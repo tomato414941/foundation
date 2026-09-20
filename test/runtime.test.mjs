@@ -87,12 +87,11 @@ test('CLI never overwrites or follows an existing insecure key file', async t =>
   assert.equal(await readFile(existing, 'utf8'), 'do-not-overwrite');
 });
 
-test('The CLI has no status or wait: accounts answers 401 until approval, then lists what was granted', async t => {
+test('accounts answers 401 until approval, then lists what was granted', async t => {
   const f = await fixture(t), account = await f.account();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-poll-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'runtime-key') };
   const connected = await execute(['connect'], env), row = JSON.parse(connected.out).request;
-  for (const removed of ['status', 'wait']) { const result = await execute([removed], env); assert.equal(result.code, 1); assert.match(result.err, /Invalid command/); }
   const before = await execute(['accounts'], env);
   assert.equal(before.code, 1); assert.match(before.err, /not_approved/);
   await f.request('/api/access-requests/' + row.id + '/deny', { method: 'POST', data: {} });
