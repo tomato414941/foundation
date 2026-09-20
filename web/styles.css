@@ -150,6 +150,16 @@ legend { padding: 0; margin-top: 0; }
 .token-setup p, .token-permission p { margin: 8px 0 12px; color: var(--muted); font-size: 14px; }
 .token-step { margin-top: 24px; }
 .token-details { margin-top: 18px; }
+.expo-approval { padding: 24px; }
+.expo-request-purpose { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
+.expo-request-code { font-size: 14px; padding: 10px 0; border-block: 1px solid var(--line); color: var(--muted); }
+.expo-request-code strong { margin-left: 8px; color: var(--ink); letter-spacing: .06em; }
+.expo-request-code span { display: inline-block; margin-left: 12px; }
+.expo-login-form label { margin-top: 14px; }
+.expo-login-form .auth-permission { padding: 10px 12px; margin: 12px 0; background: var(--soft); border-left: 3px solid #a8c4b1; }
+.expo-login-form .auth-privacy { margin: 12px 0; }
+.expo-login-form .form-error:empty { margin-top: 10px; }
+.expo-approval .approval-heading { margin-bottom: 12px; }
 .token-permission { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 14px; }
 dialog { width: min(520px, calc(100% - 32px)); max-height: calc(100dvh - 40px); border: 1px solid var(--line); border-radius: 12px; padding: 30px; box-shadow: 0 20px 80px #152d302e; color: var(--ink); }
 dialog::backdrop { background: #122a2252; }

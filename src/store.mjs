@@ -12,6 +12,7 @@ const unpack = (row) => row ? { ...row, scopes: JSON.parse(row.scopes) } : undef
 
 export class Store {
   constructor(path, key) {
+    this.transactionDepth = 0;
     this.vault = new Vault(key);
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path);
@@ -72,9 +73,12 @@ export class Store {
     } catch (error) { this.db.close(); throw error; }
   }
   transaction(fn) {
-    this.db.exec('BEGIN IMMEDIATE');
-    try { const result = fn(); this.db.exec('COMMIT'); return result; }
-    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    const nested = this.transactionDepth > 0, savepoint = 'foundation_' + this.transactionDepth;
+    this.db.exec(nested ? 'SAVEPOINT ' + savepoint : 'BEGIN IMMEDIATE');
+    this.transactionDepth++;
+    try { const result = fn(); this.db.exec(nested ? 'RELEASE ' + savepoint : 'COMMIT'); return result; }
+    catch (error) { this.db.exec(nested ? 'ROLLBACK TO ' + savepoint + '; RELEASE ' + savepoint : 'ROLLBACK'); throw error; }
+    finally { this.transactionDepth--; }
   }
   sweep() {
     this.db.prepare('DELETE FROM oauth_flows WHERE expires_at<=?').run(Date.now());

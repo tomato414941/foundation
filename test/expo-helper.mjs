@@ -4,8 +4,8 @@ import { expoConnection, gmailConnection } from '../src/providers/catalog.mjs';
 import { FakeGmail, fixture, json } from './helpers.mjs';
 
 export class FakeExpo extends ExpoProvider {
-  constructor() {
-    super({ fetcher: (url, options) => this.fetch(url, options) });
+  constructor({ sessionLogin = false } = {}) {
+    super({ fetcher: (url, options) => this.fetch(url, options), sessionLogin });
     this.calls = [];
     this.actor = { __typename: 'User', id: 'expo-user-1', username: 'fixture-expo-user' };
   }

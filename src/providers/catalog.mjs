@@ -1,7 +1,7 @@
 import { fail } from '../errors.mjs';
 import { GMAIL_API, GMAIL_DOCS, METADATA_SCOPE, READONLY_SCOPE } from './gmail.mjs';
 import { OPENROUTER_API, OPENROUTER_DOCS, OPENROUTER_SCOPE } from './openrouter.mjs';
-import { EXPO_API, EXPO_DOCS, EXPO_SCOPE, EXPO_TOKENS } from './expo.mjs';
+import { EXPO_API, EXPO_DOCS, EXPO_SCOPE, EXPO_SESSION_SCOPE, EXPO_TOKENS } from './expo.mjs';
 
 // Each integration supplies its authentication client and permission descriptions.
 // Request creation, user approval and runtime authentication do not depend on Gmail.
@@ -32,15 +32,15 @@ export function openrouterConnection(client) {
 
 export function expoConnection(client) {
   return {
-    id: 'expo', name: 'Expo', connectLabel: 'Expoのトークンを登録', client, icon: 'device', canReconnect: false, canRevoke: false,
-    intro: 'Expoで発行したアクセストークンを登録します。', managementUrl: EXPO_TOKENS, credentialType: 'api_key',
-    connectionMethod: 'token', tokenSetup: { url: EXPO_TOKENS, label: 'アクセストークン',
+    id: 'expo', name: 'Expo', connectLabel: client.sessionLoginEnabled ? 'Expoにログイン' : 'Expoのトークンを登録', client, icon: 'device', canReconnect: false, canRevoke: false,
+    intro: client.sessionLoginEnabled ? 'Expoにログインして接続します。' : 'Expoで発行したアクセストークンを登録します。', managementUrl: EXPO_TOKENS, credentialType: 'api_key',
+    connectionMethod: client.sessionLoginEnabled ? 'password' : 'token', tokenSetup: { url: EXPO_TOKENS, label: 'アクセストークン',
       instructions: 'Expoにログインして「Create Token」から、この接続専用のトークンを作成してください。名前は「Foundation」など、用途がわかるものにします。' },
     api: { base_url: EXPO_API, documentation_url: EXPO_DOCS },
-    permissions: [{ id: 'access-token', name: 'トークンの権限でExpoを利用',
+    permissions: [...(client.sessionLoginEnabled ? [{ id: 'session', name: 'Expoアカウントの利用', description: 'このAIに、Expoであなたと同じ権限での操作を許可します。ビルド・公開など、課金を伴う操作も含みます。', restrictions: '接続を解除すると、この接続のログインセッションを無効にできます。', connection_method: 'password' }] : []), { id: 'access-token', name: 'トークンの権限でExpoを利用', connection_method: 'token', connect_label: 'Expoのトークンを登録',
       description: '個人用トークンは、本人がアクセスできるすべてのアカウント・組織で操作できます。ビルドなどは課金を伴う場合があります。',
       restrictions: '読み取り専用ではありません。対象や操作を絞る場合は、Expoで権限を制限したRobotのトークンを使ってください。' }],
-    matches(mode, account) { return mode === 'access-token' && account?.provider === 'expo' && account.scopes.length === 1 && account.scopes[0] === EXPO_SCOPE; },
+    matches(mode, account) { return account?.provider === 'expo' && account.scopes.length === 1 && (mode === 'access-token' ? account.scopes[0] === EXPO_SCOPE : mode === 'session' && client.sessionLoginEnabled && account.scopes[0] === EXPO_SESSION_SCOPE); },
   };
 }
 
