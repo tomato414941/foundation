@@ -55,10 +55,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     field = dialog.get_by_label('アクセストークン', exact=True)
     expect(field).to_have_attribute('type', 'password')
     expect(field).to_have_attribute('autocomplete', 'off')
-    expect(dialog.get_by_text('すべてのアカウント・組織', exact=False)).to_be_hidden()
-    dialog.get_by_text('権限の範囲と注意点', exact=True).click()
-    expect(dialog.get_by_text('すべてのアカウント・組織', exact=False)).to_be_visible()
-    expect(dialog.get_by_label('用途 任意', exact=True)).to_have_value(request['purpose'])
+    expect(dialog.get_by_text('すべてのアカウント・組織', exact=False)).to_have_count(0)
+    expect(dialog.locator('input[name="purpose"]')).to_have_value(request['purpose'])
+    expect(dialog.get_by_label('用途 任意', exact=True)).to_have_count(0)
 
     # Verify the external login is an isolated official-site tab, never a
     # Foundation password form or an iframe. No real account is used.
@@ -133,10 +132,12 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     dialog.get_by_role('button', name='閉じる', exact=True).click()
     section.get_by_role('button', name='Expoを接続', exact=True).click()
     expect(field).to_have_value('')
-    dialog.get_by_text('名前・用途を変更', exact=True).click()
-    dialog.get_by_label('表示名', exact=True).fill('<img src=x onerror="window.xss=1">')
     field.fill(token)
     dialog.get_by_role('button', name='登録する', exact=True).click()
+    expect(dialog).not_to_be_visible()
+    section.get_by_role('button', name='編集', exact=True).click()
+    dialog.get_by_label('表示名', exact=True).fill('<img src=x onerror="window.xss=1">')
+    dialog.get_by_role('button', name='保存', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(section.get_by_role('heading', name='<img src=x onerror="window.xss=1">', exact=True)).to_be_visible()
     assert section.locator('img').count() == 0 and page.evaluate('window.xss === undefined')
