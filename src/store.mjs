@@ -142,7 +142,7 @@ export class Store {
   addAgent(ownerId, name, accountIds) {
     const ids = this.validateAccountIds(ownerId, accountIds);
     if (!ids.length) fail(400, 'invalid_accounts', 'アカウントを一つ以上選んでください。');
-    if (this.agents(ownerId).length >= 50) fail(409, 'agent_limit', '登録できる実行環境は50件までです。');
+    if (this.agents(ownerId).length >= 50) fail(409, 'agent_limit', '登録できるアクセスキーは50件までです。');
     const id = randomUUID(), token = `fdn_${randomBytes(32).toString('base64url')}`;
     this.transaction(() => {
       this.db.prepare('INSERT INTO agents (id,owner_id,name,token_hash,created_at) VALUES (?,?,?,?,?)').run(id, ownerId, name, digest(token), now());
@@ -151,7 +151,7 @@ export class Store {
     return { ...this.agents(ownerId).find((agent) => agent.id === id), token };
   }
   setGrants(ownerId, id, accountIds) {
-    if (!this.db.prepare('SELECT 1 FROM agents WHERE owner_id=? AND id=?').get(ownerId, id)) fail(404, 'not_found', '実行環境が見つかりません。');
+    if (!this.db.prepare('SELECT 1 FROM agents WHERE owner_id=? AND id=?').get(ownerId, id)) fail(404, 'not_found', 'アクセスキーが見つかりません。');
     const ids = this.validateAccountIds(ownerId, accountIds);
     this.transaction(() => {
       this.db.prepare('DELETE FROM grants WHERE agent_id=?').run(id);
@@ -160,6 +160,13 @@ export class Store {
     });
   }
   removeAgent(ownerId, id) { this.db.prepare('DELETE FROM agents WHERE owner_id=? AND id=?').run(ownerId, id); }
+  renameAgent(ownerId, id, name) {
+    if (!this.db.prepare('UPDATE agents SET name=? WHERE owner_id=? AND id=?').run(name, ownerId, id).changes) fail(404, 'not_found', 'アクセスキーが見つかりません。');
+  }
+  agentDetails(agent) {
+    const row = this.db.prepare('SELECT id,name,created_at,last_used_at,issued_until,issued_nonexpiring FROM agents WHERE id=?').get(agent.id);
+    return { ...row, accounts: this.allowedAccounts(agent).map(account => ({ id: account.id, provider: account.provider, name: account.name, status: account.status })) };
+  }
   authenticate(token) {
     if (typeof token !== 'string' || !/^fdn_[A-Za-z0-9_-]{43}$/.test(token)) return;
     return this.db.prepare('SELECT id,owner_id,name,generation FROM agents WHERE token_hash=?').get(digest(token));

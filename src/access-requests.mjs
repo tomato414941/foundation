@@ -13,7 +13,7 @@ const normalizeCode = value => typeof value === 'string' ? value.toUpperCase().r
 export class AccessRequests {
   constructor(store, providers) { this.store = store; this.db = store.db; this.providers = providers; }
   key(token) {
-    if (typeof token !== 'string' || !RUNTIME_KEY.test(token)) fail(401, 'invalid_token', '実行環境のアクセスキーが無効です。');
+    if (typeof token !== 'string' || !RUNTIME_KEY.test(token)) fail(401, 'invalid_token', 'アクセスキーの形式が無効です。');
     return digest(token);
   }
   get(id) {
@@ -38,7 +38,7 @@ export class AccessRequests {
     const encoded = JSON.stringify(this.providers.details(provider, details));
     this.store.sweep();
     const hash = this.key(token);
-    const agent = this.store.authenticate(token), requesterName = agent?.name || name;
+    const agent = this.store.authenticate(token), requesterName = name;
     const previous = this.db.prepare("SELECT * FROM access_requests WHERE token_hash=? AND status='pending' AND expires_at>? ORDER BY created_at DESC LIMIT 1").get(hash, Date.now());
     if (previous) {
       if (previous.requester_name !== requesterName || previous.provider !== provider || previous.purpose !== purpose || previous.mode !== mode || previous.details !== encoded) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
@@ -84,11 +84,12 @@ export class AccessRequests {
       let agentId = row.agent_id;
       if (!agentId) {
         if (this.db.prepare('SELECT 1 FROM agents WHERE token_hash=?').get(row.token_hash)) fail(409, 'request_changed', '依頼元の状態が変わりました。接続リンクを作成し直してください。');
-        if (this.store.agents(ownerId).length >= 50) fail(409, 'agent_limit', '登録できる実行環境は50件までです。');
+        if (this.store.agents(ownerId).length >= 50) fail(409, 'agent_limit', '登録できるアクセスキーは50件までです。');
         agentId = randomUUID();
         this.db.prepare('INSERT INTO agents (id,owner_id,name,token_hash,created_at) VALUES (?,?,?,?,?)').run(agentId, ownerId, row.requester_name, row.token_hash, new Date().toISOString());
       } else {
-        this.db.prepare('UPDATE agents SET generation=generation+1 WHERE id=?').run(agentId);
+        // An approved request also confirms the account's current name.
+        this.db.prepare('UPDATE agents SET generation=generation+1, name=? WHERE id=?').run(row.requester_name, agentId);
       }
       this.db.prepare('INSERT OR IGNORE INTO grants (agent_id,account_id) VALUES (?,?)').run(agentId, account.id);
       this.db.prepare("UPDATE access_requests SET owner_id=?,agent_id=?,account_id=?,status='approved' WHERE id=?").run(ownerId, agentId, account.id, row.id);
@@ -116,7 +117,8 @@ export class AccessRequests {
       if (!agent || agent.owner_id !== row.owner_id || !grant || !this.matches(row, account) || account.status === 'disconnecting') status = 'revoked';
       else if (account.status !== 'connected') status = 'reconnect_required';
     }
-    return { id: row.id, provider: row.provider, service: this.providers.describe(row.provider), permission: this.providers.permission(row.provider, row.mode), requester_name: row.requester_name, purpose: row.purpose, mode: row.mode, details: this.details(row),
+    const registered = row.agent_id ? this.db.prepare('SELECT name FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash) : undefined;
+    return { id: row.id, provider: row.provider, service: this.providers.describe(row.provider), permission: this.providers.permission(row.provider, row.mode), requester_name: row.requester_name, purpose: row.purpose, mode: row.mode, details: this.details(row), ...(registered ? { agent_name: registered.name } : {}),
       ...(code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
       status, created_at: row.created_at, expires_at: row.expires_at,
       ...(status === 'approved' ? { account: { id: account.id, email: account.email, label: this.providers.get(row.provider).client.accountInfo?.(this.store.secrets(account))?.label || account.email }, agent_id: row.agent_id } : {}) };

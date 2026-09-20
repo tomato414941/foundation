@@ -101,7 +101,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
   }
   function actor(req) {
     const agent = store.authenticate(req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1]);
-    if (!agent) fail(401, 'not_approved', 'この実行環境はまだ利用を許可されていないか、利用を停止されています。foundation connect で接続依頼を作り、承認後にお試しください。');
+    if (!agent) fail(401, 'not_approved', 'このアクセスキーはまだ承認されていないか、失効しています。foundation connect で接続依頼を作り、承認後にお試しください。');
     return agent;
   }
   function requireOrigin(req, origin) {
@@ -395,12 +395,24 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
             store.removeAgent(user.id, agentRoute[1]);
             return send(200, { ok: true });
           }
+          if (!agentRoute[2] && method === 'PATCH') {
+            const input = await body(req);
+            store.renameAgent(user.id, agentRoute[1], nameValue(input.name));
+            return send(200, { ok: true });
+          }
         }
       }
       if (path.startsWith('/v1/')) {
         const agent = actor(req);
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
         if (path === '/v1/accounts' && method === 'GET') return send(200, { accounts: store.allowedAccounts(agent).map(account => resource(account, agent.owner_id)) });
+        if (path === '/v1/me' && method === 'GET') return send(200, { agent: store.agentDetails(agent) });
+        if (path === '/v1/me' && method === 'DELETE') {
+          await body(req);
+          // The account retires itself: its key stops working and its grants are dropped. Connections stay.
+          store.removeAgent(agent.owner_id, agent.id);
+          return send(200, { ok: true });
+        }
         const route = path.match(/^\/v1\/accounts\/([a-f0-9-]{36})\/credentials$/);
         if (route && method === 'POST') {
           await body(req);
