@@ -101,7 +101,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
   }
   function actor(req) {
     const agent = store.authenticate(req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1]);
-    if (!agent) fail(401, 'invalid_token', '実行環境のアクセスキーが無効です。');
+    if (!agent) fail(401, 'not_approved', 'この実行環境はまだ利用を許可されていないか、利用を停止されています。foundation connect で接続依頼を作り、承認後にお試しください。');
     return agent;
   }
   function requireOrigin(req, origin) {
