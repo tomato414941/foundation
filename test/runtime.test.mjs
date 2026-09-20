@@ -1,0 +1,90 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { mkdtemp, writeFile, readFile, stat, rm, chmod, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fixture } from './helpers.mjs';
+
+const execute = (args, env) => new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, ['src/runtime.mjs', ...args], { env: { ...process.env, ...env } });
+  let out = '', err = '';
+  child.stdout.on('data', (part) => { out += part; }); child.stderr.on('data', (part) => { err += part; });
+  child.once('error', reject); child.once('exit', (code) => resolve({ code, out, err }));
+});
+
+test('Runtime discovers native Gmail and injects credentials only into selected process', async (t) => {
+  const f = await fixture(t), account = await f.account(), runtime = await f.agent([account.id]);
+  const dir = await mkdtemp(join(tmpdir(), 'foundation-runtime-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const keyPath = join(dir, 'runtime-key'); await writeFile(keyPath, runtime.token, { mode: 0o600 });
+  const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
+  const listed = await execute(['accounts'], env);
+  assert.equal(listed.code, 0, listed.err);
+  assert.equal(JSON.parse(listed.out).accounts[0].id, account.id);
+  assert.doesNotMatch(listed.out, /google-access|refresh_token/);
+  const run = await execute(['exec', account.id, '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal-readonly"||process.env.GMAIL_ACCOUNT_EMAIL!=="personal@example.test"||process.env.FOUNDATION_RUNTIME_KEY_FILE) process.exit(2);console.log("runtime-ready")'], env);
+  assert.equal(run.code, 0, run.err);
+  assert.equal(run.out.trim(), 'runtime-ready');
+  assert.doesNotMatch(run.err, /google-access|refresh_token/);
+  await f.request('/api/agents/' + runtime.id, { method: 'DELETE' });
+  const revoked = await execute(['exec', account.id, '--', process.execPath, '-e', 'console.log("must-not-run")'], env);
+  assert.equal(revoked.code, 1);
+  assert.doesNotMatch(revoked.out, /must-not-run/);
+  await chmod(keyPath, 0o644);
+  const unsafe = await execute(['accounts'], env);
+  assert.equal(unsafe.code, 1);
+  assert.match(unsafe.err, /private/);
+});
+
+test('CLI bootstraps and resumes approval without printing or manually copying a runtime key', async t => {
+  const f = await fixture(t), account = await f.account();
+  const dir = await mkdtemp(join(tmpdir(), 'foundation-pairing-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const keyPath = join(dir, 'runtime-key'), env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
+  const providers = await execute(['providers'], env);
+  assert.equal(providers.code, 0, providers.err);
+  assert.equal(JSON.parse(providers.out).providers[0].id, 'gmail');
+  await assert.rejects(stat(keyPath), { code: 'ENOENT' });
+  const missing = await execute(['accounts'], env);
+  assert.equal(missing.code, 1);
+  assert.match(missing.err, /connect/);
+  const connected = await execute(['connect', '--name', 'dev-us のAI', '--purpose', 'メールの確認'], env);
+  assert.equal(connected.code, 0, connected.err);
+  const row = JSON.parse(connected.out).request, secret = (await readFile(keyPath, 'utf8')).trim();
+  assert.equal(row.status, 'pending');
+  assert.equal((await stat(keyPath)).mode & 0o777, 0o600);
+  assert.ok(!connected.out.includes(secret));
+  const pending = await execute(['status'], env);
+  assert.equal(JSON.parse(pending.out).request.status, 'pending');
+  assert.equal((await execute(['accounts'], env)).code, 1);
+  const approval = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { accountId: account.id, confirmationCode: row.confirmation_code } });
+  assert.equal(approval.status, 200, approval.text);
+  const approved = await execute(['status'], env);
+  assert.equal(JSON.parse(approved.out).request.status, 'approved');
+  assert.equal(JSON.parse((await execute(['accounts'], env)).out).accounts[0].id, account.id);
+  const run = await execute(['exec', account.id, '--', process.execPath, '-e', 'if(process.env.FOUNDATION_ACCESS_TOKEN!==process.env.GOOGLE_OAUTH_ACCESS_TOKEN || process.env.FOUNDATION_PROVIDER!=="gmail" || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("connected")'], env);
+  assert.equal(run.code, 0, run.err);
+  assert.equal(run.out.trim(), 'connected');
+  assert.equal((await readFile(keyPath, 'utf8')).trim(), secret);
+  for (const result of [connected, pending, approved, run]) assert.doesNotMatch(result.out + result.err, /fdn_|google-access|refresh_token/);
+  const next = await execute(['connect'], env);
+  assert.equal(next.code, 0, next.err);
+  const cancelled = await execute(['cancel'], env);
+  assert.equal(JSON.parse(cancelled.out).request.status, 'cancelled');
+  assert.equal((await execute(['accounts'], env)).code, 0, 'cancelling a new request does not revoke an earlier grant');
+});
+
+test('CLI never overwrites or follows an existing insecure key file', async t => {
+  const f = await fixture(t);
+  const dir = await mkdtemp(join(tmpdir(), 'foundation-keyfile-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const existing = join(dir, 'existing'), link = join(dir, 'link');
+  await writeFile(existing, 'do-not-overwrite', { mode: 0o644 });
+  let result = await execute(['connect'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: existing });
+  assert.equal(result.code, 1);
+  assert.match(result.err, /private/);
+  assert.equal(await readFile(existing, 'utf8'), 'do-not-overwrite');
+  await symlink(existing, link);
+  result = await execute(['connect'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: link });
+  assert.equal(result.code, 1);
+  assert.match(result.err, /symbolic link/);
+  assert.equal(await readFile(existing, 'utf8'), 'do-not-overwrite');
+});

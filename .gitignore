@@ -1,0 +1,12 @@
+.foundation/
+.env
+.env.*
+*.sqlite*
+node_modules/
+__pycache__/
+test-results/
+playwright-report/
+*.key
+*.pem
+*.p12
+*.log
