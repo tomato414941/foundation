@@ -68,7 +68,7 @@ test('Expo MFA keeps no server-side password challenge, grants nothing before va
   assert.equal(wrong.status, 400); safeResponse(wrong); assert.doesNotMatch(wrong.text, /000000/);
   const complete = await f.loginExpo({ ...input, username: 'otp-user', otp: LOGIN_OTP });
   assert.equal(complete.status, 200, complete.text); safeResponse(complete);
-  assert.equal((await f.request('/v1/access-requests/current', { token })).json.request.status, 'approved');
+  assert.equal((await f.request('/v1/accounts', { token, anonymous: true })).json.accounts[0].id, complete.json.account_id);
   const stored = f.app.store.secrets(f.app.store.account(USER_A, complete.json.account_id));
   assert.ok(!JSON.stringify(stored).includes(LOGIN_PASSWORD)); assert.ok(!JSON.stringify(stored).includes(LOGIN_OTP));
   const sms = await f.loginExpo({ username: 'sms-user' });

@@ -28,11 +28,11 @@ def review(page):
 with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, sync_playwright() as p:
     env = {**os.environ, 'FOUNDATION_URL': args.base, 'FOUNDATION_RUNTIME_KEY_FILE': key_dir + '/runtime-key'}
 
-    def cli(*command):
+    def cli(*command, success=True):
         result = subprocess.run(['node', 'src/runtime.mjs', *command], env=env, capture_output=True, text=True, timeout=15)
-        assert result.returncode == 0, result.stderr
+        assert (result.returncode == 0) == success, result.stderr
         assert 'fdn_' not in result.stdout and 'google-access-' not in result.stdout
-        return json.loads(result.stdout)
+        return json.loads(result.stdout) if success else None
 
     request = cli('connect', '--name', 'dev-us のAI', '--purpose', '届いたメールを確認する')['request']
     browser = p.chromium.launch(headless=True)
@@ -73,12 +73,12 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']
-    assert cli('status')['request']['status'] == 'pending'
+    cli('accounts', success=False)
     authorization['deny'] = False
     page.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_role('radio', name='Gmail personal@example.test', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']
-    assert cli('status')['request']['status'] == 'pending'
+    cli('accounts', success=False)
     expect(page.get_by_role('button', name='利用を許可', exact=True)).to_be_disabled()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
@@ -88,15 +88,13 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_label('確認コード', exact=True).fill('0000-0000')
     page.get_by_role('button', name='利用を許可', exact=True).click()
     expect(page.get_by_role('alert')).to_contain_text('確認コードを入力してください')
-    assert cli('status')['request']['status'] == 'pending'
+    cli('accounts', success=False)
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'].lower())
     page.get_by_role('button', name='利用を許可', exact=True).click()
     expect(page.get_by_role('heading', name='利用を許可しました', exact=True)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'request-approved.png'), full_page=True)
-    approved = cli('status')['request']
-    assert approved['status'] == 'approved'
-    assert cli('accounts')['accounts'][0]['id'] == approved['account']['id']
+    approved = {'account': cli('accounts')['accounts'][0]}
     command = subprocess.run(['node', 'src/runtime.mjs', 'exec', approved['account']['id'], '--', 'node', '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN || process.env.FOUNDATION_ACCESS_TOKEN!==process.env.GOOGLE_OAUTH_ACCESS_TOKEN)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
@@ -105,7 +103,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     runtime.get_by_role('button', name='失効', exact=True).click()
     page.get_by_role('dialog').get_by_role('button', name='失効させる', exact=True).click()
     expect(page.get_by_role('dialog')).not_to_be_visible()
-    assert cli('status')['request']['status'] == 'revoked'
+    cli('accounts', success=False)
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='利用許可は停止されています', exact=True)).to_be_visible()
 
@@ -114,7 +112,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_role('radio')).to_have_count(1)
     page.get_by_role('button', name='許可しない', exact=True).click()
     expect(page.get_by_role('heading', name='利用を許可しませんでした', exact=True)).to_be_visible()
-    assert cli('status')['request']['status'] == 'denied'
+    cli('accounts', success=False)
 
     request = cli('connect', '--mode', 'metadata')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')

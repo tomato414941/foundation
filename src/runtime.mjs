@@ -67,12 +67,7 @@ async function main() {
       options.provider ||= 'apikey'; options.details = { service, site, env };
     }
   }
-  else if (action === 'wait') {
-    options = parseArgs({ args, options: { timeout: { type: 'string', default: '1800' }, 'after-verification': { type: 'string', default: '0' } }, strict: true, allowPositionals: false }).values;
-    if (!/^\d+$/.test(options.timeout) || Number(options.timeout) < 1 || Number(options.timeout) > 1800) throw new Error('Wait timeout must be between 1 and 1800 seconds.');
-    if (!/^\d+$/.test(options['after-verification']) || !Number.isSafeInteger(Number(options['after-verification']))) throw new Error('--after-verification must be a nonnegative integer revision.');
-  }
-  else if (!(['providers', 'accounts', 'status', 'cancel', 'whoami', 'leave'].includes(action) && !args.length) && !(action === 'exec' && /^[a-f0-9-]{36}$/.test(accountId || '') && separator === '--' && command.length)) throw new Error('Invalid command. Use --help.');
+  else if (!(['providers', 'accounts', 'cancel', 'whoami', 'leave'].includes(action) && !args.length) && !(action === 'exec' && /^[a-f0-9-]{36}$/.test(accountId || '') && separator === '--' && command.length)) throw new Error('Invalid command. Use --help.');
   const url = new URL(process.env.FOUNDATION_URL || '');
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('FOUNDATION_URL must be an HTTPS origin (HTTP is allowed only on localhost).');
   if (action === 'connect' && (!options.provider || !options.mode)) {
@@ -85,7 +80,7 @@ async function main() {
   }
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
   const token = action === 'providers' ? null : await runtimeKey(keyPath, action === 'connect', !process.env.FOUNDATION_RUNTIME_KEY_FILE);
-  const path = action === 'providers' ? '/v1/providers' : action === 'accounts' ? '/v1/accounts' : action === 'exec' ? '/v1/accounts/' + accountId + '/credentials' : ['whoami', 'leave'].includes(action) ? '/v1/me' : '/v1/access-requests' + (action === 'connect' ? '' : '/current');
+  const path = action === 'providers' ? '/v1/providers' : action === 'accounts' ? '/v1/accounts' : action === 'exec' ? '/v1/accounts/' + accountId + '/credentials' : ['whoami', 'leave'].includes(action) ? '/v1/me' : action === 'cancel' ? '/v1/access-requests/current' : '/v1/access-requests';
   const method = action === 'connect' || action === 'exec' ? 'POST' : action === 'cancel' || action === 'leave' ? 'DELETE' : 'GET';
   async function request(timeout = 30_000) {
     const response = await fetch(url.origin + path, { method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), 'content-type': 'application/json' }, ...(method !== 'GET' ? { body: JSON.stringify(action === 'connect' ? options : {}) } : {}), redirect: 'error', signal: AbortSignal.timeout(timeout) });
@@ -94,23 +89,9 @@ async function main() {
     return data;
   }
   let data = await request();
-  if (action === 'wait') {
-    const requestId = data.request?.id, deadline = Date.now() + Number(options.timeout) * 1000;
-    if (!requestId) throw new Error('No current approval request.');
-    const hasNewVerification = () => data.request?.verification?.revision > Number(options['after-verification']);
-    while (data.request?.status === 'pending' && !hasNewVerification()) {
-      await delay(Math.min(3000, Math.max(1, deadline - Date.now())));
-      if (Date.now() >= deadline) throw new Error('Approval wait timed out. The request was not cancelled.');
-      data = await request(Math.min(30_000, Math.max(1, deadline - Date.now())));
-      if (data.request?.id !== requestId) throw new Error('Approval request changed. Run status before continuing.');
-    }
-    if (data.request?.status === 'pending' && hasNewVerification()) data.event = 'verification';
-    else if (data.request?.status !== 'approved') throw new Error('Approval did not complete (' + (data.request?.status || 'unknown') + ').');
-  }
   if (action === 'leave') { console.log('Left Foundation: this access key and its permissions were revoked. Delete ' + keyPath + ' if it is no longer needed.'); return; }
   if (action !== 'exec') { console.log(JSON.stringify(data, null, 2)); return; }
   const expoSession = data.account?.provider === 'expo' && data.credential_type === 'expo_session';
-  if (data.verification?.checks?.some(check => check.status === 'failed' || check.status === 'unknown' && !['permissions'].includes(check.check))) console.error(JSON.stringify({ event: 'verification', verification: data.verification }));
   const expiryValid = (data.credential_type === 'api_key' || expoSession) && data.expires_at === null || Number.isFinite(data.expires_at) && data.expires_at > Date.now();
   if (typeof data.access_token !== 'string' || !data.access_token || /[\r\n\x00]/.test(data.access_token) || !data.account?.email || !expiryValid) throw new Error('Foundation returned an invalid credential.');
   const environment = { ...process.env, FOUNDATION_ACCESS_TOKEN: data.access_token, FOUNDATION_CREDENTIAL_TYPE: data.credential_type || 'oauth2_access_token', FOUNDATION_ACCOUNT_ID: data.account.id, FOUNDATION_ACCOUNT_LABEL: data.account.label || data.account.email, FOUNDATION_PROVIDER: data.account.provider, FOUNDATION_TOKEN_EXPIRES_AT: data.expires_at === null ? '' : String(data.expires_at), FOUNDATION_API_BASE_URL: data.api_base_url };

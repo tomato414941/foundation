@@ -1,7 +1,6 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { digest } from './store.mjs';
 import { fail } from './errors.mjs';
-import { verification } from './verification.mjs';
 
 export const REQUEST_TTL = 30 * 60_000;
 export const REQUEST_ID = /^[A-Za-z0-9_-]{43}$/;
@@ -61,21 +60,6 @@ export class AccessRequests {
     this.db.prepare('UPDATE access_requests SET owner_id=? WHERE id=?').run(ownerId, row.id);
     return this.get(id);
   }
-  beginVerification(id, ownerId) {
-    this.claim(id, ownerId);
-    this.db.prepare('UPDATE access_requests SET verification=NULL, verification_revision=verification_revision+1 WHERE id=?').run(id);
-    return this.get(id).verification_revision;
-  }
-  currentVerification(id, ownerId, revision) {
-    const row = this.forUser(id, ownerId, true);
-    if (row.verification_revision !== revision) fail(409, 'connection_changed', '新しい入力の確認が始まっています。');
-    return row;
-  }
-  finishVerification(id, ownerId, revision, report) {
-    this.currentVerification(id, ownerId, revision);
-    // Keep only the latest small report; it expires with the request (30 min).
-    this.db.prepare('UPDATE access_requests SET verification=? WHERE id=?').run(JSON.stringify(verification(report.checks, report.checked_at)), id);
-  }
   // The user types the code the runtime showed in the conversation; the approval page never displays it.
   // Wrong entries count even when the surrounding transaction rolls back.
   verifyCode(id, ownerId, code) {
@@ -109,8 +93,6 @@ export class AccessRequests {
       }
       this.db.prepare('INSERT OR IGNORE INTO grants (agent_id,account_id) VALUES (?,?)').run(agentId, account.id);
       this.db.prepare("UPDATE access_requests SET owner_id=?,agent_id=?,account_id=?,status='approved' WHERE id=?").run(ownerId, agentId, account.id, row.id);
-      const report = this.store.secrets(account).verification;
-      this.db.prepare('UPDATE access_requests SET verification=? WHERE id=?').run(report ? JSON.stringify(report) : null, row.id);
       return this.get(id);
     });
   }
@@ -138,8 +120,7 @@ export class AccessRequests {
     const registered = row.agent_id ? this.db.prepare('SELECT name FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash) : undefined;
     return { id: row.id, provider: row.provider, service: this.providers.describe(row.provider), permission: this.providers.permission(row.provider, row.mode), requester_name: row.requester_name, purpose: row.purpose, mode: row.mode, details: this.details(row), ...(registered ? { agent_name: registered.name } : {}),
       ...(code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
-      status, created_at: row.created_at, expires_at: row.expires_at, verification_revision: row.verification_revision,
-      ...(row.verification && ['pending', 'approved', 'reconnect_required'].includes(status) ? { verification: { ...JSON.parse(row.verification), revision: row.verification_revision } } : {}),
+      status, created_at: row.created_at, expires_at: row.expires_at,
       ...(status === 'approved' ? { account: { id: account.id, email: account.email, label: this.providers.get(row.provider).client.accountInfo?.(this.store.secrets(account))?.label || account.email }, agent_id: row.agent_id } : {}) };
   }
 }

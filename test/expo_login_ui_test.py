@@ -77,11 +77,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     expect(page.get_by_role('alert')).to_contain_text('Expoにログインできませんでした')
     expect(password).to_have_value('')
     expect(code).to_have_value(row['confirmation_code'])
-    assert cli('status')['request']['status'] == 'pending'
     cli('accounts', success=False)
 
-    # The runtime waits without seeing the password, OTP, or session.
-    waiting = subprocess.Popen(['node', 'src/runtime.mjs', 'wait', '--timeout', '90'], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # The runtime learns nothing until approval; it just tries accounts.
     try:
         username.fill('otp-user')
         password.fill(PASSWORD)
@@ -92,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
         expect(otp).to_be_visible()
         expect(password).to_have_value('')
         expect(password).to_be_disabled()
-        assert cli('status')['request']['status'] == 'pending'
+        cli('accounts', success=False)
         for width in [1280, 390, 320]:
             page.set_viewport_size({'width': width, 'height': 844})
             review(page)
@@ -110,14 +108,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
         expect(page.get_by_role('heading', name='利用を許可しました', exact=True)).to_be_visible()
         expect(page.get_by_text('この画面は閉じて構いません。', exact=False)).to_be_visible()
         expect(password).to_have_count(0)
-        out, err = waiting.communicate(timeout=12)
-        assert waiting.returncode == 0, err
-        assert json.loads(out)['request']['id'] == row['id']
-        assert PASSWORD not in out + err and 'fixture-session-' not in out + err
+        listed = subprocess.run(['node', 'src/runtime.mjs', 'accounts'], env=env, capture_output=True, text=True, timeout=15)
+        assert listed.returncode == 0, listed.stderr
+        assert PASSWORD not in listed.stdout + listed.stderr and 'fixture-session-' not in listed.stdout + listed.stderr
     finally:
-        if waiting.poll() is None:
-            waiting.terminate()
-            waiting.communicate(timeout=5)
+        pass
     account = cli('accounts')['accounts'][0]
     assert account['credential_type'] == 'expo_session'
     review(page)
@@ -130,11 +125,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     expect(password).to_have_count(0)
     expect(page.get_by_role('radio')).to_have_count(1)
     page.get_by_role('button', name='このアカウントの利用を許可', exact=True).click()
-    assert cli('status')['request']['status'] == 'pending'
     page.get_by_label('確認コード', exact=True).fill(row['confirmation_code'])
     page.get_by_role('button', name='このアカウントの利用を許可', exact=True).click()
     expect(page.get_by_role('heading', name='利用を許可しました', exact=True)).to_be_visible()
-    assert cli('status')['request']['status'] == 'approved'
+    assert len(cli('accounts')['accounts']) == 1
 
     row = request()
     page.goto(row['verification_uri'], wait_until='networkidle')
@@ -163,13 +157,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     expect(password).to_be_visible()
     expect(password).to_have_value('')
     expect(page.get_by_role('alert')).to_contain_text('時間が経過しました')
-    assert cli('status')['request']['status'] == 'pending'
     username.fill('unused-user')
     password.fill(PASSWORD)
     page.get_by_role('button', name='許可しない', exact=True).click()
     expect(page.get_by_role('heading', name='利用を許可しませんでした', exact=True)).to_be_visible()
     expect(password).to_have_count(0)
-    assert cli('status')['request']['status'] == 'denied'
     review(page)
 
     # Root connection is optional and never silently grants the runtime.

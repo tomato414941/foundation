@@ -213,7 +213,7 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 .key-caption { font-size: 12px; line-height: 1.6; }
 .key-management { display: inline-block; margin: 4px 0 14px; font-size: 13px; }
 .approval-account + .approval-account { margin-top: 18px; }
-.verification-result { margin: 18px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; }
+.verification-result { margin: 18px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; overflow-wrap: anywhere; }
 .verification-result summary { cursor: pointer; font-weight: 600; }
 .verification-result ul { list-style: none; padding: 0; margin: 14px 0 0; }
 .verification-result li + li { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }

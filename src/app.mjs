@@ -117,32 +117,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
     const current = accountFor(account.owner_id, account.id);
     if (current.status !== 'connected' || current.generation !== account.generation) fail(409, 'connection_changed', '接続状態が変わりました。');
   }
-  async function verifyConnection(req, session, user, requestId, operation, commit) {
-    const revision = requestId ? requests.beginVerification(requestId, user.id) : null;
-    const stillCurrent = () => {
-      if (req.aborted || req.socket.destroyed || localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
-      if (requestId) requests.currentVerification(requestId, user.id, revision);
-    };
-    let result;
-    try { result = await operation(); }
-    catch (error) {
-      stillCurrent();
-      if (requestId) requests.finishVerification(requestId, user.id, revision, verificationResult(null, error));
-      throw error;
-    }
+  // Runs a provider exchange, records what was verified on the stored credentials (for the owner's screens only),
+  // and commits atomically. Foundation never reports these outcomes to the runtime; it learns only whether it can use a connection.
+  async function verifyConnection(req, session, user, operation, commit) {
+    const stillCurrent = () => { if (req.aborted || req.socket.destroyed || localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。'); };
+    const result = await operation();
     stillCurrent();
     const report = verificationResult(result);
     if (result.credentials) result.credentials.verification = report;
-    try {
-      return store.transaction(() => {
-        if (requestId) requests.finishVerification(requestId, user.id, revision, report);
-        return commit(result, report);
-      });
-    } catch (error) {
-      stillCurrent();
-      if (requestId) requests.finishVerification(requestId, user.id, revision, verificationResult(null, error));
-      throw error;
-    }
+    return store.transaction(() => commit(result, report));
   }
   function publicAccount(account, ownerId) {
     const provider = providers.get(account.provider);
@@ -221,7 +204,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
             requests.forUser(flow.accessRequestId, user.id, true);
           }
           if (url.searchParams.has('error')) {
-            await verifyConnection(req, session, user, flow.accessRequestId, async () => { fail(400, 'authorization_denied', '接続先での認証は許可されませんでした。'); }, () => {});
+            fail(400, 'authorization_denied', '接続先での認証は許可されませんでした。');
           }
           const code = url.searchParams.get('code');
           if (!code || code.length > 8192) fail(400, 'invalid_state', '接続をやり直してください。');
@@ -230,9 +213,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
             previous = accountFor(user.id, flow.previous.id);
             if (previous.generation !== flow.previous.generation || previous.status === 'disconnecting') fail(409, 'connection_changed', '接続状態が変わりました。');
           }
-          await verifyConnection(req, session, user, flow.accessRequestId,
+          if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true);
+          await verifyConnection(req, session, user,
             () => provider.client.exchange({ ...flow, code }, previous ? { email: previous.email, credentials: store.secrets(previous) } : undefined),
-            result => store.connect(user.id, { provider: provider.id, name: flow.name, purpose: flow.purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials, previous));
+            result => { if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true); return store.connect(user.id, { provider: provider.id, name: flow.name, purpose: flow.purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials, previous); });
           return redirect(connectionLocation('connected'));
         } catch (error) {
           const codes = { authorization_denied: 'denied', invalid_state: 'expired', login_required: 'expired', account_changed: 'wrong_account', already_connected: 'already_connected', scope_mismatch: 'scope', refresh_missing: 'retry', connection_changed: 'changed' };
@@ -279,6 +263,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
       }
       // Pairing bootstraps a runtime without a previously issued Foundation key.
       // Possessing the approval URL alone never gives access to this endpoint.
+      // There is deliberately no way for a runtime to ask about a request's state: it learns
+      // whether it may use a connection by calling /v1/accounts, and nothing else.
       if (path === '/v1/providers' && method === 'GET') return send(200, { providers: [...providers.providers.keys()].map(id => providers.describe(id)) });
       if (path === '/v1/access-requests' || path === '/v1/access-requests/current') {
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
@@ -292,7 +278,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           rateLimit('request-create:' + req.socket.remoteAddress, 12, 600_000);
           return send(201, { request: requests.summary(requests.create(token, { name, purpose, provider: input.provider, mode: input.mode, details: input.details }), origin) });
         }
-        if (path.endsWith('/current') && method === 'GET') return send(200, { request: requests.summary(requests.current(token), origin) });
         if (path.endsWith('/current') && method === 'DELETE') {
           await body(req);
           return send(200, { request: requests.summary(requests.cancel(token), origin) });
@@ -325,9 +310,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
             if (accessRequest && (accessRequest.provider !== 'expo' || accessRequest.mode !== 'session')) fail(400, 'scope_mismatch', '依頼されたサービスと権限で接続してください。');
             if (accessRequest) requests.verifyCode(accessRequest.id, user.id, input.confirmationCode);
             const name = nameValue(input.name ?? 'Expo', '表示名'), purpose = purposeValue(input.purpose ?? accessRequest?.purpose ?? '');
-            const saved = await verifyConnection(req, session, user, accessRequest?.id, async () => {
+            if (accessRequest) requests.claim(accessRequest.id, user.id);
+            const saved = await verifyConnection(req, session, user, async () => {
               result = await provider.client.login(input); return result;
             }, () => {
+              if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
               if (result.challenge) return { challenge: result.challenge };
               const id = store.connect(user.id, { provider: 'expo', name, purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials);
               const approved = accessRequest ? requests.approve(accessRequest.id, user.id, id, input.confirmationCode) : null;
@@ -361,7 +348,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           if (provider.connectionMethod === 'token' || permission.connection_method === 'token') {
             // A request fixes the runtime's declared service and variable name; a root import takes them from the user.
             const details = accessRequest ? requests.details(accessRequest) : providers.details(provider.id, input.details);
-            const saved = await verifyConnection(req, session, user, accessRequest?.id,
+            if (accessRequest) requests.claim(accessRequest.id, user.id);
+            const saved = await verifyConnection(req, session, user,
               () => provider.client.importToken({ token: input.token, mode: input.mode, details, fields: input.fields }),
               (result, report) => {
                 // Only this request's ungranted candidate can be updated on retry.
