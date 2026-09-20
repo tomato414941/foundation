@@ -110,8 +110,6 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .approval-card h1 { font-size: 25px; letter-spacing: -.035em; }
 .approval-facts { margin: 26px 0; }
 .approval-facts > div { display: grid; grid-template-columns: 94px minmax(0, 1fr); gap: 12px; margin-top: 12px; }
-.approval-summary { margin: 22px 0 6px; font-size: 16px; line-height: 1.7; overflow-wrap: anywhere; }
-.approval-summary strong { font-weight: 600; }
 #confirmation-code { font: 600 20px/1.4 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
 .approval-details, .token-details { margin-top: 18px; }
 .token-details + .token-details { margin-top: 10px; }
