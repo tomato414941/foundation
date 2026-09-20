@@ -110,3 +110,16 @@ for (const outcome of ['approved', 'denied', 'replaced', 'timeout']) test('CLI w
   if (outcome === 'timeout') assert.equal(JSON.parse((await execute(['status'], env)).out).request.status, 'pending');
   for (const timeout of ['0', '1801', 'abc']) assert.equal((await execute(['wait', '--timeout', timeout], env)).code, 1);
 });
+
+test('--help prints the agent procedure in Japanese and, when a server is reachable, which services it offers', async t => {
+  const f = await fixture(t);
+  const offline = await execute(['--help'], { FOUNDATION_URL: '' });
+  assert.equal(offline.code, 0, offline.err);
+  assert.match(offline.out, /foundation connect --provider expo/);
+  assert.match(offline.out, /verification_uri と confirmation_code/);
+  assert.doesNotMatch(offline.out, /現在のサーバーで使えるサービス/);
+  const online = await execute(['--help'], { FOUNDATION_URL: f.base });
+  assert.equal(online.code, 0, online.err);
+  assert.match(online.out, /現在のサーバーで使えるサービス: gmail \(Gmail\)/);
+  assert.doesNotMatch(online.out, /foundation connect --provider expo/);
+});

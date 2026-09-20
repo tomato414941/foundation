@@ -8,6 +8,7 @@ import { parseArgs } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { spawnExpoSession } from './expo-runtime.mjs';
 import { validEnvName, validRequestedEnvName } from './env-name.mjs';
+import { guide } from './guide.mjs';
 
 async function runtimeKey(path, create, privateDirectory) {
   if (create) {
@@ -43,11 +44,16 @@ async function runtimeKey(path, create, privateDirectory) {
 async function main() {
   const [action, ...args] = process.argv.slice(2);
   const [accountId, separator, ...command] = args;
-  if (action === '--help' || !action) {
-    console.log('Usage: node src/runtime.mjs providers\n       node src/runtime.mjs connect [--provider <id>] [--mode <permission-id>] [--name <name>] [--purpose <purpose>]\n       node src/runtime.mjs status\n       node src/runtime.mjs cancel\n       node src/runtime.mjs accounts\n       node src/runtime.mjs exec <account-id> -- <command> [args...]\nEnvironment: FOUNDATION_URL; optional FOUNDATION_RUNTIME_KEY_FILE\nconnect selects the first available provider and its first permission unless specified, saves a private runtime key and prints an approval URL plus confirmation code.\nAfter the user approves, run status, then accounts or exec. No key copying is needed.\nDefault key: ~/.local/state/foundation/<origin-hash>.key (private, per Foundation origin).\nChild environment: FOUNDATION_ACCESS_TOKEN, FOUNDATION_CREDENTIAL_TYPE, FOUNDATION_ACCOUNT_ID, FOUNDATION_ACCOUNT_LABEL, FOUNDATION_PROVIDER, FOUNDATION_TOKEN_EXPIRES_AT, FOUNDATION_API_BASE_URL\nGmail also receives: GOOGLE_OAUTH_ACCESS_TOKEN, GMAIL_ACCOUNT_EMAIL, GOOGLE_OAUTH_EXPIRES_AT\nOpenRouter also receives: OPENROUTER_API_KEY\nAn empty FOUNDATION_TOKEN_EXPIRES_AT means the API key has no reported expiry, not a short-lived token. Foundation revocation stops future delivery; already delivered keys require provider-side deletion. Model calls can incur charges.');
-    console.log('Expo API keys receive EXPO_TOKEN. Expo login sessions use an isolated in-memory CLI state (Linux + bubblewrap); shared Expo login is not overwritten. For direct API access use the expo-session header, never Bearer/EXPO_TOKEN for a session. Empty expiry means the provider expiry is unknown or unspecified. Expo operations may incur charges.');
-    console.log('Any other service: connect --provider apikey --service <name> --site <https key page> --env <VARIABLE> [--purpose <purpose>]. The user creates the key on that site and pastes it into Foundation; exec then sets <VARIABLE> (also reported as token_env). Foundation cannot verify such keys.');
-    console.log('node src/runtime.mjs wait [--timeout <seconds>] waits for the current approval (default 1800, maximum 1800 seconds). It prints only the approved request, never credentials. Cancellation, expiry, replacement, or timeout fails without cancelling the request.');
+  if (action === '--help' || action === 'help' || action === 'guide' || !action) {
+    let providers;
+    if (process.env.FOUNDATION_URL) {
+      try {
+        const response = await fetch(new URL('/v1/providers', process.env.FOUNDATION_URL), { redirect: 'error', signal: AbortSignal.timeout(5_000) });
+        const catalog = await response.json();
+        if (response.ok && Array.isArray(catalog.providers)) providers = catalog.providers;
+      } catch {}
+    }
+    console.log(guide(providers));
     return;
   }
   let options;
