@@ -4,6 +4,7 @@ const EXAMPLES = {
   expo: 'foundation connect --provider expo --purpose "<用途>"',
   openrouter: 'foundation connect --provider openrouter --purpose "<用途>"',
   supabase: 'foundation connect --provider supabase --purpose "<用途>"   (Supabase CLI は SUPABASE_ACCESS_TOKEN を読む)',
+  cloudflare: 'foundation connect --provider cloudflare --purpose "R2のバケット一覧を確認する。変更やデータ転送は行わない"   (CLOUDFLARE_API_TOKEN。accounts の cloudflare_account_id が対象)',
   gmail: 'foundation connect --provider gmail --mode metadata --purpose "<用途>"   (mode: readonly | metadata)',
   apikey: 'foundation connect --service <サービス名> --site <https://キー作成ページ> --env <環境変数名> --purpose "<用途>"',
 };
@@ -22,6 +23,8 @@ export function guide(providers) {
   const ids = available ? available.map(provider => provider.id) : Object.keys(EXAMPLES);
   for (const id of ids) if (EXAMPLES[id]) lines.push('   ' + EXAMPLES[id]);
   if (ids.includes('apikey')) lines.push('   例: foundation connect --service Anthropic --site https://console.anthropic.com/settings/keys --env ANTHROPIC_API_KEY --purpose "Claude API で要約を生成する"');
+  if (ids.includes('cloudflare')) lines.push('   Cloudflare はユーザーAPIトークン。R2のS3互換API用Access Key/Secret Keyではない。バケット一覧は公式APIの /accounts/<cloudflare_account_id>/r2/buckets (ページ送りは result_info.cursor) を使う。',
+    '   Foundationはトークン全体の権限を狭めない。登録したアカウントと依頼された用途にだけ使う。');
   lines.push('2. 出力の verification_uri と confirmation_code を、そのまま利用者に伝える。',
     '   利用者はブラウザで URL を開き、必要ならサービス側でキーを作って登録し、コードを入力して許可する。',
     '   コードは利用者が手で打つので必ず表示する。',

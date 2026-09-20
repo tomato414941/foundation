@@ -4,6 +4,7 @@ import { OPENROUTER_API, OPENROUTER_DOCS, OPENROUTER_SCOPE } from './openrouter.
 import { EXPO_API, EXPO_DOCS, EXPO_SCOPE, EXPO_SESSION_SCOPE, EXPO_TOKENS } from './expo.mjs';
 import { APIKEY_SCOPE } from './apikey.mjs';
 import { SUPABASE_API, SUPABASE_DOCS, SUPABASE_SCOPE, SUPABASE_TOKENS } from './supabase.mjs';
+import { CLOUDFLARE_API, CLOUDFLARE_DOCS, CLOUDFLARE_SCOPE, CLOUDFLARE_TOKENS } from './cloudflare.mjs';
 
 // Each integration supplies its authentication client and permission descriptions.
 // Request creation, user approval and runtime authentication do not depend on Gmail.
@@ -43,6 +44,22 @@ export function expoConnection(client) {
       description: '個人用トークンは、本人がアクセスできるすべてのアカウント・組織で操作できます。ビルドなどは課金を伴う場合があります。',
       restrictions: '読み取り専用ではありません。対象や操作を絞る場合は、Expoで権限を制限したRobotのトークンを使ってください。' }],
     matches(mode, account) { return account?.provider === 'expo' && account.scopes.length === 1 && (mode === 'access-token' ? account.scopes[0] === EXPO_SCOPE : mode === 'session' && client.sessionLoginEnabled && account.scopes[0] === EXPO_SESSION_SCOPE); },
+  };
+}
+
+export function cloudflareConnection(client) {
+  return {
+    id: 'cloudflare', name: 'Cloudflare', connectLabel: 'Cloudflareのトークンを登録', client, icon: 'cloud', canReconnect: false, canRevoke: false,
+    intro: 'APIトークンでR2に接続します。', managementUrl: CLOUDFLARE_TOKENS, credentialType: 'api_key', connectionMethod: 'token', tokenEnv: 'CLOUDFLARE_API_TOKEN',
+    tokenSetup: { url: CLOUDFLARE_TOKENS, label: 'APIトークン',
+      instructions: '「Create Token」→「Create Custom Token」で、Account → Workers R2 Storage → Read を選び、対象アカウントを1つに限定してください。不要な権限は追加せず、有効期限を設定してください。',
+      note: '登録時にR2の一覧へのアクセスを確認します。トークンの権限全体は確認・制限しません。',
+      fields: [{ id: 'account_id', label: 'アカウントID', max_length: 32, pattern: '[a-fA-F0-9]{32}', help: 'CloudflareのR2画面にある「Account ID」をコピーしてください。' }] },
+    api: { base_url: CLOUDFLARE_API, documentation_url: CLOUDFLARE_DOCS },
+    permissions: [{ id: 'api-token', name: 'トークンの権限でCloudflareを利用', connection_method: 'token',
+      description: '指定したアカウントでR2の一覧を取得できるAPIトークンを登録します。',
+      restrictions: '利用できる範囲はトークンに与えた全権限です。ここで指定するアカウントIDや用途では制限されません。読み取り専用のトークンを使ってください。' }],
+    matches(mode, account) { return mode === 'api-token' && account?.provider === 'cloudflare' && account.scopes.length === 1 && account.scopes[0] === CLOUDFLARE_SCOPE; },
   };
 }
 

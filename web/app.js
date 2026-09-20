@@ -25,6 +25,7 @@ const icon = (name) => {
     arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>', check: '<path d="m5 12 4 4L19 6"/>',
     lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
     database: '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/>',
+    cloud: '<path d="M7 18a5 5 0 1 1 1-9.9A6 6 0 0 1 20 10a4 4 0 0 1-1 8Z"/>',
     key: '<circle cx="8" cy="14" r="4"/><path d="m11 11 8-8m-3 3 2 2m-5 1 2 2"/>',
     network: '<circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="2"/><circle cx="18" cy="19" r="2"/><path d="m9 11 7-5m-7 7 7 5"/>',
   };
@@ -35,7 +36,7 @@ const statusName = (account) => ({ connected: '接続済み', reconnect_required
 const scopeName = account => account.permission?.name || '接続先で許可した権限';
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
 function keyFacts(account) {
-  if (!account.key_info) return '';
+  if (!account.key_info) return account.credential_type === 'api_key' && account.expiry_known === true ? `<dl class="key-facts"><div><dt>有効期限</dt><dd>${account.expires_at === null ? '期限の指定なし' : esc(new Date(account.expires_at).toLocaleString('ja-JP'))}</dd></div></dl>` : '';
   const info = account.key_info, dollars = value => value === null ? '上限なし' : new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }).format(value);
   const reset = { daily: '毎日', weekly: '毎週', monthly: '毎月' }[info.limit_reset] || 'リセットなし';
   return `<dl class="key-facts"><div><dt>キーの利用上限</dt><dd>${esc(dollars(info.limit))} · ${esc(reset)}</dd></div><div><dt>残りの上限額</dt><dd>${info.limit_remaining === null && info.limit !== null ? '情報がありません' : esc(dollars(info.limit_remaining))}</dd></div><div><dt>有効期限</dt><dd>${account.expiry_known === false ? '情報がありません' : account.expires_at === null ? '期限の指定なし' : esc(new Date(account.expires_at).toLocaleString('ja-JP'))}</dd></div><div><dt>持ち込みキーの利用分</dt><dd>${info.include_byok_in_limit ? '上限に含む' : '上限に含まない'}</dd></div></dl><p class="muted key-caption">${esc(new Date(info.checked_at).toLocaleString('ja-JP'))} 時点。上限と期限はOpenRouterで管理します。</p><a class="key-management" href="${esc(account.management_url)}" target="_blank" rel="noopener noreferrer">OpenRouterで上限・期限を確認 ↗</a>`;
@@ -316,10 +317,12 @@ function connectToken(provider, request = null) {
   }).join('');
   const siteUrl = claimed?.site || setup.url;
   const serviceName = claimed?.service || (fields.length ? '' : provider.name);
-  openDialog(`<h2 id="dialog-title">${esc(serviceName || provider.name)}を接続</h2><p>${serviceName ? `パスワードは${esc(serviceName)}の画面で入力します。ここには${esc(setup.label)}だけを登録してください。` : esc(provider.intro)}</p>
+  const setupFields = setup.fields || [];
+  const setupInputs = setupFields.map(field => `<label for="setup-${esc(field.id)}">${esc(field.label)}</label><input id="setup-${esc(field.id)}" name="setup-${esc(field.id)}" required maxlength="${esc(field.max_length)}" pattern="${esc(field.pattern)}" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="setup-${esc(field.id)}-help"><p class="permission-note" id="setup-${esc(field.id)}-help">${esc(field.help)}</p>`).join('');
+  openDialog(`<h2 id="dialog-title">${esc(serviceName || provider.name)}を接続</h2><p>${setupFields.length ? `${esc(provider.name)}で発行した${esc(setup.label)}と、対象の${setupFields.map(field => esc(field.label)).join('・')}を登録します。` : serviceName ? `パスワードは${esc(serviceName)}の画面で入力します。ここには${esc(setup.label)}だけを登録してください。` : esc(provider.intro)}</p>
     ${fields.length ? `<form autocomplete="off" class="token-form">${claimed ? `<p class="permission-note claim-note">以下はAIの申告です。作成ページのドメインが正しいか確認してください。</p>` : ''}${fieldInputs}` : '<form autocomplete="off" class="token-form">'}
     <div class="token-setup"><h3>1. ${esc(serviceName || 'サービス')}でキーを作成</h3><p>${esc(setup.instructions)}</p>${siteUrl || fields.length ? `<a class="button secondary full" href="${esc(siteUrl || '#')}" target="_blank" rel="noopener noreferrer" ${siteUrl ? '' : 'style="display:none"'}>${esc(serviceName || 'サービス')}の${esc(setup.label)}管理ページを開く ↗</a>` : ''}</div>
-    <h3 class="token-step">2. キーを登録</h3><label for="connection-token">${esc(setup.label)}</label><input id="connection-token" name="token" type="password" required minlength="8" maxlength="4096" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="token-storage-note"><p class="permission-note" id="token-storage-note">キーは暗号化して保存し、許可したアクセスキーの持ち主だけに渡します。チャットには貼り付けないでください。</p>
+    <h3 class="token-step">2. キーを登録</h3>${setupInputs}<label for="connection-token">${esc(setup.label)}</label><input id="connection-token" name="token" type="password" required minlength="8" maxlength="4096" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="token-storage-note"><p class="permission-note" id="token-storage-note">キーは暗号化して保存し、許可したアクセスキーの持ち主だけに渡します。チャットには貼り付けないでください。</p>${setup.note ? `<p class="permission-note">${esc(setup.note)}</p>` : ''}
     <input type="hidden" name="name" value="${esc(claimed?.service || provider.name)}"><input type="hidden" name="purpose" value="${esc(request?.purpose || '')}">
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>`);
   if (fields.length && !claimed) {
@@ -333,7 +336,8 @@ function connectToken(provider, request = null) {
     const input = dialog.querySelector('[name="token"]');
     input.value = '';
     const details = fields.length && !claimed ? Object.fromEntries(fields.map(field => [field.id, (form.get(field.id) || '').trim()])) : undefined;
-    const result = await api(`/api/connections/${provider.id}/connect`, { method: 'POST', data: { token, name: form.get('name'), purpose: form.get('purpose'), mode, ...(details ? { details } : {}), ...(request ? { accessRequestId: request.id } : {}) } });
+    const connectionFields = setupFields.length ? Object.fromEntries(setupFields.map(field => [field.id, (form.get('setup-' + field.id) || '').trim()])) : undefined;
+    const result = await api(`/api/connections/${provider.id}/connect`, { method: 'POST', data: { token, name: form.get('name'), purpose: form.get('purpose'), mode, ...(details ? { details } : {}), ...(connectionFields ? { fields: connectionFields } : {}), ...(request ? { accessRequestId: request.id } : {}) } });
     selected = result.account_id;
     closeDialog(); await refresh(); toast(`${provider.name}を接続しました。`);
   });
