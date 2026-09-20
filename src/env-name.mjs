@@ -4,7 +4,7 @@ const RESERVED = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'PWD', 'OL
   'NODE_OPTIONS', 'NODE_PATH', 'NODE_EXTRA_CA_CERTS', 'PYTHONPATH', 'PYTHONSTARTUP', 'PYTHONHOME', 'PERL5OPT', 'PERL5LIB', 'RUBYOPT', 'RUBYLIB', 'JAVA_TOOL_OPTIONS', 'GOFLAGS', 'GOPATH', 'GEM_PATH', 'GEM_HOME']);
 const SYSTEM_PREFIX = /^(FOUNDATION_|LD_|DYLD_|LC_|XDG_|GIT_|SSH_)/;
 // Names that built-in providers already own; a runtime-declared key may not borrow them.
-const PROVIDER_PREFIX = /^(GOOGLE_OAUTH_|GMAIL_|OPENROUTER_|EXPO_)/;
+const PROVIDER_PREFIX = /^(GOOGLE_OAUTH_|GMAIL_|OPENROUTER_|EXPO_|SUPABASE_ACCESS_TOKEN$)/;
 
 export function validEnvName(value) {
   return typeof value === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(value) && !RESERVED.has(value) && !SYSTEM_PREFIX.test(value);

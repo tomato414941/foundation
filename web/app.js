@@ -24,6 +24,7 @@ const icon = (name) => {
     device: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>',
     arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>', check: '<path d="m5 12 4 4L19 6"/>',
     lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+    database: '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/>',
     key: '<circle cx="8" cy="14" r="4"/><path d="m11 11 8-8m-3 3 2 2m-5 1 2 2"/>',
     network: '<circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="2"/><circle cx="18" cy="19" r="2"/><path d="m9 11 7-5m-7 7 7 5"/>',
   };
@@ -119,7 +120,7 @@ function details(account) {
   if (!account) return '';
   const provider = providerFor(account);
   return `<div class="connection-heading"><span class="status ${account.status === 'connected' ? '' : 'warning'}">${account.status === 'connected' ? icon('check') : ''}${statusName(account)}</span>${account.verified === false ? '<span class="status neutral">未検証</span>' : ''}<h3>${esc(account.name)}</h3><p class="account-email">${esc(accountLabel(account))}</p></div>
-    <dl class="connection-facts"><div><dt>用途</dt><dd>${esc(account.purpose || '未設定')}</dd></div>${claimRows(provider, account.details)}<div><dt>許可範囲</dt><dd>${esc(scopeName(account))}<span class="muted block">${esc(account.permission?.restrictions)}</span></dd></div></dl>${keyFacts(account)}
+    <dl class="connection-facts"><div><dt>用途</dt><dd>${esc(account.purpose || '未設定')}</dd></div>${Array.isArray(account.organizations) ? `<div><dt>組織</dt><dd>${account.organizations.length ? account.organizations.map(item => esc(item.name)).join('、') : 'なし'}</dd></div>` : ''}${claimRows(provider, account.details)}<div><dt>許可範囲</dt><dd>${esc(scopeName(account))}<span class="muted block">${esc(account.permission?.restrictions)}</span></dd></div></dl>${keyFacts(account)}
     <div class="connection-actions">${account.verified === false ? '' : `<button class="button secondary" data-action="check" data-id="${esc(account.id)}" ${account.status !== 'connected' || !provider.available ? 'disabled' : ''}>接続を確認</button>`}${provider.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(account.id)}" ${account.status === 'disconnecting' || !provider.available ? 'disabled' : ''}>再接続</button>` : ''}<button class="text-button" data-action="edit-account" data-id="${esc(account.id)}">編集</button></div>
     <details class="connection-reference"><summary>接続情報</summary><dl><dt>接続ID</dt><dd><code>${esc(account.id)}</code></dd></dl>${provider.api.documentation_url ? `<a href="${esc(provider.api.documentation_url)}" target="_blank" rel="noopener noreferrer">${esc(provider.name)} APIの公式ドキュメント ↗</a>` : ''}</details>
     <div class="connection-footer">${account.credential_type === 'expo_session' ? '' : `<a href="${esc(account.management_url || provider.management_url)}" target="_blank" rel="noopener noreferrer">${esc(account.details?.service || provider.name)}の${account.details ? 'キー管理ページ' : '接続管理'} ↗</a>`}<button class="text-button danger" data-action="remove-account" data-id="${esc(account.id)}">${account.status === 'disconnecting' ? '接続解除を再試行' : '接続を解除'}</button></div>`;
