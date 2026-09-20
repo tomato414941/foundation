@@ -140,6 +140,10 @@ function render() {
     <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">実行環境への利用許可</h2><p>AIを動かす環境ごとに接続先を選択</p></div></div><button class="button secondary" data-action="add-agent" ${state.accounts.some((a) => a.status !== 'disconnecting') ? '' : 'disabled'}>${icon('plus')} 実行環境を追加</button></div>
     ${state.agents.length ? `<div class="agent-list">${state.agents.map((agent) => `<article class="agent-row"><div class="agent-name"><h3>${esc(agent.name)}</h3><p>${agent.last_used_at ? '最終利用 ' + esc(new Date(agent.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions">${agent.accountIds.length ? `<ul>${agent.accountIds.map((id) => `<li><span>${esc(byId.get(id)?.name)}</span><small>${esc(accountLabel(byId.get(id)))}</small></li>`).join('')}</ul>` : '<span class="muted">許可なし</span>'}</div><div class="agent-actions"><button class="text-button" data-action="edit-grants" data-id="${esc(agent.id)}">許可を変更</button><button class="text-button danger" data-action="remove-agent" data-id="${esc(agent.id)}">利用を停止</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>利用を許可した実行環境はありません。</p></div>'}</section></main></div>`;
 }
+const codeComplete = form => /^[0-9a-fA-F]{8}$/.test((form.elements.confirmationCode?.value || '').replace(/[^0-9a-zA-Z]/g, ''));
+function codeField(enabled = true) {
+  return `<label for="confirmation-code">確認コード</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="0000-0000" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">AIとの会話に表示されたコードを入力してください。心当たりのない依頼は許可しないでください。</p>`;
+}
 function renderRequest() {
   const row = accessRequest;
   const shell = (content) => `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main class="approval-main">${content}</main></div>`;
@@ -159,26 +163,26 @@ function renderRequest() {
   const matching = state.accounts.filter(account => row.eligible_account_ids.includes(account.id));
   const available = matching.filter((account) => account.status === 'connected');
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.service.name)}へのアクセス</p><h1>利用を許可しますか？</h1></div></header>
-    <dl class="approval-facts"><div><dt>依頼元</dt><dd>${esc(row.requester_name)}</dd></div>${row.purpose ? `<div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}<div><dt>権限</dt><dd>${esc(row.permission.name)}<span class="muted block">${esc(row.permission.description)}</span></dd></div></dl>
-    <div class="confirmation-panel"><span>確認コード</span><strong>${esc(row.confirmation_code)}</strong><p>AIとの会話に表示されたコードと照合してください。心当たりのない依頼は許可しないでください。</p></div>
+    <p class="approval-summary"><strong>${esc(row.requester_name)}</strong> が${row.purpose ? `「${esc(row.purpose)}」のために` : ''}、<strong>${esc(row.service.name)}</strong> の「${esc(row.permission.name)}」を求めています。</p>
     <form id="access-request-form"><fieldset><legend>利用を許可するアカウント</legend>${available.length ? available.map((account) => `<div class="approval-account"><label class="choice"><input type="radio" name="accountId" value="${esc(account.id)}" ${available.length === 1 ? 'checked' : ''} required><span><strong>${esc(account.name)}</strong><small>${esc(accountLabel(account))}</small></span></label>${keyFacts(account)}</div>`).join('') : '<p class="muted">この権限で利用できる接続済みのアカウントはありません。</p>'}</fieldset>
     ${matching.filter(account => account.status === 'reconnect_required' && row.service.can_reconnect).map(account => `<button class="button secondary full request-connect" type="button" data-action="request-connect" data-id="${esc(account.id)}" ${row.service.available ? '' : 'disabled'}>${esc(accountLabel(account))} を再接続</button>`).join('')}
     <button class="button secondary full request-connect" type="button" data-action="request-connect" ${row.service.available ? '' : 'disabled'}>${icon('plus')} ${esc(row.permission.connect_label || row.service.connect_label)}</button>
     ${row.service.available ? '' : `<p class="form-error" role="status">現在${esc(row.service.name)}を接続できません。</p>`}
     ${row.service.id === 'openrouter' && ['failed', 'scope', 'retry', 'changed'].includes(resultCode) ? '<p class="permission-note">接続できなくても、OpenRouterで作成済みのキーが残る場合があります。<a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">不要なキーはOpenRouterで削除してください ↗</a></p>' : ''}
-    <label class="choice confirmation-choice"><input type="checkbox" name="confirmed" required ${available.length ? '' : 'disabled'}><span>会話の確認コードと一致しています</span></label>
-    <p class="permission-note">${esc(row.permission.restrictions)} 利用許可は、後から接続画面で取り消せます。${row.service.can_revoke ? '' : `受け渡し済みのAPIキーの停止は、${esc(row.service.name)}のキー管理画面で行ってください。`}</p><p class="form-error" role="alert"></p>
+    ${codeField(available.length > 0)}
+    <details class="approval-details"><summary>権限の範囲と取り消し方</summary><p>${esc(row.permission.description)}</p><p>${esc(row.permission.restrictions)}</p><p>利用許可は、後から接続画面で取り消せます。${row.service.can_revoke ? '' : `受け渡し済みのAPIキーの停止は、${esc(row.service.name)}のキー管理画面で行ってください。`}</p></details><p class="form-error" role="alert"></p>
     <button class="button primary full" type="submit" disabled>利用を許可 ${icon('arrow')}</button><button class="text-button full" type="button" data-action="deny-request">許可しない</button></form>
     <p class="request-expiry">この依頼は ${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで有効です。</p></section>`);
   const form = document.querySelector('#access-request-form'), submit = form.querySelector('[type="submit"]');
-  form.addEventListener('change', () => { submit.disabled = !row.service.available || !form.elements.confirmed.checked || !form.querySelector('[name="accountId"]:checked'); });
+  const update = () => { submit.disabled = !row.service.available || !codeComplete(form) || !form.querySelector('[name="accountId"]:checked'); };
+  form.addEventListener('change', update); form.addEventListener('input', update);
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (submit.disabled || !form.reportValidity()) return;
     submit.disabled = true;
     const errorElement = form.querySelector('[role="alert"]'); errorElement.textContent = '';
     try {
-      await api(`/api/access-requests/${requestId}/approve`, { method: 'POST', data: { accountId: new FormData(form).get('accountId'), confirmationCode: row.confirmation_code } });
+      await api(`/api/access-requests/${requestId}/approve`, { method: 'POST', data: { accountId: new FormData(form).get('accountId'), confirmationCode: form.elements.confirmationCode.value } });
       await refresh();
     } catch (error) { if (form.isConnected) { errorElement.textContent = error.message; submit.disabled = false; } }
   });
@@ -226,7 +230,7 @@ function connect(account, providerId = account?.provider) {
 function expoLoginMarkup(request) {
   return `<form class="expo-login-form" autocomplete="off"><div class="expo-password-fields"><label for="expo-username">Expoのメールアドレスまたはユーザー名</label><input id="expo-username" name="username" required maxlength="254" autocomplete="off" autocapitalize="none" spellcheck="false"><label for="expo-password">パスワード</label><input id="expo-password" name="password" type="password" required maxlength="1024" autocomplete="off"></div>
     <div class="expo-otp-fields" hidden><label for="expo-otp">認証コード</label><input id="expo-otp" name="otp" maxlength="64" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" disabled><p class="expo-otp-help permission-note"></p><button type="button" class="text-button expo-reset">ログイン情報を入力し直す</button></div>
-    <p class="permission-note auth-privacy">入力内容はFoundationを経由してExpoへ送信します。パスワード・認証コードは保存しません。</p>
+    ${request ? codeField() : ''}<p class="permission-note auth-privacy">入力内容はFoundationを経由してExpoへ送信します。パスワード・認証コードは保存しません。</p>
     <p class="permission-note auth-permission">${request ? esc(request.permission.description) : 'Expoのログイン状態を保存します。AIへの利用許可は、接続後に設定できます。'}</p><p class="form-error" role="alert"></p>
     <button class="button primary full" type="submit" ${request && !request.service.available ? 'disabled' : ''}>${request ? 'ログインして利用を許可' : 'ログインして接続'} ${icon('arrow')}</button></form>`;
 }
@@ -237,7 +241,9 @@ function bindExpoLogin(container, request) {
   let password = '', username = '', active = true, busy = false, deadline, controller;
   function reset() {
     password = ''; username = ''; clearTimeout(deadline); controller?.abort(); busy = false;
-    form.reset(); passwordFields.hidden = false; otpFields.hidden = true;
+    const code = form.elements.confirmationCode?.value || '';
+    form.reset(); if (form.elements.confirmationCode) form.elements.confirmationCode.value = code;
+    passwordFields.hidden = false; otpFields.hidden = true;
     form.elements.password.disabled = false; form.elements.username.disabled = false; form.elements.otp.disabled = true; form.elements.otp.required = false;
     button.disabled = Boolean(request && !request.service.available); button.textContent = request ? 'ログインして利用を許可' : 'ログインして接続';
   }
@@ -255,7 +261,7 @@ function bindExpoLogin(container, request) {
     busy = true; button.disabled = true; button.textContent = '確認中…'; errorElement.textContent = ''; controller = new AbortController();
     const signal = controller.signal;
     try {
-      const result = await api('/api/connections/expo/login', { method: 'POST', signal, data: { username, password, ...(otp === undefined ? {} : { otp }), ...(request ? { accessRequestId: request.id, confirmationCode: request.confirmation_code } : {}) } });
+      const result = await api('/api/connections/expo/login', { method: 'POST', signal, data: { username, password, ...(otp === undefined ? {} : { otp }), ...(request ? { accessRequestId: request.id, confirmationCode: form.elements.confirmationCode.value } : {}) } });
       if (!active || signal.aborted) return;
       if (result.challenge) {
         passwordFields.hidden = true; otpFields.hidden = false;
@@ -279,8 +285,8 @@ function bindExpoLogin(container, request) {
 function renderExpoRequest(row, shell) {
   const accounts = state.accounts.filter(account => row.eligible_account_ids.includes(account.id) && account.status === 'connected');
   app.innerHTML = shell(`<section class="approval-card expo-approval"><header class="approval-heading"><span class="approval-symbol">${icon('device')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}からの接続依頼</p><h1>Expoを接続</h1></div></header>
-    ${row.purpose ? `<p class="expo-request-purpose">${esc(row.purpose)}</p>` : ''}<p class="expo-request-code">確認コード <strong>${esc(row.confirmation_code)}</strong><span>会話のコードと照合してください。</span></p>
-    <div class="expo-login-area">${accounts.length ? `<form id="expo-existing"><fieldset><legend>利用するアカウント</legend>${accounts.map((account, index) => `<label class="choice"><input type="radio" name="accountId" value="${esc(account.id)}" ${index === 0 ? 'checked' : ''}><span><strong>${esc(accountLabel(account))}</strong><small>${esc(account.name)}</small></span></label>`).join('')}</fieldset><p class="permission-note">${esc(row.permission.description)}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">このアカウントの利用を許可</button><button class="text-button full expo-other" type="button">別のアカウントで接続</button></form>` : expoLoginMarkup(row)}</div>
+    ${row.purpose ? `<p class="expo-request-purpose">${esc(row.purpose)}</p>` : ''}
+    <div class="expo-login-area">${accounts.length ? `<form id="expo-existing"><fieldset><legend>利用するアカウント</legend>${accounts.map((account, index) => `<label class="choice"><input type="radio" name="accountId" value="${esc(account.id)}" ${index === 0 ? 'checked' : ''}><span><strong>${esc(accountLabel(account))}</strong><small>${esc(account.name)}</small></span></label>`).join('')}</fieldset>${codeField()}<details class="approval-details"><summary>権限の範囲</summary><p>${esc(row.permission.description)}</p><p>${esc(row.permission.restrictions)}</p></details><p class="form-error" role="alert"></p><button class="button primary full" type="submit">このアカウントの利用を許可</button><button class="text-button full expo-other" type="button">別のアカウントで接続</button></form>` : expoLoginMarkup(row)}</div>
     <button class="text-button full" data-action="deny-request">許可しない</button></section>`);
   const area = app.querySelector('.expo-login-area');
   if (!accounts.length) { bindExpoLogin(area, row); return; }
@@ -288,7 +294,7 @@ function renderExpoRequest(row, shell) {
   area.querySelector('form').addEventListener('submit', async event => {
     event.preventDefault(); const form = event.currentTarget, button = form.querySelector('[type="submit"]');
     button.disabled = true;
-    try { await api(`/api/access-requests/${row.id}/approve`, { method: 'POST', data: { accountId: new FormData(form).get('accountId'), confirmationCode: row.confirmation_code } }); await refresh(); }
+    try { await api(`/api/access-requests/${row.id}/approve`, { method: 'POST', data: { accountId: new FormData(form).get('accountId'), confirmationCode: form.elements.confirmationCode.value } }); await refresh(); }
     catch (error) { if (form.isConnected) { button.disabled = false; form.querySelector('[role="alert"]').textContent = error.message; } }
   });
 }
@@ -299,8 +305,8 @@ function connectToken(provider, request = null) {
     <div class="token-setup"><h3>1. ${esc(provider.name)}でトークンを作成</h3><p>${esc(setup.instructions)}</p><a class="button secondary full" href="${esc(setup.url)}" target="_blank" rel="noopener noreferrer">${esc(provider.name)}のトークン管理を開く ↗</a></div>
     <form autocomplete="off"><h3 class="token-step">2. トークンを登録</h3><label for="connection-token">${esc(setup.label)}</label><input id="connection-token" name="token" type="password" required minlength="20" maxlength="1024" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="token-storage-note"><p class="permission-note" id="token-storage-note">トークンは暗号化して保存し、許可した実行環境だけに渡します。チャットには貼り付けないでください。</p>
     <details class="token-details"><summary>名前・用途を変更</summary>${accountFields({ name: provider.name, purpose: request?.purpose || '' })}</details>
-    <div class="token-permission"><strong>${esc(permission.name)}</strong><p>${esc(permission.description)}</p><p>${esc(permission.restrictions)}</p></div>
-    <p class="permission-note">登録だけではAIに利用を許可しません。${request ? '登録後、アカウントと確認コードを確認して利用を許可してください。' : '登録後、利用を許可する実行環境を選んでください。'}トークンの無効化は${esc(provider.name)}で行います。</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>`);
+    <details class="token-details"><summary>権限の範囲と注意点</summary><p>${esc(permission.description)}</p><p>${esc(permission.restrictions)}</p><p>登録だけではAIに利用を許可しません。${request ? '登録後、アカウントと確認コードを確認して利用を許可してください。' : '登録後、利用を許可する実行環境を選んでください。'}トークンの無効化は${esc(provider.name)}で行います。</p></details>
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>`);
   bindForm(async form => {
     const token = form.get('token').trim();
     form.delete('token');

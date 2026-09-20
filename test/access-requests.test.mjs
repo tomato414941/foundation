@@ -213,3 +213,31 @@ test('A second integration uses the same request, approval and credential APIs w
   assert.equal(credentials.json.api_base_url, notes.api.base_url);
   assert.equal((await f.request('/v1/accounts', { token })).json.accounts[0].api.documentation_url, notes.api.documentation_url);
 });
+
+test('The approval page never receives the confirmation code; entry is normalized and locked after repeated mistakes', async t => {
+  const f = await fixture(t), account = await f.account();
+  const { token, row } = await create(f);
+  const page = await f.request('/api/access-requests/' + row.id);
+  assert.equal(page.status, 200);
+  assert.equal(page.json.request.confirmation_code, undefined);
+  assert.doesNotMatch(page.text, new RegExp(row.confirmation_code));
+  assert.equal((await status(f, token)).json.request.confirmation_code, row.confirmation_code);
+  for (const wrong of ['', 'ZZZZ-ZZZZ', row.confirmation_code.slice(0, 7)]) {
+    const response = await approve(f, row, account.id, { confirmationCode: wrong });
+    assert.equal(response.status, 400); assert.equal(response.json.error.code, 'confirmation_required');
+    assert.doesNotMatch(response.text, new RegExp(row.confirmation_code));
+  }
+  assert.equal((await status(f, token)).json.request.status, 'pending');
+  const relaxed = await approve(f, row, account.id, { confirmationCode: ' ' + row.confirmation_code.toLowerCase().replace('-', '') + ' ' });
+  assert.equal(relaxed.status, 200, relaxed.text);
+  assert.equal(relaxed.json.request.status, 'approved');
+  assert.equal(relaxed.json.request.confirmation_code, undefined);
+
+  const second = await create(f, key());
+  for (let attempt = 1; attempt <= 4; attempt++) assert.equal((await approve(f, second.row, account.id, { confirmationCode: '0000-0000' })).json.error.code, 'confirmation_required');
+  const locked = await approve(f, second.row, account.id, { confirmationCode: '0000-0000' });
+  assert.equal(locked.status, 400); assert.equal(locked.json.error.code, 'confirmation_locked');
+  assert.equal((await status(f, second.token)).json.request.status, 'denied');
+  assert.equal((await approve(f, second.row, account.id)).status, 409);
+  assert.equal(f.app.store.agents(USER_A).length, 1);
+});

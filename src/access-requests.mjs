@@ -1,10 +1,12 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { digest } from './store.mjs';
 import { fail } from './errors.mjs';
 
 export const REQUEST_TTL = 30 * 60_000;
 export const REQUEST_ID = /^[A-Za-z0-9_-]{43}$/;
 export const RUNTIME_KEY = /^fdn_[A-Za-z0-9_-]{43}$/;
+export const CODE_ATTEMPTS = 5;
+const normalizeCode = value => typeof value === 'string' ? value.toUpperCase().replace(/[^0-9A-F]/g, '') : '';
 
 // The public approval URL cannot authenticate a runtime. Only the hash of the
 // independently generated runtime key is stored, even before user approval.
@@ -56,10 +58,24 @@ export class AccessRequests {
     this.db.prepare('UPDATE access_requests SET owner_id=? WHERE id=?').run(ownerId, row.id);
     return this.get(id);
   }
+  // The user types the code the runtime showed in the conversation; the approval page never displays it.
+  // Wrong entries count even when the surrounding transaction rolls back.
+  verifyCode(id, ownerId, code) {
+    const row = this.forUser(id, ownerId, true);
+    const expected = Buffer.from(row.confirmation_code.replace('-', '')), given = Buffer.from(normalizeCode(code));
+    if (given.length === expected.length && timingSafeEqual(given, expected)) return row;
+    const attempts = row.confirmation_attempts + 1;
+    if (attempts >= CODE_ATTEMPTS) {
+      this.db.prepare("UPDATE access_requests SET confirmation_attempts=?, owner_id=?, status='denied' WHERE id=?").run(attempts, ownerId, row.id);
+      fail(400, 'confirmation_locked', '確認コードの入力回数が上限に達したため、この依頼を取り消しました。AIに新しい接続リンクを依頼してください。');
+    }
+    this.db.prepare('UPDATE access_requests SET confirmation_attempts=? WHERE id=?').run(attempts, row.id);
+    fail(400, 'confirmation_required', 'AIとの会話に表示された確認コードを入力してください。');
+  }
   approve(id, ownerId, accountId, code) {
+    this.verifyCode(id, ownerId, code);
     return this.store.transaction(() => {
-      const row = this.forUser(id, ownerId, true);
-      if (typeof code !== 'string' || code !== row.confirmation_code) fail(400, 'confirmation_required', '会話に表示された確認コードを確認してください。');
+      const row = this.verifyCode(id, ownerId, code);
       this.providers.get(row.provider).client.check();
       const account = typeof accountId === 'string' ? this.store.account(ownerId, accountId) : null;
       if (!account || account.status !== 'connected' || !this.matches(row, account)) fail(409, 'account_unavailable', '依頼された権限で利用できるアカウントを選んでください。');
@@ -88,7 +104,7 @@ export class AccessRequests {
     this.db.prepare("UPDATE access_requests SET status='cancelled' WHERE id=?").run(row.id);
     return this.get(row.id);
   }
-  summary(row, origin) {
+  summary(row, origin, { code = true } = {}) {
     let status = row.status, account;
     if (status === 'pending' && row.agent_id && !this.db.prepare('SELECT 1 FROM agents WHERE id=? AND owner_id=? AND token_hash=?').get(row.agent_id, row.owner_id, row.token_hash)) status = 'revoked';
     if (status === 'approved') {
@@ -99,7 +115,7 @@ export class AccessRequests {
       else if (account.status !== 'connected') status = 'reconnect_required';
     }
     return { id: row.id, provider: row.provider, service: this.providers.describe(row.provider), permission: this.providers.permission(row.provider, row.mode), requester_name: row.requester_name, purpose: row.purpose, mode: row.mode,
-      confirmation_code: row.confirmation_code, verification_uri: origin + '/connect/' + row.id,
+      ...(code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
       status, created_at: row.created_at, expires_at: row.expires_at,
       ...(status === 'approved' ? { account: { id: account.id, email: account.email, label: this.providers.get(row.provider).client.accountInfo?.(this.store.secrets(account))?.label || account.email }, agent_id: row.agent_id } : {}) };
   }

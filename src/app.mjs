@@ -268,12 +268,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
         const requestRoute = path.match(/^\/api\/access-requests\/([A-Za-z0-9_-]{43})(\/(?:approve|deny))?$/);
         if (requestRoute) {
           const row = requests.forUser(requestRoute[1], user.id);
-          if (!requestRoute[2] && method === 'GET') return send(200, { request: { ...requests.summary(row, origin), eligible_account_ids: store.accounts(user.id).filter(account => requests.matches(row, account)).map(account => account.id) } });
+          if (!requestRoute[2] && method === 'GET') return send(200, { request: { ...requests.summary(row, origin, { code: false }), eligible_account_ids: store.accounts(user.id).filter(account => requests.matches(row, account)).map(account => account.id) } });
           if (method === 'POST' && requestRoute[2]) {
             const input = await body(req);
             if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
             const result = requestRoute[2] === '/deny' ? requests.deny(row.id, user.id) : requests.approve(row.id, user.id, input.accountId, input.confirmationCode);
-            return send(200, { request: requests.summary(result, origin) });
+            return send(200, { request: requests.summary(result, origin, { code: false }) });
           }
         }
         if (path === '/api/connections/expo/login' && method === 'POST') {
@@ -285,7 +285,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           try {
             const accessRequest = input.accessRequestId === undefined ? null : requests.forUser(input.accessRequestId, user.id, true);
             if (accessRequest && (accessRequest.provider !== 'expo' || accessRequest.mode !== 'session')) fail(400, 'scope_mismatch', '依頼されたサービスと権限で接続してください。');
-            if (accessRequest && input.confirmationCode !== accessRequest.confirmation_code) fail(400, 'confirmation_required', '会話の確認コードを確認してください。');
+            if (accessRequest) requests.verifyCode(accessRequest.id, user.id, input.confirmationCode);
             const name = nameValue(input.name ?? 'Expo', '表示名'), purpose = purposeValue(input.purpose ?? accessRequest?.purpose ?? '');
             if (accessRequest) requests.claim(accessRequest.id, user.id);
             result = await provider.client.login(input);
@@ -295,7 +295,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
             const saved = store.transaction(() => {
               const id = store.connect(user.id, { provider: 'expo', name, purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials);
               const approved = accessRequest ? requests.approve(accessRequest.id, user.id, id, input.confirmationCode) : null;
-              return { connected: true, account_id: id, ...(approved ? { request: requests.summary(approved, origin) } : {}) };
+              return { connected: true, account_id: id, ...(approved ? { request: requests.summary(approved, origin, { code: false }) } : {}) };
             });
             committed = true;
             return send(200, saved);

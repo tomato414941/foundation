@@ -55,6 +55,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     field = dialog.get_by_label('アクセストークン', exact=True)
     expect(field).to_have_attribute('type', 'password')
     expect(field).to_have_attribute('autocomplete', 'off')
+    expect(dialog.get_by_text('すべてのアカウント・組織', exact=False)).to_be_hidden()
+    dialog.get_by_text('権限の範囲と注意点', exact=True).click()
     expect(dialog.get_by_text('すべてのアカウント・組織', exact=False)).to_be_visible()
     expect(dialog.get_by_label('用途 任意', exact=True)).to_have_value(request['purpose'])
 
@@ -94,7 +96,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     assert cli('status')['request']['status'] == 'pending'
     cli('accounts', success=False)
     review(page)
-    page.get_by_role('checkbox', name='会話の確認コードと一致しています', exact=True).check()
+    expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
+    page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
     page.get_by_role('button', name='利用を許可', exact=True).click()
     expect(page.get_by_role('heading', name='利用を許可しました', exact=True)).to_be_visible()
     assert cli('status')['request']['status'] == 'approved'
