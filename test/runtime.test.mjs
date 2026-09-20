@@ -123,3 +123,29 @@ test('--help prints the agent procedure in Japanese and, when a server is reacha
   assert.match(online.out, /現在のサーバーで使えるサービス: gmail \(Gmail\)/);
   assert.doesNotMatch(online.out, /foundation connect --provider expo/);
 });
+
+test('The server distributes its own CLI: install.sh bakes in the origin and the installed command runs against it', async t => {
+  const f = await fixture(t);
+  const script = await f.request('/cli/install.sh', { anonymous: true });
+  assert.equal(script.status, 200);
+  assert.match(script.text, new RegExp("ORIGIN='" + f.base + "'"));
+  assert.match(script.text, /Node\.js 24/);
+  assert.doesNotMatch(script.text, /__ORIGIN__|__FILES__/);
+  const file = await f.request('/cli/runtime.mjs', { anonymous: true });
+  assert.equal(file.status, 200);
+  assert.equal(file.text, await readFile('src/runtime.mjs', 'utf8'));
+  for (const bad of ['/cli/app.mjs', '/cli/../src/store.mjs', '/cli/store.mjs', '/cli/', '/cli/install.sh/']) assert.equal((await f.request(bad, { anonymous: true })).status, 404, bad);
+  const dir = await mkdtemp(join(tmpdir(), 'foundation-install-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, 'install.sh'), script.text);
+  const run = (command, args, env) => new Promise((resolve) => {
+    const child = spawn(command, args, { env: { ...process.env, ...env } });
+    let out = '', err = ''; child.stdout.on('data', part => { out += part; }); child.stderr.on('data', part => { err += part; });
+    child.once('exit', code => resolve({ code, out, err }));
+  });
+  const install = await run('sh', [join(dir, 'install.sh')], { FOUNDATION_CLI_DIR: join(dir, 'cli'), FOUNDATION_BIN_DIR: join(dir, 'bin') });
+  assert.equal(install.code, 0, install.err);
+  assert.match(install.out, /Installed/);
+  const installed = await run(join(dir, 'bin', 'foundation'), ['providers'], { FOUNDATION_URL: '' });
+  assert.equal(installed.code, 0, installed.err);
+  assert.equal(JSON.parse(installed.out).providers[0].id, 'gmail');
+});
