@@ -446,14 +446,14 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           const provider = providers.get(account.provider);
           const credentials = await provider.client.token(store, account);
           const expoSession = account.provider === 'expo' && credentials.credential_type === 'expo_session';
-          if (!(Number.isFinite(credentials.expires_at) && credentials.expires_at > Date.now()) && !((credentials.credential_type === 'api_key' || expoSession) && credentials.expires_at === null)) fail(502, 'provider_response', '認証情報の有効期限を確認できませんでした。');
+          if (!(Number.isFinite(credentials.expires_at) && credentials.expires_at > Date.now()) && !(['api_key', 'private_key'].includes(credentials.credential_type) || expoSession) || credentials.expires_at !== null && !Number.isFinite(credentials.expires_at)) fail(502, 'provider_response', '認証情報の有効期限を確認できませんでした。');
           const still = actor(req);
           if (still.generation !== agent.generation) fail(403, 'access_denied', '利用許可が変わりました。');
           store.requireGrant(agent, account.id);
           currentAccount(account);
           store.recordIssuance(agent, credentials.expires_at);
           const info = provider.client.accountInfo?.(credentials) || {};
-          return send(200, { access_token: credentials.access_token, token_type: expoSession ? 'Expo-Session' : 'Bearer', credential_type: credentials.credential_type || 'oauth2_access_token', expires_at: credentials.expires_at, expires_in: credentials.expires_at === null ? null : Math.max(0, Math.floor((credentials.expires_at - Date.now()) / 1000)), scope: credentials.scopes.join(' '), account: { id: account.id, provider: account.provider, email: account.email, label: info.label || account.email }, ...(expoSession ? { credential_header: 'expo-session', session_profile: { user_id: credentials.details.actor_id, username: credentials.details.label } } : {}), ...(info.key_info ? { key_info: info.key_info } : {}), ...(credentials.verification ? { verification: credentials.verification } : {}), token_env: providers.tokenEnv(provider.id, credentials), api_base_url: provider.api.base_url });
+          return send(200, { access_token: credentials.access_token, token_type: expoSession ? 'Expo-Session' : 'Bearer', credential_type: credentials.credential_type || 'oauth2_access_token', expires_at: credentials.expires_at, expires_in: credentials.expires_at === null ? null : Math.max(0, Math.floor((credentials.expires_at - Date.now()) / 1000)), scope: credentials.scopes.join(' '), account: { id: account.id, provider: account.provider, email: account.email, label: info.label || account.email }, ...(expoSession ? { credential_header: 'expo-session', session_profile: { user_id: credentials.details.actor_id, username: credentials.details.label } } : {}), ...(info.key_info ? { key_info: info.key_info } : {}), ...(credentials.verification ? { verification: credentials.verification } : {}), ...providers.delivery(provider.id, credentials), api_base_url: provider.api.base_url });
         }
       }
       fail(404, 'not_found', '指定された操作が見つかりません。');
