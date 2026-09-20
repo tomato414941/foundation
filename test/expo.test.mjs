@@ -166,3 +166,18 @@ test('CLI resumes Expo approval and injects EXPO_TOKEN only into selected comman
   const other = await execute(['exec', gmail.id, '--', process.execPath, '-e', 'if(process.env.EXPO_TOKEN || process.env.OPENROUTER_API_KEY || !process.env.GOOGLE_OAUTH_ACCESS_TOKEN) process.exit(2)'], env);
   assert.equal(other.code, 0, other.err);
 });
+
+test('Session login is off by default; stored sessions stop being delivered when it is disabled', async t => {
+  const { ExpoProvider, EXPO_SESSION_SCOPE } = await import('../src/providers/expo.mjs');
+  assert.equal(new ExpoProvider().sessionLoginEnabled, false);
+  const f = await expoFixture(t);
+  const login = await f.request('/api/connections/expo/login', { method: 'POST', data: { username: 'u', password: 'p' } });
+  assert.ok([400, 503].includes(login.status), login.text);
+  assert.equal(f.app.store.accounts(USER_A).length, 0);
+  const account = await f.expoAccount();
+  const store = f.app.store, id = account.id, row = store.account(USER_A, id);
+  store.saveCredentials(row, { ...store.secrets(row), credential_type: 'expo_session', scopes: [EXPO_SESSION_SCOPE], details: { ...store.secrets(row).details } });
+  const check = await f.request('/api/accounts/' + id + '/check', { method: 'POST', data: {} });
+  assert.equal(check.status, 409); assert.equal(check.json.error.code, 'reconnect_required');
+  assert.equal(store.account(row.owner_id, id).status, 'reconnect_required');
+});
