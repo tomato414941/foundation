@@ -3,6 +3,7 @@
 const EXAMPLES = {
   expo: 'foundation connect --provider expo --purpose "<用途>"',
   openrouter: 'foundation connect --provider openrouter --purpose "<用途>"',
+  supabase: 'foundation connect --provider supabase --purpose "<用途>"   (Supabase CLI は SUPABASE_ACCESS_TOKEN を読む)',
   gmail: 'foundation connect --provider gmail --mode metadata --purpose "<用途>"   (mode: readonly | metadata)',
   apikey: 'foundation connect --service <サービス名> --site <https://キー作成ページ> --env <環境変数名> --purpose "<用途>"',
 };
