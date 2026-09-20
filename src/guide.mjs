@@ -22,7 +22,7 @@ export function guide(providers) {
     '   利用者はブラウザで URL を開き、必要ならサービス側でキーを作って登録し、コードを入力して許可する。',
     '   コードは利用者が手で打つので必ず表示する。',
     '3. 承認を待つ: foundation wait --timeout 1800',
-    '4. 接続先を確認: foundation accounts   (account id と token_env が分かる)',
+    '4. 接続先を確認: foundation accounts   (account id と token_env が分かる。承認前は 401 not_approved になる)',
     '5. 実行: foundation exec <account-id> -- <コマンド> [引数...]',
     '   子プロセスにだけ FOUNDATION_ACCESS_TOKEN と、token_env が示す変数 (EXPO_TOKEN、OPENROUTER_API_KEY、',
     '   GOOGLE_OAUTH_ACCESS_TOKEN、または --env で申告した名前) が入る。exec の外では認証情報に触れない。', '');
