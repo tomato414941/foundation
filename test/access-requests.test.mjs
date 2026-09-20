@@ -12,7 +12,9 @@ async function create(f, token = key(), overrides = {}) {
   return { token, row: response.json.request };
 }
 const approve = (f, row, accountId, overrides = {}) => f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { accountId, confirmationCode: row.confirmation_code, ...overrides } });
-const status = (f, token) => f.request('/v1/access-requests/current', { token, anonymous: true });
+const usable = (f, token) => f.request('/v1/accounts', { token, anonymous: true });
+const cancel = (f, token) => f.request('/v1/access-requests/current', { method: 'DELETE', token, anonymous: true, data: {} });
+const rowStatus = (f, id) => f.app.store.db.prepare('SELECT status FROM access_requests WHERE id=?').get(id)?.status;
 
 test('A fresh runtime requests access, receives no access before approval, and uses the same private key after approval', async t => {
   const f = await fixture(t, { login: false });
@@ -24,8 +26,9 @@ test('A fresh runtime requests access, receives no access before approval, and u
   assert.equal((await f.request('/connect/' + row.id, { anonymous: true, headers: { 'sec-fetch-site': 'cross-site' } })).status, 200);
   assert.equal((await f.request('/api/access-requests/' + row.id, { anonymous: true })).status, 401);
   assert.equal((await f.request('/v1/accounts', { token, anonymous: true })).status, 401);
-  assert.equal((await status(f, row.id)).status, 401);
-  assert.equal((await status(f, key())).status, 410);
+  assert.equal((await cancel(f, row.id)).status, 401);
+  assert.equal((await cancel(f, key())).status, 410);
+  assert.equal((await f.request('/v1/access-requests/current', { token, anonymous: true })).status, 405, 'no status window for runtimes');
   await f.login();
   const account = await f.account();
   const info = await f.request('/api/access-requests/' + row.id);
@@ -34,7 +37,7 @@ test('A fresh runtime requests access, receives no access before approval, and u
   assert.equal(approved.status, 200, approved.text);
   assert.equal(approved.json.request.status, 'approved');
   assert.doesNotMatch(approved.text, /fdn_|google-access|refresh_token|token_hash/);
-  assert.equal((await status(f, token)).json.request.account.id, account.id);
+  assert.equal((await usable(f, token)).json.accounts[0].id, account.id);
   const listed = await f.request('/v1/accounts', { token, anonymous: true });
   assert.deepEqual(listed.json.accounts.map(a => a.id), [account.id]);
   const credential = await f.request('/v1/accounts/' + account.id + '/credentials', { method: 'POST', token, anonymous: true, data: {} });
@@ -52,7 +55,7 @@ test('Request creation is idempotent and cannot silently change the permissions 
   assert.equal(again.row.id, row.id);
   const changed = await f.request('/v1/access-requests', { method: 'POST', token, data: { ...input, mode: 'metadata' } });
   assert.equal(changed.status, 409);
-  assert.equal((await status(f, token)).json.request.mode, 'readonly');
+  assert.equal(f.app.store.db.prepare('SELECT mode FROM access_requests WHERE id=?').get(row.id).mode, 'readonly');
 });
 
 test('Email login returns to the exact approval page and rejects open redirects', async t => {
@@ -76,7 +79,6 @@ test('Google OAuth preserves the request but connecting alone never approves the
   assert.equal(start.status, 200, start.text);
   const response = await f.callback(new URL(start.json.url));
   assert.equal(response.headers.get('location'), '/connect/' + row.id + '?connection=connected');
-  assert.equal((await status(f, token)).json.request.status, 'pending');
   assert.equal((await f.request('/v1/accounts', { token, anonymous: true })).status, 401);
   assert.equal(f.app.store.accounts(USER_A).length, 1);
   assert.equal(f.app.store.agents(USER_A).length, 0);
@@ -107,7 +109,7 @@ test('Existing runtime requests stay with their owner, preserve old grants, and 
   assert.deepEqual(new Set(f.app.store.agents(USER_A)[0].accountIds), new Set([first.id, second.id]));
   const next = await create(f, runtime.token);
   f.app.store.removeAgent(USER_A, runtime.id);
-  assert.equal((await status(f, runtime.token)).json.request.status, 'revoked');
+  assert.equal((await usable(f, runtime.token)).status, 401);
   const blocked = await f.request('/api/access-requests/' + next.row.id + '/approve', { method: 'POST', headers: { cookie: ownerCookie }, data: { accountId: second.id, confirmationCode: next.row.confirmation_code } });
   assert.equal(blocked.status, 409);
   assert.equal(f.app.store.agents(USER_A).length, 0);
@@ -140,10 +142,10 @@ for (const end of ['deny', 'cancel', 'expire']) test(`A ${end} request cannot gr
   assert.notEqual((await approve(f, row, existing.id)).status, 200);
   assert.equal(f.app.store.agents(USER_A).length, 0);
   if (end === 'expire') {
-    assert.equal((await status(f, token)).status, 410);
+    assert.equal(rowStatus(f, row.id), 'pending');
     f.app.store.sweep();
     assert.equal(f.app.store.db.prepare('SELECT count(*) n FROM access_requests').get().n, 0);
-  } else assert.equal((await status(f, token)).json.request.status, end === 'deny' ? 'denied' : 'cancelled');
+  } else assert.equal(rowStatus(f, row.id), end === 'deny' ? 'denied' : 'cancelled');
 });
 
 test('Cross-site creation, forged providers and cross-origin approval are rejected', async t => {
@@ -157,17 +159,17 @@ test('Cross-site creation, forged providers and cross-origin approval are reject
   const { row } = await create(f, token), account = await f.account();
   const response = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', headers: { origin: 'https://evil.test' }, data: { accountId: account.id, confirmationCode: row.confirmation_code } });
   assert.equal(response.status, 403);
-  assert.equal((await status(f, token)).json.request.status, 'pending');
+  assert.equal(rowStatus(f, row.id), 'pending'); assert.equal((await usable(f, token)).status, 401);
 });
 
-test('Request status reflects later grant revocation and a disconnected account', async t => {
+test('What the runtime sees reflects later grant revocation and a disconnected account', async t => {
   const f = await fixture(t), account = await f.account(), { token, row } = await create(f);
   await approve(f, row, account.id);
   f.app.store.reconnectRequired(f.app.store.account(USER_A, account.id));
-  assert.equal((await status(f, token)).json.request.status, 'reconnect_required');
+  assert.equal((await usable(f, token)).json.accounts[0].status, 'reconnect_required');
   const agent = f.app.store.agents(USER_A)[0];
   f.app.store.setGrants(USER_A, agent.id, []);
-  assert.equal((await status(f, token)).json.request.status, 'revoked');
+  assert.deepEqual((await usable(f, token)).json.accounts, []);
 });
 
 test('Unavailable integrations cannot claim approval success; expired request records are deleted without revoking existing grants', async t => {
@@ -179,7 +181,7 @@ test('Unavailable integrations cannot claim approval success; expired request re
   assert.equal((await approve(f, row, account.id)).status, 200);
   f.app.store.db.prepare('UPDATE access_requests SET expires_at=0 WHERE id=?').run(row.id);
   f.app.store.sweep();
-  assert.equal((await status(f, token)).status, 410);
+  assert.equal(rowStatus(f, row.id), undefined);
   assert.equal((await f.request('/v1/accounts', { token })).json.accounts[0].id, account.id);
 });
 
@@ -221,13 +223,12 @@ test('The approval page never receives the confirmation code; entry is normalize
   assert.equal(page.status, 200);
   assert.equal(page.json.request.confirmation_code, undefined);
   assert.doesNotMatch(page.text, new RegExp(row.confirmation_code));
-  assert.equal((await status(f, token)).json.request.confirmation_code, row.confirmation_code);
   for (const wrong of ['', 'ZZZZ-ZZZZ', row.confirmation_code.slice(0, 7)]) {
     const response = await approve(f, row, account.id, { confirmationCode: wrong });
     assert.equal(response.status, 400); assert.equal(response.json.error.code, 'confirmation_required');
     assert.doesNotMatch(response.text, new RegExp(row.confirmation_code));
   }
-  assert.equal((await status(f, token)).json.request.status, 'pending');
+  assert.equal(rowStatus(f, row.id), 'pending');
   const relaxed = await approve(f, row, account.id, { confirmationCode: ' ' + row.confirmation_code.toLowerCase().replace('-', '') + ' ' });
   assert.equal(relaxed.status, 200, relaxed.text);
   assert.equal(relaxed.json.request.status, 'approved');
@@ -237,7 +238,7 @@ test('The approval page never receives the confirmation code; entry is normalize
   for (let attempt = 1; attempt <= 4; attempt++) assert.equal((await approve(f, second.row, account.id, { confirmationCode: '0000-0000' })).json.error.code, 'confirmation_required');
   const locked = await approve(f, second.row, account.id, { confirmationCode: '0000-0000' });
   assert.equal(locked.status, 400); assert.equal(locked.json.error.code, 'confirmation_locked');
-  assert.equal((await status(f, second.token)).json.request.status, 'denied');
+  assert.equal(rowStatus(f, second.row.id), 'denied');
   assert.equal((await approve(f, second.row, account.id)).status, 409);
   assert.equal(f.app.store.agents(USER_A).length, 1);
 });

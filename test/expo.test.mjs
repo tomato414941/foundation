@@ -69,7 +69,7 @@ test('Expo approval binds requesting runtime, retains explicit consent and preve
   const f = await expoFixture(t), token = 'fdn_' + randomBytes(32).toString('base64url');
   const row = await createRequest(f, token), account = await f.expoAccount({ accessRequestId: row.id });
   assert.equal((await credential(f, account.id, token)).status, 401);
-  assert.equal((await f.request('/v1/access-requests/current', { token })).json.request.status, 'pending');
+  assert.equal((await f.request('/v1/accounts', { token, anonymous: true })).status, 401);
   const approve = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { accountId: account.id, confirmationCode: row.confirmation_code } });
   assert.equal(approve.status, 200);
   const listed = await f.request('/v1/accounts', { token });

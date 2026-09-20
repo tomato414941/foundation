@@ -67,8 +67,6 @@ export class Store {
         const requestColumns = this.db.prepare('PRAGMA table_info(access_requests)').all().map(column => column.name);
         if (!requestColumns.includes('confirmation_attempts')) this.db.exec('ALTER TABLE access_requests ADD COLUMN confirmation_attempts INTEGER NOT NULL DEFAULT 0');
         if (!requestColumns.includes('details')) this.db.exec("ALTER TABLE access_requests ADD COLUMN details TEXT NOT NULL DEFAULT '{}'");
-        if (!requestColumns.includes('verification')) this.db.exec('ALTER TABLE access_requests ADD COLUMN verification TEXT');
-        if (!requestColumns.includes('verification_revision')) this.db.exec('ALTER TABLE access_requests ADD COLUMN verification_revision INTEGER NOT NULL DEFAULT 0');
         this.db.exec('PRAGMA user_version=5;');
         const check = this.db.prepare("SELECT value FROM metadata WHERE name='key_check'").get();
         if (check) this.vault.open(check.value, 'key_check');

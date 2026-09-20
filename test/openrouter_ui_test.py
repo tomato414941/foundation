@@ -67,13 +67,13 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.route('https://openrouter.ai/auth?*', consent)
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
     expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
-    assert cli('status')['request']['status'] == 'pending'
+    cli('accounts', success=False)
     authorization['deny'] = False
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
     expect(page.get_by_role('radio')).to_have_count(1)
     expect(page.get_by_text('期限の指定なし', exact=True)).to_be_visible()
     expect(page.get_by_text('$0.00 · リセットなし', exact=True)).to_be_visible()
-    assert cli('status')['request']['status'] == 'pending'
+    cli('accounts', success=False)
     cli('accounts', success=False)
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
@@ -84,9 +84,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
     page.get_by_role('button', name='利用を許可', exact=True).click()
     expect(page.get_by_role('heading', name='利用を許可しました', exact=True)).to_be_visible()
-    approved = cli('status')['request']
     account = cli('accounts')['accounts'][0]
-    assert approved['account']['id'] == account['id']
     assert account['authentication']['type'] == 'api_key_bearer'
     command = subprocess.run(['node', 'src/runtime.mjs', 'exec', account['id'], '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY!==process.env.FOUNDATION_ACCESS_TOKEN || process.env.FOUNDATION_TOKEN_EXPIRES_AT!=="")process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr

@@ -28,10 +28,8 @@ export function guide(providers) {
   lines.push('2. 出力の verification_uri と confirmation_code を、そのまま利用者に伝える。',
     '   利用者はブラウザで URL を開き、必要ならサービス側でキーを作って登録し、コードを入力して許可する。',
     '   コードは利用者が手で打つので必ず表示する。',
-    '3. 検証結果または承認を待つ: foundation wait --timeout 1800',
-    '   event=verification は検証結果の通知であり、利用承認ではない。request.status を必ず確認する。',
-    '   request.verification.checks に確認できたこと・失敗・未確認が返る。続行や設定の修正は利用者と判断する。',
-    '   再入力は同じ verification_uri から。次の結果を待つには foundation wait --after-verification <受け取った revision> を使う。',
+    '3. 利用者が承認するのを待つ。Foundation は承認の状態を教えない。数秒おきに foundation accounts を試し、通ったら 4 へ。',
+    '   401 not_approved が続くなら利用者に確認する。連打しない (数秒おきで十分)。拒否や期限切れも利用者に聞く。',
     '4. 接続先を確認: foundation accounts   (account id と token_env が分かる。キーが未承認なら 401 not_approved になる)',
     '5. 実行: foundation exec <account-id> -- <コマンド> [引数...]',
     '   子プロセスにだけ FOUNDATION_ACCESS_TOKEN と、token_env が示す変数 (EXPO_TOKEN、OPENROUTER_API_KEY、',
@@ -44,7 +42,7 @@ export function guide(providers) {
     '- 拒否された、または 30 分で期限切れになった場合は、理由を推測せず利用者に確認する。',
     '- --service で申告したキーは Foundation では検証されない。認証エラーになったら貼り間違いの可能性を利用者に伝える。',
     '- 受け取った認証情報は、その作業でだけ使う。', '');
-  lines.push('その他のコマンド: foundation providers | status | cancel | accounts | whoami | leave (自分のキーを失効させる)',
+  lines.push('その他のコマンド: foundation providers | cancel (承認待ちの依頼を取り下げる) | accounts | whoami | leave (自分のキーを失効させる)',
     '環境変数: FOUNDATION_URL (必須)、FOUNDATION_AGENT (任意。この AI の名前。例: claude / codex)、FOUNDATION_RUNTIME_KEY_FILE (任意)',
     'キーの単位: 既定は「機械 × OS ユーザー」で 1 つ。FOUNDATION_AGENT を設定すると AI ごとに別のキーになるが、同じ OS ユーザーで動く他の AI はそのファイルを読めるので、これは帳簿上の区別であり守りではない。',
     '  本当に分離したいなら OS ユーザーを分ける。');

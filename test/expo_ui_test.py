@@ -84,7 +84,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     dialog.get_by_role('button', name='登録する', exact=True).click()
     expect(dialog.get_by_role('alert')).to_contain_text('トークンが無効か')
     expect(field).to_have_value('')
-    assert cli('status')['request']['status'] == 'pending'
+    cli('accounts', success=False)
     review(page)
     field.fill(token)
     with page.expect_response(lambda response: '/api/connections/expo/connect' in response.url) as response_event:
@@ -92,14 +92,14 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     assert token not in response_event.value.text()
     expect(dialog).not_to_be_visible()
     expect(page.get_by_role('radio')).to_have_count(1)
-    assert cli('status')['request']['status'] == 'pending'
+    cli('accounts', success=False)
     cli('accounts', success=False)
     review(page)
     expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
     page.get_by_role('button', name='利用を許可', exact=True).click()
     expect(page.get_by_role('heading', name='利用を許可しました', exact=True)).to_be_visible()
-    assert cli('status')['request']['status'] == 'approved'
+    assert cli('accounts')['accounts'][0]['provider'] == 'expo'
     account = cli('accounts')['accounts'][0]
     command = subprocess.run(['node', 'src/runtime.mjs', 'exec', account['id'], '--', 'node', '-e', 'if(!process.env.EXPO_TOKEN || process.env.EXPO_TOKEN!==process.env.FOUNDATION_ACCESS_TOKEN || process.env.FOUNDATION_PROVIDER!=="expo" || process.env.FOUNDATION_TOKEN_EXPIRES_AT!=="" || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
