@@ -88,8 +88,8 @@ export class AccessRequests {
         agentId = randomUUID();
         this.db.prepare('INSERT INTO agents (id,owner_id,name,token_hash,created_at) VALUES (?,?,?,?,?)').run(agentId, ownerId, row.requester_name, row.token_hash, new Date().toISOString());
       } else {
-        // An approved request also confirms the account's current name.
-        this.db.prepare('UPDATE agents SET generation=generation+1, name=? WHERE id=?').run(row.requester_name, agentId);
+        // The owner names the key; a later request never renames it.
+        this.db.prepare('UPDATE agents SET generation=generation+1 WHERE id=?').run(agentId);
       }
       this.db.prepare('INSERT OR IGNORE INTO grants (agent_id,account_id) VALUES (?,?)').run(agentId, account.id);
       this.db.prepare("UPDATE access_requests SET owner_id=?,agent_id=?,account_id=?,status='approved' WHERE id=?").run(ownerId, agentId, account.id, row.id);

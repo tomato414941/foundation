@@ -254,12 +254,12 @@ test('An access key introduces itself: whoami, approval renames it, the owner ca
   assert.equal(me.json.agent.name, 'dev-us の claude');
   assert.deepEqual(me.json.agent.accounts.map(item => item.id), [account.id]);
   assert.doesNotMatch(me.text, /token_hash|fdn_/);
-  // A later request from the same key carries its own name; the page shows the registered one; approval renames.
+  // A later request from the same key carries its own name; the page shows the registered one; approval keeps the owner's name.
   const next = await create(f, token, { name: 'dev-us の Claude Code', mode: 'readonly' });
   const page = (await f.request('/api/access-requests/' + next.row.id)).json.request;
   assert.equal(page.requester_name, 'dev-us の Claude Code'); assert.equal(page.agent_name, 'dev-us の claude');
   assert.equal((await approve(f, next.row, account.id)).status, 200);
-  assert.equal((await f.request('/v1/me', { token, anonymous: true })).json.agent.name, 'dev-us の Claude Code');
+  assert.equal((await f.request('/v1/me', { token, anonymous: true })).json.agent.name, 'dev-us の claude');
   const agentId = me.json.agent.id;
   assert.equal((await f.request('/api/agents/' + agentId, { method: 'PATCH', data: { name: '' } })).status, 400);
   assert.equal((await f.request('/api/agents/' + agentId, { method: 'PATCH', data: { name: '作業用' } })).status, 200);
