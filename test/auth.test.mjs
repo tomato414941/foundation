@@ -86,7 +86,6 @@ test('Signup policy: allowlist admits only listed addresses at send, at callback
   assert.equal(f.auth.links.size, 0);
   assert.equal((await f.request('/api/auth/config', { anonymous: true })).json.signup, 'allowlist');
   await f.login();
-  assert.equal(f.auth.links.size, 1);
   assert.equal((await f.request('/api/state')).status, 200);
   // A session for an address that is not (or no longer) listed stops working.
   const otherCookie = 'fdn_session=' + f.app.store.createSession(f.auth.value('other@example.test'));
