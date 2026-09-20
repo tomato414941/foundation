@@ -88,13 +88,41 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     expect(field).to_have_value('')
     expect(account_field).to_have_value(account_id)
     review(page)
+    failed = cli('wait', '--timeout', '2')
+    assert failed['event'] == 'verification' and failed['request']['status'] == 'pending'
+    assert failed['request']['verification']['revision'] == 1
+    assert failed['request']['verification']['checks'][0]['status'] == 'failed'
+
+    # A valid token with an inaccessible account is a reported fact, not a hard gate.
+    account_field.fill('f' * 32)
+    field.fill(token)
+    dialog.get_by_role('button', name='登録する', exact=True).click()
+    expect(dialog).not_to_be_visible()
+    expect(page.get_by_text('R2の一覧を取得できませんでした。', exact=False)).to_be_visible()
+    expect(page.get_by_role('button', name='利用を許可', exact=True)).to_be_disabled()
+    partial = cli('wait', '--timeout', '2', '--after-verification', '1')
+    assert partial['request']['verification']['revision'] == 2
+    assert partial['request']['verification']['checks'][1]['status'] == 'failed'
+    cli('accounts', success=False)
+    for width in [1280, 390, 320]:
+        page.set_viewport_size({'width': width, 'height': 1050})
+        review(page)
+        if width != 320:
+            page.screenshot(path=str(shots / ('verification-desktop.png' if width == 1280 else 'verification-mobile.png')), full_page=True)
+
+    # The same approval URL supports correcting the ID without adding another connection.
+    page.get_by_role('button', name='Cloudflareのトークンを登録', exact=True).click()
+    expect(field).to_have_value('')
+    account_field.fill(account_id)
     field.fill(token)
     with page.expect_response(lambda response: '/api/connections/cloudflare/connect' in response.url) as response_event:
         dialog.get_by_role('button', name='登録する', exact=True).click()
     assert token not in response_event.value.text()
     expect(dialog).not_to_be_visible()
     expect(page.get_by_role('radio')).to_have_count(1)
-    assert cli('status')['request']['status'] == 'pending'
+    pending = cli('status')['request']
+    assert pending['status'] == 'pending' and pending['verification']['revision'] == 3
+    assert pending['verification']['checks'][1]['status'] == 'passed'
     cli('accounts', success=False)
     expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
     expect(page.get_by_text('有効期限', exact=True)).to_be_visible()
@@ -147,4 +175,4 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     assert not errors, errors
     context.close()
     browser.close()
-    print('Cloudflare browser flow passed: login, official token page, masked/cleared secret, account ID, expiry, explicit approval, native credential delivery, check, disconnect and mobile. All Cloudflare calls mocked; no resources or objects changed.')
+    print('Cloudflare browser flow passed: failed verification reaches CLI, permission failure is nonblocking, same-link correction, explicit approval, native credential delivery, secret clearing and mobile copy review. All Cloudflare calls mocked; no resources or objects changed.')

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { fail } from '../errors.mjs';
 import { validRequestedEnvName } from '../env-name.mjs';
+import { verification } from '../verification.mjs';
 
 export const APIKEY_SCOPE = 'apikey';
 const hash = key => createHash('sha256').update(key).digest('hex');
@@ -29,7 +30,9 @@ export class ApiKeyProvider {
     const valid = this.details(details);
     if (typeof token !== 'string' || !/^[\x21-\x7e]{8,4096}$/.test(token)) fail(400, 'invalid_credential', 'キーを確認してください。空白や改行は含められません。');
     const digest = hash(token);
-    return { email: slug(valid.service) + ':' + digest, credentials: { access_token: token, credential_type: 'api_key', expires_at: null, expiry_known: false, scopes: this.scopes(valid), details: { ...valid, key_hash: digest, checked_at: Date.now() } } };
+    return { email: slug(valid.service) + ':' + digest, credentials: { access_token: token, credential_type: 'api_key', expires_at: null, expiry_known: false, scopes: this.scopes(valid),
+      verification: verification([{ check: 'credential', status: 'unknown', code: 'not_checked' }, { check: 'permissions', status: 'unknown', code: 'permissions_unknown' }]),
+      details: { ...valid, key_hash: digest, checked_at: Date.now() } } };
   }
   async token(store, account) {
     if (account.status !== 'connected') fail(409, 'reconnect_required', '新しいキーで接続を追加してください。');

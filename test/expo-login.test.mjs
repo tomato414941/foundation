@@ -142,10 +142,8 @@ test('Concurrent login submissions cannot create two connections or grants for o
   const began = new Promise(resolve => started = resolve);
   f.expo.loginHandler = async () => { await new Promise(resolve => { release.push(resolve); if (release.length === 2) started(); }); };
   const first = f.loginExpo(input), second = f.loginExpo(input);
-  await began; release[0]();
-  const winner = await Promise.race([first, second]);
-  assert.equal(winner.status, 200, winner.text);
-  release[1](); const results = await Promise.all([first, second]);
+  await began; release[0](); release[1]();
+  const results = await Promise.all([first, second]);
   assert.deepEqual(results.map(result => result.status).sort(), [200, 409]);
   assert.equal(f.app.store.accounts(USER_A).length, 1); assert.equal(f.app.store.agents(USER_A).length, 1);
   assert.equal(f.expo.sessions.size, 1);

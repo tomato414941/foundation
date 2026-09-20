@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { fail, HttpError } from '../errors.mjs';
+import { verification, failedCheck } from '../verification.mjs';
 
 export const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
 export const CLOUDFLARE_DOCS = 'https://developers.cloudflare.com/api/resources/r2/subresources/buckets/methods/list/';
@@ -29,9 +30,9 @@ export class CloudflareProvider {
     try { response = await this.fetcher(CLOUDFLARE_API + path, { method: 'GET', headers: { authorization: 'Bearer ' + token }, redirect: 'error', signal: AbortSignal.timeout(12_000) }); }
     catch { fail(502, 'provider_unavailable', 'Cloudflareに接続できませんでした。時間をおいて再度お試しください。'); }
     if (response.status === 429) fail(503, 'provider_rate_limit', 'Cloudflareへの確認が続いています。時間をおいて再度お試しください。');
-    const denied = () => fail(409, 'reconnect_required', verify
+    const denied = () => { const error = new HttpError(409, verify ? 'reconnect_required' : 'r2_unavailable', verify
       ? 'トークンが無効か、失効しています。Cloudflareのプロフィールから作成したAPIトークンを確認してください。'
-      : 'R2の一覧を確認できません。アカウントID、対象アカウントの Workers R2 Storage: Read 権限、R2の利用設定を確認してください。');
+      : 'R2の一覧を確認できません。アカウントID、対象アカウントの Workers R2 Storage: Read 権限、R2の利用設定を確認してください。'); error.upstreamStatus = response.status; throw error; };
     if ([400, 401, 403, 404].includes(response.status)) denied();
     if (!response.ok) fail(502, 'provider_unavailable', 'Cloudflareで処理を完了できませんでした。');
     let data;
@@ -49,15 +50,28 @@ export class CloudflareProvider {
     if (verified.status !== 'active' || expiresAt !== null && expiresAt <= Date.now() || notBefore !== null && notBefore > Date.now()) fail(409, 'reconnect_required', 'このAPIトークンは現在使えません。Cloudflareで状態と有効期限を確認してください。');
     // Only a permission probe; never download objects, enumerate all buckets,
     // or grant token-management/account-management permissions to inspect it.
-    const result = await this.request('/accounts/' + id + '/r2/buckets?per_page=1', token);
-    if (!Array.isArray(result.buckets) || result.buckets.some(bucket => !bucket || typeof bucket.name !== 'string' || !bucket.name || bucket.name.length > 64)) invalidResponse();
+    let r2;
+    try {
+      const result = await this.request('/accounts/' + id + '/r2/buckets?per_page=1', token);
+      if (!Array.isArray(result.buckets) || result.buckets.some(bucket => !bucket || typeof bucket.name !== 'string' || !bucket.name || bucket.name.length > 64)) invalidResponse();
+      r2 = { check: 'r2_bucket_list', status: 'passed', code: 'available' };
+    } catch (error) {
+      // Capability observations are not Foundation access-control decisions.
+      r2 = failedCheck(error, 'r2_bucket_list');
+    }
     return { access_token: token, credential_type: 'api_key', expires_at: expiresAt, expiry_known: true, scopes: [CLOUDFLARE_SCOPE],
+      verification: verification([{ check: 'credential', status: 'passed', code: 'active' }, r2, { check: 'permissions', status: 'unknown', code: 'permissions_unknown' }]),
       details: { token_hash: digest(token), token_id: verified.id, account_id: id, checked_at: Date.now() } };
   }
   async importToken({ token, mode, fields }) {
     this.check();
     if (mode !== 'api-token') fail(400, 'invalid_scope', '利用する権限を選び直してください。');
-    const credentials = await this.inspect(token, fields?.account_id);
+    let credentials;
+    try { credentials = await this.inspect(token, fields?.account_id); }
+    catch (error) {
+      error.verification = verification([failedCheck(error, error.code === 'invalid_account' ? 'input' : 'credential'), { check: 'r2_bucket_list', status: 'unknown', code: 'not_checked' }, { check: 'permissions', status: 'unknown', code: 'permissions_unknown' }]);
+      throw error;
+    }
     // One token must not appear to be several separately scoped connections.
     return { email: 'token:' + credentials.details.token_hash, credentials };
   }

@@ -35,6 +35,12 @@ const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span
 const statusName = (account) => ({ connected: '接続済み', reconnect_required: '再接続が必要', disconnecting: '解除待ち' }[account.status] || '確認が必要');
 const scopeName = account => account.permission?.name || '接続先で許可した権限';
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
+function verificationDetails(report) {
+  if (!report?.checks?.length) return '';
+  const attention = report.checks.some(item => item.status === 'failed' || item.status === 'unknown' && item.check !== 'permissions');
+  const statuses = { passed: '成功', failed: '失敗', unknown: '未確認' };
+  return `<details class="verification-result" ${attention ? 'open' : ''}><summary>検証結果</summary><ul>${report.checks.map(item => `<li><span class="verification-label">${esc(item.label)}<small>${esc(statuses[item.status] || '未確認')}</small></span><p>${esc(item.message)}</p></li>`).join('')}</ul></details>`;
+}
 function keyFacts(account) {
   if (!account.key_info) return account.credential_type === 'api_key' && account.expiry_known === true ? `<dl class="key-facts"><div><dt>有効期限</dt><dd>${account.expires_at === null ? '期限の指定なし' : esc(new Date(account.expires_at).toLocaleString('ja-JP'))}</dd></div></dl>` : '';
   const info = account.key_info, dollars = value => value === null ? '上限なし' : new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }).format(value);
@@ -123,7 +129,7 @@ function details(account) {
   return `<div class="connection-heading"><span class="status ${account.status === 'connected' ? '' : 'warning'}">${account.status === 'connected' ? icon('check') : ''}${statusName(account)}</span>${account.verified === false ? '<span class="status neutral">未検証</span>' : ''}<h3>${esc(account.name)}</h3><p class="account-email">${esc(accountLabel(account))}</p></div>
     <dl class="connection-facts"><div><dt>用途</dt><dd>${esc(account.purpose || '未設定')}</dd></div>${Array.isArray(account.organizations) ? `<div><dt>組織</dt><dd>${account.organizations.length ? account.organizations.map(item => esc(item.name)).join('、') : 'なし'}</dd></div>` : ''}${claimRows(provider, account.details)}<div><dt>許可範囲</dt><dd>${esc(scopeName(account))}<span class="muted block">${esc(account.permission?.restrictions)}</span></dd></div></dl>${keyFacts(account)}
     <div class="connection-actions">${account.verified === false ? '' : `<button class="button secondary" data-action="check" data-id="${esc(account.id)}" ${account.status !== 'connected' || !provider.available ? 'disabled' : ''}>接続を確認</button>`}${provider.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(account.id)}" ${account.status === 'disconnecting' || !provider.available ? 'disabled' : ''}>再接続</button>` : ''}<button class="text-button" data-action="edit-account" data-id="${esc(account.id)}">編集</button></div>
-    <details class="connection-reference"><summary>接続情報</summary><dl><dt>接続ID</dt><dd><code>${esc(account.id)}</code></dd></dl>${provider.api.documentation_url ? `<a href="${esc(provider.api.documentation_url)}" target="_blank" rel="noopener noreferrer">${esc(provider.name)} APIの公式ドキュメント ↗</a>` : ''}</details>
+    ${verificationDetails(account.verification)}<details class="connection-reference"><summary>接続情報</summary><dl><dt>接続ID</dt><dd><code>${esc(account.id)}</code></dd></dl>${provider.api.documentation_url ? `<a href="${esc(provider.api.documentation_url)}" target="_blank" rel="noopener noreferrer">${esc(provider.name)} APIの公式ドキュメント ↗</a>` : ''}</details>
     <div class="connection-footer">${account.credential_type === 'expo_session' ? '' : `<a href="${esc(account.management_url || provider.management_url)}" target="_blank" rel="noopener noreferrer">${esc(account.details?.service || provider.name)}の${account.details ? 'キー管理ページ' : '接続管理'} ↗</a>`}<button class="text-button danger" data-action="remove-account" data-id="${esc(account.id)}">${account.status === 'disconnecting' ? '接続解除を再試行' : '接続を解除'}</button></div>`;
 }
 function serviceSection(provider) {
@@ -177,6 +183,7 @@ function renderRequest() {
     <button class="button secondary full request-connect" type="button" data-action="request-connect" ${row.service.available ? '' : 'disabled'}>${icon('plus')} ${esc(row.permission.connect_label || row.service.connect_label)}</button>
     ${row.service.available ? '' : `<p class="form-error" role="status">現在${esc(row.service.name)}を接続できません。</p>`}
     ${row.service.id === 'openrouter' && ['failed', 'scope', 'retry', 'changed'].includes(resultCode) ? '<p class="permission-note">接続できなくても、OpenRouterで作成済みのキーが残る場合があります。<a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">不要なキーはOpenRouterで削除してください ↗</a></p>' : ''}
+    ${verificationDetails(row.verification)}${row.verification ? '<p class="permission-note">検証結果は依頼元のAIにも共有されます。設定を直す場合は、このページから再入力できます。</p>' : ''}
     ${codeField(available.length > 0)}
     <p class="form-error" role="alert"></p>
     <button class="button primary full" type="submit" disabled>利用を許可 ${icon('arrow')}</button><button class="text-button full" type="button" data-action="deny-request">許可しない</button></form>
@@ -324,6 +331,7 @@ function connectToken(provider, request = null) {
     <div class="token-setup"><h3>1. ${esc(serviceName || 'サービス')}でキーを作成</h3><p>${esc(setup.instructions)}</p>${siteUrl || fields.length ? `<a class="button secondary full" href="${esc(siteUrl || '#')}" target="_blank" rel="noopener noreferrer" ${siteUrl ? '' : 'style="display:none"'}>${esc(serviceName || 'サービス')}の${esc(setup.label)}管理ページを開く ↗</a>` : ''}</div>
     <h3 class="token-step">2. キーを登録</h3>${setupInputs}<label for="connection-token">${esc(setup.label)}</label><input id="connection-token" name="token" type="password" required minlength="8" maxlength="4096" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="token-storage-note"><p class="permission-note" id="token-storage-note">キーは暗号化して保存し、許可したアクセスキーの持ち主だけに渡します。チャットには貼り付けないでください。</p>${setup.note ? `<p class="permission-note">${esc(setup.note)}</p>` : ''}
     <input type="hidden" name="name" value="${esc(claimed?.service || provider.name)}"><input type="hidden" name="purpose" value="${esc(request?.purpose || '')}">
+    ${request ? '<p class="permission-note">確認結果は依頼元のAIにも共有されます。認証情報は、利用を許可するまで渡しません。</p>' : ''}
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>`);
   if (fields.length && !claimed) {
     const siteInput = dialog.querySelector('[name="site"]'), link = dialog.querySelector('.token-setup a');
@@ -337,9 +345,11 @@ function connectToken(provider, request = null) {
     input.value = '';
     const details = fields.length && !claimed ? Object.fromEntries(fields.map(field => [field.id, (form.get(field.id) || '').trim()])) : undefined;
     const connectionFields = setupFields.length ? Object.fromEntries(setupFields.map(field => [field.id, (form.get('setup-' + field.id) || '').trim()])) : undefined;
-    const result = await api(`/api/connections/${provider.id}/connect`, { method: 'POST', data: { token, name: form.get('name'), purpose: form.get('purpose'), mode, ...(details ? { details } : {}), ...(connectionFields ? { fields: connectionFields } : {}), ...(request ? { accessRequestId: request.id } : {}) } });
+    let result;
+    try { result = await api(`/api/connections/${provider.id}/connect`, { method: 'POST', data: { token, name: form.get('name'), purpose: form.get('purpose'), mode, ...(details ? { details } : {}), ...(connectionFields ? { fields: connectionFields } : {}), ...(request ? { accessRequestId: request.id } : {}) } }); }
+    catch (error) { if (request) await refresh(); throw error; }
     selected = result.account_id;
-    closeDialog(); await refresh(); toast(`${provider.name}を接続しました。`);
+    closeDialog(); await refresh(); toast(`${provider.name}の認証情報を登録しました。`);
   });
 }
 function editAccount(account) {
@@ -409,7 +419,10 @@ document.addEventListener('click', async (event) => {
     if (action === 'rename-agent') renameAgent(state.agents.find((a) => a.id === id));
     if (action === 'check') {
       target.disabled = true;
-      try { await api(`/api/accounts/${id}/check`, { method: 'POST', data: {} }); toast(providerFor(state.accounts.find(account => account.id === id)).name + 'に接続できました。'); }
+      try {
+        const result = await api(`/api/accounts/${id}/check`, { method: 'POST', data: {} });
+        toast(result.verification?.checks.some(item => item.status !== 'passed' && item.check !== 'permissions') ? '検証結果を更新しました。確認できなかった項目があります。' : providerFor(state.accounts.find(account => account.id === id)).name + 'に接続できました。');
+      }
       finally { await refresh(); }
     }
     if (action === 'copy-token') {

@@ -85,17 +85,19 @@ test('Cloudflare handles invalid envelopes, provider failures and rate limits wi
   provider.handler = () => { throw new Error(CLOUDFLARE_TOKEN); };
   await assert.rejects(inspect(provider), error => error.code === 'provider_unavailable' && !error.message.includes(CLOUDFLARE_TOKEN));
   provider.handler = url => url.includes('/r2/') ? json({ success: true, result: { buckets: [null] } }) : null;
-  await assert.rejects(inspect(provider), code('provider_response'));
+  const unverified = await inspect(provider);
+  assert.equal(unverified.verification.checks[1].code, 'provider_response');
+  assert.equal(unverified.verification.checks[1].status, 'unknown');
 });
 
-test('Cloudflare requires an account with R2 access; token verification alone does not create a connection', async t => {
+test('Cloudflare records R2 access failures without blocking registration of a valid token', async t => {
   const f = await cloudflareFixture(t);
   const bad = await f.importCloudflare({ fields: { account_id: 'f'.repeat(32) } });
-  assert.equal(bad.status, 409); assert.match(bad.json.error.message, /アカウントID/);
-  assert.equal(f.app.store.accounts(USER_A).length, 0);
+  assert.equal(bad.status, 200); assert.equal(bad.json.verification.checks[1].code, 'r2_unavailable');
+  assert.equal(f.app.store.accounts(USER_A).length, 1);
+  assert.equal(f.app.store.agents(USER_A).length, 0);
   assert.equal((await f.importCloudflare({ fields: undefined })).status, 400);
   assert.equal((await f.importCloudflare({ mode: 'admin' })).status, 400);
-  assert.equal((await f.importCloudflare()).status, 200);
   assert.equal((await f.importCloudflare()).status, 409);
   const generic = new ApiKeyProvider();
   for (const env of ['CLOUDFLARE_API_TOKEN', 'CF_API_TOKEN']) assert.throws(() => generic.details({ service: 'Cloudflare', site: CLOUDFLARE_TOKENS, env }), /環境変数名/);
@@ -141,8 +143,10 @@ test('Cloudflare rechecks R2 access and token identity on delivery but does not 
   assert.equal((await credential(f, account.id, agent.token)).json.error.code, 'provider_response');
   f.cloudflare.verification.id = original;
   f.cloudflare.handler = url => url.includes('/r2/') ? json({ success: false }, 403) : null;
-  assert.equal((await credential(f, account.id, agent.token)).json.error.code, 'reconnect_required');
-  assert.equal((await f.request('/api/state')).json.accounts[0].status, 'reconnect_required');
+  const result = await credential(f, account.id, agent.token);
+  assert.equal(result.status, 200);
+  assert.equal(result.json.verification.checks[1].code, 'r2_unavailable');
+  assert.equal((await f.request('/api/state')).json.accounts[0].status, 'connected');
 });
 
 test('Cloudflare cannot be imported across user sessions or after an approval request is cancelled', { timeout: 10_000 }, async t => {

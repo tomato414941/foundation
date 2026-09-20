@@ -19,7 +19,7 @@ export class Store {
     if (path !== ':memory:') chmodSync(path, 0o600);
     this.db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000; PRAGMA secure_delete=ON;');
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 4) { this.db.close(); throw new Error('Unsupported database version'); }
+    if (version > 5) { this.db.close(); throw new Error('Unsupported database version'); }
     if (version === 1) {
       const count = ['accounts', 'agents', 'grants'].reduce((sum, table) => sum + this.db.prepare('SELECT count(*) AS n FROM ' + table).get().n, 0);
       // Never assign legacy owner-key data to the first Supabase user who logs in.
@@ -67,7 +67,9 @@ export class Store {
         const requestColumns = this.db.prepare('PRAGMA table_info(access_requests)').all().map(column => column.name);
         if (!requestColumns.includes('confirmation_attempts')) this.db.exec('ALTER TABLE access_requests ADD COLUMN confirmation_attempts INTEGER NOT NULL DEFAULT 0');
         if (!requestColumns.includes('details')) this.db.exec("ALTER TABLE access_requests ADD COLUMN details TEXT NOT NULL DEFAULT '{}'");
-        this.db.exec('PRAGMA user_version=4;');
+        if (!requestColumns.includes('verification')) this.db.exec('ALTER TABLE access_requests ADD COLUMN verification TEXT');
+        if (!requestColumns.includes('verification_revision')) this.db.exec('ALTER TABLE access_requests ADD COLUMN verification_revision INTEGER NOT NULL DEFAULT 0');
+        this.db.exec('PRAGMA user_version=5;');
         const check = this.db.prepare("SELECT value FROM metadata WHERE name='key_check'").get();
         if (check) this.vault.open(check.value, 'key_check');
         else this.db.prepare('INSERT INTO metadata VALUES (?, ?)').run('key_check', this.vault.seal(true, 'key_check'));

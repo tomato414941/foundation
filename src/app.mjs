@@ -7,6 +7,7 @@ import { fail, HttpError, nameValue } from './errors.mjs';
 import { ProviderCatalog, gmailConnection } from './providers/catalog.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { AccessRequests } from './access-requests.mjs';
+import { verificationResult } from './verification.mjs';
 
 const PUBLIC = new URL('../web/', import.meta.url);
 const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
@@ -116,10 +117,38 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
     const current = accountFor(account.owner_id, account.id);
     if (current.status !== 'connected' || current.generation !== account.generation) fail(409, 'connection_changed', '接続状態が変わりました。');
   }
+  async function verifyConnection(req, session, user, requestId, operation, commit) {
+    const revision = requestId ? requests.beginVerification(requestId, user.id) : null;
+    const stillCurrent = () => {
+      if (req.aborted || req.socket.destroyed || localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
+      if (requestId) requests.currentVerification(requestId, user.id, revision);
+    };
+    let result;
+    try { result = await operation(); }
+    catch (error) {
+      stillCurrent();
+      if (requestId) requests.finishVerification(requestId, user.id, revision, verificationResult(null, error));
+      throw error;
+    }
+    stillCurrent();
+    const report = verificationResult(result);
+    if (result.credentials) result.credentials.verification = report;
+    try {
+      return store.transaction(() => {
+        if (requestId) requests.finishVerification(requestId, user.id, revision, report);
+        return commit(result, report);
+      });
+    } catch (error) {
+      stillCurrent();
+      if (requestId) requests.finishVerification(requestId, user.id, revision, verificationResult(null, error));
+      throw error;
+    }
+  }
   function publicAccount(account, ownerId) {
     const provider = providers.get(account.provider);
-    const info = provider.client.accountInfo?.(store.secrets(store.account(ownerId, account.id))) || {};
-    return { ...account, ...info, permission: provider.permissions.find(permission => provider.matches(permission.id, account)) };
+    const credentials = store.secrets(store.account(ownerId, account.id));
+    const info = provider.client.accountInfo?.(credentials) || {};
+    return { ...account, ...info, ...(credentials.verification ? { verification: credentials.verification } : {}), permission: provider.permissions.find(permission => provider.matches(permission.id, account)) };
   }
   function resource(account, ownerId) {
     const provider = providers.get(account.provider);
@@ -191,7 +220,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
             destination = '/connect/' + flow.accessRequestId;
             requests.forUser(flow.accessRequestId, user.id, true);
           }
-          if (url.searchParams.has('error')) return redirect(connectionLocation('denied'));
+          if (url.searchParams.has('error')) {
+            await verifyConnection(req, session, user, flow.accessRequestId, async () => { fail(400, 'authorization_denied', '接続先での認証は許可されませんでした。'); }, () => {});
+          }
           const code = url.searchParams.get('code');
           if (!code || code.length > 8192) fail(400, 'invalid_state', '接続をやり直してください。');
           let previous;
@@ -199,13 +230,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
             previous = accountFor(user.id, flow.previous.id);
             if (previous.generation !== flow.previous.generation || previous.status === 'disconnecting') fail(409, 'connection_changed', '接続状態が変わりました。');
           }
-          const result = await provider.client.exchange({ ...flow, code }, previous ? { email: previous.email, credentials: store.secrets(previous) } : undefined);
-          if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
-          if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true);
-          store.connect(user.id, { provider: provider.id, name: flow.name, purpose: flow.purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials, previous);
+          await verifyConnection(req, session, user, flow.accessRequestId,
+            () => provider.client.exchange({ ...flow, code }, previous ? { email: previous.email, credentials: store.secrets(previous) } : undefined),
+            result => store.connect(user.id, { provider: provider.id, name: flow.name, purpose: flow.purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials, previous));
           return redirect(connectionLocation('connected'));
         } catch (error) {
-          const codes = { invalid_state: 'expired', login_required: 'expired', account_changed: 'wrong_account', already_connected: 'already_connected', scope_mismatch: 'scope', refresh_missing: 'retry', connection_changed: 'changed' };
+          const codes = { authorization_denied: 'denied', invalid_state: 'expired', login_required: 'expired', account_changed: 'wrong_account', already_connected: 'already_connected', scope_mismatch: 'scope', refresh_missing: 'retry', connection_changed: 'changed' };
           return redirect(connectionLocation(codes[error.code] || 'failed'));
         }
       }
@@ -295,16 +325,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
             if (accessRequest && (accessRequest.provider !== 'expo' || accessRequest.mode !== 'session')) fail(400, 'scope_mismatch', '依頼されたサービスと権限で接続してください。');
             if (accessRequest) requests.verifyCode(accessRequest.id, user.id, input.confirmationCode);
             const name = nameValue(input.name ?? 'Expo', '表示名'), purpose = purposeValue(input.purpose ?? accessRequest?.purpose ?? '');
-            if (accessRequest) requests.claim(accessRequest.id, user.id);
-            result = await provider.client.login(input);
-            if (req.aborted || res.destroyed || localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
-            if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
-            if (result.challenge) return send(202, { challenge: result.challenge });
-            const saved = store.transaction(() => {
+            const saved = await verifyConnection(req, session, user, accessRequest?.id, async () => {
+              result = await provider.client.login(input); return result;
+            }, () => {
+              if (result.challenge) return { challenge: result.challenge };
               const id = store.connect(user.id, { provider: 'expo', name, purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials);
               const approved = accessRequest ? requests.approve(accessRequest.id, user.id, id, input.confirmationCode) : null;
               return { connected: true, account_id: id, ...(approved ? { request: requests.summary(approved, origin, { code: false }) } : {}) };
             });
+            if (result.challenge) return send(202, saved);
             committed = true;
             return send(200, saved);
           } finally {
@@ -332,13 +361,20 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           if (provider.connectionMethod === 'token' || permission.connection_method === 'token') {
             // A request fixes the runtime's declared service and variable name; a root import takes them from the user.
             const details = accessRequest ? requests.details(accessRequest) : providers.details(provider.id, input.details);
-            const result = await provider.client.importToken({ token: input.token, mode: input.mode, details, fields: input.fields });
-            // Network validation must not resurrect a logged-out session or an
-            // expired/cancelled request. Importing alone never grants a runtime.
-            if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
-            if (accessRequest) requests.claim(accessRequest.id, user.id);
-            const accountId = store.connect(user.id, { provider: provider.id, name, purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials);
-            return send(200, { connected: true, account_id: accountId });
+            const saved = await verifyConnection(req, session, user, accessRequest?.id,
+              () => provider.client.importToken({ token: input.token, mode: input.mode, details, fields: input.fields }),
+              (result, report) => {
+                // Only this request's ungranted candidate can be updated on retry.
+                const row = accessRequest && requests.forUser(accessRequest.id, user.id, true);
+                const candidate = row?.account_id && store.account(user.id, row.account_id);
+                const retry = candidate?.email === result.email && candidate.provider === provider.id && candidate.status === 'connected'
+                  && !store.db.prepare('SELECT 1 FROM grants WHERE account_id=?').get(candidate.id) ? candidate : undefined;
+                const accountId = store.connect(user.id, { provider: provider.id, name, purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials, retry);
+                if (row) store.db.prepare('UPDATE access_requests SET account_id=? WHERE id=?').run(accountId, row.id);
+                return { connected: true, account_id: accountId, verification: report };
+              });
+            input.token = '';
+            return send(200, saved);
           }
           if (provider.connectionMethod === 'password') fail(400, 'login_required', 'Expoのログイン画面から接続してください。');
           const verifier = randomBytes(32).toString('base64url');
@@ -374,10 +410,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           if (accountRoute[2] && method === 'POST') {
             await body(req);
             rateLimit('check:' + account.id, 4);
-            await providers.get(account.provider).client.token(store, account, true);
+            const credentials = await providers.get(account.provider).client.token(store, account, true);
             localSession(req);
             currentAccount(account);
-            return send(200, { ok: true });
+            return send(200, { ok: true, ...(credentials.verification ? { verification: credentials.verification } : {}) });
           }
         }
         if (path === '/api/agents' && method === 'POST') {
@@ -429,7 +465,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           currentAccount(account);
           store.recordIssuance(agent, credentials.expires_at);
           const info = provider.client.accountInfo?.(credentials) || {};
-          return send(200, { access_token: credentials.access_token, token_type: expoSession ? 'Expo-Session' : 'Bearer', credential_type: credentials.credential_type || 'oauth2_access_token', expires_at: credentials.expires_at, expires_in: credentials.expires_at === null ? null : Math.max(0, Math.floor((credentials.expires_at - Date.now()) / 1000)), scope: credentials.scopes.join(' '), account: { id: account.id, provider: account.provider, email: account.email, label: info.label || account.email }, ...(expoSession ? { credential_header: 'expo-session', session_profile: { user_id: credentials.details.actor_id, username: credentials.details.label } } : {}), ...(info.key_info ? { key_info: info.key_info } : {}), token_env: providers.tokenEnv(provider.id, credentials), api_base_url: provider.api.base_url });
+          return send(200, { access_token: credentials.access_token, token_type: expoSession ? 'Expo-Session' : 'Bearer', credential_type: credentials.credential_type || 'oauth2_access_token', expires_at: credentials.expires_at, expires_in: credentials.expires_at === null ? null : Math.max(0, Math.floor((credentials.expires_at - Date.now()) / 1000)), scope: credentials.scopes.join(' '), account: { id: account.id, provider: account.provider, email: account.email, label: info.label || account.email }, ...(expoSession ? { credential_header: 'expo-session', session_profile: { user_id: credentials.details.actor_id, username: credentials.details.label } } : {}), ...(info.key_info ? { key_info: info.key_info } : {}), ...(credentials.verification ? { verification: credentials.verification } : {}), token_env: providers.tokenEnv(provider.id, credentials), api_base_url: provider.api.base_url });
         }
       }
       fail(404, 'not_found', '指定された操作が見つかりません。');
