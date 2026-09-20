@@ -13,7 +13,7 @@ const invalidResponse = () => fail(502, 'provider_response', 'Expoからの応�
 // EAS login returns a session, not an EXPO_TOKEN. Keep the two credential
 // types separate; passwords and OTPs never become stored credentials.
 export class ExpoProvider {
-  constructor({ fetcher = fetch, sessionLogin = true } = {}) { this.enabled = true; this.fetcher = fetcher; this.sessionLoginEnabled = sessionLogin; }
+  constructor({ fetcher = fetch, sessionLogin = false } = {}) { this.enabled = true; this.fetcher = fetcher; this.sessionLoginEnabled = sessionLogin; }
   check() { if (!this.enabled) fail(503, 'expo_unavailable', '現在Expoに接続できません。'); }
   async inspect(token, { session = false } = {}) {
     const reconnectMessage = session ? 'Expoのログインが無効になっています。もう一度接続してください。' : 'トークンが無効か、利用できません。Expoのトークン管理画面で確認してください。';
@@ -86,6 +86,7 @@ export class ExpoProvider {
     if (account.status !== 'connected') fail(409, 'reconnect_required', 'Expoへの接続を確認し、新しい接続を追加してください。');
     try {
       const previous = store.secrets(account), session = previous.credential_type === 'expo_session';
+      if (session && !this.sessionLoginEnabled) fail(409, 'reconnect_required', 'Expoのログイン接続は現在利用できません。アクセストークンで新しい接続を追加してください。');
       const next = await this.inspect(previous.access_token, { session });
       if (account.email !== (session ? 'session:' : 'token:') + next.details.token_hash || previous.details.actor_id !== next.details.actor_id) invalidResponse();
       store.saveCredentials(account, next);

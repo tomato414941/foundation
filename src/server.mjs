@@ -10,7 +10,7 @@ const config = configuration();
 const auth = new SupabaseAuth(config.supabase);
 const gmail = new GmailProvider(config.google);
 const openrouter = new OpenRouterProvider();
-const app = createApp({ database: config.database, encryptionKey: config.encryptionKey, publicOrigin: config.publicOrigin, auth, gmail, integrations: [openrouterConnection(openrouter), expoConnection(new ExpoProvider()), gmailConnection(gmail)] });
+const app = createApp({ database: config.database, encryptionKey: config.encryptionKey, publicOrigin: config.publicOrigin, auth, gmail, integrations: [openrouterConnection(openrouter), expoConnection(new ExpoProvider(config.expo)), gmailConnection(gmail)] });
 app.server.listen(config.port, '127.0.0.1', () => {
   console.log(`Foundation: http://127.0.0.1:${config.port}`);
   if (config.publicOrigin) console.log(`Private preview: ${config.publicOrigin}`);
