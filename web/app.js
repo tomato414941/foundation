@@ -24,6 +24,7 @@ const icon = (name) => {
     device: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>',
     arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>', check: '<path d="m5 12 4 4L19 6"/>',
     lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+    key: '<circle cx="8" cy="14" r="4"/><path d="m11 11 8-8m-3 3 2 2m-5 1 2 2"/>',
     network: '<circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="2"/><circle cx="18" cy="19" r="2"/><path d="m9 11 7-5m-7 7 7 5"/>',
   };
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
@@ -117,11 +118,11 @@ async function refresh() {
 function details(account) {
   if (!account) return '';
   const provider = providerFor(account);
-  return `<div class="connection-heading"><span class="status ${account.status === 'connected' ? '' : 'warning'}">${account.status === 'connected' ? icon('check') : ''}${statusName(account)}</span><h3>${esc(account.name)}</h3><p class="account-email">${esc(accountLabel(account))}</p></div>
-    <dl class="connection-facts"><div><dt>用途</dt><dd>${esc(account.purpose || '未設定')}</dd></div><div><dt>許可範囲</dt><dd>${esc(scopeName(account))}<span class="muted block">${esc(account.permission?.restrictions)}</span></dd></div></dl>${keyFacts(account)}
-    <div class="connection-actions"><button class="button secondary" data-action="check" data-id="${esc(account.id)}" ${account.status !== 'connected' || !provider.available ? 'disabled' : ''}>接続を確認</button>${provider.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(account.id)}" ${account.status === 'disconnecting' || !provider.available ? 'disabled' : ''}>再接続</button>` : ''}<button class="text-button" data-action="edit-account" data-id="${esc(account.id)}">編集</button></div>
-    <details class="connection-reference"><summary>接続情報</summary><dl><dt>接続ID</dt><dd><code>${esc(account.id)}</code></dd></dl><a href="${esc(provider.api.documentation_url)}" target="_blank" rel="noopener noreferrer">${esc(provider.name)} APIの公式ドキュメント ↗</a></details>
-    <div class="connection-footer">${account.credential_type === 'expo_session' ? '' : `<a href="${esc(account.management_url || provider.management_url)}" target="_blank" rel="noopener noreferrer">${esc(provider.name)}の接続管理 ↗</a>`}<button class="text-button danger" data-action="remove-account" data-id="${esc(account.id)}">${account.status === 'disconnecting' ? '接続解除を再試行' : '接続を解除'}</button></div>`;
+  return `<div class="connection-heading"><span class="status ${account.status === 'connected' ? '' : 'warning'}">${account.status === 'connected' ? icon('check') : ''}${statusName(account)}</span>${account.verified === false ? '<span class="status neutral">未検証</span>' : ''}<h3>${esc(account.name)}</h3><p class="account-email">${esc(accountLabel(account))}</p></div>
+    <dl class="connection-facts"><div><dt>用途</dt><dd>${esc(account.purpose || '未設定')}</dd></div>${claimRows(provider, account.details)}<div><dt>許可範囲</dt><dd>${esc(scopeName(account))}<span class="muted block">${esc(account.permission?.restrictions)}</span></dd></div></dl>${keyFacts(account)}
+    <div class="connection-actions">${account.verified === false ? '' : `<button class="button secondary" data-action="check" data-id="${esc(account.id)}" ${account.status !== 'connected' || !provider.available ? 'disabled' : ''}>接続を確認</button>`}${provider.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(account.id)}" ${account.status === 'disconnecting' || !provider.available ? 'disabled' : ''}>再接続</button>` : ''}<button class="text-button" data-action="edit-account" data-id="${esc(account.id)}">編集</button></div>
+    <details class="connection-reference"><summary>接続情報</summary><dl><dt>接続ID</dt><dd><code>${esc(account.id)}</code></dd></dl>${provider.api.documentation_url ? `<a href="${esc(provider.api.documentation_url)}" target="_blank" rel="noopener noreferrer">${esc(provider.name)} APIの公式ドキュメント ↗</a>` : ''}</details>
+    <div class="connection-footer">${account.credential_type === 'expo_session' ? '' : `<a href="${esc(account.management_url || provider.management_url)}" target="_blank" rel="noopener noreferrer">${esc(account.details?.service || provider.name)}の${account.details ? 'キー管理ページ' : '接続管理'} ↗</a>`}<button class="text-button danger" data-action="remove-account" data-id="${esc(account.id)}">${account.status === 'disconnecting' ? '接続解除を再試行' : '接続を解除'}</button></div>`;
 }
 function serviceSection(provider) {
   const accounts = state.accounts.filter(account => account.provider === provider.id);
@@ -139,6 +140,11 @@ function render() {
     ${state.providers.filter(provider => provider.available || state.accounts.some(account => account.provider === provider.id) || !state.providers.some(item => item.available)).map(serviceSection).join('')}
     <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">実行環境への利用許可</h2><p>AIを動かす環境ごとに接続先を選択</p></div></div><button class="button secondary" data-action="add-agent" ${state.accounts.some((a) => a.status !== 'disconnecting') ? '' : 'disabled'}>${icon('plus')} 実行環境を追加</button></div>
     ${state.agents.length ? `<div class="agent-list">${state.agents.map((agent) => `<article class="agent-row"><div class="agent-name"><h3>${esc(agent.name)}</h3><p>${agent.last_used_at ? '最終利用 ' + esc(new Date(agent.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions">${agent.accountIds.length ? `<ul>${agent.accountIds.map((id) => `<li><span>${esc(byId.get(id)?.name)}</span><small>${esc(accountLabel(byId.get(id)))}</small></li>`).join('')}</ul>` : '<span class="muted">許可なし</span>'}</div><div class="agent-actions"><button class="text-button" data-action="edit-grants" data-id="${esc(agent.id)}">許可を変更</button><button class="text-button danger" data-action="remove-agent" data-id="${esc(agent.id)}">利用を停止</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>利用を許可した実行環境はありません。</p></div>'}</section></main></div>`;
+}
+const siteLink = value => { try { const url = new URL(value); return `<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer"><strong>${esc(url.host)}</strong>${esc(url.pathname === '/' ? '' : url.pathname)} ↗</a>`; } catch { return esc(value); } };
+function claimRows(service, details) {
+  if (!service.request_fields?.length || !details) return '';
+  return service.request_fields.map(field => `<div><dt>${esc(field.label)}</dt><dd>${field.type === 'url' ? siteLink(details[field.id]) : field.type === 'code' ? `<code>${esc(details[field.id])}</code>` : esc(details[field.id])}</dd></div>`).join('');
 }
 const codeComplete = form => /^[0-9a-fA-F]{8}$/.test((form.elements.confirmationCode?.value || '').replace(/[^0-9a-zA-Z]/g, ''));
 function codeField(enabled = true) {
@@ -163,7 +169,7 @@ function renderRequest() {
   const matching = state.accounts.filter(account => row.eligible_account_ids.includes(account.id));
   const available = matching.filter((account) => account.status === 'connected');
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.service.name)}へのアクセス</p><h1>利用を許可しますか？</h1></div></header>
-    <dl class="approval-facts"><div><dt>依頼元</dt><dd>${esc(row.requester_name)}</dd></div>${row.purpose ? `<div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}<div><dt>権限</dt><dd>${esc(row.permission.name)}</dd></div></dl>
+    <dl class="approval-facts"><div><dt>依頼元</dt><dd>${esc(row.requester_name)}</dd></div>${row.purpose ? `<div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}<div><dt>権限</dt><dd>${esc(row.permission.name)}</dd></div>${claimRows(row.service, row.details)}</dl>${row.service.request_fields?.length ? '<p class="permission-note claim-note">サービス名・作成ページ・環境変数名はAIの申告です。作成ページのドメインが正しいか確認してください。</p>' : ''}
     <form id="access-request-form"><fieldset><legend>利用を許可するアカウント</legend>${available.length ? available.map((account) => `<div class="approval-account"><label class="choice"><input type="radio" name="accountId" value="${esc(account.id)}" ${available.length === 1 ? 'checked' : ''} required><span><strong>${esc(account.name)}</strong><small>${esc(accountLabel(account))}</small></span></label>${keyFacts(account)}</div>`).join('') : '<p class="muted">この権限で利用できる接続済みのアカウントはありません。</p>'}</fieldset>
     ${matching.filter(account => account.status === 'reconnect_required' && row.service.can_reconnect).map(account => `<button class="button secondary full request-connect" type="button" data-action="request-connect" data-id="${esc(account.id)}" ${row.service.available ? '' : 'disabled'}>${esc(accountLabel(account))} を再接続</button>`).join('')}
     <button class="button secondary full request-connect" type="button" data-action="request-connect" ${row.service.available ? '' : 'disabled'}>${icon('plus')} ${esc(row.permission.connect_label || row.service.connect_label)}</button>
@@ -301,18 +307,33 @@ function renderExpoRequest(row, shell) {
 function connectToken(provider, request = null) {
   const setup = provider.token_setup, mode = request?.mode || provider.permissions[0].id;
   const permission = provider.permissions.find(item => item.id === mode);
-  openDialog(`<h2 id="dialog-title">${esc(provider.name)}を接続</h2><p>パスワードは${esc(provider.name)}の画面で入力します。ここにはアクセストークンだけを登録してください。</p>
-    <div class="token-setup"><h3>1. ${esc(provider.name)}でトークンを作成</h3><p>${esc(setup.instructions)}</p><a class="button secondary full" href="${esc(setup.url)}" target="_blank" rel="noopener noreferrer">${esc(provider.name)}のトークン管理を開く ↗</a></div>
-    <form autocomplete="off"><h3 class="token-step">2. トークンを登録</h3><label for="connection-token">${esc(setup.label)}</label><input id="connection-token" name="token" type="password" required minlength="20" maxlength="1024" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="token-storage-note"><p class="permission-note" id="token-storage-note">トークンは暗号化して保存し、許可した実行環境だけに渡します。チャットには貼り付けないでください。</p>
-    <details class="token-details"><summary>名前・用途を変更</summary>${accountFields({ name: provider.name, purpose: request?.purpose || '' })}</details>
-    <details class="token-details"><summary>権限の範囲と注意点</summary><p>${esc(permission.description)}</p><p>${esc(permission.restrictions)}</p><p>登録だけではAIに利用を許可しません。${request ? '登録後、アカウントと確認コードを確認して利用を許可してください。' : '登録後、利用を許可する実行環境を選んでください。'}トークンの無効化は${esc(provider.name)}で行います。</p></details>
+  const fields = provider.request_fields || [], claimed = request?.details || null;
+  const fieldInputs = fields.map(field => {
+    const value = claimed?.[field.id] || '';
+    const attrs = { service: 'maxlength="40" placeholder="Anthropic など"', site: 'type="url" maxlength="300" placeholder="https://"', env: 'maxlength="64" placeholder="ANTHROPIC_API_KEY" autocapitalize="characters" spellcheck="false"' }[field.id] || '';
+    return `<label for="field-${esc(field.id)}">${esc(field.label)}</label><input id="field-${esc(field.id)}" name="${esc(field.id)}" required ${attrs} autocomplete="off" value="${esc(value)}" ${claimed ? 'readonly' : ''}>`;
+  }).join('');
+  const siteUrl = claimed?.site || setup.url;
+  const serviceName = claimed?.service || (fields.length ? '' : provider.name);
+  openDialog(`<h2 id="dialog-title">${esc(serviceName || provider.name)}を接続</h2><p>${serviceName ? `パスワードは${esc(serviceName)}の画面で入力します。ここには${esc(setup.label)}だけを登録してください。` : esc(provider.intro)}</p>
+    ${fields.length ? `<form autocomplete="off" class="token-form">${claimed ? `<p class="permission-note claim-note">以下はAIの申告です。作成ページのドメインが正しいか確認してください。</p>` : ''}${fieldInputs}` : '<form autocomplete="off" class="token-form">'}
+    <div class="token-setup"><h3>1. ${esc(serviceName || 'サービス')}でキーを作成</h3><p>${esc(setup.instructions)}</p>${siteUrl || fields.length ? `<a class="button secondary full" href="${esc(siteUrl || '#')}" target="_blank" rel="noopener noreferrer" ${siteUrl ? '' : 'style="display:none"'}>${esc(serviceName || 'サービス')}の${esc(setup.label)}管理ページを開く ↗</a>` : ''}</div>
+    <h3 class="token-step">2. キーを登録</h3><label for="connection-token">${esc(setup.label)}</label><input id="connection-token" name="token" type="password" required minlength="8" maxlength="4096" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="token-storage-note"><p class="permission-note" id="token-storage-note">キーは暗号化して保存し、許可した実行環境だけに渡します。チャットには貼り付けないでください。</p>
+    <details class="token-details"><summary>名前・用途を変更</summary>${accountFields({ name: claimed?.service || provider.name, purpose: request?.purpose || '' })}</details>
+    <details class="token-details"><summary>権限の範囲と注意点</summary><p>${esc(permission.description)}</p><p>${esc(permission.restrictions)}</p><p>登録だけではAIに利用を許可しません。${request ? '登録後、アカウントと確認コードを確認して利用を許可してください。' : '登録後、利用を許可する実行環境を選んでください。'}キーの無効化は${esc(serviceName || 'サービス側')}で行います。</p></details>
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>`);
+  if (fields.length && !claimed) {
+    const siteInput = dialog.querySelector('[name="site"]'), link = dialog.querySelector('.token-setup a');
+    const sync = () => { if (link) { const value = siteInput.value.trim(), valid = /^https:\/\/[^\s/]+\.[^\s/]+/.test(value); link.href = valid ? value : '#'; link.style.display = valid ? '' : 'none'; } };
+    if (link) siteInput.addEventListener('input', sync);
+  }
   bindForm(async form => {
     const token = form.get('token').trim();
     form.delete('token');
     const input = dialog.querySelector('[name="token"]');
     input.value = '';
-    const result = await api(`/api/connections/${provider.id}/connect`, { method: 'POST', data: { token, name: form.get('name'), purpose: form.get('purpose'), mode, ...(request ? { accessRequestId: request.id } : {}) } });
+    const details = fields.length && !claimed ? Object.fromEntries(fields.map(field => [field.id, (form.get(field.id) || '').trim()])) : undefined;
+    const result = await api(`/api/connections/${provider.id}/connect`, { method: 'POST', data: { token, name: form.get('name'), purpose: form.get('purpose'), mode, ...(details ? { details } : {}), ...(request ? { accessRequestId: request.id } : {}) } });
     selected = result.account_id;
     closeDialog(); await refresh(); toast(`${provider.name}を接続しました。`);
   });

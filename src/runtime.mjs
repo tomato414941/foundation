@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { spawnExpoSession } from './expo-runtime.mjs';
+import { validEnvName, validRequestedEnvName } from './env-name.mjs';
 
 async function runtimeKey(path, create, privateDirectory) {
   if (create) {
@@ -45,11 +46,19 @@ async function main() {
   if (action === '--help' || !action) {
     console.log('Usage: node src/runtime.mjs providers\n       node src/runtime.mjs connect [--provider <id>] [--mode <permission-id>] [--name <name>] [--purpose <purpose>]\n       node src/runtime.mjs status\n       node src/runtime.mjs cancel\n       node src/runtime.mjs accounts\n       node src/runtime.mjs exec <account-id> -- <command> [args...]\nEnvironment: FOUNDATION_URL; optional FOUNDATION_RUNTIME_KEY_FILE\nconnect selects the first available provider and its first permission unless specified, saves a private runtime key and prints an approval URL plus confirmation code.\nAfter the user approves, run status, then accounts or exec. No key copying is needed.\nDefault key: ~/.local/state/foundation/<origin-hash>.key (private, per Foundation origin).\nChild environment: FOUNDATION_ACCESS_TOKEN, FOUNDATION_CREDENTIAL_TYPE, FOUNDATION_ACCOUNT_ID, FOUNDATION_ACCOUNT_LABEL, FOUNDATION_PROVIDER, FOUNDATION_TOKEN_EXPIRES_AT, FOUNDATION_API_BASE_URL\nGmail also receives: GOOGLE_OAUTH_ACCESS_TOKEN, GMAIL_ACCOUNT_EMAIL, GOOGLE_OAUTH_EXPIRES_AT\nOpenRouter also receives: OPENROUTER_API_KEY\nAn empty FOUNDATION_TOKEN_EXPIRES_AT means the API key has no reported expiry, not a short-lived token. Foundation revocation stops future delivery; already delivered keys require provider-side deletion. Model calls can incur charges.');
     console.log('Expo API keys receive EXPO_TOKEN. Expo login sessions use an isolated in-memory CLI state (Linux + bubblewrap); shared Expo login is not overwritten. For direct API access use the expo-session header, never Bearer/EXPO_TOKEN for a session. Empty expiry means the provider expiry is unknown or unspecified. Expo operations may incur charges.');
+    console.log('Any other service: connect --provider apikey --service <name> --site <https key page> --env <VARIABLE> [--purpose <purpose>]. The user creates the key on that site and pastes it into Foundation; exec then sets <VARIABLE> (also reported as token_env). Foundation cannot verify such keys.');
     console.log('node src/runtime.mjs wait [--timeout <seconds>] waits for the current approval (default 1800, maximum 1800 seconds). It prints only the approved request, never credentials. Cancellation, expiry, replacement, or timeout fails without cancelling the request.');
     return;
   }
   let options;
-  if (action === 'connect') options = parseArgs({ args, options: { provider: { type: 'string' }, name: { type: 'string', default: hostname() + ' のAI' }, purpose: { type: 'string', default: '' }, mode: { type: 'string' } }, strict: true, allowPositionals: false }).values;
+  if (action === 'connect') {
+    const { service, site, env, ...values } = parseArgs({ args, options: { provider: { type: 'string' }, name: { type: 'string', default: hostname() + ' のAI' }, purpose: { type: 'string', default: '' }, mode: { type: 'string' }, service: { type: 'string' }, site: { type: 'string' }, env: { type: 'string' } }, strict: true, allowPositionals: false }).values;
+    options = values;
+    if (service !== undefined || site !== undefined || env !== undefined) {
+      if (!service || !site || !validRequestedEnvName(env)) throw new Error('--service, --site (https) and --env (UPPER_CASE, not reserved) are all required for a key request.');
+      options.provider ||= 'apikey'; options.details = { service, site, env };
+    }
+  }
   else if (action === 'wait') {
     options = parseArgs({ args, options: { timeout: { type: 'string', default: '1800' } }, strict: true, allowPositionals: false }).values;
     if (!/^\d+$/.test(options.timeout) || Number(options.timeout) < 1 || Number(options.timeout) > 1800) throw new Error('Wait timeout must be between 1 and 1800 seconds.');
@@ -98,6 +107,10 @@ async function main() {
   if (data.account.provider === 'openrouter') environment.OPENROUTER_API_KEY = data.access_token;
   if (data.account.provider === 'expo' && !expoSession) environment.EXPO_TOKEN = data.access_token;
   environment.FOUNDATION_AUTH_HEADER = expoSession ? 'expo-session' : 'authorization';
+  if (data.token_env != null) {
+    if (!validEnvName(data.token_env)) throw new Error('Foundation named a reserved environment variable for this key.');
+    environment[data.token_env] = data.access_token;
+  }
   delete environment.FOUNDATION_RUNTIME_KEY_FILE;
   const child = expoSession ? await spawnExpoSession(command, environment, data) : spawn(command[0], command.slice(1), { stdio: 'inherit', env: environment, shell: false });
   const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (value, signal) => resolve(value ?? (signal ? 1 : 0))); });

@@ -2,12 +2,13 @@ import { fail } from '../errors.mjs';
 import { GMAIL_API, GMAIL_DOCS, METADATA_SCOPE, READONLY_SCOPE } from './gmail.mjs';
 import { OPENROUTER_API, OPENROUTER_DOCS, OPENROUTER_SCOPE } from './openrouter.mjs';
 import { EXPO_API, EXPO_DOCS, EXPO_SCOPE, EXPO_SESSION_SCOPE, EXPO_TOKENS } from './expo.mjs';
+import { APIKEY_SCOPE } from './apikey.mjs';
 
 // Each integration supplies its authentication client and permission descriptions.
 // Request creation, user approval and runtime authentication do not depend on Gmail.
 export function gmailConnection(client) {
   return {
-    id: 'gmail', name: 'Gmail', connectLabel: 'Googleで接続', client,
+    id: 'gmail', name: 'Gmail', connectLabel: 'Googleで接続', client, tokenEnv: 'GOOGLE_OAUTH_ACCESS_TOKEN',
     icon: 'mail', intro: 'Googleアカウントと読み取り範囲を選べます。', managementUrl: 'https://myaccount.google.com/connections',
     api: { base_url: GMAIL_API, documentation_url: GMAIL_DOCS },
     permissions: [
@@ -22,7 +23,7 @@ export function gmailConnection(client) {
 
 export function openrouterConnection(client) {
   return {
-    id: 'openrouter', name: 'OpenRouter', connectLabel: 'OpenRouterで接続', client, icon: 'network', canReconnect: false, canRevoke: false,
+    id: 'openrouter', name: 'OpenRouter', connectLabel: 'OpenRouterで接続', client, icon: 'network', canReconnect: false, canRevoke: false, tokenEnv: 'OPENROUTER_API_KEY',
     intro: 'OpenRouterでログインし、接続用のキーを作成します。', managementUrl: 'https://openrouter.ai/keys', credentialType: 'api_key',
     api: { base_url: OPENROUTER_API, documentation_url: OPENROUTER_DOCS },
     permissions: [{ id: 'api-key', name: 'APIキーの利用', description: 'このキーの権限でOpenRouter APIを利用できます。モデルの実行は課金を伴う場合があります。', restrictions: '利用上限と有効期限はOpenRouter側の設定が適用されます。読み取り専用のキーではありません。' }],
@@ -32,7 +33,7 @@ export function openrouterConnection(client) {
 
 export function expoConnection(client) {
   return {
-    id: 'expo', name: 'Expo', connectLabel: client.sessionLoginEnabled ? 'Expoにログイン' : 'Expoのトークンを登録', client, icon: 'device', canReconnect: false, canRevoke: false,
+    id: 'expo', name: 'Expo', connectLabel: client.sessionLoginEnabled ? 'Expoにログイン' : 'Expoのトークンを登録', client, icon: 'device', canReconnect: false, canRevoke: false, tokenEnv: credentials => credentials.credential_type === 'expo_session' ? null : 'EXPO_TOKEN',
     intro: client.sessionLoginEnabled ? 'Expoにログインして接続します。' : 'Expoで発行したアクセストークンを登録します。', managementUrl: EXPO_TOKENS, credentialType: 'api_key',
     connectionMethod: client.sessionLoginEnabled ? 'password' : 'token', tokenSetup: { url: EXPO_TOKENS, label: 'アクセストークン',
       instructions: 'Expoにログインして「Create Token」から、この接続専用のトークンを作成してください。名前は「Foundation」など、用途がわかるものにします。' },
@@ -41,6 +42,27 @@ export function expoConnection(client) {
       description: '個人用トークンは、本人がアクセスできるすべてのアカウント・組織で操作できます。ビルドなどは課金を伴う場合があります。',
       restrictions: '読み取り専用ではありません。対象や操作を絞る場合は、Expoで権限を制限したRobotのトークンを使ってください。' }],
     matches(mode, account) { return account?.provider === 'expo' && account.scopes.length === 1 && (mode === 'access-token' ? account.scopes[0] === EXPO_SCOPE : mode === 'session' && client.sessionLoginEnabled && account.scopes[0] === EXPO_SESSION_SCOPE); },
+  };
+}
+
+// Any service with a key the user can create themselves. The runtime supplies
+// the service name, the key page and the variable name; the catalog only fixes
+// the copy that must not come from the runtime.
+export function apikeyConnection(client) {
+  return {
+    id: 'apikey', name: 'APIキー', connectLabel: 'キーを登録', client, icon: 'key', canReconnect: false, canRevoke: false, credentialType: 'api_key', connectionMethod: 'token',
+    intro: 'サービスの設定画面で作成したキーを登録します。Foundationはキーの権限や有効性を検証しません。',
+    tokenSetup: { label: 'APIキー', instructions: 'サービスの設定画面でこの接続専用のキーを作成し、貼り付けてください。名前は「Foundation」など、用途がわかるものにします。' },
+    requestFields: [{ id: 'service', label: 'サービス' }, { id: 'site', label: 'キーの作成ページ', type: 'url' }, { id: 'env', label: '環境変数名', type: 'code' }],
+    api: { base_url: '', documentation_url: '' },
+    permissions: [{ id: 'key', name: 'キーの権限で利用', description: 'このキーで行える操作は、サービス側でキーに与えた権限のとおりです。Foundationはその内容を確認できません。', restrictions: '読み取り専用とは限りません。範囲を絞る場合は、サービス側で権限を制限したキーを作成してください。', connection_method: 'token' }],
+    tokenEnv: (credentials) => client.tokenEnv(credentials),
+    matches(mode, account, request) {
+      if (mode !== 'key' || account?.provider !== 'apikey' || !account.scopes.includes(APIKEY_SCOPE)) return false;
+      if (!request) return true;
+      const expected = client.scopes(client.details(request.details));
+      return expected.every(scope => account.scopes.includes(scope));
+    },
   };
 }
 
@@ -58,9 +80,17 @@ export class ProviderCatalog {
     if (!permission) fail(400, 'invalid_scope', '利用する権限を選んでください。');
     return permission;
   }
+  details(id, input) {
+    const provider = this.get(id);
+    return provider.requestFields?.length ? provider.client.details(input) : {};
+  }
+  tokenEnv(id, credentials) {
+    const value = this.get(id).tokenEnv;
+    return typeof value === 'function' ? value(credentials) : value || null;
+  }
   describe(id) {
     const provider = this.get(id);
-    return { id, name: provider.name, connect_label: provider.connectLabel, available: provider.client.enabled, permissions: provider.permissions,
+    return { id, name: provider.name, connect_label: provider.connectLabel, available: provider.client.enabled, permissions: provider.permissions, request_fields: provider.requestFields || [],
       icon: provider.icon || 'network', intro: provider.intro || '', api: provider.api, management_url: provider.managementUrl,
       connection_method: provider.connectionMethod || 'oauth', ...(provider.tokenSetup ? { token_setup: provider.tokenSetup } : {}),
       can_reconnect: provider.canReconnect !== false, can_revoke: provider.canRevoke !== false, credential_type: provider.credentialType || 'oauth2_access_token' };
