@@ -63,7 +63,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     # Verify the external login is an isolated official-site tab, never a
     # Foundation password form or an iframe. No real account is used.
     context.route('https://expo.dev/settings/access-tokens', lambda route: route.fulfill(status=200, content_type='text/html', body='<h1>Official token settings fixture</h1>'))
-    link = dialog.get_by_role('link', name='Expoのトークン管理を開く', exact=False)
+    link = dialog.get_by_role('link', name='Expoのアクセストークン管理ページを開く', exact=False)
     expect(link).to_have_attribute('rel', 'noopener noreferrer')
     with page.expect_popup() as popup_event:
         link.click()

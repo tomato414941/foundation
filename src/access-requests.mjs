@@ -33,25 +33,27 @@ export class AccessRequests {
     if (!row) fail(410, 'request_expired', '接続依頼がありません。新しい接続リンクを作成してください。');
     return row;
   }
-  create(token, { name, provider, purpose, mode }) {
+  create(token, { name, provider, purpose, mode, details }) {
     this.providers.permission(provider, mode);
+    const encoded = JSON.stringify(this.providers.details(provider, details));
     this.store.sweep();
     const hash = this.key(token);
     const agent = this.store.authenticate(token), requesterName = agent?.name || name;
     const previous = this.db.prepare("SELECT * FROM access_requests WHERE token_hash=? AND status='pending' AND expires_at>? ORDER BY created_at DESC LIMIT 1").get(hash, Date.now());
     if (previous) {
-      if (previous.requester_name !== requesterName || previous.provider !== provider || previous.purpose !== purpose || previous.mode !== mode) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
+      if (previous.requester_name !== requesterName || previous.provider !== provider || previous.purpose !== purpose || previous.mode !== mode || previous.details !== encoded) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
       return previous;
     }
     if (this.db.prepare('SELECT count(*) n FROM access_requests').get().n >= 1000) fail(429, 'request_limit', '接続依頼が混み合っています。しばらく待ってからお試しください。');
     const id = randomBytes(32).toString('base64url'), code = randomBytes(4).toString('hex').toUpperCase();
     const now = Date.now();
-    this.db.prepare('INSERT INTO access_requests (id,token_hash,requester_name,provider,purpose,mode,confirmation_code,owner_id,agent_id,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-      .run(id, hash, requesterName, provider, purpose, mode, code.slice(0, 4) + '-' + code.slice(4), agent?.owner_id || null, agent?.id || null, now, now + REQUEST_TTL);
+    this.db.prepare('INSERT INTO access_requests (id,token_hash,requester_name,provider,purpose,mode,details,confirmation_code,owner_id,agent_id,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(id, hash, requesterName, provider, purpose, mode, encoded, code.slice(0, 4) + '-' + code.slice(4), agent?.owner_id || null, agent?.id || null, now, now + REQUEST_TTL);
     return this.get(id);
   }
+  details(row) { try { return JSON.parse(row.details || '{}'); } catch { return {}; } }
   matches(row, account) {
-    return account && account.provider === row.provider && this.providers.get(row.provider).matches(row.mode, account);
+    return account && account.provider === row.provider && this.providers.get(row.provider).matches(row.mode, account, { ...row, details: this.details(row) });
   }
   claim(id, ownerId) {
     const row = this.forUser(id, ownerId, true);
@@ -114,7 +116,7 @@ export class AccessRequests {
       if (!agent || agent.owner_id !== row.owner_id || !grant || !this.matches(row, account) || account.status === 'disconnecting') status = 'revoked';
       else if (account.status !== 'connected') status = 'reconnect_required';
     }
-    return { id: row.id, provider: row.provider, service: this.providers.describe(row.provider), permission: this.providers.permission(row.provider, row.mode), requester_name: row.requester_name, purpose: row.purpose, mode: row.mode,
+    return { id: row.id, provider: row.provider, service: this.providers.describe(row.provider), permission: this.providers.permission(row.provider, row.mode), requester_name: row.requester_name, purpose: row.purpose, mode: row.mode, details: this.details(row),
       ...(code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
       status, created_at: row.created_at, expires_at: row.expires_at,
       ...(status === 'approved' ? { account: { id: account.id, email: account.email, label: this.providers.get(row.provider).client.accountInfo?.(this.store.secrets(account))?.label || account.email }, agent_id: row.agent_id } : {}) };

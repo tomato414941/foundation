@@ -120,7 +120,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
     const provider = providers.get(account.provider);
     const info = publicAccount(account, ownerId);
     if (info.credential_type === 'expo_session') return { ...info, api: provider.api, authentication: { method: 'POST', credential_endpoint: '/v1/accounts/' + account.id + '/credentials', type: 'expo_session', header: 'expo-session', revocation: 'Stopping a runtime only stops future delivery. Disconnect this connection with provider revocation to invalidate its Expo session. No artificial expiry is applied.' } };
-    return { ...info, api: provider.api, authentication: { method: 'POST', credential_endpoint: '/v1/accounts/' + account.id + '/credentials', type: provider.credentialType === 'api_key' ? 'api_key_bearer' : 'oauth2_bearer', revocation: provider.canRevoke === false ? `Stops future credential delivery only. Already delivered API keys remain usable until their provider expiry or deletion on ${provider.name}. No artificial short expiry is applied.` : 'Stops future credential issuance; already issued tokens may remain valid until expiry or provider revocation.' } };
+    return { ...info, api: provider.api, token_env: providers.tokenEnv(provider.id, store.secrets(store.account(ownerId, account.id))), authentication: { method: 'POST', credential_endpoint: '/v1/accounts/' + account.id + '/credentials', type: provider.credentialType === 'api_key' ? 'api_key_bearer' : 'oauth2_bearer', revocation: provider.canRevoke === false ? `Stops future credential delivery only. Already delivered API keys remain usable until their provider expiry or deletion on ${provider.name}. No artificial short expiry is applied.` : 'Stops future credential issuance; already issued tokens may remain valid until expiry or provider revocation.' } };
   }
   const server = createServer(async (req, res) => {
     const send = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
@@ -252,7 +252,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           const name = nameValue(input.name, '依頼元'), purpose = purposeValue(input.purpose);
           providers.permission(input.provider, input.mode);
           rateLimit('request-create:' + req.socket.remoteAddress, 12, 600_000);
-          return send(201, { request: requests.summary(requests.create(token, { name, purpose, provider: input.provider, mode: input.mode }), origin) });
+          return send(201, { request: requests.summary(requests.create(token, { name, purpose, provider: input.provider, mode: input.mode, details: input.details }), origin) });
         }
         if (path.endsWith('/current') && method === 'GET') return send(200, { request: requests.summary(requests.current(token), origin) });
         if (path.endsWith('/current') && method === 'DELETE') {
@@ -322,7 +322,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           if (previous?.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
           if (accessRequest && previous && !requests.matches(accessRequest, previous)) fail(400, 'scope_mismatch', 'この依頼では既存の読み取り範囲を変更できません。');
           if (provider.connectionMethod === 'token' || permission.connection_method === 'token') {
-            const result = await provider.client.importToken({ token: input.token, mode: input.mode });
+            // A request fixes the runtime's declared service and variable name; a root import takes them from the user.
+            const details = accessRequest ? requests.details(accessRequest) : providers.details(provider.id, input.details);
+            const result = await provider.client.importToken({ token: input.token, mode: input.mode, details });
             // Network validation must not resurrect a logged-out session or an
             // expired/cancelled request. Importing alone never grants a runtime.
             if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
@@ -407,7 +409,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           currentAccount(account);
           store.recordIssuance(agent, credentials.expires_at);
           const info = provider.client.accountInfo?.(credentials) || {};
-          return send(200, { access_token: credentials.access_token, token_type: expoSession ? 'Expo-Session' : 'Bearer', credential_type: credentials.credential_type || 'oauth2_access_token', expires_at: credentials.expires_at, expires_in: credentials.expires_at === null ? null : Math.max(0, Math.floor((credentials.expires_at - Date.now()) / 1000)), scope: credentials.scopes.join(' '), account: { id: account.id, provider: account.provider, email: account.email, label: info.label || account.email }, ...(expoSession ? { credential_header: 'expo-session', session_profile: { user_id: credentials.details.actor_id, username: credentials.details.label } } : {}), ...(info.key_info ? { key_info: info.key_info } : {}), api_base_url: provider.api.base_url });
+          return send(200, { access_token: credentials.access_token, token_type: expoSession ? 'Expo-Session' : 'Bearer', credential_type: credentials.credential_type || 'oauth2_access_token', expires_at: credentials.expires_at, expires_in: credentials.expires_at === null ? null : Math.max(0, Math.floor((credentials.expires_at - Date.now()) / 1000)), scope: credentials.scopes.join(' '), account: { id: account.id, provider: account.provider, email: account.email, label: info.label || account.email }, ...(expoSession ? { credential_header: 'expo-session', session_profile: { user_id: credentials.details.actor_id, username: credentials.details.label } } : {}), ...(info.key_info ? { key_info: info.key_info } : {}), token_env: providers.tokenEnv(provider.id, credentials), api_base_url: provider.api.base_url });
         }
       }
       fail(404, 'not_found', '指定された操作が見つかりません。');

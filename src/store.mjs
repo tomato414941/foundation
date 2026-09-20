@@ -64,7 +64,9 @@ export class Store {
           CREATE INDEX IF NOT EXISTS access_requests_token ON access_requests(token_hash, created_at);
         `);
         if (!this.db.prepare('PRAGMA table_info(agents)').all().some(column => column.name === 'issued_nonexpiring')) this.db.exec('ALTER TABLE agents ADD COLUMN issued_nonexpiring INTEGER NOT NULL DEFAULT 0');
-        if (!this.db.prepare('PRAGMA table_info(access_requests)').all().some(column => column.name === 'confirmation_attempts')) this.db.exec('ALTER TABLE access_requests ADD COLUMN confirmation_attempts INTEGER NOT NULL DEFAULT 0');
+        const requestColumns = this.db.prepare('PRAGMA table_info(access_requests)').all().map(column => column.name);
+        if (!requestColumns.includes('confirmation_attempts')) this.db.exec('ALTER TABLE access_requests ADD COLUMN confirmation_attempts INTEGER NOT NULL DEFAULT 0');
+        if (!requestColumns.includes('details')) this.db.exec("ALTER TABLE access_requests ADD COLUMN details TEXT NOT NULL DEFAULT '{}'");
         this.db.exec('PRAGMA user_version=4;');
         const check = this.db.prepare("SELECT value FROM metadata WHERE name='key_check'").get();
         if (check) this.vault.open(check.value, 'key_check');
