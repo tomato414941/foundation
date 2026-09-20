@@ -149,3 +149,29 @@ test('The server distributes its own CLI: install.sh bakes in the origin and the
   assert.equal(installed.code, 0, installed.err);
   assert.equal(JSON.parse(installed.out).providers[0].id, 'gmail');
 });
+
+test('FOUNDATION_AGENT gives each AI its own key file and default name; whoami and leave work through the CLI', async t => {
+  const f = await fixture(t), account = await f.account();
+  const home = await mkdtemp(join(tmpdir(), 'foundation-agent-home-')); t.after(() => rm(home, { recursive: true, force: true }));
+  const base = { FOUNDATION_URL: f.base, HOME: home, FOUNDATION_RUNTIME_KEY_FILE: '' };
+  const claude = await execute(['connect', '--purpose', 'メールの確認'], { ...base, FOUNDATION_AGENT: 'claude' });
+  assert.equal(claude.code, 0, claude.err);
+  const codex = await execute(['connect', '--purpose', 'メールの確認'], { ...base, FOUNDATION_AGENT: 'codex' });
+  assert.equal(codex.code, 0, codex.err);
+  const rows = [JSON.parse(claude.out).request, JSON.parse(codex.out).request];
+  assert.notEqual(rows[0].id, rows[1].id);
+  assert.match(rows[0].requester_name, / の claude$/); assert.match(rows[1].requester_name, / の codex$/);
+  const { readdir } = await import('node:fs/promises');
+  const keys = (await readdir(join(home, '.local', 'state', 'foundation'))).sort();
+  assert.equal(keys.length, 2); assert.ok(keys.some(name => name.endsWith('-claude.key')) && keys.some(name => name.endsWith('-codex.key')));
+  const bad = await execute(['whoami'], { ...base, FOUNDATION_AGENT: '../x' });
+  assert.equal(bad.code, 1); assert.match(bad.err, /FOUNDATION_AGENT/);
+  await f.request('/api/access-requests/' + rows[0].id + '/approve', { method: 'POST', data: { accountId: account.id, confirmationCode: rows[0].confirmation_code } });
+  const who = await execute(['whoami'], { ...base, FOUNDATION_AGENT: 'claude' });
+  assert.equal(who.code, 0, who.err); assert.match(JSON.parse(who.out).agent.name, / の claude$/);
+  const other = await execute(['whoami'], { ...base, FOUNDATION_AGENT: 'codex' });
+  assert.equal(other.code, 1); assert.match(other.err, /not_approved/);
+  const left = await execute(['leave'], { ...base, FOUNDATION_AGENT: 'claude' });
+  assert.equal(left.code, 0, left.err); assert.match(left.out, /revoked/);
+  assert.equal((await execute(['accounts'], { ...base, FOUNDATION_AGENT: 'claude' })).code, 1);
+});

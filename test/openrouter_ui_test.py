@@ -104,11 +104,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
             page.screenshot(path=str(shots / ('connections-desktop.png' if width == 1280 else 'connections-mobile.png')), full_page=True)
 
     runtime = page.locator('.agent-row').filter(has_text='dev-us のAI')
-    runtime.get_by_role('button', name='利用を停止', exact=True).click()
+    runtime.get_by_role('button', name='失効', exact=True).click()
     dialog = page.get_by_role('dialog')
     expect(dialog.get_by_text('有効期限が未指定または不明の認証情報', exact=False)).to_be_visible()
     review(page)
-    dialog.get_by_role('button', name='利用を停止', exact=True).click()
+    dialog.get_by_role('button', name='失効させる', exact=True).click()
     expect(dialog).not_to_be_visible()
     cli('accounts', success=False)
 

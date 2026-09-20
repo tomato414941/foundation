@@ -102,8 +102,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
 
     page.goto(args.base, wait_until='networkidle')
     runtime = page.locator('.agent-row').filter(has_text='dev-us のAI')
-    runtime.get_by_role('button', name='利用を停止', exact=True).click()
-    page.get_by_role('dialog').get_by_role('button', name='利用を停止', exact=True).click()
+    runtime.get_by_role('button', name='失効', exact=True).click()
+    page.get_by_role('dialog').get_by_role('button', name='失効させる', exact=True).click()
     expect(page.get_by_role('dialog')).not_to_be_visible()
     assert cli('status')['request']['status'] == 'revoked'
     page.goto(request['verification_uri'], wait_until='networkidle')

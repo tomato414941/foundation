@@ -241,3 +241,33 @@ test('The approval page never receives the confirmation code; entry is normalize
   assert.equal((await approve(f, second.row, account.id)).status, 409);
   assert.equal(f.app.store.agents(USER_A).length, 1);
 });
+
+test('An access key introduces itself: whoami, approval renames it, the owner can rename it, and it can leave', async t => {
+  const f = await fixture(t), account = await f.account();
+  const { token, row } = await create(f, key(), { name: 'dev-us の claude' });
+  const before = await f.request('/v1/me', { token, anonymous: true });
+  assert.equal(before.status, 401); assert.equal(before.json.error.code, 'not_approved');
+  assert.equal((await f.request('/api/access-requests/' + row.id)).json.request.agent_name, undefined);
+  assert.equal((await approve(f, row, account.id)).status, 200);
+  const me = await f.request('/v1/me', { token, anonymous: true });
+  assert.equal(me.status, 200, me.text);
+  assert.equal(me.json.agent.name, 'dev-us の claude');
+  assert.deepEqual(me.json.agent.accounts.map(item => item.id), [account.id]);
+  assert.doesNotMatch(me.text, /token_hash|fdn_/);
+  // A later request from the same key carries its own name; the page shows the registered one; approval renames.
+  const next = await create(f, token, { name: 'dev-us の Claude Code', mode: 'readonly' });
+  const page = (await f.request('/api/access-requests/' + next.row.id)).json.request;
+  assert.equal(page.requester_name, 'dev-us の Claude Code'); assert.equal(page.agent_name, 'dev-us の claude');
+  assert.equal((await approve(f, next.row, account.id)).status, 200);
+  assert.equal((await f.request('/v1/me', { token, anonymous: true })).json.agent.name, 'dev-us の Claude Code');
+  const agentId = me.json.agent.id;
+  assert.equal((await f.request('/api/agents/' + agentId, { method: 'PATCH', data: { name: '' } })).status, 400);
+  assert.equal((await f.request('/api/agents/' + agentId, { method: 'PATCH', data: { name: '作業用' } })).status, 200);
+  assert.equal(f.app.store.agents(USER_A)[0].name, '作業用');
+  assert.equal((await f.request('/api/agents/' + agentId, { method: 'PATCH', headers: { origin: 'https://evil.test' }, data: { name: 'x' } })).status, 403);
+  // Leaving revokes the key and its grants but keeps the connection.
+  assert.equal((await f.request('/v1/me', { method: 'DELETE', token, anonymous: true, data: {} })).status, 200);
+  assert.equal((await f.request('/v1/accounts', { token, anonymous: true })).status, 401);
+  assert.equal(f.app.store.agents(USER_A).length, 0);
+  assert.equal(f.app.store.accounts(USER_A).length, 1);
+});
