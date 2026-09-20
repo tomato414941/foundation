@@ -53,7 +53,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     page.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
     expect(page.get_by_role('heading', name='Expoを接続', exact=True)).to_be_visible()
-    expect(page.get_by_text(row['confirmation_code'], exact=True)).to_be_visible()
+    expect(page.get_by_text(row['confirmation_code'], exact=True)).to_have_count(0)
+    code = page.get_by_label('確認コード', exact=True)
+    expect(code).to_be_visible()
     expect(page.get_by_role('dialog')).not_to_be_visible()
     expect(page.get_by_role('button', name='利用を許可', exact=True)).to_have_count(0)
     expect(page.get_by_text('トークンを登録', exact=False)).to_have_count(0)
@@ -68,11 +70,13 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
         review(page)
         if width != 320:
             page.screenshot(path=str(shots / ('login-desktop.png' if width == 1280 else 'login-mobile.png')), full_page=True)
+    code.fill(row['confirmation_code'])
     username.fill('otp-user')
     password.fill('fixture-wrong-password')
     submit.click()
     expect(page.get_by_role('alert')).to_contain_text('Expoにログインできませんでした')
     expect(password).to_have_value('')
+    expect(code).to_have_value(row['confirmation_code'])
     assert cli('status')['request']['status'] == 'pending'
     cli('accounts', success=False)
 
@@ -126,6 +130,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     expect(password).to_have_count(0)
     expect(page.get_by_role('radio')).to_have_count(1)
     page.get_by_role('button', name='このアカウントの利用を許可', exact=True).click()
+    assert cli('status')['request']['status'] == 'pending'
+    page.get_by_label('確認コード', exact=True).fill(row['confirmation_code'])
+    page.get_by_role('button', name='このアカウントの利用を許可', exact=True).click()
     expect(page.get_by_role('heading', name='利用を許可しました', exact=True)).to_be_visible()
     assert cli('status')['request']['status'] == 'approved'
 
@@ -137,6 +144,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     page.reload(wait_until='networkidle')
     page.get_by_role('button', name='別のアカウントで接続', exact=True).click()
     expect(password).to_have_value('')
+    page.get_by_label('確認コード', exact=True).fill(row['confirmation_code'])
     username.fill('otp-other')
     password.fill(PASSWORD)
     submit.click()

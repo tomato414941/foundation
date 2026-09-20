@@ -110,12 +110,15 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .approval-card h1 { font-size: 25px; letter-spacing: -.035em; }
 .approval-facts { margin: 26px 0; }
 .approval-facts > div { display: grid; grid-template-columns: 94px minmax(0, 1fr); gap: 12px; margin-top: 12px; }
-.confirmation-panel { padding: 18px 20px; border-left: 3px solid var(--accent); background: var(--soft); border-radius: 0 8px 8px 0; }
-.confirmation-panel > span, .confirmation-panel p, .request-expiry { font-size: 14px; color: var(--muted); }
-.confirmation-panel strong { display: block; font: 600 26px/1.8 ui-monospace, monospace; letter-spacing: .1em; }
-.confirmation-panel p { margin-top: 4px; }
+.approval-summary { margin: 22px 0 6px; font-size: 16px; line-height: 1.7; overflow-wrap: anywhere; }
+.approval-summary strong { font-weight: 600; }
+#confirmation-code { font: 600 20px/1.4 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
+.approval-details, .token-details { margin-top: 18px; }
+.token-details + .token-details { margin-top: 10px; }
+.approval-details summary, .token-details summary { font-size: 14px; color: var(--muted); cursor: pointer; }
+.approval-details p, .token-details > p { margin: 10px 0 0; font-size: 14px; color: var(--muted); }
+.request-expiry { font-size: 14px; color: var(--muted); }
 .request-connect { margin-top: 8px; white-space: normal; overflow-wrap: anywhere; }
-.confirmation-choice { margin-top: 24px; }
 .request-expiry { text-align: center; margin-top: 14px; }
 .approval-result .approval-symbol { margin-bottom: 16px; }
 .approval-result p { color: var(--muted); margin: 14px 0 24px; overflow-wrap: anywhere; }
@@ -149,12 +152,8 @@ legend { padding: 0; margin-top: 0; }
 .token-setup { padding: 17px; background: var(--soft); border: 1px solid var(--line); border-radius: 8px; }
 .token-setup p, .token-permission p { margin: 8px 0 12px; color: var(--muted); font-size: 14px; }
 .token-step { margin-top: 24px; }
-.token-details { margin-top: 18px; }
 .expo-approval { padding: 24px; }
 .expo-request-purpose { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
-.expo-request-code { font-size: 14px; padding: 10px 0; border-block: 1px solid var(--line); color: var(--muted); }
-.expo-request-code strong { margin-left: 8px; color: var(--ink); letter-spacing: .06em; }
-.expo-request-code span { display: inline-block; margin-left: 12px; }
 .expo-login-form label { margin-top: 14px; }
 .expo-login-form .auth-permission { padding: 10px 12px; margin: 12px 0; background: var(--soft); border-left: 3px solid #a8c4b1; }
 .expo-login-form .auth-privacy { margin: 12px 0; }
