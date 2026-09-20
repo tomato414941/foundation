@@ -1,8 +1,9 @@
-import { open, mkdir, stat } from 'node:fs/promises';
+import { open, mkdir, stat, mkdtemp, writeFile, chmod } from 'node:fs/promises';
+import { rmSync } from 'node:fs';
 import { constants } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { homedir, hostname } from 'node:os';
+import { homedir, hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -45,7 +46,7 @@ async function main() {
   const [action, ...args] = process.argv.slice(2);
   const agentName = (process.env.FOUNDATION_AGENT || '').trim();
   if (agentName && !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/.test(agentName)) throw new Error('FOUNDATION_AGENT must be 1-40 characters of letters, digits, space, dot, underscore or hyphen.');
-  const [accountId, separator, ...command] = args;
+  const separatorAt = args.indexOf('--'), accountIds = action === 'exec' && separatorAt > 0 ? args.slice(0, separatorAt) : [], command = separatorAt >= 0 ? args.slice(separatorAt + 1) : [];
   if (action === '--help' || action === 'help' || action === 'guide' || !action) {
     let providers;
     if (process.env.FOUNDATION_URL) {
@@ -67,7 +68,7 @@ async function main() {
       options.provider ||= 'apikey'; options.details = { service, site, env };
     }
   }
-  else if (!(['providers', 'accounts', 'cancel', 'whoami', 'leave'].includes(action) && !args.length) && !(action === 'exec' && /^[a-f0-9-]{36}$/.test(accountId || '') && separator === '--' && command.length)) throw new Error('Invalid command. Use --help.');
+  else if (!(['providers', 'accounts', 'cancel', 'whoami', 'leave'].includes(action) && !args.length) && !(action === 'exec' && accountIds.length && accountIds.every(id => /^[a-f0-9-]{36}$/.test(id)) && new Set(accountIds).size === accountIds.length && command.length)) throw new Error('Invalid command. Use --help.');
   const url = new URL(process.env.FOUNDATION_URL || '');
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('FOUNDATION_URL must be an HTTPS origin (HTTP is allowed only on localhost).');
   if (action === 'connect' && (!options.provider || !options.mode)) {
@@ -80,10 +81,10 @@ async function main() {
   }
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
   const token = action === 'providers' ? null : await runtimeKey(keyPath, action === 'connect', !process.env.FOUNDATION_RUNTIME_KEY_FILE);
-  const path = action === 'providers' ? '/v1/providers' : action === 'accounts' ? '/v1/accounts' : action === 'exec' ? '/v1/accounts/' + accountId + '/credentials' : ['whoami', 'leave'].includes(action) ? '/v1/me' : action === 'cancel' ? '/v1/access-requests/current' : '/v1/access-requests';
+  const path = action === 'providers' ? '/v1/providers' : action === 'accounts' ? '/v1/accounts' : action === 'exec' ? '/v1/accounts/' + accountIds[0] + '/credentials' : ['whoami', 'leave'].includes(action) ? '/v1/me' : action === 'cancel' ? '/v1/access-requests/current' : '/v1/access-requests';
   const method = action === 'connect' || action === 'exec' ? 'POST' : action === 'cancel' || action === 'leave' ? 'DELETE' : 'GET';
-  async function request(timeout = 30_000) {
-    const response = await fetch(url.origin + path, { method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), 'content-type': 'application/json' }, ...(method !== 'GET' ? { body: JSON.stringify(action === 'connect' ? options : {}) } : {}), redirect: 'error', signal: AbortSignal.timeout(timeout) });
+  async function request(timeout = 30_000, target = path) {
+    const response = await fetch(url.origin + target, { method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), 'content-type': 'application/json' }, ...(method !== 'GET' ? { body: JSON.stringify(action === 'connect' ? options : {}) } : {}), redirect: 'error', signal: AbortSignal.timeout(timeout) });
     const data = await response.json();
     if (!response.ok) throw new Error('Foundation request failed (' + response.status + ', ' + (data.error?.code || 'unknown') + '). ' + (data.error?.message || 'Check the connection and runtime permission.'));
     return data;
@@ -91,23 +92,57 @@ async function main() {
   let data = await request();
   if (action === 'leave') { console.log('Left Foundation: this access key and its permissions were revoked. Delete ' + keyPath + ' if it is no longer needed.'); return; }
   if (action !== 'exec') { console.log(JSON.stringify(data, null, 2)); return; }
-  const expoSession = data.account?.provider === 'expo' && data.credential_type === 'expo_session';
-  const expiryValid = (data.credential_type === 'api_key' || expoSession) && data.expires_at === null || Number.isFinite(data.expires_at) && data.expires_at > Date.now();
-  if (typeof data.access_token !== 'string' || !data.access_token || /[\r\n\x00]/.test(data.access_token) || !data.account?.email || !expiryValid) throw new Error('Foundation returned an invalid credential.');
-  const environment = { ...process.env, FOUNDATION_ACCESS_TOKEN: data.access_token, FOUNDATION_CREDENTIAL_TYPE: data.credential_type || 'oauth2_access_token', FOUNDATION_ACCOUNT_ID: data.account.id, FOUNDATION_ACCOUNT_LABEL: data.account.label || data.account.email, FOUNDATION_PROVIDER: data.account.provider, FOUNDATION_TOKEN_EXPIRES_AT: data.expires_at === null ? '' : String(data.expires_at), FOUNDATION_API_BASE_URL: data.api_base_url };
-  delete environment.GOOGLE_OAUTH_ACCESS_TOKEN; delete environment.GMAIL_ACCOUNT_EMAIL; delete environment.GOOGLE_OAUTH_EXPIRES_AT;
-  delete environment.OPENROUTER_API_KEY; delete environment.EXPO_TOKEN;
-  if (data.account.provider === 'gmail') Object.assign(environment, { GOOGLE_OAUTH_ACCESS_TOKEN: data.access_token, GMAIL_ACCOUNT_EMAIL: data.account.email, GOOGLE_OAUTH_EXPIRES_AT: String(data.expires_at) });
-  if (data.account.provider === 'openrouter') environment.OPENROUTER_API_KEY = data.access_token;
-  if (data.account.provider === 'expo' && !expoSession) environment.EXPO_TOKEN = data.access_token;
-  environment.FOUNDATION_AUTH_HEADER = expoSession ? 'expo-session' : 'authorization';
-  if (data.token_env != null) {
-    if (!validEnvName(data.token_env)) throw new Error('Foundation named a reserved environment variable for this key.');
-    environment[data.token_env] = data.access_token;
+  const issued = [data];
+  for (const id of accountIds.slice(1)) issued.push(await request(30_000, '/v1/accounts/' + id + '/credentials'));
+  const environment = { ...process.env };
+  for (const name of ['GOOGLE_OAUTH_ACCESS_TOKEN', 'GMAIL_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT', 'OPENROUTER_API_KEY', 'EXPO_TOKEN', 'FOUNDATION_RUNTIME_KEY_FILE']) delete environment[name];
+  const owned = new Map(), files = [];
+  const assign = (name, value, account) => {
+    if (!validEnvName(name)) throw new Error('Foundation named a reserved environment variable (' + name + ') for ' + account + '.');
+    if (owned.has(name) && owned.get(name) !== account) throw new Error('Two connections both set ' + name + ' (' + owned.get(name) + ' and ' + account + '). Choose one of them.');
+    owned.set(name, account); environment[name] = value;
+  };
+  let expoSession = false;
+  for (const credential of issued) {
+    const session = credential.account?.provider === 'expo' && credential.credential_type === 'expo_session';
+    const secretFile = credential.credential_type === 'private_key';
+    const expiryValid = (['api_key', 'private_key'].includes(credential.credential_type) || session) && credential.expires_at === null || Number.isFinite(credential.expires_at) && credential.expires_at > Date.now();
+    if (typeof credential.access_token !== 'string' || !credential.access_token || /\x00/.test(credential.access_token) || (!secretFile && /[\r\n]/.test(credential.access_token)) || !credential.account?.email || !expiryValid) throw new Error('Foundation returned an invalid credential.');
+    if (session) { if (issued.length > 1) throw new Error('An Expo login session cannot be combined with other connections.'); expoSession = true; }
+    const label = credential.account.provider + ':' + credential.account.id;
+    if (credential === data) Object.assign(environment, { FOUNDATION_ACCESS_TOKEN: secretFile ? '' : credential.access_token, FOUNDATION_CREDENTIAL_TYPE: credential.credential_type || 'oauth2_access_token', FOUNDATION_ACCOUNT_ID: credential.account.id, FOUNDATION_ACCOUNT_LABEL: credential.account.label || credential.account.email, FOUNDATION_PROVIDER: credential.account.provider, FOUNDATION_TOKEN_EXPIRES_AT: credential.expires_at === null ? '' : String(credential.expires_at), FOUNDATION_API_BASE_URL: credential.api_base_url, FOUNDATION_AUTH_HEADER: session ? 'expo-session' : 'authorization' });
+    if (credential.account.provider === 'gmail') { assign('GOOGLE_OAUTH_ACCESS_TOKEN', credential.access_token, label); assign('GMAIL_ACCOUNT_EMAIL', credential.account.email, label); assign('GOOGLE_OAUTH_EXPIRES_AT', String(credential.expires_at), label); }
+    if (credential.account.provider === 'openrouter') assign('OPENROUTER_API_KEY', credential.access_token, label);
+    if (credential.account.provider === 'expo' && !session) assign('EXPO_TOKEN', credential.access_token, label);
+    if (credential.token_env != null && credential.account.provider !== 'gmail' && credential.account.provider !== 'openrouter' && credential.account.provider !== 'expo') assign(credential.token_env, credential.access_token, label);
+    if (credential.token_file) {
+      const file = credential.token_file;
+      if (typeof file.env !== 'string' || typeof file.filename !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(file.filename) || file.filename.startsWith('.')) throw new Error('Foundation described an invalid credential file for ' + label + '.');
+      files.push({ env: file.env, filename: file.filename, content: credential.access_token, label });
+    }
+    for (const [name, value] of Object.entries(credential.environment || {})) {
+      if (typeof value !== 'string' || /[\x00\r\n]/.test(value) || value.length > 1024) throw new Error('Foundation returned an invalid environment value for ' + label + '.');
+      assign(name, value, label);
+    }
   }
-  delete environment.FOUNDATION_RUNTIME_KEY_FILE;
-  const child = expoSession ? await spawnExpoSession(command, environment, data) : spawn(command[0], command.slice(1), { stdio: 'inherit', env: environment, shell: false });
-  const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (value, signal) => resolve(value ?? (signal ? 1 : 0))); });
-  process.exitCode = code;
+  environment.FOUNDATION_ACCOUNT_IDS = issued.map(credential => credential.account.id).join(',');
+  // Secret files live in a private directory for exactly as long as the command runs.
+  let secretDir;
+  if (files.length) {
+    secretDir = await mkdtemp(join(process.env.XDG_RUNTIME_DIR && (await stat(process.env.XDG_RUNTIME_DIR).catch(() => null))?.isDirectory() ? process.env.XDG_RUNTIME_DIR : tmpdir(), 'foundation-'));
+    await chmod(secretDir, 0o700);
+    for (const file of files) {
+      const target = join(secretDir, file.filename);
+      await writeFile(target, file.content, { mode: 0o600, flag: 'wx' });
+      assign(file.env, target, file.label);
+    }
+  }
+  const cleanup = () => { if (secretDir) rmSync(secretDir, { recursive: true, force: true }); };
+  process.once('exit', cleanup);
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => { cleanup(); process.exit(1); });
+  try {
+    const child = expoSession ? await spawnExpoSession(command, environment, data) : spawn(command[0], command.slice(1), { stdio: 'inherit', env: environment, shell: false });
+    process.exitCode = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (value, signal) => resolve(value ?? (signal ? 1 : 0))); });
+  } finally { cleanup(); }
 }
 main().catch((error) => { console.error(error instanceof TypeError ? 'Unable to connect. Check Foundation URL and network access.' : error.message); process.exitCode = 1; });

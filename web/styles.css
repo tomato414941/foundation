@@ -128,7 +128,7 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .login-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 12px; margin-top: 5px; }
 .login-actions button:disabled { background: none; }
 label:not(.choice), legend { display: block; font-size: 14px; font-weight: 600; margin: 18px 0 7px; }
-input:not([type=checkbox], [type=radio]), textarea { display: block; width: 100%; min-width: 0; min-height: 46px; border: 1px solid #9eafa3; border-radius: 6px; padding: 10px 12px; background: #fff; font-size: 16px; }
+input:not([type=checkbox], [type=radio]), textarea, select { display: block; width: 100%; min-width: 0; min-height: 46px; border: 1px solid #9eafa3; border-radius: 6px; padding: 10px 12px; background: #fff; font-size: 16px; }
 input:disabled { background: var(--soft); }
 input[readonly], textarea[readonly] { background: #f4f6f3; }
 textarea { resize: vertical; }

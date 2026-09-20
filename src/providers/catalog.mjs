@@ -4,6 +4,7 @@ import { OPENROUTER_API, OPENROUTER_DOCS, OPENROUTER_SCOPE } from './openrouter.
 import { EXPO_API, EXPO_DOCS, EXPO_SCOPE, EXPO_SESSION_SCOPE, EXPO_TOKENS } from './expo.mjs';
 import { APIKEY_SCOPE } from './apikey.mjs';
 import { SUPABASE_API, SUPABASE_DOCS, SUPABASE_SCOPE, SUPABASE_TOKENS } from './supabase.mjs';
+import { APPLE_API, APPLE_DOCS, APPLE_KEYS, APPLE_SCOPE } from './apple.mjs';
 import { CLOUDFLARE_API, CLOUDFLARE_DOCS, CLOUDFLARE_SCOPE, CLOUDFLARE_TOKENS } from './cloudflare.mjs';
 
 // Each integration supplies its authentication client and permission descriptions.
@@ -76,6 +77,32 @@ export function supabaseConnection(client) {
   };
 }
 
+// App Store Connect API key for EAS: the .p8 travels as a file that exists only
+// while the command runs; the identifiers travel as plain environment variables.
+export function appleConnection(client) {
+  return {
+    id: 'apple', name: 'Apple', connectLabel: 'AppleのAPIキーを登録', client, icon: 'key', canReconnect: false, canRevoke: false,
+    intro: 'App Store ConnectのAPIキー (.p8) と識別情報を登録します。', managementUrl: APPLE_KEYS, credentialType: 'private_key', connectionMethod: 'token',
+    tokenEnv: null,
+    tokenFile: credentials => ({ env: 'EXPO_ASC_API_KEY_PATH', filename: 'AuthKey_' + credentials.details.key_id + '.p8' }),
+    environment: credentials => ({ EXPO_ASC_KEY_ID: credentials.details.key_id, EXPO_ASC_ISSUER_ID: credentials.details.issuer_id, EXPO_APPLE_TEAM_ID: credentials.details.team_id, EXPO_APPLE_TEAM_TYPE: credentials.details.team_type }),
+    tokenSetup: { url: APPLE_KEYS, label: 'APIキー (.p8 の内容)', multiline: true, link_label: 'App Store Connect の「統合」を開く',
+      instructions: '「ユーザーとアクセス」→「統合」→「App Store Connect API」で「チームキー」を作成し、ダウンロードした .p8 ファイルの中身を貼り付けてください。EASの署名準備には Admin の役割が必要です。',
+      note: '登録時にAppleへ1回だけ読み取りで問い合わせ、キーが有効か確認します。証明書やプロファイルの作成はEASが行い、Foundationは関与しません。',
+      fields: [
+        { id: 'key_id', label: 'Key ID', max_length: 10, pattern: '[A-Za-z0-9]{10}', help: 'キー一覧に表示される10桁のID。' },
+        { id: 'issuer_id', label: 'Issuer ID', max_length: 36, pattern: '[0-9a-fA-F-]{36}', help: 'キー一覧の上部に表示されるID。' },
+        { id: 'team_id', label: 'Team ID', max_length: 10, pattern: '[A-Za-z0-9]{10}', help: 'Apple Developerの「メンバーシップ」に表示される10桁のID。' },
+        { id: 'team_type', label: 'チーム種別', options: [['INDIVIDUAL', '個人 (Individual)'], ['COMPANY_OR_ORGANIZATION', '法人・組織 (Company / Organization)'], ['IN_HOUSE', '社内配布 (In-House)']], help: 'Apple Developer Program の契約種別。' },
+      ] },
+    api: { base_url: APPLE_API, documentation_url: APPLE_DOCS },
+    permissions: [{ id: 'api-key', name: 'App Store Connect APIキーの権限でAppleを利用', connection_method: 'token',
+      description: 'このキーにAppleで与えた役割の範囲で、アプリID・端末・証明書・プロビジョニングプロファイルの作成や更新ができます。',
+      restrictions: '読み取り専用ではありません。Team API キーは単一アプリに限定できません。' }],
+    matches(mode, account) { return mode === 'api-key' && account?.provider === 'apple' && account.scopes.length === 1 && account.scopes[0] === APPLE_SCOPE; },
+  };
+}
+
 // Any service with a key the user can create themselves. The runtime supplies
 // the service name, the key page and the variable name; the catalog only fixes
 // the copy that must not come from the runtime.
@@ -118,6 +145,11 @@ export class ProviderCatalog {
   tokenEnv(id, credentials) {
     const value = this.get(id).tokenEnv;
     return typeof value === 'function' ? value(credentials) : value || null;
+  }
+  // How a runtime receives this credential: as a variable, as a file whose path is in a variable, plus plain identifiers.
+  delivery(id, credentials) {
+    const provider = this.get(id), call = value => typeof value === 'function' ? value(credentials) : value || null;
+    return { token_env: this.tokenEnv(id, credentials), token_file: call(provider.tokenFile), environment: call(provider.environment) || {} };
   }
   describe(id) {
     const provider = this.get(id);
