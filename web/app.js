@@ -3,6 +3,9 @@ let state = null, selected = null, toastTimer, loginTimer, revision = 0;
 const requestId = location.pathname.match(/^\/connect\/([A-Za-z0-9_-]{43})$/)?.[1];
 const pagePath = requestId ? '/connect/' + requestId : '/';
 let accessRequest = null, requestError = '';
+let disposePrivateInput = () => {};
+function clearPrivateInput() { const dispose = disposePrivateInput; disposePrivateInput = () => {}; dispose(); }
+window.addEventListener('pagehide', clearPrivateInput);
 const loginMessages = {
   expired: 'メールを送信したブラウザでリンクを開いてください。期限が切れた場合は、もう一度メールを送信してください。',
   invalid: 'リンクが無効か、有効期限が切れています。最新のメールのリンクを開いてください。',
@@ -39,9 +42,9 @@ function toast(text) {
   clearTimeout(toastTimer); notice.textContent = text; notice.hidden = false;
   toastTimer = setTimeout(() => { notice.hidden = true; }, 5500);
 }
-async function api(path, { method = 'GET', data } = {}) {
+async function api(path, { method = 'GET', data, signal } = {}) {
   let response;
-  try { response = await fetch(path, { method, credentials: 'same-origin', cache: 'no-store', headers: data !== undefined ? { 'content-type': 'application/json' } : {}, ...(data !== undefined ? { body: JSON.stringify(data) } : {}) }); }
+  try { response = await fetch(path, { method, signal, credentials: 'same-origin', cache: 'no-store', headers: data !== undefined ? { 'content-type': 'application/json' } : {}, ...(data !== undefined ? { body: JSON.stringify(data) } : {}) }); }
   catch { throw new Error('接続できませんでした。通信状況を確認してください。'); }
   const result = await response.json();
   if (!response.ok) {
@@ -118,7 +121,7 @@ function details(account) {
     <dl class="connection-facts"><div><dt>用途</dt><dd>${esc(account.purpose || '未設定')}</dd></div><div><dt>許可範囲</dt><dd>${esc(scopeName(account))}<span class="muted block">${esc(account.permission?.restrictions)}</span></dd></div></dl>${keyFacts(account)}
     <div class="connection-actions"><button class="button secondary" data-action="check" data-id="${esc(account.id)}" ${account.status !== 'connected' || !provider.available ? 'disabled' : ''}>接続を確認</button>${provider.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(account.id)}" ${account.status === 'disconnecting' || !provider.available ? 'disabled' : ''}>再接続</button>` : ''}<button class="text-button" data-action="edit-account" data-id="${esc(account.id)}">編集</button></div>
     <details class="connection-reference"><summary>接続情報</summary><dl><dt>接続ID</dt><dd><code>${esc(account.id)}</code></dd></dl><a href="${esc(provider.api.documentation_url)}" target="_blank" rel="noopener noreferrer">${esc(provider.name)} APIの公式ドキュメント ↗</a></details>
-    <div class="connection-footer"><a href="${esc(account.management_url || provider.management_url)}" target="_blank" rel="noopener noreferrer">${esc(provider.name)}の接続管理 ↗</a><button class="text-button danger" data-action="remove-account" data-id="${esc(account.id)}">${account.status === 'disconnecting' ? '接続解除を再試行' : '接続を解除'}</button></div>`;
+    <div class="connection-footer">${account.credential_type === 'expo_session' ? '' : `<a href="${esc(account.management_url || provider.management_url)}" target="_blank" rel="noopener noreferrer">${esc(provider.name)}の接続管理 ↗</a>`}<button class="text-button danger" data-action="remove-account" data-id="${esc(account.id)}">${account.status === 'disconnecting' ? '接続解除を再試行' : '接続を解除'}</button></div>`;
 }
 function serviceSection(provider) {
   const accounts = state.accounts.filter(account => account.provider === provider.id);
@@ -129,6 +132,7 @@ function serviceSection(provider) {
 }
 function render() {
   if (!state) return;
+  clearPrivateInput();
   if (requestId) { renderRequest(); return; }
   const byId = new Map(state.accounts.map((item) => [item.id, item]));
   app.innerHTML = `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main><header class="page-heading"><h1>接続</h1><p>アカウントと利用許可を管理</p></header>
@@ -140,7 +144,7 @@ function renderRequest() {
   const row = accessRequest;
   const shell = (content) => `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main class="approval-main">${content}</main></div>`;
   const finished = {
-    approved: ['利用を許可しました', `${row?.account?.label || row?.account?.email || ''} を、${row?.requester_name || ''}から利用できるようになりました。元の会話に戻って、接続完了を伝えてください。`],
+    approved: ['利用を許可しました', `${row?.account?.label || row?.account?.email || ''} を、${row?.requester_name || ''}から利用できるようになりました。この画面は閉じて構いません。`],
     denied: ['利用を許可しませんでした', 'この依頼による利用許可は追加されていません。'],
     cancelled: ['依頼は取り消されました', '必要な場合は、AIに新しい接続リンクを依頼してください。'],
     revoked: ['利用許可は停止されています', 'この依頼による接続は現在利用できません。'],
@@ -151,6 +155,7 @@ function renderRequest() {
     app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(row?.status === 'approved' ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p><a class="button secondary" href="/">接続を管理</a></section>`);
     return;
   }
+  if (row.provider === 'expo' && row.mode === 'session') { renderExpoRequest(row, shell); return; }
   const matching = state.accounts.filter(account => row.eligible_account_ids.includes(account.id));
   const available = matching.filter((account) => account.status === 'connected');
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.service.name)}へのアクセス</p><h1>利用を許可しますか？</h1></div></header>
@@ -158,7 +163,7 @@ function renderRequest() {
     <div class="confirmation-panel"><span>確認コード</span><strong>${esc(row.confirmation_code)}</strong><p>AIとの会話に表示されたコードと照合してください。心当たりのない依頼は許可しないでください。</p></div>
     <form id="access-request-form"><fieldset><legend>利用を許可するアカウント</legend>${available.length ? available.map((account) => `<div class="approval-account"><label class="choice"><input type="radio" name="accountId" value="${esc(account.id)}" ${available.length === 1 ? 'checked' : ''} required><span><strong>${esc(account.name)}</strong><small>${esc(accountLabel(account))}</small></span></label>${keyFacts(account)}</div>`).join('') : '<p class="muted">この権限で利用できる接続済みのアカウントはありません。</p>'}</fieldset>
     ${matching.filter(account => account.status === 'reconnect_required' && row.service.can_reconnect).map(account => `<button class="button secondary full request-connect" type="button" data-action="request-connect" data-id="${esc(account.id)}" ${row.service.available ? '' : 'disabled'}>${esc(accountLabel(account))} を再接続</button>`).join('')}
-    <button class="button secondary full request-connect" type="button" data-action="request-connect" ${row.service.available ? '' : 'disabled'}>${icon('plus')} ${esc(row.service.connect_label)}</button>
+    <button class="button secondary full request-connect" type="button" data-action="request-connect" ${row.service.available ? '' : 'disabled'}>${icon('plus')} ${esc(row.permission.connect_label || row.service.connect_label)}</button>
     ${row.service.available ? '' : `<p class="form-error" role="status">現在${esc(row.service.name)}を接続できません。</p>`}
     ${row.service.id === 'openrouter' && ['failed', 'scope', 'retry', 'changed'].includes(resultCode) ? '<p class="permission-note">接続できなくても、OpenRouterで作成済みのキーが残る場合があります。<a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">不要なキーはOpenRouterで削除してください ↗</a></p>' : ''}
     <label class="choice confirmation-choice"><input type="checkbox" name="confirmed" required ${available.length ? '' : 'disabled'}><span>会話の確認コードと一致しています</span></label>
@@ -179,10 +184,11 @@ function renderRequest() {
   });
 }
 function openDialog(content) {
+  clearPrivateInput();
   dialog.innerHTML = `<button class="dialog-close icon-button" data-action="close-dialog" aria-label="閉じる">${icon('close')}</button>${content}`;
   if (!dialog.open) dialog.showModal();
 }
-function closeDialog() { if (dialog.open) dialog.close(); dialog.innerHTML = ''; }
+function closeDialog() { clearPrivateInput(); if (dialog.open) dialog.close(); dialog.innerHTML = ''; }
 dialog.addEventListener('cancel', (event) => { event.preventDefault(); closeDialog(); });
 function bindForm(handler) {
   dialog.querySelector('form').addEventListener('submit', async (event) => {
@@ -199,6 +205,11 @@ function accountFields(account) {
 function connect(account, providerId = account?.provider) {
   const provider = state.providers.find(item => item.id === providerId);
   if (!provider?.available) return;
+  if (provider.connection_method === 'password') {
+    openDialog(`<h2 id="dialog-title">Expoを接続</h2>${expoLoginMarkup(null)}`);
+    bindExpoLogin(dialog, null);
+    return;
+  }
   if (provider.connection_method === 'token') { connectToken(provider); return; }
   const mode = account?.permission?.id || provider.permissions[0].id;
   openDialog(`<h2 id="dialog-title">${esc(provider.name)}を${account ? '再接続' : '接続'}</h2><p>${account ? esc(accountLabel(account)) : esc(provider.intro)}</p><form>${accountFields(account || { name: provider.name })}
@@ -210,6 +221,75 @@ function connect(account, providerId = account?.provider) {
   bindForm(async (form) => {
     const result = await api(`/api/connections/${provider.id}/connect`, { method: 'POST', data: { name: form.get('name'), purpose: form.get('purpose'), mode: form.get('mode'), ...(account ? { accountId: account.id } : {}) } });
     location.assign(result.url);
+  });
+}
+function expoLoginMarkup(request) {
+  return `<form class="expo-login-form" autocomplete="off"><div class="expo-password-fields"><label for="expo-username">Expoのメールアドレスまたはユーザー名</label><input id="expo-username" name="username" required maxlength="254" autocomplete="off" autocapitalize="none" spellcheck="false"><label for="expo-password">パスワード</label><input id="expo-password" name="password" type="password" required maxlength="1024" autocomplete="off"></div>
+    <div class="expo-otp-fields" hidden><label for="expo-otp">認証コード</label><input id="expo-otp" name="otp" maxlength="64" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" disabled><p class="expo-otp-help permission-note"></p><button type="button" class="text-button expo-reset">ログイン情報を入力し直す</button></div>
+    <p class="permission-note auth-privacy">入力内容はFoundationを経由してExpoへ送信します。パスワード・認証コードは保存しません。</p>
+    <p class="permission-note auth-permission">${request ? esc(request.permission.description) : 'Expoのログイン状態を保存します。AIへの利用許可は、接続後に設定できます。'}</p><p class="form-error" role="alert"></p>
+    <button class="button primary full" type="submit" ${request && !request.service.available ? 'disabled' : ''}>${request ? 'ログインして利用を許可' : 'ログインして接続'} ${icon('arrow')}</button></form>`;
+}
+function bindExpoLogin(container, request) {
+  clearPrivateInput();
+  const form = container.querySelector('.expo-login-form'), button = form.querySelector('[type="submit"]'), errorElement = form.querySelector('[role="alert"]');
+  const passwordFields = form.querySelector('.expo-password-fields'), otpFields = form.querySelector('.expo-otp-fields');
+  let password = '', username = '', active = true, busy = false, deadline, controller;
+  function reset() {
+    password = ''; username = ''; clearTimeout(deadline); controller?.abort(); busy = false;
+    form.reset(); passwordFields.hidden = false; otpFields.hidden = true;
+    form.elements.password.disabled = false; form.elements.username.disabled = false; form.elements.otp.disabled = true; form.elements.otp.required = false;
+    button.disabled = Boolean(request && !request.service.available); button.textContent = request ? 'ログインして利用を許可' : 'ログインして接続';
+  }
+  disposePrivateInput = () => { active = false; reset(); };
+  form.querySelector('.expo-reset').addEventListener('click', () => { reset(); errorElement.textContent = ''; form.elements.username.focus(); });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (busy || !active || (request && !request.service.available) || !form.reportValidity()) return;
+    const initial = !password;
+    if (initial) {
+      username = form.elements.username.value.trim(); password = form.elements.password.value; form.elements.password.value = '';
+      deadline = setTimeout(() => { if (active) { reset(); errorElement.textContent = '時間が経過しました。ログイン情報を入力し直してください。'; } }, Math.max(1, Math.min(300_000, (request?.expires_at || Infinity) - Date.now())));
+    }
+    const otp = initial ? undefined : form.elements.otp.value.trim(); form.elements.otp.value = '';
+    busy = true; button.disabled = true; button.textContent = '確認中…'; errorElement.textContent = ''; controller = new AbortController();
+    const signal = controller.signal;
+    try {
+      const result = await api('/api/connections/expo/login', { method: 'POST', signal, data: { username, password, ...(otp === undefined ? {} : { otp }), ...(request ? { accessRequestId: request.id, confirmationCode: request.confirmation_code } : {}) } });
+      if (!active || signal.aborted) return;
+      if (result.challenge) {
+        passwordFields.hidden = true; otpFields.hidden = false;
+        form.elements.password.disabled = true; form.elements.username.disabled = true; form.elements.otp.disabled = false; form.elements.otp.required = true;
+        form.querySelector('.expo-otp-help').textContent = result.challenge.delivery === 'sms' ? 'Expoから届いたSMSのコード、またはバックアップコードを入力してください。' : '認証アプリのコード、またはバックアップコードを入力してください。';
+        if (!initial) errorElement.textContent = '認証コードを確認してください。';
+        button.textContent = request ? '確認して利用を許可' : '確認して接続'; form.elements.otp.focus();
+      } else {
+        password = ''; username = ''; clearTimeout(deadline);
+        selected = result.account_id; closeDialog(); await refresh();
+        if (!request) toast('Expoを接続しました。');
+      }
+    } catch (error) {
+      if (!active || signal.aborted) return;
+      if (initial || error.code !== 'expo_login_failed') reset();
+      else button.textContent = request ? '確認して利用を許可' : '確認して接続';
+      errorElement.textContent = error.message;
+    } finally { if (active && !signal.aborted) { busy = false; button.disabled = false; } }
+  });
+}
+function renderExpoRequest(row, shell) {
+  const accounts = state.accounts.filter(account => row.eligible_account_ids.includes(account.id) && account.status === 'connected');
+  app.innerHTML = shell(`<section class="approval-card expo-approval"><header class="approval-heading"><span class="approval-symbol">${icon('device')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}からの接続依頼</p><h1>Expoを接続</h1></div></header>
+    ${row.purpose ? `<p class="expo-request-purpose">${esc(row.purpose)}</p>` : ''}<p class="expo-request-code">確認コード <strong>${esc(row.confirmation_code)}</strong><span>会話のコードと照合してください。</span></p>
+    <div class="expo-login-area">${accounts.length ? `<form id="expo-existing"><fieldset><legend>利用するアカウント</legend>${accounts.map((account, index) => `<label class="choice"><input type="radio" name="accountId" value="${esc(account.id)}" ${index === 0 ? 'checked' : ''}><span><strong>${esc(accountLabel(account))}</strong><small>${esc(account.name)}</small></span></label>`).join('')}</fieldset><p class="permission-note">${esc(row.permission.description)}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">このアカウントの利用を許可</button><button class="text-button full expo-other" type="button">別のアカウントで接続</button></form>` : expoLoginMarkup(row)}</div>
+    <button class="text-button full" data-action="deny-request">許可しない</button></section>`);
+  const area = app.querySelector('.expo-login-area');
+  if (!accounts.length) { bindExpoLogin(area, row); return; }
+  area.querySelector('.expo-other').addEventListener('click', () => { area.innerHTML = expoLoginMarkup(row); bindExpoLogin(area, row); });
+  area.querySelector('form').addEventListener('submit', async event => {
+    event.preventDefault(); const form = event.currentTarget, button = form.querySelector('[type="submit"]');
+    button.disabled = true;
+    try { await api(`/api/access-requests/${row.id}/approve`, { method: 'POST', data: { accountId: new FormData(form).get('accountId'), confirmationCode: row.confirmation_code } }); await refresh(); }
+    catch (error) { if (form.isConnected) { button.disabled = false; form.querySelector('[role="alert"]').textContent = error.message; } }
   });
 }
 function connectToken(provider, request = null) {
@@ -250,16 +330,17 @@ function editAgent(agent) {
 }
 function removeAccount(account) {
   const provider = providerFor(account);
-  const revoke = provider.can_revoke ? `<p>すべての実行環境への利用許可を取り消します。メールは削除されません。</p><label class="choice revoke-choice"><input type="checkbox" name="revoke" checked><span><strong>Google側の許可も取り消す</strong><small>このアプリに与えた、ほかのGoogleサービスの許可も取り消されます。反映に時間がかかる場合があります。</small></span></label><p class="permission-note">チェックを外すと、Googleの許可は残ります。${revocationNote}</p>` : `<p>Foundationから、この接続とすべての利用許可を削除します。受け渡し済みのAPIキーは、この操作では無効になりません。</p><p><a href="${esc(account.management_url || provider.management_url)}" target="_blank" rel="noopener noreferrer">${esc(provider.name)}でキーを削除する ↗</a></p><label class="choice"><input type="checkbox" name="acknowledged" required><span>キーの無効化は${esc(provider.name)}で行うことを確認しました</span></label>`;
+  const expoSession = account.credential_type === 'expo_session';
+  const revoke = expoSession ? '<p>この接続のExpoログインを無効にし、すべてのAIへの利用許可を取り消します。Expoのプロジェクトやデータは削除しません。</p>' : provider.can_revoke ? `<p>すべての実行環境への利用許可を取り消します。メールは削除されません。</p><label class="choice revoke-choice"><input type="checkbox" name="revoke" checked><span><strong>Google側の許可も取り消す</strong><small>このアプリに与えた、ほかのGoogleサービスの許可も取り消されます。反映に時間がかかる場合があります。</small></span></label><p class="permission-note">チェックを外すと、Googleの許可は残ります。${revocationNote}</p>` : `<p>Foundationから、この接続とすべての利用許可を削除します。受け渡し済みのAPIキーは、この操作では無効になりません。</p><p><a href="${esc(account.management_url || provider.management_url)}" target="_blank" rel="noopener noreferrer">${esc(provider.name)}でキーを削除する ↗</a></p><label class="choice"><input type="checkbox" name="acknowledged" required><span>キーの無効化は${esc(provider.name)}で行うことを確認しました</span></label>`;
   openDialog(`<h2 id="dialog-title">${esc(provider.name)}の接続を解除しますか？</h2><p>${esc(accountLabel(account))}</p><form>${revoke}<p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">接続を解除</button></div></form>`);
   bindForm(async (form) => {
-    try { await api(`/api/accounts/${account.id}`, { method: 'DELETE', data: { revoke: form.has('revoke') } }); }
+    try { await api(`/api/accounts/${account.id}`, { method: 'DELETE', data: { revoke: expoSession || form.has('revoke') } }); }
     catch (error) { await refresh(); throw error; }
     closeDialog(); await refresh(); toast('接続を解除しました。');
   });
 }
 function removeAgent(agent) {
-  const expiry = agent.issued_nonexpiring ? '<p class="permission-note">この実行環境には、有効期限が未指定または不明のAPIキーを渡しています。キーの停止は接続先で行ってください。</p>' : agent.issued_until > Date.now() ? `<p class="permission-note">受け渡し済みの認証情報の最長有効期限：${esc(new Date(agent.issued_until).toLocaleString('ja-JP'))}</p>` : '';
+  const expiry = agent.issued_nonexpiring ? '<p class="permission-note">この実行環境には、有効期限が未指定または不明の認証情報を渡しています。完全に無効にするには、接続自体の解除も必要です。</p>' : agent.issued_until > Date.now() ? `<p class="permission-note">受け渡し済みの認証情報の最長有効期限：${esc(new Date(agent.issued_until).toLocaleString('ja-JP'))}</p>` : '';
   openDialog(`<h2 id="dialog-title">実行環境の利用を停止しますか？</h2><p>${esc(agent.name)}</p><form><p>この実行環境から認証情報を取得できなくなります。${revocationNote}</p>${expiry}<p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">利用を停止</button></div></form>`);
   bindForm(async () => { await api(`/api/agents/${agent.id}`, { method: 'DELETE' }); closeDialog(); await refresh(); toast('利用を停止しました。'); });
 }
@@ -268,15 +349,16 @@ document.addEventListener('click', async (event) => {
   const { action, id } = target.dataset;
   try {
     if (action === 'close-dialog') closeDialog();
-    if (action === 'logout') { target.disabled = true; await api('/api/session', { method: 'DELETE' }); await showLogin(); }
+    if (action === 'logout') { clearPrivateInput(); target.disabled = true; await api('/api/session', { method: 'DELETE' }); await showLogin(); }
     if (action === 'request-connect') {
-      if (accessRequest.service.connection_method === 'token') { connectToken(accessRequest.service, accessRequest); return; }
+      if ((accessRequest.permission.connection_method || accessRequest.service.connection_method) === 'token') { connectToken(accessRequest.service, accessRequest); return; }
       target.disabled = true;
       const account = state.accounts.find(item => item.id === id);
       const result = await api(`/api/connections/${accessRequest.provider}/connect`, { method: 'POST', data: { name: account?.name || accessRequest.service.name, purpose: account?.purpose || accessRequest.purpose, mode: accessRequest.mode, accessRequestId: requestId, ...(account ? { accountId: account.id } : {}) } });
       location.assign(result.url);
     }
     if (action === 'deny-request') {
+      clearPrivateInput();
       target.disabled = true;
       await api(`/api/access-requests/${requestId}/deny`, { method: 'POST', data: {} });
       await refresh();
@@ -302,6 +384,7 @@ document.addEventListener('click', async (event) => {
   } catch (error) { if (target.isConnected) target.disabled = false; toast(error.message); }
 });
 const resultCode = new URL(location.href).searchParams.get('connection');
+window.addEventListener('pageshow', event => { if (event.persisted) void refresh().catch(() => {}); });
 const resultProvider = new URL(location.href).searchParams.get('provider') || 'gmail';
 if (location.search || location.hash) history.replaceState(null, '', pagePath);
 try { await refresh(); } catch (error) { if (error.status !== 401) { await showLogin(); toast(error.message); } }

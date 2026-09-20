@@ -88,3 +88,25 @@ test('CLI never overwrites or follows an existing insecure key file', async t =>
   assert.match(result.err, /symbolic link/);
   assert.equal(await readFile(existing, 'utf8'), 'do-not-overwrite');
 });
+
+for (const outcome of ['approved', 'denied', 'replaced', 'timeout']) test('CLI wait tracks only its original request: ' + outcome, async t => {
+  const f = await fixture(t), account = await f.account();
+  const dir = await mkdtemp(join(tmpdir(), 'foundation-wait-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'runtime-key') };
+  const connected = await execute(['connect'], env), row = JSON.parse(connected.out).request;
+  let seen;
+  const firstPoll = new Promise(resolve => { seen = (req, res) => { if (req.method === 'GET' && req.url === '/v1/access-requests/current') res.once('finish', resolve); }; });
+  f.app.server.on('request', seen); t.after(() => f.app.server.off('request', seen));
+  const waiting = execute(['wait', '--timeout', outcome === 'timeout' ? '1' : '8'], env);
+  await firstPoll;
+  if (outcome === 'approved') await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { accountId: account.id, confirmationCode: row.confirmation_code } });
+  if (outcome === 'denied') await f.request('/api/access-requests/' + row.id + '/deny', { method: 'POST', data: {} });
+  if (outcome === 'replaced') { await execute(['cancel'], env); await execute(['connect'], env); }
+  const result = await waiting;
+  assert.equal(result.code, outcome === 'approved' ? 0 : 1, result.err);
+  if (outcome === 'approved') { assert.equal(JSON.parse(result.out).request.id, row.id); assert.equal(JSON.parse(result.out).request.status, 'approved'); }
+  else assert.match(result.err, outcome === 'denied' ? /denied/ : outcome === 'replaced' ? /changed/ : /timed out/);
+  assert.doesNotMatch(result.out + result.err, /fdn_|google-access|refresh_token/);
+  if (outcome === 'timeout') assert.equal(JSON.parse((await execute(['status'], env)).out).request.status, 'pending');
+  for (const timeout of ['0', '1801', 'abc']) assert.equal((await execute(['wait', '--timeout', timeout], env)).code, 1);
+});

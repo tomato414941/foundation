@@ -104,7 +104,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     runtime = page.locator('.agent-row').filter(has_text='dev-us のAI')
     runtime.get_by_role('button', name='利用を停止', exact=True).click()
     dialog = page.get_by_role('dialog')
-    expect(dialog.get_by_text('有効期限が未指定または不明のAPIキー', exact=False)).to_be_visible()
+    expect(dialog.get_by_text('有効期限が未指定または不明の認証情報', exact=False)).to_be_visible()
     review(page)
     dialog.get_by_role('button', name='利用を停止', exact=True).click()
     expect(dialog).not_to_be_visible()
