@@ -77,21 +77,3 @@ test('Email delivery must be enabled separately and cannot send while unavailabl
   assert.equal(requests, 0);
   assert.deepEqual(await auth.user('existing-session'), { id: USER_A, email: user.email });
 });
-
-test('Signup policy: allowlist admits only listed addresses at send, at callback and on every request; open admits anyone', async t => {
-  const { fixture } = await import('./helpers.mjs');
-  const f = await fixture(t, { login: false, signup: { mode: 'allowlist', emails: ['Owner@example.test'] } });
-  const denied = await f.request('/api/auth/link', { method: 'POST', anonymous: true, data: { email: 'stranger@example.test' } });
-  assert.equal(denied.status, 403); assert.equal(denied.json.error.code, 'not_admitted');
-  assert.equal(f.auth.links.size, 0);
-  assert.equal((await f.request('/api/auth/config', { anonymous: true })).json.signup, 'allowlist');
-  await f.login();
-  assert.equal((await f.request('/api/state')).status, 200);
-  // A session for an address that is not (or no longer) listed stops working.
-  const otherCookie = 'fdn_session=' + f.app.store.createSession(f.auth.value('other@example.test'));
-  const blocked = await f.request('/api/state', { anonymous: true, headers: { cookie: otherCookie } });
-  assert.equal(blocked.status, 401); assert.equal(blocked.json.error.code, 'not_admitted');
-  const open = await fixture(t, { login: false });
-  assert.equal((await open.request('/api/auth/link', { method: 'POST', anonymous: true, data: { email: 'stranger@example.test' } })).status, 202);
-  assert.equal((await open.request('/api/auth/config', { anonymous: true })).json.signup, 'open');
-});

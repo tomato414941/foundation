@@ -25,7 +25,6 @@ const icon = (name) => {
     arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>', check: '<path d="m5 12 4 4L19 6"/>',
     lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
     database: '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/>',
-    cloud: '<path d="M7 18a5 5 0 1 1 1-9.9A6 6 0 0 1 20 10a4 4 0 0 1-1 8Z"/>',
     key: '<circle cx="8" cy="14" r="4"/><path d="m11 11 8-8m-3 3 2 2m-5 1 2 2"/>',
     network: '<circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="2"/><circle cx="18" cy="19" r="2"/><path d="m9 11 7-5m-7 7 7 5"/>',
   };
@@ -68,7 +67,7 @@ async function showLogin({ email = '', message = loginNotice } = {}) {
     ${pending ? `<p class="login-intro" id="email-sent">ログイン用のリンクをお送りしました。</p><p class="login-address">${esc(pending.email)}</p><p class="login-help">メールのリンクを、このブラウザで開いてください。有効期限は1時間です。</p>` : '<p class="login-intro">メールに届くリンクからログインできます。</p>'}
     <form id="login-form">${pending ? '' : `<label for="login-email">メールアドレス</label><input id="login-email" name="email" type="email" autocomplete="email" required maxlength="254" value="${esc(email)}" ${config.available ? '' : 'disabled'}>`}
     <p class="form-error" role="alert">${config.available ? esc(message) : '現在ログインを利用できません。'}</p><button class="button ${pending ? 'secondary' : 'primary'} full" type="submit" ${pending ? 'id="resend-link" disabled' : config.available ? '' : 'disabled'}>${pending ? 'メールを再送信' : 'ログインメールを送信'} ${pending ? '' : icon('arrow')}</button></form>
-    ${pending ? '<p class="login-help login-delivery">届かない場合は、迷惑メールフォルダもご確認ください。</p><div class="login-actions"><button class="text-button" type="button" id="change-email">メールアドレスを変更</button></div>' : config.available ? `<p class="login-help login-footer">${config.signup === 'open' ? '初めての方も、このまま始められます。' : '利用を許可されたメールアドレスでログインできます。'}</p>` : ''}</main></div>`;
+    ${pending ? '<p class="login-help login-delivery">届かない場合は、迷惑メールフォルダもご確認ください。</p><div class="login-actions"><button class="text-button" type="button" id="change-email">メールアドレスを変更</button></div>' : config.available ? '<p class="login-help login-footer">初めての方も、このまま始められます。</p>' : ''}</main></div>`;
   const form = document.querySelector('#login-form');
   let busy = false;
   function setBusy(value) {
@@ -317,12 +316,10 @@ function connectToken(provider, request = null) {
   }).join('');
   const siteUrl = claimed?.site || setup.url;
   const serviceName = claimed?.service || (fields.length ? '' : provider.name);
-  const setupFields = setup.fields || [];
-  const setupInputs = setupFields.map(field => `<label for="setup-${esc(field.id)}">${esc(field.label)}</label><input id="setup-${esc(field.id)}" name="setup-${esc(field.id)}" required maxlength="${esc(field.max_length)}" pattern="${esc(field.pattern)}" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="setup-${esc(field.id)}-help"><p class="permission-note" id="setup-${esc(field.id)}-help">${esc(field.help)}</p>`).join('');
   openDialog(`<h2 id="dialog-title">${esc(serviceName || provider.name)}を接続</h2><p>${serviceName ? `パスワードは${esc(serviceName)}の画面で入力します。ここには${esc(setup.label)}だけを登録してください。` : esc(provider.intro)}</p>
     ${fields.length ? `<form autocomplete="off" class="token-form">${claimed ? `<p class="permission-note claim-note">以下はAIの申告です。作成ページのドメインが正しいか確認してください。</p>` : ''}${fieldInputs}` : '<form autocomplete="off" class="token-form">'}
     <div class="token-setup"><h3>1. ${esc(serviceName || 'サービス')}でキーを作成</h3><p>${esc(setup.instructions)}</p>${siteUrl || fields.length ? `<a class="button secondary full" href="${esc(siteUrl || '#')}" target="_blank" rel="noopener noreferrer" ${siteUrl ? '' : 'style="display:none"'}>${esc(serviceName || 'サービス')}の${esc(setup.label)}管理ページを開く ↗</a>` : ''}</div>
-    <h3 class="token-step">2. キーを登録</h3>${setupInputs}<label for="connection-token">${esc(setup.label)}</label><input id="connection-token" name="token" type="password" required minlength="8" maxlength="4096" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="token-storage-note"><p class="permission-note" id="token-storage-note">キーは暗号化して保存し、許可したアクセスキーの持ち主だけに渡します。チャットには貼り付けないでください。</p>${setup.note ? `<p class="permission-note">${esc(setup.note)}</p>` : ''}
+    <h3 class="token-step">2. キーを登録</h3><label for="connection-token">${esc(setup.label)}</label><input id="connection-token" name="token" type="password" required minlength="8" maxlength="4096" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="token-storage-note"><p class="permission-note" id="token-storage-note">キーは暗号化して保存し、許可したアクセスキーの持ち主だけに渡します。チャットには貼り付けないでください。</p>
     <input type="hidden" name="name" value="${esc(claimed?.service || provider.name)}"><input type="hidden" name="purpose" value="${esc(request?.purpose || '')}">
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>`);
   if (fields.length && !claimed) {
@@ -336,8 +333,7 @@ function connectToken(provider, request = null) {
     const input = dialog.querySelector('[name="token"]');
     input.value = '';
     const details = fields.length && !claimed ? Object.fromEntries(fields.map(field => [field.id, (form.get(field.id) || '').trim()])) : undefined;
-    const connectionFields = setupFields.length ? Object.fromEntries(setupFields.map(field => [field.id, (form.get('setup-' + field.id) || '').trim()])) : undefined;
-    const result = await api(`/api/connections/${provider.id}/connect`, { method: 'POST', data: { token, name: form.get('name'), purpose: form.get('purpose'), mode, ...(details ? { details } : {}), ...(connectionFields ? { fields: connectionFields } : {}), ...(request ? { accessRequestId: request.id } : {}) } });
+    const result = await api(`/api/connections/${provider.id}/connect`, { method: 'POST', data: { token, name: form.get('name'), purpose: form.get('purpose'), mode, ...(details ? { details } : {}), ...(request ? { accessRequestId: request.id } : {}) } });
     selected = result.account_id;
     closeDialog(); await refresh(); toast(`${provider.name}を接続しました。`);
   });
