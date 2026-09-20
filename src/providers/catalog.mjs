@@ -57,7 +57,7 @@ export function cloudflareConnection(client) {
       fields: [{ id: 'account_id', label: 'アカウントID', max_length: 32, pattern: '[a-fA-F0-9]{32}', help: 'CloudflareのR2画面にある「Account ID」をコピーしてください。' }] },
     api: { base_url: CLOUDFLARE_API, documentation_url: CLOUDFLARE_DOCS },
     permissions: [{ id: 'api-token', name: 'トークンの権限でCloudflareを利用', connection_method: 'token',
-      description: '指定したアカウントでR2の一覧を取得できるAPIトークンを登録します。',
+      description: 'APIトークンを登録し、指定したアカウントでR2の一覧を取得できるか確認します。',
       restrictions: '利用できる範囲はトークンに与えた全権限です。ここで指定するアカウントIDや用途では制限されません。読み取り専用のトークンを使ってください。' }],
     matches(mode, account) { return mode === 'api-token' && account?.provider === 'cloudflare' && account.scopes.length === 1 && account.scopes[0] === CLOUDFLARE_SCOPE; },
   };

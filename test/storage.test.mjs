@@ -58,7 +58,7 @@ test('Old data cannot be reassigned to the first Supabase login; empty legacy sc
   assert.equal(db.prepare('SELECT count(*) n FROM accounts').get().n, 1);
   db.exec('DELETE FROM accounts'); db.close();
   const upgraded = new Store(path, KEY);
-  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 4); upgraded.close();
+  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 5); upgraded.close();
 });
 
 test('Version 2 upgrade preserves encrypted connections, runtime keys and grants', async t => {
@@ -69,7 +69,7 @@ test('Version 2 upgrade preserves encrypted connections, runtime keys and grants
   first.db.exec('DROP TABLE access_requests; PRAGMA user_version=2;');
   first.close();
   const upgraded = new Store(path, KEY); t.after(() => upgraded.close());
-  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 4);
+  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 5);
   assert.equal(upgraded.secrets(upgraded.account(USER_A, id)).refresh_token, 'keep-private');
   assert.equal(upgraded.authenticate(agent.token).id, agent.id);
   assert.deepEqual(upgraded.agents(USER_A)[0].accountIds, [id]);
@@ -85,7 +85,7 @@ test('Version 3 adds nonexpiring-key audit without changing credentials or grant
   first.db.exec('ALTER TABLE agents DROP COLUMN issued_nonexpiring; PRAGMA user_version=3;');
   first.close();
   const upgraded = new Store(path, KEY); t.after(() => upgraded.close());
-  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 4);
+  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 5);
   assert.equal(upgraded.secrets(upgraded.account(USER_A, id)).access_token, 'keep-encrypted');
   assert.deepEqual(upgraded.agents(USER_A)[0].accountIds, [id]);
   assert.equal(upgraded.agents(USER_A)[0].issued_nonexpiring, 0);
