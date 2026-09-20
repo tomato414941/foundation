@@ -50,9 +50,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     assert page.url == request['verification_uri']
     expect(page.get_by_text('OpenRouterへのアクセス', exact=True)).to_be_visible()
     expect(page.get_by_text('APIキーの利用', exact=False)).to_be_visible()
-    expect(page.get_by_text('モデルの実行は課金を伴う場合があります。', exact=False)).to_be_hidden()
-    page.get_by_text('権限の範囲と取り消し方', exact=True).click()
-    expect(page.get_by_text('モデルの実行は課金を伴う場合があります。', exact=False)).to_be_visible()
+    expect(page.get_by_text('利用上限と有効期限はOpenRouter側の設定が適用されます。', exact=False)).to_be_visible()
     expect(page.get_by_role('button', name='利用を許可', exact=True)).to_be_disabled()
     review(page)
     authorization = {'deny': True, 'code': 'personal'}
