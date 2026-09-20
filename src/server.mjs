@@ -3,21 +3,22 @@ import { createApp } from './app.mjs';
 import { GmailProvider } from './providers/gmail.mjs';
 import { OpenRouterProvider } from './providers/openrouter.mjs';
 import { ExpoProvider } from './providers/expo.mjs';
-import { gmailConnection, openrouterConnection, expoConnection, apikeyConnection, supabaseConnection } from './providers/catalog.mjs';
+import { gmailConnection, openrouterConnection, expoConnection, apikeyConnection, supabaseConnection, cloudflareConnection } from './providers/catalog.mjs';
 import { ApiKeyProvider } from './providers/apikey.mjs';
 import { SupabaseProvider } from './providers/supabase.mjs';
+import { CloudflareProvider } from './providers/cloudflare.mjs';
 import { SupabaseAuth } from './auth.mjs';
 
 const config = configuration();
 const auth = new SupabaseAuth(config.supabase);
 const gmail = new GmailProvider(config.google);
 const openrouter = new OpenRouterProvider();
-const app = createApp({ database: config.database, encryptionKey: config.encryptionKey, publicOrigin: config.publicOrigin, auth, gmail, integrations: [openrouterConnection(openrouter), expoConnection(new ExpoProvider(config.expo)), supabaseConnection(new SupabaseProvider()), gmailConnection(gmail), apikeyConnection(new ApiKeyProvider())] });
+const app = createApp({ database: config.database, encryptionKey: config.encryptionKey, publicOrigin: config.publicOrigin, signup: config.signup, auth, gmail, integrations: [openrouterConnection(openrouter), expoConnection(new ExpoProvider(config.expo)), supabaseConnection(new SupabaseProvider()), cloudflareConnection(new CloudflareProvider()), gmailConnection(gmail), apikeyConnection(new ApiKeyProvider())] });
 app.server.listen(config.port, '127.0.0.1', () => {
   console.log(`Foundation: http://127.0.0.1:${config.port}`);
   if (config.publicOrigin) console.log(`Private preview: ${config.publicOrigin}`);
   console.log(`Supabase Auth: ${auth.enabled ? 'configured' : 'not configured'}; Gmail OAuth: ${gmail.enabled ? 'configured' : 'not configured'}`);
-  console.log(`Email login: ${auth.emailEnabled ? 'enabled' : 'disabled'}`);
+  console.log(`Email login: ${auth.emailEnabled ? 'enabled' : 'disabled'}; signup: ${config.signup.mode}${config.signup.mode === 'allowlist' ? ' (' + config.signup.emails.length + ' allowed)' : ''}`);
 });
 let closing = false;
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => {

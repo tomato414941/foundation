@@ -45,8 +45,12 @@ function purposeValue(value = '') {
   return value.trim();
 }
 
-export function createApp({ database = ':memory:', encryptionKey, auth, gmail, integrations, publicOrigin, loginClock }) {
+export function createApp({ database = ':memory:', encryptionKey, auth, gmail, integrations, publicOrigin, loginClock, signup = { mode: 'open', emails: [] } }) {
   if (!auth || !gmail) throw new Error('Authentication and Gmail providers are required');
+  if (!['allowlist', 'open'].includes(signup.mode)) throw new Error('signup.mode must be allowlist or open');
+  // Who may hold an account here. Multi-tenant by design; the operator decides how wide the door is.
+  const allowedEmails = new Set((signup.emails || []).map(value => value.toLowerCase()));
+  const admitted = email => signup.mode === 'open' || allowedEmails.has(String(email).toLowerCase());
   let external;
   if (publicOrigin) {
     external = new URL(publicOrigin);
@@ -93,6 +97,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
       const fresh = localSession(req);
       const user = await auth.user(fresh.value.access_token);
       if (user.id !== fresh.owner_id || localSession(req).id !== row.id) fail(401, 'login_required', 'もう一度ログインしてください。');
+      if (!admitted(user.email)) fail(401, 'not_admitted', 'このメールアドレスは現在このFoundationを利用できません。');
       return { user, session: fresh };
     } catch (error) {
       if (error instanceof HttpError && error.status === 401) store.removeSession(cookieToken(req));
@@ -162,7 +167,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           pending = logins.begin(loginToken);
           destination = pending.returnTo || '/';
           const session = await auth.exchangeLink(code, pending.storage);
-          if (session.user.email.toLowerCase() !== pending.email || !logins.consume(loginToken, pending)) {
+          if (session.user.email.toLowerCase() !== pending.email || !admitted(session.user.email) || !logins.consume(loginToken, pending)) {
             try { await auth.logout(session.access_token); } catch {}
             fail(401, 'login_expired', 'もう一度、ログイン用のメールを送信してください。');
           }
@@ -210,13 +215,14 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
         }
       }
       if (req.headers['sec-fetch-site'] === 'cross-site') fail(403, 'cross_site_denied', '外部サイトからの操作は許可されていません。');
-      if (path === '/api/auth/config' && method === 'GET') return send(200, { available: auth.emailEnabled ?? auth.enabled, method: 'email_link', pending: logins.summary(loginToken) });
+      if (path === '/api/auth/config' && method === 'GET') return send(200, { available: auth.emailEnabled ?? auth.enabled, method: 'email_link', signup: signup.mode, pending: logins.summary(loginToken) });
       if (path === '/api/auth/link' && method === 'POST') {
         requireOrigin(req, origin);
         const input = await body(req);
         if (typeof input.email !== 'string' || input.email.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(input.email.trim())) fail(400, 'invalid_email', 'メールアドレスを確認してください。');
         const destination = returnPath(input.returnTo);
         rateLimit('link-send:' + req.socket.remoteAddress, 12, 600_000);
+        if (!admitted(input.email.trim())) fail(403, 'not_admitted', 'このメールアドレスにはログイン用のメールを送信できません。');
         const { token, row } = logins.reserve(input.email.trim().toLowerCase());
         row.returnTo = destination;
         try {
@@ -332,7 +338,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           if (provider.connectionMethod === 'token' || permission.connection_method === 'token') {
             // A request fixes the runtime's declared service and variable name; a root import takes them from the user.
             const details = accessRequest ? requests.details(accessRequest) : providers.details(provider.id, input.details);
-            const result = await provider.client.importToken({ token: input.token, mode: input.mode, details });
+            const result = await provider.client.importToken({ token: input.token, mode: input.mode, details, fields: input.fields });
             // Network validation must not resurrect a logged-out session or an
             // expired/cancelled request. Importing alone never grants a runtime.
             if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
