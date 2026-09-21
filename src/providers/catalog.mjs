@@ -5,7 +5,7 @@ import { EXPO_API, EXPO_DOCS, EXPO_SCOPE, EXPO_SESSION_SCOPE, EXPO_TOKENS } from
 import { APIKEY_SCOPE } from './apikey.mjs';
 import { SUPABASE_API, SUPABASE_DOCS, SUPABASE_SCOPE, SUPABASE_TOKENS } from './supabase.mjs';
 import { APPLE_API, APPLE_DOCS, APPLE_KEYS, APPLE_SCOPE } from './apple.mjs';
-import { AWS_DOCS, AWS_KEYS, AWS_SCOPE } from './aws.mjs';
+import { AWS_DOCS, AWS_KEYS, AWS_SCOPE, AWS_TEMPLATE_PATH, quickCreateUrl } from './aws.mjs';
 import { CLOUDFLARE_API, CLOUDFLARE_DOCS, CLOUDFLARE_SCOPE, CLOUDFLARE_TOKENS } from './cloudflare.mjs';
 
 // Each integration supplies its authentication client and permission descriptions.
@@ -106,15 +106,18 @@ export function appleConnection(client) {
 
 // AWS: Foundation keeps an IAM user key and issues temporary credentials for one
 // role on every exec. Duration is the runtime's request and AWS's decision.
-export function awsConnection(client) {
+export function awsConnection(client, { templateUrl = '', region = 'ap-northeast-1' } = {}) {
+  const quickCreate = quickCreateUrl(templateUrl, region);
   return {
     id: 'aws', name: 'AWS', connectLabel: 'AWSのアクセスキーを登録', client, icon: 'cloud', canReconnect: false, canRevoke: false, credentialType: 'api_key', connectionMethod: 'token',
     intro: 'IAMユーザーのアクセスキーと、AIに使わせるロールを登録します。AIには一時的な認証情報だけを渡します。', managementUrl: AWS_KEYS,
     tokenEnv: 'AWS_SECRET_ACCESS_KEY',
     environment: credentials => ({ AWS_ACCESS_KEY_ID: credentials.details.session_access_key_id, AWS_SESSION_TOKEN: credentials.details.session_token, AWS_REGION: credentials.details.region, AWS_DEFAULT_REGION: credentials.details.region }),
-    tokenSetup: { url: AWS_KEYS, label: 'シークレットアクセスキー', link_label: 'IAM のセキュリティ認証情報を開く',
-      instructions: 'Foundation専用のIAMユーザーを作り、権限は「指定したロールを引き受ける (sts:AssumeRole)」だけにします。AIに使わせるロールは別に作り、信頼ポリシーでそのユーザーを許可してください。そのユーザーのアクセスキーを発行して貼り付けます。',
-      note: '登録時に GetCallerIdentity と AssumeRole を1回ずつ試し、キーとロールの組み合わせが有効か確認します。',
+    tokenSetup: { url: quickCreate || AWS_TEMPLATE_PATH, label: 'シークレットアクセスキー', step_label: 'AWSにFoundation用のユーザーとロールを作る', link_label: quickCreate ? 'AWS で作成する' : '定義ファイルをダウンロード',
+      instructions: quickCreate
+        ? 'ボタンを押すと、AWSのCloudFormationに「Foundation用のユーザーとロール」を作る画面が開きます。権限の範囲を選び、確認欄にチェックして「スタックの作成」を押してください。完了後、「出力」タブに出る4つの値を下に貼り付けます。'
+        : '定義ファイルをダウンロードし、AWSコンソールの CloudFormation で「スタックの作成」→「テンプレートファイルのアップロード」から投入してください。権限の範囲を選び、確認欄にチェックして作成します。完了後、「出力」タブに出る4つの値を下に貼り付けます。',
+      note: '作られるのは、ロールを引き受けることしかできないユーザーと、AIが使うロール、そのアクセスキーです。不要になったらスタックを削除すれば全部消えます。登録時に GetCallerIdentity と AssumeRole を1回ずつ試して確認します。',
       fields: [
         { id: 'access_key_id', label: 'アクセスキーID', max_length: 20, pattern: 'AKIA[A-Z0-9]{16}', help: 'AKIA で始まる20文字。' },
         { id: 'role_arn', label: 'ロールARN', max_length: 200, pattern: 'arn:aws[a-z-]*:iam::[0-9]{12}:role/.+', help: 'AIに使わせるロール。権限はこのロールで絞ります。' },
