@@ -77,6 +77,10 @@ async function main() {
       options.provider ||= 'apikey'; options.details = { service, site, env };
     }
   }
+  else if (action === 'rename') {
+    if (args.length !== 1 || !args[0].trim() || args[0].length > 80) throw new Error('Usage: rename <new name> (1-80 characters).');
+    options = { name: args[0].trim() };
+  }
   else if (!(['providers', 'accounts', 'cancel', 'whoami', 'leave'].includes(action) && !args.length) && !(action === 'exec' && accountIds.length && accountIds.every(id => /^[a-f0-9-]{36}$/.test(id)) && new Set(accountIds).size === accountIds.length && command.length)) throw new Error('Invalid command. Use --help.');
   const url = new URL(process.env.FOUNDATION_URL || '');
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('FOUNDATION_URL must be an HTTPS origin (HTTP is allowed only on localhost).');
@@ -90,10 +94,10 @@ async function main() {
   }
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
   const token = action === 'providers' ? null : await runtimeKey(keyPath, action === 'connect', !process.env.FOUNDATION_RUNTIME_KEY_FILE);
-  const path = action === 'providers' ? '/v1/providers' : action === 'accounts' ? '/v1/accounts' : action === 'exec' ? '/v1/accounts/' + accountIds[0] + '/credentials' : ['whoami', 'leave'].includes(action) ? '/v1/me' : action === 'cancel' ? '/v1/access-requests/current' : '/v1/access-requests';
-  const method = action === 'connect' || action === 'exec' ? 'POST' : action === 'cancel' || action === 'leave' ? 'DELETE' : 'GET';
+  const path = action === 'providers' ? '/v1/providers' : action === 'accounts' ? '/v1/accounts' : action === 'exec' ? '/v1/accounts/' + accountIds[0] + '/credentials' : ['whoami', 'leave', 'rename'].includes(action) ? '/v1/me' : action === 'cancel' ? '/v1/access-requests/current' : '/v1/access-requests';
+  const method = action === 'connect' || action === 'exec' ? 'POST' : action === 'rename' ? 'PATCH' : action === 'cancel' || action === 'leave' ? 'DELETE' : 'GET';
   async function request(timeout = 30_000, target = path) {
-    const response = await fetch(url.origin + target, { method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), 'content-type': 'application/json' }, ...(method !== 'GET' ? { body: JSON.stringify(action === 'connect' ? options : action === 'exec' ? issuance : {}) } : {}), redirect: 'error', signal: AbortSignal.timeout(timeout) });
+    const response = await fetch(url.origin + target, { method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), 'content-type': 'application/json' }, ...(method !== 'GET' ? { body: JSON.stringify(action === 'connect' || action === 'rename' ? options : action === 'exec' ? issuance : {}) } : {}), redirect: 'error', signal: AbortSignal.timeout(timeout) });
     const data = await response.json();
     if (!response.ok) throw new Error('Foundation request failed (' + response.status + ', ' + (data.error?.code || 'unknown') + '). ' + (data.error?.message || 'Check the connection and runtime permission.'));
     return data;
