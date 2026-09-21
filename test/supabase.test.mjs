@@ -12,7 +12,7 @@ test('Supabase import verifies the token against the Management API and shows wh
   const f = await supabaseFixture(t), account = await f.supabaseAccount();
   const state = await f.request('/api/state'), provider = state.json.providers.find(item => item.id === 'supabase');
   assert.equal(provider.connection_method, 'token');
-  assert.equal(provider.token_setup.url, SUPABASE_TOKENS);
+  assert.equal(provider.token_setup.links[0].href, SUPABASE_TOKENS);
   assert.equal(provider.can_revoke, false);
   assert.equal(account.label, 'owner@example.test');
   assert.deepEqual(account.organizations, [{ slug: 'ttgx', name: 'Owner Org' }]);

@@ -118,7 +118,7 @@ test('Foundation hands out the CloudFormation stack that creates the user, role 
   const served = await f.request(AWS_TEMPLATE_PATH, { anonymous: true });
   assert.equal(served.status, 200); assert.equal(served.text, template); assert.match(served.headers.get('content-disposition'), /foundation-agent\.yaml/);
   const plain = (await f.request('/api/state')).json.providers.find(item => item.id === 'aws').token_setup;
-  assert.equal(plain.url, AWS_TEMPLATE_PATH); assert.equal(plain.link_label, '定義ファイルをダウンロード');
+  assert.deepEqual(plain.links.map(link => link.label), ['定義ファイルをダウンロード', 'CloudFormation を開く']); assert.equal(plain.links[0].href, AWS_TEMPLATE_PATH);
   const url = quickCreateUrl('https://foundation-templates.s3.ap-northeast-1.amazonaws.com/foundation-agent.yaml', 'ap-northeast-1');
   assert.match(url, /^https:\/\/ap-northeast-1\.console\.aws\.amazon\.com\/cloudformation\/home\?region=ap-northeast-1#\/stacks\/quickcreate\?templateURL=https%3A%2F%2Ffoundation-templates/);
   assert.equal(quickCreateUrl('', 'ap-northeast-1'), null);
@@ -126,5 +126,5 @@ test('Foundation hands out the CloudFormation stack that creates the user, role 
   const { awsConnection } = await import('../src/providers/catalog.mjs');
   const { FakeAws } = await import('./aws-helper.mjs');
   const oneTap = awsConnection(new FakeAws(), { templateUrl: 'https://foundation-templates.s3.ap-northeast-1.amazonaws.com/foundation-agent.yaml', region: 'ap-northeast-1' }).tokenSetup;
-  assert.equal(oneTap.link_label, 'AWS で作成する'); assert.match(oneTap.url, /quickcreate/);
+  assert.deepEqual(oneTap.links.map(link => link.label), ['AWS で作成する']); assert.match(oneTap.links[0].href, /quickcreate/);
 });

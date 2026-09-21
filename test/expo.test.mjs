@@ -22,7 +22,7 @@ test('Expo import is a discoverable token flow, validates identity without mutat
   const f = await expoFixture(t), account = await f.expoAccount();
   const state = await f.request('/api/state'), provider = state.json.providers.find(item => item.id === 'expo');
   assert.equal(provider.connection_method, 'token');
-  assert.equal(provider.token_setup.url, EXPO_TOKENS);
+  assert.equal(provider.token_setup.links[0].href, EXPO_TOKENS);
   assert.equal(provider.can_reconnect, false); assert.equal(provider.can_revoke, false);
   assert.match(provider.permissions[0].description, /すべてのアカウント・組織/);
   assert.equal(account.label, 'fixture-expo-user');
