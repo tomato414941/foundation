@@ -106,3 +106,23 @@ test('The CLI passes --duration through and the child sees only temporary AWS cr
   assert.equal((await execute(['exec', '--duration', 'x', account.id, '--', process.execPath, '-e', '1'], env)).code, 1);
   assert.ok(!(run.out + run.err + custom.out + custom.err + refused.err).includes(AWS_SECRET));
 });
+
+test('Foundation hands out the CloudFormation stack that creates the user, role and key; a one-tap link appears only with an S3 template URL', async t => {
+  const { cloudFormationTemplate, quickCreateUrl, AWS_TEMPLATE_PATH } = await import('../src/providers/aws.mjs');
+  const template = cloudFormationTemplate();
+  for (const needle of ['AWS::IAM::User', 'AWS::IAM::Role', 'AWS::IAM::AccessKey', 'sts:AssumeRole', '!GetAtt FoundationUser.Arn', 'SecretAccessKey:', 'RoleArn:', 'MaxSessionDuration: 3600', 'AllowedValues:']) assert.ok(template.includes(needle), needle);
+  assert.ok(!/RoleName|UserName: [a-z]/.test(template), 'unnamed resources need only CAPABILITY_IAM');
+  const f = await awsFixture(t);
+  const served = await f.request(AWS_TEMPLATE_PATH, { anonymous: true });
+  assert.equal(served.status, 200); assert.equal(served.text, template); assert.match(served.headers.get('content-disposition'), /foundation-agent\.yaml/);
+  const plain = (await f.request('/api/state')).json.providers.find(item => item.id === 'aws').token_setup;
+  assert.equal(plain.url, AWS_TEMPLATE_PATH); assert.equal(plain.link_label, '定義ファイルをダウンロード');
+  const url = quickCreateUrl('https://foundation-templates.s3.ap-northeast-1.amazonaws.com/foundation-agent.yaml', 'ap-northeast-1');
+  assert.match(url, /^https:\/\/ap-northeast-1\.console\.aws\.amazon\.com\/cloudformation\/home\?region=ap-northeast-1#\/stacks\/quickcreate\?templateURL=https%3A%2F%2Ffoundation-templates/);
+  assert.equal(quickCreateUrl('', 'ap-northeast-1'), null);
+  assert.throws(() => quickCreateUrl('https://evil.example/x.yaml', 'ap-northeast-1'), /S3/);
+  const { awsConnection } = await import('../src/providers/catalog.mjs');
+  const { FakeAws } = await import('./aws-helper.mjs');
+  const oneTap = awsConnection(new FakeAws(), { templateUrl: 'https://foundation-templates.s3.ap-northeast-1.amazonaws.com/foundation-agent.yaml', region: 'ap-northeast-1' }).tokenSetup;
+  assert.equal(oneTap.link_label, 'AWS で作成する'); assert.match(oneTap.url, /quickcreate/);
+});

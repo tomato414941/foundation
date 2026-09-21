@@ -4,6 +4,77 @@ import { fail, HttpError } from '../errors.mjs';
 export const AWS_DOCS = 'https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html';
 export const AWS_KEYS = 'https://console.aws.amazon.com/iam/home#/security_credentials';
 export const AWS_SCOPE = 'aws:assume-role';
+export const AWS_TEMPLATE_PATH = '/aws/foundation-agent.yaml';
+export const AWS_PERMISSION_SETS = ['arn:aws:iam::aws:policy/ReadOnlyAccess', 'arn:aws:iam::aws:policy/PowerUserAccess', 'arn:aws:iam::aws:policy/AdministratorAccess'];
+
+// One stack creates everything the user would otherwise assemble by hand: a user that may
+// only assume one role, the role the AI will use, and an access key. The outputs are what
+// the registration dialog asks for. Resources are unnamed so only CAPABILITY_IAM is needed.
+export function cloudFormationTemplate() {
+  return `AWSTemplateFormatVersion: '2010-09-09'
+Description: Foundation agent access - an IAM user that can only assume one role, and the role an approved AI uses through Foundation.
+Parameters:
+  Permissions:
+    Type: String
+    Default: ${AWS_PERMISSION_SETS[1]}
+    AllowedValues:
+${AWS_PERMISSION_SETS.map(arn => '      - ' + arn).join('\n')}
+    Description: What the AI may do through the role (ReadOnlyAccess, PowerUserAccess, or AdministratorAccess).
+Resources:
+  FoundationUser:
+    Type: AWS::IAM::User
+  AgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Assumed by Foundation on behalf of an approved AI. Temporary credentials only.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !GetAtt FoundationUser.Arn
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref Permissions
+  AssumeAgentRole:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: foundation-assume-agent-role
+      Users:
+        - !Ref FoundationUser
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Resource: !GetAtt AgentRole.Arn
+  FoundationKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref FoundationUser
+Outputs:
+  AccessKeyId:
+    Description: Paste into Foundation as the access key ID.
+    Value: !Ref FoundationKey
+  SecretAccessKey:
+    Description: Paste into Foundation as the secret access key.
+    Value: !GetAtt FoundationKey.SecretAccessKey
+  RoleArn:
+    Description: Paste into Foundation as the role ARN.
+    Value: !GetAtt AgentRole.Arn
+  Region:
+    Description: Paste into Foundation as the region.
+    Value: !Ref AWS::Region
+`;
+}
+
+export function quickCreateUrl(templateUrl, region) {
+  if (!templateUrl) return null;
+  const target = new URL(templateUrl);
+  if (target.protocol !== 'https:' || !/(^|\.)amazonaws\.com$/.test(target.hostname)) throw new Error('FOUNDATION_AWS_TEMPLATE_URL must be an HTTPS S3 URL');
+  return `https://${region}.console.aws.amazon.com/cloudformation/home?region=${region}#/stacks/quickcreate?templateURL=${encodeURIComponent(target.href)}&stackName=foundation`;
+}
 const STS_VERSION = '2011-06-15';
 const digest = value => createHash('sha256').update(value).digest('hex');
 const hmac = (key, value) => createHmac('sha256', key).update(value).digest();

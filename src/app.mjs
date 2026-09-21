@@ -8,6 +8,7 @@ import { ProviderCatalog, gmailConnection } from './providers/catalog.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { AccessRequests } from './access-requests.mjs';
 import { verificationResult } from './verification.mjs';
+import { AWS_TEMPLATE_PATH, cloudFormationTemplate } from './providers/aws.mjs';
 
 const PUBLIC = new URL('../web/', import.meta.url);
 const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
@@ -162,6 +163,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
         return res.end(await readFile(fileURLToPath(new URL(filename, PUBLIC))));
       }
       if (path === '/health' && method === 'GET') return send(200, { status: 'ok' });
+      if (path === AWS_TEMPLATE_PATH && method === 'GET') { res.writeHead(200, { 'content-type': 'text/yaml; charset=utf-8', 'content-disposition': 'attachment; filename="foundation-agent.yaml"' }); return res.end(cloudFormationTemplate()); }
       if (path === '/cli/install.sh' && method === 'GET') { res.writeHead(200, { 'content-type': 'text/x-shellscript; charset=utf-8' }); return res.end(await installScript(origin)); }
       const cliFile = path.match(/^\/cli\/([a-z-]+\.mjs)$/)?.[1];
       if (cliFile && CLI_FILES.includes(cliFile) && method === 'GET') { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' }); return res.end(await readFile(fileURLToPath(new URL(cliFile, CLI_DIR)))); }

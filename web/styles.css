@@ -112,6 +112,9 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .approval-facts > div { display: grid; grid-template-columns: 94px minmax(0, 1fr); gap: 12px; margin-top: 12px; }
 #confirmation-code { font: 600 20px/1.4 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
 .claim-note { margin: 6px 0 0; }
+.file-pick { display: block; margin-top: 10px; }
+.file-pick input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.file-pick:focus-within .button { outline: 2px solid var(--accent); }
 .approval-facts code, .connection-facts code { font: 500 14px ui-monospace, monospace; background: var(--soft); padding: 2px 6px; border-radius: 4px; }
 .status.neutral { margin-left: 8px; color: var(--muted); background: var(--soft); }
 .token-form .token-setup { margin-top: 18px; }
