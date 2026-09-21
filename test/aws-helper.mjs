@@ -5,6 +5,7 @@ import { FakeGmail, fixture, json } from './helpers.mjs';
 export const AWS_KEY_ID = 'AKIAIOSFODNN7EXAMPLE';
 export const AWS_SECRET = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
 export const AWS_FIELDS = { access_key_id: AWS_KEY_ID, role_arn: 'arn:aws:iam::123456789012:role/foundation-agent', region: 'ap-northeast-1' };
+export const AWS_CODE = [AWS_KEY_ID, AWS_SECRET, AWS_FIELDS.role_arn, AWS_FIELDS.region].join('|');
 
 // Re-signs each request with the known secret and compares signatures, as STS would; never contacts AWS.
 export class FakeAws extends AwsProvider {
@@ -34,7 +35,7 @@ export class FakeAws extends AwsProvider {
 export async function awsFixture(t, options = {}) {
   const aws = options.aws || new FakeAws(), gmail = new FakeGmail();
   const f = await fixture(t, { gmail, integrations: [awsConnection(aws), gmailConnection(gmail)], ...options });
-  const importAws = (extra = {}) => f.request('/api/connections/aws/connect', { method: 'POST', data: { name: 'AWS', mode: 'assume-role', token: AWS_SECRET, fields: AWS_FIELDS, ...extra } });
+  const importAws = (extra = {}) => f.request('/api/connections/aws/connect', { method: 'POST', data: { name: 'AWS', mode: 'assume-role', token: AWS_CODE, ...extra } });
   async function awsAccount(extra = {}) {
     const result = await importAws(extra);
     if (result.status !== 200) throw new Error(result.text);
