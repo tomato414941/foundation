@@ -38,7 +38,8 @@ export class AccessRequests {
     const encoded = JSON.stringify(this.providers.details(provider, details));
     this.store.sweep();
     const hash = this.key(token);
-    const agent = this.store.authenticate(token), requesterName = name;
+    // A registered key is known by the name its owner gave it; what the runtime calls itself matters only the first time.
+    const agent = this.store.authenticate(token), requesterName = agent?.name || name;
     const previous = this.db.prepare("SELECT * FROM access_requests WHERE token_hash=? AND status='pending' AND expires_at>? ORDER BY created_at DESC LIMIT 1").get(hash, Date.now());
     if (previous) {
       if (previous.requester_name !== requesterName || previous.provider !== provider || previous.purpose !== purpose || previous.mode !== mode || previous.details !== encoded) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
