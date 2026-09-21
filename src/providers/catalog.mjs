@@ -88,7 +88,7 @@ export function appleConnection(client) {
     tokenFile: credentials => ({ env: 'EXPO_ASC_API_KEY_PATH', filename: 'AuthKey_' + credentials.details.key_id + '.p8' }),
     environment: credentials => ({ EXPO_ASC_KEY_ID: credentials.details.key_id, EXPO_ASC_ISSUER_ID: credentials.details.issuer_id, EXPO_APPLE_TEAM_ID: credentials.details.team_id, EXPO_APPLE_TEAM_TYPE: credentials.details.team_type }),
     tokenSetup: { url: APPLE_KEYS, label: 'APIキー (.p8 の内容)', multiline: true, link_label: 'App Store Connect の「統合」を開く',
-      instructions: '「ユーザーとアクセス」→「統合」→「App Store Connect API」で「チームキー」を作成し、ダウンロードした .p8 ファイルの中身を貼り付けてください。EASの署名準備には Admin の役割が必要です。',
+      instructions: '「ユーザーとアクセス」→「統合」→「App Store Connect API」で「チームキー」を作成し、ダウンロードした .p8 ファイルを「ファイルを選ぶ」で指定するか、中身を貼り付けてください。EASの署名準備には Admin の役割が必要です。',
       note: '登録時にAppleへ1回だけ読み取りで問い合わせ、キーが有効か確認します。証明書やプロファイルの作成はEASが行い、Foundationは関与しません。',
       fields: [
         { id: 'key_id', label: 'Key ID', max_length: 10, pattern: '[A-Za-z0-9]{10}', help: 'キー一覧に表示される10桁のID。' },
