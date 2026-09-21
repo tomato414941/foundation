@@ -266,6 +266,11 @@ test('An access key introduces itself: whoami, approval renames it, the owner ca
   assert.equal((await f.request('/api/agents/' + agentId, { method: 'PATCH', data: { name: '作業用' } })).status, 200);
   assert.equal(f.app.store.agents(USER_A)[0].name, '作業用');
   assert.equal((await f.request('/api/agents/' + agentId, { method: 'PATCH', headers: { origin: 'https://evil.test' }, data: { name: 'x' } })).status, 403);
+  // The key may rename itself; the owner's later rename wins just the same.
+  const renamed = await f.request('/v1/me', { method: 'PATCH', token, anonymous: true, data: { name: '作業用 Claude' } });
+  assert.equal(renamed.status, 200, renamed.text); assert.equal(renamed.json.agent.name, '作業用 Claude');
+  assert.equal((await f.request('/v1/me', { method: 'PATCH', token, anonymous: true, data: { name: '' } })).status, 400);
+  assert.equal(f.app.store.agents(USER_A)[0].name, '作業用 Claude');
   // Leaving revokes the key and its grants but keeps the connection.
   assert.equal((await f.request('/v1/me', { method: 'DELETE', token, anonymous: true, data: {} })).status, 200);
   assert.equal((await f.request('/v1/accounts', { token, anonymous: true })).status, 401);

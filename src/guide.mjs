@@ -46,7 +46,7 @@ export function guide(providers) {
     '- 拒否された、または 30 分で期限切れになった場合は、理由を推測せず利用者に確認する。',
     '- --service で申告したキーは Foundation では検証されない。認証エラーになったら貼り間違いの可能性を利用者に伝える。',
     '- 受け取った認証情報は、その作業でだけ使う。', '');
-  lines.push('その他のコマンド: foundation providers | cancel (承認待ちの依頼を取り下げる) | accounts | whoami | leave (自分のキーを失効させる)',
+  lines.push('その他のコマンド: foundation providers | cancel (承認待ちの依頼を取り下げる) | accounts | whoami | rename <名前> (自分のキーの名前を変える) | leave (自分のキーを失効させる)',
     '環境変数: FOUNDATION_URL (必須)、FOUNDATION_AGENT (任意。この AI の名前。例: claude / codex)、FOUNDATION_RUNTIME_KEY_FILE (任意)',
     'キーの単位: 既定は「機械 × OS ユーザー」で 1 つ。FOUNDATION_AGENT を設定すると AI ごとに別のキーになるが、同じ OS ユーザーで動く他の AI はそのファイルを読めるので、これは帳簿上の区別であり守りではない。',
     '  本当に分離したいなら OS ユーザーを分ける。');

@@ -433,6 +433,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
         if (path === '/v1/accounts' && method === 'GET') return send(200, { accounts: store.allowedAccounts(agent).map(account => resource(account, agent.owner_id)) });
         if (path === '/v1/me' && method === 'GET') return send(200, { agent: store.agentDetails(agent) });
+        if (path === '/v1/me' && method === 'PATCH') {
+          const input = await body(req);
+          store.renameAgent(agent.owner_id, agent.id, nameValue(input.name));
+          return send(200, { agent: store.agentDetails(agent) });
+        }
         if (path === '/v1/me' && method === 'DELETE') {
           await body(req);
           // The account retires itself: its key stops working and its grants are dropped. Connections stay.
