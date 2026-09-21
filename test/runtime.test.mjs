@@ -94,6 +94,10 @@ test('accounts answers 401 until approval, then lists what was granted', async t
   const connected = await execute(['connect'], env), row = JSON.parse(connected.out).request;
   const before = await execute(['accounts'], env);
   assert.equal(before.code, 1); assert.match(before.err, /not_approved/);
+  const raw = await execute(['request'], env);
+  assert.equal(raw.code, 0, raw.err); assert.equal(JSON.parse(raw.out).request.id, row.id); assert.deepEqual(JSON.parse(raw.out).request.events, []);
+  await f.request('/connect/' + row.id, { anonymous: true });
+  assert.equal(JSON.parse((await execute(['request'], env)).out).request.events[0].event, 'page_opened');
   await f.request('/api/access-requests/' + row.id + '/deny', { method: 'POST', data: {} });
   const denied = await execute(['accounts'], env);
   assert.equal(denied.code, 1); assert.match(denied.err, /not_approved/, 'denial is indistinguishable from waiting');

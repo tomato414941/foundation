@@ -30,7 +30,7 @@ test('A failed import stores no secret, tells the owner in the response, and tel
   const stored = JSON.stringify(f.app.store.db.prepare('SELECT * FROM access_requests').all());
   assert.doesNotMatch(stored, /invalid-token-with-valid-syntax|fixturetoken|test-bucket-do-not-store|verification/);
   assert.equal((await usable(f, token)).status, 401);
-  assert.equal((await f.request('/v1/access-requests/current', { anonymous: true, token })).status, 405);
+  assert.equal((await f.request('/v1/access-requests/current', { anonymous: true, token })).json.request.events.at(-1).code, 'reconnect_required', 'the runtime may read what happened, not the token');
   const originalCookie = 'fdn_session=' + f.app.store.createSession(f.auth.value());
   await f.login('other@example.test');
   assert.equal((await f.request('/api/access-requests/' + row.id)).status, 404);

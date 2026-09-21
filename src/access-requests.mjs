@@ -53,6 +53,24 @@ export class AccessRequests {
     return this.get(id);
   }
   details(row) { try { return JSON.parse(row.details || '{}'); } catch { return {}; } }
+  // Everything that happens at the approval URL passes through this server. It is written down as it
+  // happens, unjudged, so the runtime can read what its owner ran into. Inputs are never recorded.
+  record(id, event, detail = {}) {
+    let row;
+    try { row = this.get(id); } catch { return; }
+    const events = this.eventsOf(row);
+    const entry = { at: Date.now(), event: String(event).slice(0, 40) };
+    for (const key of ['provider', 'method', 'code']) if (detail[key] != null) entry[key] = String(detail[key]).slice(0, 64);
+    if (detail.message != null) entry.message = String(detail.message).slice(0, 300);
+    events.push(entry);
+    this.db.prepare('UPDATE access_requests SET progress=? WHERE id=?').run(JSON.stringify(events.slice(-40)), row.id);
+  }
+  eventsOf(row) { try { const value = JSON.parse(row.progress || '[]'); return Array.isArray(value) ? value : []; } catch { return []; } }
+  // What a runtime may read about its own current request: the request as created, and the raw events since.
+  runtimeView(token) {
+    const row = this.current(token);
+    return { ...this.summary(row, ''), events: this.eventsOf(row) };
+  }
   matches(row, account) {
     return account && account.provider === row.provider && this.providers.get(row.provider).matches(row.mode, account, { ...row, details: this.details(row) });
   }

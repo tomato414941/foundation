@@ -114,9 +114,6 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .claim-note { margin: 6px 0 0; }
 .file-pick { display: block; margin-top: 10px; }
 .setup-steps { margin: 8px 0 14px 20px; padding: 0; color: var(--muted); font-size: 14px; }
-.hint-list { margin: 4px 0 8px 20px; padding: 0; color: var(--muted); font-size: 14px; }
-.hint-list li { margin: 4px 0; }
-.failure-help .permission-note { margin: 6px 0 0; }
 .setup-steps li { margin: 6px 0; }
 .setup-link + .setup-link { margin-top: 10px; }
 .file-pick input { position: absolute; width: 1px; height: 1px; opacity: 0; }
