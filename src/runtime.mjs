@@ -46,7 +46,16 @@ async function main() {
   const [action, ...args] = process.argv.slice(2);
   const agentName = (process.env.FOUNDATION_AGENT || '').trim();
   if (agentName && !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/.test(agentName)) throw new Error('FOUNDATION_AGENT must be 1-40 characters of letters, digits, space, dot, underscore or hyphen.');
-  const separatorAt = args.indexOf('--'), accountIds = action === 'exec' && separatorAt > 0 ? args.slice(0, separatorAt) : [], command = separatorAt >= 0 ? args.slice(separatorAt + 1) : [];
+  const separatorAt = args.indexOf('--'), command = separatorAt >= 0 ? args.slice(separatorAt + 1) : [];
+  let accountIds = [], issuance = {};
+  if (action === 'exec' && separatorAt > 0) {
+    const parsed = parseArgs({ args: args.slice(0, separatorAt), options: { duration: { type: 'string' } }, strict: true, allowPositionals: true });
+    accountIds = parsed.positionals;
+    if (parsed.values.duration !== undefined) {
+      if (!/^\d{1,7}$/.test(parsed.values.duration) || Number(parsed.values.duration) < 1) throw new Error('--duration must be a positive number of seconds; AWS decides whether it is allowed.');
+      issuance = { duration: Number(parsed.values.duration) };
+    }
+  }
   if (action === '--help' || action === 'help' || action === 'guide' || !action) {
     let providers;
     if (process.env.FOUNDATION_URL) {
@@ -84,7 +93,7 @@ async function main() {
   const path = action === 'providers' ? '/v1/providers' : action === 'accounts' ? '/v1/accounts' : action === 'exec' ? '/v1/accounts/' + accountIds[0] + '/credentials' : ['whoami', 'leave'].includes(action) ? '/v1/me' : action === 'cancel' ? '/v1/access-requests/current' : '/v1/access-requests';
   const method = action === 'connect' || action === 'exec' ? 'POST' : action === 'cancel' || action === 'leave' ? 'DELETE' : 'GET';
   async function request(timeout = 30_000, target = path) {
-    const response = await fetch(url.origin + target, { method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), 'content-type': 'application/json' }, ...(method !== 'GET' ? { body: JSON.stringify(action === 'connect' ? options : {}) } : {}), redirect: 'error', signal: AbortSignal.timeout(timeout) });
+    const response = await fetch(url.origin + target, { method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), 'content-type': 'application/json' }, ...(method !== 'GET' ? { body: JSON.stringify(action === 'connect' ? options : action === 'exec' ? issuance : {}) } : {}), redirect: 'error', signal: AbortSignal.timeout(timeout) });
     const data = await response.json();
     if (!response.ok) throw new Error('Foundation request failed (' + response.status + ', ' + (data.error?.code || 'unknown') + '). ' + (data.error?.message || 'Check the connection and runtime permission.'));
     return data;
