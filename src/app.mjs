@@ -101,8 +101,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
       throw error;
     }
   }
+  const bearer = req => req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
   function actor(req) {
-    const agent = store.authenticate(req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1]);
+    const agent = store.authenticate(bearer(req));
     if (!agent) fail(401, 'not_approved', 'このアクセスキーはまだ承認されていないか、失効しています。foundation connect で接続依頼を作り、承認後にお試しください。');
     return agent;
   }
@@ -148,6 +149,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+    let progressRequestId = null;
     try {
       const port = server.address()?.port;
       const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`, ...(external ? [external.host] : [])];
@@ -158,6 +160,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
       const setCookie = (value, age) => setNamedCookie('fdn_session', value, age);
       const loginToken = readCookie(req, 'fdn_login');
       if ((STATIC.has(path) || CONNECT_PAGE.test(path)) && method === 'GET') {
+        if (CONNECT_PAGE.test(path)) requests.record(path.slice('/connect/'.length), 'page_opened');
         const [filename, type] = STATIC.get(CONNECT_PAGE.test(path) ? '/' : path);
         res.writeHead(200, { 'content-type': type });
         return res.end(await readFile(fileURLToPath(new URL(filename, PUBLIC))));
@@ -204,6 +207,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           if (flow.accessRequestId) {
             destination = '/connect/' + flow.accessRequestId;
             requests.forUser(flow.accessRequestId, user.id, true);
+            progressRequestId = flow.accessRequestId;
           }
           if (url.searchParams.has('error')) {
             fail(400, 'authorization_denied', '接続先での認証は許可されませんでした。');
@@ -219,8 +223,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           await verifyConnection(req, session, user,
             () => provider.client.exchange({ ...flow, code }, previous ? { email: previous.email, credentials: store.secrets(previous) } : undefined),
             result => { if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true); return store.connect(user.id, { provider: provider.id, name: flow.name, purpose: flow.purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials, previous); });
+          if (flow.accessRequestId) requests.record(flow.accessRequestId, 'connected', { provider: provider.id });
           return redirect(connectionLocation('connected'));
         } catch (error) {
+          if (progressRequestId && error instanceof HttpError) requests.record(progressRequestId, 'connect_failed', { provider: providerCallback[1], code: error.code, message: error.message });
           const codes = { authorization_denied: 'denied', invalid_state: 'expired', login_required: 'expired', account_changed: 'wrong_account', already_connected: 'already_connected', scope_mismatch: 'scope', refresh_missing: 'retry', connection_changed: 'changed' };
           return redirect(connectionLocation(codes[error.code] || 'failed'));
         }
@@ -265,8 +271,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
       }
       // Pairing bootstraps a runtime without a previously issued Foundation key.
       // Possessing the approval URL alone never gives access to this endpoint.
-      // There is deliberately no way for a runtime to ask about a request's state: it learns
-      // whether it may use a connection by calling /v1/accounts, and nothing else.
+      // A runtime learns whether it may use a connection from /v1/accounts. When its owner asks for help,
+      // it may read its own current request raw (what was requested, and what happened at the approval URL).
       if (path === '/v1/providers' && method === 'GET') return send(200, { providers: [...providers.providers.keys()].map(id => providers.describe(id)) });
       if (path === '/v1/access-requests' || path === '/v1/access-requests/current') {
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
@@ -280,9 +286,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           rateLimit('request-create:' + req.socket.remoteAddress, 12, 600_000);
           return send(201, { request: requests.summary(requests.create(token, { name, purpose, provider: input.provider, mode: input.mode, details: input.details }), origin) });
         }
+        if (path.endsWith('/current') && method === 'GET') return send(200, { request: { ...requests.runtimeView(token), verification_uri: origin + '/connect/' + requests.current(token).id } });
         if (path.endsWith('/current') && method === 'DELETE') {
           await body(req);
-          return send(200, { request: requests.summary(requests.cancel(token), origin) });
+          const cancelled = requests.cancel(token); requests.record(cancelled.id, 'cancelled');
+          return send(200, { request: requests.summary(cancelled, origin) });
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
@@ -293,11 +301,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
         const requestRoute = path.match(/^\/api\/access-requests\/([A-Za-z0-9_-]{43})(\/(?:approve|deny))?$/);
         if (requestRoute) {
           const row = requests.forUser(requestRoute[1], user.id);
-          if (!requestRoute[2] && method === 'GET') return send(200, { request: { ...requests.summary(row, origin, { code: false }), eligible_account_ids: store.accounts(user.id).filter(account => requests.matches(row, account)).map(account => account.id) } });
+          if (!requestRoute[2] && method === 'GET') { requests.record(row.id, 'page_viewed'); return send(200, { request: { ...requests.summary(row, origin, { code: false }), eligible_account_ids: store.accounts(user.id).filter(account => requests.matches(row, account)).map(account => account.id) } }); }
           if (method === 'POST' && requestRoute[2]) {
             const input = await body(req);
             if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
+            progressRequestId = row.id;
             const result = requestRoute[2] === '/deny' ? requests.deny(row.id, user.id) : requests.approve(row.id, user.id, input.accountId, input.confirmationCode);
+            requests.record(row.id, requestRoute[2] === '/deny' ? 'denied' : 'approved');
             return send(200, { request: requests.summary(result, origin, { code: false }) });
           }
         }
@@ -309,6 +319,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           let result, committed = false;
           try {
             const accessRequest = input.accessRequestId === undefined ? null : requests.forUser(input.accessRequestId, user.id, true);
+            progressRequestId = accessRequest?.id || null;
+            if (accessRequest) requests.record(accessRequest.id, 'connect_started', { provider: 'expo', method: 'login' });
             if (accessRequest && (accessRequest.provider !== 'expo' || accessRequest.mode !== 'session')) fail(400, 'scope_mismatch', '依頼されたサービスと権限で接続してください。');
             if (accessRequest) requests.verifyCode(accessRequest.id, user.id, input.confirmationCode);
             const name = nameValue(input.name ?? 'Expo', '表示名'), purpose = purposeValue(input.purpose ?? accessRequest?.purpose ?? '');
@@ -324,6 +336,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
             });
             if (result.challenge) return send(202, saved);
             committed = true;
+            if (accessRequest) requests.record(accessRequest.id, 'connected', { provider: 'expo' });
             return send(200, saved);
           } finally {
             input.password = ''; input.otp = '';
@@ -339,6 +352,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           rateLimit('oauth:' + user.id, 10);
           const input = await body(req);
           const accessRequest = input.accessRequestId === undefined ? null : requests.forUser(input.accessRequestId, user.id, true);
+          progressRequestId = accessRequest?.id || null;
+          if (accessRequest) requests.record(accessRequest.id, 'connect_started', { provider: provider.id, method: provider.connectionMethod === 'token' || providers.permission(provider.id, input.mode).connection_method === 'token' ? 'token' : 'oauth' });
           if (accessRequest && (input.mode !== accessRequest.mode || provider.id !== accessRequest.provider)) fail(400, 'scope_mismatch', '依頼されたサービスと権限で接続してください。');
           const name = nameValue(input.name, '表示名'), purpose = purposeValue(input.purpose);
           const permission = providers.permission(provider.id, input.mode);
@@ -364,6 +379,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
                 return { connected: true, account_id: accountId, verification: report };
               });
             input.token = '';
+            if (accessRequest) requests.record(accessRequest.id, 'connected', { provider: provider.id });
             return send(200, saved);
           }
           if (provider.connectionMethod === 'password') fail(400, 'login_required', 'Expoのログイン画面から接続してください。');
@@ -466,7 +482,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
       }
       fail(404, 'not_found', '指定された操作が見つかりません。');
     } catch (error) {
-      if (!res.headersSent) send(error instanceof HttpError ? error.status : 500, { error: { code: error instanceof HttpError ? error.code : 'internal_error', message: error instanceof HttpError ? error.message : '処理を完了できませんでした。' } });
+      if (!(error instanceof HttpError)) console.error(new Date().toISOString(), req.method, req.url, error);
+      if (progressRequestId && error instanceof HttpError && !res.headersSent) requests.record(progressRequestId, 'connect_failed', { code: error.code, message: error.message });
+      if (!res.headersSent) send(error instanceof HttpError ? error.status : 500, { error: { code: error instanceof HttpError ? error.code : 'internal_error', message: error instanceof HttpError ? error.message : '処理を完了できませんでした。' }, ...(error instanceof HttpError && error.extra ? error.extra : {}) });
       else res.end();
     }
   });

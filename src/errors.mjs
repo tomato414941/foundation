@@ -1,13 +1,14 @@
 export class HttpError extends Error {
-  constructor(status, code, message) {
+  constructor(status, code, message, extra) {
     super(message);
     this.status = status;
     this.code = code;
+    if (extra) this.extra = extra;
   }
 }
 
-export function fail(status, code, message) {
-  throw new HttpError(status, code, message);
+export function fail(status, code, message, extra) {
+  throw new HttpError(status, code, message, extra);
 }
 
 export function nameValue(value, label = '名前') {

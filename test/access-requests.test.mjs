@@ -28,7 +28,7 @@ test('A fresh runtime requests access, receives no access before approval, and u
   assert.equal((await f.request('/v1/accounts', { token, anonymous: true })).status, 401);
   assert.equal((await cancel(f, row.id)).status, 401);
   assert.equal((await cancel(f, key())).status, 410);
-  assert.equal((await f.request('/v1/access-requests/current', { token, anonymous: true })).status, 405, 'no status window for runtimes');
+  assert.equal((await f.request('/v1/access-requests/current', { token, anonymous: true })).json.request.id, row.id, 'a runtime may read its own request');
   await f.login();
   const account = await f.account();
   const info = await f.request('/api/access-requests/' + row.id);
@@ -276,4 +276,34 @@ test('An access key introduces itself: whoami, approval renames it, the owner ca
   assert.equal((await f.request('/v1/accounts', { token, anonymous: true })).status, 401);
   assert.equal(f.app.store.agents(USER_A).length, 0);
   assert.equal(f.app.store.accounts(USER_A).length, 1);
+});
+
+test('A runtime can read its own request raw: what it asked for, and what happened at the approval URL, never an input', async t => {
+  const f = await fixture(t, { login: false }), { token, row } = await create(f);
+  const view = async () => (await f.request('/v1/access-requests/current', { token, anonymous: true })).json.request;
+  assert.deepEqual((await view()).events, []);
+  assert.equal((await view()).confirmation_code, row.confirmation_code, 'the runtime created the request and already knows the code');
+  assert.equal((await f.request('/connect/' + row.id, { anonymous: true })).status, 200);
+  await f.login();
+  await f.request('/api/access-requests/' + row.id);
+  const start = await f.request('/api/connections/gmail/connect', { method: 'POST', data: { name: 'Gmail', mode: 'readonly', accessRequestId: row.id } });
+  await f.callback(new URL(start.json.url), 'headers-metadata');
+  const again = await f.request('/api/connections/gmail/connect', { method: 'POST', data: { name: 'Gmail', mode: 'readonly', accessRequestId: row.id } });
+  await f.callback(new URL(again.json.url), 'personal-readonly');
+  const account = f.app.store.accounts(USER_A)[0];
+  assert.equal((await approve(f, row, account.id, { confirmationCode: 'ZZZZ-ZZZZ' })).status, 400);
+  assert.equal((await approve(f, row, account.id)).status, 200);
+  const events = (await view()).events;
+  assert.deepEqual(events.map(item => item.event), ['page_opened', 'page_viewed', 'connect_started', 'connect_failed', 'connect_started', 'connected', 'connect_failed', 'approved']);
+  assert.equal(events[3].code, 'scope_mismatch'); assert.match(events[3].message, /読み取り範囲/); assert.equal(events[3].provider, 'gmail');
+  assert.equal(events[6].code, 'confirmation_required');
+  assert.ok(events.every(item => Number.isFinite(item.at)));
+  assert.doesNotMatch(JSON.stringify(events), /headers-metadata|personal-readonly|google-access|refresh_token|fdn_|ZZZZ/);
+  assert.equal((await view()).status, 'approved');
+  // Another key never sees this request; a cancelled request records it.
+  assert.equal((await f.request('/v1/access-requests/current', { token: key(), anonymous: true })).status, 410);
+  const next = await create(f, token, { mode: 'metadata' });
+  assert.equal((await f.request('/v1/access-requests/current', { method: 'DELETE', token, anonymous: true, data: {} })).status, 200);
+  assert.deepEqual((await view()).events.map(item => item.event), ['cancelled']);
+  assert.equal((await view()).id, next.row.id);
 });

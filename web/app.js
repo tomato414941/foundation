@@ -208,30 +208,13 @@ function openDialog(content) {
 }
 function closeDialog() { clearPrivateInput(); if (dialog.open) dialog.close(); dialog.innerHTML = ''; }
 dialog.addEventListener('cancel', (event) => { event.preventDefault(); closeDialog(); });
-// Registration failures are explained in place, with the provider's own hints, and can be handed to the AI
-// by the user (one copied line: provider, error code, fixed text; never a secret). Nothing is sent automatically.
-function showFailure(form, error, provider) {
-  const box = form.querySelector('.form-error');
-  box.textContent = error.message;
-  form.querySelector('.failure-help')?.remove();
-  if (!provider || !error.code) return;
-  const hints = provider.hints?.[error.code] || [];
-  const summary = `Foundation: ${provider.name} の登録に失敗しました (${error.code}): ${error.message}`;
-  const help = document.createElement('div'); help.className = 'failure-help';
-  help.innerHTML = `${hints.length ? `<p class="permission-note">確認すること</p><ul class="hint-list">${hints.map(hint => `<li>${esc(hint)}</li>`).join('')}</ul>` : ''}<button type="button" class="text-button consult">AIに相談する (内容をコピー)</button>`;
-  help.querySelector('.consult').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(summary); toast('コピーしました。チャットに貼り付けてください。'); }
-    catch { toast('コピーできませんでした。エラーの文をそのまま伝えてください。'); }
-  });
-  box.after(help);
-}
-function bindForm(handler, provider) {
+function bindForm(handler) {
   dialog.querySelector('form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget, button = form.querySelector('[type="submit"]');
-    button.disabled = true; form.querySelector('.form-error').textContent = ''; form.querySelector('.failure-help')?.remove();
+    button.disabled = true; form.querySelector('.form-error').textContent = '';
     try { await handler(new FormData(form)); }
-    catch (error) { if (form.isConnected) { showFailure(form, error, provider); button.disabled = false; } }
+    catch (error) { if (form.isConnected) { form.querySelector('.form-error').textContent = error.message; button.disabled = false; } }
   });
 }
 function accountFields(account) {
@@ -256,7 +239,7 @@ function connect(account, providerId = account?.provider) {
   bindForm(async (form) => {
     const result = await api(`/api/connections/${provider.id}/connect`, { method: 'POST', data: { name: form.get('name'), purpose: form.get('purpose'), mode: form.get('mode'), ...(account ? { accountId: account.id } : {}) } });
     location.assign(result.url);
-  }, provider);
+  });
 }
 function expoLoginMarkup(request) {
   return `<form class="expo-login-form" autocomplete="off"><div class="expo-password-fields"><label for="expo-username">Expoのメールアドレスまたはユーザー名</label><input id="expo-username" name="username" required maxlength="254" autocomplete="off" autocapitalize="none" spellcheck="false"><label for="expo-password">パスワード</label><input id="expo-password" name="password" type="password" required maxlength="1024" autocomplete="off"></div>
@@ -372,7 +355,7 @@ function connectToken(provider, request = null) {
     catch (error) { if (request) await refresh(); throw error; }
     selected = result.account_id;
     closeDialog(); await refresh(); toast(`${provider.name}の認証情報を登録しました。`);
-  }, provider);
+  });
 }
 function editAccount(account) {
   openDialog(`<h2 id="dialog-title">接続を編集</h2><p>${esc(accountLabel(account))}</p><form>${accountFields(account)}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
