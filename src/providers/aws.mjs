@@ -54,18 +54,9 @@ Resources:
     Properties:
       UserName: !Ref FoundationUser
 Outputs:
-  AccessKeyId:
-    Description: Paste into Foundation as the access key ID.
-    Value: !Ref FoundationKey
-  SecretAccessKey:
-    Description: Paste into Foundation as the secret access key.
-    Value: !GetAtt FoundationKey.SecretAccessKey
-  RoleArn:
-    Description: Paste into Foundation as the role ARN.
-    Value: !GetAtt AgentRole.Arn
-  Region:
-    Description: Paste into Foundation as the region.
-    Value: !Ref AWS::Region
+  CopyToFoundation:
+    Description: Copy this whole value into Foundation. It contains the access key, the role and the region.
+    Value: !Join ['|', [!Ref FoundationKey, !GetAtt FoundationKey.SecretAccessKey, !GetAtt AgentRole.Arn, !Ref AWS::Region]]
 `;
 }
 
@@ -130,10 +121,16 @@ export class AwsProvider {
     if (!data || typeof data !== 'object') invalidResponse();
     return data;
   }
-  async inspect(secret, input) {
-    const fields = this.fields(input);
-    if (typeof secret !== 'string' || !/^[A-Za-z0-9+/]{40}$/.test(secret)) fail(400, 'invalid_credential', 'シークレットアクセスキーは40文字の英数字です。');
-    const key = { ...fields, secret };
+  parse(code) {
+    const parts = typeof code === 'string' ? code.trim().split('|').map(part => part.trim()) : [];
+    if (parts.length !== 4) fail(400, 'invalid_credential', 'AWSの「出力」タブに表示された CopyToFoundation の値を、そのまま貼り付けてください。');
+    const [access_key_id, secret, role_arn, region] = parts;
+    const fields = this.fields({ access_key_id, role_arn, region });
+    if (!/^[A-Za-z0-9+/]{40}$/.test(secret)) fail(400, 'invalid_credential', 'AWSの「出力」タブに表示された CopyToFoundation の値を、そのまま貼り付けてください。');
+    return { ...fields, secret };
+  }
+  async inspect(code) {
+    const key = this.parse(code), { secret, ...fields } = key;
     const identity = (await this.call(key, 'GetCallerIdentity')).GetCallerIdentityResponse?.GetCallerIdentityResult;
     if (!identity || !/^\d{12}$/.test(identity.Account || '') || typeof identity.Arn !== 'string' || identity.Arn.length > 2048) invalidResponse();
     if (!fields.role_arn.includes(':' + identity.Account + ':')) fail(409, 'role_denied', 'ロールARNのアカウントIDが、このアクセスキーのアカウントと一致しません。');
@@ -153,10 +150,10 @@ export class AwsProvider {
     if (!result || !/^ASIA[A-Z0-9]{16}$/.test(result.AccessKeyId || '') || typeof result.SecretAccessKey !== 'string' || typeof result.SessionToken !== 'string' || !Number.isFinite(expiresAt) || /[\r\n\x00]/.test(result.SecretAccessKey + result.SessionToken)) invalidResponse();
     return { access_key_id: result.AccessKeyId, secret_access_key: result.SecretAccessKey, session_token: result.SessionToken, expires_at: expiresAt };
   }
-  async importToken({ token, mode, fields }) {
+  async importToken({ token, mode }) {
     this.check();
     if (mode !== 'assume-role') fail(400, 'invalid_scope', '利用する権限を選び直してください。');
-    const credentials = await this.inspect(token, fields);
+    const credentials = await this.inspect(token);
     return { email: credentials.details.account_id + ':' + credentials.details.role_arn.split('/').pop() + ':' + credentials.details.key_hash.slice(0, 12), credentials };
   }
   // Issuance never returns the stored key: each call assumes the role afresh.

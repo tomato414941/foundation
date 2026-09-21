@@ -113,16 +113,12 @@ export function awsConnection(client, { templateUrl = '', region = 'ap-northeast
     intro: 'IAMユーザーのアクセスキーと、AIに使わせるロールを登録します。AIには一時的な認証情報だけを渡します。', managementUrl: AWS_KEYS,
     tokenEnv: 'AWS_SECRET_ACCESS_KEY',
     environment: credentials => ({ AWS_ACCESS_KEY_ID: credentials.details.session_access_key_id, AWS_SESSION_TOKEN: credentials.details.session_token, AWS_REGION: credentials.details.region, AWS_DEFAULT_REGION: credentials.details.region }),
-    tokenSetup: { url: quickCreate || AWS_TEMPLATE_PATH, label: 'シークレットアクセスキー', step_label: 'AWSにFoundation用のユーザーとロールを作る', link_label: quickCreate ? 'AWS で作成する' : '定義ファイルをダウンロード',
+    tokenSetup: { url: quickCreate || AWS_TEMPLATE_PATH, label: 'AWSの「出力」に表示された値 (CopyToFoundation)', step_label: 'AWSにFoundation用のユーザーとロールを作る', link_label: quickCreate ? 'AWS で作成する' : '定義ファイルをダウンロード',
       instructions: quickCreate
-        ? 'ボタンを押すと、AWSのCloudFormationに「Foundation用のユーザーとロール」を作る画面が開きます。権限の範囲を選び、確認欄にチェックして「スタックの作成」を押してください。完了後、「出力」タブに出る4つの値を下に貼り付けます。'
-        : '定義ファイルをダウンロードし、AWSコンソールの CloudFormation で「スタックの作成」→「テンプレートファイルのアップロード」から投入してください。権限の範囲を選び、確認欄にチェックして作成します。完了後、「出力」タブに出る4つの値を下に貼り付けます。',
+        ? 'ボタンを押すと、AWSのCloudFormationに「Foundation用のユーザーとロール」を作る画面が開きます。権限の範囲を選び、確認欄にチェックして「スタックの作成」を押してください。完了後、「出力」タブの CopyToFoundation の値を1つコピーして、下に貼り付けます。'
+        : '定義ファイルをダウンロードし、AWSコンソールの CloudFormation で「スタックの作成」→「テンプレートファイルのアップロード」から投入してください。権限の範囲を選び、確認欄にチェックして作成します。完了後、「出力」タブの CopyToFoundation の値を1つコピーして、下に貼り付けます。',
       note: '作られるのは、ロールを引き受けることしかできないユーザーと、AIが使うロール、そのアクセスキーです。不要になったらスタックを削除すれば全部消えます。登録時に GetCallerIdentity と AssumeRole を1回ずつ試して確認します。',
-      fields: [
-        { id: 'access_key_id', label: 'アクセスキーID', max_length: 20, pattern: 'AKIA[A-Z0-9]{16}', help: 'AKIA で始まる20文字。' },
-        { id: 'role_arn', label: 'ロールARN', max_length: 200, pattern: 'arn:aws[a-z-]*:iam::[0-9]{12}:role/.+', help: 'AIに使わせるロール。権限はこのロールで絞ります。' },
-        { id: 'region', label: 'リージョン', max_length: 32, pattern: '[a-z]{2}(-[a-z]+)+-[0-9]', help: '例: ap-northeast-1' },
-      ] },
+      },
     api: { base_url: '', documentation_url: AWS_DOCS },
     permissions: [{ id: 'assume-role', name: 'ロールの権限でAWSを利用', connection_method: 'token',
       description: '登録したロールに付けた権限の範囲で、AWSを操作できます。渡すのはロールの一時的な認証情報で、長期のアクセスキーは渡しません。',

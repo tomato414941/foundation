@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { signedRequest } from '../src/providers/aws.mjs';
-import { awsFixture, AWS_SECRET, AWS_FIELDS } from './aws-helper.mjs';
+import { awsFixture, AWS_SECRET, AWS_FIELDS, AWS_KEY_ID } from './aws-helper.mjs';
 import { json, USER_A } from './helpers.mjs';
 
 const credential = (f, id, token, data = {}) => f.request('/v1/accounts/' + id + '/credentials', { method: 'POST', anonymous: true, token, data });
@@ -29,7 +29,7 @@ test('Signature Version 4 matches the AWS documentation example', () => {
 test('AWS import verifies the key with GetCallerIdentity, proves the role once, and stores only the long-lived key encrypted', async t => {
   const f = await awsFixture(t), account = await f.awsAccount();
   const state = await f.request('/api/state'), provider = state.json.providers.find(item => item.id === 'aws');
-  assert.deepEqual(provider.token_setup.fields.map(field => field.id), ['access_key_id', 'role_arn', 'region']);
+  assert.equal(provider.token_setup.fields, undefined, 'one pasted value, no separate fields');
   assert.equal(account.label, '123456789012 / foundation-agent');
   assert.deepEqual(account.aws, { account_id: '123456789012', role_arn: AWS_FIELDS.role_arn, region: 'ap-northeast-1', user_arn: 'arn:aws:iam::123456789012:user/foundation' });
   assert.deepEqual(f.aws.calls.map(call => call.params.Action), ['GetCallerIdentity', 'AssumeRole']);
@@ -48,13 +48,14 @@ test('AWS refuses bad identifiers, wrong secrets, untrusted roles and mismatched
   rejects({ ...AWS_FIELDS, region: 'tokyo' }, /リージョン/);
   rejects(null, /入力/);
   assert.equal((await f.importAws({ token: 'too-short' })).json.error.code, 'invalid_credential');
-  const wrong = await f.importAws({ token: 'x'.repeat(40) });
+  assert.equal((await f.importAws({ token: [AWS_KEY_ID, 'short', AWS_FIELDS.role_arn, 'ap-northeast-1'].join('|') })).json.error.code, 'invalid_credential');
+  const wrong = await f.importAws({ token: [AWS_KEY_ID, 'x'.repeat(40), AWS_FIELDS.role_arn, 'ap-northeast-1'].join('|') });
   assert.equal(wrong.status, 409); assert.equal(wrong.json.error.code, 'reconnect_required');
   f.aws.trusted = false;
   const untrusted = await f.importAws();
   assert.equal(untrusted.status, 409); assert.equal(untrusted.json.error.code, 'role_denied');
   f.aws.trusted = true;
-  const mismatch = await f.importAws({ fields: { ...AWS_FIELDS, role_arn: 'arn:aws:iam::999999999999:role/other' } });
+  const mismatch = await f.importAws({ token: [AWS_KEY_ID, AWS_SECRET, 'arn:aws:iam::999999999999:role/other', 'ap-northeast-1'].join('|') });
   assert.equal(mismatch.json.error.code, 'role_denied');
   assert.equal(f.app.store.accounts(USER_A).length, 0);
   assert.equal((await f.importAws()).status, 200);
@@ -110,7 +111,8 @@ test('The CLI passes --duration through and the child sees only temporary AWS cr
 test('Foundation hands out the CloudFormation stack that creates the user, role and key; a one-tap link appears only with an S3 template URL', async t => {
   const { cloudFormationTemplate, quickCreateUrl, AWS_TEMPLATE_PATH } = await import('../src/providers/aws.mjs');
   const template = cloudFormationTemplate();
-  for (const needle of ['AWS::IAM::User', 'AWS::IAM::Role', 'AWS::IAM::AccessKey', 'sts:AssumeRole', '!GetAtt FoundationUser.Arn', 'SecretAccessKey:', 'RoleArn:', 'MaxSessionDuration: 3600', 'AllowedValues:']) assert.ok(template.includes(needle), needle);
+  for (const needle of ['AWS::IAM::User', 'AWS::IAM::Role', 'AWS::IAM::AccessKey', 'sts:AssumeRole', '!GetAtt FoundationUser.Arn', 'CopyToFoundation:', "!Join ['|'", 'MaxSessionDuration: 3600', 'AllowedValues:']) assert.ok(template.includes(needle), needle);
+  assert.equal((template.match(/^  \w+:\n    Description/gm) || []).length, 1, 'exactly one output to copy');
   assert.ok(!/RoleName|UserName: [a-z]/.test(template), 'unnamed resources need only CAPABILITY_IAM');
   const f = await awsFixture(t);
   const served = await f.request(AWS_TEMPLATE_PATH, { anonymous: true });
