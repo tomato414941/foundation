@@ -100,6 +100,11 @@ export function appleConnection(client) {
     permissions: [{ id: 'api-key', name: 'App Store Connect APIキーの権限でAppleを利用', connection_method: 'token',
       description: 'このキーにAppleで与えた役割の範囲で、アプリID・端末・証明書・プロビジョニングプロファイルの作成や更新ができます。',
       restrictions: '読み取り専用ではありません。Team API キーは単一アプリに限定できません。' }],
+    hints: {
+      invalid_credential: ['.p8 ファイルを「ファイルを選ぶ」で指定したか、中身を BEGIN から END まで全部貼ったか。', 'ファイルが App Store Connect からダウンロードした AuthKey_XXXX.p8 であるか (証明書や他の鍵ではないか)。'],
+      invalid_account: ['Key ID は「統合」画面のキー一覧、Issuer ID は同じ画面の上部、Team ID は Apple Developer の「メンバーシップの詳細」にある。', 'チーム種別は Apple Developer Program の契約に合わせる (個人契約なら「個人」)。'],
+      reconnect_required: ['Key ID と .p8 が同じキーのものか (キーを複数作っていると取り違えやすい)。', 'キーが App Store Connect で失効されていないか。', 'Issuer ID を取り違えていないか。'],
+    },
     matches(mode, account) { return mode === 'api-key' && account?.provider === 'apple' && account.scopes.length === 1 && account.scopes[0] === APPLE_SCOPE; },
   };
 }
@@ -137,6 +142,12 @@ export function awsConnection(client, { templateUrl = '', region = 'ap-northeast
     permissions: [{ id: 'assume-role', name: 'ロールの権限でAWSを利用', connection_method: 'token',
       description: '登録したロールに付けた権限の範囲で、AWSを操作できます。渡すのはロールの一時的な認証情報で、長期のアクセスキーは渡しません。',
       restrictions: '一時認証情報の有効期間はAIの要求とロールの設定で決まります (指定がなければAWSの既定)。ロールの権限はAWS側で管理します。' }],
+    hints: {
+      invalid_credential: ['「出力」タブの CopyToFoundation の値を、先頭から末尾まで全部コピーしたか (途中で切れていないか)。', 'スタックの状態が CREATE_COMPLETE になっているか。作成中は出力がまだ揃っていない。'],
+      reconnect_required: ['スタックを作り直した場合は、新しい出力の値を貼る (古いキーは無効)。', 'IAM でこのアクセスキーを無効化・削除していないか。'],
+      role_denied: ['スタックの作成が最後まで完了しているか (ROLLBACK になっていないか)。', '別のスタックの出力を貼っていないか (ユーザーとロールは同じスタックの組で使う)。'],
+      provider_unavailable: ['しばらく待ってから、同じ値でもう一度登録する。'],
+    },
     matches(mode, account) { return mode === 'assume-role' && account?.provider === 'aws' && account.scopes.length === 1 && account.scopes[0] === AWS_SCOPE; },
   };
 }
@@ -191,7 +202,7 @@ export class ProviderCatalog {
   }
   describe(id) {
     const provider = this.get(id);
-    return { id, name: provider.name, connect_label: provider.connectLabel, available: provider.client.enabled, permissions: provider.permissions, request_fields: provider.requestFields || [],
+    return { id, name: provider.name, connect_label: provider.connectLabel, available: provider.client.enabled, permissions: provider.permissions, request_fields: provider.requestFields || [], hints: provider.hints || {},
       icon: provider.icon || 'network', intro: provider.intro || '', api: provider.api, management_url: provider.managementUrl,
       connection_method: provider.connectionMethod || 'oauth', ...(provider.tokenSetup ? { token_setup: provider.tokenSetup } : {}),
       can_reconnect: provider.canReconnect !== false, can_revoke: provider.canRevoke !== false, credential_type: provider.credentialType || 'oauth2_access_token' };
