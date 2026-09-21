@@ -439,14 +439,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
         }
         const route = path.match(/^\/v1\/accounts\/([a-f0-9-]{36})\/credentials$/);
         if (route && method === 'POST') {
-          await body(req);
+          const input = await body(req);
+          if (input.duration !== undefined && (!Number.isInteger(input.duration) || input.duration < 1 || input.duration > 86400 * 7)) fail(400, 'invalid_duration', '期間は秒数の整数で指定してください。');
           store.requireGrant(agent, route[1]);
           const account = accountFor(agent.owner_id, route[1]);
           rateLimit('issue:' + agent.id, 30);
           const provider = providers.get(account.provider);
-          const credentials = await provider.client.token(store, account);
+          const credentials = await provider.client.token(store, account, false, { duration: input.duration });
           const expoSession = account.provider === 'expo' && credentials.credential_type === 'expo_session';
-          if (!(Number.isFinite(credentials.expires_at) && credentials.expires_at > Date.now()) && !(['api_key', 'private_key'].includes(credentials.credential_type) || expoSession) || credentials.expires_at !== null && !Number.isFinite(credentials.expires_at)) fail(502, 'provider_response', '認証情報の有効期限を確認できませんでした。');
+          if (!(Number.isFinite(credentials.expires_at) && credentials.expires_at > Date.now()) && !(['api_key', 'private_key', 'aws_temporary'].includes(credentials.credential_type) || expoSession) || credentials.expires_at !== null && !Number.isFinite(credentials.expires_at)) fail(502, 'provider_response', '認証情報の有効期限を確認できませんでした。');
           const still = actor(req);
           if (still.generation !== agent.generation) fail(403, 'access_denied', '利用許可が変わりました。');
           store.requireGrant(agent, account.id);
