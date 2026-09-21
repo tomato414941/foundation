@@ -19,7 +19,7 @@ test('Cloudflare verifies a user token and probes one R2 list page without keepi
   const f = await cloudflareFixture(t), account = await f.cloudflareAccount({ fields: { account_id: CLOUDFLARE_ACCOUNT.toUpperCase() } });
   const state = await f.request('/api/state'), provider = state.json.providers.find(item => item.id === 'cloudflare');
   assert.equal(provider.connection_method, 'token');
-  assert.equal(provider.token_setup.url, CLOUDFLARE_TOKENS);
+  assert.equal(provider.token_setup.links[0].href, CLOUDFLARE_TOKENS);
   assert.equal(provider.token_setup.fields[0].id, 'account_id');
   assert.equal(provider.can_revoke, false);
   assert.equal(account.cloudflare_account_id, CLOUDFLARE_ACCOUNT);

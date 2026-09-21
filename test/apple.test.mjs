@@ -29,7 +29,7 @@ test('Apple import signs a JWT with the .p8, confirms it with one read, and show
   const state = await f.request('/api/state'), provider = state.json.providers.find(item => item.id === 'apple');
   assert.equal(provider.connection_method, 'token'); assert.equal(provider.token_setup.multiline, true);
   assert.deepEqual(provider.token_setup.fields.map(field => field.id), ['key_id', 'issuer_id', 'team_id', 'team_type']);
-  assert.equal(provider.token_setup.url, APPLE_KEYS);
+  assert.equal(provider.token_setup.links[0].href, APPLE_KEYS);
   assert.equal(account.label, 'Team TEAM123456 / Key ABC1234567'); assert.equal(provider.name, 'Apple');
   assert.equal(account.credential_type, 'private_key'); assert.equal(account.expires_at, null);
   assert.deepEqual(account.apple, APPLE_FIELDS);

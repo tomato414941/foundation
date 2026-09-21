@@ -39,7 +39,7 @@ export function expoConnection(client) {
   return {
     id: 'expo', name: 'Expo', connectLabel: client.sessionLoginEnabled ? 'Expoにログイン' : 'Expoのトークンを登録', client, icon: 'device', canReconnect: false, canRevoke: false, tokenEnv: credentials => credentials.credential_type === 'expo_session' ? null : 'EXPO_TOKEN',
     intro: client.sessionLoginEnabled ? 'Expoにログインして接続します。' : 'Expoで発行したアクセストークンを登録します。', managementUrl: EXPO_TOKENS, credentialType: 'api_key',
-    connectionMethod: client.sessionLoginEnabled ? 'password' : 'token', tokenSetup: { url: EXPO_TOKENS, label: 'アクセストークン',
+    connectionMethod: client.sessionLoginEnabled ? 'password' : 'token', tokenSetup: { links: [{ label: 'Expoのアクセストークン管理ページを開く', href: EXPO_TOKENS }], label: 'アクセストークン',
       instructions: 'Expoにログインして「Create Token」から、この接続専用のトークンを作成してください。名前は「Foundation」など、用途がわかるものにします。' },
     api: { base_url: EXPO_API, documentation_url: EXPO_DOCS },
     permissions: [...(client.sessionLoginEnabled ? [{ id: 'session', name: 'Expoアカウントの利用', description: 'このAIに、Expoであなたと同じ権限での操作を許可します。ビルド・公開など、課金を伴う操作も含みます。', restrictions: '接続を解除すると、この接続のログインセッションを無効にできます。', connection_method: 'password' }] : []), { id: 'access-token', name: 'トークンの権限でExpoを利用', connection_method: 'token', connect_label: 'Expoのトークンを登録',
@@ -53,7 +53,7 @@ export function cloudflareConnection(client) {
   return {
     id: 'cloudflare', name: 'Cloudflare', connectLabel: 'Cloudflareのトークンを登録', client, icon: 'cloud', canReconnect: false, canRevoke: false,
     intro: 'APIトークンでR2に接続します。', managementUrl: CLOUDFLARE_TOKENS, credentialType: 'api_key', connectionMethod: 'token', tokenEnv: 'CLOUDFLARE_API_TOKEN',
-    tokenSetup: { url: CLOUDFLARE_TOKENS, label: 'APIトークン',
+    tokenSetup: { links: [{ label: 'CloudflareのAPIトークン管理ページを開く', href: CLOUDFLARE_TOKENS }], label: 'APIトークン',
       instructions: '「Create Token」→「Create Custom Token」で、Account → Workers R2 Storage → Read を選び、対象アカウントを1つに限定してください。不要な権限は追加せず、有効期限を設定してください。',
       note: '登録時にR2の一覧へのアクセスを確認します。トークンの権限全体は確認・制限しません。',
       fields: [{ id: 'account_id', label: 'アカウントID', max_length: 32, pattern: '[a-fA-F0-9]{32}', help: 'CloudflareのR2画面にある「Account ID」をコピーしてください。' }] },
@@ -69,7 +69,7 @@ export function supabaseConnection(client) {
   return {
     id: 'supabase', name: 'Supabase', connectLabel: 'Supabaseのトークンを登録', client, icon: 'database', canReconnect: false, canRevoke: false,
     intro: 'Supabaseで発行したアクセストークンを登録します。', managementUrl: SUPABASE_TOKENS, credentialType: 'api_key', connectionMethod: 'token', tokenEnv: 'SUPABASE_ACCESS_TOKEN',
-    tokenSetup: { url: SUPABASE_TOKENS, label: 'アクセストークン', instructions: 'Supabaseにログインして「Generate new token」から、この接続専用のトークンを作成してください。名前は「Foundation」など、用途がわかるものにします。' },
+    tokenSetup: { links: [{ label: 'Supabaseのアクセストークン管理ページを開く', href: SUPABASE_TOKENS }], label: 'アクセストークン', instructions: 'Supabaseにログインして「Generate new token」から、この接続専用のトークンを作成してください。名前は「Foundation」など、用途がわかるものにします。' },
     api: { base_url: SUPABASE_API, documentation_url: SUPABASE_DOCS },
     permissions: [{ id: 'access-token', name: 'アカウントの権限でSupabaseを利用', connection_method: 'token',
       description: 'アカウントがアクセスできるすべての組織とプロジェクトを、Management APIとCLIから操作できます。プロジェクトの作成・削除や設定変更も含みます。',
@@ -87,7 +87,7 @@ export function appleConnection(client) {
     tokenEnv: null,
     tokenFile: credentials => ({ env: 'EXPO_ASC_API_KEY_PATH', filename: 'AuthKey_' + credentials.details.key_id + '.p8' }),
     environment: credentials => ({ EXPO_ASC_KEY_ID: credentials.details.key_id, EXPO_ASC_ISSUER_ID: credentials.details.issuer_id, EXPO_APPLE_TEAM_ID: credentials.details.team_id, EXPO_APPLE_TEAM_TYPE: credentials.details.team_type }),
-    tokenSetup: { url: APPLE_KEYS, label: 'APIキー (.p8 の内容)', multiline: true, link_label: 'App Store Connect の「統合」を開く',
+    tokenSetup: { links: [{ label: 'App Store Connect の「統合」を開く', href: APPLE_KEYS }], label: 'APIキー (.p8 の内容)', multiline: true,
       instructions: '「ユーザーとアクセス」→「統合」→「App Store Connect API」で「チームキー」を作成し、ダウンロードした .p8 ファイルを「ファイルを選ぶ」で指定するか、中身を貼り付けてください。EASの署名準備には Admin の役割が必要です。',
       note: '登録時にAppleへ1回だけ読み取りで問い合わせ、キーが有効か確認します。証明書やプロファイルの作成はEASが行い、Foundationは関与しません。',
       fields: [
@@ -108,15 +108,29 @@ export function appleConnection(client) {
 // role on every exec. Duration is the runtime's request and AWS's decision.
 export function awsConnection(client, { templateUrl = '', region = 'ap-northeast-1' } = {}) {
   const quickCreate = quickCreateUrl(templateUrl, region);
+  const createUrl = `https://${region}.console.aws.amazon.com/cloudformation/home?region=${region}#/stacks/create`;
   return {
     id: 'aws', name: 'AWS', connectLabel: 'AWSのアクセスキーを登録', client, icon: 'cloud', canReconnect: false, canRevoke: false, credentialType: 'api_key', connectionMethod: 'token',
     intro: 'IAMユーザーのアクセスキーと、AIに使わせるロールを登録します。AIには一時的な認証情報だけを渡します。', managementUrl: AWS_KEYS,
     tokenEnv: 'AWS_SECRET_ACCESS_KEY',
     environment: credentials => ({ AWS_ACCESS_KEY_ID: credentials.details.session_access_key_id, AWS_SESSION_TOKEN: credentials.details.session_token, AWS_REGION: credentials.details.region, AWS_DEFAULT_REGION: credentials.details.region }),
-    tokenSetup: { url: quickCreate || AWS_TEMPLATE_PATH, label: 'AWSの「出力」に表示された値 (CopyToFoundation)', step_label: 'AWSにFoundation用のユーザーとロールを作る', link_label: quickCreate ? 'AWS で作成する' : '定義ファイルをダウンロード',
-      instructions: quickCreate
-        ? 'ボタンを押すと、AWSのCloudFormationに「Foundation用のユーザーとロール」を作る画面が開きます。権限の範囲を選び、確認欄にチェックして「スタックの作成」を押してください。完了後、「出力」タブの CopyToFoundation の値を1つコピーして、下に貼り付けます。'
-        : '定義ファイルをダウンロードし、AWSコンソールの CloudFormation で「スタックの作成」→「テンプレートファイルのアップロード」から投入してください。権限の範囲を選び、確認欄にチェックして作成します。完了後、「出力」タブの CopyToFoundation の値を1つコピーして、下に貼り付けます。',
+    tokenSetup: { links: quickCreate ? [{ label: 'AWS で作成する', href: quickCreate }] : [{ label: '定義ファイルをダウンロード', href: AWS_TEMPLATE_PATH }, { label: 'CloudFormation を開く', href: createUrl }], label: 'AWSの「出力」に表示された値 (CopyToFoundation)', step_label: 'AWSにFoundation用のユーザーとロールを作る',
+      instructions: quickCreate ? 'ボタンを押すと、AWSにFoundation用のユーザーとロールを作る画面が開きます。' : '定義ファイルをダウンロードしてから、CloudFormationに投入します。',
+      steps: quickCreate ? [
+        '「AWS で作成する」を押し、AWSにログインする。',
+        '画面下の「AWS CloudFormation によって IAM リソースが作成される場合があることを承認します」にチェックして、「スタックの作成」を押す。',
+        '1分ほど待ち、状態が「CREATE_COMPLETE」になったら「出力」タブを開く。',
+        '「CopyToFoundation」の値をコピーして、下の欄に貼り付ける。',
+      ] : [
+        '「定義ファイルをダウンロード」を押す (foundation-agent.yaml が保存される)。',
+        '「CloudFormation を開く」を押し、AWSにログインする。',
+        '「既存のテンプレートを選択」→「テンプレートファイルのアップロード」→「ファイルの選択」で、保存したファイルを選び、「次へ」。',
+        'スタック名に foundation と入れる。Permissions はそのままで「次へ」、次の画面も「次へ」。',
+        '最後の画面の下にある「AWS CloudFormation によって IAM リソースが作成される場合があることを承認します」にチェックして、「送信」。',
+        '1分ほど待ち、状態が「CREATE_COMPLETE」になったら「出力」タブを開く。',
+        '「CopyToFoundation」の値をコピーして、下の欄に貼り付ける。',
+      ],
+
       note: '作られるのは、ロールを引き受けることしかできないユーザーと、AIが使うロール、そのアクセスキーです。不要になったらスタックを削除すれば全部消えます。登録時に GetCallerIdentity と AssumeRole を1回ずつ試して確認します。',
       },
     api: { base_url: '', documentation_url: AWS_DOCS },
