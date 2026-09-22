@@ -47,7 +47,7 @@ function purposeValue(value = '') {
   return value.trim();
 }
 
-export function createApp({ database = ':memory:', encryptionKey, auth, gmail, integrations, publicOrigin, loginClock }) {
+export function createApp({ database = ':memory:', encryptionKey, auth, gmail, integrations, publicOrigin, loginClock, trustedProxies = [] }) {
   if (!auth || !gmail) throw new Error('Authentication and Gmail providers are required');
   let external;
   if (publicOrigin) {
@@ -55,6 +55,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
     if (external.protocol !== 'https:' || external.username || external.password || external.pathname !== '/' || external.search || external.hash) throw new Error('FOUNDATION_PUBLIC_ORIGIN must be an HTTPS origin without a path');
   }
   const store = new Store(database, encryptionKey);
+  // Behind a reverse proxy every socket has the proxy's address; the client is the last hop the proxy appended.
+  // Only proxies the operator named are believed, otherwise the header is attacker-controlled.
+  const proxies = new Set(trustedProxies);
+  const clientAddress = req => {
+    const socket = req.socket.remoteAddress || '';
+    if (!proxies.has(socket)) return socket;
+    const forwarded = String(req.headers['x-forwarded-for'] || '').split(',').map(part => part.trim()).filter(Boolean);
+    return forwarded.at(-1) || socket;
+  };
   const providers = new ProviderCatalog(integrations || [gmailConnection(gmail)]);
   const requests = new AccessRequests(store, providers);
   const logins = new EmailLogins({ now: loginClock });
@@ -148,6 +157,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
+    if (external) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
     let progressRequestId = null;
     try {
@@ -173,7 +183,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
       if (path === LOGIN_CALLBACK && method === 'GET') {
         let pending, destination = logins.get(loginToken)?.returnTo || '/';
         try {
-          rateLimit('login:' + req.socket.remoteAddress, 30, 600_000);
+          rateLimit('login:' + clientAddress(req), 30, 600_000);
           const code = url.searchParams.get('code');
           if (url.searchParams.has('error') || url.searchParams.getAll('code').length !== 1 || !/^[A-Za-z0-9_-]{20,2048}$/.test(code || '')) fail(400, 'invalid_link', 'ログイン用のリンクを開き直してください。');
           pending = logins.begin(loginToken);
@@ -238,7 +248,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
         const input = await body(req);
         if (typeof input.email !== 'string' || input.email.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(input.email.trim())) fail(400, 'invalid_email', 'メールアドレスを確認してください。');
         const destination = returnPath(input.returnTo);
-        rateLimit('link-send:' + req.socket.remoteAddress, 12, 600_000);
+        rateLimit('link-send:' + clientAddress(req), 12, 600_000);
         const { token, row } = logins.reserve(input.email.trim().toLowerCase());
         row.returnTo = destination;
         try {
@@ -283,7 +293,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           const input = await body(req);
           const name = nameValue(input.name, '依頼元'), purpose = purposeValue(input.purpose);
           providers.permission(input.provider, input.mode);
-          rateLimit('request-create:' + req.socket.remoteAddress, 12, 600_000);
+          rateLimit('request-create:' + clientAddress(req), 12, 600_000);
           return send(201, { request: requests.summary(requests.create(token, { name, purpose, provider: input.provider, mode: input.mode, details: input.details }), origin) });
         }
         if (path.endsWith('/current') && method === 'GET') return send(200, { request: { ...requests.runtimeView(token), verification_uri: origin + '/connect/' + requests.current(token).id } });

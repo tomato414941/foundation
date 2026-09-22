@@ -206,3 +206,19 @@ test('Login attempts are bounded; provider error text is never exposed', async (
   f.gmail.exchangeHandler = () => { throw new Error('secret-token'); };
   assert.equal((await f.callback(await f.start())).headers.get('location'), '/?connection=failed');
 });
+
+test('Behind a named proxy the client address comes from X-Forwarded-For; an unnamed proxy cannot spoof it; HSTS only on the public origin', async t => {
+  const { fixture } = await import('./helpers.mjs');
+  const { randomBytes } = await import('node:crypto');
+  const create = (f, forwarded) => f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: 'fdn_' + randomBytes(32).toString('base64url'), headers: forwarded ? { 'x-forwarded-for': forwarded } : {}, data: { provider: 'gmail', mode: 'readonly', name: 'x', purpose: 'y' } });
+  const trusting = await fixture(t, { login: false, trustedProxies: ['127.0.0.1', '::ffff:127.0.0.1', '::1'] });
+  for (let i = 0; i < 12; i++) assert.equal((await create(trusting, '203.0.113.10, 10.0.0.2')).status, 201);
+  assert.equal((await create(trusting, '203.0.113.10, 10.0.0.2')).status, 429, 'the last hop is the client');
+  assert.equal((await create(trusting, '203.0.113.10, 10.0.0.3')).status, 201, 'another client is not affected');
+  const plain = await fixture(t, { login: false });
+  for (let i = 0; i < 12; i++) assert.equal((await create(plain, '10.0.0.' + i)).status, 201);
+  assert.equal((await create(plain, '10.0.0.99')).status, 429, 'without a trusted proxy the header is ignored');
+  assert.equal((await plain.request('/health', { anonymous: true })).headers.get('strict-transport-security'), null);
+  const external = await fixture(t, { login: false, publicOrigin: 'https://foundation.example.test' });
+  assert.equal((await external.request('/health', { anonymous: true, headers: { host: 'foundation.example.test' } })).headers.get('strict-transport-security'), 'max-age=31536000; includeSubDomains');
+});

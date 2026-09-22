@@ -1,0 +1,239 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: A host for Foundation - one small Arm instance in its own network, a KMS key that wraps the data key, a private bucket for backups, and an instance role limited to those two. Administration goes through SSM and Tailscale, never SSH keys.
+Parameters:
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Amazon Linux 2023 (arm64), resolved to the current image at stack creation.
+  InstanceType:
+    Type: String
+    Default: t4g.micro
+    AllowedValues: [t4g.nano, t4g.micro, t4g.small]
+  Repository:
+    Type: String
+    Default: https://github.com/tomato414941/foundation.git
+    Description: Where the Foundation code is cloned from.
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: foundation }]
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags: [{ Key: Name, Value: foundation }]
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  SubnetRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet
+      RouteTableId: !Ref RouteTable
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Foundation host - HTTPS and HTTP for the reverse proxy only. No SSH.
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
+      Tags: [{ Key: Name, Value: foundation }]
+  DataKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Wraps the key that seals every credential Foundation stores.
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AccountAdministration
+            Effect: Allow
+            Principal: { AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root' }
+            Action: 'kms:*'
+            Resource: '*'
+  DataKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/foundation
+      TargetKeyId: !Ref DataKey
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: aws:kms, KMSMasterKeyID: !GetAtt DataKey.Arn }
+      PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true }
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - { Id: expire-old-backups, Status: Enabled, ExpirationInDays: 90, NoncurrentVersionExpiration: { NoncurrentDays: 30 } }
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: What the Foundation host itself may do - use its KMS key, write its backups, and be managed through SSM.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: foundation-host
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [kms:Encrypt, kms:Decrypt, kms:DescribeKey, kms:GenerateDataKey]
+                Resource: !GetAtt DataKey.Arn
+              - Effect: Allow
+                Action: [s3:PutObject, s3:GetObject, s3:ListBucket]
+                Resource: [!GetAtt BackupBucket.Arn, !Sub '${BackupBucket.Arn}/*']
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+  Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: DefaultRoute
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref Subnet
+      SecurityGroupIds: [!Ref SecurityGroup]
+      IamInstanceProfile: !Ref InstanceProfile
+      MetadataOptions: { HttpTokens: required, HttpEndpoint: enabled }
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 20, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true }
+      Tags: [{ Key: Name, Value: foundation }]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          exec > >(tee /var/log/foundation-bootstrap.log) 2>&1
+          dnf -y update
+          dnf -y install git sqlite tar
+          curl -fsSL https://rpm.nodesource.com/setup_24.x | bash -
+          dnf -y install nodejs
+          curl -fsSL https://pkgs.tailscale.com/stable/amazon-linux/2023/tailscale.repo -o /etc/yum.repos.d/tailscale.repo
+          dnf -y install tailscale
+          systemctl enable --now tailscaled
+          CADDY=$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest | grep -o '"tag_name": *"v[^"]*"' | grep -o 'v[0-9][^"]*' | head -1)
+          curl -fsSL "https://github.com/caddyserver/caddy/releases/download/${!CADDY}/caddy_${!CADDY#v}_linux_arm64.tar.gz" | tar -xz -C /usr/local/bin caddy
+          useradd --system --home /opt/foundation --shell /sbin/nologin foundation || true
+          mkdir -p /opt/foundation /var/lib/foundation /etc/foundation /etc/caddy /var/lib/caddy
+          git clone --depth 1 ${Repository} /opt/foundation/app
+          (cd /opt/foundation/app && npm ci --omit=dev)
+          cat > /etc/foundation/env <<'ENV'
+          FOUNDATION_DATA_DIR=/var/lib/foundation
+          FOUNDATION_PORT=3417
+          FOUNDATION_BIND=127.0.0.1
+          FOUNDATION_TRUSTED_PROXIES=127.0.0.1,::1,::ffff:127.0.0.1
+          ENV
+          echo "FOUNDATION_KMS_KEY_ID=${DataKey.Arn}" >> /etc/foundation/env
+          echo "FOUNDATION_AWS_REGION=${AWS::Region}" >> /etc/foundation/env
+          echo "FOUNDATION_BACKUP_BUCKET=${BackupBucket}" >> /etc/foundation/env
+          chown -R foundation:foundation /opt/foundation /var/lib/foundation /etc/foundation
+          chmod 700 /var/lib/foundation && chmod 600 /etc/foundation/env
+          cat > /etc/systemd/system/foundation.service <<'UNIT'
+          [Unit]
+          Description=Foundation
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          User=foundation
+          Group=foundation
+          WorkingDirectory=/opt/foundation/app
+          EnvironmentFile=/etc/foundation/env
+          ExecStart=/usr/bin/node src/server.mjs
+          Restart=always
+          RestartSec=3
+          LimitCORE=0
+          NoNewPrivileges=true
+          PrivateTmp=true
+          ProtectSystem=strict
+          ProtectHome=true
+          ReadWritePaths=/var/lib/foundation
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          cat > /usr/local/bin/foundation-backup <<'SCRIPT'
+          #!/bin/bash
+          set -euo pipefail
+          . /etc/foundation/env
+          tmp=$(mktemp) && sqlite3 /var/lib/foundation/state.sqlite ".backup $tmp"
+          aws s3 cp "$tmp" "s3://$FOUNDATION_BACKUP_BUCKET/state-$(date -u +%Y%m%dT%H%M%SZ).sqlite" --only-show-errors
+          rm -f "$tmp"
+          SCRIPT
+          chmod 755 /usr/local/bin/foundation-backup
+          cat > /etc/systemd/system/foundation-backup.service <<'UNIT'
+          [Unit]
+          Description=Foundation database backup to S3
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/foundation-backup
+          UNIT
+          cat > /etc/systemd/system/foundation-backup.timer <<'UNIT'
+          [Unit]
+          Description=Daily Foundation backup
+          [Timer]
+          OnCalendar=daily
+          RandomizedDelaySec=1h
+          Persistent=true
+          [Install]
+          WantedBy=timers.target
+          UNIT
+          cat > /etc/systemd/system/caddy.service <<'UNIT'
+          [Unit]
+          Description=Caddy reverse proxy
+          After=network-online.target
+          [Service]
+          ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
+          Restart=always
+          Environment=XDG_DATA_HOME=/var/lib
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          systemctl daemon-reload
+          systemctl enable foundation-backup.timer
+          echo "bootstrap complete"
+  Address:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref Instance
+      Tags: [{ Key: Name, Value: foundation }]
+Outputs:
+  InstanceId:
+    Value: !Ref Instance
+  PublicIp:
+    Value: !Ref Address
+  KmsKeyArn:
+    Value: !GetAtt DataKey.Arn
+  BackupBucket:
+    Value: !Ref BackupBucket
