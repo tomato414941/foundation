@@ -6,6 +6,7 @@ import { EXPO_API, EXPO_DOCS, EXPO_TOKENS } from './services/expo.mjs';
 import { SUPABASE_API, SUPABASE_DOCS, SUPABASE_TOKENS } from './services/supabase.mjs';
 import { APPLE_API, APPLE_DOCS, APPLE_KEYS } from './services/apple.mjs';
 import { CLOUDFLARE_API, CLOUDFLARE_DOCS, CLOUDFLARE_TOKENS } from './services/cloudflare.mjs';
+import { GITHUB_API, GITHUB_DOCS, GITHUB_SETTINGS } from './services/github.mjs';
 
 // The unit Foundation holds is a credential: one thing the owner handed over.
 // An adapter is how a credential of one kind is handled over its whole life:
@@ -22,6 +23,7 @@ const OPENROUTER = service('OpenRouter', 'network', 'https://openrouter.ai/keys'
 const EXPO = service('Expo', 'device', EXPO_TOKENS, { base_url: EXPO_API, documentation_url: EXPO_DOCS });
 const SUPABASE = service('Supabase', 'database', SUPABASE_TOKENS, { base_url: SUPABASE_API, documentation_url: SUPABASE_DOCS });
 const CLOUDFLARE = service('Cloudflare', 'cloud', CLOUDFLARE_TOKENS, { base_url: CLOUDFLARE_API, documentation_url: CLOUDFLARE_DOCS });
+const GITHUB = service('GitHub', 'code', GITHUB_SETTINGS, { base_url: GITHUB_API, documentation_url: GITHUB_DOCS });
 const APPLE = service('Apple', 'key', APPLE_KEYS, { base_url: APPLE_API, documentation_url: APPLE_DOCS });
 
 const GMAIL_VARIABLES = ['GOOGLE_OAUTH_ACCESS_TOKEN', 'GMAIL_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT'];
@@ -51,6 +53,17 @@ export function openrouterOauth(client) {
     intro: 'OpenRouterでログインし、Foundation用のキーを作成します。',
     access: { name: 'APIキーの利用', description: 'このキーの権限でOpenRouter APIを利用できます。モデルの実行は課金を伴う場合があります。', restrictions: '利用上限と有効期限はOpenRouter側の設定が適用されます。読み取り専用のキーではありません。' },
     variables: ['OPENROUTER_API_KEY'], deliver: secret => ({ environment: { OPENROUTER_API_KEY: secret.access_token } }),
+  };
+}
+
+// gh reads GH_TOKEN; many other tools read GITHUB_TOKEN. git reaches GitHub through gh (gh auth setup-git).
+export function githubOauth(client) {
+  return {
+    id: 'github.oauth', service: GITHUB, label: 'GitHubで接続', register: 'oauth', client,
+    intro: 'GitHubでログインし、リポジトリへのアクセスを許可します。',
+    access: { name: 'リポジトリの読み書き', description: 'あなたがアクセスできるすべてのリポジトリ (非公開を含む) の読み書き、Actions のワークフローの変更、Gist の作成、組織の閲覧', restrictions: 'リポジトリや組織の削除・管理者設定の変更は許可しません。登録を解除すると、GitHub側の許可も取り消します。' },
+    ai: 'gh と多くのツールがそのまま使える。git の push/pull は gh 経由の認証で行う (exec の中で gh auth setup-git してから git を使う)。スコープは repo, workflow, read:org, gist。',
+    variables: ['GH_TOKEN', 'GITHUB_TOKEN'], deliver: secret => ({ environment: { GH_TOKEN: secret.access_token, GITHUB_TOKEN: secret.access_token } }),
   };
 }
 
