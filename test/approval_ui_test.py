@@ -48,15 +48,15 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     callback = context.new_page()
     callback.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
-    expect(callback.get_by_role('heading', name='利用を許可しますか？', exact=True)).to_be_visible()
+    expect(callback.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
     assert callback.url == request['verification_uri']
     callback.close()
     page.bring_to_front()
     page.evaluate('window.dispatchEvent(new Event("focus"))')
-    expect(page.get_by_role('heading', name='利用を許可しますか？', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
     expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
     assert request['confirmation_code'] not in page.content()
-    expect(page.get_by_role('button', name='利用を許可', exact=True)).to_be_disabled()
+    expect(page.get_by_role('button', name='利用を許可', exact=True)).to_have_count(0)
     review(page)
     page.screenshot(path=str(shots / 'request-before-connection.png'), full_page=True)
     authorization = {'deny': True}
@@ -76,7 +76,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     cli('accounts', success=False)
     authorization['deny'] = False
     page.get_by_role('button', name='Googleで接続', exact=True).click()
-    expect(page.get_by_role('radio', name='Gmail personal@example.test', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='利用を許可しますか？', exact=True)).to_be_visible()
+    expect(page.get_by_text('personal@example.test', exact=True)).to_be_visible()
+    expect(page.get_by_role('radio')).to_have_count(0)
     assert page.url == request['verification_uri']
     cli('accounts', success=False)
     expect(page.get_by_role('button', name='利用を許可', exact=True)).to_be_disabled()
@@ -109,16 +111,16 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
 
     request = cli('connect', '--name', 'dev-us のAI')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_role('radio')).to_have_count(1)
+    expect(page.get_by_role('heading', name='利用を許可しますか？', exact=True)).to_be_visible()
     page.get_by_role('button', name='許可しない', exact=True).click()
     expect(page.get_by_role('heading', name='利用を許可しませんでした', exact=True)).to_be_visible()
     cli('accounts', success=False)
 
     request = cli('connect', '--mode', 'metadata')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_role('radio')).to_have_count(0)
+    expect(page.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
     page.get_by_role('button', name='Googleで接続', exact=True).click()
-    expect(page.get_by_role('radio', name='Gmail headers@example.test', exact=True)).to_be_visible()
+    expect(page.get_by_text('headers@example.test', exact=True)).to_be_visible()
     expect(page.get_by_text('件名・差出人などの読み取り', exact=False)).to_be_visible()
     expect(page.get_by_text('本文の取得・送信・変更・削除は許可しません。', exact=True)).to_be_visible()
     review(page)

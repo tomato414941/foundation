@@ -27,7 +27,7 @@ export function guide(providers) {
   if (ids.includes('apikey')) lines.push('   例: foundation connect --service Anthropic --site https://console.anthropic.com/settings/keys --env ANTHROPIC_API_KEY --purpose "Claude API で要約を生成する"');
   if (ids.includes('cloudflare')) lines.push('   Cloudflare はユーザーAPIトークン。R2のS3互換API用Access Key/Secret Keyではない。バケット一覧は公式APIの /accounts/<cloudflare_account_id>/r2/buckets (ページ送りは result_info.cursor) を使う。',
     '   Foundationはトークン全体の権限を狭めない。登録したアカウントと依頼された用途にだけ使う。');
-  lines.push('   --guide "<案内>" に、利用者が承認ページで何をすればよいかを書く (2000 文字まで、改行可)。承認ページに「依頼元のAIからの案内」として出る。',
+  lines.push('   --guide "<案内>" に、利用者がアカウントを登録するときの手順を書く (2000 文字まで、改行可)。登録画面に「依頼元のAIからの案内」として出る。許可の画面には出ないので、確認コードや許可の押し方は書かなくてよい。',
     '   --valid <分> で依頼の有効期間を決める (既定 30、最大 1440)。他社の画面での作業が長くなりそうなら延ばす。',
     '   Foundation 自身は手順書を持たない。他社の画面の操作 (どこを押すか) は、その時点で自分で調べて書く。Foundation が知っている事実は次の通り:',
     '     AWS: 定義ファイルのスタックが IAM ユーザー・ロール・アクセスキーを作り、完了すると「出力」に CopyToFoundation が 1 つ出る。利用者はその 1 行を貼る。',

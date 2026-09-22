@@ -46,12 +46,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.get_by_role('button', name='ログインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     page.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
-    expect(page.get_by_role('heading', name='利用を許可しますか？', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='OpenRouterで接続', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']
-    expect(page.get_by_text('OpenRouterへのアクセス', exact=True)).to_be_visible()
-    expect(page.get_by_text('APIキーの利用', exact=False)).to_be_visible()
-    expect(page.get_by_text('利用上限と有効期限はOpenRouter側の設定が適用されます。', exact=False)).to_be_visible()
-    expect(page.get_by_role('button', name='利用を許可', exact=True)).to_be_disabled()
+    expect(page.get_by_role('button', name='利用を許可', exact=True)).to_have_count(0)
     review(page)
     authorization = {'deny': True, 'code': 'personal'}
 
@@ -70,7 +67,12 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     cli('accounts', success=False)
     authorization['deny'] = False
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
-    expect(page.get_by_role('radio')).to_have_count(1)
+    expect(page.get_by_role('heading', name='利用を許可しますか？', exact=True)).to_be_visible()
+    expect(page.get_by_text('OpenRouterへのアクセス', exact=True)).to_be_visible()
+    expect(page.get_by_text('APIキーの利用', exact=False)).to_be_visible()
+    expect(page.get_by_text('利用上限と有効期限はOpenRouter側の設定が適用されます。', exact=False)).to_be_visible()
+    expect(page.get_by_role('button', name='利用を許可', exact=True)).to_be_disabled()
+    expect(page.get_by_role('radio')).to_have_count(0)
     expect(page.get_by_text('期限の指定なし', exact=True)).to_be_visible()
     expect(page.get_by_text('$0.00 · リセットなし', exact=True)).to_be_visible()
     cli('accounts', success=False)
