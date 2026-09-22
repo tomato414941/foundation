@@ -105,9 +105,9 @@ export class Store {
       return id;
     });
   }
-  updateCredential(ownerId, id, name) {
+  updateCredential(ownerId, id, name, service) {
     if (!this.credential(ownerId, id)) fail(404, 'not_found', '認証情報が見つかりません。');
-    this.db.prepare('UPDATE credentials SET name=?, updated_at=? WHERE owner_id=? AND id=?').run(name, now(), ownerId, id);
+    this.db.prepare('UPDATE credentials SET name=?, service=?, updated_at=? WHERE owner_id=? AND id=?').run(name, service, now(), ownerId, id);
   }
   saveSecret(credential, secret) {
     const result = this.db.prepare("UPDATE credentials SET secret=? WHERE owner_id=? AND id=? AND generation=? AND status='connected'").run(this.vault.seal(secret, binding(credential)), credential.owner_id, credential.id, credential.generation);

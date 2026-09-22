@@ -131,16 +131,6 @@ async function refresh() {
   if (!state.credentials.some((credential) => credential.id === selected)) selected = null;
   render();
 }
-// A credential's group is where it lives: the registrable domain of its management page. A built-in service names
-// its group; a declared one keeps the name it was declared with.
-const siteOf = value => {
-  try {
-    const labels = new URL(value).hostname.split('.');
-    const size = labels.length >= 3 && labels.at(-1).length === 2 && /^(ac|co|com|ed|go|gr|lg|ne|net|or|org)$/.test(labels.at(-2)) ? 3 : 2;
-    return labels.slice(-size).join('.');
-  } catch { return ''; }
-};
-const whereOf = credential => siteOf(credential.management_url || adapterOf(credential)?.service?.management_url) || credential.service;
 // Unknown for credentials registered before this was recorded; then only the date is shown.
 const registeredBy = credential => credential.requested_by ? credential.requested_by + 'の依頼' : credential.requested_by === '' ? '管理画面から' : '';
 const cameFrom = credential => [new Date(credential.created_at).toLocaleDateString('ja-JP') + ' 登録', registeredBy(credential)].filter(Boolean).join(' · ');
@@ -150,23 +140,25 @@ function details(credential) {
   return `<div class="credential-heading"><span class="status ${credential.status === 'connected' ? '' : 'warning'}">${credential.status === 'connected' ? icon('check') : ''}${statusName(credential)}</span><h3>${esc(credential.name)}</h3>${otherLabel(credential) ? `<p class="credential-email">${esc(otherLabel(credential))}</p>` : ''}<p class="credential-meta">${esc(cameFrom(credential))}</p></div>
     <dl class="credential-facts">${adapter.kind ? `<div><dt>種類</dt><dd>${esc(adapter.kind)}</dd></div>` : ''}${Array.isArray(credential.organizations) ? `<div><dt>組織</dt><dd>${credential.organizations.length ? credential.organizations.map(item => esc(item.name)).join('、') : 'なし'}</dd></div>` : ''}<div><dt>渡す変数</dt><dd>${credential.variables?.length ? credential.variables.map(name => `<code>${esc(name)}</code>`).join(' ') : 'Expo のログイン状態として渡します'}</dd></div></dl>${keyFacts(credential)}
     <div class="credential-actions">${adapter.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(credential.id)}" ${credential.status === 'disconnecting' || !adapter.available ? 'disabled' : ''}>登録し直す</button>` : ''}<button class="text-button" data-action="edit-credential" data-id="${esc(credential.id)}">編集</button></div>
-    <details class="credential-reference"><summary>識別情報</summary><dl><dt>認証情報ID</dt><dd><code>${esc(credential.id)}</code></dd></dl>${adapter.service?.api.documentation_url ? `<a href="${esc(adapter.service.api.documentation_url)}" target="_blank" rel="noopener noreferrer">${esc(name)} APIの公式ドキュメント ↗</a>` : ''}</details>
+    <details class="credential-reference"><summary>識別情報</summary><dl>${credential.fingerprint ? `<dt>値の指紋</dt><dd><code>${esc(credential.fingerprint)}</code></dd>` : ''}<dt>認証情報ID</dt><dd><code>${esc(credential.id)}</code></dd></dl>${adapter.service?.api.documentation_url ? `<a href="${esc(adapter.service.api.documentation_url)}" target="_blank" rel="noopener noreferrer">${esc(name)} APIの公式ドキュメント ↗</a>` : ''}</details>
     <div class="credential-footer">${credential.credential_type === 'expo_session' ? '' : `<a href="${esc(credential.management_url || adapter.service?.management_url)}" target="_blank" rel="noopener noreferrer">${esc(name)}の${adapter.declared ? 'キー管理ページ' : '管理ページ'} ↗</a>`}<button class="text-button danger" data-action="remove-credential" data-id="${esc(credential.id)}">${credential.status === 'disconnecting' ? '解除を再試行' : '登録を解除'}</button></div>`;
 }
-// Registered services first, then the ones that can be registered, each in name order. Credentials keep the
-// order they were registered, so nothing moves when one is used or checked.
-const adaptersOf = service => state.adapters.filter(adapter => adapter.service?.name === service.name && !adapter.declared);
+// A credential belongs to the service its owner named. Registered services come first, then the ones that can be
+// registered from here, each in name order. Credentials keep the order they were registered.
+const adaptersOf = name => state.adapters.filter(adapter => adapter.service?.name === name && !adapter.declared);
 function credentialGroups() {
   const byName = (a, b) => a.name.localeCompare(b.name, 'ja', { sensitivity: 'base' });
-  const builtIn = new Map(state.adapters.filter(adapter => adapter.service && !adapter.declared).map(adapter => [siteOf(adapter.service.management_url), adapter.service]));
-  const groups = new Map();
+  const groups = new Map(), open = [];
   for (const credential of state.credentials) {
-    const key = whereOf(credential), service = builtIn.get(key);
-    if (!groups.has(key)) groups.set(key, { name: service?.name || credential.service, icon: service?.icon || 'key', service, adapters: service ? adaptersOf(service) : [], credentials: [] });
-    groups.get(key).credentials.push(credential);
+    const name = credential.service;
+    if (!groups.has(name)) groups.set(name, { name, icon: adaptersOf(name)[0]?.service.icon || 'key', adapters: adaptersOf(name), credentials: [] });
+    groups.get(name).credentials.push(credential);
   }
-  const open = [];
-  for (const [key, service] of builtIn) if (!groups.has(key) && !open.some(group => group.name === service.name) && state.adapters.some(adapter => adapter.service?.name === service.name && adapter.available && !adapter.declared)) open.push({ name: service.name, icon: service.icon, service, adapters: adaptersOf(service), credentials: [] });
+  for (const adapter of state.adapters) {
+    const service = adapter.service;
+    if (!service || adapter.declared || !adapter.available || groups.has(service.name) || open.some(group => group.name === service.name)) continue;
+    open.push({ name: service.name, icon: service.icon, adapters: adaptersOf(service.name), credentials: [] });
+  }
   return [...[...groups.values()].sort(byName), ...open.sort(byName)];
 }
 const groupId = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'service-' + [...name].map(char => char.codePointAt(0).toString(36)).join('');
@@ -184,6 +176,7 @@ function render() {
   const byId = new Map(state.credentials.map((item) => [item.id, item]));
   app.innerHTML = `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main><header class="page-heading"><h1>認証情報</h1></header>
     ${credentialGroups().map(serviceSection).join('')}
+    ${state.adapters.some(adapter => adapter.declared && adapter.available) ? `<section class="resource-section" aria-labelledby="other-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="other-title">ほかのサービス</h2><p>一覧にないサービスのキーを預けます</p></div></div><button class="button secondary" data-action="add-generic">${icon('plus')} キーを登録</button></div></section>` : ''}
     <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">AIのアクセスキー</h2></div></div><button class="button secondary" data-action="add-agent">${icon('plus')} アクセスキーを追加</button></div>
     ${state.agents.length ? `<div class="agent-list">${state.agents.map((agent) => `<article class="agent-row"><div class="agent-name"><h3>${esc(agent.name)}</h3><p>${agent.last_used_at ? '最終利用 ' + esc(new Date(agent.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(agent.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-agent" data-id="${esc(agent.id)}">名前を変更</button><button class="text-button danger" data-action="remove-agent" data-id="${esc(agent.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section></main></div>`;
 }
@@ -276,6 +269,8 @@ function bindForm(handler, container = dialog) {
     catch (error) { if (form.isConnected) { form.querySelector('.form-error').textContent = error.message; button.disabled = false; } }
   });
 }
+const serviceNames = () => [...new Set([...state.credentials.map(item => item.service), ...state.adapters.filter(item => item.service && !item.declared).map(item => item.service.name)])].sort((a, b) => a.localeCompare(b, 'ja', { sensitivity: 'base' }));
+const serviceField = (value = '') => `<label for="credential-service">サービス</label><input id="credential-service" name="service" list="service-names" required maxlength="40" autocomplete="off" value="${esc(value)}" placeholder="GitHub など"><datalist id="service-names">${serviceNames().map(name => `<option value="${esc(name)}"></option>`).join('')}</datalist><p class="permission-note">同じサービス名の認証情報が、ひとつの枠にまとまります。あとから変えられます。</p>`;
 // Registering: the name may be left empty and is then taken from what was verified. Editing: the name stays set.
 function credentialFields(credential, editing = false) {
   return `<label for="credential-name">表示名${editing ? '' : ' <span class="optional">任意</span>'}</label><input id="credential-name" name="name" ${editing ? 'required' : 'placeholder="空欄なら確かめた内容から付けます"'} maxlength="80" autocomplete="off" value="${esc(credential?.name || '')}">`;
@@ -285,6 +280,30 @@ function chooseAdapter(serviceName) {
   const options = state.adapters.filter(adapter => adapter.service?.name === serviceName && adapter.available && !adapter.declared);
   if (options.length === 1) { connect(null, options[0].id); return; }
   openDialog(`<h2 id="dialog-title">${esc(serviceName)}を登録</h2><p>登録の方法を選んでください。</p>${options.map(adapter => `<button class="button secondary full setup-link" data-action="add-adapter" data-adapter="${esc(adapter.id)}"><span>${esc(adapter.access.name)}</span></button>`).join('')}`);
+}
+// The owner declaring a key themselves: which service, where it is made, and each value with the name it is delivered under.
+function connectGeneric() {
+  const adapter = state.adapters.find(item => item.id === 'generic');
+  if (!adapter?.available) return;
+  const field = index => `<div class="declared-field"><label for="declared-name-${index}">変数名</label><input id="declared-name-${index}" name="name${index}" maxlength="64" required autocomplete="off" spellcheck="false" autocapitalize="characters" pattern="[A-Z][A-Z0-9_]*" placeholder="ANTHROPIC_API_KEY"><label for="declared-value-${index}">値</label><input id="declared-value-${index}" name="value${index}" type="password" maxlength="4096" required autocomplete="off"></div>`;
+  openDialog(`<h2 id="dialog-title">ほかのサービスのキーを登録</h2><p>${esc(adapter.intro)}</p><form autocomplete="off">
+    ${serviceField()}
+    <label for="declared-site">キーの作成ページ</label><input id="declared-site" name="site" type="url" required maxlength="300" autocomplete="off" spellcheck="false" placeholder="https://console.anthropic.com/settings/keys">
+    <div class="declared-fields">${field(0)}</div><button class="text-button" type="button" data-action="add-declared-field">値を追加</button>
+    <p class="permission-note">${esc(adapter.access.description)}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>`);
+  const fields = dialog.querySelector('.declared-fields');
+  dialog.querySelector('[data-action="add-declared-field"]').addEventListener('click', () => { if (fields.children.length < 8) fields.insertAdjacentHTML('beforeend', field(fields.children.length)); });
+  bindForm(async (form) => {
+    const declared = [], values = {};
+    for (let index = 0; index < 8; index++) {
+      const name = (form.get('name' + index) || '').trim();
+      if (name) { declared.push({ id: name }); values[name] = form.get('value' + index); }
+    }
+    const service = (form.get('service') || '').trim();
+    const result = await api('/api/adapters/generic/connect', { method: 'POST', data: { service, details: { service, site: (form.get('site') || '').trim(), fields: declared }, values } });
+    for (const input of dialog.querySelectorAll('input[type="password"]')) input.value = '';
+    selected = result.credential_id; closeDialog(); await refresh(); toast('認証情報を登録しました。');
+  });
 }
 function connect(credential, adapterId = credential?.adapter) {
   const adapter = state.adapters.find(item => item.id === adapterId);
@@ -391,8 +410,8 @@ function bindSchemaForm(container, form, submit) {
   }, container);
 }
 function editCredential(credential) {
-  openDialog(`<h2 id="dialog-title">名前を変更</h2><p>${esc(credential.service)}</p><form>${credentialFields(credential, true)}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
-  bindForm(async (form) => { await api(`/api/credentials/${credential.id}`, { method: 'PATCH', data: { name: form.get('name') } }); closeDialog(); await refresh(); toast('名前を変更しました。'); });
+  openDialog(`<h2 id="dialog-title">認証情報を編集</h2><form>${credentialFields(credential, true)}${serviceField(credential.service)}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
+  bindForm(async (form) => { await api(`/api/credentials/${credential.id}`, { method: 'PATCH', data: { name: form.get('name'), service: form.get('service') } }); closeDialog(); await refresh(); toast('保存しました。'); });
 }
 function editAgent() {
   openDialog(`<h2 id="dialog-title">アクセスキーを追加</h2><p>AIの実行環境に置くキーを発行します。承認済みのキーと同じく、預けた認証情報をすべて使えます。</p><form><label for="agent-name">アクセスキーの名前</label><input id="agent-name" name="name" placeholder="dev-us など" required maxlength="80" autocomplete="off"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">アクセスキーを発行</button></form>`);
@@ -441,6 +460,7 @@ document.addEventListener('click', async (event) => {
       await refresh();
     }
     if (action === 'add-credential') chooseAdapter(target.dataset.service);
+    if (action === 'add-generic') connectGeneric();
     if (action === 'add-adapter') connect(null, target.dataset.adapter);
     if (action === 'select-credential') { selected = id; render(); }
     if (action === 'reconnect') connect(state.credentials.find((a) => a.id === id));
