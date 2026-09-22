@@ -229,6 +229,7 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 .approval-credential .verification-result { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: #fff; }
 .verification-result { margin: 18px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; overflow-wrap: anywhere; }
 .verification-result summary { cursor: pointer; font-weight: 600; }
+.verification-heading { font-size: 14px; font-weight: 600; margin: 0; }
 .verification-result ul { list-style: none; padding: 0; margin: 14px 0 0; }
 .verification-result li + li { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
 .verification-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-weight: 600; }
