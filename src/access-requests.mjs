@@ -2,7 +2,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { digest } from './store.mjs';
 import { fail } from './errors.mjs';
 
-export const REQUEST_TTL = 30 * 60_000;
+export const REQUEST_TTL = 30 * 60_000, MAX_REQUEST_TTL = 24 * 60 * 60_000;
 export const REQUEST_ID = /^[A-Za-z0-9_-]{43}$/;
 export const RUNTIME_KEY = /^fdn_[A-Za-z0-9_-]{43}$/;
 export const CODE_ATTEMPTS = 5;
@@ -34,8 +34,10 @@ export class AccessRequests {
     return row;
   }
   // The runtime writes the guidance the owner reads on the approval page; Foundation only frames it as the AI's words.
-  create(token, { name, provider, purpose, mode, details, guidance = '' }) {
+  // The runtime chooses how long the link stays open (default 30 minutes, at most a day): a phone user may need time for the other service.
+  create(token, { name, provider, purpose, mode, details, guidance = '', validMinutes = 30 }) {
     this.providers.permission(provider, mode);
+    if (!Number.isInteger(validMinutes) || validMinutes < 1 || validMinutes * 60_000 > MAX_REQUEST_TTL) fail(400, 'invalid_validity', '有効期間は1〜1440分で指定してください。');
     if (typeof guidance !== 'string' || guidance.length > 2000 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(guidance)) fail(400, 'invalid_guidance', '案内は2000文字以内で入力してください。');
     guidance = guidance.replace(/\r\n?/g, '\n').trim();
     const encoded = JSON.stringify(this.providers.details(provider, details));
@@ -45,14 +47,14 @@ export class AccessRequests {
     const agent = this.store.authenticate(token), requesterName = agent?.name || name;
     const previous = this.db.prepare("SELECT * FROM access_requests WHERE token_hash=? AND status='pending' AND expires_at>? ORDER BY created_at DESC LIMIT 1").get(hash, Date.now());
     if (previous) {
-      if (previous.requester_name !== requesterName || previous.provider !== provider || previous.purpose !== purpose || previous.mode !== mode || previous.details !== encoded || previous.guidance !== guidance) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
+      if (previous.requester_name !== requesterName || previous.provider !== provider || previous.purpose !== purpose || previous.mode !== mode || previous.details !== encoded || previous.guidance !== guidance || previous.expires_at - previous.created_at !== validMinutes * 60_000) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
       return previous;
     }
     if (this.db.prepare('SELECT count(*) n FROM access_requests').get().n >= 1000) fail(429, 'request_limit', '接続依頼が混み合っています。しばらく待ってからお試しください。');
     const id = randomBytes(32).toString('base64url'), code = randomBytes(4).toString('hex').toUpperCase();
     const now = Date.now();
     this.db.prepare('INSERT INTO access_requests (id,token_hash,requester_name,provider,purpose,mode,details,guidance,confirmation_code,owner_id,agent_id,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
-      .run(id, hash, requesterName, provider, purpose, mode, encoded, guidance, code.slice(0, 4) + '-' + code.slice(4), agent?.owner_id || null, agent?.id || null, now, now + REQUEST_TTL);
+      .run(id, hash, requesterName, provider, purpose, mode, encoded, guidance, code.slice(0, 4) + '-' + code.slice(4), agent?.owner_id || null, agent?.id || null, now, now + validMinutes * 60_000);
     return this.get(id);
   }
   details(row) { try { return JSON.parse(row.details || '{}'); } catch { return {}; } }

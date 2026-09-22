@@ -308,6 +308,16 @@ test('A runtime can read its own request raw: what it asked for, and what happen
   assert.equal((await view()).id, next.row.id);
 });
 
+test('The runtime chooses how long the link stays open, within a day', async t => {
+  const f = await fixture(t), token = key();
+  const { row } = await create(f, token, { valid_minutes: 120 });
+  assert.equal(row.expires_at - row.created_at, 120 * 60_000);
+  assert.equal((await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { ...input, valid_minutes: 30 } })).status, 409, 'a different validity is a different request');
+  const plain = (await create(f, key())).row;
+  assert.equal(plain.expires_at - plain.created_at, 30 * 60_000, 'the default stays 30 minutes');
+  for (const bad of [0, 1441, 1.5, '120']) assert.equal((await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: key(), data: { ...input, valid_minutes: bad } })).json.error.code, 'invalid_validity', String(bad));
+});
+
 test('The runtime writes the guidance its owner reads on the approval page; Foundation frames it and bounds it', async t => {
   const f = await fixture(t), token = key();
   const guidance = '1. 定義ファイルをダウンロード\n2. スタック名は foundation-admin\n\n出力の値を貼る';
