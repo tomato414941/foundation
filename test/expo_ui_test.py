@@ -82,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     register.get_by_role('button', name='登録する', exact=True).click()
     expect(register.get_by_role('alert')).to_contain_text('トークンが無効か')
     expect(field).to_have_value('')
-    cli('accounts', success=False)
+    cli('credentials', success=False)
     review(page)
     field.fill(token)
     with page.expect_response(lambda response: '/api/adapters/expo.token/connect' in response.url) as response_event:
@@ -91,47 +91,47 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
     expect(page.get_by_text('Expoへのアクセス', exact=True)).to_be_visible()
     expect(page.get_by_role('radio')).to_have_count(0)
-    cli('accounts', success=False)
-    cli('accounts', success=False)
+    cli('credentials', success=False)
+    cli('credentials', success=False)
     review(page)
     expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
-    assert cli('accounts')['accounts'][0]['adapter'] == 'expo.token'
-    account = cli('accounts')['accounts'][0]
-    command = subprocess.run(['node', 'src/runtime.mjs', 'exec', account['id'], '--', 'node', '-e', 'if(!process.env.EXPO_TOKEN || process.env.EXPO_TOKEN!==process.env.FOUNDATION_ACCESS_TOKEN || process.env.FOUNDATION_ADAPTER!=="expo.token" || process.env.FOUNDATION_TOKEN_EXPIRES_AT!=="" || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
+    assert cli('credentials')['credentials'][0]['adapter'] == 'expo.token'
+    account = cli('credentials')['credentials'][0]
+    command = subprocess.run(['node', 'src/runtime.mjs', 'exec', account['id'], '--', 'node', '-e', 'if(!process.env.EXPO_TOKEN || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
     assert token not in command.stdout + command.stderr
 
     page.goto(args.base, wait_until='networkidle')
     section = page.locator('[aria-labelledby="expo-title"]')
     assert 'Gmail' not in section.inner_text() and 'OpenRouter' not in section.inner_text()
-    section.get_by_role('button', name='接続を確認', exact=True).click()
-    expect(page.get_by_text('Expoに接続できました。', exact=True)).to_be_visible()
+    section.get_by_role('button', name='検証する', exact=True).click()
+    expect(page.get_by_text('Expoで検証できました。', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
         if width != 320:
             page.screenshot(path=str(shots / ('connections-desktop.png' if width == 1280 else 'connections-mobile.png')), full_page=True)
 
-    section.get_by_role('button', name='接続を解除', exact=True).click()
+    section.get_by_role('button', name='登録を解除', exact=True).click()
     assert 'OpenRouter' not in dialog.inner_text() and 'Google' not in dialog.inner_text()
     expect(dialog.get_by_role('link', name='Expoでキーを削除する', exact=False)).to_have_attribute('href', 'https://expo.dev/settings/access-tokens')
-    dialog.get_by_role('button', name='接続を解除', exact=True).click()
+    dialog.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog).to_be_visible()
     dialog.get_by_role('checkbox', name='キーの無効化はExpoで行うことを確認しました', exact=True).check()
     review(page)
-    dialog.get_by_role('button', name='接続を解除', exact=True).click()
+    dialog.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert cli('accounts')['accounts'] == []
+    assert cli('credentials')['credentials'] == []
 
     # The dashboard registers through the dialog.
-    section.get_by_role('button', name='Expoを接続', exact=True).click()
+    section.get_by_role('button', name='Expoを登録', exact=True).click()
     field = dialog.get_by_label('アクセストークン', exact=True)
     field.fill(token)
     dialog.get_by_role('button', name='閉じる', exact=True).click()
-    section.get_by_role('button', name='Expoを接続', exact=True).click()
+    section.get_by_role('button', name='Expoを登録', exact=True).click()
     expect(field).to_have_value('')
     field.fill(token)
     dialog.get_by_role('button', name='登録する', exact=True).click()
@@ -142,7 +142,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     expect(dialog).not_to_be_visible()
     expect(section.get_by_role('heading', name='<img src=x onerror="window.xss=1">', exact=True)).to_be_visible()
     assert section.locator('img').count() == 0 and page.evaluate('window.xss === undefined')
-    assert len(cli('accounts')['accounts']) == 1, 'the approved key uses a connection the owner registers later'
+    assert len(cli('credentials')['credentials']) == 1, 'the approved key uses a connection the owner registers later'
     review(page)
     assert not errors, errors
     context.close()

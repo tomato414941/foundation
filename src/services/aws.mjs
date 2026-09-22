@@ -142,29 +142,28 @@ export class AwsClient {
     if (!result || !/^ASIA[A-Z0-9]{16}$/.test(result.AccessKeyId || '') || typeof result.SecretAccessKey !== 'string' || typeof result.SessionToken !== 'string' || !Number.isFinite(expiresAt) || /[\r\n\x00]/.test(result.SecretAccessKey + result.SessionToken)) invalidResponse();
     return { access_key_id: result.AccessKeyId, secret_access_key: result.SecretAccessKey, session_token: result.SessionToken, expires_at: expiresAt };
   }
-  async importToken({ values, permission }) {
+  async importToken({ values }) {
     const token = values.code;
     this.check();
-    if (permission !== 'assume-role') fail(400, 'invalid_permission', '利用する権限を選び直してください。');
-    const credentials = await this.inspect(token);
-    return { subject: credentials.details.account_id + ':' + credentials.details.role_arn.split('/').pop() + ':' + credentials.details.key_hash.slice(0, 12), credentials };
+    const secret = await this.inspect(token);
+    return { subject: secret.details.account_id + ':' + secret.details.role_arn.split('/').pop() + ':' + secret.details.key_hash.slice(0, 12), secret };
   }
   // Issuance never returns the stored key: each call assumes the role afresh.
-  async token(store, account, force = false, options = {}) {
+  async token(store, credential, force = false, options = {}) {
     this.check();
-    if (account.status !== 'connected') fail(409, 'reconnect_required', 'AWSのアクセスキーを確認し、新しい接続を追加してください。');
-    const stored = store.secrets(account), key = { ...stored.details, secret: stored.access_token };
+    if (credential.status !== 'connected') fail(409, 'reconnect_required', 'AWSのアクセスキーを確認し、新しく登録し直してください。');
+    const stored = store.secret(credential), key = { ...stored.details, secret: stored.access_token };
     try {
-      const session = await this.assume(key, 'foundation-' + account.id.slice(0, 8), { duration: options.duration });
+      const session = await this.assume(key, 'foundation-' + credential.id.slice(0, 8), { duration: options.duration });
       return { access_token: session.secret_access_key, credential_type: 'aws_temporary', expires_at: session.expires_at, expiry_known: true, scopes: stored.scopes,
         details: { ...stored.details, session_access_key_id: session.access_key_id, session_token: session.session_token }, verification: stored.verification };
     } catch (error) {
-      if (error instanceof HttpError && error.code === 'reconnect_required') store.reconnectRequired(account);
+      if (error instanceof HttpError && error.code === 'reconnect_required') store.reconnectRequired(credential);
       throw error;
     }
   }
-  accountInfo(credentials) {
-    const detail = credentials.details;
+  facts(secret) {
+    const detail = secret.details;
     return { label: detail.account_id + ' / ' + detail.role_arn.split('/').pop(), credential_type: 'api_key', expires_at: null, expiry_known: false, management_url: AWS_KEYS,
       aws: { account_id: detail.account_id, role_arn: detail.role_arn, region: detail.region, user_arn: detail.user_arn }, checked_at: detail.checked_at };
   }

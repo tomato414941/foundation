@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { OpenRouterClient } from '../src/services/openrouter.mjs';
-import { openrouterOauth, gmailOauth } from '../src/adapters.mjs';
+import { openrouterOauth, gmailReadonly, gmailMetadata } from '../src/adapters.mjs';
 import { FakeGmail, fixture, json } from './helpers.mjs';
 
 export class FakeOpenRouter extends OpenRouterClient {
@@ -26,9 +26,9 @@ export class FakeOpenRouter extends OpenRouterClient {
 
 export async function openrouterFixture(t, options = {}) {
   const openrouter = options.openrouter || new FakeOpenRouter(), gmail = new FakeGmail();
-  const f = await fixture(t, { gmail, adapters: [openrouterOauth(openrouter), gmailOauth(gmail)], ...options });
+  const f = await fixture(t, { gmail, adapters: [openrouterOauth(openrouter), gmailReadonly(gmail), gmailMetadata(gmail)], ...options });
   async function start(extra = {}) {
-    const result = await f.request('/api/adapters/openrouter.oauth/connect', { method: 'POST', data: { name: 'OpenRouter', permission: 'api-key', ...extra } });
+    const result = await f.request('/api/adapters/openrouter.oauth/connect', { method: 'POST', data: { name: 'OpenRouter', ...extra } });
     if (result.status !== 200) throw new Error(result.text);
     return new URL(result.json.url);
   }
@@ -41,7 +41,7 @@ export async function openrouterFixture(t, options = {}) {
     const result = await callback(await start(), code);
     if (!result.headers.get('location')?.includes('connection=connected')) throw new Error(result.headers.get('location'));
     const state = (await f.request('/api/state')).json;
-    return state.accounts.filter(item => item.adapter === 'openrouter.oauth').at(-1);
+    return state.credentials.filter(item => item.adapter === 'openrouter.oauth').at(-1);
   }
   return { ...f, openrouter, startOpenRouter: start, callbackOpenRouter: callback, openrouterAccount: account };
 }

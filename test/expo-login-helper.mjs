@@ -38,6 +38,6 @@ export class FakeExpoLogin extends FakeExpo {
 export async function expoLoginFixture(t, options = {}) {
   const expo = options.expo || new FakeExpoLogin();
   const f = await expoFixture(t, { ...options, expo });
-  const loginExpo = (input = {}, requestOptions = {}) => f.request('/api/adapters/expo.login/connect', { method: 'POST', data: { name: 'Expo', permission: 'session', username: 'fixture-user', password: LOGIN_PASSWORD, ...input }, ...requestOptions });
+  const loginExpo = (input = {}, requestOptions = {}) => f.request('/api/adapters/expo.login/connect', { method: 'POST', data: { name: 'Expo', username: 'fixture-user', password: LOGIN_PASSWORD, ...input }, ...requestOptions });
   return { ...f, loginExpo };
 }

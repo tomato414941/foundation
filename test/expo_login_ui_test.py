@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
         return cli('connect', '--adapter', 'expo.login', '--name', 'dev-us のAI', '--purpose', 'Expoのアカウントを確認します。ビルド・公開は行いません。')['request']
 
     row = request()
-    assert row['permission']['id'] == 'session'
+    assert row['adapter']['id'] == 'expo.login'
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 800})
     page = context.new_page()
@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     expect(page.get_by_role('alert')).to_contain_text('Expoにログインできませんでした')
     expect(password).to_have_value('')
     expect(code).to_have_value(row['confirmation_code'])
-    cli('accounts', success=False)
+    cli('credentials', success=False)
 
     # The runtime learns nothing until approval; it just tries accounts.
     try:
@@ -90,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
         expect(otp).to_be_visible()
         expect(password).to_have_value('')
         expect(password).to_be_disabled()
-        cli('accounts', success=False)
+        cli('credentials', success=False)
         for width in [1280, 390, 320]:
             page.set_viewport_size({'width': width, 'height': 844})
             review(page)
@@ -108,12 +108,12 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
         expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
         expect(page.get_by_text('この画面は閉じて構いません。', exact=False)).to_be_visible()
         expect(password).to_have_count(0)
-        listed = subprocess.run(['node', 'src/runtime.mjs', 'accounts'], env=env, capture_output=True, text=True, timeout=15)
+        listed = subprocess.run(['node', 'src/runtime.mjs', 'credentials'], env=env, capture_output=True, text=True, timeout=15)
         assert listed.returncode == 0, listed.stderr
         assert PASSWORD not in listed.stdout + listed.stderr and 'fixture-session-' not in listed.stdout + listed.stderr
     finally:
         pass
-    account = cli('accounts')['accounts'][0]
+    account = cli('credentials')['credentials'][0]
     assert account['credential_type'] == 'expo_session'
     review(page)
     page.set_viewport_size({'width': 390, 'height': 844})
@@ -124,8 +124,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     page.goto(row['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='Expoにログイン', exact=True)).to_be_visible()
     expect(page.get_by_label('確認コード', exact=True)).to_have_count(0)
-    assert len(cli('accounts')['accounts']) == 1
-    submit = page.get_by_role('button', name='ログインして接続', exact=True)
+    assert len(cli('credentials')['credentials']) == 1
+    submit = page.get_by_role('button', name='ログインして登録', exact=True)
     username.fill('otp-other')
     password.fill(PASSWORD)
     page.reload(wait_until='networkidle')
@@ -158,27 +158,27 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     # Root connection is optional and never silently grants the runtime.
     page.goto(args.base, wait_until='networkidle')
     section = page.locator('[aria-labelledby="expo-title"]')
-    section.get_by_role('button', name='接続を確認', exact=True).click()
-    expect(page.get_by_text('Expoに接続できました。', exact=True)).to_be_visible()
-    section.get_by_role('button', name='Expoを接続', exact=True).click()
+    section.get_by_role('button', name='検証する', exact=True).click()
+    expect(page.get_by_text('Expoで検証できました。', exact=True)).to_be_visible()
+    section.get_by_role('button', name='Expoを登録', exact=True).click()
     dialog = page.get_by_role('dialog')
     username.fill('fixture-user')
     password.fill(PASSWORD)
     dialog.get_by_role('button', name='閉じる', exact=True).click()
-    section.get_by_role('button', name='Expoを接続', exact=True).click()
+    section.get_by_role('button', name='Expoを登録', exact=True).click()
     expect(password).to_have_value('')
     username.fill('fixture-user')
     password.fill(PASSWORD)
-    dialog.get_by_role('button', name='ログインして接続', exact=True).click()
+    dialog.get_by_role('button', name='ログインして登録', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert len(cli('accounts')['accounts']) == 2, 'the approved key uses a connection the owner adds later'
-    section.locator('.account-item').filter(has_text='otp-user').click()
-    section.get_by_role('button', name='接続を解除', exact=True).click()
+    assert len(cli('credentials')['credentials']) == 2, 'the approved key uses a connection the owner adds later'
+    section.locator('.credential-item').filter(has_text='otp-user').click()
+    section.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog.get_by_role('link', name='Expoでキーを削除する', exact=False)).to_have_count(0)
     expect(dialog.get_by_text('Expoのプロジェクトやデータは削除しません。', exact=False)).to_be_visible()
-    dialog.get_by_role('button', name='接続を解除', exact=True).click()
+    dialog.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert len(cli('accounts')['accounts']) == 1, 'the other connection stays usable'
+    assert len(cli('credentials')['credentials']) == 1, 'the other connection stays usable'
     review(page)
     page.goto(args.base + '/connect/' + 'Z' * 43, wait_until='networkidle')
     expect(page.get_by_role('heading', name='依頼を確認できません', exact=True)).to_be_visible()

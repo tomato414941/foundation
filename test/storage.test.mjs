@@ -13,13 +13,13 @@ async function directory(t) { const path = await mkdtemp(join(tmpdir(), 'foundat
 
 test('Gmail and Supabase secrets are encrypted; keys and cookies never persist in plaintext', async (t) => {
   const dir = await directory(t), database = join(dir, 'state.sqlite');
-  const f = await fixture(t, { database }), account = await f.account(), agent = await f.agent();
+  const f = await fixture(t, { database }), account = await f.credential(), agent = await f.agent();
   const cookie = f.cookie();
   await f.start();
   const contents = await readFile(database);
   for (const value of ['google-access-personal', 'refresh-personal', 'supabase-access-owner', 'supabase-refresh-owner', agent.token, cookie.slice(12)]) assert.ok(!contents.includes(Buffer.from(value)), value);
   const second = new Store(database, KEY); t.after(() => second.close());
-  assert.equal(second.secrets(second.account(USER_A, account.id)).refresh_token, 'refresh-personal-readonly');
+  assert.equal(second.secret(second.credential(USER_A, account.id)).refresh_token, 'refresh-personal-readonly');
   assert.ok(second.session(cookie.slice(12)));
   assert.equal(second.authenticate(agent.token).owner_id, USER_A);
   const tables = second.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((item) => item.name);
@@ -52,12 +52,12 @@ test('Configuration creates private encryption key, never an owner login key; lo
 test('A new database is created in the current shape; a database of any other shape is refused and left unchanged', async (t) => {
   const dir = await directory(t), path = join(dir, 'state.sqlite');
   const created = new Store(path, KEY);
-  const id = created.connect(USER_A, { adapter: 'gmail.oauth', subject: 'kept@example.test', name: 'kept', purpose: '', scopes: ['readonly'] }, { refresh_token: 'keep-private' });
+  const id = created.register(USER_A, { adapter: 'gmail.readonly', service: 'Gmail', subject: 'kept@example.test', name: 'kept', purpose: '' }, { refresh_token: 'keep-private' });
   const agent = created.addAgent(USER_A, 'runtime');
   created.recordIssuance(agent, null);
   created.close();
   const reopened = new Store(path, KEY); t.after(() => reopened.close());
-  assert.equal(reopened.secrets(reopened.account(USER_A, id)).refresh_token, 'keep-private');
+  assert.equal(reopened.secret(reopened.credential(USER_A, id)).refresh_token, 'keep-private');
   assert.equal(reopened.agents(USER_A)[0].issued_nonexpiring, 1);
   for (const shape of ['CREATE TABLE accounts(id TEXT); INSERT INTO accounts VALUES (\'existing\');', 'CREATE TABLE accounts(id TEXT); PRAGMA user_version=6;', 'PRAGMA user_version=2;']) {
     const other = join(dir, 'other-' + Math.random().toString(36).slice(2) + '.sqlite'), db = new DatabaseSync(other);

@@ -87,7 +87,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     expect(field).to_have_value('')
     expect(account_field).to_have_value(account_id)
     review(page)
-    cli('accounts', success=False)
+    cli('credentials', success=False)
     cli('wait', success=False)
 
     # A valid token with an inaccessible account is a reported fact, not a hard gate.
@@ -97,7 +97,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     expect(dialog).not_to_be_visible()
     expect(page.get_by_text('R2の一覧を取得できませんでした。', exact=False)).to_be_visible()
     expect(page.get_by_role('button', name='承認する', exact=True)).to_be_disabled()
-    cli('accounts', success=False)
+    cli('credentials', success=False)
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
@@ -105,11 +105,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
             page.screenshot(path=str(shots / ('verification-desktop.png' if width == 1280 else 'verification-mobile.png')), full_page=True)
 
     # The same approval URL supports correcting the ID without adding another connection.
-    page.get_by_role('button', name='別のアカウントを登録する', exact=True).click()
+    page.get_by_role('button', name='別の認証情報を登録する', exact=True).click()
     expect(page.get_by_role('heading', name='Cloudflareのトークンを登録', exact=True)).to_be_visible()
     page.get_by_role('button', name='登録せずに戻る', exact=True).click()
     expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
-    page.get_by_role('button', name='別のアカウントを登録する', exact=True).click()
+    page.get_by_role('button', name='別の認証情報を登録する', exact=True).click()
     expect(field).to_have_value('')
     account_field.fill(account_id)
     field.fill(token)
@@ -121,56 +121,56 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     expect(page.get_by_role('radio')).to_have_count(0)
     page.get_by_text('検証結果', exact=True).last.click()
     expect(page.get_by_text('R2のバケット一覧を取得できました。', exact=False)).to_be_visible()
-    cli('accounts', success=False)
+    cli('credentials', success=False)
     expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
     expect(page.get_by_text('有効期限', exact=True)).to_be_visible()
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
     review(page)
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
-    account = cli('accounts')['accounts'][0]
+    account = cli('credentials')['credentials'][0]
     assert account['cloudflare_account_id'] == account_id
-    assert account['token_env'] == 'CLOUDFLARE_API_TOKEN'
+    assert account['variables'] == ['CLOUDFLARE_API_TOKEN']
     result = subprocess.run(['node', 'src/runtime.mjs', 'exec', account['id'], '--', 'node', '-e',
-        'if(!process.env.CLOUDFLARE_API_TOKEN?.startsWith("cfut_") || process.env.CLOUDFLARE_API_TOKEN!==process.env.FOUNDATION_ACCESS_TOKEN || process.env.FOUNDATION_ADAPTER!=="cloudflare.api-token" || !process.env.FOUNDATION_TOKEN_EXPIRES_AT || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2); console.log("ready")'],
+        'if(!process.env.CLOUDFLARE_API_TOKEN?.startsWith("cfut_") || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2); console.log("ready")'],
         env=env, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0 and result.stdout.strip() == 'ready', result.stderr
     assert token not in result.stdout + result.stderr
 
     page.goto(args.base, wait_until='networkidle')
     section = page.locator('[aria-labelledby="cloudflare-title"]')
-    section.get_by_role('button', name='接続を確認', exact=True).click()
-    expect(page.get_by_text('Cloudflareに接続できました。', exact=True)).to_be_visible()
+    section.get_by_role('button', name='検証する', exact=True).click()
+    expect(page.get_by_text('Cloudflareで検証できました。', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
         if width != 320:
             page.screenshot(path=str(shots / ('connections-desktop.png' if width == 1280 else 'connections-mobile.png')), full_page=True)
 
-    section.get_by_role('button', name='接続を解除', exact=True).click()
+    section.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog.get_by_role('link', name='Cloudflareでキーを削除する', exact=False)).to_have_attribute('href', 'https://dash.cloudflare.com/profile/api-tokens')
     expect(dialog.get_by_text('受け渡し済みのAPIキーは、この操作では無効になりません。', exact=False)).to_be_visible()
     dialog.get_by_role('checkbox', name='キーの無効化はCloudflareで行うことを確認しました', exact=True).check()
     review(page)
-    dialog.get_by_role('button', name='接続を解除', exact=True).click()
+    dialog.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert cli('accounts')['accounts'] == []
+    assert cli('credentials')['credentials'] == []
 
     # Root imports use the same small form and do not restore revoked grants.
     # The dashboard registers through the dialog.
-    section.get_by_role('button', name='Cloudflareを接続', exact=True).click()
+    section.get_by_role('button', name='Cloudflareを登録', exact=True).click()
     field = dialog.get_by_label('APIトークン', exact=True)
     account_field = dialog.get_by_label('アカウントID', exact=True)
     field.fill(token)
     dialog.get_by_role('button', name='閉じる', exact=True).click()
-    section.get_by_role('button', name='Cloudflareを接続', exact=True).click()
+    section.get_by_role('button', name='Cloudflareを登録', exact=True).click()
     expect(field).to_have_value('')
     expect(account_field).to_have_value('')
     account_field.fill(account_id)
     field.fill(token)
     dialog.get_by_role('button', name='登録する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert len(cli('accounts')['accounts']) == 1, 'the approved key uses a connection the owner registers later'
+    assert len(cli('credentials')['credentials']) == 1, 'the approved key uses a connection the owner registers later'
     review(page)
     assert not errors, errors
     context.close()

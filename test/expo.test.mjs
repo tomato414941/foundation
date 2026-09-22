@@ -9,8 +9,8 @@ import { EXPO_API, EXPO_TOKENS } from '../src/services/expo.mjs';
 import { FakeExpo, expoFixture } from './expo-helper.mjs';
 import { json, USER_A } from './helpers.mjs';
 
-const credential = (f, id, token) => f.request('/v1/accounts/' + id + '/credentials', { method: 'POST', anonymous: true, token, data: {} });
-const createRequest = async (f, token) => (await f.request('/v1/access-requests', { method: 'POST', token, data: { adapter: 'expo.token', permission: 'access-token', name: 'dev-us のAI', purpose: 'アカウントの確認のみ。ビルドしません。' } })).json.request;
+const credential = (f, id, token) => f.request('/v1/credentials/' + id + '/deliver', { method: 'POST', anonymous: true, token, data: {} });
+const createRequest = async (f, token) => (await f.request('/v1/access-requests', { method: 'POST', token, data: { adapter: 'expo.token', name: 'dev-us のAI', purpose: 'アカウントの確認のみ。ビルドしません。' } })).json.request;
 const execute = (args, env) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, ['src/runtime.mjs', ...args], { env: { ...process.env, ...env } });
   let out = '', err = '';
@@ -24,7 +24,7 @@ test('Expo import is a discoverable token flow, validates identity without mutat
   assert.equal(adapter.register, 'paste');
   assert.equal(adapter.form.links[0].href, EXPO_TOKENS);
   assert.equal(adapter.can_reconnect, false); assert.equal(adapter.can_revoke, false);
-  assert.match(adapter.permissions[0].description, /すべてのアカウント・組織/);
+  assert.match(adapter.access.description, /すべてのアカウント・組織/);
   assert.equal(account.label, 'fixture-expo-user');
   assert.equal(account.credential_type, 'api_key'); assert.equal(account.expires_at, null); assert.equal(account.expiry_known, false);
   assert.ok(!state.text.includes(f.expo.tokenValue()));
@@ -42,7 +42,6 @@ test('Expo token import requires a human session and same-origin POST; bad token
   const f = await expoFixture(t);
   assert.equal((await f.importExpo({}, { anonymous: true })).status, 401);
   assert.equal((await f.importExpo({}, { headers: { origin: 'https://attacker.example' } })).status, 403);
-  assert.equal((await f.importExpo({ permission: 'readonly' })).json.error.code, 'invalid_permission');
   assert.equal((await f.importExpo({ token: 'password' })).json.error.code, 'invalid_credential');
   assert.equal((await f.importExpo({ token: 'a'.repeat(15) + '\r\n' + 'a'.repeat(15) })).json.error.code, 'invalid_values');
   assert.equal((await f.importExpo({ token: 'a'.repeat(1025) })).json.error.code, 'invalid_credential');
@@ -50,36 +49,36 @@ test('Expo token import requires a human session and same-origin POST; bad token
   const invalid = await f.importExpo({ token: 'syntactically-valid-but-revoked' });
   assert.equal(invalid.json.error.code, 'reconnect_required');
   assert.doesNotMatch(invalid.text, /fixture secret|syntactically-valid/);
-  assert.equal((await f.request('/api/state')).json.accounts.length, 0);
+  assert.equal((await f.request('/api/state')).json.credentials.length, 0);
 });
 
 test('Expo supports Robot and SSO identities without pretending tokens are read-only or short-lived', async () => {
   const expo = new FakeExpo();
   expo.actor = { __typename: 'Robot', id: 'robot-1', firstName: 'limited-bot' };
-  let result = await expo.importToken({ values: { token: expo.tokenValue() }, permission: 'access-token' });
-  assert.equal(expo.accountInfo(result.credentials).label, 'limited-bot (Robot)');
+  let result = await expo.importToken({ values: { token: expo.tokenValue() } });
+  assert.equal(expo.facts(result.secret).label, 'limited-bot (Robot)');
   expo.actor = { __typename: 'SSOUser', id: 'sso-1', username: 'org-user' };
-  result = await expo.importToken({ values: { token: expo.tokenValue() }, permission: 'access-token' });
-  assert.equal(expo.accountInfo(result.credentials).label, 'org-user');
-  assert.equal(result.credentials.expires_at, null);
-  assert.equal(result.credentials.expiry_known, false);
+  result = await expo.importToken({ values: { token: expo.tokenValue() } });
+  assert.equal(expo.facts(result.secret).label, 'org-user');
+  assert.equal(result.secret.expires_at, null);
+  assert.equal(result.secret.expiry_known, false);
 });
 
 test('Expo approval binds requesting runtime, retains explicit consent and prevents later delivery after revocation', async t => {
   const f = await expoFixture(t), token = 'fdn_' + randomBytes(32).toString('base64url');
   const row = await createRequest(f, token), account = await f.expoAccount({ accessRequestId: row.id });
   assert.equal((await credential(f, account.id, token)).status, 401);
-  assert.equal((await f.request('/v1/accounts', { token, anonymous: true })).status, 401);
-  const approve = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { accountId: account.id, confirmationCode: row.confirmation_code } });
+  assert.equal((await f.request('/v1/credentials', { token, anonymous: true })).status, 401);
+  const approve = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { credentialId: account.id, confirmationCode: row.confirmation_code } });
   assert.equal(approve.status, 200);
-  const listed = await f.request('/v1/accounts', { token });
-  assert.equal(listed.json.accounts[0].authentication.type, 'api_key_bearer');
-  assert.match(listed.json.accounts[0].authentication.revocation, /until the service expires or deletes them/);
+  const listed = await f.request('/v1/credentials', { token });
+  assert.deepEqual(listed.json.credentials[0].variables, ['EXPO_TOKEN']);
+  assert.match(listed.json.credentials[0].delivery.revocation, /until the service expires or deletes them/);
   assert.ok(!listed.text.includes(f.expo.tokenValue()));
   const issued = await credential(f, account.id, token);
-  assert.equal(issued.status, 200); assert.equal(issued.json.access_token, f.expo.tokenValue());
+  assert.equal(issued.status, 200); assert.deepEqual(issued.json.delivery.environment, { EXPO_TOKEN: f.expo.tokenValue() });
   assert.equal(issued.json.expires_at, null); assert.equal(issued.json.expires_in, null);
-  assert.equal(issued.json.api_base_url, EXPO_API);
+  assert.equal(listed.json.credentials[0].api.base_url, EXPO_API);
   assert.equal(f.app.store.agents(USER_A)[0].issued_nonexpiring, 1);
   assert.equal(f.expo.calls.length, 2, 'identity is rechecked on delivery');
   await f.request('/api/agents/' + approve.json.request.agent_id, { method: 'DELETE' });
@@ -91,12 +90,12 @@ test('Expo tokens stay encrypted and owner-separated; duplicate imports and sile
   const database = join(dir, 'state.sqlite'), f = await expoFixture(t, { database });
   const account = await f.expoAccount(), agent = await f.agent();
   assert.ok(!(await readFile(database)).includes(Buffer.from(f.expo.tokenValue())));
-  assert.ok(!f.app.store.account(USER_A, account.id).secret.includes(f.expo.tokenValue()));
+  assert.ok(!f.app.store.credential(USER_A, account.id).secret.includes(f.expo.tokenValue()));
   assert.equal((await f.importExpo()).json.error.code, 'already_connected');
-  assert.equal((await f.importExpo({ accountId: account.id, token: f.expo.tokenValue('second') })).json.error.code, 'new_connection_required');
+  assert.equal((await f.importExpo({ credentialId: account.id, token: f.expo.tokenValue('second') })).json.error.code, 'new_connection_required');
   await f.login('other@example.test');
-  assert.equal((await f.request('/api/state')).json.accounts.length, 0);
-  assert.equal((await f.request('/api/accounts/' + account.id, { method: 'DELETE', data: { revoke: false } })).status, 404);
+  assert.equal((await f.request('/api/state')).json.credentials.length, 0);
+  assert.equal((await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: false } })).status, 404);
   const other = await f.expoAccount({ token: f.expo.tokenValue('second') }), otherAgent = await f.agent();
   assert.equal((await credential(f, account.id, otherAgent.token)).status, 403);
   assert.equal((await credential(f, other.id, agent.token)).status, 403);
@@ -114,18 +113,18 @@ for (const change of ['logout', 'cancel', 'expire', 'deny']) test('Expo does not
   if (change === 'deny') await f.request('/api/access-requests/' + row.id + '/deny', { method: 'POST', data: {} });
   release(); const result = await pending;
   assert.ok(result.status >= 400, result.text);
-  assert.equal(f.app.store.accounts(USER_A).length, 0);
+  assert.equal(f.app.store.credentials(USER_A).length, 0);
   assert.ok(!result.text.includes(f.expo.tokenValue()));
 });
 
 test('Revoked Expo token is not delivered and local disconnect never claims to revoke at Expo', async t => {
   const f = await expoFixture(t), account = await f.expoAccount(), agent = await f.agent();
-  assert.equal((await f.request('/api/accounts/' + account.id, { method: 'DELETE', data: { revoke: true } })).json.error.code, 'manual_revocation_required');
+  assert.equal((await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: true } })).json.error.code, 'manual_revocation_required');
   f.expo.identityHandler = () => json({ errors: [{ message: f.expo.tokenValue() }] }, 401);
   const result = await credential(f, account.id, agent.token);
   assert.equal(result.json.error.code, 'reconnect_required'); assert.ok(!result.text.includes(f.expo.tokenValue()));
-  assert.equal(f.app.store.account(USER_A, account.id).status, 'reconnect_required');
-  assert.equal((await f.request('/api/accounts/' + account.id, { method: 'DELETE', data: { revoke: false } })).json.service_revoked, false);
+  assert.equal(f.app.store.credential(USER_A, account.id).status, 'reconnect_required');
+  assert.equal((await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: false } })).json.service_revoked, false);
   assert.equal((await credential(f, account.id, agent.token)).status, 403);
 });
 
@@ -154,13 +153,13 @@ test('CLI resumes Expo approval and injects EXPO_TOKEN only into selected comman
   const start = await execute(['connect', '--adapter', 'expo.token', '--name', 'dev-us のAI'], env);
   assert.equal(start.code, 0, start.err);
   const row = JSON.parse(start.out).request;
-  assert.equal(row.adapter.id, 'expo.token'); assert.equal(row.permission.id, 'access-token');
-  await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { accountId: account.id, confirmationCode: row.confirmation_code } });
-  const run = await execute(['exec', account.id, '--', process.execPath, '-e', 'if(!process.env.EXPO_TOKEN || process.env.EXPO_TOKEN!==process.env.FOUNDATION_ACCESS_TOKEN || process.env.EXPO_TOKEN==="unrelated-existing-token" || process.env.FOUNDATION_ADAPTER!=="expo.token" || process.env.FOUNDATION_TOKEN_EXPIRES_AT!=="" || process.env.FOUNDATION_RUNTIME_KEY_FILE) process.exit(2); console.log("expo-ready")'], env);
+  assert.equal(row.adapter.id, 'expo.token');
+  await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { credentialId: account.id, confirmationCode: row.confirmation_code } });
+  const run = await execute(['exec', account.id, '--', process.execPath, '-e', 'if(!process.env.EXPO_TOKEN || process.env.EXPO_TOKEN==="unrelated-existing-token" || process.env.FOUNDATION_RUNTIME_KEY_FILE) process.exit(2); console.log("expo-ready")'], env);
   assert.equal(run.code, 0, run.err); assert.equal(run.out.trim(), 'expo-ready');
   assert.ok(!(start.out + start.err + run.out + run.err).includes(f.expo.tokenValue()));
   assert.doesNotMatch(start.out + start.err + run.out + run.err, /fdn_/);
-  const gmail = await f.account();
+  const gmail = await f.credential();
   const agent = f.app.store.agents(USER_A)[0];
   await f.request('/api/agents/' + agent.id + '/grants', { method: 'PUT', data: { accountIds: [account.id, gmail.id] } });
   const other = await execute(['exec', gmail.id, '--', process.execPath, '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN) process.exit(2)'], env);
@@ -173,11 +172,11 @@ test('Session login is off by default; stored sessions stop being delivered when
   const f = await expoFixture(t);
   const login = await f.request('/api/adapters/expo.login/connect', { method: 'POST', data: { username: 'u', password: 'p' } });
   assert.ok([400, 503].includes(login.status), login.text);
-  assert.equal(f.app.store.accounts(USER_A).length, 0);
+  assert.equal(f.app.store.credentials(USER_A).length, 0);
   const account = await f.expoAccount();
-  const store = f.app.store, id = account.id, row = store.account(USER_A, id);
-  store.saveCredentials(row, { ...store.secrets(row), credential_type: 'expo_session', scopes: [EXPO_SESSION_SCOPE], details: { ...store.secrets(row).details } });
-  const check = await f.request('/api/accounts/' + id + '/check', { method: 'POST', data: {} });
+  const store = f.app.store, id = account.id, row = store.credential(USER_A, id);
+  store.saveSecret(row, { ...store.secret(row), credential_type: 'expo_session', scopes: [EXPO_SESSION_SCOPE], details: { ...store.secret(row).details } });
+  const check = await f.request('/api/credentials/' + id + '/check', { method: 'POST', data: {} });
   assert.equal(check.status, 409); assert.equal(check.json.error.code, 'reconnect_required');
-  assert.equal(store.account(row.owner_id, id).status, 'reconnect_required');
+  assert.equal(store.credential(row.owner_id, id).status, 'reconnect_required');
 });

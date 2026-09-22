@@ -11,12 +11,12 @@ const identityQuery = 'query FoundationIdentity { meActor { __typename id ... on
 const invalidResponse = () => fail(502, 'service_response', 'Expoからの応答を確認できませんでした。');
 
 // EAS login returns a session, not an EXPO_TOKEN. Keep the two credential
-// types separate; passwords and OTPs never become stored credentials.
+// types separate; passwords and OTPs never become stored secrets.
 export class ExpoClient {
   constructor({ fetcher = fetch, sessionLogin = false } = {}) { this.enabled = true; this.fetcher = fetcher; this.sessionLoginEnabled = sessionLogin; }
   check() { if (!this.enabled) fail(503, 'expo_unavailable', '現在Expoに接続できません。'); }
   async inspect(token, { session = false } = {}) {
-    const reconnectMessage = session ? 'Expoのログインが無効になっています。もう一度接続してください。' : 'トークンが無効か、利用できません。Expoのトークン管理画面で確認してください。';
+    const reconnectMessage = session ? 'Expoのログインが無効になっています。もう一度登録してください。' : 'トークンが無効か、利用できません。Expoのトークン管理画面で確認してください。';
     if (typeof token !== 'string' || !(session ? /^[\x20-\x7e]{20,8192}$/ : /^[A-Za-z0-9._~-]{20,1024}$/).test(token)) fail(400, 'invalid_credential', 'Expoの認証情報を確認できませんでした。');
     let response;
     try {
@@ -68,45 +68,44 @@ export class ExpoClient {
     const sessionSecret = result?.data?.sessionSecret;
     if (typeof sessionSecret !== 'string' || !/^[\x20-\x7e]{20,8192}$/.test(sessionSecret)) invalidResponse();
     try {
-      const credentials = await this.inspect(sessionSecret, { session: true });
-      return { subject: 'session:' + credentials.details.token_hash, credentials };
+      const secret = await this.inspect(sessionSecret, { session: true });
+      return { subject: 'session:' + secret.details.token_hash, secret };
     } catch (error) {
       await this.revoke({ credential_type: 'expo_session', access_token: sessionSecret }).catch(() => {});
       throw error;
     }
   }
-  async importToken({ values, permission }) {
+  async importToken({ values }) {
     const { token } = values;
     this.check();
-    if (permission !== 'access-token') fail(400, 'invalid_permission', '利用する権限を選び直してください。');
-    const credentials = await this.inspect(token);
-    return { subject: 'token:' + credentials.details.token_hash, credentials };
+    const secret = await this.inspect(token);
+    return { subject: 'token:' + secret.details.token_hash, secret };
   }
-  async token(store, account) {
+  async token(store, credential) {
     this.check();
-    if (account.status !== 'connected') fail(409, 'reconnect_required', 'Expoへの接続を確認し、新しい接続を追加してください。');
+    if (credential.status !== 'connected') fail(409, 'reconnect_required', 'Expoのトークンを確認し、新しく登録し直してください。');
     try {
-      const previous = store.secrets(account), session = previous.credential_type === 'expo_session';
-      if (session && !this.sessionLoginEnabled) fail(409, 'reconnect_required', 'Expoのログイン接続は現在利用できません。アクセストークンで新しい接続を追加してください。');
+      const previous = store.secret(credential), session = previous.credential_type === 'expo_session';
+      if (session && !this.sessionLoginEnabled) fail(409, 'reconnect_required', 'Expoのログインによる登録は現在利用できません。アクセストークンで新しく登録し直してください。');
       const next = await this.inspect(previous.access_token, { session });
-      if (account.subject !== (session ? 'session:' : 'token:') + next.details.token_hash || previous.details.actor_id !== next.details.actor_id) invalidResponse();
-      store.saveCredentials(account, next);
+      if (credential.subject !== (session ? 'session:' : 'token:') + next.details.token_hash || previous.details.actor_id !== next.details.actor_id) invalidResponse();
+      store.saveSecret(credential, next);
       return next;
     } catch (error) {
-      if (error instanceof HttpError && error.code === 'reconnect_required') store.reconnectRequired(account);
+      if (error instanceof HttpError && error.code === 'reconnect_required') store.reconnectRequired(credential);
       throw error;
     }
   }
-  accountInfo(credentials) {
-    const session = credentials.credential_type === 'expo_session';
-    return { label: credentials.details.label + (credentials.details.actor_type === 'Robot' ? ' (Robot)' : ''), credential_type: session ? 'expo_session' : 'api_key', can_revoke: session,
+  facts(secret) {
+    const session = secret.credential_type === 'expo_session';
+    return { label: secret.details.label + (secret.details.actor_type === 'Robot' ? ' (Robot)' : ''), credential_type: session ? 'expo_session' : 'api_key', can_revoke: session,
       expires_at: null, expiry_known: false, ...(session ? {} : { management_url: EXPO_TOKENS }) };
   }
-  canRevoke(credentials) { return credentials.credential_type === 'expo_session'; }
-  async revoke(credentials) {
-    if (!this.canRevoke(credentials)) fail(409, 'manual_revocation_required', 'トークンの無効化はExpoのトークン管理画面で行ってください。');
+  canRevoke(secret) { return secret.credential_type === 'expo_session'; }
+  async revoke(secret) {
+    if (!this.canRevoke(secret)) fail(409, 'manual_revocation_required', 'トークンの無効化はExpoのトークン管理画面で行ってください。');
     let response;
-    try { response = await this.fetcher('https://api.expo.dev/v2/auth/logout', { method: 'POST', headers: { 'content-type': 'application/json', 'expo-session': credentials.access_token }, body: '{}', redirect: 'error', signal: AbortSignal.timeout(12_000) }); }
+    try { response = await this.fetcher('https://api.expo.dev/v2/auth/logout', { method: 'POST', headers: { 'content-type': 'application/json', 'expo-session': secret.access_token }, body: '{}', redirect: 'error', signal: AbortSignal.timeout(12_000) }); }
     catch { fail(502, 'service_unavailable', 'Expo側のログアウトを確認できませんでした。もう一度お試しください。'); }
     if (!response.ok && ![401, 403].includes(response.status)) fail(502, 'service_unavailable', 'Expo側のログアウトを確認できませんでした。もう一度お試しください。');
   }

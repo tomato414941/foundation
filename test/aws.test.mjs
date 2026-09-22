@@ -8,7 +8,7 @@ import { signedRequest } from '../src/services/aws.mjs';
 import { awsFixture, AWS_SECRET, AWS_FIELDS, AWS_KEY_ID } from './aws-helper.mjs';
 import { json, USER_A } from './helpers.mjs';
 
-const credential = (f, id, token, data = {}) => f.request('/v1/accounts/' + id + '/credentials', { method: 'POST', anonymous: true, token, data });
+const credential = (f, id, token, data = {}) => f.request('/v1/credentials/' + id + '/deliver', { method: 'POST', anonymous: true, token, data });
 const execute = (args, env) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, ['src/runtime.mjs', ...args], { env: { ...process.env, ...env } });
   let out = '', err = '';
@@ -35,7 +35,7 @@ test('AWS import verifies the key with GetCallerIdentity, proves the role once, 
   assert.deepEqual(f.aws.calls.map(call => call.params.Action), ['GetCallerIdentity', 'AssumeRole']);
   assert.equal(f.aws.calls[1].params.DurationSeconds, undefined, 'registration probe leaves the duration to AWS');
   assert.ok(!state.text.includes(AWS_SECRET));
-  const stored = f.app.store.secrets(f.app.store.account(USER_A, account.id));
+  const stored = f.app.store.secret(f.app.store.credential(USER_A, account.id));
   assert.equal(stored.access_token, AWS_SECRET);
   assert.equal(stored.details.session_token, undefined);
 });
@@ -57,7 +57,7 @@ test('AWS refuses bad identifiers, wrong secrets, untrusted roles and mismatched
   f.aws.trusted = true;
   const mismatch = await f.importAws({ token: [AWS_KEY_ID, AWS_SECRET, 'arn:aws:iam::999999999999:role/other', 'ap-northeast-1'].join('|') });
   assert.equal(mismatch.json.error.code, 'role_denied');
-  assert.equal(f.app.store.accounts(USER_A).length, 0);
+  assert.equal(f.app.store.credentials(USER_A).length, 0);
   assert.equal((await f.importAws()).status, 200);
   assert.equal((await f.importAws()).status, 409, 'same key and role twice');
 });
@@ -66,17 +66,16 @@ test('Each issuance assumes the role afresh: temporary credentials only, duratio
   const f = await awsFixture(t), account = await f.awsAccount(), runtime = await f.agent();
   const first = await credential(f, account.id, runtime.token);
   assert.equal(first.status, 200, first.text);
-  assert.equal(first.json.credential_type, 'aws_temporary');
-  assert.equal(first.json.token_env, 'AWS_SECRET_ACCESS_KEY');
-  assert.match(first.json.access_token, /^temporary\/secret\/foundation-/);
-  assert.equal(first.json.environment.AWS_ACCESS_KEY_ID, 'ASIAEXAMPLE123456789');
-  assert.equal(first.json.environment.AWS_SESSION_TOKEN, 'session-token-3600');
-  assert.equal(first.json.environment.AWS_REGION, 'ap-northeast-1');
+  const delivered = first.json.delivery.environment;
+  assert.match(delivered.AWS_SECRET_ACCESS_KEY, /^temporary\/secret\/foundation-/);
+  assert.equal(delivered.AWS_ACCESS_KEY_ID, 'ASIAEXAMPLE123456789');
+  assert.equal(delivered.AWS_SESSION_TOKEN, 'session-token-3600');
+  assert.equal(delivered.AWS_REGION, 'ap-northeast-1');
   assert.ok(first.json.expires_at > Date.now() + 3500_000 && first.json.expires_at < Date.now() + 3700_000);
   assert.ok(!first.text.includes(AWS_SECRET), 'the long-lived secret is never issued');
   assert.equal(f.aws.calls.filter(call => call.params.Action === 'AssumeRole').at(-1).params.DurationSeconds, undefined);
   const longer = await credential(f, account.id, runtime.token, { duration: 1800 });
-  assert.equal(longer.json.environment.AWS_SESSION_TOKEN, 'session-token-1800');
+  assert.equal(longer.json.delivery.environment.AWS_SESSION_TOKEN, 'session-token-1800');
   assert.equal(f.aws.calls.at(-1).params.DurationSeconds, '1800');
   const tooLong = await credential(f, account.id, runtime.token, { duration: 7200 });
   assert.equal(tooLong.status, 409); assert.equal(tooLong.json.error.code, 'aws_validationerror');
@@ -84,12 +83,12 @@ test('Each issuance assumes the role afresh: temporary credentials only, duratio
   assert.equal((await credential(f, account.id, runtime.token, { duration: 'soon' })).status, 400);
   assert.equal((await credential(f, account.id, runtime.token, { duration: 0 })).status, 400);
   // Stored key stays unchanged and is not overwritten by session material.
-  const stored = f.app.store.secrets(f.app.store.account(USER_A, account.id));
+  const stored = f.app.store.secret(f.app.store.credential(USER_A, account.id));
   assert.equal(stored.access_token, AWS_SECRET); assert.equal(stored.details.session_token, undefined);
   // A key AWS stops accepting marks the connection for reconnection.
   f.aws.handler = () => json({ Error: { Code: 'InvalidClientTokenId' } }, 403);
   assert.equal((await credential(f, account.id, runtime.token)).json.error.code, 'reconnect_required');
-  assert.equal((await f.request('/api/state')).json.accounts[0].status, 'reconnect_required');
+  assert.equal((await f.request('/api/state')).json.credentials[0].status, 'reconnect_required');
 });
 
 test('The CLI passes --duration through and the child sees only temporary AWS credentials', async t => {
@@ -97,7 +96,7 @@ test('The CLI passes --duration through and the child sees only temporary AWS cr
   const dir = await mkdtemp(join(tmpdir(), 'foundation-aws-cli-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'runtime-key'); await writeFile(keyPath, runtime.token, { mode: 0o600 });
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
-  const probe = ['-e', 'const e=process.env; if(!e.AWS_ACCESS_KEY_ID?.startsWith("ASIA")||!e.AWS_SECRET_ACCESS_KEY?.startsWith("temporary/")||!e.AWS_SESSION_TOKEN||e.AWS_REGION!=="ap-northeast-1"||e.FOUNDATION_ACCESS_TOKEN!==e.AWS_SECRET_ACCESS_KEY)process.exit(2); console.log(e.AWS_SESSION_TOKEN)'];
+  const probe = ['-e', 'const e=process.env; if(!e.AWS_ACCESS_KEY_ID?.startsWith("ASIA")||!e.AWS_SECRET_ACCESS_KEY?.startsWith("temporary/")||!e.AWS_SESSION_TOKEN||e.AWS_REGION!=="ap-northeast-1")process.exit(2); console.log(e.AWS_SESSION_TOKEN)'];
   const run = await execute(['exec', account.id, '--', process.execPath, ...probe], env);
   assert.equal(run.code, 0, run.err); assert.equal(run.out.trim(), 'session-token-3600');
   const custom = await execute(['exec', '--duration', '900', account.id, '--', process.execPath, ...probe], env);

@@ -81,13 +81,13 @@ with sync_playwright() as p:
     code = hashlib.sha256(b"new@example.test").hexdigest()
     link_page = context.new_page()
     link_page.goto(args.base + "/auth/callback?code=" + code, wait_until="networkidle")
-    expect(link_page.get_by_role("heading", name="接続", exact=True)).to_be_visible()
+    expect(link_page.get_by_role("heading", name="認証情報", exact=True)).to_be_visible()
     assert "code=" not in link_page.url and "#" not in link_page.url
     link_page.close()
     page.bring_to_front()
     page.evaluate('window.dispatchEvent(new Event("focus"))')
-    expect(page.get_by_role("heading", name="接続", exact=True)).to_be_visible()
-    expect(page.get_by_role("button", name="Gmailを接続", exact=True)).to_be_enabled()
+    expect(page.get_by_role("heading", name="認証情報", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="Gmailを登録", exact=True)).to_be_enabled()
     expect(page.get_by_role("button", name="アクセスキーを追加", exact=True)).to_be_enabled()
     assert page.evaluate("localStorage.length === 0 && sessionStorage.length === 0")
     assert "fdn_session" not in page.evaluate("document.cookie")
@@ -107,29 +107,29 @@ with sync_playwright() as p:
 
     def connect(name, code, metadata=False):
         authorization["code"] = code
-        page.get_by_role("button", name="Gmailを接続", exact=True).click()
+        page.get_by_role("button", name="Gmailを登録", exact=True).click()
         expect(dialog).to_be_visible()
-        dialog.get_by_label("表示名", exact=True).fill(name)
+        # Gmail has one adapter per read range; the owner picks one first.
+        dialog.get_by_role("button", name="件名・差出人などの読み取り" if metadata else "メールの読み取り", exact=True).click()
+        dialog.get_by_label("表示名 任意", exact=True).fill(name)
         dialog.locator("#account-purpose").fill("サービスへの登録と確認メール")
-        if metadata:
-            dialog.get_by_role("radio", name="件名・差出人などの読み取り", exact=False).check()
         check_display(page)
         if name == "個人用":
             page.screenshot(path=str(shots / "connect.png"), full_page=True)
         dialog.get_by_role("button", name="Googleで接続", exact=False).click()
-        expect(page.get_by_role("heading", name="接続", exact=True)).to_be_visible()
-        expect(page.get_by_text("Gmailを接続しました。", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="認証情報", exact=True)).to_be_visible()
+        expect(page.get_by_text("Gmailの認証情報を登録しました。", exact=True)).to_be_visible()
         page.wait_for_load_state("networkidle")
         assert "code=" not in page.url and "state=" not in page.url
 
     connect("個人用", "personal-readonly")
     connect("仕事用", "work-metadata", True)
-    expect(page.locator(".account-item")).to_have_count(2)
-    page.locator(".account-item").filter(has_text="仕事用").click()
-    expect(page.locator('.connection-facts')).to_contain_text("件名・差出人などの読み取り")
-    page.locator(".account-item").filter(has_text="個人用").click()
-    page.get_by_role("button", name="接続を確認", exact=True).click()
-    expect(page.get_by_text("Gmailに接続できました。", exact=True)).to_be_visible()
+    expect(page.locator(".credential-item")).to_have_count(2)
+    page.locator(".credential-item").filter(has_text="仕事用").click()
+    expect(page.locator('.credential-facts')).to_contain_text("件名・差出人などの読み取り")
+    page.locator(".credential-item").filter(has_text="個人用").click()
+    page.get_by_role("button", name="検証する", exact=True).click()
+    expect(page.get_by_text("Gmailで検証できました。", exact=True)).to_be_visible()
 
     def create_runtime(name):
         page.get_by_role("button", name="アクセスキーを追加", exact=True).click()
@@ -146,12 +146,12 @@ with sync_playwright() as p:
     caller = p.request.new_context(base_url=args.base)
     def runtime(path, token, method="GET"):
         return caller.fetch(path, method=method, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data="{}" if method == "POST" else None)
-    accounts = runtime("/v1/accounts", token_a).json()["accounts"]
-    assert len(accounts) == 2, "an issued key uses every registered connection"
-    account_id = accounts[0]["id"]
-    issued = runtime("/v1/accounts/" + account_id + "/credentials", token_a, "POST")
-    assert issued.status == 200 and issued.json()["access_token"].startswith("google-access-")
-    assert runtime("/v1/accounts/" + account_id + "/messages", token_a).status == 404
+    credentials = runtime("/v1/credentials", token_a).json()["credentials"]
+    assert len(credentials) == 2, "an issued key uses every registered credential"
+    credential_id = credentials[0]["id"]
+    issued = runtime("/v1/credentials/" + credential_id + "/deliver", token_a, "POST")
+    assert issued.status == 200 and issued.json()["delivery"]["environment"]["GOOGLE_OAUTH_ACCESS_TOKEN"].startswith("google-access-")
+    assert runtime("/v1/credentials/" + credential_id + "/messages", token_a).status == 404
     assert "google-access-" not in page.content()
     page.reload()
     page.wait_for_load_state("networkidle")
@@ -159,7 +159,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "desktop.png"), full_page=True)
 
     row = page.locator(".agent-row").filter(has_text="dev-us")
-    assert runtime("/v1/accounts/" + account_id + "/credentials", token_b, "POST").status == 200
+    assert runtime("/v1/credentials/" + credential_id + "/deliver", token_b, "POST").status == 200
 
     for width in [1280, 800, 768, 601, 600, 390, 320]:
         page.set_viewport_size({"width": width, "height": 950})
@@ -171,7 +171,7 @@ with sync_playwright() as p:
     dialog.locator("#account-purpose").fill("長い用途の説明" * 30)
     dialog.get_by_role("button", name="保存", exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert page.locator(".connection-pane img").count() == 0
+    assert page.locator(".credential-pane img").count() == 0
     assert page.evaluate("window.xss === undefined")
     for width in [320, 601, 1280]:
         page.set_viewport_size({"width": width, "height": 950})
@@ -184,9 +184,9 @@ with sync_playwright() as p:
 
     # Cancellation returns a useful message without disclosing provider errors.
     authorization["deny"] = True
-    page.get_by_role("button", name="再接続", exact=True).click()
+    page.get_by_role("button", name="登録し直す", exact=True).click()
     dialog.get_by_role("button", name="Googleで接続", exact=False).click()
-    expect(page.get_by_text("Gmailの接続をキャンセルしました。", exact=True)).to_be_visible()
+    expect(page.get_by_text("Gmailの登録をキャンセルしました。", exact=True)).to_be_visible()
     authorization["deny"] = False
 
     page.set_viewport_size({"width": 390, "height": 844})
@@ -196,15 +196,15 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "revoke-mobile.png"), full_page=True)
     dialog.get_by_role("button", name="失効させる", exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert runtime("/v1/accounts", token_a).status == 401
-    assert runtime("/v1/accounts", token_b).status == 200
-    page.get_by_role("button", name="接続を解除", exact=True).click()
+    assert runtime("/v1/credentials", token_a).status == 401
+    assert runtime("/v1/credentials", token_b).status == 200
+    page.get_by_role("button", name="登録を解除", exact=True).click()
     check_display(page)
     page.screenshot(path=str(shots / "disconnect-mobile.png"), full_page=True)
-    dialog.get_by_role("button", name="接続を解除", exact=True).click()
+    dialog.get_by_role("button", name="登録を解除", exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(page.locator(".account-item")).to_have_count(1)
-    assert runtime("/v1/accounts/" + account_id + "/credentials", token_b, "POST").status == 403
+    expect(page.locator(".credential-item")).to_have_count(1)
+    assert runtime("/v1/credentials/" + credential_id + "/deliver", token_b, "POST").status == 403
     page.get_by_role("button", name="ログアウト", exact=True).click()
     expect(page.get_by_role("heading", name="ログイン", exact=True)).to_be_visible()
     assert not errors, errors

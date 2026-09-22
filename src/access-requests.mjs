@@ -35,8 +35,8 @@ export class AccessRequests {
   }
   // The runtime writes the guidance the owner reads on the approval page; Foundation only frames it as the AI's words.
   // The runtime chooses how long the link stays open (default 30 minutes, at most a day): a phone user may need time for the other service.
-  create(token, { name, adapter, purpose, permission, details, guidance = '', validMinutes = 30 }) {
-    this.adapters.permission(adapter, permission);
+  create(token, { name, adapter, purpose, details, guidance = '', validMinutes = 30 }) {
+    this.adapters.get(adapter);
     if (!Number.isInteger(validMinutes) || validMinutes < 1 || validMinutes * 60_000 > MAX_REQUEST_TTL) fail(400, 'invalid_validity', '有効期間は1〜1440分で指定してください。');
     if (typeof guidance !== 'string' || guidance.length > 2000 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(guidance)) fail(400, 'invalid_guidance', '案内は2000文字以内で入力してください。');
     guidance = guidance.replace(/\r\n?/g, '\n').trim();
@@ -47,14 +47,14 @@ export class AccessRequests {
     const agent = this.store.authenticate(token), requesterName = agent?.name || name;
     const previous = this.db.prepare("SELECT * FROM access_requests WHERE token_hash=? AND status='pending' AND expires_at>? ORDER BY created_at DESC LIMIT 1").get(hash, Date.now());
     if (previous) {
-      if (previous.requester_name !== requesterName || previous.adapter !== adapter || previous.purpose !== purpose || previous.permission !== permission || previous.details !== encoded || previous.guidance !== guidance || previous.expires_at - previous.created_at !== validMinutes * 60_000) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
+      if (previous.requester_name !== requesterName || previous.adapter !== adapter || previous.purpose !== purpose || previous.details !== encoded || previous.guidance !== guidance || previous.expires_at - previous.created_at !== validMinutes * 60_000) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
       return previous;
     }
     if (this.db.prepare('SELECT count(*) n FROM access_requests').get().n >= 1000) fail(429, 'request_limit', '接続依頼が混み合っています。しばらく待ってからお試しください。');
     const id = randomBytes(32).toString('base64url'), code = randomBytes(4).toString('hex').toUpperCase();
     const now = Date.now();
-    this.db.prepare('INSERT INTO access_requests (id,token_hash,requester_name,adapter,purpose,permission,details,guidance,confirmation_code,owner_id,agent_id,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
-      .run(id, hash, requesterName, adapter, purpose, permission, encoded, guidance, code.slice(0, 4) + '-' + code.slice(4), agent?.owner_id || null, agent?.id || null, now, now + validMinutes * 60_000);
+    this.db.prepare('INSERT INTO access_requests (id,token_hash,requester_name,adapter,purpose,details,guidance,confirmation_code,owner_id,agent_id,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(id, hash, requesterName, adapter, purpose, encoded, guidance, code.slice(0, 4) + '-' + code.slice(4), agent?.owner_id || null, agent?.id || null, now, now + validMinutes * 60_000);
     return this.get(id);
   }
   details(row) { return JSON.parse(row.details); }
@@ -76,12 +76,11 @@ export class AccessRequests {
     const row = this.current(token);
     return { ...this.summary(row, ''), events: this.eventsOf(row) };
   }
-  matches(row, account) { return this.adapters.matches(row.adapter, row.permission, account, this.details(row)); }
   // A request from a key the owner already approved asks for nothing but a registration: registering completes it.
-  registered(id, ownerId, accountId) {
+  registered(id, ownerId, credentialId) {
     const row = this.forUser(id, ownerId, true);
-    if (row.agent_id) this.db.prepare("UPDATE access_requests SET owner_id=?, account_id=?, status='approved' WHERE id=?").run(ownerId, accountId, row.id);
-    else this.db.prepare('UPDATE access_requests SET owner_id=?, account_id=? WHERE id=?').run(ownerId, accountId, row.id);
+    if (row.agent_id) this.db.prepare("UPDATE access_requests SET owner_id=?, credential_id=?, status='approved' WHERE id=?").run(ownerId, credentialId, row.id);
+    else this.db.prepare('UPDATE access_requests SET owner_id=?, credential_id=? WHERE id=?').run(ownerId, credentialId, row.id);
     return this.get(id);
   }
   claim(id, ownerId) {
@@ -103,7 +102,7 @@ export class AccessRequests {
     this.db.prepare('UPDATE access_requests SET confirmation_attempts=? WHERE id=?').run(attempts, row.id);
     fail(400, 'confirmation_required', 'AIとの会話に表示された確認コードを入力してください。');
   }
-  // Approval is the owner acknowledging the key as theirs: once, with the code. From then on the key uses every account the owner has.
+  // Approval is the owner acknowledging the key as theirs: once, with the code. From then on the key uses every credential the owner has.
   approve(id, ownerId, code) {
     this.verifyCode(id, ownerId, code);
     return this.store.transaction(() => {
@@ -129,19 +128,20 @@ export class AccessRequests {
     return this.get(row.id);
   }
   summary(row, origin, { code = true } = {}) {
-    let status = row.status, account;
+    let status = row.status, credential;
     if (status === 'pending' && row.agent_id && !this.db.prepare('SELECT 1 FROM agents WHERE id=? AND owner_id=? AND token_hash=?').get(row.agent_id, row.owner_id, row.token_hash)) status = 'revoked';
     if (status === 'approved') {
       const agent = this.db.prepare('SELECT * FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash);
-      account = row.account_id ? this.store.account(row.owner_id, row.account_id) : null;
+      credential = row.credential_id ? this.store.credential(row.owner_id, row.credential_id) : null;
       if (!agent || agent.owner_id !== row.owner_id) status = 'revoked';
-      else if (account && account.status === 'disconnecting') account = null;
-      else if (account && account.status !== 'connected') status = 'reconnect_required';
+      else if (credential && credential.status === 'disconnecting') credential = null;
+      else if (credential && credential.status !== 'connected') status = 'reconnect_required';
     }
     const registered = row.agent_id ? this.db.prepare('SELECT name FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash) : undefined;
-    return { id: row.id, adapter: this.adapters.describe(row.adapter), permission: this.adapters.permission(row.adapter, row.permission), form: this.adapters.form(row.adapter, this.details(row)), requester_name: row.requester_name, purpose: row.purpose, details: this.details(row), guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
+    const details = this.details(row);
+    return { id: row.id, adapter: this.adapters.describe(row.adapter, details), requester_name: row.requester_name, purpose: row.purpose, details, guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
       ...(code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
-      status, created_at: row.created_at, expires_at: row.expires_at, ...(row.account_id ? { account_id: row.account_id } : {}),
-      ...(status === 'approved' ? { agent_id: row.agent_id, ...(account ? { account: { id: account.id, subject: account.subject, label: this.adapters.get(account.adapter).client.accountInfo?.(this.store.secrets(account))?.label || account.subject } } : {}) } : {}) };
+      status, created_at: row.created_at, expires_at: row.expires_at, ...(row.credential_id ? { credential_id: row.credential_id } : {}),
+      ...(status === 'approved' ? { agent_id: row.agent_id, ...(credential ? { credential: { id: credential.id, service: credential.service, subject: credential.subject, label: this.adapters.get(credential.adapter).client.facts?.(this.store.secret(credential))?.label || credential.subject } } : {}) } : {}) };
   }
 }

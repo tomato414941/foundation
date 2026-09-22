@@ -7,11 +7,12 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { CLOUDFLARE_API, CLOUDFLARE_TOKENS } from '../src/services/cloudflare.mjs';
 import { GenericClient } from '../src/generic.mjs';
+import { Adapters, cloudflareApiToken, generic } from '../src/adapters.mjs';
 import { cloudflareFixture, FakeCloudflare, CLOUDFLARE_TOKEN, CLOUDFLARE_ACCOUNT } from './cloudflare-helper.mjs';
 import { json, USER_A } from './helpers.mjs';
 
-const credential = (f, id, token) => f.request('/v1/accounts/' + id + '/credentials', { method: 'POST', anonymous: true, token, data: {} });
-const createRequest = async (f, token) => (await f.request('/v1/access-requests', { method: 'POST', token, anonymous: true, data: { adapter: 'cloudflare.api-token', permission: 'api-token', name: 'dev-us', purpose: 'R2のバケット一覧を確認。変更は行わない。' } })).json.request;
+const credential = (f, id, token) => f.request('/v1/credentials/' + id + '/deliver', { method: 'POST', anonymous: true, token, data: {} });
+const createRequest = async (f, token) => (await f.request('/v1/access-requests', { method: 'POST', token, anonymous: true, data: { adapter: 'cloudflare.api-token', name: 'dev-us', purpose: 'R2のバケット一覧を確認。変更は行わない。' } })).json.request;
 const inspect = provider => provider.inspect(CLOUDFLARE_TOKEN, CLOUDFLARE_ACCOUNT);
 const code = expected => error => error.code === expected;
 
@@ -26,11 +27,10 @@ test('Cloudflare verifies a user token and probes one R2 list page without keepi
   assert.equal(account.label, 'Cloudflare ' + CLOUDFLARE_ACCOUNT);
   assert.equal(account.expires_at, Date.parse(f.cloudflare.verification.expires_on));
   assert.equal(account.expiry_known, true);
-  assert.equal(account.permission.id, 'api-token');
-  assert.match(account.permission.restrictions, /全権限/);
+  assert.match(account.access.restrictions, /全権限/);
   assert.ok(!state.text.includes(CLOUDFLARE_TOKEN));
   assert.doesNotMatch(state.text, /test-bucket-do-not-store|token_id|token_hash/);
-  const saved = f.app.store.secrets(f.app.store.account(USER_A, account.id));
+  const saved = f.app.store.secret(f.app.store.credential(USER_A, account.id));
   assert.doesNotMatch(JSON.stringify(saved), /test-bucket-do-not-store/);
   assert.deepEqual(f.cloudflare.calls.map(call => call.url.slice(CLOUDFLARE_API.length)), ['/user/tokens/verify', '/accounts/' + CLOUDFLARE_ACCOUNT + '/r2/buckets?per_page=1']);
   assert.ok(f.cloudflare.calls.every(call => call.options.redirect === 'error' && call.options.method === 'GET' && call.options.headers.authorization === 'Bearer ' + CLOUDFLARE_TOKEN));
@@ -45,7 +45,6 @@ test('Cloudflare rejects invalid account IDs and token kinds before any network 
     await assert.rejects(provider.inspect(token, CLOUDFLARE_ACCOUNT), code('invalid_credential'));
   }
   assert.equal(provider.calls.length, 0);
-  await assert.rejects(provider.importToken({ values: { token: CLOUDFLARE_TOKEN, account_id: CLOUDFLARE_ACCOUNT }, permission: 'readonly' }), code('invalid_permission'));
 });
 
 test('Cloudflare accepts legacy user tokens, no expiry and empty bucket lists', async () => {
@@ -94,13 +93,12 @@ test('Cloudflare records R2 access failures without blocking registration of a v
   const f = await cloudflareFixture(t);
   const bad = await f.importCloudflare({ fields: { account_id: 'f'.repeat(32) } });
   assert.equal(bad.status, 200); assert.equal(bad.json.verification.checks[1].code, 'r2_unavailable');
-  assert.equal(f.app.store.accounts(USER_A).length, 1);
+  assert.equal(f.app.store.credentials(USER_A).length, 1);
   assert.equal(f.app.store.agents(USER_A).length, 0);
   assert.equal((await f.importCloudflare({ fields: {} })).status, 400);
-  assert.equal((await f.importCloudflare({ permission: 'admin' })).status, 400);
   assert.equal((await f.importCloudflare()).status, 409);
-  const generic = new GenericClient();
-  for (const env of ['CLOUDFLARE_API_TOKEN', 'CF_API_TOKEN']) assert.throws(() => generic.details({ service: 'Cloudflare', site: CLOUDFLARE_TOKENS, fields: [{ id: env }] }), /環境変数名/);
+  const adapters = new Adapters([cloudflareApiToken(new FakeCloudflare()), generic(new GenericClient())]);
+  assert.throws(() => adapters.details('generic', { service: 'Cloudflare', site: CLOUDFLARE_TOKENS, fields: [{ id: 'CLOUDFLARE_API_TOKEN' }] }), /環境変数名/);
 });
 
 test('Cloudflare requires explicit approval, keeps tokens encrypted and stops delivery after revocation', async t => {
@@ -110,25 +108,24 @@ test('Cloudflare requires explicit approval, keeps tokens encrypted and stops de
   const token = 'fdn_' + randomBytes(32).toString('base64url'), row = await createRequest(f, token);
   const account = await f.cloudflareAccount({ accessRequestId: row.id });
   assert.equal((await credential(f, account.id, token)).status, 401);
-  const approved = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { accountId: account.id, confirmationCode: row.confirmation_code } });
+  const approved = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { credentialId: account.id, confirmationCode: row.confirmation_code } });
   assert.equal(approved.status, 200, approved.text);
-  const listed = await f.request('/v1/accounts', { token, anonymous: true });
-  assert.equal(listed.json.accounts[0].token_env, 'CLOUDFLARE_API_TOKEN');
-  assert.equal(listed.json.accounts[0].cloudflare_account_id, CLOUDFLARE_ACCOUNT);
+  const listed = await f.request('/v1/credentials', { token, anonymous: true });
+  assert.deepEqual(listed.json.credentials[0].variables, ['CLOUDFLARE_API_TOKEN']);
+  assert.equal(listed.json.credentials[0].cloudflare_account_id, CLOUDFLARE_ACCOUNT);
   assert.ok(!listed.text.includes(CLOUDFLARE_TOKEN));
   const issued = await credential(f, account.id, token);
   assert.equal(issued.status, 200, issued.text);
-  assert.equal(issued.json.access_token, CLOUDFLARE_TOKEN);
-  assert.equal(issued.json.token_env, 'CLOUDFLARE_API_TOKEN');
-  assert.equal(issued.json.api_base_url, CLOUDFLARE_API);
+  assert.deepEqual(issued.json.delivery.environment, { CLOUDFLARE_API_TOKEN: CLOUDFLARE_TOKEN });
+  assert.equal(listed.json.credentials[0].api.base_url, CLOUDFLARE_API);
   f.app.store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   assert.ok(!(await readFile(database)).includes(Buffer.from(CLOUDFLARE_TOKEN)));
   f.cloudflare.valid.clear();
   const revoked = await credential(f, account.id, token);
   assert.equal(revoked.status, 409); assert.equal(revoked.json.error.code, 'reconnect_required');
-  assert.equal((await f.request('/api/state')).json.accounts[0].status, 'reconnect_required');
-  assert.equal((await f.request('/api/accounts/' + account.id, { method: 'DELETE', data: { revoke: true } })).json.error.code, 'manual_revocation_required');
-  assert.equal((await f.request('/api/accounts/' + account.id, { method: 'DELETE', data: { revoke: false } })).status, 200);
+  assert.equal((await f.request('/api/state')).json.credentials[0].status, 'reconnect_required');
+  assert.equal((await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: true } })).json.error.code, 'manual_revocation_required');
+  assert.equal((await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: false } })).status, 200);
   assert.equal((await credential(f, account.id, token)).status, 403);
 });
 
@@ -136,7 +133,7 @@ test('Cloudflare rechecks R2 access and token identity on delivery but does not 
   const f = await cloudflareFixture(t), account = await f.cloudflareAccount(), agent = await f.agent();
   f.cloudflare.handler = () => { throw new Error('offline'); };
   assert.equal((await credential(f, account.id, agent.token)).status, 502);
-  assert.equal((await f.request('/api/state')).json.accounts[0].status, 'connected');
+  assert.equal((await f.request('/api/state')).json.credentials[0].status, 'connected');
   f.cloudflare.handler = null;
   const original = f.cloudflare.verification.id;
   f.cloudflare.verification.id = 'c'.repeat(32);
@@ -146,7 +143,7 @@ test('Cloudflare rechecks R2 access and token identity on delivery but does not 
   const result = await credential(f, account.id, agent.token);
   assert.equal(result.status, 200);
   assert.equal(result.json.verification.checks[1].code, 'r2_unavailable');
-  assert.equal((await f.request('/api/state')).json.accounts[0].status, 'connected');
+  assert.equal((await f.request('/api/state')).json.credentials[0].status, 'connected');
 });
 
 test('Cloudflare cannot be imported across user sessions or after an approval request is cancelled', { timeout: 10_000 }, async t => {
@@ -162,13 +159,13 @@ test('Cloudflare cannot be imported across user sessions or after an approval re
   finally { release(); }
   assert.equal(cancelled.status, 200, cancelled.text);
   assert.equal((await importing).status, 409);
-  assert.equal(f.app.store.accounts(USER_A).length, 0);
+  assert.equal(f.app.store.credentials(USER_A).length, 0);
   f.cloudflare.handler = null;
   const account = await f.cloudflareAccount(), agent = await f.agent();
   await f.login('other@example.test');
-  assert.equal((await f.request('/api/state')).json.accounts.length, 0);
-  assert.equal((await f.request('/api/accounts/' + account.id + '/check', { method: 'POST', data: {} })).status, 404);
-  const otherAccount = await f.account('other'), other = await f.agent();
+  assert.equal((await f.request('/api/state')).json.credentials.length, 0);
+  assert.equal((await f.request('/api/credentials/' + account.id + '/check', { method: 'POST', data: {} })).status, 404);
+  const otherAccount = await f.credential('other'), other = await f.agent();
   assert.equal((await credential(f, account.id, other.token)).status, 403);
   assert.equal((await credential(f, account.id, agent.token)).status, 200);
 });
@@ -185,7 +182,7 @@ test('Cloudflare import cannot recreate a connection after the user logs out dur
   finally { release(); }
   assert.equal(logout.status, 200);
   assert.equal((await importing).status, 401);
-  assert.equal(f.app.store.accounts(USER_A).length, 0);
+  assert.equal(f.app.store.credentials(USER_A).length, 0);
 });
 
 test('Cloudflare native API credentials are injected into the child process without printing the token', async t => {
@@ -195,7 +192,7 @@ test('Cloudflare native API credentials are injected into the child process with
   const key = join(dir, 'runtime-key'); await writeFile(key, agent.token, { mode: 0o600 });
   const output = await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['src/runtime.mjs', 'exec', account.id, '--', process.execPath, '-e',
-      'if(!process.env.CLOUDFLARE_API_TOKEN?.startsWith("cfut_") || process.env.CLOUDFLARE_API_TOKEN!==process.env.FOUNDATION_ACCESS_TOKEN || process.env.FOUNDATION_API_BASE_URL!=="https://api.cloudflare.com/client/v4" || process.env.FOUNDATION_RUNTIME_KEY_FILE) process.exit(2); console.log("cloudflare-ready")'],
+      'if(!process.env.CLOUDFLARE_API_TOKEN?.startsWith("cfut_") || process.env.FOUNDATION_RUNTIME_KEY_FILE) process.exit(2); console.log("cloudflare-ready")'],
     { env: { ...process.env, FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: key } });
     let out = '', err = '';
     child.stdout.on('data', part => { out += part; }); child.stderr.on('data', part => { err += part; });

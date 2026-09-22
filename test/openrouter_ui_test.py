@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
         return json.loads(result.stdout) if success else None
 
     request = cli('connect', '--adapter', 'openrouter.oauth', '--name', 'dev-us のAI', '--purpose', '接続したキーの情報を確認。モデルは実行しません。')['request']
-    assert request['adapter']['id'] == 'openrouter.oauth' and request['permission']['id'] == 'api-key'
+    assert request['adapter']['id'] == 'openrouter.oauth'
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 1050})
     page = context.new_page()
@@ -63,8 +63,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
 
     page.route('https://openrouter.ai/auth?*', consent)
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
-    expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
-    cli('accounts', success=False)
+    expect(page.get_by_text('登録をキャンセルしました。', exact=True)).to_be_visible()
+    cli('credentials', success=False)
     authorization['deny'] = False
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
     expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
@@ -75,8 +75,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     expect(page.get_by_role('radio')).to_have_count(0)
     expect(page.get_by_text('期限の指定なし', exact=True)).to_be_visible()
     expect(page.get_by_text('$0.00 · リセットなし', exact=True)).to_be_visible()
-    cli('accounts', success=False)
-    cli('accounts', success=False)
+    cli('credentials', success=False)
+    cli('credentials', success=False)
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
@@ -86,17 +86,17 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
-    account = cli('accounts')['accounts'][0]
-    assert account['authentication']['type'] == 'api_key_bearer'
-    command = subprocess.run(['node', 'src/runtime.mjs', 'exec', account['id'], '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY!==process.env.FOUNDATION_ACCESS_TOKEN || process.env.FOUNDATION_TOKEN_EXPIRES_AT!=="")process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
+    account = cli('credentials')['credentials'][0]
+    assert account['variables'] == ['OPENROUTER_API_KEY']
+    command = subprocess.run(['node', 'src/runtime.mjs', 'exec', account['id'], '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
     page.goto(args.base, wait_until='networkidle')
     section = page.locator('[aria-labelledby="openrouter-title"]')
     assert 'Gmail' not in section.inner_text() and 'メール' not in section.inner_text()
-    expect(section.get_by_role('button', name='再接続', exact=True)).to_have_count(0)
-    section.get_by_role('button', name='接続を確認', exact=True).click()
-    expect(page.get_by_text('OpenRouterに接続できました。', exact=True)).to_be_visible()
+    expect(section.get_by_role('button', name='登録し直す', exact=True)).to_have_count(0)
+    section.get_by_role('button', name='検証する', exact=True).click()
+    expect(page.get_by_text('OpenRouterで検証できました。', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
@@ -110,29 +110,29 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     review(page)
     dialog.get_by_role('button', name='失効させる', exact=True).click()
     expect(dialog).not_to_be_visible()
-    cli('accounts', success=False)
+    cli('credentials', success=False)
 
-    section.get_by_role('button', name='接続を解除', exact=True).click()
+    section.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog.get_by_text('受け渡し済みのAPIキーは、この操作では無効になりません。', exact=False)).to_be_visible()
     expect(dialog.get_by_role('link', name='OpenRouterでキーを削除する', exact=False)).to_have_attribute('href', account['management_url'])
-    dialog.get_by_role('button', name='接続を解除', exact=True).click()
+    dialog.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog).to_be_visible()
     dialog.get_by_role('checkbox', name='キーの無効化はOpenRouterで行うことを確認しました', exact=True).check()
     review(page)
     page.screenshot(path=str(shots / 'disconnect-mobile.png'), full_page=True)
-    dialog.get_by_role('button', name='接続を解除', exact=True).click()
+    dialog.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(section.get_by_role('heading', name='OpenRouterを接続しましょう', exact=True)).to_be_visible()
+    expect(section.get_by_role('heading', name='OpenRouterの認証情報を登録しましょう', exact=True)).to_be_visible()
 
     # Root management uses the same adapter-driven flow, with no Gmail-only copy.
-    section.get_by_role('button', name='OpenRouterを接続', exact=True).click()
-    expect(dialog.get_by_label('表示名', exact=True)).to_have_value('OpenRouter')
+    section.get_by_role('button', name='OpenRouterを登録', exact=True).click()
+    expect(dialog.get_by_label('表示名 任意', exact=True)).to_have_value('')
     review(page)
     authorization['code'] = 'second'
-    dialog.get_by_label('表示名', exact=True).fill('<img src=x onerror="window.xss=1">')
+    dialog.get_by_label('表示名 任意', exact=True).fill('<img src=x onerror="window.xss=1">')
     dialog.get_by_role('button', name='OpenRouterで接続', exact=True).click()
-    expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
-    assert 'Gmailを接続しました。' not in page.locator('body').inner_text()
+    expect(page.get_by_text('認証情報を登録しました。', exact=True)).to_be_visible()
+    assert 'Gmailの認証情報を登録しました。' not in page.locator('body').inner_text()
     assert section.locator('img').count() == 0 and page.evaluate('window.xss === undefined')
     review(page)
     assert not errors, errors

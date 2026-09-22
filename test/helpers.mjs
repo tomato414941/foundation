@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createApp } from '../src/app.mjs';
 import { fail } from '../src/errors.mjs';
 import { GmailClient, METADATA_SCOPE, READONLY_SCOPE } from '../src/services/gmail.mjs';
-import { gmailOauth } from '../src/adapters.mjs';
+import { gmailReadonly, gmailMetadata } from '../src/adapters.mjs';
 
 export const KEY = Buffer.alloc(32, 7);
 export const USER_A = '10000000-0000-4000-8000-000000000001';
@@ -58,7 +58,7 @@ export class FakeGmail extends GmailClient {
   }
 }
 export async function fixture(t, options = {}) {
-  const { gmail = new FakeGmail(), adapters = [gmailOauth(gmail)], ...rest } = options, auth = options.auth || new FakeAuth();
+  const { gmail = new FakeGmail(), adapters = [gmailReadonly(gmail), gmailMetadata(gmail)], ...rest } = options, auth = options.auth || new FakeAuth();
   const app = createApp({ encryptionKey: KEY, ...rest, auth, adapters });
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   t.after(() => app.close());
@@ -81,29 +81,31 @@ export async function fixture(t, options = {}) {
     cookie = response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
     return response;
   }
-  async function start({ name = '個人用', permission = 'readonly', purpose = 'サービス登録', accountId } = {}) {
-    const result = await request('/api/adapters/gmail.oauth/connect', { method: 'POST', data: { name, permission, purpose, accountId } });
+  // Gmail's read range is its adapter: gmail.readonly or gmail.metadata.
+  async function start({ name = '個人用', range = 'readonly', purpose = 'サービス登録', credentialId } = {}) {
+    const result = await request('/api/adapters/gmail.' + range + '/connect', { method: 'POST', data: { name, purpose, credentialId } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
+  // Returns to the callback the authorization named, as Google would.
   async function callback(url, code = 'personal-readonly', extra = {}) {
-    return request('/oauth/gmail.oauth/callback?state=' + url.searchParams.get('state') + '&code=' + code, extra);
+    return request(new URL(url.searchParams.get('redirect_uri')).pathname + '?state=' + url.searchParams.get('state') + '&code=' + code, extra);
   }
-  async function account(code = 'personal', permission = 'readonly') {
-    const url = await start({ name: code, permission });
-    const response = await callback(url, code + '-' + permission);
-    assert.equal(response.headers.get('location'), '/?connection=connected&adapter=gmail.oauth', response.text);
-    return (await request('/api/state')).json.accounts.find((item) => item.subject === code + '@example.test');
+  async function credential(code = 'personal', range = 'readonly') {
+    const url = await start({ name: code, range });
+    const response = await callback(url, code + '-' + range);
+    assert.equal(response.headers.get('location'), '/?connection=connected&adapter=gmail.' + range, response.text);
+    return (await request('/api/state')).json.credentials.find((item) => item.subject === code + '@example.test');
   }
   async function agent(name = 'dev-us') {
     const result = await request('/api/agents', { method: 'POST', data: { name } });
     assert.equal(result.status, 201, result.text);
     return result.json.agent;
   }
-  function expire(accountId, owner = USER_A) {
-    const account = app.store.account(owner, accountId);
-    app.store.saveCredentials(account, { ...app.store.secrets(account), expires_at: Date.now() - 1 });
+  function expire(credentialId, owner = USER_A) {
+    const credential = app.store.credential(owner, credentialId);
+    app.store.saveSecret(credential, { ...app.store.secret(credential), expires_at: Date.now() - 1 });
   }
   if (options.login !== false) await login();
-  return { app, auth, gmail, base, request, login, start, callback, account, agent, expire, cookie: () => cookie };
+  return { app, auth, gmail, base, request, login, start, callback, credential, agent, expire, cookie: () => cookie };
 }
