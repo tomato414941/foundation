@@ -156,30 +156,35 @@ function details(credential, group) {
     <div class="credential-actions">${credential.verified === false ? '' : `<button class="button secondary" data-action="check" data-id="${esc(credential.id)}" ${credential.status !== 'connected' || !adapter.available ? 'disabled' : ''}>検証する</button>`}${adapter.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(credential.id)}" ${credential.status === 'disconnecting' || !adapter.available ? 'disabled' : ''}>登録し直す</button>` : ''}<button class="text-button" data-action="edit-credential" data-id="${esc(credential.id)}">名前を変更</button>${manage}<button class="text-button danger" data-action="remove-credential" data-id="${esc(credential.id)}">${credential.status === 'disconnecting' ? '解除を再試行' : '登録を解除'}</button></div>
     ${verificationDetails(credential.verification)}<details class="credential-reference"><summary>詳細</summary><dl><dt>渡す変数</dt><dd>${credential.variables?.length ? credential.variables.map(name => `<code>${esc(name)}</code>`).join(' ') : 'Expo のログイン状態として渡します'}</dd><dt>認証情報ID</dt><dd><code>${esc(credential.id)}</code></dd></dl></details>`;
 }
-// Groups in name order, and credentials in the order they were registered, so nothing moves when one is used or checked.
+// Registered services first, then the ones that can be registered, each in name order. Credentials keep the
+// order they were registered, so nothing moves when one is used or checked.
 function credentialGroups() {
+  const byName = (a, b) => a.name.localeCompare(b.name, 'ja', { sensitivity: 'base' });
   const builtIn = new Map(state.adapters.filter(adapter => adapter.service && !adapter.declared).map(adapter => [siteOf(adapter.service.management_url), adapter.service]));
   const groups = new Map();
   for (const credential of state.credentials) {
     const key = whereOf(credential), service = builtIn.get(key);
-    if (!groups.has(key)) groups.set(key, { name: service?.name || credential.service, icon: service?.icon || 'key', credentials: [] });
+    if (!groups.has(key)) groups.set(key, { name: service?.name || credential.service, icon: service?.icon || 'key', service, credentials: [] });
     groups.get(key).credentials.push(credential);
   }
-  return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name, 'ja', { sensitivity: 'base' }));
+  const open = [];
+  for (const [key, service] of builtIn) if (!groups.has(key) && !open.some(group => group.name === service.name) && state.adapters.some(adapter => adapter.service?.name === service.name && adapter.available && !adapter.declared)) open.push({ name: service.name, icon: service.icon, service, credentials: [] });
+  return [...[...groups.values()].sort(byName), ...open.sort(byName)];
 }
 const groupId = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'service-' + [...name].map(char => char.codePointAt(0).toString(36)).join('');
-// One section per group. With several credentials, a list beside the one shown; with one, just that one.
+// One section per service. With several credentials, a list beside the one shown; with one, just that one;
+// with none, only the heading and the way to register.
 function groupSection(group) {
   const id = groupId(group.name), current = group.credentials.find(item => item.id === selected) || group.credentials[0];
+  const canAdd = group.service && state.adapters.some(adapter => adapter.service?.name === group.name && adapter.available && !adapter.declared);
+  const heading = `<div class="section-heading"><div class="section-label"><span class="service-icon">${icon(group.icon)}</span><div><h2 id="${id}-title">${esc(group.name)}</h2>${current ? '' : '<p>未登録</p>'}</div></div>${canAdd ? `<button class="button secondary" data-action="add-credential" data-service="${esc(group.name)}">${icon('plus')} ${esc(group.name)}を登録</button>` : ''}</div>`;
+  if (!current) return `<section class="resource-section compact" aria-labelledby="${id}-title">${heading}</section>`;
   const list = group.credentials.length > 1 ? `<div class="credential-list" role="group" aria-label="${esc(group.name)}の認証情報">${group.credentials.map(item => `<button class="credential-item ${item.id === current.id ? 'selected' : ''}" data-action="select-credential" data-id="${esc(item.id)}" aria-pressed="${item.id === current.id}"><strong>${esc(item.name)}</strong><span>${esc(cameFrom(item))}</span>${item.status !== 'connected' ? `<small class="warning-text">${statusName(item)}</small>` : ''}</button>`).join('')}</div>` : '';
-  return `<section class="resource-section" aria-labelledby="${id}-title"><div class="section-heading"><div class="section-label"><span class="service-icon">${icon(group.icon)}</span><h2 id="${id}-title">${esc(group.name)}</h2></div></div><div class="credential-workspace${list ? '' : ' single'}">${list}<div class="credential-pane">${details(current, group)}</div></div></section>`;
+  return `<section class="resource-section" aria-labelledby="${id}-title">${heading}<div class="credential-workspace${list ? '' : ' single'}">${list}<div class="credential-pane">${details(current, group)}</div></div></section>`;
 }
 function credentialsSection() {
-  const groups = credentialGroups(), services = [];
-  for (const adapter of state.adapters) if (adapter.service && !adapter.declared && adapter.available && !services.some(item => item.name === adapter.service.name)) services.push(adapter.service);
-  services.sort((a, b) => a.name.localeCompare(b.name, 'ja', { sensitivity: 'base' }));
-  return `<div class="dashboard-heading"><h1>認証情報</h1>${services.length ? `<div class="add-services"><span>管理画面から登録</span>${services.map(service => `<button class="button secondary" data-action="add-credential" data-service="${esc(service.name)}" aria-label="${esc(service.name)}を登録">${icon('plus')} ${esc(service.name)}</button>`).join('')}</div>` : ''}</div>
-    ${groups.length ? groups.map(groupSection).join('') : '<section class="resource-section"><p class="access-empty">まだありません。AIが登録を依頼すると、ここに追加されます。</p></section>'}`;
+  const groups = credentialGroups();
+  return `<h1 class="dashboard-title">認証情報</h1>${groups.length ? groups.map(groupSection).join('') : '<section class="resource-section"><p class="access-empty">まだありません。AIが登録を依頼すると、ここに追加されます。</p></section>'}`;
 }
 function render() {
   if (!state) return;

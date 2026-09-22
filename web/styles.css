@@ -53,11 +53,8 @@ svg { width: 19px; height: 19px; flex-shrink: 0; }
 .destructive:hover:not(:disabled) { background: #812320; }
 .icon-button { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; background: transparent; border: 0; border-radius: 6px; }
 .icon-button:hover { background: var(--soft); }
-.dashboard-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 24px; margin-bottom: 20px; }
-.dashboard-heading h1 { font-size: 26px; }
-.add-services { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.add-services > span { font-size: 14px; color: var(--muted); margin-right: 4px; }
-.add-services .button { min-height: 38px; padding: 7px 12px; }
+.dashboard-title { font-size: 26px; margin-bottom: 20px; }
+.resource-section.compact + .resource-section.compact { margin-top: 10px; }
 .credential-workspace { display: grid; grid-template-columns: 240px minmax(0, 1fr); border-top: 1px solid var(--line); }
 .credential-workspace.single { display: block; }
 .credential-list { padding: 12px; background: #fafcf9; border-right: 1px solid var(--line); }
