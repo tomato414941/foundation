@@ -32,6 +32,6 @@ export function configuration(env = process.env) {
     supabase: { url: env.FOUNDATION_SUPABASE_URL || '', key: env.FOUNDATION_SUPABASE_PUBLISHABLE_KEY || '', emailEnabled: env.FOUNDATION_EMAIL_LOGIN_ENABLED === 'true' },
     google: { clientId: env.FOUNDATION_GOOGLE_CLIENT_ID || '', clientSecret: env.FOUNDATION_GOOGLE_CLIENT_SECRET || '' },
     expo: { sessionLogin: env.FOUNDATION_EXPO_SESSION_LOGIN === 'true' },
-    aws: { templateUrl: env.FOUNDATION_AWS_TEMPLATE_URL || '', region: env.FOUNDATION_AWS_REGION || 'ap-northeast-1' },
+    files: { bucket: env.FOUNDATION_FILES_BUCKET || '', region: env.FOUNDATION_FILES_REGION || 'ap-northeast-1' },
   };
 }

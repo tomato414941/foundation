@@ -9,7 +9,7 @@ import { acceptValues } from './schema.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { AccessRequests } from './access-requests.mjs';
 import { verificationResult } from './verification.mjs';
-import { AWS_TEMPLATE_PATH, cloudFormationTemplate } from './services/aws.mjs';
+import { Files, FILE_MAX } from './files.mjs';
 
 const PUBLIC = new URL('../web/', import.meta.url);
 const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
@@ -43,12 +43,24 @@ async function body(req) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) fail(400, 'invalid_json', '送信内容を確認してください。');
   return result;
 }
+// A file as sent, bytes untouched.
+async function raw(req, max) {
+  if (Number(req.headers['content-length']) > max) fail(413, 'file_too_large', 'ファイルは5MBまでです。');
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of req) {
+    length += chunk.length;
+    if (length > max) fail(413, 'file_too_large', 'ファイルは5MBまでです。');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
 function purposeValue(value = '') {
   if (typeof value !== 'string' || value.length > 240 || /[\x00-\x1f]/.test(value)) fail(400, 'invalid_purpose', '用途は240文字以内で入力してください。');
   return value.trim();
 }
 
-export function createApp({ database = ':memory:', encryptionKey, auth, adapters: adapterList, publicOrigin, loginClock, trustedProxies = [] }) {
+export function createApp({ database = ':memory:', encryptionKey, auth, adapters: adapterList, files: fileBackend = null, publicOrigin, loginClock, trustedProxies = [] }) {
   if (!auth || !Array.isArray(adapterList)) throw new Error('Authentication and adapters are required');
   let external;
   if (publicOrigin) {
@@ -67,6 +79,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   };
   const adapters = new Adapters(adapterList);
   const requests = new AccessRequests(store, adapters);
+  const files = new Files(store, fileBackend);
   const logins = new EmailLogins({ now: loginClock });
   const refreshing = new Map(), limits = new Map(), disconnects = new Set();
   const timer = setInterval(() => {
@@ -180,7 +193,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         return res.end(await readFile(fileURLToPath(new URL(filename, PUBLIC))));
       }
       if (path === '/health' && method === 'GET') return send(200, { status: 'ok' });
-      if (path === AWS_TEMPLATE_PATH && method === 'GET') { res.writeHead(200, { 'content-type': 'text/yaml; charset=utf-8', 'content-disposition': 'attachment; filename="foundation-agent.yaml"' }); return res.end(cloudFormationTemplate()); }
       if (path === '/cli/install.sh' && method === 'GET') { res.writeHead(200, { 'content-type': 'text/x-shellscript; charset=utf-8' }); return res.end(await installScript(origin)); }
       const cliFile = path.match(/^\/cli\/([a-z-]+\.mjs)$/)?.[1];
       if (cliFile && CLI_FILES.includes(cliFile) && method === 'GET') { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' }); return res.end(await readFile(fileURLToPath(new URL(cliFile, CLI_DIR)))); }
@@ -458,16 +470,30 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           store.removeAgent(agent.owner_id, agent.id);
           return send(200, { ok: true });
         }
+        // The file space, a tool the key may use: put a file, get a time-limited link that reads it.
+        if (path === '/v1/files' && method === 'GET') return send(200, { files: files.list(agent.owner_id) });
+        if (path === '/v1/files' && method === 'POST') {
+          files.check();
+          rateLimit('files:' + agent.id, 20);
+          const minutes = url.searchParams.has('minutes') ? Number(url.searchParams.get('minutes')) : undefined;
+          const content = await raw(req, FILE_MAX);
+          return send(201, await files.put(agent, { name: url.searchParams.get('name'), contentType: req.headers['content-type'] || 'application/octet-stream', body: content, minutes }));
+        }
+        const fileRoute = path.match(/^\/v1\/files\/([A-Za-z0-9_-]{32})\/link$/);
+        if (fileRoute && method === 'POST') {
+          const input = await body(req);
+          rateLimit('files:' + agent.id, 20);
+          return send(200, await files.link(agent, fileRoute[1], input.minutes));
+        }
         // Delivery: the adapter makes what the command receives from the stored secret, at the moment of use.
         const route = path.match(/^\/v1\/credentials\/([a-f0-9-]{36})\/deliver$/);
         if (route && method === 'POST') {
-          const input = await body(req);
-          if (input.duration !== undefined && (!Number.isInteger(input.duration) || input.duration < 1 || input.duration > 86400 * 7)) fail(400, 'invalid_duration', '期間は秒数の整数で指定してください。');
+          await body(req);
           store.requireAccess(agent, route[1]);
           const credential = credentialFor(agent.owner_id, route[1]);
           rateLimit('issue:' + agent.id, 30);
           const adapter = adapters.get(credential.adapter);
-          const secret = await adapter.client.token(store, credential, false, { duration: input.duration });
+          const secret = await adapter.client.token(store, credential, false);
           if (secret.expires_at !== null && !(Number.isFinite(secret.expires_at) && secret.expires_at > Date.now())) fail(502, 'service_response', '認証情報の有効期限を確認できませんでした。');
           actor(req);
           store.requireAccess(agent, credential.id);

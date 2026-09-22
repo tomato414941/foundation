@@ -5,7 +5,6 @@ import { OPENROUTER_API, OPENROUTER_DOCS } from './services/openrouter.mjs';
 import { EXPO_API, EXPO_DOCS, EXPO_TOKENS } from './services/expo.mjs';
 import { SUPABASE_API, SUPABASE_DOCS, SUPABASE_TOKENS } from './services/supabase.mjs';
 import { APPLE_API, APPLE_DOCS, APPLE_KEYS } from './services/apple.mjs';
-import { AWS_DOCS, AWS_KEYS, AWS_TEMPLATE_PATH, quickCreateUrl } from './services/aws.mjs';
 import { CLOUDFLARE_API, CLOUDFLARE_DOCS, CLOUDFLARE_TOKENS } from './services/cloudflare.mjs';
 
 // The unit Foundation holds is a credential: one thing the owner handed over.
@@ -24,7 +23,6 @@ const EXPO = service('Expo', 'device', EXPO_TOKENS, { base_url: EXPO_API, docume
 const SUPABASE = service('Supabase', 'database', SUPABASE_TOKENS, { base_url: SUPABASE_API, documentation_url: SUPABASE_DOCS });
 const CLOUDFLARE = service('Cloudflare', 'cloud', CLOUDFLARE_TOKENS, { base_url: CLOUDFLARE_API, documentation_url: CLOUDFLARE_DOCS });
 const APPLE = service('Apple', 'key', APPLE_KEYS, { base_url: APPLE_API, documentation_url: APPLE_DOCS });
-const AWS = service('AWS', 'cloud', AWS_KEYS, { base_url: '', documentation_url: AWS_DOCS });
 
 const GMAIL_VARIABLES = ['GOOGLE_OAUTH_ACCESS_TOKEN', 'GMAIL_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT'];
 const gmailDelivery = (secret, credential) => ({ environment: { GOOGLE_OAUTH_ACCESS_TOKEN: secret.access_token, GMAIL_ACCOUNT_EMAIL: credential.subject, GOOGLE_OAUTH_EXPIRES_AT: String(secret.expires_at) } });
@@ -132,24 +130,6 @@ export function appleApiKey(client) {
     variables: ['EXPO_ASC_API_KEY_PATH', 'EXPO_ASC_KEY_ID', 'EXPO_ASC_ISSUER_ID', 'EXPO_APPLE_TEAM_ID', 'EXPO_APPLE_TEAM_TYPE'],
     deliver: secret => ({ files: [{ env: 'EXPO_ASC_API_KEY_PATH', filename: 'AuthKey_' + secret.details.key_id + '.p8', content: secret.access_token }],
       environment: { EXPO_ASC_KEY_ID: secret.details.key_id, EXPO_ASC_ISSUER_ID: secret.details.issuer_id, EXPO_APPLE_TEAM_ID: secret.details.team_id, EXPO_APPLE_TEAM_TYPE: secret.details.team_type } }),
-  };
-}
-
-// Foundation keeps an IAM user key and delivers temporary credentials for one role, assumed afresh for each use.
-// Duration is the runtime's request and AWS's decision.
-export function awsIamUserKey(client, { templateUrl = '', region = 'ap-northeast-1' } = {}) {
-  const quickCreate = quickCreateUrl(templateUrl, region);
-  return {
-    id: 'aws.iam-user-key', service: AWS, label: 'AWSのアクセスキーを登録', register: 'paste', client, canReconnect: false, canRevoke: false, credentialType: 'api_key',
-    intro: 'IAMユーザーのアクセスキーと、AIに使わせるロールを登録します。AIには一時的な認証情報だけを渡します。',
-    links: quickCreate ? [{ label: 'AWS で作成する', href: quickCreate }] : [{ label: '定義ファイルをダウンロード', href: AWS_TEMPLATE_PATH }, { label: 'CloudFormation を開く', href: `https://${region}.console.aws.amazon.com/cloudformation/home?region=${region}#/stacks/create` }],
-    schema: defineSchema([{ id: 'code', label: 'AWSの「出力」に表示された値 (CopyToFoundation)', secret: true }]),
-    instructions: 'CloudFormationのスタックが作った「出力」の CopyToFoundation の値 1 つを受け付けます。登録時に GetCallerIdentity と AssumeRole を1回ずつ試して確認します。',
-    note: '作られるのは、ロールを引き受けることしかできないユーザーと、AIが使うロール、そのアクセスキーです。不要になったらスタックを削除すれば全部消えます。',
-    access: { name: 'ロールの権限でAWSを利用', description: '登録したロールに付けた権限の範囲で、AWSを操作できます。渡すのはロールの一時的な認証情報で、長期のアクセスキーは渡しません。', restrictions: '一時認証情報の有効期間はAIの要求とロールの設定で決まります (指定がなければAWSの既定)。ロールの権限はAWS側で管理します。' },
-    ai: '定義ファイルのスタックが IAM ユーザー・ロール・アクセスキーを作り、完了すると「出力」に CopyToFoundation が 1 つ出る。利用者はその 1 行を貼る。Permissions はスタック作成時に選ぶ (ReadOnlyAccess / PowerUserAccess / AdministratorAccess)。IAM を含む作業には AdministratorAccess が要る。同名のスタックは作れない。exec --duration <秒> で一時認証情報の期間を要求できる (上限は AWS が決める)。',
-    variables: ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_DEFAULT_REGION'],
-    deliver: secret => ({ environment: { AWS_ACCESS_KEY_ID: secret.details.session_access_key_id, AWS_SECRET_ACCESS_KEY: secret.access_token, AWS_SESSION_TOKEN: secret.details.session_token, AWS_REGION: secret.details.region, AWS_DEFAULT_REGION: secret.details.region } }),
   };
 }
 

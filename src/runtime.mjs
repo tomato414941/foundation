@@ -1,15 +1,20 @@
-import { open, mkdir, stat, mkdtemp, writeFile, chmod } from 'node:fs/promises';
+import { open, mkdir, stat, mkdtemp, writeFile, chmod, readFile } from 'node:fs/promises';
 import { rmSync } from 'node:fs';
 import { constants } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { homedir, hostname, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { spawnExpoSession } from './expo-runtime.mjs';
 import { validEnvName } from './env-name.mjs';
 import { guide } from './guide.mjs';
+
+// What a file is served as when --type is not given. Text is served as plain text so a browser shows it.
+const TYPES = { '.yaml': 'text/plain; charset=utf-8', '.yml': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8', '.csv': 'text/plain; charset=utf-8', '.log': 'text/plain; charset=utf-8',
+  '.json': 'application/json', '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.zip': 'application/zip' };
+const minutesOption = value => { if (value === undefined) return undefined; if (!/^\d{1,5}$/.test(value)) throw new Error('--minutes takes the number of minutes the link stays valid (1-10080).'); return Number(value); };
 
 async function runtimeKey(path, create, privateDirectory) {
   if (create) {
@@ -47,15 +52,7 @@ async function main() {
   const agentName = (process.env.FOUNDATION_AGENT || '').trim();
   if (agentName && !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/.test(agentName)) throw new Error('FOUNDATION_AGENT must be 1-40 characters of letters, digits, space, dot, underscore or hyphen.');
   const separatorAt = args.indexOf('--'), command = separatorAt >= 0 ? args.slice(separatorAt + 1) : [];
-  let credentialIds = [], issuance = {};
-  if (action === 'exec' && separatorAt > 0) {
-    const parsed = parseArgs({ args: args.slice(0, separatorAt), options: { duration: { type: 'string' } }, strict: true, allowPositionals: true });
-    credentialIds = parsed.positionals;
-    if (parsed.values.duration !== undefined) {
-      if (!/^\d{1,7}$/.test(parsed.values.duration) || Number(parsed.values.duration) < 1) throw new Error('--duration must be a positive number of seconds; AWS decides whether it is allowed.');
-      issuance = { duration: Number(parsed.values.duration) };
-    }
-  }
+  const credentialIds = action === 'exec' && separatorAt > 0 ? args.slice(0, separatorAt) : [];
   if (action === '--help' || action === 'help' || action === 'guide' || !action) {
     let adapters;
     if (process.env.FOUNDATION_URL) {
@@ -86,7 +83,19 @@ async function main() {
     if (args.length !== 1 || !args[0].trim() || args[0].length > 80) throw new Error('Usage: rename <new name> (1-80 characters).');
     options = { name: args[0].trim() };
   }
-  else if (!(['adapters', 'credentials', 'cancel', 'whoami', 'leave', 'request'].includes(action) && !args.length) && !(action === 'exec' && credentialIds.length && credentialIds.every(id => /^[a-f0-9-]{36}$/.test(id)) && new Set(credentialIds).size === credentialIds.length && command.length)) throw new Error('Invalid command. Use --help.');
+  // The file space: put a file and get a link to it, list what is there, or link a file again.
+  else if (action === 'put' || action === 'link') {
+    const parsed = parseArgs({ args, options: { minutes: { type: 'string' }, ...(action === 'put' ? { type: { type: 'string' } } : {}) }, strict: true, allowPositionals: true });
+    if (parsed.positionals.length !== 1) throw new Error(action === 'put' ? 'Usage: put <file> [--type <content-type>] [--minutes <n>]' : 'Usage: link <file-id> [--minutes <n>]');
+    const minutes = minutesOption(parsed.values.minutes), target = parsed.positionals[0];
+    if (action === 'link') options = { id: target, ...(minutes === undefined ? {} : { minutes }) };
+    else {
+      const info = await stat(target);
+      if (!info.isFile() || info.size > 5 * 1024 * 1024) throw new Error('put takes a regular file of at most 5 MB.');
+      options = { name: basename(target), type: parsed.values.type || TYPES[extname(target).toLowerCase()] || 'application/octet-stream', minutes, content: await readFile(target) };
+    }
+  }
+  else if (!(['adapters', 'credentials', 'files', 'cancel', 'whoami', 'leave', 'request'].includes(action) && !args.length) && !(action === 'exec' && credentialIds.length && credentialIds.every(id => /^[a-f0-9-]{36}$/.test(id)) && new Set(credentialIds).size === credentialIds.length && command.length)) throw new Error('Invalid command. Use --help.');
   const url = new URL(process.env.FOUNDATION_URL || '');
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('FOUNDATION_URL must be an HTTPS origin (HTTP is allowed only on localhost).');
   // Without --adapter, connect asks for this key to be approved. With it, an approved key asks for a registration.
@@ -94,10 +103,12 @@ async function main() {
   if (action === 'connect' && !options.adapter) { delete options.purpose; }
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
   const token = action === 'adapters' ? null : await runtimeKey(keyPath, action === 'connect', !process.env.FOUNDATION_RUNTIME_KEY_FILE);
-  const path = action === 'adapters' ? '/v1/adapters' : action === 'credentials' ? '/v1/credentials' : action === 'exec' ? '/v1/credentials/' + credentialIds[0] + '/deliver' : ['whoami', 'leave', 'rename'].includes(action) ? '/v1/me' : action === 'cancel' || action === 'request' ? '/v1/access-requests/current' : '/v1/access-requests';
-  const method = action === 'connect' || action === 'exec' ? 'POST' : action === 'rename' ? 'PATCH' : action === 'cancel' || action === 'leave' ? 'DELETE' : 'GET';
+  const path = action === 'adapters' ? '/v1/adapters' : action === 'credentials' ? '/v1/credentials' : action === 'files' ? '/v1/files' : action === 'link' ? '/v1/files/' + encodeURIComponent(options.id) + '/link'
+    : action === 'put' ? '/v1/files?' + new URLSearchParams({ name: options.name, ...(options.minutes === undefined ? {} : { minutes: String(options.minutes) }) }) : action === 'exec' ? '/v1/credentials/' + credentialIds[0] + '/deliver' : ['whoami', 'leave', 'rename'].includes(action) ? '/v1/me' : action === 'cancel' || action === 'request' ? '/v1/access-requests/current' : '/v1/access-requests';
+  const method = ['connect', 'exec', 'put', 'link'].includes(action) ? 'POST' : action === 'rename' ? 'PATCH' : action === 'cancel' || action === 'leave' ? 'DELETE' : 'GET';
   async function request(timeout = 30_000, target = path) {
-    const response = await fetch(url.origin + target, { method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), 'content-type': 'application/json' }, ...(method !== 'GET' ? { body: JSON.stringify(action === 'connect' || action === 'rename' ? options : action === 'exec' ? issuance : {}) } : {}), redirect: 'error', signal: AbortSignal.timeout(timeout) });
+    const payload = action === 'put' ? options.content : JSON.stringify(action === 'connect' || action === 'rename' ? options : action === 'link' ? { minutes: options.minutes } : {});
+    const response = await fetch(url.origin + target, { method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), 'content-type': action === 'put' ? options.type : 'application/json' }, ...(method !== 'GET' ? { body: payload } : {}), redirect: 'error', signal: AbortSignal.timeout(timeout) });
     const data = await response.json();
     if (!response.ok) throw new Error('Foundation request failed (' + response.status + ', ' + (data.error?.code || 'unknown') + '). ' + (data.error?.message || 'Check the connection and runtime permission.'));
     return data;
