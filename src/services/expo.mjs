@@ -103,7 +103,6 @@ export class ExpoClient {
   }
   canRevoke(secret) { return secret.credential_type === 'expo_session'; }
   async revoke(secret) {
-    if (!this.canRevoke(secret)) fail(409, 'manual_revocation_required', 'トークンの無効化はExpoのトークン管理画面で行ってください。');
     let response;
     try { response = await this.fetcher('https://api.expo.dev/v2/auth/logout', { method: 'POST', headers: { 'content-type': 'application/json', 'expo-session': secret.access_token }, body: '{}', redirect: 'error', signal: AbortSignal.timeout(12_000) }); }
     catch { fail(502, 'service_unavailable', 'Expo側のログアウトを確認できませんでした。もう一度お試しください。'); }

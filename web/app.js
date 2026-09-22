@@ -210,7 +210,7 @@ function renderRequest() {
   const expiry = `<p class="request-expiry">この依頼は ${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで有効です。</p>`;
   if (row.kind === 'approve') { renderApproval(row, shell, expiry); return; }
   const adapter = row.adapter, name = serviceName(adapter);
-  const same = state.credentials.filter(credential => credential.adapter === adapter.id && credential.status !== 'disconnecting');
+  const same = state.credentials.filter(credential => credential.adapter === adapter.id);
   const unavailable = `<p class="form-error" role="status">現在${esc(name)}を登録できません。</p>`;
   const body = !adapter.available ? unavailable : adapter.register === 'login' ? expoLoginMarkup(row) : adapter.register === 'paste' ? schemaFormMarkup(adapter.form)
     : `${same.filter(credential => credential.status === 'reconnect_required' && adapter.can_reconnect).map(credential => `<button class="button secondary full request-connect" type="button" data-action="request-connect" data-id="${esc(credential.id)}">${esc(credentialLabel(credential))} を登録し直す</button>`).join('')}
@@ -233,9 +233,8 @@ function renderRequest() {
 }
 // Approving a key: only who is asking, what the key will reach, and the code.
 function renderApproval(row, shell, expiry) {
-  const usable = state.credentials.filter(credential => credential.status !== 'disconnecting');
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">新しいアクセスキー</p><h1>このアクセスキーを承認しますか？</h1></div></header>
-    <dl class="approval-facts"><div><dt>依頼元</dt><dd>${esc(row.requester_name)}</dd></div><div><dt>使えるもの</dt><dd>${usable.length ? `預けた認証情報すべて<span class="muted block">${usable.map(credential => esc(credential.service) + ' · ' + esc(credential.name)).join('<br>')}</span>` : '今後預ける認証情報すべて'}</dd></div></dl>
+    <dl class="approval-facts"><div><dt>依頼元</dt><dd>${esc(row.requester_name)}</dd></div><div><dt>使えるもの</dt><dd>${state.credentials.length ? `預けた認証情報すべて<span class="muted block">${state.credentials.map(credential => esc(credential.service) + ' · ' + esc(credential.name)).join('<br>')}</span>` : '今後預ける認証情報すべて'}</dd></div></dl>
     <form id="access-request-form">${codeField()}
     <p class="form-error" role="alert"></p>
     <button class="button primary full" type="submit" disabled>承認する ${icon('arrow')}</button><button class="text-button full" type="button" data-action="deny-request">承認しない</button></form>${expiry}</section>`);

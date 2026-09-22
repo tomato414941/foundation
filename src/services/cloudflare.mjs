@@ -79,5 +79,4 @@ export class CloudflareClient {
     return { label: 'Cloudflare ' + detail.account_id, credential_type: 'api_key', expires_at: secret.expires_at, expiry_known: true,
       management_url: CLOUDFLARE_TOKENS, cloudflare_account_id: detail.account_id, checked_at: detail.checked_at };
   }
-  async revoke() { fail(409, 'manual_revocation_required', 'トークンの無効化はCloudflareのAPIトークン管理画面で行ってください。'); }
 }

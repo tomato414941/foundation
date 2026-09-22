@@ -82,5 +82,4 @@ export class OpenRouterClient {
       management_url: 'https://openrouter.ai/keys/' + detail.key_hash,
       key_info: { limit: detail.limit, limit_remaining: detail.limit_remaining, limit_reset: detail.limit_reset, include_byok_in_limit: detail.include_byok_in_limit, checked_at: detail.checked_at } };
   }
-  async revoke() { fail(409, 'manual_revocation_required', 'キーの無効化はOpenRouterのキー管理画面で行ってください。'); }
 }
