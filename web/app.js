@@ -155,11 +155,12 @@ function claimRows(service, details) {
   return service.request_fields.map(field => `<div><dt>${esc(field.label)}</dt><dd>${field.type === 'url' ? siteLink(details[field.id]) : field.type === 'code' ? `<code>${esc(details[field.id])}</code>` : esc(details[field.id])}</dd></div>`).join('');
 }
 // Guidance the requesting AI wrote for its owner. Framed as the AI's words; line breaks kept, nothing else interpreted.
-const guidanceBlock = (text, compact = false) => text ? `<section class="ai-guidance${compact ? ' compact' : ''}"><h3>依頼元のAIからの案内</h3>${text.split(/\n{2,}/).map(part => `<p>${esc(part).replace(/\n/g, '<br>')}</p>`).join('')}</section>` : '';
+const guidanceBlock = (text) => text ? `<section class="ai-guidance"><h3>依頼元のAIからの案内</h3>${text.split(/\n{2,}/).map(part => `<p>${esc(part).replace(/\n/g, '<br>')}</p>`).join('')}</section>` : '';
 const codeComplete = form => /^[0-9a-fA-F]{8}$/.test((form.elements.confirmationCode?.value || '').replace(/[^0-9a-zA-Z]/g, ''));
 function codeField(enabled = true) {
   return `<label for="confirmation-code">確認コード</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="0000-0000" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">AIとの会話に表示されたコードを入力してください。心当たりのない依頼は許可しないでください。</p>`;
 }
+let registerOpen = false;
 function renderRequest() {
   const row = accessRequest;
   const shell = (content) => `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main class="approval-main">${content}</main></div>`;
@@ -178,17 +179,23 @@ function renderRequest() {
   if (row.provider === 'expo' && row.mode === 'session') { renderExpoRequest(row, shell); return; }
   const matching = state.accounts.filter(account => row.eligible_account_ids.includes(account.id));
   const available = matching.filter((account) => account.status === 'connected');
+  const byToken = (row.permission.connection_method || row.service.connection_method) === 'token';
+  // A token is registered on this page, in the order the owner works: the AI's guidance, then the form. Other methods leave the page.
+  const registerSection = byToken ? `<section class="register-section" ${available.length && !registerOpen ? 'hidden' : ''} aria-labelledby="register-title"><h2 id="register-title">${esc(row.permission.connect_label || row.service.connect_label)}</h2>${row.service.available ? tokenFormMarkup(row.service, row) : `<p class="form-error" role="status">現在${esc(row.service.name)}を接続できません。</p>`}</section>` : '';
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.service.name)}へのアクセス</p><h1>利用を許可しますか？</h1></div></header>
     <dl class="approval-facts"><div><dt>依頼元</dt><dd>${esc(row.requester_name)}<span class="muted block">${row.agent_name ? '承認済みのアクセスキーからの依頼です。' : '新しいアクセスキーです。許可すると登録されます。'}</span></dd></div>${row.purpose ? `<div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}<div><dt>権限</dt><dd>${esc(row.permission.name)}${row.permission.restrictions ? `<span class="muted block">${esc(row.permission.restrictions)}</span>` : ''}</dd></div>${claimRows(row.service, row.details)}</dl>${row.service.request_fields?.length ? '<p class="permission-note claim-note">サービス名・作成ページ・環境変数名はAIの申告です。作成ページのドメインが正しいか確認してください。</p>' : ''}${guidanceBlock(row.guidance)}
-    <form id="access-request-form"><fieldset><legend>利用を許可するアカウント</legend>${available.length ? available.map((account) => `<div class="approval-account"><label class="choice"><input type="radio" name="accountId" value="${esc(account.id)}" ${available.length === 1 ? 'checked' : ''} required><span><strong>${esc(account.name)}</strong><small>${esc(accountLabel(account))}</small></span></label>${keyFacts(account)}${verificationDetails(account.verification)}</div>`).join('') : '<p class="muted">この権限で利用できる接続済みのアカウントはありません。</p>'}</fieldset>
-    ${matching.filter(account => account.status === 'reconnect_required' && row.service.can_reconnect).map(account => `<button class="button secondary full request-connect" type="button" data-action="request-connect" data-id="${esc(account.id)}" ${row.service.available ? '' : 'disabled'}>${esc(accountLabel(account))} を再接続</button>`).join('')}
-    <button class="button secondary full request-connect" type="button" data-action="request-connect" ${row.service.available ? '' : 'disabled'}>${icon('plus')} ${esc(row.permission.connect_label || row.service.connect_label)}</button>
-    ${row.service.available ? '' : `<p class="form-error" role="status">現在${esc(row.service.name)}を接続できません。</p>`}
+    ${registerSection}
+    <form id="access-request-form"><fieldset><legend>利用を許可するアカウント</legend>${available.length ? available.map((account) => `<div class="approval-account"><label class="choice"><input type="radio" name="accountId" value="${esc(account.id)}" ${available.length === 1 ? 'checked' : ''} required><span><strong>${esc(account.name)}</strong><small>${esc(accountLabel(account))}</small></span></label>${keyFacts(account)}${verificationDetails(account.verification)}</div>`).join('') : `<p class="muted">${byToken ? '登録すると、ここに表示されます。' : 'この権限で利用できる接続済みのアカウントはありません。'}</p>`}</fieldset>
+    ${matching.filter(account => account.status === 'reconnect_required' && row.service.can_reconnect && !byToken).map(account => `<button class="button secondary full request-connect" type="button" data-action="request-connect" data-id="${esc(account.id)}" ${row.service.available ? '' : 'disabled'}>${esc(accountLabel(account))} を再接続</button>`).join('')}
+    ${byToken ? (available.length && !registerOpen ? `<button class="text-button full request-connect" type="button" data-action="open-register">別の${esc(row.service.name)}のキーを登録</button>` : '') : `<button class="button secondary full request-connect" type="button" data-action="request-connect" ${row.service.available ? '' : 'disabled'}>${icon('plus')} ${esc(row.permission.connect_label || row.service.connect_label)}</button>`}
+    ${row.service.available || byToken ? '' : `<p class="form-error" role="status">現在${esc(row.service.name)}を接続できません。</p>`}
     ${row.service.id === 'openrouter' && ['failed', 'scope', 'retry', 'changed'].includes(resultCode) ? '<p class="permission-note">接続できなくても、OpenRouterで作成済みのキーが残る場合があります。<a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">不要なキーはOpenRouterで削除してください ↗</a></p>' : ''}
     ${codeField(available.length > 0)}
     <p class="form-error" role="alert"></p>
     <button class="button primary full" type="submit" disabled>利用を許可 ${icon('arrow')}</button><button class="text-button full" type="button" data-action="deny-request">許可しない</button></form>
     <p class="request-expiry">この依頼は ${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで有効です。</p></section>`);
+  registerOpen = false;
+  if (byToken && row.service.available) bindTokenForm(app.querySelector('.register-section'), row.service, row);
   const form = document.querySelector('#access-request-form'), submit = form.querySelector('[type="submit"]');
   const update = () => { submit.disabled = !row.service.available || !codeComplete(form) || !form.querySelector('[name="accountId"]:checked'); };
   form.addEventListener('change', update); form.addEventListener('input', update);
@@ -210,8 +217,8 @@ function openDialog(content) {
 }
 function closeDialog() { clearPrivateInput(); if (dialog.open) dialog.close(); dialog.innerHTML = ''; }
 dialog.addEventListener('cancel', (event) => { event.preventDefault(); closeDialog(); });
-function bindForm(handler) {
-  dialog.querySelector('form').addEventListener('submit', async (event) => {
+function bindForm(handler, container = dialog) {
+  container.querySelector('form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget, button = form.querySelector('[type="submit"]');
     button.disabled = true; form.querySelector('.form-error').textContent = '';
@@ -314,9 +321,9 @@ function renderExpoRequest(row, shell) {
     catch (error) { if (form.isConnected) { button.disabled = false; form.querySelector('[role="alert"]').textContent = error.message; } }
   });
 }
-function connectToken(provider, request = null) {
-  const setup = provider.token_setup, mode = request?.mode || provider.permissions[0].id;
-  const permission = provider.permissions.find(item => item.id === mode);
+// The token form is one markup for two places: inline on the approval page, or in a dialog from the dashboard.
+function tokenFormMarkup(provider, request = null) {
+  const setup = provider.token_setup;
   const fields = provider.request_fields || [], claimed = request?.details || null;
   const fieldInputs = fields.map(field => {
     const value = claimed?.[field.id] || '';
@@ -327,38 +334,44 @@ function connectToken(provider, request = null) {
   const serviceName = claimed?.service || (fields.length ? '' : provider.name);
   const setupFields = setup.fields || [];
   const setupInputs = setupFields.map(field => `<label for="setup-${esc(field.id)}">${esc(field.label)}</label>${Array.isArray(field.options) ? `<select id="setup-${esc(field.id)}" name="setup-${esc(field.id)}" required aria-describedby="setup-${esc(field.id)}-help"><option value="">選択してください</option>${field.options.map(([value, text]) => `<option value="${esc(value)}">${esc(text)}</option>`).join('')}</select>` : `<input id="setup-${esc(field.id)}" name="setup-${esc(field.id)}" required maxlength="${esc(field.max_length)}" pattern="${esc(field.pattern)}" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="setup-${esc(field.id)}-help">`}<p class="permission-note" id="setup-${esc(field.id)}-help">${esc(field.help)}</p>`).join('');
-  openDialog(`<h2 id="dialog-title">${esc(serviceName || provider.name)}を接続</h2><p>${setupFields.length ? `${esc(provider.name)}で発行した${esc(setup.label)}と、対象の${setupFields.map(field => esc(field.label)).join('・')}を登録します。` : serviceName ? `パスワードは${esc(serviceName)}の画面で入力します。ここには${esc(setup.label)}だけを登録してください。` : esc(provider.intro)}</p>
-    ${guidanceBlock(request?.guidance, true)}
-    ${fields.length ? `<form autocomplete="off" class="token-form">${claimed ? `<p class="permission-note claim-note">以下はAIの申告です。作成ページのドメインが正しいか確認してください。</p>` : ''}${fieldInputs}` : '<form autocomplete="off" class="token-form">'}
+  const intro = setupFields.length ? `${esc(provider.name)}で発行した${esc(setup.label)}と、対象の${setupFields.map(field => esc(field.label)).join('・')}を登録します。` : serviceName === provider.name || !serviceName ? esc(provider.intro) : `${esc(serviceName)}で発行した${esc(setup.label)}を登録します。`;
+  return `<p class="token-intro">${intro}</p><form autocomplete="off" class="token-form">${fields.length && claimed ? '<p class="permission-note claim-note">以下はAIの申告です。作成ページのドメインが正しいか確認してください。</p>' : ''}${fieldInputs}
     <div class="token-setup"><h3>1. ${esc(setup.step_label || `${serviceName || 'サービス'}でキーを作成`)}</h3><p>${esc(setup.instructions)}</p>${(setup.links || []).map(link => `<a class="button secondary full setup-link" href="${esc(link.href)}" target="_blank" rel="noopener noreferrer">${esc(link.label)} ↗</a>`).join('')}${fields.length ? `<a class="button secondary full setup-link" href="${esc(siteUrl || '#')}" target="_blank" rel="noopener noreferrer" ${siteUrl ? '' : 'style="display:none"'}>${esc(serviceName || 'サービス')}のキー作成ページを開く ↗</a>` : ''}</div>
     <h3 class="token-step">2. キーを登録</h3>${setupInputs}<label for="connection-token">${esc(setup.label)}</label>${setup.multiline ? '<textarea id="connection-token" name="token" rows="6" required minlength="8" maxlength="8192" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="token-storage-note" placeholder="-----BEGIN PRIVATE KEY-----"></textarea><label class="file-pick"><input type="file" id="connection-token-file" accept=".p8,.pem,.key,.txt,text/plain"><span class="button secondary full">ファイルを選ぶ (.p8)</span></label>' : '<input id="connection-token" name="token" type="password" required minlength="8" maxlength="4096" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="token-storage-note">'}<p class="permission-note" id="token-storage-note">キーは暗号化して保存し、許可したアクセスキーの持ち主だけに渡します。チャットには貼り付けないでください。</p>${setup.note ? `<p class="permission-note">${esc(setup.note)}</p>` : ''}
     <input type="hidden" name="name" value="${esc(claimed?.service || provider.name)}"><input type="hidden" name="purpose" value="${esc(request?.purpose || '')}">
-    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>`);
-  dialog.querySelector('#connection-token-file')?.addEventListener('change', async event => {
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>`;
+}
+function bindTokenForm(container, provider, request = null, done = async () => {}) {
+  const setup = provider.token_setup, mode = request?.mode || provider.permissions[0].id;
+  const fields = provider.request_fields || [], claimed = request?.details || null, setupFields = setup.fields || [];
+  container.querySelector('#connection-token-file')?.addEventListener('change', async event => {
     const file = event.target.files?.[0]; if (!file) return;
     const text = file.size <= 8192 ? await file.text() : '';
-    dialog.querySelector('[name="token"]').value = text.trim();
-    dialog.querySelector('.form-error').textContent = text ? '' : 'ファイルが大きすぎます。.p8 ファイルを選んでください。';
+    container.querySelector('[name="token"]').value = text.trim();
+    container.querySelector('.form-error').textContent = text ? '' : 'ファイルが大きすぎます。.p8 ファイルを選んでください。';
     event.target.value = '';
   });
   if (fields.length && !claimed) {
-    const siteInput = dialog.querySelector('[name="site"]'), link = dialog.querySelector('.token-setup a');
+    const siteInput = container.querySelector('[name="site"]'), link = container.querySelector('.token-setup a');
     const sync = () => { if (link) { const value = siteInput.value.trim(), valid = /^https:\/\/[^\s/]+\.[^\s/]+/.test(value); link.href = valid ? value : '#'; link.style.display = valid ? '' : 'none'; } };
     if (link) siteInput.addEventListener('input', sync);
   }
   bindForm(async form => {
     const token = form.get('token').trim();
     form.delete('token');
-    const input = dialog.querySelector('[name="token"]');
-    input.value = '';
+    container.querySelector('[name="token"]').value = '';
     const details = fields.length && !claimed ? Object.fromEntries(fields.map(field => [field.id, (form.get(field.id) || '').trim()])) : undefined;
     const connectionFields = setupFields.length ? Object.fromEntries(setupFields.map(field => [field.id, (form.get('setup-' + field.id) || '').trim()])) : undefined;
     let result;
     try { result = await api(`/api/connections/${provider.id}/connect`, { method: 'POST', data: { token, name: form.get('name'), purpose: form.get('purpose'), mode, ...(details ? { details } : {}), ...(connectionFields ? { fields: connectionFields } : {}), ...(request ? { accessRequestId: request.id } : {}) } }); }
-    catch (error) { if (request) await refresh(); throw error; }
+    catch (error) { if (request && [401, 404].includes(error.status)) await refresh(); throw error; }
     selected = result.account_id;
-    closeDialog(); await refresh(); toast(`${provider.name}の認証情報を登録しました。`);
-  });
+    await done(); await refresh(); toast(`${provider.name}の認証情報を登録しました。`);
+  }, container);
+}
+function connectToken(provider) {
+  openDialog(`<h2 id="dialog-title">${esc(provider.name)}を接続</h2>${tokenFormMarkup(provider)}`);
+  bindTokenForm(dialog, provider, null, async () => closeDialog());
 }
 function editAccount(account) {
   openDialog(`<h2 id="dialog-title">接続を編集</h2><p>${esc(accountLabel(account))}</p><form>${accountFields(account)}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
@@ -403,8 +416,8 @@ document.addEventListener('click', async (event) => {
   try {
     if (action === 'close-dialog') closeDialog();
     if (action === 'logout') { clearPrivateInput(); target.disabled = true; await api('/api/session', { method: 'DELETE' }); await showLogin(); }
+    if (action === 'open-register') { registerOpen = true; renderRequest(); app.querySelector('.register-section')?.scrollIntoView({ block: 'start' }); return; }
     if (action === 'request-connect') {
-      if ((accessRequest.permission.connection_method || accessRequest.service.connection_method) === 'token') { connectToken(accessRequest.service, accessRequest); return; }
       target.disabled = true;
       const account = state.accounts.find(item => item.id === id);
       const result = await api(`/api/connections/${accessRequest.provider}/connect`, { method: 'POST', data: { name: account?.name || accessRequest.service.name, purpose: account?.purpose || accessRequest.purpose, mode: accessRequest.mode, accessRequestId: requestId, ...(account ? { accountId: account.id } : {}) } });

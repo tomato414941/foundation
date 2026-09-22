@@ -116,7 +116,10 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .ai-guidance h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin-bottom: 8px; }
 .ai-guidance p { font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
 .ai-guidance p + p { margin-top: 8px; }
-.ai-guidance.compact { margin: 0 0 14px; }
+.register-section { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--line); }
+.register-section h2 { font-size: 18px; margin-bottom: 6px; }
+.register-section + form { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--line); }
+.token-intro { color: var(--muted); margin-bottom: 4px; overflow-wrap: anywhere; }
 .file-pick { display: block; margin-top: 10px; }
 .setup-link + .setup-link { margin-top: 10px; }
 .file-pick input { position: absolute; width: 1px; height: 1px; opacity: 0; }
