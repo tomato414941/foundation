@@ -160,7 +160,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     # Root connection is optional and never silently grants the runtime.
     page.goto(args.base, wait_until='networkidle')
     section = page.locator('[aria-labelledby="expo-title"]')
-    section.locator('.credential-row').first.click()
     section.get_by_role('button', name='検証する', exact=True).click()
     expect(page.get_by_text('Expoで検証できました。', exact=True)).to_be_visible()
     page.get_by_role('button', name='Expoを登録', exact=True).click()
@@ -175,7 +174,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     dialog.get_by_role('button', name='ログインして登録', exact=True).click()
     expect(dialog).not_to_be_visible()
     assert len(cli('credentials')['credentials']) == 2, 'the approved key uses a connection the owner adds later'
-    section.locator('.credential-row').filter(has_text='otp-user').click()
+    section.locator('.credential-item').filter(has_text='otp-user').click()
     section.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog.get_by_role('link', name='Expoでキーを削除する', exact=False)).to_have_count(0)
     expect(dialog.get_by_text('Expoのプロジェクトやデータは削除しません。', exact=False)).to_be_visible()

@@ -123,15 +123,13 @@ with sync_playwright() as p:
 
     connect("個人用", "personal-readonly")
     connect("仕事用", "work-metadata", True)
-    # One line per credential, in the order registered; a line opens to its facts and actions.
-    expect(page.locator(".credential-row")).to_have_count(2)
-    assert page.locator(".credential-row strong").all_inner_texts() == ["個人用", "仕事用"]
-    expect(page.locator(".credential-detail")).to_have_count(0)
-    page.locator(".credential-row").filter(has_text="仕事用").click()
+    # Credentials of one service are listed in the order registered, beside the one shown.
+    expect(page.locator(".credential-item strong")).to_have_text(["個人用", "仕事用"])
+    expect(page.locator(".credential-heading h3")).to_have_text("個人用")
+    page.locator(".credential-item").filter(has_text="仕事用").click()
     expect(page.locator('.credential-facts')).to_contain_text("件名・差出人などの読み取り")
-    expect(page.locator(".credential-row").filter(has_text="仕事用").locator(".credential-meta")).to_contain_text("管理画面から")
-    page.locator(".credential-row").filter(has_text="個人用").click()
-    expect(page.locator(".credential-detail")).to_have_count(1)
+    expect(page.locator(".credential-heading .credential-meta")).to_contain_text("管理画面から")
+    page.locator(".credential-item").filter(has_text="個人用").click()
     page.get_by_role("button", name="検証する", exact=True).click()
     expect(page.get_by_text("Gmailで検証できました。", exact=True)).to_be_visible()
 
@@ -170,17 +168,17 @@ with sync_playwright() as p:
         check_display(page)
     page.set_viewport_size({"width": 390, "height": 1000})
     page.screenshot(path=str(shots / "mobile.png"), full_page=True)
-    page.locator(".credential-row").filter(has_text="個人用").click()
-    page.locator(".credential-detail").get_by_role("button", name="名前を変更", exact=True).click()
+    page.locator(".credential-item").filter(has_text="個人用").click()
+    page.locator(".credential-pane").get_by_role("button", name="名前を変更", exact=True).click()
     dialog.get_by_label("表示名", exact=True).fill('<img src=x onerror="window.xss=1">' + "長い名前" * 10)
     dialog.get_by_role("button", name="保存", exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert page.locator(".credential-rows img").count() == 0
+    assert page.locator(".credential-workspace img").count() == 0
     assert page.evaluate("window.xss === undefined")
     for width in [320, 601, 1280]:
         page.set_viewport_size({"width": width, "height": 950})
         check_display(page)
-    page.locator(".credential-detail").get_by_role("button", name="名前を変更", exact=True).click()
+    page.locator(".credential-pane").get_by_role("button", name="名前を変更", exact=True).click()
     dialog.get_by_label("表示名", exact=True).fill("個人用")
     dialog.get_by_role("button", name="保存", exact=True).click()
     expect(dialog).not_to_be_visible()
@@ -201,13 +199,14 @@ with sync_playwright() as p:
     expect(dialog).not_to_be_visible()
     assert runtime("/v1/credentials", token_a).status == 401
     assert runtime("/v1/credentials", token_b).status == 200
-    page.locator(".credential-row").filter(has_text="個人用").click()
+    page.locator(".credential-item").filter(has_text="個人用").click()
     page.get_by_role("button", name="登録を解除", exact=True).click()
     check_display(page)
     page.screenshot(path=str(shots / "disconnect-mobile.png"), full_page=True)
     dialog.get_by_role("button", name="登録を解除", exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(page.locator(".credential-row")).to_have_count(1)
+    expect(page.locator(".credential-pane")).to_have_count(1)
+    expect(page.locator(".credential-heading h3")).to_have_text("仕事用")
     assert runtime("/v1/credentials/" + credential_id + "/deliver", token_b, "POST").status == 403
     page.get_by_role("button", name="ログアウト", exact=True).click()
     expect(page.get_by_role("heading", name="ログイン", exact=True)).to_be_visible()
