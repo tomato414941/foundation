@@ -40,14 +40,14 @@ test('CLI bootstraps and resumes approval without printing or manually copying a
   const f = await fixture(t), account = await f.account();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-pairing-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'runtime-key'), env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
-  const providers = await execute(['providers'], env);
-  assert.equal(providers.code, 0, providers.err);
-  assert.equal(JSON.parse(providers.out).providers[0].id, 'gmail');
+  const adapters = await execute(['adapters'], env);
+  assert.equal(adapters.code, 0, adapters.err);
+  assert.equal(JSON.parse(adapters.out).adapters[0].id, 'gmail.oauth');
   await assert.rejects(stat(keyPath), { code: 'ENOENT' });
   const missing = await execute(['accounts'], env);
   assert.equal(missing.code, 1);
   assert.match(missing.err, /connect/);
-  const connected = await execute(['connect', '--name', 'dev-us のAI', '--purpose', 'メールの確認'], env);
+  const connected = await execute(['connect', '--adapter', 'gmail.oauth', '--permission', 'readonly', '--name', 'dev-us のAI', '--purpose', 'メールの確認'], env);
   assert.equal(connected.code, 0, connected.err);
   const row = JSON.parse(connected.out).request, secret = (await readFile(keyPath, 'utf8')).trim();
   assert.equal(row.status, 'pending');
@@ -59,12 +59,12 @@ test('CLI bootstraps and resumes approval without printing or manually copying a
   assert.equal(approval.status, 200, approval.text);
   assert.equal((await execute(['accounts'], env)).code, 0);
   assert.equal(JSON.parse((await execute(['accounts'], env)).out).accounts[0].id, account.id);
-  const run = await execute(['exec', account.id, '--', process.execPath, '-e', 'if(process.env.FOUNDATION_ACCESS_TOKEN!==process.env.GOOGLE_OAUTH_ACCESS_TOKEN || process.env.FOUNDATION_PROVIDER!=="gmail" || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("connected")'], env);
+  const run = await execute(['exec', account.id, '--', process.execPath, '-e', 'if(process.env.FOUNDATION_ACCESS_TOKEN!==process.env.GOOGLE_OAUTH_ACCESS_TOKEN || process.env.FOUNDATION_ADAPTER!=="gmail.oauth" || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("connected")'], env);
   assert.equal(run.code, 0, run.err);
   assert.equal(run.out.trim(), 'connected');
   assert.equal((await readFile(keyPath, 'utf8')).trim(), secret);
   for (const result of [connected, pending, run]) assert.doesNotMatch(result.out + result.err, /fdn_|google-access|refresh_token/);
-  const next = await execute(['connect'], env);
+  const next = await execute(['connect', '--adapter', 'gmail.oauth', '--permission', 'readonly'], env);
   assert.equal(next.code, 0, next.err);
   const cancelled = await execute(['cancel'], env);
   assert.equal(JSON.parse(cancelled.out).request.status, 'cancelled');
@@ -76,12 +76,12 @@ test('CLI never overwrites or follows an existing insecure key file', async t =>
   const dir = await mkdtemp(join(tmpdir(), 'foundation-keyfile-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const existing = join(dir, 'existing'), link = join(dir, 'link');
   await writeFile(existing, 'do-not-overwrite', { mode: 0o644 });
-  let result = await execute(['connect'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: existing });
+  let result = await execute(['connect', '--adapter', 'gmail.oauth', '--permission', 'readonly'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: existing });
   assert.equal(result.code, 1);
   assert.match(result.err, /private/);
   assert.equal(await readFile(existing, 'utf8'), 'do-not-overwrite');
   await symlink(existing, link);
-  result = await execute(['connect'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: link });
+  result = await execute(['connect', '--adapter', 'gmail.oauth', '--permission', 'readonly'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: link });
   assert.equal(result.code, 1);
   assert.match(result.err, /symbolic link/);
   assert.equal(await readFile(existing, 'utf8'), 'do-not-overwrite');
@@ -91,7 +91,7 @@ test('accounts answers 401 until approval, then lists what was granted', async t
   const f = await fixture(t), account = await f.account();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-poll-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'runtime-key') };
-  const connected = await execute(['connect'], env), row = JSON.parse(connected.out).request;
+  const connected = await execute(['connect', '--adapter', 'gmail.oauth', '--permission', 'readonly'], env), row = JSON.parse(connected.out).request;
   const before = await execute(['accounts'], env);
   assert.equal(before.code, 1); assert.match(before.err, /not_approved/);
   const raw = await execute(['request'], env);
@@ -101,24 +101,24 @@ test('accounts answers 401 until approval, then lists what was granted', async t
   await f.request('/api/access-requests/' + row.id + '/deny', { method: 'POST', data: {} });
   const denied = await execute(['accounts'], env);
   assert.equal(denied.code, 1); assert.match(denied.err, /not_approved/, 'denial is indistinguishable from waiting');
-  const again = JSON.parse((await execute(['connect'], env)).out).request;
+  const again = JSON.parse((await execute(['connect', '--adapter', 'gmail.oauth', '--permission', 'readonly'], env)).out).request;
   await f.request('/api/access-requests/' + again.id + '/approve', { method: 'POST', data: { accountId: account.id, confirmationCode: again.confirmation_code } });
   const after = await execute(['accounts'], env);
   assert.equal(after.code, 0, after.err); assert.equal(JSON.parse(after.out).accounts[0].id, account.id);
   assert.doesNotMatch(connected.out + before.err + after.out, /fdn_|google-access|refresh_token/);
 });
 
-test('--help prints the agent procedure in Japanese and, when a server is reachable, which services it offers', async t => {
+test('--help prints the agent procedure in Japanese and, when a server is reachable, which adapters it offers', async t => {
   const f = await fixture(t);
   const offline = await execute(['--help'], { FOUNDATION_URL: '' });
   assert.equal(offline.code, 0, offline.err);
-  assert.match(offline.out, /foundation connect --provider expo/);
+  assert.match(offline.out, /foundation connect --adapter expo.token/);
   assert.match(offline.out, /verification_uri と confirmation_code/);
-  assert.doesNotMatch(offline.out, /現在のサーバーで使えるサービス/);
+  assert.doesNotMatch(offline.out, /現在のサーバーで使える接続方法/);
   const online = await execute(['--help'], { FOUNDATION_URL: f.base });
   assert.equal(online.code, 0, online.err);
-  assert.match(online.out, /現在のサーバーで使えるサービス: gmail \(Gmail\)/);
-  assert.doesNotMatch(online.out, /foundation connect --provider expo/);
+  assert.match(online.out, /現在のサーバーで使える接続方法: gmail.oauth \(Gmail\)/);
+  assert.doesNotMatch(online.out, /foundation connect --adapter expo.token/);
 });
 
 test('The server distributes its own CLI: install.sh bakes in the origin and the installed command runs against it', async t => {
@@ -142,18 +142,18 @@ test('The server distributes its own CLI: install.sh bakes in the origin and the
   const install = await run('sh', [join(dir, 'install.sh')], { FOUNDATION_CLI_DIR: join(dir, 'cli'), FOUNDATION_BIN_DIR: join(dir, 'bin') });
   assert.equal(install.code, 0, install.err);
   assert.match(install.out, /Installed/);
-  const installed = await run(join(dir, 'bin', 'foundation'), ['providers'], { FOUNDATION_URL: '' });
+  const installed = await run(join(dir, 'bin', 'foundation'), ['adapters'], { FOUNDATION_URL: '' });
   assert.equal(installed.code, 0, installed.err);
-  assert.equal(JSON.parse(installed.out).providers[0].id, 'gmail');
+  assert.equal(JSON.parse(installed.out).adapters[0].id, 'gmail.oauth');
 });
 
 test('FOUNDATION_AGENT gives each AI its own key file and default name; whoami and leave work through the CLI', async t => {
   const f = await fixture(t), account = await f.account();
   const home = await mkdtemp(join(tmpdir(), 'foundation-agent-home-')); t.after(() => rm(home, { recursive: true, force: true }));
   const base = { FOUNDATION_URL: f.base, HOME: home, FOUNDATION_RUNTIME_KEY_FILE: '' };
-  const claude = await execute(['connect', '--purpose', 'メールの確認'], { ...base, FOUNDATION_AGENT: 'claude' });
+  const claude = await execute(['connect', '--adapter', 'gmail.oauth', '--permission', 'readonly', '--purpose', 'メールの確認'], { ...base, FOUNDATION_AGENT: 'claude' });
   assert.equal(claude.code, 0, claude.err);
-  const codex = await execute(['connect', '--purpose', 'メールの確認'], { ...base, FOUNDATION_AGENT: 'codex' });
+  const codex = await execute(['connect', '--adapter', 'gmail.oauth', '--permission', 'readonly', '--purpose', 'メールの確認'], { ...base, FOUNDATION_AGENT: 'codex' });
   assert.equal(codex.code, 0, codex.err);
   const rows = [JSON.parse(claude.out).request, JSON.parse(codex.out).request];
   assert.notEqual(rows[0].id, rows[1].id);

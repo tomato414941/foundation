@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, rm, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { APPLE_KEYS } from '../src/providers/apple.mjs';
+import { APPLE_KEYS } from '../src/services/apple.mjs';
 import { appleFixture, APPLE_P8, APPLE_FIELDS } from './apple-helper.mjs';
 import { json, USER_A } from './helpers.mjs';
 
@@ -26,11 +26,11 @@ async function grant(f, ids) {
 
 test('Apple import signs a JWT with the .p8, confirms it with one read, and shows team and key without exposing the key', async t => {
   const f = await appleFixture(t), account = await f.appleAccount();
-  const state = await f.request('/api/state'), provider = state.json.providers.find(item => item.id === 'apple');
-  assert.equal(provider.connection_method, 'token'); assert.equal(provider.token_setup.multiline, true);
-  assert.deepEqual(provider.token_setup.fields.map(field => field.id), ['key_id', 'issuer_id', 'team_id', 'team_type']);
-  assert.equal(provider.token_setup.links[0].href, APPLE_KEYS);
-  assert.equal(account.label, 'Team TEAM123456 / Key ABC1234567'); assert.equal(provider.name, 'Apple');
+  const state = await f.request('/api/state'), adapter = state.json.adapters.find(item => item.id === 'apple.api-key');
+  assert.equal(adapter.register, 'paste'); assert.equal(adapter.form.schema.at(-1).kind, 'multiline'); assert.equal(adapter.form.schema.at(-1).secret, true);
+  assert.deepEqual(adapter.form.schema.map(field => field.id), ['key_id', 'issuer_id', 'team_id', 'team_type', 'key']);
+  assert.equal(adapter.form.links[0].href, APPLE_KEYS);
+  assert.equal(account.label, 'Team TEAM123456 / Key ABC1234567'); assert.equal(adapter.service.name, 'Apple');
   assert.equal(account.credential_type, 'private_key'); assert.equal(account.expires_at, null);
   assert.deepEqual(account.apple, APPLE_FIELDS);
   assert.ok(!state.text.includes('PRIVATE KEY'));
@@ -46,8 +46,8 @@ test('Apple rejects wrong identifiers, non-P-256 keys, malformed keys and keys A
   for (const pem of [rsa, 'not a key', APPLE_P8.replace('PRIVATE KEY-----\n', 'PRIVATE KEY-----\nAAAA'), '']) rejects(() => f.apple.privateKey(pem), /p8|P-256/);
   assert.equal(f.apple.calls.length, 0, 'format checks never contact Apple');
   const wrongFields = await f.importApple({ fields: { ...APPLE_FIELDS, key_id: 'short' } });
-  assert.equal(wrongFields.status, 400); assert.equal(wrongFields.json.error.code, 'invalid_account');
-  assert.equal((await f.importApple({ mode: 'session' })).status, 400);
+  assert.equal(wrongFields.status, 400); assert.equal(wrongFields.json.error.code, 'invalid_values');
+  assert.equal((await f.importApple({ permission: 'session' })).status, 400);
   // A key Apple no longer accepts: valid PEM, wrong key id for the signature.
   const other = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' });
   const refused = await f.importApple({ token: other });
@@ -57,7 +57,7 @@ test('Apple rejects wrong identifiers, non-P-256 keys, malformed keys and keys A
   f.apple.handler = () => json({}, 429);
   assert.equal((await f.importApple()).status, 503);
   f.apple.handler = () => json({ nope: true });
-  assert.equal((await f.importApple()).json.error.code, 'provider_response');
+  assert.equal((await f.importApple()).json.error.code, 'service_response');
   f.apple.handler = null;
   assert.equal(f.app.store.accounts(USER_A).length, 0);
   assert.equal((await f.importApple()).status, 200);
@@ -74,7 +74,7 @@ test('The runtime receives the .p8 as a file that exists only while the command 
     const stat = fs.statSync(p); const pem = fs.readFileSync(p, 'utf8');
     if ((stat.mode & 0o777) !== 0o600 || !pem.startsWith('-----BEGIN PRIVATE KEY-----')) process.exit(2);
     if (process.env.EXPO_ASC_KEY_ID !== 'ABC1234567' || process.env.EXPO_APPLE_TEAM_TYPE !== 'INDIVIDUAL' || !process.env.GOOGLE_OAUTH_ACCESS_TOKEN) process.exit(3);
-    if (process.env.FOUNDATION_ACCESS_TOKEN !== '' || process.env.FOUNDATION_PROVIDER !== 'apple' || process.env.FOUNDATION_ACCOUNT_IDS.split(',').length !== 2) process.exit(4);
+    if (process.env.FOUNDATION_ACCESS_TOKEN !== '' || process.env.FOUNDATION_ADAPTER !== 'apple.api-key' || process.env.FOUNDATION_ACCOUNT_IDS.split(',').length !== 2) process.exit(4);
     console.log(p);`];
   const run = await execute(['exec', apple.id, gmail.id, '--', process.execPath, ...probe], env);
   assert.equal(run.code, 0, run.err + run.out);

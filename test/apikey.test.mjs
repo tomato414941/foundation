@@ -6,12 +6,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fixture, FakeGmail, USER_A } from './helpers.mjs';
-import { apikeyConnection, gmailConnection } from '../src/providers/catalog.mjs';
-import { ApiKeyProvider } from '../src/providers/apikey.mjs';
+import { generic, gmailOauth } from '../src/adapters.mjs';
+import { GenericClient } from '../src/generic.mjs';
 import { validEnvName, validRequestedEnvName } from '../src/env-name.mjs';
 
 const key = () => 'fdn_' + randomBytes(32).toString('base64url');
-const claim = { service: 'Anthropic', site: 'https://console.anthropic.com/settings/keys', env: 'ANTHROPIC_API_KEY' };
+const claim = { service: 'Anthropic', site: 'https://console.anthropic.com/settings/keys', fields: [{ id: 'ANTHROPIC_API_KEY', label: 'APIキー', kind: 'line' }] };
+const field = id => ({ ...claim, fields: [{ id, label: id, kind: 'line' }] });
 const secret = 'sk-ant-fixture-' + randomBytes(16).toString('hex');
 const execute = (args, env) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, ['src/runtime.mjs', ...args], { env: { ...process.env, ...env } });
@@ -21,9 +22,16 @@ const execute = (args, env) => new Promise((resolve, reject) => {
 });
 async function apikeyFixture(t) {
   const gmail = new FakeGmail();
-  return fixture(t, { gmail, integrations: [apikeyConnection(new ApiKeyProvider()), gmailConnection(gmail)] });
+  return fixture(t, { gmail, adapters: [generic(new GenericClient()), gmailOauth(gmail)] });
 }
-const create = (f, token, details = claim, extra = {}) => f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { provider: 'apikey', mode: 'key', name: 'dev-us のAI', purpose: 'Claude APIでの要約', details, ...extra } });
+const create = (f, token, details = claim, extra = {}) => f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { adapter: 'generic', permission: 'key', name: 'dev-us のAI', purpose: 'Claude APIでの要約', details, ...extra } });
+
+test('The generic client rejects credentials in a site, a local site and a lowercase name', () => {
+  const client = new GenericClient(), code = details => { try { client.details(details); } catch (error) { return error.code; } };
+  assert.equal(code({ ...claim, site: 'https://user:pw@example.com/' }), 'invalid_site');
+  assert.equal(code({ ...claim, site: 'https://localhost/keys' }), 'invalid_site');
+  assert.equal(code(field('anthropic_api_key')), 'invalid_env');
+});
 
 test('Environment variable names cannot hijack the child process or borrow built-in provider names', () => {
   for (const name of ['ANTHROPIC_API_KEY', 'STRIPE_SECRET_KEY', 'X']) assert.ok(validRequestedEnvName(name), name);
@@ -31,9 +39,10 @@ test('Environment variable names cannot hijack the child process or borrow built
   for (const name of ['OPENROUTER_API_KEY', 'EXPO_TOKEN', 'GOOGLE_OAUTH_ACCESS_TOKEN']) { assert.ok(validEnvName(name), name); assert.equal(validRequestedEnvName(name), false, name); }
 });
 
-test('A runtime declares service, key page and variable; the declaration is validated and shown, never trusted as a scope', async t => {
+test('A runtime declares the service, the key page and the fields; the declaration is validated and shown, never trusted as a scope', async t => {
   const f = await apikeyFixture(t), token = key();
-  for (const [details, code] of [[null, 'invalid_details'], [{ ...claim, service: '' }, 'invalid_service'], [{ ...claim, service: '<b>x</b>' }, 'invalid_service'], [{ ...claim, site: 'http://example.com/keys' }, 'invalid_site'], [{ ...claim, site: 'https://user:pw@example.com/' }, 'invalid_site'], [{ ...claim, site: 'https://localhost/keys' }, 'invalid_site'], [{ ...claim, env: 'PATH' }, 'invalid_env'], [{ ...claim, env: 'OPENROUTER_API_KEY' }, 'invalid_env'], [{ ...claim, env: 'anthropic_api_key' }, 'invalid_env']]) {
+  for (const [details, code] of [[null, 'invalid_details'], [{ ...claim, service: '' }, 'invalid_service'], [{ ...claim, service: '<b>x</b>' }, 'invalid_service'], [{ ...claim, site: 'http://example.com/keys' }, 'invalid_site'],
+    [field('PATH'), 'invalid_env'], [field('OPENROUTER_API_KEY'), 'invalid_env'], [{ ...claim, fields: [] }, 'invalid_fields'], [{ ...claim, fields: [...claim.fields, ...claim.fields] }, 'invalid_fields'], [{ ...claim, fields: [{ id: 'A_KEY', kind: 'file' }] }, 'invalid_fields']]) {
     const response = await create(f, token, details);
     assert.equal(response.status, 400, JSON.stringify(details)); assert.equal(response.json.error.code, code, JSON.stringify(details));
   }
@@ -41,78 +50,73 @@ test('A runtime declares service, key page and variable; the declaration is vali
   assert.equal(created.status, 201, created.text);
   const row = created.json.request;
   assert.deepEqual(row.details, claim);
-  assert.deepEqual(row.service.request_fields.map(field => field.id), ['service', 'site', 'env']);
-  assert.equal(row.service.api.base_url, '');
+  assert.equal(row.adapter.id, 'generic'); assert.equal(row.adapter.service, null);
+  assert.deepEqual(row.form.schema.map(item => [item.id, item.label, item.kind, item.secret]), [['ANTHROPIC_API_KEY', 'APIキー', 'line', true]]);
+  assert.deepEqual(row.form.links, [{ label: claim.site, href: claim.site, declared: true }]);
   // Same declaration reuses the pending request; a different one conflicts.
   assert.equal((await create(f, token)).json.request.id, row.id);
-  assert.equal((await create(f, token, { ...claim, env: 'OTHER_KEY' })).status, 409);
+  assert.equal((await create(f, token, field('OTHER_KEY'))).status, 409);
   const page = await f.request('/api/access-requests/' + row.id);
   assert.deepEqual(page.json.request.details, claim);
   assert.equal(page.json.request.confirmation_code, undefined);
-  return { f, token, row };
 });
 
-test('The user pastes the key; it is bound to the declaration, delivered under the declared variable, and never verified or claimed as scoped', async t => {
+test('The owner pastes each declared value; each reaches the command under its own name, unverified', async t => {
   const f = await apikeyFixture(t), token = key();
   const row = (await create(f, token)).json.request;
-  // Import through the request: details come from the request, not the browser.
-  const bad = await f.request('/api/connections/apikey/connect', { method: 'POST', data: { name: 'Anthropic', mode: 'key', token: 'with space', accessRequestId: row.id } });
-  assert.equal(bad.status, 400); assert.equal(bad.json.error.code, 'invalid_credential');
-  const imported = await f.request('/api/connections/apikey/connect', { method: 'POST', data: { name: 'Anthropic', mode: 'key', token: secret, accessRequestId: row.id, details: { ...claim, env: 'IGNORED_NAME' } } });
+  const register = (values, extra = {}) => f.request('/api/adapters/generic/connect', { method: 'POST', data: { name: 'Anthropic', permission: 'key', values, accessRequestId: row.id, ...extra } });
+  // Values are taken for the request's declared fields only; what the browser sends as a declaration is ignored.
+  const bad = await register({ ANTHROPIC_API_KEY: 'with space' });
+  assert.equal(bad.status, 400); assert.equal(bad.json.error.code, 'invalid_values');
+  const imported = await register({ ANTHROPIC_API_KEY: secret, IGNORED_NAME: 'x' }, { details: field('IGNORED_NAME') });
   assert.equal(imported.status, 200, imported.text);
   const state = (await f.request('/api/state')).json, account = state.accounts.find(item => item.id === imported.json.account_id);
   assert.equal(account.verified, false);
-  assert.deepEqual(account.details, claim);
-  assert.deepEqual(account.scopes, ['apikey', 'service:anthropic', 'env:ANTHROPIC_API_KEY']);
+  assert.deepEqual(account.details, { service: 'Anthropic', site: claim.site, fields: ['ANTHROPIC_API_KEY'] });
+  assert.deepEqual(account.scopes, ['generic', 'service:anthropic', 'field:ANTHROPIC_API_KEY']);
   assert.equal(account.management_url, claim.site);
   assert.doesNotMatch(JSON.stringify(state), new RegExp(secret));
   assert.equal(account.permission.id, 'key');
-  // Duplicate key content is rejected; the same key cannot be registered twice.
-  assert.equal((await f.request('/api/connections/apikey/connect', { method: 'POST', data: { name: 'Anthropic', mode: 'key', token: secret, details: claim } })).status, 409);
-  // A key for another service registered outside the request is an ordinary second connection.
-  const other = await f.request('/api/connections/apikey/connect', { method: 'POST', data: { name: 'Stripe', mode: 'key', token: 'sk_live_fixture_' + randomBytes(8).toString('hex'), details: { service: 'Stripe', site: 'https://dashboard.stripe.com/apikeys', env: 'STRIPE_SECRET_KEY' } } });
-  assert.equal(other.status, 200, other.text);
   const approved = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code } });
   assert.equal(approved.status, 200, approved.text);
-  assert.equal(approved.json.request.account.label, 'Anthropic キー …' + account.email.split(':')[1].slice(0, 8));
-  // Runtime side: listing names the variable; exec sets it and nothing else leaks.
+  assert.equal(approved.json.request.account.label, 'Anthropic キー …' + account.subject.split(':')[1].slice(0, 8));
+  // Two values from one registration: both reach the command, each under its declared name.
+  const twilio = { service: 'Twilio', site: 'https://console.twilio.com/', fields: [{ id: 'TWILIO_ACCOUNT_SID', label: 'Account SID', kind: 'line' }, { id: 'TWILIO_AUTH_TOKEN', label: 'Auth Token', kind: 'line' }] };
+  const second = (await create(f, token, twilio)).json.request;
+  const pair = await f.request('/api/adapters/generic/connect', { method: 'POST', data: { name: 'Twilio', permission: 'key', values: { TWILIO_ACCOUNT_SID: 'AC123', TWILIO_AUTH_TOKEN: 'twilio-secret' }, accessRequestId: second.id } });
+  assert.equal(pair.status, 200, pair.text);
+  assert.equal((await f.request('/api/access-requests/' + second.id)).json.request.status, 'approved', 'an approved key completes by registering');
   const listed = await f.request('/v1/accounts', { token, anonymous: true });
-  assert.deepEqual(listed.json.accounts.map(item => item.token_env).sort(), ['ANTHROPIC_API_KEY', 'STRIPE_SECRET_KEY']);
-  assert.equal(listed.json.accounts.find(item => item.id === account.id).authentication.type, 'api_key_bearer');
-  assert.doesNotMatch(listed.text, new RegExp(secret));
+  assert.deepEqual(listed.json.accounts.map(item => item.token_env).sort(), ['ANTHROPIC_API_KEY', 'TWILIO_ACCOUNT_SID']);
+  assert.doesNotMatch(listed.text, new RegExp(secret + '|twilio-secret'));
   const issued = await f.request('/v1/accounts/' + account.id + '/credentials', { method: 'POST', token, anonymous: true, data: {} });
-  assert.equal(issued.status, 200, issued.text);
-  assert.equal(issued.json.access_token, secret);
-  assert.equal(issued.json.token_env, 'ANTHROPIC_API_KEY');
-  assert.equal(issued.json.expires_at, null);
-  assert.equal(issued.json.scope, 'apikey service:anthropic env:ANTHROPIC_API_KEY');
+  assert.equal(issued.json.access_token, secret); assert.equal(issued.json.token_env, 'ANTHROPIC_API_KEY'); assert.equal(issued.json.expires_at, null);
   const dir = await mkdtemp(join(tmpdir(), 'foundation-apikey-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'runtime-key');
   const { writeFile } = await import('node:fs/promises'); await writeFile(keyPath, token, { mode: 0o600 });
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
-  const run = await execute(['exec', account.id, '--', process.execPath, '-e', `if(process.env.ANTHROPIC_API_KEY!==${JSON.stringify(secret)}||process.env.FOUNDATION_ACCESS_TOKEN!==process.env.ANTHROPIC_API_KEY||process.env.FOUNDATION_PROVIDER!=='apikey'||process.env.FOUNDATION_TOKEN_EXPIRES_AT!==''||process.env.FOUNDATION_API_BASE_URL!=='')process.exit(2);console.log('ready')`], env);
+  const run = await execute(['exec', account.id, pair.json.account_id, '--', process.execPath, '-e', `if(process.env.ANTHROPIC_API_KEY!==${JSON.stringify(secret)}||process.env.TWILIO_ACCOUNT_SID!=='AC123'||process.env.TWILIO_AUTH_TOKEN!=='twilio-secret'||process.env.FOUNDATION_ADAPTER!=='generic')process.exit(2);console.log('ready')`], env);
   assert.equal(run.code, 0, run.err);
   assert.equal(run.out.trim(), 'ready');
-  // Disconnect cannot revoke at the service; delivery stops locally.
+  // Removing it cannot revoke at the service; delivery stops locally.
   const revoke = await f.request('/api/accounts/' + account.id, { method: 'DELETE', data: { revoke: true } });
   assert.equal(revoke.status, 409); assert.equal(revoke.json.error.code, 'manual_revocation_required');
   assert.equal((await f.request('/api/accounts/' + account.id, { method: 'DELETE', data: { revoke: false } })).status, 200);
   assert.equal((await f.request('/v1/accounts/' + account.id + '/credentials', { method: 'POST', token, anonymous: true, data: {} })).status, 403);
-  assert.equal(f.app.store.accounts(USER_A).length, 1);
 });
 
-test('The CLI builds a key request from its own declaration and refuses reserved variable names before contacting Foundation', async t => {
+test('The CLI builds a generic request from --field declarations and refuses reserved names before contacting Foundation', async t => {
   const f = await apikeyFixture(t);
   const dir = await mkdtemp(join(tmpdir(), 'foundation-apikey-cli-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'runtime-key') };
-  const reserved = await execute(['connect', '--service', 'Anthropic', '--site', claim.site, '--env', 'LD_PRELOAD'], env);
+  const reserved = await execute(['connect', '--service', 'Anthropic', '--site', claim.site, '--field', 'LD_PRELOAD'], env);
   assert.equal(reserved.code, 1); assert.match(reserved.err, /reserved/);
   const partial = await execute(['connect', '--service', 'Anthropic'], env);
   assert.equal(partial.code, 1); assert.match(partial.err, /--site/);
-  const connected = await execute(['connect', '--service', 'Anthropic', '--site', claim.site, '--env', claim.env, '--purpose', 'Claude APIでの要約'], env);
+  const connected = await execute(['connect', '--service', 'Anthropic', '--site', claim.site, '--field', 'ANTHROPIC_API_KEY=APIキー', '--multiline-field', 'ANTHROPIC_CONFIG', '--purpose', 'Claude APIでの要約'], env);
   assert.equal(connected.code, 0, connected.err);
   const row = JSON.parse(connected.out).request;
-  assert.equal(row.provider, 'apikey'); assert.equal(row.mode, 'key');
-  assert.deepEqual(row.details, claim);
+  assert.equal(row.adapter.id, 'generic'); assert.equal(row.permission.id, 'key');
+  assert.deepEqual(row.details.fields, [{ id: 'ANTHROPIC_API_KEY', label: 'APIキー', kind: 'line' }, { id: 'ANTHROPIC_CONFIG', label: 'ANTHROPIC_CONFIG', kind: 'multiline' }]);
   assert.match(row.verification_uri, /\/connect\//);
 });

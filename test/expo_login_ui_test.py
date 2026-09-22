@@ -37,10 +37,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
         return json.loads(result.stdout) if success else None
 
     def request():
-        return cli('connect', '--provider', 'expo', '--name', 'dev-us のAI', '--purpose', 'Expoのアカウントを確認します。ビルド・公開は行いません。')['request']
+        return cli('connect', '--adapter', 'expo.login', '--name', 'dev-us のAI', '--purpose', 'Expoのアカウントを確認します。ビルド・公開は行いません。')['request']
 
     row = request()
-    assert row['mode'] == 'session'
+    assert row['permission']['id'] == 'session'
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 800})
     page = context.new_page()
@@ -83,7 +83,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     try:
         username.fill('otp-user')
         password.fill(PASSWORD)
-        with page.expect_response(lambda response: response.url.endswith('/api/connections/expo/login')) as reply:
+        with page.expect_response(lambda response: response.url.endswith('/api/adapters/expo.login/connect')) as reply:
             submit.click()
         assert reply.value.status == 202 and PASSWORD not in reply.value.text()
         otp = page.get_by_label('認証コード', exact=True)
@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
         expect(otp).to_have_value('')
         expect(otp).to_be_visible()
         otp.fill(OTP)
-        with page.expect_response(lambda response: response.url.endswith('/api/connections/expo/login')) as reply:
+        with page.expect_response(lambda response: response.url.endswith('/api/adapters/expo.login/connect')) as reply:
             page.get_by_role('button', name='確認して承認', exact=True).click()
         assert reply.value.status == 200 and PASSWORD not in reply.value.text() and 'fixture-session-' not in reply.value.text()
         expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()

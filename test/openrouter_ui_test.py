@@ -34,8 +34,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
         assert 'sk-or-v1-' not in result.stdout + result.stderr and 'fdn_' not in result.stdout
         return json.loads(result.stdout) if success else None
 
-    request = cli('connect', '--name', 'dev-us のAI', '--purpose', '接続したキーの情報を確認。モデルは実行しません。')['request']
-    assert request['provider'] == 'openrouter' and request['mode'] == 'api-key'
+    request = cli('connect', '--adapter', 'openrouter.oauth', '--name', 'dev-us のAI', '--purpose', '接続したキーの情報を確認。モデルは実行しません。')['request']
+    assert request['adapter']['id'] == 'openrouter.oauth' and request['permission']['id'] == 'api-key'
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 1050})
     page = context.new_page()
@@ -124,7 +124,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     expect(dialog).not_to_be_visible()
     expect(section.get_by_role('heading', name='OpenRouterを接続しましょう', exact=True)).to_be_visible()
 
-    # Root management uses the same provider-driven flow, with no Gmail-only copy.
+    # Root management uses the same adapter-driven flow, with no Gmail-only copy.
     section.get_by_role('button', name='OpenRouterを接続', exact=True).click()
     expect(dialog.get_by_label('表示名', exact=True)).to_have_value('OpenRouter')
     review(page)

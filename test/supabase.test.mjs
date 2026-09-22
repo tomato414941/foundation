@@ -1,19 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { SUPABASE_TOKENS } from '../src/providers/supabase.mjs';
+import { SUPABASE_TOKENS } from '../src/services/supabase.mjs';
 import { FakeSupabase, supabaseFixture, SUPABASE_TOKEN } from './supabase-helper.mjs';
 import { json, USER_A } from './helpers.mjs';
 
 const credential = (f, id, token) => f.request('/v1/accounts/' + id + '/credentials', { method: 'POST', anonymous: true, token, data: {} });
-const createRequest = async (f, token) => (await f.request('/v1/access-requests', { method: 'POST', token, anonymous: true, data: { provider: 'supabase', mode: 'access-token', name: 'dev-us', purpose: 'プロジェクト一覧の確認' } })).json.request;
+const createRequest = async (f, token) => (await f.request('/v1/access-requests', { method: 'POST', token, anonymous: true, data: { adapter: 'supabase.access-token', permission: 'access-token', name: 'dev-us', purpose: 'プロジェクト一覧の確認' } })).json.request;
 
 test('Supabase import verifies the token against the Management API and shows who it belongs to', async t => {
   const f = await supabaseFixture(t), account = await f.supabaseAccount();
-  const state = await f.request('/api/state'), provider = state.json.providers.find(item => item.id === 'supabase');
-  assert.equal(provider.connection_method, 'token');
-  assert.equal(provider.token_setup.links[0].href, SUPABASE_TOKENS);
-  assert.equal(provider.can_revoke, false);
+  const state = await f.request('/api/state'), adapter = state.json.adapters.find(item => item.id === 'supabase.access-token');
+  assert.equal(adapter.register, 'paste');
+  assert.equal(adapter.form.links[0].href, SUPABASE_TOKENS);
+  assert.equal(adapter.can_revoke, false);
   assert.equal(account.label, 'owner@example.test');
   assert.deepEqual(account.organizations, [{ slug: 'ttgx', name: 'Owner Org' }]);
   assert.equal(account.credential_type, 'api_key'); assert.equal(account.expires_at, null);
@@ -30,13 +30,13 @@ test('Supabase rejects malformed, unauthorized or inconsistent tokens without st
     assert.equal(response.status, token.startsWith('sbp_') && token.length > 20 ? 409 : 400, token); assert.equal(response.json.error.code, code, token);
   }
   f.supabase.handler = () => json({ username: 'x' });
-  assert.equal((await f.importSupabase()).json.error.code, 'provider_response');
+  assert.equal((await f.importSupabase()).json.error.code, 'service_response');
   f.supabase.handler = () => json({ message: 'slow down' }, 429);
   assert.equal((await f.importSupabase()).status, 503);
   f.supabase.handler = () => { throw new TypeError('network'); };
-  assert.equal((await f.importSupabase()).json.error.code, 'provider_unavailable');
+  assert.equal((await f.importSupabase()).json.error.code, 'service_unavailable');
   f.supabase.handler = null;
-  assert.equal((await f.importSupabase({ mode: 'admin' })).status, 400);
+  assert.equal((await f.importSupabase({ permission: 'admin' })).status, 400);
   assert.equal(f.app.store.accounts(USER_A).length, 0);
   assert.equal((await f.importSupabase()).status, 200);
   assert.equal((await f.importSupabase()).status, 409, 'same token twice');
@@ -66,8 +66,8 @@ test('Supabase approval delivers SUPABASE_ACCESS_TOKEN to the runtime and stops 
 
 test('A generic key request may not borrow the Supabase variable name', async t => {
   const f = await supabaseFixture(t);
-  const { apikeyConnection } = await import('../src/providers/catalog.mjs');
-  const { ApiKeyProvider } = await import('../src/providers/apikey.mjs');
-  assert.throws(() => new ApiKeyProvider().details({ service: 'Supabase', site: SUPABASE_TOKENS, env: 'SUPABASE_ACCESS_TOKEN' }), /invalid_env|環境変数名/);
-  assert.ok(apikeyConnection(new ApiKeyProvider()).id);
+  const { generic } = await import('../src/adapters.mjs');
+  const { GenericClient } = await import('../src/generic.mjs');
+  assert.throws(() => new GenericClient().details({ service: 'Supabase', site: SUPABASE_TOKENS, fields: [{ id: 'SUPABASE_ACCESS_TOKEN' }] }), /invalid_env|環境変数名/);
+  assert.ok(generic(new GenericClient()).id);
 });

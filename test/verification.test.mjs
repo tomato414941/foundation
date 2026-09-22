@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { cloudflareFixture, CLOUDFLARE_TOKEN, CLOUDFLARE_ACCOUNT } from './cloudflare-helper.mjs';
 import { fixture, FakeGmail, USER_A, json } from './helpers.mjs';
-import { ApiKeyProvider } from '../src/providers/apikey.mjs';
-import { apikeyConnection, gmailConnection } from '../src/providers/catalog.mjs';
+import { GenericClient } from '../src/generic.mjs';
+import { generic, gmailOauth } from '../src/adapters.mjs';
 import { verification, verificationResult } from '../src/verification.mjs';
 import { HttpError } from '../src/errors.mjs';
 
 const key = () => 'fdn_' + randomBytes(32).toString('base64url');
 async function create(f, token = key(), extra = {}) {
-  const result = await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { name: 'dev-us', provider: 'cloudflare', mode: 'api-token', purpose: 'R2の一覧を確認', ...extra } });
+  const result = await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { name: 'dev-us', adapter: 'cloudflare.api-token', permission: 'api-token', purpose: 'R2の一覧を確認', ...extra } });
   assert.equal(result.status, 201, result.text);
   return { token, row: result.json.request };
 }
@@ -35,7 +35,7 @@ test('A failed import stores no secret, tells the owner in the response, and tel
   await f.login('other@example.test');
   assert.equal((await f.request('/api/access-requests/' + row.id)).status, 404);
   assert.equal((await f.importCloudflare({ accessRequestId: row.id })).status, 404);
-  const valid = await f.request('/api/connections/cloudflare/connect', { method: 'POST', headers: { cookie: originalCookie }, data: { name: 'Cloudflare', mode: 'api-token', token: CLOUDFLARE_TOKEN, fields: { account_id: CLOUDFLARE_ACCOUNT }, accessRequestId: row.id } });
+  const valid = await f.request('/api/adapters/cloudflare.api-token/connect', { method: 'POST', headers: { cookie: originalCookie }, data: { name: 'Cloudflare', permission: 'api-token', values: { token: CLOUDFLARE_TOKEN, account_id: CLOUDFLARE_ACCOUNT }, accessRequestId: row.id } });
   assert.equal(valid.status, 200, valid.text);
   assert.equal(check(valid.json.verification, 'credential').status, 'passed');
   assert.equal(check(valid.json.verification, 'permissions').status, 'unknown');
@@ -78,7 +78,7 @@ test('Correcting an account ID while the request is open updates this request\'s
 
 test('Verification output is a bounded allowlist, not upstream messages or input fields', () => {
   const secret = 'sensitive-credential-and-upstream-prompt';
-  const error = new HttpError(502, 'provider_response', secret);
+  const error = new HttpError(502, 'service_response', secret);
   assert.ok(!JSON.stringify(verificationResult(null, error)).includes(secret));
   const result = verification([{ check: secret, status: secret, code: secret, message: secret, token: secret, http_status: secret }]);
   assert.ok(!JSON.stringify(result).includes(secret));
@@ -92,17 +92,17 @@ test('A provider outage is an error to the owner, never proof of bad credentials
   const f = await cloudflareFixture(t), { row, token } = await create(f);
   f.cloudflare.handler = () => { throw new Error(CLOUDFLARE_TOKEN); };
   const outage = await f.importCloudflare({ accessRequestId: row.id });
-  assert.equal(outage.status, 502); assert.equal(outage.json.error.code, 'provider_unavailable');
+  assert.equal(outage.status, 502); assert.equal(outage.json.error.code, 'service_unavailable');
   assert.ok(!outage.text.includes(CLOUDFLARE_TOKEN));
   assert.equal(f.app.store.accounts(USER_A).length, 0);
   assert.equal((await usable(f, token)).status, 401);
 });
 
 test('Generic API keys report unverified to the owner, without pretending to verify the provider or permissions', async t => {
-  const gmail = new FakeGmail(), f = await fixture(t, { gmail, integrations: [gmailConnection(gmail), apikeyConnection(new ApiKeyProvider())] });
-  const details = { service: 'Example', site: 'https://example.test/keys', env: 'EXAMPLE_API_KEY' };
-  const { row } = await create(f, key(), { provider: 'apikey', mode: 'key', details });
-  const result = await f.request('/api/connections/apikey/connect', { method: 'POST', data: { name: 'Example', mode: 'key', token: 'example-private-key', accessRequestId: row.id } });
+  const gmail = new FakeGmail(), f = await fixture(t, { gmail, adapters: [gmailOauth(gmail), generic(new GenericClient())] });
+  const details = { service: 'Example', site: 'https://example.test/keys', fields: [{ id: 'EXAMPLE_API_KEY' }] };
+  const { row } = await create(f, key(), { adapter: 'generic', permission: 'key', details });
+  const result = await f.request('/api/adapters/generic/connect', { method: 'POST', data: { name: 'Example', permission: 'key', values: { EXAMPLE_API_KEY: 'example-private-key' }, accessRequestId: row.id } });
   assert.equal(result.status, 200, result.text);
   const report = await shown(f, result.json.account_id);
   assert.deepEqual(report.checks.map(item => item.status), ['unknown', 'unknown']);
@@ -110,8 +110,8 @@ test('Generic API keys report unverified to the owner, without pretending to ver
 });
 
 test('OAuth failures return to the approval page and the connection records what passed', async t => {
-  const f = await fixture(t), { row, token } = await create(f, key(), { provider: 'gmail', mode: 'metadata' });
-  const begin = async () => new URL((await f.request('/api/connections/gmail/connect', { method: 'POST', data: { name: 'Gmail', mode: 'metadata', accessRequestId: row.id } })).json.url);
+  const f = await fixture(t), { row, token } = await create(f, key(), { adapter: 'gmail.oauth', permission: 'metadata' });
+  const begin = async () => new URL((await f.request('/api/adapters/gmail.oauth/connect', { method: 'POST', data: { name: 'Gmail', permission: 'metadata', accessRequestId: row.id } })).json.url);
   const failed = await f.callback(await begin(), 'personal-readonly');
   assert.match(failed.headers.get('location'), /connection=scope/);
   assert.equal(f.app.store.accounts(USER_A).length, 0);

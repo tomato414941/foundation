@@ -11,7 +11,7 @@ const normalizeCode = value => typeof value === 'string' ? value.toUpperCase().r
 // The public approval URL cannot authenticate a runtime. Only the hash of the
 // independently generated runtime key is stored, even before user approval.
 export class AccessRequests {
-  constructor(store, providers) { this.store = store; this.db = store.db; this.providers = providers; }
+  constructor(store, adapters) { this.store = store; this.db = store.db; this.adapters = adapters; }
   key(token) {
     if (typeof token !== 'string' || !RUNTIME_KEY.test(token)) fail(401, 'invalid_token', 'アクセスキーの形式が無効です。');
     return digest(token);
@@ -35,29 +35,29 @@ export class AccessRequests {
   }
   // The runtime writes the guidance the owner reads on the approval page; Foundation only frames it as the AI's words.
   // The runtime chooses how long the link stays open (default 30 minutes, at most a day): a phone user may need time for the other service.
-  create(token, { name, provider, purpose, mode, details, guidance = '', validMinutes = 30 }) {
-    this.providers.permission(provider, mode);
+  create(token, { name, adapter, purpose, permission, details, guidance = '', validMinutes = 30 }) {
+    this.adapters.permission(adapter, permission);
     if (!Number.isInteger(validMinutes) || validMinutes < 1 || validMinutes * 60_000 > MAX_REQUEST_TTL) fail(400, 'invalid_validity', '有効期間は1〜1440分で指定してください。');
     if (typeof guidance !== 'string' || guidance.length > 2000 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(guidance)) fail(400, 'invalid_guidance', '案内は2000文字以内で入力してください。');
     guidance = guidance.replace(/\r\n?/g, '\n').trim();
-    const encoded = JSON.stringify(this.providers.details(provider, details));
+    const encoded = JSON.stringify(this.adapters.details(adapter, details));
     this.store.sweep();
     const hash = this.key(token);
     // A registered key is known by the name its owner gave it; what the runtime calls itself matters only the first time.
     const agent = this.store.authenticate(token), requesterName = agent?.name || name;
     const previous = this.db.prepare("SELECT * FROM access_requests WHERE token_hash=? AND status='pending' AND expires_at>? ORDER BY created_at DESC LIMIT 1").get(hash, Date.now());
     if (previous) {
-      if (previous.requester_name !== requesterName || previous.provider !== provider || previous.purpose !== purpose || previous.mode !== mode || previous.details !== encoded || previous.guidance !== guidance || previous.expires_at - previous.created_at !== validMinutes * 60_000) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
+      if (previous.requester_name !== requesterName || previous.adapter !== adapter || previous.purpose !== purpose || previous.permission !== permission || previous.details !== encoded || previous.guidance !== guidance || previous.expires_at - previous.created_at !== validMinutes * 60_000) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
       return previous;
     }
     if (this.db.prepare('SELECT count(*) n FROM access_requests').get().n >= 1000) fail(429, 'request_limit', '接続依頼が混み合っています。しばらく待ってからお試しください。');
     const id = randomBytes(32).toString('base64url'), code = randomBytes(4).toString('hex').toUpperCase();
     const now = Date.now();
-    this.db.prepare('INSERT INTO access_requests (id,token_hash,requester_name,provider,purpose,mode,details,guidance,confirmation_code,owner_id,agent_id,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
-      .run(id, hash, requesterName, provider, purpose, mode, encoded, guidance, code.slice(0, 4) + '-' + code.slice(4), agent?.owner_id || null, agent?.id || null, now, now + validMinutes * 60_000);
+    this.db.prepare('INSERT INTO access_requests (id,token_hash,requester_name,adapter,purpose,permission,details,guidance,confirmation_code,owner_id,agent_id,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(id, hash, requesterName, adapter, purpose, permission, encoded, guidance, code.slice(0, 4) + '-' + code.slice(4), agent?.owner_id || null, agent?.id || null, now, now + validMinutes * 60_000);
     return this.get(id);
   }
-  details(row) { try { return JSON.parse(row.details || '{}'); } catch { return {}; } }
+  details(row) { return JSON.parse(row.details); }
   // Everything that happens at the approval URL passes through this server. It is written down as it
   // happens, unjudged, so the runtime can read what its owner ran into. Inputs are never recorded.
   record(id, event, detail = {}) {
@@ -65,20 +65,18 @@ export class AccessRequests {
     try { row = this.get(id); } catch { return; }
     const events = this.eventsOf(row);
     const entry = { at: Date.now(), event: String(event).slice(0, 40) };
-    for (const key of ['provider', 'method', 'code']) if (detail[key] != null) entry[key] = String(detail[key]).slice(0, 64);
+    for (const key of ['adapter', 'code']) if (detail[key] != null) entry[key] = String(detail[key]).slice(0, 64);
     if (detail.message != null) entry.message = String(detail.message).slice(0, 300);
     events.push(entry);
     this.db.prepare('UPDATE access_requests SET progress=? WHERE id=?').run(JSON.stringify(events.slice(-40)), row.id);
   }
-  eventsOf(row) { try { const value = JSON.parse(row.progress || '[]'); return Array.isArray(value) ? value : []; } catch { return []; } }
+  eventsOf(row) { return row.progress ? JSON.parse(row.progress) : []; }
   // What a runtime may read about its own current request: the request as created, and the raw events since.
   runtimeView(token) {
     const row = this.current(token);
     return { ...this.summary(row, ''), events: this.eventsOf(row) };
   }
-  matches(row, account) {
-    return account && account.provider === row.provider && this.providers.get(row.provider).matches(row.mode, account, { ...row, details: this.details(row) });
-  }
+  matches(row, account) { return this.adapters.matches(row.adapter, row.permission, account, this.details(row)); }
   // A request from a key the owner already approved asks for nothing but a registration: registering completes it.
   registered(id, ownerId, accountId) {
     const row = this.forUser(id, ownerId, true);
@@ -141,9 +139,9 @@ export class AccessRequests {
       else if (account && account.status !== 'connected') status = 'reconnect_required';
     }
     const registered = row.agent_id ? this.db.prepare('SELECT name FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash) : undefined;
-    return { id: row.id, provider: row.provider, service: this.providers.describe(row.provider), permission: this.providers.permission(row.provider, row.mode), requester_name: row.requester_name, purpose: row.purpose, mode: row.mode, details: this.details(row), guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
+    return { id: row.id, adapter: this.adapters.describe(row.adapter), permission: this.adapters.permission(row.adapter, row.permission), form: this.adapters.form(row.adapter, this.details(row)), requester_name: row.requester_name, purpose: row.purpose, details: this.details(row), guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
       ...(code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
       status, created_at: row.created_at, expires_at: row.expires_at, ...(row.account_id ? { account_id: row.account_id } : {}),
-      ...(status === 'approved' ? { agent_id: row.agent_id, ...(account ? { account: { id: account.id, email: account.email, label: this.providers.get(row.provider).client.accountInfo?.(this.store.secrets(account))?.label || account.email } } : {}) } : {}) };
+      ...(status === 'approved' ? { agent_id: row.agent_id, ...(account ? { account: { id: account.id, subject: account.subject, label: this.adapters.get(account.adapter).client.accountInfo?.(this.store.secrets(account))?.label || account.subject } } : {}) } : {}) };
   }
 }

@@ -1,9 +1,9 @@
-import { SupabaseProvider, SUPABASE_API } from '../src/providers/supabase.mjs';
-import { supabaseConnection, gmailConnection } from '../src/providers/catalog.mjs';
+import { SupabaseClient, SUPABASE_API } from '../src/services/supabase.mjs';
+import { supabaseAccessToken, gmailOauth } from '../src/adapters.mjs';
 import { FakeGmail, fixture, json } from './helpers.mjs';
 
 export const SUPABASE_TOKEN = 'sbp_' + 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0';
-export class FakeSupabase extends SupabaseProvider {
+export class FakeSupabase extends SupabaseClient {
   constructor() {
     super({ fetcher: (url, options) => this.fetch(url, options) });
     this.calls = [];
@@ -24,8 +24,8 @@ export class FakeSupabase extends SupabaseProvider {
 
 export async function supabaseFixture(t, options = {}) {
   const supabase = options.supabase || new FakeSupabase(), gmail = new FakeGmail();
-  const f = await fixture(t, { gmail, integrations: [supabaseConnection(supabase), gmailConnection(gmail)], ...options });
-  const importSupabase = (extra = {}) => f.request('/api/connections/supabase/connect', { method: 'POST', data: { name: 'Supabase', mode: 'access-token', token: SUPABASE_TOKEN, ...extra } });
+  const f = await fixture(t, { gmail, adapters: [supabaseAccessToken(supabase), gmailOauth(gmail)], ...options });
+  const importSupabase = ({ token = SUPABASE_TOKEN, ...extra } = {}) => f.request('/api/adapters/supabase.access-token/connect', { method: 'POST', data: { name: 'Supabase', permission: 'access-token', values: { token }, ...extra } });
   async function supabaseAccount(extra = {}) {
     const result = await importSupabase(extra);
     if (result.status !== 200) throw new Error(result.text);

@@ -6,22 +6,22 @@ export const SUPABASE_DOCS = 'https://supabase.com/docs/reference/api/introducti
 export const SUPABASE_TOKENS = 'https://supabase.com/dashboard/account/tokens';
 export const SUPABASE_SCOPE = 'supabase:access-token';
 const digest = token => createHash('sha256').update(token).digest('hex');
-const invalidResponse = () => fail(502, 'provider_response', 'Supabaseからの応答を確認できませんでした。');
+const invalidResponse = () => fail(502, 'service_response', 'Supabaseからの応答を確認できませんでした。');
 const text = (value, max) => typeof value === 'string' && value.trim() && value.length <= max && !/[\x00-\x1f\x7f]/.test(value);
 
 // Personal access tokens for the Management API and the Supabase CLI. The
 // token is created by the user on the dashboard and pasted; Foundation checks
 // it against /v1/profile so the connection shows who it belongs to.
-export class SupabaseProvider {
+export class SupabaseClient {
   constructor({ fetcher = fetch } = {}) { this.enabled = true; this.fetcher = fetcher; }
   check() { if (!this.enabled) fail(503, 'supabase_unavailable', '現在Supabaseに接続できません。'); }
   async request(path, token) {
     let response;
     try { response = await this.fetcher(SUPABASE_API + path, { headers: { authorization: 'Bearer ' + token }, redirect: 'error', signal: AbortSignal.timeout(12_000) }); }
-    catch { fail(502, 'provider_unavailable', 'Supabaseに接続できませんでした。時間をおいて再度お試しください。'); }
+    catch { fail(502, 'service_unavailable', 'Supabaseに接続できませんでした。時間をおいて再度お試しください。'); }
     if (response.status === 401 || response.status === 403) fail(409, 'reconnect_required', 'トークンが無効か、失効しています。Supabaseのトークン管理画面で確認してください。');
-    if (response.status === 429) fail(503, 'provider_rate_limit', 'Supabaseへの確認が続いています。時間をおいて再度お試しください。');
-    if (!response.ok) fail(502, 'provider_unavailable', 'Supabaseで処理を完了できませんでした。');
+    if (response.status === 429) fail(503, 'service_rate_limit', 'Supabaseへの確認が続いています。時間をおいて再度お試しください。');
+    if (!response.ok) fail(502, 'service_unavailable', 'Supabaseで処理を完了できませんでした。');
     let data;
     try { data = await response.json(); } catch { invalidResponse(); }
     return data;
@@ -35,18 +35,19 @@ export class SupabaseProvider {
     return { access_token: token, credential_type: 'api_key', expires_at: null, expiry_known: false, scopes: [SUPABASE_SCOPE],
       details: { token_hash: digest(token), user_id: profile.gotrue_id, email: profile.primary_email.toLowerCase(), username: profile.username, organizations: organizations.map(item => ({ slug: item.slug, name: item.name })), checked_at: Date.now() } };
   }
-  async importToken({ token, mode }) {
+  async importToken({ values, permission }) {
+    const { token } = values;
     this.check();
-    if (mode !== 'access-token') fail(400, 'invalid_scope', '利用する権限を選び直してください。');
+    if (permission !== 'access-token') fail(400, 'invalid_permission', '利用する権限を選び直してください。');
     const credentials = await this.inspect(token);
-    return { email: 'token:' + credentials.details.token_hash, credentials };
+    return { subject: 'token:' + credentials.details.token_hash, credentials };
   }
   async token(store, account) {
     this.check();
     if (account.status !== 'connected') fail(409, 'reconnect_required', 'Supabaseでトークンを確認し、新しい接続を追加してください。');
     try {
       const previous = store.secrets(account), next = await this.inspect(previous.access_token);
-      if (account.email !== 'token:' + next.details.token_hash || previous.details.user_id !== next.details.user_id) invalidResponse();
+      if (account.subject !== 'token:' + next.details.token_hash || previous.details.user_id !== next.details.user_id) invalidResponse();
       store.saveCredentials(account, next);
       return next;
     } catch (error) {

@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
         assert token not in result.stdout + result.stderr and 'fdn_' not in result.stdout
         return json.loads(result.stdout) if success else None
 
-    request = cli('connect', '--provider', 'cloudflare', '--name', 'dev-us のAI', '--purpose', 'R2のバケット一覧を確認。変更やデータ転送は行いません。')['request']
+    request = cli('connect', '--adapter', 'cloudflare.api-token', '--name', 'dev-us のAI', '--purpose', 'R2のバケット一覧を確認。変更やデータ転送は行いません。')['request']
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 1050})
     page = context.new_page()
@@ -58,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     account_field = register.get_by_label('アカウントID', exact=True)
     expect(field).to_have_attribute('type', 'password')
     expect(field).to_have_attribute('autocomplete', 'off')
-    expect(register.get_by_text('Global API Key と R2 の S3互換キーは不可', exact=False)).to_be_visible()
+    expect(page.get_by_text('Global API Key と R2 の S3互換キーは不可', exact=False)).to_be_visible()
     context.route('https://dash.cloudflare.com/profile/api-tokens', lambda route: route.fulfill(status=200, content_type='text/html', body='<h1>Cloudflare token settings fixture</h1>'))
     link = register.get_by_role('link', name='CloudflareのAPIトークン管理ページを開く', exact=False)
     expect(link).to_have_attribute('rel', 'noopener noreferrer')
@@ -113,7 +113,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     expect(field).to_have_value('')
     account_field.fill(account_id)
     field.fill(token)
-    with page.expect_response(lambda response: '/api/connections/cloudflare/connect' in response.url) as response_event:
+    with page.expect_response(lambda response: '/api/adapters/cloudflare.api-token/connect' in response.url) as response_event:
         register.get_by_role('button', name='登録する', exact=True).click()
     assert token not in response_event.value.text()
     expect(dialog).not_to_be_visible()
@@ -132,7 +132,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     assert account['cloudflare_account_id'] == account_id
     assert account['token_env'] == 'CLOUDFLARE_API_TOKEN'
     result = subprocess.run(['node', 'src/runtime.mjs', 'exec', account['id'], '--', 'node', '-e',
-        'if(!process.env.CLOUDFLARE_API_TOKEN?.startsWith("cfut_") || process.env.CLOUDFLARE_API_TOKEN!==process.env.FOUNDATION_ACCESS_TOKEN || process.env.FOUNDATION_PROVIDER!=="cloudflare" || !process.env.FOUNDATION_TOKEN_EXPIRES_AT || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2); console.log("ready")'],
+        'if(!process.env.CLOUDFLARE_API_TOKEN?.startsWith("cfut_") || process.env.CLOUDFLARE_API_TOKEN!==process.env.FOUNDATION_ACCESS_TOKEN || process.env.FOUNDATION_ADAPTER!=="cloudflare.api-token" || !process.env.FOUNDATION_TOKEN_EXPIRES_AT || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2); console.log("ready")'],
         env=env, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0 and result.stdout.strip() == 'ready', result.stderr
     assert token not in result.stdout + result.stderr

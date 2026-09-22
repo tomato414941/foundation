@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createApp } from '../src/app.mjs';
 import { fail } from '../src/errors.mjs';
-import { GmailProvider, METADATA_SCOPE, READONLY_SCOPE } from '../src/providers/gmail.mjs';
+import { GmailClient, METADATA_SCOPE, READONLY_SCOPE } from '../src/services/gmail.mjs';
+import { gmailOauth } from '../src/adapters.mjs';
 
 export const KEY = Buffer.alloc(32, 7);
 export const USER_A = '10000000-0000-4000-8000-000000000001';
@@ -29,7 +30,7 @@ export class FakeAuth {
   async refresh(token) { this.refreshes++; if (this.refreshHandler) await this.refreshHandler(); return this.value(token.slice('supabase-refresh-'.length)); }
   async logout() {}
 }
-export class FakeGmail extends GmailProvider {
+export class FakeGmail extends GmailClient {
   constructor() {
     super({ clientId: 'test-google-client', clientSecret: 'test-google-secret' }, { fetcher: async (url, options) => this.fetch(url, options) });
     this.calls = []; this.exchangeCount = 0;
@@ -57,8 +58,8 @@ export class FakeGmail extends GmailProvider {
   }
 }
 export async function fixture(t, options = {}) {
-  const auth = options.auth || new FakeAuth(), gmail = options.gmail || new FakeGmail();
-  const app = createApp({ encryptionKey: KEY, auth, gmail, ...options });
+  const { gmail = new FakeGmail(), adapters = [gmailOauth(gmail)], ...rest } = options, auth = options.auth || new FakeAuth();
+  const app = createApp({ encryptionKey: KEY, ...rest, auth, adapters });
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   t.after(() => app.close());
   const base = 'http://127.0.0.1:' + app.server.address().port;
@@ -80,19 +81,19 @@ export async function fixture(t, options = {}) {
     cookie = response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
     return response;
   }
-  async function start({ name = '個人用', mode = 'readonly', purpose = 'サービス登録', accountId } = {}) {
-    const result = await request('/api/gmail/connect', { method: 'POST', data: { name, mode, purpose, accountId } });
+  async function start({ name = '個人用', permission = 'readonly', purpose = 'サービス登録', accountId } = {}) {
+    const result = await request('/api/adapters/gmail.oauth/connect', { method: 'POST', data: { name, permission, purpose, accountId } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
   async function callback(url, code = 'personal-readonly', extra = {}) {
-    return request('/oauth/gmail/callback?state=' + url.searchParams.get('state') + '&code=' + code, extra);
+    return request('/oauth/gmail.oauth/callback?state=' + url.searchParams.get('state') + '&code=' + code, extra);
   }
-  async function account(code = 'personal', mode = 'readonly') {
-    const url = await start({ name: code, mode });
-    const response = await callback(url, code + '-' + mode);
-    assert.equal(response.headers.get('location'), '/?connection=connected', response.text);
-    return (await request('/api/state')).json.accounts.find((item) => item.email === code + '@example.test');
+  async function account(code = 'personal', permission = 'readonly') {
+    const url = await start({ name: code, permission });
+    const response = await callback(url, code + '-' + permission);
+    assert.equal(response.headers.get('location'), '/?connection=connected&adapter=gmail.oauth', response.text);
+    return (await request('/api/state')).json.accounts.find((item) => item.subject === code + '@example.test');
   }
   async function agent(name = 'dev-us') {
     const result = await request('/api/agents', { method: 'POST', data: { name } });

@@ -34,7 +34,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
         assert token not in result.stdout + result.stderr and 'fdn_' not in result.stdout
         return json.loads(result.stdout) if success else None
 
-    request = cli('connect', '--provider', 'expo', '--name', 'dev-us のAI', '--purpose', 'Expoのアカウントを確認。ビルドは実行しません。')['request']
+    request = cli('connect', '--adapter', 'expo.token', '--name', 'dev-us のAI', '--purpose', 'Expoのアカウントを確認。ビルドは実行しません。')['request']
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 1050})
     page = context.new_page()
@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     expect(field).to_have_attribute('type', 'password')
     expect(field).to_have_attribute('autocomplete', 'off')
     expect(register.get_by_text('すべてのアカウント・組織', exact=False)).to_have_count(0)
-    expect(register.locator('input[name="purpose"]')).to_have_value(request['purpose'])
+    expect(page.get_by_text(request['purpose'], exact=True)).to_be_visible()
     expect(register.get_by_label('用途 任意', exact=True)).to_have_count(0)
 
     # Verify the external login is an isolated official-site tab, never a
@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     cli('accounts', success=False)
     review(page)
     field.fill(token)
-    with page.expect_response(lambda response: '/api/connections/expo/connect' in response.url) as response_event:
+    with page.expect_response(lambda response: '/api/adapters/expo.token/connect' in response.url) as response_event:
         register.get_by_role('button', name='登録する', exact=True).click()
     assert token not in response_event.value.text()
     expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
@@ -98,9 +98,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
-    assert cli('accounts')['accounts'][0]['provider'] == 'expo'
+    assert cli('accounts')['accounts'][0]['adapter'] == 'expo.token'
     account = cli('accounts')['accounts'][0]
-    command = subprocess.run(['node', 'src/runtime.mjs', 'exec', account['id'], '--', 'node', '-e', 'if(!process.env.EXPO_TOKEN || process.env.EXPO_TOKEN!==process.env.FOUNDATION_ACCESS_TOKEN || process.env.FOUNDATION_PROVIDER!=="expo" || process.env.FOUNDATION_TOKEN_EXPIRES_AT!=="" || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
+    command = subprocess.run(['node', 'src/runtime.mjs', 'exec', account['id'], '--', 'node', '-e', 'if(!process.env.EXPO_TOKEN || process.env.EXPO_TOKEN!==process.env.FOUNDATION_ACCESS_TOKEN || process.env.FOUNDATION_ADAPTER!=="expo.token" || process.env.FOUNDATION_TOKEN_EXPIRES_AT!=="" || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
     assert token not in command.stdout + command.stderr
 

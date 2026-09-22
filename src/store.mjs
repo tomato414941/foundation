@@ -7,8 +7,35 @@ import { fail } from './errors.mjs';
 
 export const digest = (value) => createHash('sha256').update(value).digest('hex');
 const now = () => new Date().toISOString();
-const publicColumns = 'id, provider, email, name, purpose, scopes, status, created_at, updated_at';
+const publicColumns = 'id, adapter, subject, name, purpose, scopes, status, created_at, updated_at';
 const unpack = (row) => row ? { ...row, scopes: JSON.parse(row.scopes) } : undefined;
+
+const SCHEMA_VERSION = 1;
+// accounts: one credential the owner handed over through one adapter. subject identifies it at the service.
+// agents: access keys the owner approved; each may use every account of its owner.
+// access_requests: one request from a runtime, as it asked and as it went.
+const SCHEMA = `
+  CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+  CREATE TABLE accounts (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, adapter TEXT NOT NULL, subject TEXT NOT NULL,
+    name TEXT NOT NULL, purpose TEXT NOT NULL, scopes TEXT NOT NULL, status TEXT NOT NULL, secret TEXT NOT NULL,
+    generation INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    UNIQUE(owner_id, adapter, subject)
+  );
+  CREATE TABLE agents (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
+    last_used_at TEXT, issued_until INTEGER, issued_nonexpiring INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL, expires_at INTEGER NOT NULL);
+  CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);
+  CREATE TABLE access_requests (
+    id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, requester_name TEXT NOT NULL, adapter TEXT NOT NULL, permission TEXT NOT NULL,
+    purpose TEXT NOT NULL, details TEXT NOT NULL, guidance TEXT NOT NULL, confirmation_code TEXT NOT NULL, confirmation_attempts INTEGER NOT NULL DEFAULT 0,
+    progress TEXT, owner_id TEXT, agent_id TEXT, account_id TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX access_requests_token ON access_requests(token_hash, created_at);
+  PRAGMA user_version = ${SCHEMA_VERSION};
+`;
 
 export class Store {
   constructor(path, key) {
@@ -18,55 +45,13 @@ export class Store {
     this.db = new DatabaseSync(path);
     if (path !== ':memory:') chmodSync(path, 0o600);
     this.db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000; PRAGMA secure_delete=ON;');
+    // The database is created in this exact shape and never migrated. Any other shape is refused.
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 6) { this.db.close(); throw new Error('Unsupported database version'); }
-    if (version === 1) {
-      const count = ['accounts', 'agents'].reduce((sum, table) => sum + this.db.prepare('SELECT count(*) AS n FROM ' + table).get().n, 0);
-      // Never assign legacy owner-key data to the first Supabase user who logs in.
-      if (count) { this.db.close(); throw new Error('Legacy data needs an explicit owner migration; database left unchanged'); }
-    }
+    const empty = !this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'metadata'").get();
+    if (version !== SCHEMA_VERSION && !(version === 0 && empty)) { this.db.close(); throw new Error('This database was not created by this version of Foundation. Start from a new database file.'); }
     try {
       this.transaction(() => {
-        if (version === 1) this.db.exec('DROP TABLE agents; DROP TABLE accounts;');
-        this.db.exec(`
-          CREATE TABLE IF NOT EXISTS accounts (
-            id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, provider TEXT NOT NULL DEFAULT 'gmail',
-            email TEXT NOT NULL COLLATE NOCASE, name TEXT NOT NULL, purpose TEXT NOT NULL,
-            scopes TEXT NOT NULL, status TEXT NOT NULL, credentials TEXT NOT NULL,
-            generation INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-            UNIQUE(owner_id, provider, email)
-          );
-          CREATE TABLE IF NOT EXISTS agents (
-            id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
-            generation INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL,
-            last_used_at TEXT, issued_until INTEGER
-          );
-          CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL,
-            credentials TEXT NOT NULL, expires_at INTEGER NOT NULL
-          );
-          CREATE TABLE IF NOT EXISTS oauth_flows (
-            id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-            payload TEXT NOT NULL, expires_at INTEGER NOT NULL
-          );
-          CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
-          CREATE TABLE IF NOT EXISTS access_requests (
-            id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, requester_name TEXT NOT NULL,
-            provider TEXT NOT NULL, purpose TEXT NOT NULL, mode TEXT NOT NULL, confirmation_code TEXT NOT NULL,
-            owner_id TEXT, agent_id TEXT, account_id TEXT,
-            status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
-          );
-          CREATE INDEX IF NOT EXISTS access_requests_token ON access_requests(token_hash, created_at);
-        `);
-        if (!this.db.prepare('PRAGMA table_info(agents)').all().some(column => column.name === 'issued_nonexpiring')) this.db.exec('ALTER TABLE agents ADD COLUMN issued_nonexpiring INTEGER NOT NULL DEFAULT 0');
-        const requestColumns = this.db.prepare('PRAGMA table_info(access_requests)').all().map(column => column.name);
-        if (!requestColumns.includes('confirmation_attempts')) this.db.exec('ALTER TABLE access_requests ADD COLUMN confirmation_attempts INTEGER NOT NULL DEFAULT 0');
-        if (!requestColumns.includes('details')) this.db.exec("ALTER TABLE access_requests ADD COLUMN details TEXT NOT NULL DEFAULT '{}'");
-        if (!requestColumns.includes('progress')) this.db.exec('ALTER TABLE access_requests ADD COLUMN progress TEXT');
-        if (!requestColumns.includes('guidance')) this.db.exec("ALTER TABLE access_requests ADD COLUMN guidance TEXT NOT NULL DEFAULT ''");
-        // An approved key uses every account its owner registered; per-key grants are gone.
-        this.db.exec('DROP TABLE IF EXISTS grants');
-        this.db.exec('PRAGMA user_version=6;');
+        if (version === 0) this.db.exec(SCHEMA);
         const check = this.db.prepare("SELECT value FROM metadata WHERE name='key_check'").get();
         if (check) this.vault.open(check.value, 'key_check');
         else this.db.prepare('INSERT INTO metadata VALUES (?, ?)').run('key_check', this.vault.seal(true, 'key_check'));
@@ -89,22 +74,21 @@ export class Store {
   }
   accounts(ownerId) { return this.db.prepare(`SELECT ${publicColumns} FROM accounts WHERE owner_id=? ORDER BY created_at, id`).all(ownerId).map(unpack); }
   account(ownerId, id) { return unpack(this.db.prepare('SELECT * FROM accounts WHERE owner_id=? AND id=?').get(ownerId, id)); }
-  secrets(account) { return this.vault.open(account.credentials, `account:${account.owner_id}:${account.id}`); }
+  secrets(account) { return this.vault.open(account.secret, `account:${account.owner_id}:${account.id}`); }
   connect(ownerId, details, credentials, previous) {
     return this.transaction(() => {
       const stamp = now();
       if (previous) {
         const current = this.account(ownerId, previous.id);
         if (!current || current.generation !== previous.generation || current.status === 'disconnecting') fail(409, 'connection_changed', '接続状態が変わりました。もう一度お試しください。');
-        if (current.email !== details.email) fail(409, 'account_changed', '再接続には同じアカウントを選んでください。');
-        this.db.prepare("UPDATE accounts SET name=?, purpose=?, scopes=?, credentials=?, status='connected', generation=generation+1, updated_at=? WHERE id=?").run(details.name, details.purpose, JSON.stringify(details.scopes), this.vault.seal(credentials, `account:${ownerId}:${current.id}`), stamp, current.id);
+        if (current.subject !== details.subject) fail(409, 'account_changed', '再接続には同じアカウントを選んでください。');
+        this.db.prepare("UPDATE accounts SET name=?, purpose=?, scopes=?, secret=?, status='connected', generation=generation+1, updated_at=? WHERE id=?").run(details.name, details.purpose, JSON.stringify(details.scopes), this.vault.seal(credentials, `account:${ownerId}:${current.id}`), stamp, current.id);
         return current.id;
       }
       if (this.accounts(ownerId).length >= 25) fail(409, 'account_limit', '接続できるアカウントは25件までです。');
-      const provider = details.provider || 'gmail';
-      if (this.db.prepare('SELECT 1 FROM accounts WHERE owner_id=? AND provider=? AND email=?').get(ownerId, provider, details.email)) fail(409, 'already_connected', 'このアカウントは接続済みです。');
+      if (this.db.prepare('SELECT 1 FROM accounts WHERE owner_id=? AND adapter=? AND subject=?').get(ownerId, details.adapter, details.subject)) fail(409, 'already_connected', 'このアカウントは接続済みです。');
       const id = randomUUID();
-      this.db.prepare('INSERT INTO accounts (id,owner_id,provider,email,name,purpose,scopes,status,credentials,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(id, ownerId, provider, details.email, details.name, details.purpose, JSON.stringify(details.scopes), 'connected', this.vault.seal(credentials, `account:${ownerId}:${id}`), stamp, stamp);
+      this.db.prepare('INSERT INTO accounts (id,owner_id,adapter,subject,name,purpose,scopes,status,secret,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(id, ownerId, details.adapter, details.subject, details.name, details.purpose, JSON.stringify(details.scopes), 'connected', this.vault.seal(credentials, `account:${ownerId}:${id}`), stamp, stamp);
       return id;
     });
   }
@@ -113,7 +97,7 @@ export class Store {
     this.db.prepare('UPDATE accounts SET name=?, purpose=?, updated_at=? WHERE owner_id=? AND id=?').run(name, purpose, now(), ownerId, id);
   }
   saveCredentials(account, credentials) {
-    const result = this.db.prepare("UPDATE accounts SET credentials=? WHERE owner_id=? AND id=? AND generation=? AND status='connected'").run(this.vault.seal(credentials, `account:${account.owner_id}:${account.id}`), account.owner_id, account.id, account.generation);
+    const result = this.db.prepare("UPDATE accounts SET secret=? WHERE owner_id=? AND id=? AND generation=? AND status='connected'").run(this.vault.seal(credentials, `account:${account.owner_id}:${account.id}`), account.owner_id, account.id, account.generation);
     if (!result.changes) fail(409, 'connection_changed', 'この接続は変更または解除されています。');
   }
   reconnectRequired(account) {
@@ -147,7 +131,7 @@ export class Store {
   }
   authenticate(token) {
     if (typeof token !== 'string' || !/^fdn_[A-Za-z0-9_-]{43}$/.test(token)) return;
-    return this.db.prepare('SELECT id,owner_id,name,generation FROM agents WHERE token_hash=?').get(digest(token));
+    return this.db.prepare('SELECT id,owner_id,name FROM agents WHERE token_hash=?').get(digest(token));
   }
   // Possession of an approved key is the whole authorization: the key still exists, and the account is its owner's.
   requireAccess(agent, accountId) {
@@ -164,9 +148,9 @@ export class Store {
   session(token) {
     if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token)) return;
     const row = this.db.prepare('SELECT * FROM sessions WHERE id=? AND expires_at>?').get(digest(token), Date.now());
-    return row ? { ...row, value: this.vault.open(row.credentials, `session:${row.id}`) } : undefined;
+    return row ? { ...row, value: this.vault.open(row.secret, `session:${row.id}`) } : undefined;
   }
-  updateSession(id, value) { return this.db.prepare('UPDATE sessions SET credentials=?,email=? WHERE id=? AND owner_id=? AND expires_at>?').run(this.vault.seal(value, `session:${id}`), value.user.email, id, value.user.id, Date.now()).changes > 0; }
+  updateSession(id, value) { return this.db.prepare('UPDATE sessions SET secret=?,email=? WHERE id=? AND owner_id=? AND expires_at>?').run(this.vault.seal(value, `session:${id}`), value.user.email, id, value.user.id, Date.now()).changes > 0; }
   removeSession(token) { if (typeof token === 'string') this.db.prepare('DELETE FROM sessions WHERE id=?').run(digest(token)); }
   addFlow(sessionId, payload) {
     this.sweep();

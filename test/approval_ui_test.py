@@ -34,7 +34,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
         assert 'fdn_' not in result.stdout and 'google-access-' not in result.stdout
         return json.loads(result.stdout) if success else None
 
-    request = cli('connect', '--name', 'dev-us のAI', '--purpose', '届いたメールを確認する')['request']
+    request = cli('connect', '--adapter', 'gmail.oauth', '--permission', 'readonly', '--name', 'dev-us のAI', '--purpose', '届いたメールを確認する')['request']
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 1050})
     page = context.new_page()
@@ -109,14 +109,14 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='アクセスキーは失効しています', exact=True)).to_be_visible()
 
-    request = cli('connect', '--name', 'dev-us のAI')['request']
+    request = cli('connect', '--adapter', 'gmail.oauth', '--permission', 'readonly', '--name', 'dev-us のAI')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
     page.get_by_role('button', name='許可しない', exact=True).click()
     expect(page.get_by_role('heading', name='利用を許可しませんでした', exact=True)).to_be_visible()
     cli('accounts', success=False)
 
-    request = cli('connect', '--mode', 'metadata')['request']
+    request = cli('connect', '--adapter', 'gmail.oauth', '--permission', 'metadata')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     # Gmail is already registered, so the key's request opens on approval; another account is one step away.
     expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
@@ -130,7 +130,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.reload(wait_until='networkidle')
     expect(page.get_by_role('heading', name='依頼は取り消されました', exact=True)).to_be_visible()
 
-    request = cli('connect', '--name', '<img src=x onerror="window.xss=1">', '--purpose', '長い用途' * 50)['request']
+    request = cli('connect', '--adapter', 'gmail.oauth', '--permission', 'readonly', '--name', '<img src=x onerror="window.xss=1">', '--purpose', '長い用途' * 50)['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     assert page.locator('.approval-card img').count() == 0
     assert page.evaluate('window.xss === undefined')

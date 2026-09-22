@@ -8,11 +8,11 @@ export const EXPO_SCOPE = 'expo:access-token';
 export const EXPO_SESSION_SCOPE = 'expo:session';
 const digest = token => createHash('sha256').update(token).digest('hex');
 const identityQuery = 'query FoundationIdentity { meActor { __typename id ... on UserActor { username } ... on Robot { firstName } } }';
-const invalidResponse = () => fail(502, 'provider_response', 'Expoからの応答を確認できませんでした。');
+const invalidResponse = () => fail(502, 'service_response', 'Expoからの応答を確認できませんでした。');
 
 // EAS login returns a session, not an EXPO_TOKEN. Keep the two credential
 // types separate; passwords and OTPs never become stored credentials.
-export class ExpoProvider {
+export class ExpoClient {
   constructor({ fetcher = fetch, sessionLogin = false } = {}) { this.enabled = true; this.fetcher = fetcher; this.sessionLoginEnabled = sessionLogin; }
   check() { if (!this.enabled) fail(503, 'expo_unavailable', '現在Expoに接続できません。'); }
   async inspect(token, { session = false } = {}) {
@@ -22,10 +22,10 @@ export class ExpoProvider {
     try {
       response = await this.fetcher(EXPO_API, { method: 'POST', headers: { ...(session ? { 'expo-session': token } : { authorization: 'Bearer ' + token }), 'content-type': 'application/json' },
         body: JSON.stringify({ query: identityQuery }), redirect: 'error', signal: AbortSignal.timeout(12_000) });
-    } catch { fail(502, 'provider_unavailable', 'Expoに接続できませんでした。時間をおいて再度お試しください。'); }
+    } catch { fail(502, 'service_unavailable', 'Expoに接続できませんでした。時間をおいて再度お試しください。'); }
     if (response.status === 401 || response.status === 403) fail(409, 'reconnect_required', reconnectMessage);
-    if (response.status === 429) fail(503, 'provider_rate_limit', 'Expoへの確認が続いています。時間をおいて再度お試しください。');
-    if (!response.ok) fail(502, 'provider_unavailable', 'Expoで処理を完了できませんでした。');
+    if (response.status === 429) fail(503, 'service_rate_limit', 'Expoへの確認が続いています。時間をおいて再度お試しください。');
+    if (!response.ok) fail(502, 'service_unavailable', 'Expoで処理を完了できませんでした。');
     let result;
     try { result = await response.json(); } catch { invalidResponse(); }
     if (!result || typeof result !== 'object' || Array.isArray(result)) invalidResponse();
@@ -53,33 +53,34 @@ export class ExpoProvider {
     try {
       response = await this.fetcher('https://api.expo.dev/v2/auth/loginAsync', { method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ username, password, ...(otp === undefined ? {} : { otp }) }), redirect: 'error', signal: AbortSignal.timeout(12_000) });
-    } catch { fail(502, 'provider_unavailable', 'Expoに接続できませんでした。時間をおいて再度お試しください。'); }
+    } catch { fail(502, 'service_unavailable', 'Expoに接続できませんでした。時間をおいて再度お試しください。'); }
     finally { password = ''; otp = undefined; }
-    if (response.status === 429) fail(503, 'provider_rate_limit', 'ログインの試行が続いています。時間をおいて再度お試しください。');
-    if (response.status >= 500) fail(502, 'provider_unavailable', 'Expoで処理を完了できませんでした。');
+    if (response.status === 429) fail(503, 'service_rate_limit', 'ログインの試行が続いています。時間をおいて再度お試しください。');
+    if (response.status >= 500) fail(502, 'service_unavailable', 'Expoで処理を完了できませんでした。');
     try { result = await response.json(); } catch { invalidResponse(); }
     if (!result || typeof result !== 'object' || Array.isArray(result) || (result.errors !== undefined && !Array.isArray(result.errors))) invalidResponse();
     const errors = Array.isArray(result?.errors) ? result.errors : [];
     if (errors.some(error => error?.code === 'ONE_TIME_PASSWORD_REQUIRED')) return { challenge: { type: 'otp', delivery: errors.some(error => error?.metadata?.smsAutomaticallySent === true) ? 'sms' : 'authenticator' } };
     if (!response.ok || errors.length) {
       if ([400, 401, 403].includes(response.status) || errors.length) fail(400, 'expo_login_failed', 'Expoにログインできませんでした。入力内容を確認してください。');
-      fail(502, 'provider_unavailable', 'Expoで処理を完了できませんでした。');
+      fail(502, 'service_unavailable', 'Expoで処理を完了できませんでした。');
     }
     const sessionSecret = result?.data?.sessionSecret;
     if (typeof sessionSecret !== 'string' || !/^[\x20-\x7e]{20,8192}$/.test(sessionSecret)) invalidResponse();
     try {
       const credentials = await this.inspect(sessionSecret, { session: true });
-      return { email: 'session:' + credentials.details.token_hash, credentials };
+      return { subject: 'session:' + credentials.details.token_hash, credentials };
     } catch (error) {
       await this.revoke({ credential_type: 'expo_session', access_token: sessionSecret }).catch(() => {});
       throw error;
     }
   }
-  async importToken({ token, mode }) {
+  async importToken({ values, permission }) {
+    const { token } = values;
     this.check();
-    if (mode !== 'access-token') fail(400, 'invalid_scope', '利用する権限を選び直してください。');
+    if (permission !== 'access-token') fail(400, 'invalid_permission', '利用する権限を選び直してください。');
     const credentials = await this.inspect(token);
-    return { email: 'token:' + credentials.details.token_hash, credentials };
+    return { subject: 'token:' + credentials.details.token_hash, credentials };
   }
   async token(store, account) {
     this.check();
@@ -88,7 +89,7 @@ export class ExpoProvider {
       const previous = store.secrets(account), session = previous.credential_type === 'expo_session';
       if (session && !this.sessionLoginEnabled) fail(409, 'reconnect_required', 'Expoのログイン接続は現在利用できません。アクセストークンで新しい接続を追加してください。');
       const next = await this.inspect(previous.access_token, { session });
-      if (account.email !== (session ? 'session:' : 'token:') + next.details.token_hash || previous.details.actor_id !== next.details.actor_id) invalidResponse();
+      if (account.subject !== (session ? 'session:' : 'token:') + next.details.token_hash || previous.details.actor_id !== next.details.actor_id) invalidResponse();
       store.saveCredentials(account, next);
       return next;
     } catch (error) {
@@ -106,7 +107,7 @@ export class ExpoProvider {
     if (!this.canRevoke(credentials)) fail(409, 'manual_revocation_required', 'トークンの無効化はExpoのトークン管理画面で行ってください。');
     let response;
     try { response = await this.fetcher('https://api.expo.dev/v2/auth/logout', { method: 'POST', headers: { 'content-type': 'application/json', 'expo-session': credentials.access_token }, body: '{}', redirect: 'error', signal: AbortSignal.timeout(12_000) }); }
-    catch { fail(502, 'provider_unavailable', 'Expo側のログアウトを確認できませんでした。もう一度お試しください。'); }
-    if (!response.ok && ![401, 403].includes(response.status)) fail(502, 'provider_unavailable', 'Expo側のログアウトを確認できませんでした。もう一度お試しください。');
+    catch { fail(502, 'service_unavailable', 'Expo側のログアウトを確認できませんでした。もう一度お試しください。'); }
+    if (!response.ok && ![401, 403].includes(response.status)) fail(502, 'service_unavailable', 'Expo側のログアウトを確認できませんでした。もう一度お試しください。');
   }
 }

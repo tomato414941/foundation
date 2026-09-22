@@ -1,10 +1,10 @@
-import { CloudflareProvider, CLOUDFLARE_API } from '../src/providers/cloudflare.mjs';
-import { cloudflareConnection, gmailConnection } from '../src/providers/catalog.mjs';
+import { CloudflareClient, CLOUDFLARE_API } from '../src/services/cloudflare.mjs';
+import { cloudflareApiToken, gmailOauth } from '../src/adapters.mjs';
 import { FakeGmail, fixture, json } from './helpers.mjs';
 
 export const CLOUDFLARE_TOKEN = 'cfut_' + 'fixturetoken'.repeat(4);
 export const CLOUDFLARE_ACCOUNT = '1234567890abcdef1234567890abcdef';
-export class FakeCloudflare extends CloudflareProvider {
+export class FakeCloudflare extends CloudflareClient {
   constructor() {
     super({ fetcher: (url, options) => this.fetch(url, options) });
     this.calls = [];
@@ -28,8 +28,8 @@ export class FakeCloudflare extends CloudflareProvider {
 
 export async function cloudflareFixture(t, options = {}) {
   const cloudflare = options.cloudflare || new FakeCloudflare(), gmail = new FakeGmail();
-  const f = await fixture(t, { gmail, integrations: [cloudflareConnection(cloudflare), gmailConnection(gmail)], ...options });
-  const importCloudflare = (extra = {}) => f.request('/api/connections/cloudflare/connect', { method: 'POST', data: { name: 'Cloudflare', mode: 'api-token', token: CLOUDFLARE_TOKEN, fields: { account_id: CLOUDFLARE_ACCOUNT }, ...extra } });
+  const f = await fixture(t, { gmail, adapters: [cloudflareApiToken(cloudflare), gmailOauth(gmail)], ...options });
+  const importCloudflare = ({ token = CLOUDFLARE_TOKEN, fields = { account_id: CLOUDFLARE_ACCOUNT }, ...extra } = {}) => f.request('/api/adapters/cloudflare.api-token/connect', { method: 'POST', data: { name: 'Cloudflare', permission: 'api-token', values: { account_id: fields.account_id, token }, ...extra } });
   async function cloudflareAccount(extra = {}) {
     const result = await importCloudflare(extra);
     if (result.status !== 200) throw new Error(result.text);

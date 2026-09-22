@@ -12,7 +12,7 @@ import { json, USER_A } from './helpers.mjs';
 const credential = (f, id, token) => f.request('/v1/accounts/' + id + '/credentials', { method: 'POST', token, anonymous: true, data: {} });
 async function requestAccess(f, extra = {}) {
   const token = 'fdn_' + randomBytes(32).toString('base64url');
-  const created = await f.request('/v1/access-requests', { method: 'POST', token, data: { name: 'dev-us のAI', provider: 'expo', mode: 'session', purpose: '接続の確認のみ', ...extra } });
+  const created = await f.request('/v1/access-requests', { method: 'POST', token, data: { name: 'dev-us のAI', adapter: 'expo.login', permission: 'session', purpose: '接続の確認のみ', ...extra } });
   assert.equal(created.status, 201, created.text);
   const row = created.json.request;
   return { token, row, input: { accessRequestId: row.id, confirmationCode: row.confirmation_code } };
@@ -43,7 +43,7 @@ test('Expo password login stores only an encrypted session, never password/OTP o
 
 test('Single login-and-allow atomically approves the exact request and delivers a typed session to the runtime', async t => {
   const f = await expoLoginFixture(t), { token, row, input } = await requestAccess(f);
-  assert.equal(row.service.connection_method, 'password');
+  assert.equal(row.adapter.register, 'login');
   assert.equal((await f.request('/v1/accounts', { token })).status, 401);
   const result = await f.loginExpo(input); assert.equal(result.status, 200, result.text); safeResponse(result);
   assert.equal(result.json.request.status, 'approved');
@@ -75,12 +75,12 @@ test('Expo MFA keeps no server-side password challenge, grants nothing before va
   assert.deepEqual(sms.json, { challenge: { type: 'otp', delivery: 'sms' } });
 });
 
-test('Login cannot be invoked by an anonymous runtime, another origin, wrong confirmation code, or wrong request mode', async t => {
+test('Login cannot be invoked by an anonymous runtime, another origin, a wrong confirmation code, or a request for another adapter', async t => {
   const f = await expoLoginFixture(t), request = await requestAccess(f);
   assert.equal((await f.loginExpo(request.input, { anonymous: true, token: request.token })).status, 401);
   assert.equal((await f.loginExpo(request.input, { headers: { origin: 'https://attacker.example' } })).status, 403);
   assert.equal((await f.loginExpo({ ...request.input, confirmationCode: 'wrong' })).json.error.code, 'confirmation_required');
-  const wrongScope = await requestAccess(f, { mode: 'access-token' });
+  const wrongScope = await requestAccess(f, { adapter: 'expo.token', permission: 'access-token' });
   assert.equal((await f.loginExpo(wrongScope.input)).json.error.code, 'scope_mismatch');
   assert.equal(f.expo.calls.length, 0);
   await f.loginExpo({ ...request.input, username: 'otp-user' });
@@ -126,11 +126,11 @@ test('Closing the browser request during login discards and logs out the upstrea
   f.expo.loginHandler = async () => { started(); await new Promise(resolve => release = resolve); };
   f.expo.logoutHandler = (_url, options) => { f.expo.sessions.delete(options.headers['expo-session']); revoked(); return json({ data: {} }); };
   const closed = new Promise(resolve => f.app.server.on('request', (req, res) => {
-    if (req.url === '/api/connections/expo/login') res.once('close', resolve);
+    if (req.url === '/api/adapters/expo.login/connect') res.once('close', resolve);
   }));
   const controller = new AbortController();
-  const pending = fetch(f.base + '/api/connections/expo/login', { method: 'POST', signal: controller.signal,
-    headers: { origin: f.base, cookie: f.cookie(), 'content-type': 'application/json' }, body: JSON.stringify({ ...input, username: 'fixture-user', password: LOGIN_PASSWORD }) });
+  const pending = fetch(f.base + '/api/adapters/expo.login/connect', { method: 'POST', signal: controller.signal,
+    headers: { origin: f.base, cookie: f.cookie(), 'content-type': 'application/json' }, body: JSON.stringify({ ...input, name: 'Expo', permission: 'session', username: 'fixture-user', password: LOGIN_PASSWORD }) });
   const aborted = assert.rejects(pending, { name: 'AbortError' });
   await began; controller.abort(); await aborted; await closed; release(); await loggedOut;
   assert.equal(f.expo.sessions.size, 0); assert.equal(f.app.store.accounts(USER_A).length, 0); assert.equal(f.app.store.agents(USER_A).length, 0);
@@ -160,7 +160,7 @@ test('Disconnect revokes only this Expo session and blocks issuance during an up
   assert.equal((await credential(f, id, token)).status, 403);
   f.expo.logoutHandler = null;
   const removed = await f.request('/api/accounts/' + id, { method: 'DELETE', data: { revoke: true } });
-  assert.equal(removed.json.provider_revoked, true); assert.equal(f.expo.sessions.size, 0);
+  assert.equal(removed.json.service_revoked, true); assert.equal(f.expo.sessions.size, 0);
   assert.equal(f.app.store.account(USER_A, id), undefined);
 });
 
@@ -187,8 +187,8 @@ test('EAS reads the isolated session; no EXPO_TOKEN, shared login overwrite, cre
     const child = spawn(process.execPath, ['src/runtime.mjs', ...args], { env }); let out = '', err = '';
     child.stdout.on('data', chunk => out += chunk); child.stderr.on('data', chunk => err += chunk); child.once('error', reject); child.once('exit', code => resolve({ code, out, err }));
   });
-  const created = await execute(['connect', '--provider', 'expo']); assert.equal(created.code, 0, created.err);
-  const row = JSON.parse(created.out).request; assert.equal(row.mode, 'session');
+  const created = await execute(['connect', '--adapter', 'expo.login']); assert.equal(created.code, 0, created.err);
+  const row = JSON.parse(created.out).request; assert.equal(row.permission.id, 'session');
   const result = await f.loginExpo({ accessRequestId: row.id, confirmationCode: row.confirmation_code });
   const id = result.json.account_id;
   const fingerprint = async () => { try { return createHash('sha256').update(await readFile(join(homedir(), '.expo/state.json'))).digest('hex'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };

@@ -25,10 +25,10 @@ test('OAuth uses state, PKCE, offline consent, native Google URL; callback is on
   assert.equal(url.searchParams.get('access_type'), 'offline');
   assert.equal(url.searchParams.get('include_granted_scopes'), 'false');
   assert.ok(url.searchParams.get('prompt').includes('consent'));
-  assert.equal(url.searchParams.get('redirect_uri'), f.base + '/oauth/gmail/callback');
+  assert.equal(url.searchParams.get('redirect_uri'), f.base + '/oauth/gmail.oauth/callback');
   const complete = await f.callback(url, 'personal-readonly', { headers: { 'sec-fetch-site': 'cross-site' } });
-  assert.equal(complete.headers.get('location'), '/?connection=connected');
-  assert.equal((await f.callback(url)).headers.get('location'), '/?connection=expired');
+  assert.equal(complete.headers.get('location'), '/?connection=connected&adapter=gmail.oauth');
+  assert.equal((await f.callback(url)).headers.get('location'), '/?connection=expired&adapter=gmail.oauth');
   assert.equal(f.gmail.exchangeCount, 1);
   assert.equal((await f.request('/api/state')).json.accounts.length, 1);
 });
@@ -36,15 +36,15 @@ test('OAuth uses state, PKCE, offline consent, native Google URL; callback is on
 test('OAuth state is browser-bound and expires; cancel and forged callbacks cannot connect', async (t) => {
   const f = await fixture(t);
   const url = await f.start();
-  assert.equal((await f.callback(url, 'personal-readonly', { anonymous: true })).headers.get('location'), '/?connection=expired');
+  assert.equal((await f.callback(url, 'personal-readonly', { anonymous: true })).headers.get('location'), '/?connection=expired&adapter=gmail.oauth');
   await f.login('second@example.test');
-  assert.equal((await f.callback(url)).headers.get('location'), '/?connection=expired');
+  assert.equal((await f.callback(url)).headers.get('location'), '/?connection=expired&adapter=gmail.oauth');
   const second = await f.start();
   f.app.store.db.prepare('UPDATE oauth_flows SET expires_at=0').run();
-  assert.equal((await f.callback(second)).headers.get('location'), '/?connection=expired');
+  assert.equal((await f.callback(second)).headers.get('location'), '/?connection=expired&adapter=gmail.oauth');
   const cancel = await f.start();
-  const cancelled = await f.request('/oauth/gmail/callback?state=' + cancel.searchParams.get('state') + '&error=access_denied&error_description=secret-provider-value');
-  assert.equal(cancelled.headers.get('location'), '/?connection=denied');
+  const cancelled = await f.request('/oauth/gmail.oauth/callback?state=' + cancel.searchParams.get('state') + '&error=access_denied&error_description=secret-provider-value');
+  assert.equal(cancelled.headers.get('location'), '/?connection=denied&adapter=gmail.oauth');
   assert.doesNotMatch(cancelled.text, /secret-provider/);
   assert.equal(f.gmail.exchangeCount, 0);
 });
@@ -61,7 +61,7 @@ test('Multiple accounts carry purpose, actual scopes and native API discovery, a
   const result = await f.request('/v1/accounts/' + a.id + '/credentials', { method: 'POST', data: {}, token: agent.token });
   assert.equal(result.status, 200);
   assert.equal(result.json.access_token, 'google-access-personal-readonly');
-  assert.equal(result.json.account.email, a.email);
+  assert.equal(result.json.account.subject, a.subject);
   assert.ok(result.json.expires_in > 3500);
   assert.doesNotMatch(result.text, /refresh_token/);
   assert.equal((await f.request('/v1/accounts/' + b.id + '/credentials', { method: 'POST', data: {}, token: agent.token })).json.access_token, 'google-access-work-metadata');
@@ -90,12 +90,12 @@ test('Supabase users cannot see, edit, disconnect or reach each other\'s connect
 
 test('Reauthorization pins identity and the reconnected account stays usable with its new scopes', async (t) => {
   const f = await fixture(t), a = await f.account('personal', 'metadata'), agent = await f.agent();
-  let flow = await f.start({ accountId: a.id, mode: 'readonly' });
+  let flow = await f.start({ accountId: a.id, permission: 'readonly' });
   assert.equal(flow.searchParams.get('login_hint'), 'personal@example.test');
-  assert.equal((await f.callback(flow, 'work-readonly')).headers.get('location'), '/?connection=wrong_account');
+  assert.equal((await f.callback(flow, 'work-readonly')).headers.get('location'), '/?connection=wrong_account&adapter=gmail.oauth');
   assert.equal((await f.request('/v1/accounts', { token: agent.token })).json.accounts.length, 1);
-  flow = await f.start({ accountId: a.id, mode: 'readonly' });
-  assert.equal((await f.callback(flow, 'personal-readonly')).headers.get('location'), '/?connection=connected');
+  flow = await f.start({ accountId: a.id, permission: 'readonly' });
+  assert.equal((await f.callback(flow, 'personal-readonly')).headers.get('location'), '/?connection=connected&adapter=gmail.oauth');
   const seen = (await f.request('/v1/accounts', { token: agent.token })).json.accounts;
   assert.equal(seen.length, 1); assert.match(seen[0].scopes.join(' '), /gmail\.readonly/);
   assert.equal((await f.request('/api/state')).json.accounts[0].id, a.id);
@@ -103,8 +103,8 @@ test('Reauthorization pins identity and the reconnected account stays usable wit
 
 test('Duplicate connection cannot overwrite identity, purpose or existing grants', async (t) => {
   const f = await fixture(t), a = await f.account(), agent = await f.agent();
-  const flow = await f.start({ name: 'replacement', mode: 'metadata' });
-  assert.equal((await f.callback(flow, 'personal-metadata')).headers.get('location'), '/?connection=already_connected');
+  const flow = await f.start({ name: 'replacement', permission: 'metadata' });
+  assert.equal((await f.callback(flow, 'personal-metadata')).headers.get('location'), '/?connection=already_connected&adapter=gmail.oauth');
   assert.equal((await f.request('/api/state')).json.accounts[0].name, 'personal');
   assert.equal((await f.request('/v1/accounts', { token: agent.token })).json.accounts.length, 1);
 });
@@ -156,8 +156,8 @@ test('Cross-origin, cross-site, rebinding, invalid input and unexpected paths ar
   const f = await fixture(t);
   assert.equal((await f.request('/api/session', { method: 'POST', data: { code: 'obsolete' }, headers: { origin: 'https://evil.test' } })).status, 403);
   assert.equal((await f.request('/api/state', { headers: { 'sec-fetch-site': 'cross-site' } })).status, 403);
-  assert.equal((await f.request('/api/gmail/connect', { method: 'POST', data: {}, headers: { 'content-type': 'text/plain' } })).status, 415);
-  assert.equal((await f.request('/api/gmail/connect', { method: 'POST', data: { name: 'x'.repeat(15000) } })).status, 413);
+  assert.equal((await f.request('/api/adapters/gmail.oauth/connect', { method: 'POST', data: {}, headers: { 'content-type': 'text/plain' } })).status, 415);
+  assert.equal((await f.request('/api/adapters/gmail.oauth/connect', { method: 'POST', data: { name: 'x'.repeat(15000) } })).status, 413);
   const status = await new Promise((resolve, reject) => {
     const request = httpRequest(f.base + '/api/state', { headers: { host: 'evil.test' } }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
     request.on('error', reject); request.end();
@@ -168,7 +168,7 @@ test('Cross-origin, cross-site, rebinding, invalid input and unexpected paths ar
 test('Logout deletes local session even on upstream failure; Supabase revocation blocks access', async (t) => {
   const f = await fixture(t);
   f.auth.logout = () => { throw new Error('upstream token secret'); };
-  assert.equal((await f.request('/api/session', { method: 'DELETE' })).json.providerLogout, false);
+  assert.equal((await f.request('/api/session', { method: 'DELETE' })).json.authLogout, false);
   assert.equal((await f.request('/api/state')).status, 401);
   await f.login();
   f.auth.revoked = true;
@@ -193,7 +193,7 @@ test('Secure cookies are based on configured origin, including callbacks without
   const login = await f.login();
   assert.match(login.headers.get('set-cookie'), /; Secure/);
   const url = await f.start();
-  assert.equal(url.searchParams.get('redirect_uri'), 'https://foundation.example.test:8443/oauth/gmail/callback');
+  assert.equal(url.searchParams.get('redirect_uri'), 'https://foundation.example.test:8443/oauth/gmail.oauth/callback');
 });
 
 test('Login attempts are bounded; provider error text is never exposed', async (t) => {
@@ -202,13 +202,13 @@ test('Login attempts are bounded; provider error text is never exposed', async (
   for (let i = 0; i < 31; i++) result = await f.request('/auth/callback?code=invalid-authorization-code');
   assert.equal(result.headers.get('location'), '/?login=limited');
   f.gmail.exchangeHandler = () => { throw new Error('secret-token'); };
-  assert.equal((await f.callback(await f.start())).headers.get('location'), '/?connection=failed');
+  assert.equal((await f.callback(await f.start())).headers.get('location'), '/?connection=failed&adapter=gmail.oauth');
 });
 
 test('Behind a named proxy the client address comes from X-Forwarded-For; an unnamed proxy cannot spoof it; HSTS only on the public origin', async t => {
   const { fixture } = await import('./helpers.mjs');
   const { randomBytes } = await import('node:crypto');
-  const create = (f, forwarded) => f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: 'fdn_' + randomBytes(32).toString('base64url'), headers: forwarded ? { 'x-forwarded-for': forwarded } : {}, data: { provider: 'gmail', mode: 'readonly', name: 'x', purpose: 'y' } });
+  const create = (f, forwarded) => f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: 'fdn_' + randomBytes(32).toString('base64url'), headers: forwarded ? { 'x-forwarded-for': forwarded } : {}, data: { adapter: 'gmail.oauth', permission: 'readonly', name: 'x', purpose: 'y' } });
   const trusting = await fixture(t, { login: false, trustedProxies: ['127.0.0.1', '::ffff:127.0.0.1', '::1'] });
   for (let i = 0; i < 12; i++) assert.equal((await create(trusting, '203.0.113.10, 10.0.0.2')).status, 201);
   assert.equal((await create(trusting, '203.0.113.10, 10.0.0.2')).status, 429, 'the last hop is the client');

@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { OpenRouterProvider, OPENROUTER_API } from '../src/providers/openrouter.mjs';
+import { OpenRouterClient, OPENROUTER_API } from '../src/services/openrouter.mjs';
 import { FakeOpenRouter, openrouterFixture } from './openrouter-helper.mjs';
 import { json, USER_A } from './helpers.mjs';
 
@@ -18,25 +18,25 @@ const execute = (args, env) => new Promise((resolve, reject) => {
 const credential = (f, id, token) => f.request('/v1/accounts/' + id + '/credentials', { method: 'POST', anonymous: true, token, data: {} });
 
 test('OpenRouter authorization binds state in callback and uses S256 without application secrets', () => {
-  const client = new OpenRouterProvider();
-  const url = new URL(client.authorize({ redirectUri: 'https://foundation.example/oauth/openrouter/callback', state: 'state-nonce', verifier: 'verifier', mode: 'api-key' }));
+  const client = new OpenRouterClient();
+  const url = new URL(client.authorize({ redirectUri: 'https://foundation.example/oauth/openrouter.oauth/callback', state: 'state-nonce', verifier: 'verifier', permission: 'api-key' }));
   assert.equal(url.origin + url.pathname, 'https://openrouter.ai/auth');
   assert.equal(new URL(url.searchParams.get('callback_url')).searchParams.get('state'), 'state-nonce');
   assert.equal(url.searchParams.get('code_challenge'), createHash('sha256').update('verifier').digest('base64url'));
   assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
   assert.equal(url.searchParams.get('key_label'), 'Foundation');
   assert.ok(!url.href.includes('client_secret') && !url.href.includes('verifier'));
-  assert.throws(() => client.authorize({ mode: 'readonly' }), { code: 'invalid_scope' });
+  assert.throws(() => client.authorize({ permission: 'readonly' }), { code: 'invalid_permission' });
 });
 
 test('OpenRouter exchanges only PKCE code, preserves real expiry and zero budget, exposes no secrets in UI state', async t => {
   const f = await openrouterFixture(t);
   const url = await f.startOpenRouter();
-  assert.equal((await f.callbackOpenRouter(url)).headers.get('location'), '/?connection=connected&provider=openrouter');
+  assert.equal((await f.callbackOpenRouter(url)).headers.get('location'), '/?connection=connected&adapter=openrouter.oauth');
   assert.match((await f.callbackOpenRouter(url)).headers.get('location'), /connection=expired/);
   const response = await f.request('/api/state');
   const account = response.json.accounts[0];
-  assert.equal(account.provider, 'openrouter');
+  assert.equal(account.adapter, 'openrouter.oauth');
   assert.equal(account.credential_type, 'api_key');
   assert.equal(account.key_info.limit, 0);
   assert.equal(account.expires_at, null);
@@ -59,16 +59,16 @@ test('OpenRouter callback cannot use another session, forged state, or a denied 
   const denied = await f.request(target.pathname + target.search + '&error=access_denied');
   assert.match(denied.headers.get('location'), /connection=denied/);
   assert.equal(f.openrouter.calls.length, 0);
-  const forged = await f.request('/oauth/openrouter/callback?state=' + 'x'.repeat(43) + '&code=personal');
+  const forged = await f.request('/oauth/openrouter.oauth/callback?state=' + 'x'.repeat(43) + '&code=personal');
   assert.match(forged.headers.get('location'), /connection=expired/);
   assert.equal(f.openrouter.calls.length, 0);
 });
 
 test('API key is delivered only after explicit approval; revocation metadata never promises short expiry', async t => {
   const f = await openrouterFixture(t), token = 'fdn_' + randomBytes(32).toString('base64url');
-  const created = await f.request('/v1/access-requests', { method: 'POST', token, data: { provider: 'openrouter', mode: 'api-key', name: 'AI', purpose: 'キー情報を確認。モデルは実行しない。' } });
+  const created = await f.request('/v1/access-requests', { method: 'POST', token, data: { adapter: 'openrouter.oauth', permission: 'api-key', name: 'AI', purpose: 'キー情報を確認。モデルは実行しない。' } });
   const row = created.json.request;
-  assert.equal(row.service.can_revoke, false);
+  assert.equal(row.adapter.can_revoke, false);
   assert.match(row.permission.restrictions, /読み取り専用のキーではありません/);
   const callback = await f.callbackOpenRouter(await f.startOpenRouter({ accessRequestId: row.id }));
   assert.equal(callback.headers.get('location'), '/connect/' + row.id + '?connection=connected');
@@ -78,7 +78,7 @@ test('API key is delivered only after explicit approval; revocation metadata nev
   assert.equal(approved.status, 200);
   const listed = await f.request('/v1/accounts', { token });
   assert.equal(listed.json.accounts[0].authentication.type, 'api_key_bearer');
-  assert.match(listed.json.accounts[0].authentication.revocation, /Already delivered API keys/);
+  assert.match(listed.json.accounts[0].authentication.revocation, /Already delivered keys/);
   assert.doesNotMatch(listed.text, /sk-or-v1-/);
   const issued = await credential(f, account.id, token);
   assert.equal(issued.status, 200, issued.text);
@@ -97,7 +97,7 @@ test('OpenRouter keys are owner-separated, cannot silently replace connections, 
   const database = join(dir, 'state.sqlite'), f = await openrouterFixture(t, { database });
   const account = await f.openrouterAccount(), agent = await f.agent();
   assert.ok(!(await readFile(database)).includes(Buffer.from(f.openrouter.key())));
-  const replacement = await f.request('/api/connections/openrouter/connect', { method: 'POST', data: { accountId: account.id, name: 'replacement', mode: 'api-key' } });
+  const replacement = await f.request('/api/adapters/openrouter.oauth/connect', { method: 'POST', data: { accountId: account.id, name: 'replacement', permission: 'api-key' } });
   assert.equal(replacement.json.error.code, 'new_connection_required');
   await f.login('other@example.test');
   assert.equal((await f.request('/api/state')).json.accounts.length, 0);
@@ -113,7 +113,7 @@ test('Local disconnect never pretends to delete OpenRouter key or calls a manage
   assert.equal(refused.json.error.code, 'manual_revocation_required');
   assert.equal((await credential(f, account.id, agent.token)).status, 200);
   const removed = await f.request('/api/accounts/' + account.id, { method: 'DELETE', data: { revoke: false } });
-  assert.equal(removed.json.provider_revoked, false);
+  assert.equal(removed.json.service_revoked, false);
   assert.equal((await credential(f, account.id, agent.token)).status, 403);
   assert.equal(f.app.store.account(USER_A, account.id), undefined);
   assert.ok(f.openrouter.calls.every(call => ['/auth/keys', '/key'].some(path => call.url === OPENROUTER_API + path)));
@@ -156,27 +156,27 @@ for (const [name, change] of [
   ['invalid limit', { limit: 'unlimited' }], ['negative limit', { limit: -1 }], ['unknown limit reset', { limit_reset: 'surprise' }],
 ]) test('OpenRouter rejects ' + name, async () => {
   const client = new FakeOpenRouter(); Object.assign(client.info, change);
-  await assert.rejects(client.exchange({ code: 'personal', verifier: 'secret-verifier', mode: 'api-key' }));
+  await assert.rejects(client.exchange({ code: 'personal', verifier: 'secret-verifier', permission: 'api-key' }));
 });
 
 test('OpenRouter accepts explicit unlimited and zero budgets without changing them', async () => {
   const client = new FakeOpenRouter();
   client.info.limit = null; client.info.limit_remaining = null;
-  const result = await client.exchange({ code: 'personal', verifier: 'verifier', mode: 'api-key' });
+  const result = await client.exchange({ code: 'personal', verifier: 'verifier', permission: 'api-key' });
   assert.equal(result.credentials.details.limit, null);
   assert.equal(client.calls.length, 2);
   client.info.limit = 0; client.info.limit_remaining = 0;
   assert.equal((await client.inspect(client.key())).details.limit, 0);
 });
 
-test('CLI defaults to available OpenRouter, resumes approval, injects key only into child process, then denies after removal', async t => {
+test('CLI connects through the OpenRouter adapter, resumes approval, injects key only into child process, then denies after removal', async t => {
   const f = await openrouterFixture(t), account = await f.openrouterAccount();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-openrouter-cli-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'runtime-key') };
-  const start = await execute(['connect', '--name', 'dev-us'], env);
+  const start = await execute(['connect', '--adapter', 'openrouter.oauth', '--name', 'dev-us'], env);
   assert.equal(start.code, 0, start.err);
   const row = JSON.parse(start.out).request;
-  assert.equal(row.provider, 'openrouter'); assert.equal(row.mode, 'api-key');
+  assert.equal(row.adapter.id, 'openrouter.oauth'); assert.equal(row.permission.id, 'api-key');
   const approved = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { accountId: account.id, confirmationCode: row.confirmation_code } });
   assert.equal(approved.status, 200);
   const run = await execute(['exec', account.id, '--', process.execPath, '-e', 'if(!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY!==process.env.FOUNDATION_ACCESS_TOKEN || process.env.FOUNDATION_TOKEN_EXPIRES_AT!=="" || process.env.FOUNDATION_CREDENTIAL_TYPE!=="api_key" || process.env.GOOGLE_OAUTH_ACCESS_TOKEN || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2); console.log("authenticated")'], env);
