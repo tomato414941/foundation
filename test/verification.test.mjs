@@ -18,7 +18,7 @@ async function create(f, token = key(), extra = {}) {
 const usable = (f, token) => f.request('/v1/accounts', { anonymous: true, token });
 const shown = async (f, id) => (await f.request('/api/state')).json.accounts.find(account => account.id === id)?.verification;
 const check = (report, name) => report.checks.find(item => item.check === name);
-const approve = (f, row, accountId) => f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { accountId, confirmationCode: row.confirmation_code } });
+const approve = (f, row) => f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code } });
 const credentials = (f, id, token) => f.request('/v1/accounts/' + id + '/credentials', { method: 'POST', anonymous: true, token, data: {} });
 
 test('A failed import stores no secret, tells the owner in the response, and tells the runtime nothing', async t => {
@@ -51,7 +51,7 @@ test('R2 failure permits explicit approval and delivery; the failed observation 
   assert.equal(check(imported.json.verification, 'r2_bucket_list').http_status, 403);
   assert.equal(check(await shown(f, imported.json.account_id), 'r2_bucket_list').status, 'failed');
   assert.equal((await credentials(f, imported.json.account_id, token)).status, 401);
-  const result = await approve(f, row, imported.json.account_id);
+  const result = await approve(f, row);
   assert.equal(result.status, 200, result.text);
   const issued = await credentials(f, imported.json.account_id, token);
   assert.equal(issued.status, 200);
@@ -60,8 +60,8 @@ test('R2 failure permits explicit approval and delivery; the failed observation 
   assert.ok(!JSON.stringify(issued.json.verification).includes(CLOUDFLARE_TOKEN));
 });
 
-test('Correcting an account ID before approval updates only this ungranted candidate', async t => {
-  const f = await cloudflareFixture(t), { row } = await create(f);
+test('Correcting an account ID while the request is open updates this request\'s candidate; approval closes it', async t => {
+  const f = await cloudflareFixture(t), { row, token } = await create(f);
   const first = await f.importCloudflare({ accessRequestId: row.id, fields: { account_id: 'f'.repeat(32) } });
   assert.equal(first.status, 200);
   assert.equal(check(first.json.verification, 'r2_bucket_list').status, 'failed');
@@ -69,10 +69,10 @@ test('Correcting an account ID before approval updates only this ungranted candi
   assert.equal(second.status, 200, second.text); assert.equal(second.json.account_id, first.json.account_id);
   assert.equal(f.app.store.accounts(USER_A).length, 1);
   assert.equal(check(await shown(f, second.json.account_id), 'r2_bucket_list').status, 'passed');
-  const other = await f.agent([second.json.account_id]);
+  assert.equal((await approve(f, row)).status, 200);
   const retry = await f.importCloudflare({ accessRequestId: row.id, fields: { account_id: 'e'.repeat(32) } });
   assert.equal(retry.status, 409);
-  assert.equal((await credentials(f, second.json.account_id, other.token)).status, 200);
+  assert.equal((await credentials(f, second.json.account_id, token)).status, 200);
   assert.equal(f.app.store.secrets(f.app.store.account(USER_A, second.json.account_id)).details.account_id, CLOUDFLARE_ACCOUNT);
 });
 

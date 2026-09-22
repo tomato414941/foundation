@@ -133,7 +133,7 @@ test('Cloudflare requires explicit approval, keeps tokens encrypted and stops de
 });
 
 test('Cloudflare rechecks R2 access and token identity on delivery but does not invalidate on a network outage', async t => {
-  const f = await cloudflareFixture(t), account = await f.cloudflareAccount(), agent = await f.agent([account.id]);
+  const f = await cloudflareFixture(t), account = await f.cloudflareAccount(), agent = await f.agent();
   f.cloudflare.handler = () => { throw new Error('offline'); };
   assert.equal((await credential(f, account.id, agent.token)).status, 502);
   assert.equal((await f.request('/api/state')).json.accounts[0].status, 'connected');
@@ -164,11 +164,11 @@ test('Cloudflare cannot be imported across user sessions or after an approval re
   assert.equal((await importing).status, 409);
   assert.equal(f.app.store.accounts(USER_A).length, 0);
   f.cloudflare.handler = null;
-  const account = await f.cloudflareAccount(), agent = await f.agent([account.id]);
+  const account = await f.cloudflareAccount(), agent = await f.agent();
   await f.login('other@example.test');
   assert.equal((await f.request('/api/state')).json.accounts.length, 0);
   assert.equal((await f.request('/api/accounts/' + account.id + '/check', { method: 'POST', data: {} })).status, 404);
-  const otherAccount = await f.account('other'), other = await f.agent([otherAccount.id]);
+  const otherAccount = await f.account('other'), other = await f.agent();
   assert.equal((await credential(f, account.id, other.token)).status, 403);
   assert.equal((await credential(f, account.id, agent.token)).status, 200);
 });
@@ -189,7 +189,7 @@ test('Cloudflare import cannot recreate a connection after the user logs out dur
 });
 
 test('Cloudflare native API credentials are injected into the child process without printing the token', async t => {
-  const f = await cloudflareFixture(t), account = await f.cloudflareAccount(), agent = await f.agent([account.id]);
+  const f = await cloudflareFixture(t), account = await f.cloudflareAccount(), agent = await f.agent();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-cloudflare-runtime-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const key = join(dir, 'runtime-key'); await writeFile(key, agent.token, { mode: 0o600 });

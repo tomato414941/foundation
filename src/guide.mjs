@@ -17,8 +17,8 @@ export function guide(providers) {
   const unavailable = providers ? providers.filter(provider => !provider.available) : [];
   lines.push('Foundation: 外部サービスの認証情報を、利用者の承認を経てコマンドの環境変数に渡す仕組み。',
     '利用者にキーやトークンをチャットへ貼らせてはいけない。必ず Foundation を通す。', '',
-    '自分の立場: あなたは Foundation 上で 1 つの「アクセスキー」の持ち主として扱われる。利用者がキーを 1 回承認すると、以後は許可された接続を使える。',
-    '  foundation whoami   で自分のキーの名前と許可された接続を確認できる (未承認なら 401 not_approved)。',
+    '自分の立場: あなたは Foundation 上で 1 つの「アクセスキー」の持ち主として扱われる。利用者がキーを 1 回承認すると、以後は利用者が登録した接続を全部使える (gh や aws の CLI のログインと同じ)。',
+    '  foundation whoami   で自分のキーの名前を確認できる (未承認なら 401 not_approved)。',
     '  まず whoami か accounts を試し、必要な接続が既にあれば依頼を作らずに 5 へ進む。', '');
   lines.push('手順');
   lines.push('1. 接続依頼を作る。用途は利用者が読んで判断できる具体的な 1 文にする。');
@@ -40,9 +40,9 @@ export function guide(providers) {
     '     reconnect_required = 接続先がその認証情報を受け付けなかった (無効・失効・取り違え)。 role_denied = AWS のロールを引き受けられない (信頼ポリシー、またはアカウント違い)。',
     '     already_connected = 同じ認証情報が登録済み。 invalid_account = 追加項目 (アカウント ID、Key ID など) の形式が違う。 confirmation_required / confirmation_locked = 確認コードの誤り (5 回で失効)。',
     '2. 出力の verification_uri と confirmation_code を、そのまま利用者に伝える。',
-    '   利用者はブラウザで URL を開き、必要ならサービス側でキーを作って登録し、コードを入力して許可する。',
-    '   コードは利用者が手で打つので必ず表示する。',
-    '3. 利用者が承認するのを待つ。数秒おきに foundation accounts を試し、通ったら 4 へ。連打しない。',
+    '   利用者はブラウザで URL を開き、必要ならサービス側でキーを作って登録する。キーが未承認なら最後にコードを入力して承認する。',
+    '   コードは利用者が手で打つので必ず表示する。承認済みのキーからの依頼は登録だけで完了し、コードは要らない。',
+    '3. 利用者の操作を待つ。数秒おきに foundation accounts を試し、目的の接続が現れたら 4 へ。連打しない。',
     '   利用者が「できない」「どうすればいい」と言ったら foundation request を実行し、自分の依頼の内容と、承認ページで起きた出来事 (events) を読む。',
     '   events は時系列の生の記録: page_opened / page_viewed / connect_started / connect_failed (code と Foundation の固定文) / connected / approved / denied / cancelled。',
     '   入力値は記録されない。出来事を見て、その利用者がいる段階に合った案内を会話で行う。',

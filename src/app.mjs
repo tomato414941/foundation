@@ -232,7 +232,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true);
           await verifyConnection(req, session, user,
             () => provider.client.exchange({ ...flow, code }, previous ? { email: previous.email, credentials: store.secrets(previous) } : undefined),
-            result => { if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true); return store.connect(user.id, { provider: provider.id, name: flow.name, purpose: flow.purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials, previous); });
+            result => { if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true); const id = store.connect(user.id, { provider: provider.id, name: flow.name, purpose: flow.purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials, previous); if (flow.accessRequestId) requests.registered(flow.accessRequestId, user.id, id); return id; });
           if (flow.accessRequestId) requests.record(flow.accessRequestId, 'connected', { provider: provider.id });
           return redirect(connectionLocation('connected'));
         } catch (error) {
@@ -311,12 +311,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
         const requestRoute = path.match(/^\/api\/access-requests\/([A-Za-z0-9_-]{43})(\/(?:approve|deny))?$/);
         if (requestRoute) {
           const row = requests.forUser(requestRoute[1], user.id);
-          if (!requestRoute[2] && method === 'GET') { requests.record(row.id, 'page_viewed'); return send(200, { request: { ...requests.summary(row, origin, { code: false }), eligible_account_ids: store.accounts(user.id).filter(account => requests.matches(row, account)).map(account => account.id) } }); }
+          if (!requestRoute[2] && method === 'GET') { requests.record(row.id, 'page_viewed'); return send(200, { request: requests.summary(row, origin, { code: false }) }); }
           if (method === 'POST' && requestRoute[2]) {
             const input = await body(req);
             if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
             progressRequestId = row.id;
-            const result = requestRoute[2] === '/deny' ? requests.deny(row.id, user.id) : requests.approve(row.id, user.id, input.accountId, input.confirmationCode);
+            const result = requestRoute[2] === '/deny' ? requests.deny(row.id, user.id) : requests.approve(row.id, user.id, input.confirmationCode);
             requests.record(row.id, requestRoute[2] === '/deny' ? 'denied' : 'approved');
             return send(200, { request: requests.summary(result, origin, { code: false }) });
           }
@@ -332,7 +332,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
             progressRequestId = accessRequest?.id || null;
             if (accessRequest) requests.record(accessRequest.id, 'connect_started', { provider: 'expo', method: 'login' });
             if (accessRequest && (accessRequest.provider !== 'expo' || accessRequest.mode !== 'session')) fail(400, 'scope_mismatch', '依頼されたサービスと権限で接続してください。');
-            if (accessRequest) requests.verifyCode(accessRequest.id, user.id, input.confirmationCode);
+            if (accessRequest && !accessRequest.agent_id) requests.verifyCode(accessRequest.id, user.id, input.confirmationCode);
             const name = nameValue(input.name ?? 'Expo', '表示名'), purpose = purposeValue(input.purpose ?? accessRequest?.purpose ?? '');
             if (accessRequest) requests.claim(accessRequest.id, user.id);
             const saved = await verifyConnection(req, session, user, async () => {
@@ -341,8 +341,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
               if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
               if (result.challenge) return { challenge: result.challenge };
               const id = store.connect(user.id, { provider: 'expo', name, purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials);
-              const approved = accessRequest ? requests.approve(accessRequest.id, user.id, id, input.confirmationCode) : null;
-              return { connected: true, account_id: id, ...(approved ? { request: requests.summary(approved, origin, { code: false }) } : {}) };
+              let done = null;
+              if (accessRequest) { done = requests.registered(accessRequest.id, user.id, id); if (!accessRequest.agent_id) done = requests.approve(accessRequest.id, user.id, input.confirmationCode); }
+              return { connected: true, account_id: id, ...(done ? { request: requests.summary(done, origin, { code: false }) } : {}) };
             });
             if (result.challenge) return send(202, saved);
             committed = true;
@@ -379,13 +380,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
             const saved = await verifyConnection(req, session, user,
               () => provider.client.importToken({ token: input.token, mode: input.mode, details, fields: input.fields }),
               (result, report) => {
-                // Only this request's ungranted candidate can be updated on retry.
+                // Only the candidate this request registered can be corrected on retry.
                 const row = accessRequest && requests.forUser(accessRequest.id, user.id, true);
                 const candidate = row?.account_id && store.account(user.id, row.account_id);
-                const retry = candidate?.email === result.email && candidate.provider === provider.id && candidate.status === 'connected'
-                  && !store.db.prepare('SELECT 1 FROM grants WHERE account_id=?').get(candidate.id) ? candidate : undefined;
+                const retry = candidate?.email === result.email && candidate.provider === provider.id && candidate.status === 'connected' ? candidate : undefined;
                 const accountId = store.connect(user.id, { provider: provider.id, name, purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials, retry);
-                if (row) store.db.prepare('UPDATE access_requests SET account_id=? WHERE id=?').run(accountId, row.id);
+                if (row) requests.registered(row.id, user.id, accountId);
                 return { connected: true, account_id: accountId, verification: report };
               });
             input.token = '';
@@ -434,15 +434,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
         }
         if (path === '/api/agents' && method === 'POST') {
           const input = await body(req);
-          return send(201, { agent: store.addAgent(user.id, nameValue(input.name), input.accountIds) });
+          return send(201, { agent: store.addAgent(user.id, nameValue(input.name)) });
         }
-        const agentRoute = path.match(/^\/api\/agents\/([a-f0-9-]{36})(\/grants)?$/);
+        const agentRoute = path.match(/^\/api\/agents\/([a-f0-9-]{36})()$/);
         if (agentRoute) {
-          if (agentRoute[2] && method === 'PUT') {
-            const input = await body(req);
-            store.setGrants(user.id, agentRoute[1], input.accountIds);
-            return send(200, { ok: true });
-          }
           if (!agentRoute[2] && method === 'DELETE') {
             store.removeAgent(user.id, agentRoute[1]);
             return send(200, { ok: true });
@@ -457,7 +452,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
       if (path.startsWith('/v1/')) {
         const agent = actor(req);
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
-        if (path === '/v1/accounts' && method === 'GET') return send(200, { accounts: store.allowedAccounts(agent).map(account => resource(account, agent.owner_id)) });
+        if (path === '/v1/accounts' && method === 'GET') return send(200, { accounts: store.accounts(agent.owner_id).filter(account => account.status !== 'disconnecting').map(account => resource(account, agent.owner_id)) });
         if (path === '/v1/me' && method === 'GET') return send(200, { agent: store.agentDetails(agent) });
         if (path === '/v1/me' && method === 'PATCH') {
           const input = await body(req);
@@ -466,7 +461,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
         }
         if (path === '/v1/me' && method === 'DELETE') {
           await body(req);
-          // The account retires itself: its key stops working and its grants are dropped. Connections stay.
+          // The key retires itself: it stops working. Connections stay with the owner.
           store.removeAgent(agent.owner_id, agent.id);
           return send(200, { ok: true });
         }
@@ -474,16 +469,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
         if (route && method === 'POST') {
           const input = await body(req);
           if (input.duration !== undefined && (!Number.isInteger(input.duration) || input.duration < 1 || input.duration > 86400 * 7)) fail(400, 'invalid_duration', '期間は秒数の整数で指定してください。');
-          store.requireGrant(agent, route[1]);
+          store.requireAccess(agent, route[1]);
           const account = accountFor(agent.owner_id, route[1]);
           rateLimit('issue:' + agent.id, 30);
           const provider = providers.get(account.provider);
           const credentials = await provider.client.token(store, account, false, { duration: input.duration });
           const expoSession = account.provider === 'expo' && credentials.credential_type === 'expo_session';
           if (!(Number.isFinite(credentials.expires_at) && credentials.expires_at > Date.now()) && !(['api_key', 'private_key', 'aws_temporary'].includes(credentials.credential_type) || expoSession) || credentials.expires_at !== null && !Number.isFinite(credentials.expires_at)) fail(502, 'provider_response', '認証情報の有効期限を確認できませんでした。');
-          const still = actor(req);
-          if (still.generation !== agent.generation) fail(403, 'access_denied', '利用許可が変わりました。');
-          store.requireGrant(agent, account.id);
+          actor(req);
+          store.requireAccess(agent, account.id);
           currentAccount(account);
           store.recordIssuance(agent, credentials.expires_at);
           const info = provider.client.accountInfo?.(credentials) || {};

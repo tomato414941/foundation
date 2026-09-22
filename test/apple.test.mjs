@@ -18,7 +18,7 @@ const execute = (args, env) => new Promise((resolve, reject) => {
   child.once('error', reject); child.once('exit', code => resolve({ code, out, err }));
 });
 async function grant(f, ids) {
-  const runtime = await f.agent(ids);
+  const runtime = await f.agent();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-apple-test-'));
   const keyPath = join(dir, 'runtime-key'); await writeFile(keyPath, runtime.token, { mode: 0o600 });
   return { dir, env: { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath, XDG_RUNTIME_DIR: dir }, runtime };
@@ -98,7 +98,7 @@ test('The runtime receives the .p8 as a file that exists only while the command 
 
 test('A key Apple stops accepting marks the connection for reconnection on next use', async t => {
   const f = await appleFixture(t), apple = await f.appleAccount();
-  const runtime = await f.agent([apple.id]);
+  const runtime = await f.agent();
   assert.equal((await credential(f, apple.id, runtime.token)).status, 200);
   f.apple.handler = () => json({ errors: [] }, 401);
   const revoked = await credential(f, apple.id, runtime.token);

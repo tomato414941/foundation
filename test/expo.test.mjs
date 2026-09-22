@@ -89,7 +89,7 @@ test('Expo approval binds requesting runtime, retains explicit consent and preve
 test('Expo tokens stay encrypted and owner-separated; duplicate imports and silent replacement are rejected', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'foundation-expo-store-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const database = join(dir, 'state.sqlite'), f = await expoFixture(t, { database });
-  const account = await f.expoAccount(), agent = await f.agent([account.id]);
+  const account = await f.expoAccount(), agent = await f.agent();
   assert.ok(!(await readFile(database)).includes(Buffer.from(f.expo.tokenValue())));
   assert.ok(!f.app.store.account(USER_A, account.id).credentials.includes(f.expo.tokenValue()));
   assert.equal((await f.importExpo()).json.error.code, 'already_connected');
@@ -97,7 +97,7 @@ test('Expo tokens stay encrypted and owner-separated; duplicate imports and sile
   await f.login('other@example.test');
   assert.equal((await f.request('/api/state')).json.accounts.length, 0);
   assert.equal((await f.request('/api/accounts/' + account.id, { method: 'DELETE', data: { revoke: false } })).status, 404);
-  const other = await f.expoAccount({ token: f.expo.tokenValue('second') }), otherAgent = await f.agent([other.id]);
+  const other = await f.expoAccount({ token: f.expo.tokenValue('second') }), otherAgent = await f.agent();
   assert.equal((await credential(f, account.id, otherAgent.token)).status, 403);
   assert.equal((await credential(f, other.id, agent.token)).status, 403);
 });
@@ -119,7 +119,7 @@ for (const change of ['logout', 'cancel', 'expire', 'deny']) test('Expo does not
 });
 
 test('Revoked Expo token is not delivered and local disconnect never claims to revoke at Expo', async t => {
-  const f = await expoFixture(t), account = await f.expoAccount(), agent = await f.agent([account.id]);
+  const f = await expoFixture(t), account = await f.expoAccount(), agent = await f.agent();
   assert.equal((await f.request('/api/accounts/' + account.id, { method: 'DELETE', data: { revoke: true } })).json.error.code, 'manual_revocation_required');
   f.expo.identityHandler = () => json({ errors: [{ message: f.expo.tokenValue() }] }, 401);
   const result = await credential(f, account.id, agent.token);
@@ -129,15 +129,15 @@ test('Revoked Expo token is not delivered and local disconnect never claims to r
   assert.equal((await credential(f, account.id, agent.token)).status, 403);
 });
 
-test('Expo withholds in-flight credentials after permission removal', async t => {
-  const f = await expoFixture(t), account = await f.expoAccount(), agent = await f.agent([account.id]);
+test('Expo withholds in-flight credentials after the key is revoked', async t => {
+  const f = await expoFixture(t), account = await f.expoAccount(), agent = await f.agent();
   let release, started;
   const waiting = new Promise(resolve => started = resolve);
   f.expo.identityHandler = async () => { started(); await new Promise(resolve => release = resolve); return json({ data: { meActor: f.expo.actor } }); };
   const pending = credential(f, account.id, agent.token); await waiting;
-  await f.request('/api/agents/' + agent.id + '/grants', { method: 'PUT', data: { accountIds: [] } });
+  await f.request('/api/agents/' + agent.id, { method: 'DELETE' });
   release(); const result = await pending;
-  assert.equal(result.status, 403); assert.ok(!result.text.includes(f.expo.tokenValue()));
+  assert.equal(result.status, 401); assert.ok(!result.text.includes(f.expo.tokenValue()));
 });
 
 for (const value of [null, {}, { data: { meActor: null } }, { data: { meActor: { id: 'one', __typename: 'User', username: '\n' } } }, { errors: 'secret error' }, { data: { meActor: { id: 'one', __typename: 'User', username: 'partial' } }, errors: [{ message: 'secret error' }] }]) {

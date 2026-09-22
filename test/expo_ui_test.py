@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     page.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
     expect(page.get_by_role('heading', name='Expoのトークンを登録', exact=True)).to_be_visible()
-    expect(page.get_by_role('button', name='利用を許可', exact=True)).to_have_count(0)
+    expect(page.get_by_role('button', name='承認する', exact=True)).to_have_count(0)
     review(page)
     dialog = page.get_by_role('dialog')
     register = page.locator('.register-body')
@@ -88,7 +88,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     with page.expect_response(lambda response: '/api/connections/expo/connect' in response.url) as response_event:
         register.get_by_role('button', name='登録する', exact=True).click()
     assert token not in response_event.value.text()
-    expect(page.get_by_role('heading', name='利用を許可しますか？', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
     expect(page.get_by_text('Expoへのアクセス', exact=True)).to_be_visible()
     expect(page.get_by_role('radio')).to_have_count(0)
     cli('accounts', success=False)
@@ -96,8 +96,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     review(page)
     expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
-    page.get_by_role('button', name='利用を許可', exact=True).click()
-    expect(page.get_by_role('heading', name='利用を許可しました', exact=True)).to_be_visible()
+    page.get_by_role('button', name='承認する', exact=True).click()
+    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
     assert cli('accounts')['accounts'][0]['provider'] == 'expo'
     account = cli('accounts')['accounts'][0]
     command = subprocess.run(['node', 'src/runtime.mjs', 'exec', account['id'], '--', 'node', '-e', 'if(!process.env.EXPO_TOKEN || process.env.EXPO_TOKEN!==process.env.FOUNDATION_ACCESS_TOKEN || process.env.FOUNDATION_PROVIDER!=="expo" || process.env.FOUNDATION_TOKEN_EXPIRES_AT!=="" || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
@@ -142,7 +142,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     expect(dialog).not_to_be_visible()
     expect(section.get_by_role('heading', name='<img src=x onerror="window.xss=1">', exact=True)).to_be_visible()
     assert section.locator('img').count() == 0 and page.evaluate('window.xss === undefined')
-    assert cli('accounts')['accounts'] == [], 'root import must not restore old runtime grants'
+    assert len(cli('accounts')['accounts']) == 1, 'the approved key uses a connection the owner registers later'
     review(page)
     assert not errors, errors
     context.close()

@@ -19,15 +19,15 @@ export class Store {
     if (path !== ':memory:') chmodSync(path, 0o600);
     this.db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000; PRAGMA secure_delete=ON;');
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 5) { this.db.close(); throw new Error('Unsupported database version'); }
+    if (version > 6) { this.db.close(); throw new Error('Unsupported database version'); }
     if (version === 1) {
-      const count = ['accounts', 'agents', 'grants'].reduce((sum, table) => sum + this.db.prepare('SELECT count(*) AS n FROM ' + table).get().n, 0);
+      const count = ['accounts', 'agents'].reduce((sum, table) => sum + this.db.prepare('SELECT count(*) AS n FROM ' + table).get().n, 0);
       // Never assign legacy owner-key data to the first Supabase user who logs in.
       if (count) { this.db.close(); throw new Error('Legacy data needs an explicit owner migration; database left unchanged'); }
     }
     try {
       this.transaction(() => {
-        if (version === 1) this.db.exec('DROP TABLE grants; DROP TABLE agents; DROP TABLE accounts;');
+        if (version === 1) this.db.exec('DROP TABLE agents; DROP TABLE accounts;');
         this.db.exec(`
           CREATE TABLE IF NOT EXISTS accounts (
             id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, provider TEXT NOT NULL DEFAULT 'gmail',
@@ -40,11 +40,6 @@ export class Store {
             id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
             generation INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL,
             last_used_at TEXT, issued_until INTEGER
-          );
-          CREATE TABLE IF NOT EXISTS grants (
-            agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-            account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-            PRIMARY KEY(agent_id, account_id)
           );
           CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL,
@@ -69,7 +64,9 @@ export class Store {
         if (!requestColumns.includes('details')) this.db.exec("ALTER TABLE access_requests ADD COLUMN details TEXT NOT NULL DEFAULT '{}'");
         if (!requestColumns.includes('progress')) this.db.exec('ALTER TABLE access_requests ADD COLUMN progress TEXT');
         if (!requestColumns.includes('guidance')) this.db.exec("ALTER TABLE access_requests ADD COLUMN guidance TEXT NOT NULL DEFAULT ''");
-        this.db.exec('PRAGMA user_version=5;');
+        // An approved key uses every account its owner registered; per-key grants are gone.
+        this.db.exec('DROP TABLE IF EXISTS grants');
+        this.db.exec('PRAGMA user_version=6;');
         const check = this.db.prepare("SELECT value FROM metadata WHERE name='key_check'").get();
         if (check) this.vault.open(check.value, 'key_check');
         else this.db.prepare('INSERT INTO metadata VALUES (?, ?)').run('key_check', this.vault.seal(true, 'key_check'));
@@ -100,8 +97,6 @@ export class Store {
         const current = this.account(ownerId, previous.id);
         if (!current || current.generation !== previous.generation || current.status === 'disconnecting') fail(409, 'connection_changed', '接続状態が変わりました。もう一度お試しください。');
         if (current.email !== details.email) fail(409, 'account_changed', '再接続には同じアカウントを選んでください。');
-        // Reauthorization cannot silently expand previously issued runtime grants.
-        if (JSON.stringify(current.scopes.slice().sort()) !== JSON.stringify(details.scopes.slice().sort())) this.db.prepare('DELETE FROM grants WHERE account_id=?').run(current.id);
         this.db.prepare("UPDATE accounts SET name=?, purpose=?, scopes=?, credentials=?, status='connected', generation=generation+1, updated_at=? WHERE id=?").run(details.name, details.purpose, JSON.stringify(details.scopes), this.vault.seal(credentials, `account:${ownerId}:${current.id}`), stamp, current.id);
         return current.id;
       }
@@ -129,55 +124,34 @@ export class Store {
       const account = this.account(ownerId, id);
       if (!account) fail(404, 'not_found', '接続が見つかりません。');
       this.db.prepare("UPDATE accounts SET status='disconnecting', generation=generation+1, updated_at=? WHERE owner_id=? AND id=?").run(now(), ownerId, id);
-      this.db.prepare('DELETE FROM grants WHERE account_id=?').run(id);
       return account;
     });
   }
   removeAccount(ownerId, id) { this.db.prepare('DELETE FROM accounts WHERE owner_id=? AND id=?').run(ownerId, id); }
   agents(ownerId) {
-    return this.db.prepare('SELECT id,name,created_at,last_used_at,issued_until,issued_nonexpiring FROM agents WHERE owner_id=? ORDER BY created_at,id').all(ownerId).map((agent) => ({ ...agent, accountIds: this.db.prepare('SELECT account_id FROM grants WHERE agent_id=? ORDER BY account_id').all(agent.id).map((row) => row.account_id) }));
+    return this.db.prepare('SELECT id,name,created_at,last_used_at,issued_until,issued_nonexpiring FROM agents WHERE owner_id=? ORDER BY created_at,id').all(ownerId);
   }
-  validateAccountIds(ownerId, ids) {
-    if (!Array.isArray(ids) || ids.length > 25 || ids.some((id) => typeof id !== 'string' || !this.account(ownerId, id) || this.account(ownerId, id).status === 'disconnecting')) fail(400, 'invalid_accounts', '利用できる接続先を選んでください。');
-    return [...new Set(ids)];
-  }
-  addAgent(ownerId, name, accountIds) {
-    const ids = this.validateAccountIds(ownerId, accountIds);
-    if (!ids.length) fail(400, 'invalid_accounts', 'アカウントを一つ以上選んでください。');
+  // A key issued from the dashboard: the owner carries the secret to the runtime themselves.
+  addAgent(ownerId, name) {
     if (this.agents(ownerId).length >= 50) fail(409, 'agent_limit', '登録できるアクセスキーは50件までです。');
     const id = randomUUID(), token = `fdn_${randomBytes(32).toString('base64url')}`;
-    this.transaction(() => {
-      this.db.prepare('INSERT INTO agents (id,owner_id,name,token_hash,created_at) VALUES (?,?,?,?,?)').run(id, ownerId, name, digest(token), now());
-      for (const accountId of ids) this.db.prepare('INSERT INTO grants VALUES (?,?)').run(id, accountId);
-    });
+    this.db.prepare('INSERT INTO agents (id,owner_id,name,token_hash,created_at) VALUES (?,?,?,?,?)').run(id, ownerId, name, digest(token), now());
     return { ...this.agents(ownerId).find((agent) => agent.id === id), token };
-  }
-  setGrants(ownerId, id, accountIds) {
-    if (!this.db.prepare('SELECT 1 FROM agents WHERE owner_id=? AND id=?').get(ownerId, id)) fail(404, 'not_found', 'アクセスキーが見つかりません。');
-    const ids = this.validateAccountIds(ownerId, accountIds);
-    this.transaction(() => {
-      this.db.prepare('DELETE FROM grants WHERE agent_id=?').run(id);
-      for (const accountId of ids) this.db.prepare('INSERT INTO grants VALUES (?,?)').run(id, accountId);
-      this.db.prepare('UPDATE agents SET generation=generation+1 WHERE owner_id=? AND id=?').run(ownerId, id);
-    });
   }
   removeAgent(ownerId, id) { this.db.prepare('DELETE FROM agents WHERE owner_id=? AND id=?').run(ownerId, id); }
   renameAgent(ownerId, id, name) {
     if (!this.db.prepare('UPDATE agents SET name=? WHERE owner_id=? AND id=?').run(name, ownerId, id).changes) fail(404, 'not_found', 'アクセスキーが見つかりません。');
   }
   agentDetails(agent) {
-    const row = this.db.prepare('SELECT id,name,created_at,last_used_at,issued_until,issued_nonexpiring FROM agents WHERE id=?').get(agent.id);
-    return { ...row, accounts: this.allowedAccounts(agent).map(account => ({ id: account.id, provider: account.provider, name: account.name, status: account.status })) };
+    return this.db.prepare('SELECT id,name,created_at,last_used_at,issued_until,issued_nonexpiring FROM agents WHERE id=?').get(agent.id);
   }
   authenticate(token) {
     if (typeof token !== 'string' || !/^fdn_[A-Za-z0-9_-]{43}$/.test(token)) return;
     return this.db.prepare('SELECT id,owner_id,name,generation FROM agents WHERE token_hash=?').get(digest(token));
   }
-  allowedAccounts(agent) {
-    return this.accounts(agent.owner_id).filter((account) => this.db.prepare('SELECT 1 FROM grants WHERE agent_id=? AND account_id=?').get(agent.id, account.id));
-  }
-  requireGrant(agent, accountId) {
-    if (!this.db.prepare('SELECT 1 FROM grants g JOIN agents a ON a.id=g.agent_id JOIN accounts c ON c.id=g.account_id WHERE a.id=? AND a.owner_id=? AND a.generation=? AND c.owner_id=? AND g.account_id=?').get(agent.id, agent.owner_id, agent.generation, agent.owner_id, accountId)) fail(403, 'access_denied', 'この接続を利用する許可がありません。');
+  // Possession of an approved key is the whole authorization: the key still exists, and the account is its owner's.
+  requireAccess(agent, accountId) {
+    if (!this.db.prepare('SELECT 1 FROM agents a JOIN accounts c ON c.owner_id=a.owner_id WHERE a.id=? AND a.owner_id=? AND c.id=? AND c.status!=?').get(agent.id, agent.owner_id, accountId, 'disconnecting')) fail(403, 'access_denied', 'この接続は利用できません。');
   }
   recordIssuance(agent, until) { this.db.prepare('UPDATE agents SET last_used_at=?, issued_until=MAX(COALESCE(issued_until,0),?), issued_nonexpiring=MAX(issued_nonexpiring,?) WHERE id=?').run(now(), until ?? 0, until === null ? 1 : 0, agent.id); }
   createSession(value) {

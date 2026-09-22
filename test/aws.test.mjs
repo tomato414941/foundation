@@ -63,7 +63,7 @@ test('AWS refuses bad identifiers, wrong secrets, untrusted roles and mismatched
 });
 
 test('Each issuance assumes the role afresh: temporary credentials only, duration passed through untouched, AWS decides the limit', async t => {
-  const f = await awsFixture(t), account = await f.awsAccount(), runtime = await f.agent([account.id]);
+  const f = await awsFixture(t), account = await f.awsAccount(), runtime = await f.agent();
   const first = await credential(f, account.id, runtime.token);
   assert.equal(first.status, 200, first.text);
   assert.equal(first.json.credential_type, 'aws_temporary');
@@ -93,7 +93,7 @@ test('Each issuance assumes the role afresh: temporary credentials only, duratio
 });
 
 test('The CLI passes --duration through and the child sees only temporary AWS credentials', async t => {
-  const f = await awsFixture(t), account = await f.awsAccount(), runtime = await f.agent([account.id]);
+  const f = await awsFixture(t), account = await f.awsAccount(), runtime = await f.agent();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-aws-cli-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'runtime-key'); await writeFile(keyPath, runtime.token, { mode: 0o600 });
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };

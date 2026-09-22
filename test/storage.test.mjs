@@ -13,7 +13,7 @@ async function directory(t) { const path = await mkdtemp(join(tmpdir(), 'foundat
 
 test('Gmail and Supabase secrets are encrypted; keys and cookies never persist in plaintext', async (t) => {
   const dir = await directory(t), database = join(dir, 'state.sqlite');
-  const f = await fixture(t, { database }), account = await f.account(), agent = await f.agent([account.id]);
+  const f = await fixture(t, { database }), account = await f.account(), agent = await f.agent();
   const cookie = f.cookie();
   await f.start();
   const contents = await readFile(database);
@@ -58,36 +58,35 @@ test('Old data cannot be reassigned to the first Supabase login; empty legacy sc
   assert.equal(db.prepare('SELECT count(*) n FROM accounts').get().n, 1);
   db.exec('DELETE FROM accounts'); db.close();
   const upgraded = new Store(path, KEY);
-  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 5); upgraded.close();
+  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 6); upgraded.close();
 });
 
-test('Version 2 upgrade preserves encrypted connections, runtime keys and grants', async t => {
+test('Version 2 upgrade preserves encrypted connections and runtime keys', async t => {
   const dir = await directory(t), path = join(dir, 'upgrade.sqlite');
   const first = new Store(path, KEY);
   const id = first.connect(USER_A, { email: 'upgrade@example.test', name: 'existing', purpose: '', scopes: ['readonly'] }, { refresh_token: 'keep-private' });
-  const agent = first.addAgent(USER_A, 'existing-runtime', [id]);
+  const agent = first.addAgent(USER_A, 'existing-runtime');
   first.db.exec('DROP TABLE access_requests; PRAGMA user_version=2;');
   first.close();
   const upgraded = new Store(path, KEY); t.after(() => upgraded.close());
-  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 5);
+  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 6);
   assert.equal(upgraded.secrets(upgraded.account(USER_A, id)).refresh_token, 'keep-private');
   assert.equal(upgraded.authenticate(agent.token).id, agent.id);
-  assert.deepEqual(upgraded.agents(USER_A)[0].accountIds, [id]);
+  assert.equal(upgraded.agents(USER_A)[0].name, 'existing-runtime');
   assert.equal(upgraded.db.prepare('SELECT count(*) n FROM access_requests').get().n, 0);
 });
 
-test('Version 3 adds nonexpiring-key audit without changing credentials or grants', async t => {
+test('Version 3 adds nonexpiring-key audit without changing credentials', async t => {
   const dir = await directory(t), path = join(dir, 'v3.sqlite');
   const first = new Store(path, KEY);
   const id = first.connect(USER_A, { email: 'v3@example.test', name: 'existing', purpose: '', scopes: ['readonly'] }, { access_token: 'keep-encrypted', expires_at: Date.now() + 3600_000 });
-  const agent = first.addAgent(USER_A, 'existing', [id]);
+  const agent = first.addAgent(USER_A, 'existing');
   first.recordIssuance(agent, 1000);
   first.db.exec('ALTER TABLE agents DROP COLUMN issued_nonexpiring; PRAGMA user_version=3;');
   first.close();
   const upgraded = new Store(path, KEY); t.after(() => upgraded.close());
-  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 5);
+  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 6);
   assert.equal(upgraded.secrets(upgraded.account(USER_A, id)).access_token, 'keep-encrypted');
-  assert.deepEqual(upgraded.agents(USER_A)[0].accountIds, [id]);
   assert.equal(upgraded.agents(USER_A)[0].issued_nonexpiring, 0);
   upgraded.recordIssuance(agent, null); upgraded.recordIssuance(agent, 2000);
   assert.equal(upgraded.agents(USER_A)[0].issued_nonexpiring, 1);
