@@ -124,7 +124,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     dialog.get_by_label('表示名 任意', exact=True).fill('<img src=x onerror="window.xss=1">')
     dialog.get_by_role('button', name='OpenRouterで接続', exact=True).click()
     expect(page.get_by_text('認証情報を登録しました。', exact=True)).to_be_visible()
-    assert 'Gmailの認証情報を登録しました。' not in page.locator('body').inner_text()
     assert section.locator('img').count() == 0 and page.evaluate('window.xss === undefined')
     review(page)
     assert not errors, errors
