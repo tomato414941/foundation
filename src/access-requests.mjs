@@ -51,10 +51,11 @@ export class AccessRequests {
       return previous;
     }
     if (this.db.prepare('SELECT count(*) n FROM access_requests').get().n >= 1000) fail(429, 'request_limit', '接続依頼が混み合っています。しばらく待ってからお試しください。');
-    const id = randomBytes(32).toString('base64url'), code = randomBytes(4).toString('hex').toUpperCase();
+    // A code confirms that a new key is the owner's. A key already approved asks only for a registration, so it gets none.
+    const id = randomBytes(32).toString('base64url'), code = agent ? '' : randomBytes(4).toString('hex').toUpperCase();
     const now = Date.now();
     this.db.prepare('INSERT INTO access_requests (id,token_hash,requester_name,adapter,purpose,details,guidance,confirmation_code,owner_id,agent_id,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-      .run(id, hash, requesterName, adapter, purpose, encoded, guidance, code.slice(0, 4) + '-' + code.slice(4), agent?.owner_id || null, agent?.id || null, now, now + validMinutes * 60_000);
+      .run(id, hash, requesterName, adapter, purpose, encoded, guidance, code && code.slice(0, 4) + '-' + code.slice(4), agent?.owner_id || null, agent?.id || null, now, now + validMinutes * 60_000);
     return this.get(id);
   }
   details(row) { return JSON.parse(row.details); }
@@ -92,6 +93,7 @@ export class AccessRequests {
   // Wrong entries count even when the surrounding transaction rolls back.
   verifyCode(id, ownerId, code) {
     const row = this.forUser(id, ownerId, true);
+    if (!row.confirmation_code) fail(409, 'request_changed', 'このアクセスキーは承認済みです。');
     const expected = Buffer.from(row.confirmation_code.replace('-', '')), given = Buffer.from(normalizeCode(code));
     if (given.length === expected.length && timingSafeEqual(given, expected)) return row;
     const attempts = row.confirmation_attempts + 1;
@@ -140,7 +142,7 @@ export class AccessRequests {
     const registered = row.agent_id ? this.db.prepare('SELECT name FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash) : undefined;
     const details = this.details(row);
     return { id: row.id, adapter: this.adapters.describe(row.adapter, details), requester_name: row.requester_name, purpose: row.purpose, details, guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
-      ...(code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
+      ...(code && row.confirmation_code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
       status, created_at: row.created_at, expires_at: row.expires_at, ...(row.credential_id ? { credential_id: row.credential_id } : {}),
       ...(status === 'approved' ? { agent_id: row.agent_id, ...(credential ? { credential: { id: credential.id, service: credential.service, subject: credential.subject, label: this.adapters.get(credential.adapter).client.facts?.(this.store.secret(credential))?.label || credential.subject } } : {}) } : {}) };
   }

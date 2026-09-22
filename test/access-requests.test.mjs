@@ -102,6 +102,7 @@ test('A request from an approved key stays with its owner, completes by register
   const runtime = await f.agent();
   const { row } = await create(f, runtime.token, { adapter: 'gmail.metadata' });
   assert.equal(row.agent_name, 'dev-us');
+  assert.equal(row.confirmation_code, undefined, 'a key already approved gets no code');
   const ownerCookie = 'fdn_session=' + f.app.store.createSession(f.auth.value());
   await f.login('other@example.test');
   assert.equal((await f.request('/api/access-requests/' + row.id)).status, 404);
