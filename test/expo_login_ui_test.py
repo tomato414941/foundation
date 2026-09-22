@@ -122,7 +122,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     # The approved key already uses the connected account; a further request only offers another login, with no code.
     row = request()
     page.goto(row['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_text('Expoは登録済み', exact=False)).to_be_visible()
+    expect(page.get_by_role('heading', name='Expoにログイン', exact=True)).to_be_visible()
     expect(page.get_by_label('確認コード', exact=True)).to_have_count(0)
     assert len(cli('accounts')['accounts']) == 1
     submit = page.get_by_role('button', name='ログインして接続', exact=True)
