@@ -27,7 +27,9 @@ export function guide(providers) {
   if (ids.includes('apikey')) lines.push('   例: foundation connect --service Anthropic --site https://console.anthropic.com/settings/keys --env ANTHROPIC_API_KEY --purpose "Claude API で要約を生成する"');
   if (ids.includes('cloudflare')) lines.push('   Cloudflare はユーザーAPIトークン。R2のS3互換API用Access Key/Secret Keyではない。バケット一覧は公式APIの /accounts/<cloudflare_account_id>/r2/buckets (ページ送りは result_info.cursor) を使う。',
     '   Foundationはトークン全体の権限を狭めない。登録したアカウントと依頼された用途にだけ使う。');
-  lines.push('2. 出力の verification_uri と confirmation_code を、そのまま利用者に伝える。',
+  lines.push('   --note "<補足>" で、承認ページと登録画面に利用者向けの補足を 1 つ添えられる (300 文字まで。AIの申告として表示される)。',
+    '   例: 2 つ目の AWS ロールを頼むときに「スタック名は foundation-admin、Permissions は AdministratorAccess」と添える。',
+    '2. 出力の verification_uri と confirmation_code を、そのまま利用者に伝える。',
     '   利用者はブラウザで URL を開き、必要ならサービス側でキーを作って登録し、コードを入力して許可する。',
     '   コードは利用者が手で打つので必ず表示する。',
     '3. 利用者が承認するのを待つ。数秒おきに foundation accounts を試し、通ったら 4 へ。連打しない。',

@@ -294,7 +294,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           const name = nameValue(input.name, '依頼元'), purpose = purposeValue(input.purpose);
           providers.permission(input.provider, input.mode);
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
-          return send(201, { request: requests.summary(requests.create(token, { name, purpose, provider: input.provider, mode: input.mode, details: input.details }), origin) });
+          return send(201, { request: requests.summary(requests.create(token, { name, purpose, provider: input.provider, mode: input.mode, details: input.details, note: input.note ?? '' }), origin) });
         }
         if (path.endsWith('/current') && method === 'GET') return send(200, { request: { ...requests.runtimeView(token), verification_uri: origin + '/connect/' + requests.current(token).id } });
         if (path.endsWith('/current') && method === 'DELETE') {
