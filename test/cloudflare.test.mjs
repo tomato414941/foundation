@@ -17,7 +17,7 @@ const createRequest = async (f, token) => { await f.approveKey(token); return (a
 const inspect = provider => provider.inspect(CLOUDFLARE_TOKEN, CLOUDFLARE_ACCOUNT);
 const code = expected => error => error.code === expected;
 
-test('Cloudflare verifies a user token and probes one R2 list page without keeping bucket data', async t => {
+test('Cloudflare verifies the token itself and keeps only what identifies it', async t => {
   const f = await cloudflareFixture(t), account = await f.cloudflareAccount({ fields: { account_id: CLOUDFLARE_ACCOUNT.toUpperCase() } });
   const state = await f.request('/api/state'), adapter = state.json.adapters.find(item => item.id === 'cloudflare.api-token');
   assert.equal(adapter.register, 'paste');
@@ -30,10 +30,8 @@ test('Cloudflare verifies a user token and probes one R2 list page without keepi
   assert.equal(account.expiry_known, true);
   assert.match(account.access.restrictions, /全権限/);
   assert.ok(!state.text.includes(CLOUDFLARE_TOKEN));
-  assert.doesNotMatch(state.text, /test-bucket-do-not-store|token_id|token_hash/);
-  const saved = f.app.store.secret(f.app.store.credential(USER_A, account.id));
-  assert.doesNotMatch(JSON.stringify(saved), /test-bucket-do-not-store/);
-  assert.deepEqual(f.cloudflare.calls.map(call => call.url.slice(CLOUDFLARE_API.length)), ['/user/tokens/verify', '/accounts/' + CLOUDFLARE_ACCOUNT + '/r2/buckets?per_page=1']);
+  assert.doesNotMatch(state.text, /token_id|token_hash/);
+  assert.deepEqual(f.cloudflare.calls.map(call => call.url.slice(CLOUDFLARE_API.length)), ['/user/tokens/verify']);
   assert.ok(f.cloudflare.calls.every(call => call.options.redirect === 'error' && call.options.method === 'GET' && call.options.headers.authorization === 'Bearer ' + CLOUDFLARE_TOKEN));
 });
 
@@ -56,7 +54,7 @@ test('Cloudflare accepts legacy user tokens, no expiry and empty bucket lists', 
   assert.equal(value.details.account_id, CLOUDFLARE_ACCOUNT);
 });
 
-test('Cloudflare rejects disabled, expired and not-yet-valid tokens before probing R2', async () => {
+test('Cloudflare rejects disabled, expired and not-yet-valid tokens', async () => {
   for (const patch of [{ status: 'disabled' }, { status: 'expired' }, { expires_on: '2000-01-01T00:00:00Z' }, { not_before: '2099-01-01T00:00:00Z' }]) {
     const provider = new FakeCloudflare(); Object.assign(provider.verification, patch);
     await assert.rejects(inspect(provider), code('reconnect_required'));
@@ -84,16 +82,12 @@ test('Cloudflare handles invalid envelopes, provider failures and rate limits wi
   }
   provider.handler = () => { throw new Error(CLOUDFLARE_TOKEN); };
   await assert.rejects(inspect(provider), error => error.code === 'service_unavailable' && !error.message.includes(CLOUDFLARE_TOKEN));
-  provider.handler = url => url.includes('/r2/') ? json({ success: true, result: { buckets: [null] } }) : null;
-  const unverified = await inspect(provider);
-  assert.equal(unverified.verification.checks[1].code, 'service_response');
-  assert.equal(unverified.verification.checks[1].status, 'unknown');
 });
 
-test('Cloudflare records R2 access failures without blocking registration of a valid token', async t => {
+test('Cloudflare registers a valid token whatever account it is paired with, and refuses a missing field or a repeat', async t => {
   const f = await cloudflareFixture(t);
   const bad = await f.importCloudflare({ fields: { account_id: 'f'.repeat(32) } });
-  assert.equal(bad.status, 200); assert.equal(bad.json.verification.checks[1].code, 'r2_unavailable');
+  assert.equal(bad.status, 200);
   assert.equal(f.app.store.credentials(USER_A).length, 1);
   assert.equal(f.app.store.agents(USER_A).length, 0);
   assert.equal((await f.importCloudflare({ fields: {} })).status, 400);
@@ -125,12 +119,12 @@ test('Cloudflare requires explicit approval, keeps tokens encrypted and stops de
   const revoked = await credential(f, account.id, token);
   assert.equal(revoked.status, 409); assert.equal(revoked.json.error.code, 'reconnect_required');
   assert.equal((await f.request('/api/state')).json.credentials[0].status, 'reconnect_required');
-  assert.equal((await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: true } })).json.error.code, 'manual_revocation_required');
-  assert.equal((await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: false } })).status, 200);
+  const removed = await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: true } });
+  assert.equal(removed.status, 200); assert.equal(removed.json.service_revoked, null);
   assert.equal((await credential(f, account.id, token)).status, 403);
 });
 
-test('Cloudflare rechecks R2 access and token identity on delivery but does not invalidate on a network outage', async t => {
+test('Cloudflare rechecks the token identity on delivery but does not invalidate on a network outage', async t => {
   const f = await cloudflareFixture(t), account = await f.cloudflareAccount(), agent = await f.agent();
   f.cloudflare.handler = () => { throw new Error('offline'); };
   assert.equal((await credential(f, account.id, agent.token)).status, 502);
@@ -140,10 +134,8 @@ test('Cloudflare rechecks R2 access and token identity on delivery but does not 
   f.cloudflare.verification.id = 'c'.repeat(32);
   assert.equal((await credential(f, account.id, agent.token)).json.error.code, 'service_response');
   f.cloudflare.verification.id = original;
-  f.cloudflare.handler = url => url.includes('/r2/') ? json({ success: false }, 403) : null;
   const result = await credential(f, account.id, agent.token);
   assert.equal(result.status, 200);
-  assert.equal(result.json.verification.checks[1].code, 'r2_unavailable');
   assert.equal((await f.request('/api/state')).json.credentials[0].status, 'connected');
 });
 

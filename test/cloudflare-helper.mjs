@@ -21,7 +21,6 @@ export class FakeCloudflare extends CloudflareClient {
     }
     if (!this.valid.has(options.headers.authorization?.slice(7))) return json({ success: false }, 401);
     if (url.endsWith('/user/tokens/verify')) return json({ success: true, result: this.verification });
-    if (url === CLOUDFLARE_API + '/accounts/' + CLOUDFLARE_ACCOUNT + '/r2/buckets?per_page=1') return json({ success: true, result: { buckets: this.buckets } });
     return json({ success: false }, 403);
   }
 }

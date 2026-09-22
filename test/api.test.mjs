@@ -139,15 +139,14 @@ test('Token refresh is coalesced and invalid grants become reconnect_required', 
   assert.equal((await f.request('/api/state')).json.credentials[0].status, 'reconnect_required');
 });
 
-test('Disconnect failure stops issuance, keeps retryable secret, and allows explicit local-only removal', async (t) => {
+test('Disconnecting removes the credential even when the service refuses to revoke, and says so', async (t) => {
   const f = await fixture(t), a = await f.credential(), agent = await f.agent();
   f.gmail.revokeHandler = () => new Response('{}', { status: 503 });
-  const path = '/api/credentials/' + a.id;
-  assert.equal((await f.request(path, { method: 'DELETE', data: { revoke: true } })).status, 502);
-  assert.equal((await f.request('/api/state')).json.credentials[0].status, 'disconnecting');
-  assert.equal((await f.request('/v1/credentials', { token: agent.token })).json.credentials.length, 0);
-  assert.equal((await f.request(path, { method: 'DELETE', data: { revoke: false } })).status, 200);
+  const removed = await f.request('/api/credentials/' + a.id, { method: 'DELETE', data: { revoke: true } });
+  assert.equal(removed.status, 200);
+  assert.equal(removed.json.service_revoked, false, 'the owner learns the grant is still at Google');
   assert.equal((await f.request('/api/state')).json.credentials.length, 0);
+  assert.equal((await f.request('/v1/credentials', { token: agent.token })).json.credentials.length, 0);
 });
 
 test('Cross-origin, cross-site, rebinding, invalid input and unexpected paths are denied', async (t) => {

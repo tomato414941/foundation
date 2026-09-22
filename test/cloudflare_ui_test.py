@@ -100,7 +100,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     field.fill(token)
     register.get_by_role('button', name='登録する', exact=True).click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
-    expect(page.get_by_text('R2の一覧を取得できませんでした。', exact=False)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
@@ -111,7 +110,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     wrong = cli('credentials')['credentials'][0]
     page.goto(args.base, wait_until='networkidle')
     page.locator('[aria-labelledby="cloudflare-title"]').get_by_role('button', name='登録を解除', exact=True).click()
-    dialog.get_by_role('checkbox', name='キーの無効化はCloudflareで行うことを確認しました', exact=True).check()
     dialog.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
     assert [item['id'] for item in cli('credentials')['credentials']] == []
@@ -123,7 +121,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
         register.get_by_role('button', name='登録する', exact=True).click()
     assert token not in response_event.value.text()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
-    expect(page.get_by_text('R2のバケット一覧を取得できました。', exact=False)).to_be_visible()
     review(page)
     account = cli('credentials')['credentials'][0]
     assert account['cloudflare_account_id'] == account_id
@@ -143,9 +140,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
             page.screenshot(path=str(shots / ('connections-desktop.png' if width == 1280 else 'connections-mobile.png')), full_page=True)
 
     section.get_by_role('button', name='登録を解除', exact=True).click()
-    expect(dialog.get_by_role('link', name='Cloudflareでキーを削除する', exact=False)).to_have_attribute('href', 'https://dash.cloudflare.com/profile/api-tokens')
-    expect(dialog.get_by_text('受け渡し済みのAPIキーは、この操作では無効になりません。', exact=False)).to_be_visible()
-    dialog.get_by_role('checkbox', name='キーの無効化はCloudflareで行うことを確認しました', exact=True).check()
+    expect(dialog.get_by_role('link', name='Cloudflareでキーを確認・削除する', exact=False)).to_have_attribute('href', 'https://dash.cloudflare.com/profile/api-tokens')
+    expect(dialog.get_by_text('すでにAIに渡した値と、Cloudflare側のキーは残ります。', exact=False)).to_be_visible()
     review(page)
     dialog.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
@@ -170,4 +166,4 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     assert not errors, errors
     context.close()
     browser.close()
-    print('Cloudflare browser flow passed: key approval first, registration as its own request, verification shown on the result, R2 failure nonblocking, correction by registering again, native credential delivery, secret clearing and mobile copy review. All Cloudflare calls mocked.')
+    print('Cloudflare browser flow passed: key approval first, registration as its own request, token verification on the result, correction by registering again, native credential delivery, secret clearing and mobile copy review. All Cloudflare calls mocked.')

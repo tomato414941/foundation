@@ -103,5 +103,6 @@ test('A key Apple stops accepting marks the connection for reconnection on next 
   const revoked = await credential(f, apple.id, runtime.token);
   assert.equal(revoked.status, 409); assert.equal(revoked.json.error.code, 'reconnect_required');
   assert.equal((await f.request('/api/state')).json.credentials[0].status, 'reconnect_required');
-  assert.equal((await f.request('/api/credentials/' + apple.id, { method: 'DELETE', data: { revoke: true } })).json.error.code, 'manual_revocation_required');
+  const removed = await f.request('/api/credentials/' + apple.id, { method: 'DELETE', data: { revoke: true } });
+  assert.equal(removed.status, 200); assert.equal(removed.json.service_revoked, null);
 });

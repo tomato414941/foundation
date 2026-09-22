@@ -420,14 +420,18 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             const input = await body(req);
             if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
             const adapter = adapters.get(credential.adapter), canRevoke = adapter.client.canRevoke?.(store.secret(credential)) ?? adapter.canRevoke !== false;
-            if (input.revoke && !canRevoke) fail(409, 'manual_revocation_required', 'キーの無効化は接続先のキー管理画面で行ってください。');
             if (disconnects.has(credential.id)) fail(409, 'disconnect_in_progress', '登録を解除しています。');
             disconnects.add(credential.id);
             try {
+              // Deleting it here always succeeds; asking the service to revoke is an attempt whose outcome is reported.
               const previous = store.disconnect(user.id, credential.id);
-              if (input.revoke) await adapter.client.revoke(store.secret(previous));
+              let revoked = null;
+              if (input.revoke && canRevoke) {
+                try { await adapter.client.revoke(store.secret(previous)); revoked = true; }
+                catch { revoked = false; }
+              }
               store.removeCredential(user.id, credential.id);
-              return send(200, { ok: true, service_revoked: input.revoke });
+              return send(200, { ok: true, service_revoked: revoked });
             } finally { disconnects.delete(credential.id); }
           }
         }

@@ -43,26 +43,10 @@ test('A failed import stores no secret, tells the owner in the response, and tel
   assert.equal((await credentials(f, valid.json.credential_id, token)).status, 200, 'the approved key uses what its owner registered');
 });
 
-test('An R2 failure does not block registration or delivery; the failed observation stays on the credential for the owner', async t => {
-  const f = await cloudflareFixture(t), { row, token } = await create(f);
-  f.cloudflare.handler = url => url.includes('/r2/') ? json({ success: false, errors: [{ message: CLOUDFLARE_TOKEN }] }, 403) : null;
-  const imported = await f.importCloudflare({ accessRequestId: row.id });
-  assert.equal(imported.status, 200);
-  assert.equal(check(imported.json.verification, 'credential').status, 'passed');
-  assert.equal(check(imported.json.verification, 'r2_bucket_list').http_status, 403);
-  assert.equal(check(await shown(f, imported.json.credential_id), 'r2_bucket_list').status, 'failed');
-  const issued = await credentials(f, imported.json.credential_id, token);
-  assert.equal(issued.status, 200);
-  assert.equal(issued.json.delivery.environment.CLOUDFLARE_API_TOKEN, CLOUDFLARE_TOKEN);
-  assert.equal(check(issued.json.verification, 'r2_bucket_list').code, 'r2_unavailable');
-  assert.ok(!JSON.stringify(issued.json.verification).includes(CLOUDFLARE_TOKEN));
-});
-
 test('Registering completes the request; a second registration through it is refused', async t => {
   const f = await cloudflareFixture(t), { row, token } = await create(f);
   const first = await f.importCloudflare({ accessRequestId: row.id, fields: { account_id: 'f'.repeat(32) } });
   assert.equal(first.status, 200);
-  assert.equal(check(first.json.verification, 'r2_bucket_list').status, 'failed');
   assert.equal((await f.request('/api/access-requests/' + row.id)).json.request.status, 'approved');
   const again = await f.importCloudflare({ accessRequestId: row.id });
   assert.equal(again.status, 409); assert.equal(again.json.error.code, 'request_finished');

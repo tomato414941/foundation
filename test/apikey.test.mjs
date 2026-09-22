@@ -105,10 +105,9 @@ test('The owner pastes each declared value; each reaches the command under its o
   const run = await execute(['exec', account.id, pair.json.credential_id, '--', process.execPath, '-e', `if(process.env.ANTHROPIC_API_KEY!==${JSON.stringify(secret)}||process.env.TWILIO_ACCOUNT_SID!=='AC123'||process.env.TWILIO_AUTH_TOKEN!=='twilio-secret')process.exit(2);console.log('ready')`], env);
   assert.equal(run.code, 0, run.err);
   assert.equal(run.out.trim(), 'ready');
-  // Removing it cannot revoke at the service; delivery stops locally.
-  const revoke = await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: true } });
-  assert.equal(revoke.status, 409); assert.equal(revoke.json.error.code, 'manual_revocation_required');
-  assert.equal((await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: false } })).status, 200);
+  // Removing it here cannot revoke anything at the service, and does not claim to.
+  const removed = await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: true } });
+  assert.equal(removed.status, 200); assert.equal(removed.json.service_revoked, null);
   assert.equal((await f.request('/v1/credentials/' + account.id + '/deliver', { method: 'POST', token, anonymous: true, data: {} })).status, 403);
 });
 

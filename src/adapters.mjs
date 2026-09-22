@@ -110,16 +110,15 @@ export function supabaseAccessToken(client) {
 export function cloudflareApiToken(client) {
   return {
     id: 'cloudflare.api-token', service: CLOUDFLARE, label: 'Cloudflareのトークンを登録', register: 'paste', client, canReconnect: false, canRevoke: false, credentialType: 'api_key',
-    intro: 'APIトークンでR2に接続します。',
+    intro: 'Cloudflareで発行したAPIトークンを登録します。',
     links: [{ label: 'CloudflareのAPIトークン管理ページを開く', href: CLOUDFLARE_TOKENS }],
     schema: defineSchema([
       { id: 'account_id', label: 'アカウントID', pattern: '[a-fA-F0-9]{32}', max: 32 },
       { id: 'token', label: 'APIトークン', secret: true },
     ]),
-    instructions: 'CloudflareのユーザーAPIトークンを受け付けます (Global API Key と R2 の S3互換キーは不可)。登録時に有効性と、指定アカウントの R2 一覧の取得可否を確認します。',
-    note: '登録時にR2の一覧へのアクセスを確認します。トークンの権限全体は確認・制限しません。',
-    access: { name: 'トークンの権限でCloudflareを利用', description: 'APIトークンを登録し、指定したアカウントでR2の一覧を取得できるか確認します。', restrictions: '利用できる範囲はトークンに与えた全権限です。ここで指定するアカウントIDや用途では制限されません。読み取り専用のトークンを使ってください。' },
-    ai: 'ユーザー API トークンとアカウント ID を受け付ける (Global API Key と R2 の S3 互換キーは不可)。バケット一覧は公式 API の /accounts/<cloudflare_account_id>/r2/buckets (ページ送りは result_info.cursor)。Foundation はトークン全体の権限を狭めない。',
+    instructions: 'CloudflareのユーザーAPIトークンを受け付けます (Global API Key と R2 の S3互換キーは不可)。登録時にCloudflareへ照会して、トークンが有効か確認します。',
+    access: { name: 'トークンの権限でCloudflareを利用', description: 'このトークンに与えた権限の範囲で、Cloudflareを操作できます。', restrictions: '利用できる範囲はトークンに与えた全権限です。ここで指定するアカウントIDや用途では制限されません。読み取り専用のトークンを使ってください。' },
+    ai: 'ユーザー API トークンとアカウント ID を受け付ける (Global API Key と R2 の S3 互換キーは不可)。登録時に確かめるのはトークンが有効かどうかだけで、何に届くかは確かめない。アカウント ID は認証情報の cloudflare_account_id として読める。Foundation はトークンの権限を狭めない。',
     variables: ['CLOUDFLARE_API_TOKEN'], deliver: secret => ({ environment: { CLOUDFLARE_API_TOKEN: secret.access_token } }),
   };
 }

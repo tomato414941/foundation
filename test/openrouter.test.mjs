@@ -107,11 +107,10 @@ test('OpenRouter keys are owner-separated, cannot silently replace connections, 
 
 test('Local disconnect never pretends to delete OpenRouter key or calls a management endpoint', async t => {
   const f = await openrouterFixture(t), account = await f.openrouterAccount(), agent = await f.agent();
-  const refused = await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: true } });
-  assert.equal(refused.json.error.code, 'manual_revocation_required');
   assert.equal((await credential(f, account.id, agent.token)).status, 200);
-  const removed = await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: false } });
-  assert.equal(removed.json.service_revoked, false);
+  const removed = await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: true } });
+  assert.equal(removed.status, 200);
+  assert.equal(removed.json.service_revoked, null, 'the key stays at OpenRouter, and nothing pretends otherwise');
   assert.equal((await credential(f, account.id, agent.token)).status, 403);
   assert.equal(f.app.store.credential(USER_A, account.id), undefined);
   assert.ok(f.openrouter.calls.every(call => ['/auth/keys', '/key'].some(path => call.url === OPENROUTER_API + path)));

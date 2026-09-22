@@ -37,7 +37,7 @@ const icon = (name) => {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
 const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true">F</span>Foundation</a>';
-const statusName = (credential) => ({ connected: '利用可能', reconnect_required: '登録し直しが必要', disconnecting: '解除待ち' }[credential.status] || '確認が必要');
+const statusName = (credential) => ({ connected: '利用可能', reconnect_required: '登録し直しが必要' }[credential.status] || '確認が必要');
 const accessName = credential => credential.access?.name || 'サービスで許可した範囲';
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
 // Folded where it sits beside other things (the dashboard pane); laid open where it is the point (a registration result).
@@ -139,9 +139,9 @@ function details(credential) {
   const adapter = adapterOf(credential), name = credential.service;
   return `<div class="credential-heading"><span class="status ${credential.status === 'connected' ? '' : 'warning'}">${credential.status === 'connected' ? icon('check') : ''}${statusName(credential)}</span><h3>${esc(credential.name)}</h3>${otherLabel(credential) ? `<p class="credential-email">${esc(otherLabel(credential))}</p>` : ''}<p class="credential-meta">${esc(cameFrom(credential))}</p></div>
     <dl class="credential-facts">${adapter.kind ? `<div><dt>種類</dt><dd>${esc(adapter.kind)}</dd></div>` : ''}${Array.isArray(credential.organizations) ? `<div><dt>組織</dt><dd>${credential.organizations.length ? credential.organizations.map(item => esc(item.name)).join('、') : 'なし'}</dd></div>` : ''}<div><dt>渡す変数</dt><dd>${credential.variables?.length ? credential.variables.map(name => `<code>${esc(name)}</code>`).join(' ') : 'Expo のログイン状態として渡します'}</dd></div></dl>${keyFacts(credential)}
-    <div class="credential-actions">${adapter.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(credential.id)}" ${credential.status === 'disconnecting' || !adapter.available ? 'disabled' : ''}>登録し直す</button>` : ''}<button class="text-button" data-action="edit-credential" data-id="${esc(credential.id)}">編集</button></div>
+    <div class="credential-actions">${adapter.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(credential.id)}" ${!adapter.available ? 'disabled' : ''}>登録し直す</button>` : ''}<button class="text-button" data-action="edit-credential" data-id="${esc(credential.id)}">編集</button></div>
     <details class="credential-reference"><summary>識別情報</summary><dl>${credential.fingerprint ? `<dt>値の指紋</dt><dd><code>${esc(credential.fingerprint)}</code></dd>` : ''}<dt>認証情報ID</dt><dd><code>${esc(credential.id)}</code></dd></dl>${adapter.service?.api.documentation_url ? `<a href="${esc(adapter.service.api.documentation_url)}" target="_blank" rel="noopener noreferrer">${esc(name)} APIの公式ドキュメント ↗</a>` : ''}</details>
-    <div class="credential-footer">${credential.credential_type === 'expo_session' ? '' : `<a href="${esc(credential.management_url || adapter.service?.management_url)}" target="_blank" rel="noopener noreferrer">${esc(name)}の${adapter.declared ? 'キー管理ページ' : '管理ページ'} ↗</a>`}<button class="text-button danger" data-action="remove-credential" data-id="${esc(credential.id)}">${credential.status === 'disconnecting' ? '解除を再試行' : '登録を解除'}</button></div>`;
+    <div class="credential-footer">${credential.credential_type === 'expo_session' ? '' : `<a href="${esc(credential.management_url || adapter.service?.management_url)}" target="_blank" rel="noopener noreferrer">${esc(name)}の${adapter.declared ? 'キー管理ページ' : '管理ページ'} ↗</a>`}<button class="text-button danger" data-action="remove-credential" data-id="${esc(credential.id)}">登録を解除</button></div>`;
 }
 // A credential belongs to the service its owner named. Registered services come first, then the ones that can be
 // registered from here, each in name order. Credentials keep the order they were registered.
@@ -423,13 +423,19 @@ function editAgent() {
 }
 function removeCredential(credential) {
   const adapter = adapterOf(credential), name = credential.service;
-  const expoSession = credential.credential_type === 'expo_session';
-  const revoke = expoSession ? '<p>この認証情報のExpoログインを無効にします。承認済みのアクセスキーからは使えなくなります。Expoのプロジェクトやデータは削除しません。</p>' : adapter.can_revoke ? `<p>承認済みのアクセスキーからは使えなくなります。${esc(name)}上のデータは削除されません。</p><label class="choice revoke-choice"><input type="checkbox" name="revoke" checked><span><strong>${esc(name)}側の許可も取り消す</strong><small>反映に時間がかかる場合があります。</small></span></label><p class="permission-note">チェックを外すと、${esc(name)}の許可は残ります。${revocationNote}</p>` : `<p>Foundationから、この認証情報を削除します。承認済みのアクセスキーからは使えなくなります。受け渡し済みのAPIキーは、この操作では無効になりません。</p><p><a href="${esc(credential.management_url || adapter.service?.management_url)}" target="_blank" rel="noopener noreferrer">${esc(name)}でキーを削除する ↗</a></p><label class="choice"><input type="checkbox" name="acknowledged" required><span>キーの無効化は${esc(name)}で行うことを確認しました</span></label>`;
-  openDialog(`<h2 id="dialog-title">${esc(name)}の認証情報を解除しますか？</h2><p>${esc(credentialLabel(credential))}</p><form>${revoke}<p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">登録を解除</button></div></form>`);
+  const manage = credential.management_url || adapter.service?.management_url;
+  // The same three sentences for every credential: what leaves Foundation, what stays elsewhere, and where to remove that.
+  const body = `<p>Foundationから削除します。承認済みのアクセスキーには渡らなくなります。</p>
+    <p>すでにAIに渡した値と、${esc(name)}側のキーは残ります。</p>
+    ${manage ? `<p><a href="${esc(manage)}" target="_blank" rel="noopener noreferrer">${esc(name)}でキーを確認・削除する ↗</a></p>` : ''}
+    ${adapter.can_revoke ? `<label class="choice revoke-choice"><input type="checkbox" name="revoke" checked><span><strong>${esc(name)}側の許可も取り消す</strong><small>取り消せなかった場合は、その旨をお知らせします。</small></span></label>` : ''}`;
+  openDialog(`<h2 id="dialog-title">${esc(name)}の認証情報を解除しますか？</h2><p>${esc(credentialLabel(credential))}</p><form>${body}<p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">登録を解除</button></div></form>`);
   bindForm(async (form) => {
-    try { await api(`/api/credentials/${credential.id}`, { method: 'DELETE', data: { revoke: expoSession || form.has('revoke') } }); }
+    let result;
+    try { result = await api(`/api/credentials/${credential.id}`, { method: 'DELETE', data: { revoke: form.has('revoke') } }); }
     catch (error) { await refresh(); throw error; }
-    closeDialog(); await refresh(); toast('登録を解除しました。');
+    closeDialog(); await refresh();
+    toast(result.service_revoked === false ? `登録を解除しました。${name}側の許可は取り消せませんでした。${name}の画面で取り消してください。` : '登録を解除しました。');
   });
 }
 function renameAgent(agent) {
