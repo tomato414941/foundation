@@ -173,7 +173,8 @@ test('Session login is off by default; stored sessions stop being delivered when
   const account = await f.expoAccount();
   const store = f.app.store, id = account.id, row = store.credential(USER_A, id);
   store.saveSecret(row, { ...store.secret(row), credential_type: 'expo_session', scopes: [EXPO_SESSION_SCOPE], details: { ...store.secret(row).details } });
-  const check = await f.request('/api/credentials/' + id + '/check', { method: 'POST', data: {} });
-  assert.equal(check.status, 409); assert.equal(check.json.error.code, 'reconnect_required');
+  const agent = await f.agent();
+  const delivery = await f.request('/v1/credentials/' + id + '/deliver', { method: 'POST', token: agent.token, anonymous: true, data: {} });
+  assert.equal(delivery.status, 409); assert.equal(delivery.json.error.code, 'reconnect_required');
   assert.equal(store.credential(row.owner_id, id).status, 'reconnect_required');
 });

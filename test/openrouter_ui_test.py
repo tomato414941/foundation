@@ -89,8 +89,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     section = page.locator('[aria-labelledby="openrouter-title"]')
     assert 'Gmail' not in section.inner_text() and 'メール' not in section.inner_text()
     expect(section.get_by_role('button', name='登録し直す', exact=True)).to_have_count(0)
-    section.get_by_role('button', name='検証する', exact=True).click()
-    expect(page.get_by_text('OpenRouterで検証できました。', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)

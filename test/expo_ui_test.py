@@ -106,8 +106,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     section = page.locator('[aria-labelledby="expo-title"]')
     assert 'Gmail' not in section.inner_text() and 'OpenRouter' not in section.inner_text()
     expect(section.locator('.credential-meta')).to_contain_text('dev-us のAIの依頼')
-    section.get_by_role('button', name='検証する', exact=True).click()
-    expect(page.get_by_text('Expoで検証できました。', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
@@ -136,7 +134,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     dialog.get_by_role('button', name='登録する', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(section.locator('.credential-meta')).to_contain_text('管理画面から')
-    section.get_by_role('button', name='名前を変更', exact=True).click()
+    section.get_by_role('button', name='編集', exact=True).click()
     dialog.get_by_label('表示名', exact=True).fill('<img src=x onerror="window.xss=1">')
     dialog.get_by_role('button', name='保存', exact=True).click()
     expect(dialog).not_to_be_visible()

@@ -130,8 +130,6 @@ with sync_playwright() as p:
     expect(page.locator('.credential-facts')).to_contain_text("件名・差出人などの読み取り")
     expect(page.locator(".credential-heading .credential-meta")).to_contain_text("管理画面から")
     page.locator(".credential-item").filter(has_text="個人用").click()
-    page.get_by_role("button", name="検証する", exact=True).click()
-    expect(page.get_by_text("Gmailで検証できました。", exact=True)).to_be_visible()
 
     def create_runtime(name):
         page.get_by_role("button", name="アクセスキーを追加", exact=True).click()
@@ -169,7 +167,7 @@ with sync_playwright() as p:
     page.set_viewport_size({"width": 390, "height": 1000})
     page.screenshot(path=str(shots / "mobile.png"), full_page=True)
     page.locator(".credential-item").filter(has_text="個人用").click()
-    page.locator(".credential-pane").get_by_role("button", name="名前を変更", exact=True).click()
+    page.locator(".credential-pane").get_by_role("button", name="編集", exact=True).click()
     dialog.get_by_label("表示名", exact=True).fill('<img src=x onerror="window.xss=1">' + "長い名前" * 10)
     dialog.get_by_role("button", name="保存", exact=True).click()
     expect(dialog).not_to_be_visible()
@@ -178,7 +176,7 @@ with sync_playwright() as p:
     for width in [320, 601, 1280]:
         page.set_viewport_size({"width": width, "height": 950})
         check_display(page)
-    page.locator(".credential-pane").get_by_role("button", name="名前を変更", exact=True).click()
+    page.locator(".credential-pane").get_by_role("button", name="編集", exact=True).click()
     dialog.get_by_label("表示名", exact=True).fill("個人用")
     dialog.get_by_role("button", name="保存", exact=True).click()
     expect(dialog).not_to_be_visible()
