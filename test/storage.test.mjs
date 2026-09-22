@@ -49,46 +49,22 @@ test('Configuration creates private encryption key, never an owner login key; lo
   assert.throws(() => configuration(env), /original encryption key/);
 });
 
-test('Old data cannot be reassigned to the first Supabase login; empty legacy schema upgrades', async (t) => {
-  const dir = await directory(t), path = join(dir, 'legacy.sqlite');
-  let db = new DatabaseSync(path);
-  db.exec('CREATE TABLE accounts(id TEXT); CREATE TABLE agents(id TEXT); CREATE TABLE grants(id TEXT); INSERT INTO accounts VALUES (\'existing\'); PRAGMA user_version=1;'); db.close();
-  assert.throws(() => new Store(path, KEY), /explicit owner migration/);
-  db = new DatabaseSync(path);
-  assert.equal(db.prepare('SELECT count(*) n FROM accounts').get().n, 1);
-  db.exec('DELETE FROM accounts'); db.close();
-  const upgraded = new Store(path, KEY);
-  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 6); upgraded.close();
-});
-
-test('Version 2 upgrade preserves encrypted connections and runtime keys', async t => {
-  const dir = await directory(t), path = join(dir, 'upgrade.sqlite');
-  const first = new Store(path, KEY);
-  const id = first.connect(USER_A, { email: 'upgrade@example.test', name: 'existing', purpose: '', scopes: ['readonly'] }, { refresh_token: 'keep-private' });
-  const agent = first.addAgent(USER_A, 'existing-runtime');
-  first.db.exec('DROP TABLE access_requests; PRAGMA user_version=2;');
-  first.close();
-  const upgraded = new Store(path, KEY); t.after(() => upgraded.close());
-  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 6);
-  assert.equal(upgraded.secrets(upgraded.account(USER_A, id)).refresh_token, 'keep-private');
-  assert.equal(upgraded.authenticate(agent.token).id, agent.id);
-  assert.equal(upgraded.agents(USER_A)[0].name, 'existing-runtime');
-  assert.equal(upgraded.db.prepare('SELECT count(*) n FROM access_requests').get().n, 0);
-});
-
-test('Version 3 adds nonexpiring-key audit without changing credentials', async t => {
-  const dir = await directory(t), path = join(dir, 'v3.sqlite');
-  const first = new Store(path, KEY);
-  const id = first.connect(USER_A, { email: 'v3@example.test', name: 'existing', purpose: '', scopes: ['readonly'] }, { access_token: 'keep-encrypted', expires_at: Date.now() + 3600_000 });
-  const agent = first.addAgent(USER_A, 'existing');
-  first.recordIssuance(agent, 1000);
-  first.db.exec('ALTER TABLE agents DROP COLUMN issued_nonexpiring; PRAGMA user_version=3;');
-  first.close();
-  const upgraded = new Store(path, KEY); t.after(() => upgraded.close());
-  assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version, 6);
-  assert.equal(upgraded.secrets(upgraded.account(USER_A, id)).access_token, 'keep-encrypted');
-  assert.equal(upgraded.agents(USER_A)[0].issued_nonexpiring, 0);
-  upgraded.recordIssuance(agent, null); upgraded.recordIssuance(agent, 2000);
-  assert.equal(upgraded.agents(USER_A)[0].issued_nonexpiring, 1);
-  assert.equal(upgraded.agents(USER_A)[0].issued_until, 2000);
+test('A new database is created in the current shape; a database of any other shape is refused and left unchanged', async (t) => {
+  const dir = await directory(t), path = join(dir, 'state.sqlite');
+  const created = new Store(path, KEY);
+  const id = created.connect(USER_A, { adapter: 'gmail.oauth', subject: 'kept@example.test', name: 'kept', purpose: '', scopes: ['readonly'] }, { refresh_token: 'keep-private' });
+  const agent = created.addAgent(USER_A, 'runtime');
+  created.recordIssuance(agent, null);
+  created.close();
+  const reopened = new Store(path, KEY); t.after(() => reopened.close());
+  assert.equal(reopened.secrets(reopened.account(USER_A, id)).refresh_token, 'keep-private');
+  assert.equal(reopened.agents(USER_A)[0].issued_nonexpiring, 1);
+  for (const shape of ['CREATE TABLE accounts(id TEXT); INSERT INTO accounts VALUES (\'existing\');', 'CREATE TABLE accounts(id TEXT); PRAGMA user_version=6;', 'PRAGMA user_version=2;']) {
+    const other = join(dir, 'other-' + Math.random().toString(36).slice(2) + '.sqlite'), db = new DatabaseSync(other);
+    db.exec(shape); db.close();
+    assert.throws(() => new Store(other, KEY), /not created by this version/, shape);
+    const after = new DatabaseSync(other);
+    assert.equal(after.prepare('PRAGMA user_version').get().user_version, /user_version=(\d)/.exec(shape)?.[1] * 1 || 0);
+    after.close();
+  }
 });

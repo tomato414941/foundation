@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { FakeExpo, expoFixture } from './expo-helper.mjs';
-import { EXPO_API } from '../src/providers/expo.mjs';
+import { EXPO_API } from '../src/services/expo.mjs';
 import { json } from './helpers.mjs';
 
 export const LOGIN_PASSWORD = 'fixture-password-do-not-use';
@@ -38,6 +38,6 @@ export class FakeExpoLogin extends FakeExpo {
 export async function expoLoginFixture(t, options = {}) {
   const expo = options.expo || new FakeExpoLogin();
   const f = await expoFixture(t, { ...options, expo });
-  const loginExpo = (input = {}, requestOptions = {}) => f.request('/api/connections/expo/login', { method: 'POST', data: { username: 'fixture-user', password: LOGIN_PASSWORD, ...input }, ...requestOptions });
+  const loginExpo = (input = {}, requestOptions = {}) => f.request('/api/adapters/expo.login/connect', { method: 'POST', data: { name: 'Expo', permission: 'session', username: 'fixture-user', password: LOGIN_PASSWORD, ...input }, ...requestOptions });
   return { ...f, loginExpo };
 }

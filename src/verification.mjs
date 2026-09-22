@@ -1,7 +1,7 @@
 import { HttpError } from './errors.mjs';
 
 // Only locally defined facts cross the browser/runtime boundary. Never copy
-// provider response bodies, submitted fields, tokens or arbitrary error text.
+// service response bodies, submitted fields, tokens or arbitrary error text.
 const messages = {
   completed: '接続先の認証処理が完了しました。',
   active: 'トークンが有効であることを確認しました。',
@@ -13,9 +13,9 @@ const messages = {
   invalid_credential: '認証情報の形式または種類が対応していません。',
   reconnect_required: '接続先が認証情報を受け付けないか、有効期間外です。',
   scope_mismatch: '接続先から得られた権限が、この接続方式の対応範囲と一致しません。',
-  provider_unavailable: '接続先との通信または処理を完了できませんでした。',
-  provider_rate_limit: '接続先が確認の回数を制限しています。',
-  provider_response: '接続先の応答を解釈できませんでした。',
+  service_unavailable: '接続先との通信または処理を完了できませんでした。',
+  service_rate_limit: '接続先が確認の回数を制限しています。',
+  service_response: '接続先の応答を解釈できませんでした。',
   refresh_missing: '継続利用に必要な認証情報が得られませんでした。',
   invalid_login: 'ログイン情報の形式を確認できませんでした。',
   invalid_otp: '認証コードの形式を確認できませんでした。',
@@ -42,7 +42,7 @@ export function verification(checks, checkedAt = Date.now()) {
 
 export function failedCheck(error, check = 'connection') {
   const code = error instanceof HttpError && Object.hasOwn(messages, error.code) ? error.code : 'verification_unknown';
-  return { check, code, status: ['provider_unavailable', 'provider_response', 'provider_rate_limit', 'verification_unknown'].includes(code) ? 'unknown' : 'failed', http_status: error?.upstreamStatus };
+  return { check, code, status: ['service_unavailable', 'service_response', 'service_rate_limit', 'verification_unknown'].includes(code) ? 'unknown' : 'failed', http_status: error?.upstreamStatus };
 }
 
 export function verificationResult(result, error) {

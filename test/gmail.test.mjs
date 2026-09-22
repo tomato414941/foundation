@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GmailProvider, METADATA_SCOPE, READONLY_SCOPE } from '../src/providers/gmail.mjs';
+import { GmailClient, METADATA_SCOPE, READONLY_SCOPE } from '../src/services/gmail.mjs';
 import { json, FakeGmail, KEY, USER_A } from './helpers.mjs';
 import { Store } from '../src/store.mjs';
 
@@ -9,18 +9,18 @@ function setup(t, mode = 'readonly') {
   t.after(() => store.close());
   const scopes = [mode === 'metadata' ? METADATA_SCOPE : READONLY_SCOPE];
   const credentials = { access_token: 'google-access-personal-' + mode, refresh_token: 'refresh-personal-' + mode, scopes, expires_at: Date.now() - 1 };
-  const id = store.connect(USER_A, { name: '個人用', purpose: '', email: 'personal@example.test', scopes }, credentials);
+  const id = store.connect(USER_A, { adapter: 'gmail.oauth', name: '個人用', purpose: '', subject: 'personal@example.test', scopes }, credentials);
   return { store, gmail, account: () => store.account(USER_A, id), credentials };
 }
 
 test('Google exchange and refresh keep tokens server-side and preserve actual read scopes', async (t) => {
   const { gmail, store, account } = setup(t);
-  const result = await gmail.exchange({ code: 'personal-readonly', verifier: 'test-pkce-verifier', redirectUri: 'https://app.test/oauth/gmail/callback', mode: 'readonly' });
-  assert.equal(result.email, 'personal@example.test');
+  const result = await gmail.exchange({ code: 'personal-readonly', verifier: 'test-pkce-verifier', redirectUri: 'https://app.test/oauth/gmail.oauth/callback', permission: 'readonly' });
+  assert.equal(result.subject, 'personal@example.test');
   const request = gmail.calls[0];
   assert.equal(request.options.body.get('grant_type'), 'authorization_code');
   assert.equal(request.options.body.get('code_verifier'), 'test-pkce-verifier');
-  assert.equal(request.options.body.get('redirect_uri'), 'https://app.test/oauth/gmail/callback');
+  assert.equal(request.options.body.get('redirect_uri'), 'https://app.test/oauth/gmail.oauth/callback');
   await gmail.token(store, account());
   const calls = gmail.calls.length;
   await gmail.token(store, account());
@@ -61,7 +61,7 @@ test('Changed Gmail identity is never delivered to existing runtime grants', asy
   const { store, gmail, account } = setup(t);
   gmail.refreshHandler = () => json({ access_token: 'google-access-work-readonly', expires_in: 3600, scope: READONLY_SCOPE });
   await assert.rejects(gmail.token(store, account()), { code: 'account_changed' });
-  assert.equal(account().email, 'personal@example.test');
+  assert.equal(account().subject, 'personal@example.test');
   assert.equal(account().status, 'reconnect_required');
 });
 
@@ -76,7 +76,7 @@ test('Provider failures are redacted and transient errors do not delete credenti
 
 test('Revocation is form POST, no token in URL; already invalid token counts as revoked', async () => {
   const calls = [];
-  const gmail = new GmailProvider({ clientId: 'id', clientSecret: 'secret' }, { fetcher: async (url, options) => { calls.push({ url, options }); return json({ error: 'invalid_token' }, 400); } });
+  const gmail = new GmailClient({ clientId: 'id', clientSecret: 'secret' }, { fetcher: async (url, options) => { calls.push({ url, options }); return json({ error: 'invalid_token' }, 400); } });
   await gmail.revoke({ refresh_token: 'test-refresh-sensitive' });
   assert.equal(calls[0].url, 'https://oauth2.googleapis.com/revoke');
   assert.equal(calls[0].options.method, 'POST');
@@ -85,5 +85,5 @@ test('Revocation is form POST, no token in URL; already invalid token counts as 
 
 test('Malformed token lifetimes, bearer types and identity are rejected', () => {
   const gmail = new FakeGmail();
-  for (const change of [{ expires_in: -1 }, { expires_in: 900000 }, { expires_in: '3600' }, { access_token: '' }, { access_token: 'a\r\nb' }, { token_type: 'unknown' }]) assert.throws(() => gmail.credentials({ access_token: 'a', refresh_token: 'r', scope: READONLY_SCOPE, expires_in: 3600, ...change }, 'readonly'), { code: 'provider_response' });
+  for (const change of [{ expires_in: -1 }, { expires_in: 900000 }, { expires_in: '3600' }, { access_token: '' }, { access_token: 'a\r\nb' }, { token_type: 'unknown' }]) assert.throws(() => gmail.credentials({ access_token: 'a', refresh_token: 'r', scope: READONLY_SCOPE, expires_in: 3600, ...change }, 'readonly'), { code: 'service_response' });
 });

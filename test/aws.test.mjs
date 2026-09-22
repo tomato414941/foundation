@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { signedRequest } from '../src/providers/aws.mjs';
+import { signedRequest } from '../src/services/aws.mjs';
 import { awsFixture, AWS_SECRET, AWS_FIELDS, AWS_KEY_ID } from './aws-helper.mjs';
 import { json, USER_A } from './helpers.mjs';
 
@@ -28,8 +28,8 @@ test('Signature Version 4 matches the AWS documentation example', () => {
 
 test('AWS import verifies the key with GetCallerIdentity, proves the role once, and stores only the long-lived key encrypted', async t => {
   const f = await awsFixture(t), account = await f.awsAccount();
-  const state = await f.request('/api/state'), provider = state.json.providers.find(item => item.id === 'aws');
-  assert.equal(provider.token_setup.fields, undefined, 'one pasted value, no separate fields');
+  const state = await f.request('/api/state'), adapter = state.json.adapters.find(item => item.id === 'aws.iam-user-key');
+  assert.deepEqual(adapter.form.schema.map(field => field.id), ['code'], 'one pasted value');
   assert.equal(account.label, '123456789012 / foundation-agent');
   assert.deepEqual(account.aws, { account_id: '123456789012', role_arn: AWS_FIELDS.role_arn, region: 'ap-northeast-1', user_arn: 'arn:aws:iam::123456789012:user/foundation' });
   assert.deepEqual(f.aws.calls.map(call => call.params.Action), ['GetCallerIdentity', 'AssumeRole']);
@@ -109,7 +109,7 @@ test('The CLI passes --duration through and the child sees only temporary AWS cr
 });
 
 test('Foundation hands out the CloudFormation stack that creates the user, role and key; a one-tap link appears only with an S3 template URL', async t => {
-  const { cloudFormationTemplate, quickCreateUrl, AWS_TEMPLATE_PATH } = await import('../src/providers/aws.mjs');
+  const { cloudFormationTemplate, quickCreateUrl, AWS_TEMPLATE_PATH } = await import('../src/services/aws.mjs');
   const template = cloudFormationTemplate();
   for (const needle of ['AWS::IAM::User', 'AWS::IAM::Role', 'AWS::IAM::AccessKey', 'sts:AssumeRole', '!GetAtt FoundationUser.Arn', 'CopyToFoundation:', "!Join ['|'", 'MaxSessionDuration: 3600', 'AllowedValues:']) assert.ok(template.includes(needle), needle);
   assert.equal((template.match(/^  \w+:\n    Description/gm) || []).length, 1, 'exactly one output to copy');
@@ -117,14 +117,14 @@ test('Foundation hands out the CloudFormation stack that creates the user, role 
   const f = await awsFixture(t);
   const served = await f.request(AWS_TEMPLATE_PATH, { anonymous: true });
   assert.equal(served.status, 200); assert.equal(served.text, template); assert.match(served.headers.get('content-disposition'), /foundation-agent\.yaml/);
-  const plain = (await f.request('/api/state')).json.providers.find(item => item.id === 'aws').token_setup;
+  const plain = (await f.request('/api/state')).json.adapters.find(item => item.id === 'aws.iam-user-key').form;
   assert.deepEqual(plain.links.map(link => link.label), ['定義ファイルをダウンロード', 'CloudFormation を開く']); assert.equal(plain.links[0].href, AWS_TEMPLATE_PATH);
   const url = quickCreateUrl('https://foundation-templates.s3.ap-northeast-1.amazonaws.com/foundation-agent.yaml', 'ap-northeast-1');
   assert.match(url, /^https:\/\/ap-northeast-1\.console\.aws\.amazon\.com\/cloudformation\/home\?region=ap-northeast-1#\/stacks\/quickcreate\?templateURL=https%3A%2F%2Ffoundation-templates/);
   assert.equal(quickCreateUrl('', 'ap-northeast-1'), null);
   assert.throws(() => quickCreateUrl('https://evil.example/x.yaml', 'ap-northeast-1'), /S3/);
-  const { awsConnection } = await import('../src/providers/catalog.mjs');
+  const { awsIamUserKey } = await import('../src/adapters.mjs');
   const { FakeAws } = await import('./aws-helper.mjs');
-  const oneTap = awsConnection(new FakeAws(), { templateUrl: 'https://foundation-templates.s3.ap-northeast-1.amazonaws.com/foundation-agent.yaml', region: 'ap-northeast-1' }).tokenSetup;
+  const oneTap = awsIamUserKey(new FakeAws(), { templateUrl: 'https://foundation-templates.s3.ap-northeast-1.amazonaws.com/foundation-agent.yaml', region: 'ap-northeast-1' });
   assert.deepEqual(oneTap.links.map(link => link.label), ['AWS で作成する']); assert.match(oneTap.links[0].href, /quickcreate/);
 });

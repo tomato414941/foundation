@@ -69,7 +69,7 @@ export function quickCreateUrl(templateUrl, region) {
 }
 const STS_VERSION = '2011-06-15';
 const digest = value => createHash('sha256').update(value).digest('hex');
-const invalidResponse = () => fail(502, 'provider_response', 'AWSからの応答を確認できませんでした。');
+const invalidResponse = () => fail(502, 'service_response', 'AWSからの応答を確認できませんでした。');
 
 // STS query API over the generic signer.
 export function signedRequest({ accessKeyId, secretAccessKey, region, params, now = new Date() }) {
@@ -80,7 +80,7 @@ export function signedRequest({ accessKeyId, secretAccessKey, region, params, no
 // Foundation keeps the long-lived IAM user key and hands runtimes only temporary
 // credentials for one role. How long they last is between the runtime and AWS:
 // a requested duration is passed through untouched, none means AWS's default.
-export class AwsProvider {
+export class AwsClient {
   constructor({ fetcher = fetch } = {}) { this.enabled = true; this.fetcher = fetcher; }
   check() { if (!this.enabled) fail(503, 'aws_unavailable', '現在AWSに接続できません。'); }
   fields(input = {}) {
@@ -95,7 +95,7 @@ export class AwsProvider {
     const request = signedRequest({ accessKeyId: key.access_key_id, secretAccessKey: key.secret, region: key.region, params: { Action: action, Version: STS_VERSION, ...params } });
     let response;
     try { response = await this.fetcher(request.url, { method: request.method, headers: request.headers, body: request.body, redirect: 'error', signal: AbortSignal.timeout(12_000) }); }
-    catch { fail(502, 'provider_unavailable', 'AWSに接続できませんでした。時間をおいて再度お試しください。'); }
+    catch { fail(502, 'service_unavailable', 'AWSに接続できませんでした。時間をおいて再度お試しください。'); }
     let data;
     try { data = await response.json(); } catch { data = null; }
     if (response.status === 403) {
@@ -108,8 +108,8 @@ export class AwsProvider {
       const error = new HttpError(409, 'aws_' + String(data.Error.Code).replace(/[^A-Za-z]/g, '').toLowerCase(), 'AWSが要求を拒否しました: ' + String(data.Error.Code).slice(0, 64));
       throw error;
     }
-    if (response.status === 429 || data?.Error?.Code === 'Throttling') fail(503, 'provider_rate_limit', 'AWSへの要求が続いています。時間をおいて再度お試しください。');
-    if (!response.ok) fail(502, 'provider_unavailable', 'AWSで処理を完了できませんでした。');
+    if (response.status === 429 || data?.Error?.Code === 'Throttling') fail(503, 'service_rate_limit', 'AWSへの要求が続いています。時間をおいて再度お試しください。');
+    if (!response.ok) fail(502, 'service_unavailable', 'AWSで処理を完了できませんでした。');
     if (!data || typeof data !== 'object') invalidResponse();
     return data;
   }
@@ -142,11 +142,12 @@ export class AwsProvider {
     if (!result || !/^ASIA[A-Z0-9]{16}$/.test(result.AccessKeyId || '') || typeof result.SecretAccessKey !== 'string' || typeof result.SessionToken !== 'string' || !Number.isFinite(expiresAt) || /[\r\n\x00]/.test(result.SecretAccessKey + result.SessionToken)) invalidResponse();
     return { access_key_id: result.AccessKeyId, secret_access_key: result.SecretAccessKey, session_token: result.SessionToken, expires_at: expiresAt };
   }
-  async importToken({ token, mode }) {
+  async importToken({ values, permission }) {
+    const token = values.code;
     this.check();
-    if (mode !== 'assume-role') fail(400, 'invalid_scope', '利用する権限を選び直してください。');
+    if (permission !== 'assume-role') fail(400, 'invalid_permission', '利用する権限を選び直してください。');
     const credentials = await this.inspect(token);
-    return { email: credentials.details.account_id + ':' + credentials.details.role_arn.split('/').pop() + ':' + credentials.details.key_hash.slice(0, 12), credentials };
+    return { subject: credentials.details.account_id + ':' + credentials.details.role_arn.split('/').pop() + ':' + credentials.details.key_hash.slice(0, 12), credentials };
   }
   // Issuance never returns the stored key: each call assumes the role afresh.
   async token(store, account, force = false, options = {}) {

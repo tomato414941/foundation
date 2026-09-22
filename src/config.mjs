@@ -17,12 +17,7 @@ export function configuration(env = process.env) {
   let encodedKey = env.FOUNDATION_ENCRYPTION_KEY;
   if (!encodedKey) {
     if (!existsSync(keyPath) && !kms.keyId) {
-      if (existsSync(database)) {
-        const db = new DatabaseSync(database, { readOnly: true });
-        const version = db.prepare('PRAGMA user_version').get().user_version;
-        db.close();
-        if (version >= 2) throw new Error('Existing encrypted database requires its original encryption key');
-      }
+      if (existsSync(database)) throw new Error('Existing encrypted database requires its original encryption key');
       writeFileSync(keyPath, randomBytes(32).toString('base64') + '\n', { flag: 'wx', mode: 0o600 });
     }
     if (existsSync(keyPath)) { chmodSync(keyPath, 0o600); encodedKey = readFileSync(keyPath, 'utf8').trim(); }

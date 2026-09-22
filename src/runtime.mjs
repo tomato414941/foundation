@@ -57,46 +57,53 @@ async function main() {
     }
   }
   if (action === '--help' || action === 'help' || action === 'guide' || !action) {
-    let providers;
+    let adapters;
     if (process.env.FOUNDATION_URL) {
       try {
-        const response = await fetch(new URL('/v1/providers', process.env.FOUNDATION_URL), { redirect: 'error', signal: AbortSignal.timeout(5_000) });
+        const response = await fetch(new URL('/v1/adapters', process.env.FOUNDATION_URL), { redirect: 'error', signal: AbortSignal.timeout(5_000) });
         const catalog = await response.json();
-        if (response.ok && Array.isArray(catalog.providers)) providers = catalog.providers;
+        if (response.ok && Array.isArray(catalog.adapters)) adapters = catalog.adapters;
       } catch {}
     }
-    console.log(guide(providers));
+    console.log(guide(adapters));
     return;
   }
   let options;
   if (action === 'connect') {
-    const { service, site, env, ...values } = parseArgs({ args, options: { provider: { type: 'string' }, name: { type: 'string', default: hostname() + ' の ' + (agentName || 'AI') }, purpose: { type: 'string', default: '' }, guide: { type: 'string', default: '' }, valid: { type: 'string', default: '' }, mode: { type: 'string' }, service: { type: 'string' }, site: { type: 'string' }, env: { type: 'string' } }, strict: true, allowPositionals: false }).values;
+    const { service, site, field = [], 'multiline-field': multiline = [], ...values } = parseArgs({ args, options: { adapter: { type: 'string' }, permission: { type: 'string' }, name: { type: 'string', default: hostname() + ' の ' + (agentName || 'AI') }, purpose: { type: 'string', default: '' }, guide: { type: 'string', default: '' }, valid: { type: 'string', default: '' }, service: { type: 'string' }, site: { type: 'string' }, field: { type: 'string', multiple: true }, 'multiline-field': { type: 'string', multiple: true } }, strict: true, allowPositionals: false }).values;
     options = values;
     if (options.guide) { options.guidance = options.guide; } delete options.guide;
     if (options.valid) { if (!/^\d{1,4}$/.test(options.valid)) throw new Error('--valid takes the number of minutes the link stays open (1-1440).'); options.valid_minutes = Number(options.valid); } delete options.valid;
-    if (service !== undefined || site !== undefined || env !== undefined) {
-      if (!service || !site || !validRequestedEnvName(env)) throw new Error('--service, --site (https) and --env (UPPER_CASE, not reserved) are all required for a key request.');
-      options.provider ||= 'apikey'; options.details = { service, site, env };
+    // The generic adapter: the runtime declares the service, where the key is made, and each value it wants as NAME[=label].
+    if (service !== undefined || site !== undefined || field.length || multiline.length) {
+      const declare = kind => text => { const at = text.indexOf('='), id = at < 0 ? text : text.slice(0, at); if (!validRequestedEnvName(id)) throw new Error('--field names are environment variables: UPPER_CASE and not reserved (' + id + ').'); return { id, label: at < 0 ? id : text.slice(at + 1), kind }; };
+      if (!service || !site || !(field.length + multiline.length)) throw new Error('--service, --site (https) and at least one --field are required for a generic request.');
+      if (options.adapter && options.adapter !== 'generic') throw new Error('--service, --site and --field belong to the generic adapter.');
+      options.adapter = 'generic'; options.details = { service, site, fields: [...field.map(declare('line')), ...multiline.map(declare('multiline'))] };
     }
   }
   else if (action === 'rename') {
     if (args.length !== 1 || !args[0].trim() || args[0].length > 80) throw new Error('Usage: rename <new name> (1-80 characters).');
     options = { name: args[0].trim() };
   }
-  else if (!(['providers', 'accounts', 'cancel', 'whoami', 'leave', 'request'].includes(action) && !args.length) && !(action === 'exec' && accountIds.length && accountIds.every(id => /^[a-f0-9-]{36}$/.test(id)) && new Set(accountIds).size === accountIds.length && command.length)) throw new Error('Invalid command. Use --help.');
+  else if (!(['adapters', 'accounts', 'cancel', 'whoami', 'leave', 'request'].includes(action) && !args.length) && !(action === 'exec' && accountIds.length && accountIds.every(id => /^[a-f0-9-]{36}$/.test(id)) && new Set(accountIds).size === accountIds.length && command.length)) throw new Error('Invalid command. Use --help.');
   const url = new URL(process.env.FOUNDATION_URL || '');
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('FOUNDATION_URL must be an HTTPS origin (HTTP is allowed only on localhost).');
-  if (action === 'connect' && (!options.provider || !options.mode)) {
-    const response = await fetch(url.origin + '/v1/providers', { redirect: 'error', signal: AbortSignal.timeout(30_000) });
-    const catalog = await response.json();
-    if (!response.ok || !Array.isArray(catalog.providers)) throw new Error('Unable to discover Foundation providers.');
-    const provider = options.provider ? catalog.providers.find(item => item.id === options.provider) : catalog.providers.find(item => item.available);
-    if (!provider?.available) throw new Error('This provider is not available. Run providers to check available connections.');
-    options.provider = provider.id; options.mode ||= provider.permissions[0]?.id;
+  if (action === 'connect') {
+    if (!options.adapter) throw new Error('Choose how to connect with --adapter <id>. Run adapters to see them.');
+    if (!options.permission) {
+      const response = await fetch(url.origin + '/v1/adapters', { redirect: 'error', signal: AbortSignal.timeout(30_000) });
+      const catalog = await response.json();
+      if (!response.ok || !Array.isArray(catalog.adapters)) throw new Error('Unable to discover Foundation adapters.');
+      const adapter = catalog.adapters.find(item => item.id === options.adapter);
+      if (!adapter?.available) throw new Error('This adapter is not available. Run adapters to see the ones that are.');
+      if (adapter.permissions.length !== 1) throw new Error('This adapter has several permissions; choose one with --permission (' + adapter.permissions.map(permission => permission.id).join(' | ') + ').');
+      options.permission = adapter.permissions[0].id;
+    }
   }
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
-  const token = action === 'providers' ? null : await runtimeKey(keyPath, action === 'connect', !process.env.FOUNDATION_RUNTIME_KEY_FILE);
-  const path = action === 'providers' ? '/v1/providers' : action === 'accounts' ? '/v1/accounts' : action === 'exec' ? '/v1/accounts/' + accountIds[0] + '/credentials' : ['whoami', 'leave', 'rename'].includes(action) ? '/v1/me' : action === 'cancel' || action === 'request' ? '/v1/access-requests/current' : '/v1/access-requests';
+  const token = action === 'adapters' ? null : await runtimeKey(keyPath, action === 'connect', !process.env.FOUNDATION_RUNTIME_KEY_FILE);
+  const path = action === 'adapters' ? '/v1/adapters' : action === 'accounts' ? '/v1/accounts' : action === 'exec' ? '/v1/accounts/' + accountIds[0] + '/credentials' : ['whoami', 'leave', 'rename'].includes(action) ? '/v1/me' : action === 'cancel' || action === 'request' ? '/v1/access-requests/current' : '/v1/access-requests';
   const method = action === 'connect' || action === 'exec' ? 'POST' : action === 'rename' ? 'PATCH' : action === 'cancel' || action === 'leave' ? 'DELETE' : 'GET';
   async function request(timeout = 30_000, target = path) {
     const response = await fetch(url.origin + target, { method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), 'content-type': 'application/json' }, ...(method !== 'GET' ? { body: JSON.stringify(action === 'connect' || action === 'rename' ? options : action === 'exec' ? issuance : {}) } : {}), redirect: 'error', signal: AbortSignal.timeout(timeout) });
@@ -110,7 +117,7 @@ async function main() {
   const issued = [data];
   for (const id of accountIds.slice(1)) issued.push(await request(30_000, '/v1/accounts/' + id + '/credentials'));
   const environment = { ...process.env };
-  for (const name of ['GOOGLE_OAUTH_ACCESS_TOKEN', 'GMAIL_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT', 'OPENROUTER_API_KEY', 'EXPO_TOKEN', 'FOUNDATION_RUNTIME_KEY_FILE']) delete environment[name];
+  delete environment.FOUNDATION_RUNTIME_KEY_FILE;
   const owned = new Map(), files = [];
   const assign = (name, value, account) => {
     if (!validEnvName(name)) throw new Error('Foundation named a reserved environment variable (' + name + ') for ' + account + '.');
@@ -119,17 +126,15 @@ async function main() {
   };
   let expoSession = false;
   for (const credential of issued) {
-    const session = credential.account?.provider === 'expo' && credential.credential_type === 'expo_session';
+    const session = credential.credential_type === 'expo_session';
     const secretFile = credential.credential_type === 'private_key';
     const expiryValid = (['api_key', 'private_key'].includes(credential.credential_type) || session) && credential.expires_at === null || Number.isFinite(credential.expires_at) && credential.expires_at > Date.now();
-    if (typeof credential.access_token !== 'string' || !credential.access_token || /\x00/.test(credential.access_token) || (!secretFile && /[\r\n]/.test(credential.access_token)) || !credential.account?.email || !expiryValid) throw new Error('Foundation returned an invalid credential.');
+    if (typeof credential.access_token !== 'string' || !credential.access_token || /\x00/.test(credential.access_token) || (!secretFile && /[\r\n]/.test(credential.access_token)) || !credential.account?.subject || !expiryValid) throw new Error('Foundation returned an invalid credential.');
     if (session) { if (issued.length > 1) throw new Error('An Expo login session cannot be combined with other connections.'); expoSession = true; }
-    const label = credential.account.provider + ':' + credential.account.id;
-    if (credential === data) Object.assign(environment, { FOUNDATION_ACCESS_TOKEN: secretFile ? '' : credential.access_token, FOUNDATION_CREDENTIAL_TYPE: credential.credential_type || 'oauth2_access_token', FOUNDATION_ACCOUNT_ID: credential.account.id, FOUNDATION_ACCOUNT_LABEL: credential.account.label || credential.account.email, FOUNDATION_PROVIDER: credential.account.provider, FOUNDATION_TOKEN_EXPIRES_AT: credential.expires_at === null ? '' : String(credential.expires_at), FOUNDATION_API_BASE_URL: credential.api_base_url, FOUNDATION_AUTH_HEADER: session ? 'expo-session' : 'authorization' });
-    if (credential.account.provider === 'gmail') { assign('GOOGLE_OAUTH_ACCESS_TOKEN', credential.access_token, label); assign('GMAIL_ACCOUNT_EMAIL', credential.account.email, label); assign('GOOGLE_OAUTH_EXPIRES_AT', String(credential.expires_at), label); }
-    if (credential.account.provider === 'openrouter') assign('OPENROUTER_API_KEY', credential.access_token, label);
-    if (credential.account.provider === 'expo' && !session) assign('EXPO_TOKEN', credential.access_token, label);
-    if (credential.token_env != null && credential.account.provider !== 'gmail' && credential.account.provider !== 'openrouter' && credential.account.provider !== 'expo') assign(credential.token_env, credential.access_token, label);
+    const label = credential.account.adapter + ':' + credential.account.id;
+    if (credential === data) Object.assign(environment, { FOUNDATION_ACCESS_TOKEN: secretFile ? '' : credential.access_token, FOUNDATION_CREDENTIAL_TYPE: credential.credential_type || 'oauth2_access_token', FOUNDATION_ACCOUNT_ID: credential.account.id, FOUNDATION_ACCOUNT_LABEL: credential.account.label || credential.account.subject, FOUNDATION_ADAPTER: credential.account.adapter, FOUNDATION_TOKEN_EXPIRES_AT: credential.expires_at === null ? '' : String(credential.expires_at), FOUNDATION_API_BASE_URL: credential.api_base_url, FOUNDATION_AUTH_HEADER: session ? 'expo-session' : 'authorization' });
+    // How each credential reaches the command is the server's to say; the runtime only applies it.
+    if (credential.token_env != null) assign(credential.token_env, credential.access_token, label);
     if (credential.token_file) {
       const file = credential.token_file;
       if (typeof file.env !== 'string' || typeof file.filename !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(file.filename) || file.filename.startsWith('.')) throw new Error('Foundation described an invalid credential file for ' + label + '.');

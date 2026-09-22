@@ -6,16 +6,16 @@ export const OPENROUTER_DOCS = 'https://openrouter.ai/docs/api/api-reference/ove
 export const OPENROUTER_SCOPE = 'openrouter:api-key';
 const hash = key => createHash('sha256').update(key).digest('hex');
 const validKey = key => typeof key === 'string' && /^sk-or-v1-[A-Za-z0-9_-]{20,512}$/.test(key);
-const invalidResponse = () => fail(502, 'provider_response', 'OpenRouterからの応答を確認できませんでした。');
+const invalidResponse = () => fail(502, 'service_response', 'OpenRouterからの応答を確認できませんでした。');
 
 // PKCE returns a user-controlled API key, not a refreshable short-lived token.
 // No completion, credit purchase, or management-key operation belongs here.
-export class OpenRouterProvider {
+export class OpenRouterClient {
   constructor({ fetcher = fetch } = {}) { this.enabled = true; this.fetcher = fetcher; }
   check() { if (!this.enabled) fail(503, 'openrouter_unavailable', '現在OpenRouterに接続できません。'); }
-  authorize({ state, verifier, redirectUri, mode }) {
+  authorize({ state, verifier, redirectUri, permission }) {
     this.check();
-    if (mode !== 'api-key') fail(400, 'invalid_scope', '利用する権限を選び直してください。');
+    if (permission !== 'api-key') fail(400, 'invalid_permission', '利用する権限を選び直してください。');
     // OpenRouter preserves the callback URL, but does not document a separate
     // OAuth state parameter. Bind our state to that URL and the user's session.
     const callback = new URL(redirectUri);
@@ -27,11 +27,11 @@ export class OpenRouterProvider {
   async request(path, options = {}) {
     let response;
     try { response = await this.fetcher(OPENROUTER_API + path, { ...options, redirect: 'error', signal: AbortSignal.timeout(12_000) }); }
-    catch { fail(502, 'provider_unavailable', 'OpenRouterに接続できませんでした。時間をおいて再度お試しください。'); }
+    catch { fail(502, 'service_unavailable', 'OpenRouterに接続できませんでした。時間をおいて再度お試しください。'); }
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) fail(409, 'reconnect_required', 'OpenRouterのキーを確認するか、新しく接続してください。');
-      if (response.status === 429) fail(503, 'provider_rate_limit', 'OpenRouterの利用上限に達しました。時間をおいて再度お試しください。');
-      fail(502, 'provider_unavailable', 'OpenRouterで処理を完了できませんでした。');
+      if (response.status === 429) fail(503, 'service_rate_limit', 'OpenRouterの利用上限に達しました。時間をおいて再度お試しください。');
+      fail(502, 'service_unavailable', 'OpenRouterで処理を完了できませんでした。');
     }
     let data;
     try { data = await response.json(); } catch { invalidResponse(); }
@@ -56,20 +56,20 @@ export class OpenRouterProvider {
     return { access_token: key, credential_type: 'api_key', expires_at: expiresAt, expiry_known: Object.hasOwn(data, 'expires_at'), scopes: [OPENROUTER_SCOPE],
       details: { key_hash: hash(key), limit: data.limit, limit_remaining: data.limit_remaining, limit_reset: data.limit_reset, include_byok_in_limit: data.include_byok_in_limit, checked_at: Date.now() } };
   }
-  async exchange({ code, verifier, mode }, previous) {
+  async exchange({ code, verifier, permission }, previous) {
     this.check();
-    if (mode !== 'api-key' || previous) fail(400, 'new_connection_required', '新しいOpenRouter接続を追加してください。');
+    if (permission !== 'api-key' || previous) fail(400, 'new_connection_required', '新しいOpenRouter接続を追加してください。');
     const result = await this.request('/auth/keys', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, code_verifier: verifier, code_challenge_method: 'S256' }) });
     const credentials = await this.inspect(result.key);
     // A connection identifies the authorized key, not an assumed email address.
-    return { email: 'key:' + credentials.details.key_hash, credentials };
+    return { subject: 'key:' + credentials.details.key_hash, credentials };
   }
   async token(store, account) {
     this.check();
     if (account.status !== 'connected') fail(409, 'reconnect_required', 'OpenRouterのキーを確認するか、新しく接続してください。');
     try {
       const next = await this.inspect(store.secrets(account).access_token);
-      if (account.email !== 'key:' + next.details.key_hash) invalidResponse();
+      if (account.subject !== 'key:' + next.details.key_hash) invalidResponse();
       store.saveCredentials(account, next);
       return next;
     } catch (error) {

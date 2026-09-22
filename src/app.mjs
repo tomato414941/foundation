@@ -4,11 +4,12 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { Store } from './store.mjs';
 import { fail, HttpError, nameValue } from './errors.mjs';
-import { ProviderCatalog, gmailConnection } from './providers/catalog.mjs';
+import { Adapters, SERVICES } from './adapters.mjs';
+import { acceptValues } from './schema.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { AccessRequests } from './access-requests.mjs';
 import { verificationResult } from './verification.mjs';
-import { AWS_TEMPLATE_PATH, cloudFormationTemplate } from './providers/aws.mjs';
+import { AWS_TEMPLATE_PATH, cloudFormationTemplate } from './services/aws.mjs';
 
 const PUBLIC = new URL('../web/', import.meta.url);
 const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
@@ -47,8 +48,8 @@ function purposeValue(value = '') {
   return value.trim();
 }
 
-export function createApp({ database = ':memory:', encryptionKey, auth, gmail, integrations, publicOrigin, loginClock, trustedProxies = [] }) {
-  if (!auth || !gmail) throw new Error('Authentication and Gmail providers are required');
+export function createApp({ database = ':memory:', encryptionKey, auth, adapters: adapterList, publicOrigin, loginClock, trustedProxies = [] }) {
+  if (!auth || !Array.isArray(adapterList)) throw new Error('Authentication and adapters are required');
   let external;
   if (publicOrigin) {
     external = new URL(publicOrigin);
@@ -64,8 +65,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
     const forwarded = String(req.headers['x-forwarded-for'] || '').split(',').map(part => part.trim()).filter(Boolean);
     return forwarded.at(-1) || socket;
   };
-  const providers = new ProviderCatalog(integrations || [gmailConnection(gmail)]);
-  const requests = new AccessRequests(store, providers);
+  const adapters = new Adapters(adapterList);
+  const requests = new AccessRequests(store, adapters);
   const logins = new EmailLogins({ now: loginClock });
   const refreshing = new Map(), limits = new Map(), disconnects = new Set();
   const timer = setInterval(() => {
@@ -128,7 +129,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
     const current = accountFor(account.owner_id, account.id);
     if (current.status !== 'connected' || current.generation !== account.generation) fail(409, 'connection_changed', '接続状態が変わりました。');
   }
-  // Runs a provider exchange, records what was verified on the stored credentials (for the owner's screens only),
+  // Runs a service exchange, records what was verified on the stored credentials (for the owner's screens only),
   // and commits atomically. Foundation never reports these outcomes to the runtime; it learns only whether it can use a connection.
   async function verifyConnection(req, session, user, operation, commit) {
     const stillCurrent = () => { if (req.aborted || req.socket.destroyed || localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。'); };
@@ -138,17 +139,20 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
     if (result.credentials) result.credentials.verification = report;
     return store.transaction(() => commit(result, report));
   }
+  // What the owner sees of a stored credential: the row, what its adapter can say about it, the verification, and which permission it satisfies.
   function publicAccount(account, ownerId) {
-    const provider = providers.get(account.provider);
+    const adapter = adapters.get(account.adapter);
     const credentials = store.secrets(store.account(ownerId, account.id));
-    const info = provider.client.accountInfo?.(credentials) || {};
-    return { ...account, ...info, ...(credentials.verification ? { verification: credentials.verification } : {}), permission: provider.permissions.find(permission => provider.matches(permission.id, account)) };
+    const info = adapter.client.accountInfo?.(credentials) || {};
+    return { ...account, service: adapter.service, ...info, ...(credentials.verification ? { verification: credentials.verification } : {}), permission: adapters.permissionOf(account) };
   }
+  // What a runtime sees: the same, plus how it will receive the credential. Never the secret.
   function resource(account, ownerId) {
-    const provider = providers.get(account.provider);
-    const info = publicAccount(account, ownerId);
-    if (info.credential_type === 'expo_session') return { ...info, api: provider.api, authentication: { method: 'POST', credential_endpoint: '/v1/accounts/' + account.id + '/credentials', type: 'expo_session', header: 'expo-session', revocation: 'Stopping a runtime only stops future delivery. Disconnect this connection with provider revocation to invalidate its Expo session. No artificial expiry is applied.' } };
-    return { ...info, api: provider.api, token_env: providers.tokenEnv(provider.id, store.secrets(store.account(ownerId, account.id))), authentication: { method: 'POST', credential_endpoint: '/v1/accounts/' + account.id + '/credentials', type: provider.credentialType === 'api_key' ? 'api_key_bearer' : 'oauth2_bearer', revocation: provider.canRevoke === false ? `Stops future credential delivery only. Already delivered API keys remain usable until their provider expiry or deletion on ${provider.name}. No artificial short expiry is applied.` : 'Stops future credential issuance; already issued tokens may remain valid until expiry or provider revocation.' } };
+    const adapter = adapters.get(account.adapter);
+    const info = publicAccount(account, ownerId), api = adapter.service ? SERVICES[adapter.service].api : { base_url: '', documentation_url: '' };
+    const endpoint = '/v1/accounts/' + account.id + '/credentials';
+    if (adapter.credentialType === 'expo_session') return { ...info, api, authentication: { method: 'POST', credential_endpoint: endpoint, type: 'expo_session', header: 'expo-session', revocation: 'Stopping a runtime only stops future delivery. Remove this credential with service revocation to invalidate its Expo session. No artificial expiry is applied.' } };
+    return { ...info, api, token_env: adapters.deliver(account.adapter, store.secrets(store.account(ownerId, account.id)), account).token_env, authentication: { method: 'POST', credential_endpoint: endpoint, type: adapter.credentialType === 'api_key' ? 'api_key_bearer' : 'oauth2_bearer', revocation: adapter.canRevoke === false ? 'Stops future credential delivery only. Already delivered keys remain usable until the service expires or deletes them. No artificial short expiry is applied.' : 'Stops future credential issuance; already issued tokens may remain valid until expiry or service revocation.' } };
   }
   const server = createServer(async (req, res) => {
     const send = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
@@ -203,17 +207,17 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           return redirect(destination + '?login=' + code);
         } finally { if (pending) logins.release(loginToken, pending); }
       }
-      const providerCallback = path.match(/^\/oauth\/([a-z][a-z0-9-]{0,39})\/callback$/);
-      if (providerCallback && method === 'GET') {
+      const oauthCallback = path.match(/^\/oauth\/([a-z][a-z0-9.-]{0,63})\/callback$/);
+      if (oauthCallback && method === 'GET') {
         let destination = '/';
-        const connectionLocation = code => destination + '?connection=' + code + (destination === '/' && providerCallback[1] !== 'gmail' ? '&provider=' + encodeURIComponent(providerCallback[1]) : '');
+        const connectionLocation = code => destination + '?connection=' + code + (destination === '/' ? '&adapter=' + encodeURIComponent(oauthCallback[1]) : '');
         try {
           const { user, session } = await principal(req);
           if (url.searchParams.getAll('state').length !== 1 || url.searchParams.getAll('code').length > 1) fail(400, 'invalid_state', '接続をやり直してください。');
           const flow = store.takeFlow(session.id, url.searchParams.get('state'));
           if (!flow) fail(400, 'invalid_state', '接続をやり直してください。');
-          if ((flow.provider || 'gmail') !== providerCallback[1]) fail(400, 'invalid_state', '接続をやり直してください。');
-          const provider = providers.get(flow.provider || 'gmail');
+          if (flow.adapter !== oauthCallback[1]) fail(400, 'invalid_state', '接続をやり直してください。');
+          const adapter = adapters.get(flow.adapter);
           if (flow.accessRequestId) {
             destination = '/connect/' + flow.accessRequestId;
             requests.forUser(flow.accessRequestId, user.id, true);
@@ -231,12 +235,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           }
           if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true);
           await verifyConnection(req, session, user,
-            () => provider.client.exchange({ ...flow, code }, previous ? { email: previous.email, credentials: store.secrets(previous) } : undefined),
-            result => { if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true); const id = store.connect(user.id, { provider: provider.id, name: flow.name, purpose: flow.purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials, previous); if (flow.accessRequestId) requests.registered(flow.accessRequestId, user.id, id); return id; });
-          if (flow.accessRequestId) requests.record(flow.accessRequestId, 'connected', { provider: provider.id });
+            () => adapter.client.exchange({ ...flow, code }, previous ? { subject: previous.subject, credentials: store.secrets(previous) } : undefined),
+            result => { if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true); const id = store.connect(user.id, { adapter: adapter.id, name: flow.name, purpose: flow.purpose, subject: result.subject, scopes: result.credentials.scopes }, result.credentials, previous); if (flow.accessRequestId) requests.registered(flow.accessRequestId, user.id, id); return id; });
+          if (flow.accessRequestId) requests.record(flow.accessRequestId, 'connected', { adapter: adapter.id });
           return redirect(connectionLocation('connected'));
         } catch (error) {
-          if (progressRequestId && error instanceof HttpError) requests.record(progressRequestId, 'connect_failed', { provider: providerCallback[1], code: error.code, message: error.message });
+          if (progressRequestId && error instanceof HttpError) requests.record(progressRequestId, 'connect_failed', { adapter: oauthCallback[1], code: error.code, message: error.message });
           const codes = { authorization_denied: 'denied', invalid_state: 'expired', login_required: 'expired', account_changed: 'wrong_account', already_connected: 'already_connected', scope_mismatch: 'scope', refresh_missing: 'retry', connection_changed: 'changed' };
           return redirect(connectionLocation(codes[error.code] || 'failed'));
         }
@@ -275,15 +279,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
         store.removeSession(cookieToken(req));
         setCookie('', 0);
         setNamedCookie('fdn_login', '', 0);
-        let providerLogout = true;
-        if (session) { try { await auth.logout(session.value.access_token); } catch { providerLogout = false; } }
-        return send(200, { ok: true, providerLogout });
+        let authLogout = true;
+        if (session) { try { await auth.logout(session.value.access_token); } catch { authLogout = false; } }
+        return send(200, { ok: true, authLogout });
       }
       // Pairing bootstraps a runtime without a previously issued Foundation key.
       // Possessing the approval URL alone never gives access to this endpoint.
       // A runtime learns whether it may use a connection from /v1/accounts. When its owner asks for help,
       // it may read its own current request raw (what was requested, and what happened at the approval URL).
-      if (path === '/v1/providers' && method === 'GET') return send(200, { providers: [...providers.providers.keys()].map(id => providers.describe(id)) });
+      if (path === '/v1/adapters' && method === 'GET') return send(200, { adapters: adapters.ids().map(id => adapters.describe(id)) });
       if (path === '/v1/access-requests' || path === '/v1/access-requests/current') {
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
         const token = req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
@@ -292,9 +296,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
         if (path === '/v1/access-requests' && method === 'POST') {
           const input = await body(req);
           const name = nameValue(input.name, '依頼元'), purpose = purposeValue(input.purpose);
-          providers.permission(input.provider, input.mode);
+          adapters.permission(input.adapter, input.permission);
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
-          return send(201, { request: requests.summary(requests.create(token, { name, purpose, provider: input.provider, mode: input.mode, details: input.details, guidance: input.guidance ?? '', validMinutes: input.valid_minutes ?? 30 }), origin) });
+          return send(201, { request: requests.summary(requests.create(token, { name, purpose, adapter: input.adapter, permission: input.permission, details: input.details, guidance: input.guidance ?? '', validMinutes: input.valid_minutes ?? 30 }), origin) });
         }
         if (path.endsWith('/current') && method === 'GET') return send(200, { request: { ...requests.runtimeView(token), verification_uri: origin + '/connect/' + requests.current(token).id } });
         if (path.endsWith('/current') && method === 'DELETE') {
@@ -307,7 +311,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
       if (path.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(method)) requireOrigin(req, origin);
         const { user, session } = await principal(req);
-        if (path === '/api/state' && method === 'GET') return send(200, { user, accounts: store.accounts(user.id).map(account => publicAccount(account, user.id)), agents: store.agents(user.id), providers: [...providers.providers.keys()].map(id => providers.describe(id)), gmail: { available: gmail.enabled } });
+        if (path === '/api/state' && method === 'GET') return send(200, { user, accounts: store.accounts(user.id).map(account => publicAccount(account, user.id)), agents: store.agents(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
         const requestRoute = path.match(/^\/api\/access-requests\/([A-Za-z0-9_-]{43})(\/(?:approve|deny))?$/);
         if (requestRoute) {
           const row = requests.forUser(requestRoute[1], user.id);
@@ -321,85 +325,75 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
             return send(200, { request: requests.summary(result, origin, { code: false }) });
           }
         }
-        if (path === '/api/connections/expo/login' && method === 'POST') {
-          const provider = providers.get('expo');
-          provider.client.check(); providers.permission('expo', 'session');
-          rateLimit('expo-login:' + user.id, 10, 600_000);
-          const input = await body(req);
-          let result, committed = false;
-          try {
-            const accessRequest = input.accessRequestId === undefined ? null : requests.forUser(input.accessRequestId, user.id, true);
-            progressRequestId = accessRequest?.id || null;
-            if (accessRequest) requests.record(accessRequest.id, 'connect_started', { provider: 'expo', method: 'login' });
-            if (accessRequest && (accessRequest.provider !== 'expo' || accessRequest.mode !== 'session')) fail(400, 'scope_mismatch', '依頼されたサービスと権限で接続してください。');
-            if (accessRequest && !accessRequest.agent_id) requests.verifyCode(accessRequest.id, user.id, input.confirmationCode);
-            const name = nameValue(input.name ?? 'Expo', '表示名'), purpose = purposeValue(input.purpose ?? accessRequest?.purpose ?? '');
-            if (accessRequest) requests.claim(accessRequest.id, user.id);
-            const saved = await verifyConnection(req, session, user, async () => {
-              result = await provider.client.login(input); return result;
-            }, () => {
-              if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
-              if (result.challenge) return { challenge: result.challenge };
-              const id = store.connect(user.id, { provider: 'expo', name, purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials);
-              let done = null;
-              if (accessRequest) { done = requests.registered(accessRequest.id, user.id, id); if (!accessRequest.agent_id) done = requests.approve(accessRequest.id, user.id, input.confirmationCode); }
-              return { connected: true, account_id: id, ...(done ? { request: requests.summary(done, origin, { code: false }) } : {}) };
-            });
-            if (result.challenge) return send(202, saved);
-            committed = true;
-            if (accessRequest) requests.record(accessRequest.id, 'connected', { provider: 'expo' });
-            return send(200, saved);
-          } finally {
-            input.password = ''; input.otp = '';
-            // A cancelled/expired request or failed atomic grant must not leave
-            // a newly created upstream session behind. Never log provider errors.
-            if (result?.credentials && !committed) await provider.client.revoke(result.credentials).catch(() => {});
-          }
-        }
-        const connectRoute = path.match(/^\/api\/connections\/([a-z][a-z0-9-]{0,39})\/connect$/);
-        if ((path === '/api/gmail/connect' || connectRoute) && method === 'POST') {
-          const provider = providers.get(connectRoute?.[1] || 'gmail');
-          provider.client.check();
-          rateLimit('oauth:' + user.id, 10);
+        // Registering a credential through one adapter. How the owner hands it over is the adapter's:
+        // pasted values checked against its schema, a login relayed once, or an OAuth round trip.
+        const connectRoute = path.match(/^\/api\/adapters\/([a-z][a-z0-9.-]{0,63})\/connect$/);
+        if (connectRoute && method === 'POST') {
+          const adapter = adapters.get(connectRoute[1]);
+          adapter.client.check();
+          rateLimit((adapter.register === 'login' ? 'login:' : 'connect:') + user.id, 10, adapter.register === 'login' ? 600_000 : 60_000);
           const input = await body(req);
           const accessRequest = input.accessRequestId === undefined ? null : requests.forUser(input.accessRequestId, user.id, true);
           progressRequestId = accessRequest?.id || null;
-          if (accessRequest) requests.record(accessRequest.id, 'connect_started', { provider: provider.id, method: provider.connectionMethod === 'token' || providers.permission(provider.id, input.mode).connection_method === 'token' ? 'token' : 'oauth' });
-          if (accessRequest && (input.mode !== accessRequest.mode || provider.id !== accessRequest.provider)) fail(400, 'scope_mismatch', '依頼されたサービスと権限で接続してください。');
+          if (accessRequest) requests.record(accessRequest.id, 'connect_started', { adapter: adapter.id });
+          if (accessRequest && (input.permission !== accessRequest.permission || adapter.id !== accessRequest.adapter)) fail(400, 'scope_mismatch', '依頼された接続方法と権限で登録してください。');
+          adapters.permission(adapter.id, input.permission);
           const name = nameValue(input.name, '表示名'), purpose = purposeValue(input.purpose);
-          const permission = providers.permission(provider.id, input.mode);
+          if (adapter.register === 'login') {
+            let result, committed = false;
+            try {
+              if (accessRequest && !accessRequest.agent_id) requests.verifyCode(accessRequest.id, user.id, input.confirmationCode);
+              if (accessRequest) requests.claim(accessRequest.id, user.id);
+              const saved = await verifyConnection(req, session, user, async () => { result = await adapter.client.login(input); return result; }, () => {
+                if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
+                if (result.challenge) return { challenge: result.challenge };
+                const id = store.connect(user.id, { adapter: adapter.id, name, purpose, subject: result.subject, scopes: result.credentials.scopes }, result.credentials);
+                let done = null;
+                if (accessRequest) { done = requests.registered(accessRequest.id, user.id, id); if (!accessRequest.agent_id) done = requests.approve(accessRequest.id, user.id, input.confirmationCode); }
+                return { connected: true, account_id: id, ...(done ? { request: requests.summary(done, origin, { code: false }) } : {}) };
+              });
+              if (result.challenge) return send(202, saved);
+              committed = true;
+              if (accessRequest) requests.record(accessRequest.id, 'connected', { adapter: adapter.id });
+              return send(200, saved);
+            } finally {
+              input.password = ''; input.otp = '';
+              // A session the service created must not outlive a registration that did not complete. Never log service errors.
+              if (result?.credentials && !committed) await adapter.client.revoke(result.credentials).catch(() => {});
+            }
+          }
           const previous = input.accountId ? accountFor(user.id, input.accountId) : undefined;
-          if (previous && previous.provider !== provider.id) fail(400, 'invalid_provider', '接続先のサービスが一致しません。');
-          if (previous && provider.canReconnect === false) fail(400, 'new_connection_required', '新しい接続を追加し、利用許可を設定してください。');
+          if (previous && previous.adapter !== adapter.id) fail(400, 'invalid_adapter', '接続方法が一致しません。');
+          if (previous && adapter.canReconnect === false) fail(400, 'new_connection_required', '新しく登録してください。');
           if (previous?.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
           if (accessRequest && previous && !requests.matches(accessRequest, previous)) fail(400, 'scope_mismatch', 'この依頼では既存の読み取り範囲を変更できません。');
-          if (provider.connectionMethod === 'token' || permission.connection_method === 'token') {
-            // A request fixes the runtime's declared service and variable name; a root import takes them from the user.
-            const details = accessRequest ? requests.details(accessRequest) : providers.details(provider.id, input.details);
+          if (adapter.register === 'paste') {
+            // A request fixes what the runtime declared; a registration from the owner's own screen declares it there.
+            const details = accessRequest ? requests.details(accessRequest) : adapters.details(adapter.id, input.details);
+            const values = acceptValues(adapters.form(adapter.id, details).schema, input.values);
+            input.values = null;
             if (accessRequest) requests.claim(accessRequest.id, user.id);
             const saved = await verifyConnection(req, session, user,
-              () => provider.client.importToken({ token: input.token, mode: input.mode, details, fields: input.fields }),
+              () => adapter.client.importToken({ values, permission: input.permission, details }),
               (result, report) => {
-                // Only the candidate this request registered can be corrected on retry.
+                // Only the candidate this request registered can be corrected while the request is open.
                 const row = accessRequest && requests.forUser(accessRequest.id, user.id, true);
                 const candidate = row?.account_id && store.account(user.id, row.account_id);
-                const retry = candidate?.email === result.email && candidate.provider === provider.id && candidate.status === 'connected' ? candidate : undefined;
-                const accountId = store.connect(user.id, { provider: provider.id, name, purpose, email: result.email, scopes: result.credentials.scopes }, result.credentials, retry);
+                const retry = candidate?.subject === result.subject && candidate.adapter === adapter.id && candidate.status === 'connected' ? candidate : undefined;
+                const accountId = store.connect(user.id, { adapter: adapter.id, name, purpose, subject: result.subject, scopes: result.credentials.scopes }, result.credentials, retry);
                 if (row) requests.registered(row.id, user.id, accountId);
                 return { connected: true, account_id: accountId, verification: report };
               });
-            input.token = '';
-            if (accessRequest) requests.record(accessRequest.id, 'connected', { provider: provider.id });
+            if (accessRequest) requests.record(accessRequest.id, 'connected', { adapter: adapter.id });
             return send(200, saved);
           }
-          if (provider.connectionMethod === 'password') fail(400, 'login_required', 'Expoのログイン画面から接続してください。');
           const verifier = randomBytes(32).toString('base64url');
-          const redirectUri = origin + '/oauth/' + provider.id + '/callback';
+          const redirectUri = origin + '/oauth/' + adapter.id + '/callback';
           if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
           if (accessRequest) requests.claim(accessRequest.id, user.id);
-          const flow = { provider: provider.id, name, purpose, mode: input.mode, verifier, redirectUri, accessRequestId: accessRequest?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
+          const flow = { adapter: adapter.id, name, purpose, permission: input.permission, verifier, redirectUri, accessRequestId: accessRequest?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
           const state = store.addFlow(session.id, flow);
-          return send(200, { url: provider.client.authorize({ state, verifier, redirectUri, mode: input.mode, email: previous?.email }) });
+          return send(200, { url: adapter.client.authorize({ state, verifier, redirectUri, permission: input.permission, email: previous?.subject }) });
         }
         const accountRoute = path.match(/^\/api\/accounts\/([a-f0-9-]{36})(\/check)?$/);
         if (accountRoute) {
@@ -412,21 +406,21 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           if (!accountRoute[2] && method === 'DELETE') {
             const input = await body(req);
             if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
-            const provider = providers.get(account.provider), canRevoke = provider.client.canRevoke?.(store.secrets(account)) ?? provider.canRevoke !== false;
+            const adapter = adapters.get(account.adapter), canRevoke = adapter.client.canRevoke?.(store.secrets(account)) ?? adapter.canRevoke !== false;
             if (input.revoke && !canRevoke) fail(409, 'manual_revocation_required', 'キーの無効化は接続先のキー管理画面で行ってください。');
             if (disconnects.has(account.id)) fail(409, 'disconnect_in_progress', '接続を解除しています。');
             disconnects.add(account.id);
             try {
               const previous = store.disconnect(user.id, account.id);
-              if (input.revoke) await providers.get(account.provider).client.revoke(store.secrets(previous));
+              if (input.revoke) await adapter.client.revoke(store.secrets(previous));
               store.removeAccount(user.id, account.id);
-              return send(200, { ok: true, provider_revoked: input.revoke, ...(account.provider === 'gmail' ? { google_revoked: input.revoke } : {}) });
+              return send(200, { ok: true, service_revoked: input.revoke });
             } finally { disconnects.delete(account.id); }
           }
           if (accountRoute[2] && method === 'POST') {
             await body(req);
             rateLimit('check:' + account.id, 4);
-            const credentials = await providers.get(account.provider).client.token(store, account, true);
+            const credentials = await adapters.get(account.adapter).client.token(store, account, true);
             localSession(req);
             currentAccount(account);
             return send(200, { ok: true, ...(credentials.verification ? { verification: credentials.verification } : {}) });
@@ -436,13 +430,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           const input = await body(req);
           return send(201, { agent: store.addAgent(user.id, nameValue(input.name)) });
         }
-        const agentRoute = path.match(/^\/api\/agents\/([a-f0-9-]{36})()$/);
+        const agentRoute = path.match(/^\/api\/agents\/([a-f0-9-]{36})$/);
         if (agentRoute) {
-          if (!agentRoute[2] && method === 'DELETE') {
+          if (method === 'DELETE') {
             store.removeAgent(user.id, agentRoute[1]);
             return send(200, { ok: true });
           }
-          if (!agentRoute[2] && method === 'PATCH') {
+          if (method === 'PATCH') {
             const input = await body(req);
             store.renameAgent(user.id, agentRoute[1], nameValue(input.name));
             return send(200, { ok: true });
@@ -472,16 +466,16 @@ export function createApp({ database = ':memory:', encryptionKey, auth, gmail, i
           store.requireAccess(agent, route[1]);
           const account = accountFor(agent.owner_id, route[1]);
           rateLimit('issue:' + agent.id, 30);
-          const provider = providers.get(account.provider);
-          const credentials = await provider.client.token(store, account, false, { duration: input.duration });
-          const expoSession = account.provider === 'expo' && credentials.credential_type === 'expo_session';
-          if (!(Number.isFinite(credentials.expires_at) && credentials.expires_at > Date.now()) && !(['api_key', 'private_key', 'aws_temporary'].includes(credentials.credential_type) || expoSession) || credentials.expires_at !== null && !Number.isFinite(credentials.expires_at)) fail(502, 'provider_response', '認証情報の有効期限を確認できませんでした。');
+          const adapter = adapters.get(account.adapter);
+          const credentials = await adapter.client.token(store, account, false, { duration: input.duration });
+          const expoSession = credentials.credential_type === 'expo_session';
+          if (!(Number.isFinite(credentials.expires_at) && credentials.expires_at > Date.now()) && !(['api_key', 'private_key', 'aws_temporary'].includes(credentials.credential_type) || expoSession) || credentials.expires_at !== null && !Number.isFinite(credentials.expires_at)) fail(502, 'service_response', '認証情報の有効期限を確認できませんでした。');
           actor(req);
           store.requireAccess(agent, account.id);
           currentAccount(account);
           store.recordIssuance(agent, credentials.expires_at);
-          const info = provider.client.accountInfo?.(credentials) || {};
-          return send(200, { access_token: credentials.access_token, token_type: expoSession ? 'Expo-Session' : 'Bearer', credential_type: credentials.credential_type || 'oauth2_access_token', expires_at: credentials.expires_at, expires_in: credentials.expires_at === null ? null : Math.max(0, Math.floor((credentials.expires_at - Date.now()) / 1000)), scope: credentials.scopes.join(' '), account: { id: account.id, provider: account.provider, email: account.email, label: info.label || account.email }, ...(expoSession ? { credential_header: 'expo-session', session_profile: { user_id: credentials.details.actor_id, username: credentials.details.label } } : {}), ...(info.key_info ? { key_info: info.key_info } : {}), ...(credentials.verification ? { verification: credentials.verification } : {}), ...providers.delivery(provider.id, credentials), api_base_url: provider.api.base_url });
+          const info = adapter.client.accountInfo?.(credentials) || {};
+          return send(200, { access_token: credentials.access_token, token_type: expoSession ? 'Expo-Session' : 'Bearer', credential_type: credentials.credential_type || 'oauth2_access_token', expires_at: credentials.expires_at, expires_in: credentials.expires_at === null ? null : Math.max(0, Math.floor((credentials.expires_at - Date.now()) / 1000)), scope: credentials.scopes.join(' '), account: { id: account.id, adapter: account.adapter, service: adapter.service, subject: account.subject, label: info.label || account.subject }, ...(expoSession ? { credential_header: 'expo-session', session_profile: { user_id: credentials.details.actor_id, username: credentials.details.label } } : {}), ...(info.key_info ? { key_info: info.key_info } : {}), ...(credentials.verification ? { verification: credentials.verification } : {}), ...adapters.deliver(account.adapter, credentials, account), api_base_url: adapter.service ? SERVICES[adapter.service].api.base_url : '' });
         }
       }
       fail(404, 'not_found', '指定された操作が見つかりません。');

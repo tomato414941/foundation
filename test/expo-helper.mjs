@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import { ExpoProvider, EXPO_API } from '../src/providers/expo.mjs';
-import { expoConnection, gmailConnection } from '../src/providers/catalog.mjs';
+import { ExpoClient, EXPO_API } from '../src/services/expo.mjs';
+import { expoToken, expoLogin, gmailOauth } from '../src/adapters.mjs';
 import { FakeGmail, fixture, json } from './helpers.mjs';
 
-export class FakeExpo extends ExpoProvider {
+export class FakeExpo extends ExpoClient {
   constructor({ sessionLogin = false } = {}) {
     super({ fetcher: (url, options) => this.fetch(url, options), sessionLogin });
     this.calls = [];
@@ -22,8 +22,8 @@ export class FakeExpo extends ExpoProvider {
 
 export async function expoFixture(t, options = {}) {
   const expo = options.expo || new FakeExpo(), gmail = new FakeGmail();
-  const f = await fixture(t, { gmail, integrations: [expoConnection(expo), gmailConnection(gmail)], ...options });
-  const importExpo = (extra = {}, requestOptions = {}) => f.request('/api/connections/expo/connect', { method: 'POST', data: { name: 'Expo', mode: 'access-token', token: expo.tokenValue(), ...extra }, ...requestOptions });
+  const f = await fixture(t, { gmail, adapters: [expoToken(expo), ...(expo.sessionLoginEnabled ? [expoLogin(expo)] : []), gmailOauth(gmail)], ...options });
+  const importExpo = ({ token = expo.tokenValue(), ...extra } = {}, requestOptions = {}) => f.request('/api/adapters/expo.token/connect', { method: 'POST', data: { name: 'Expo', permission: 'access-token', values: { token }, ...extra }, ...requestOptions });
   async function expoAccount(extra = {}) {
     const result = await importExpo(extra);
     if (result.status !== 200) throw new Error(result.text);

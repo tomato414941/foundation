@@ -119,14 +119,13 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .register-body { margin-top: 18px; }
 .approval-section { font-size: 15px; font-weight: 600; margin: 22px 0 10px; }
 .setup-links { margin: 14px 0 18px; }
-.token-intro { color: var(--muted); margin-bottom: 4px; overflow-wrap: anywhere; }
+.declared-link { margin: 0; overflow-wrap: anywhere; font-size: 15px; }
 .file-pick { display: block; margin-top: 10px; }
 .setup-link + .setup-link { margin-top: 10px; }
 .file-pick input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .file-pick:focus-within .button { outline: 2px solid var(--accent); }
 .approval-facts code, .connection-facts code { font: 500 14px ui-monospace, monospace; background: var(--soft); padding: 2px 6px; border-radius: 4px; }
 .status.neutral { margin-left: 8px; color: var(--muted); background: var(--soft); }
-.token-form .token-setup { margin-top: 18px; }
 .request-expiry { font-size: 14px; color: var(--muted); }
 .request-connect { margin-top: 8px; white-space: normal; overflow-wrap: anywhere; }
 .request-expiry { text-align: center; margin-top: 14px; }
@@ -159,9 +158,6 @@ legend { padding: 0; margin-top: 0; }
 .choice small { display: block; font-size: 14px; color: var(--muted); margin-top: 3px; }
 .revoke-choice { margin-top: 18px; }
 .permission-note { font-size: 14px; color: var(--muted); margin: 14px 0; }
-.token-setup { padding: 17px; background: var(--soft); border: 1px solid var(--line); border-radius: 8px; }
-.token-setup p, .token-permission p { margin: 8px 0 12px; color: var(--muted); font-size: 14px; }
-.token-step { margin-top: 24px; }
 .expo-approval { padding: 24px; }
 .expo-request-purpose { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
 .expo-login-form label { margin-top: 14px; }
@@ -169,7 +165,6 @@ legend { padding: 0; margin-top: 0; }
 .expo-login-form .auth-privacy { margin: 12px 0; }
 .expo-login-form .form-error:empty { margin-top: 10px; }
 .expo-approval .approval-heading { margin-bottom: 12px; }
-.token-permission { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 14px; }
 dialog { width: min(520px, calc(100% - 32px)); max-height: calc(100dvh - 40px); border: 1px solid var(--line); border-radius: 12px; padding: 30px; box-shadow: 0 20px 80px #152d302e; color: var(--ink); }
 dialog::backdrop { background: #122a2252; }
 dialog h2 { padding-right: 32px; font-size: 22px; margin-bottom: 9px; }
