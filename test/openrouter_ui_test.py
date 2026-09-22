@@ -116,7 +116,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.screenshot(path=str(shots / 'disconnect-mobile.png'), full_page=True)
     dialog.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(section).to_have_count(0)
+    expect(section.get_by_text('未登録', exact=True)).to_be_visible()
 
     # Root management uses the same adapter-driven flow, with no Gmail-only copy.
     page.get_by_role('button', name='OpenRouterを登録', exact=True).click()
