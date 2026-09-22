@@ -307,3 +307,14 @@ test('A runtime can read its own request raw: what it asked for, and what happen
   assert.deepEqual((await view()).events.map(item => item.event), ['cancelled']);
   assert.equal((await view()).id, next.row.id);
 });
+
+test('A request may carry one note for the owner, shown as the AI\'s claim, bounded, and part of what makes a request distinct', async t => {
+  const f = await fixture(t), token = key();
+  const noted = await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { ...input, note: ' スタック名は foundation-admin、Permissions は AdministratorAccess ' } });
+  assert.equal(noted.status, 201, noted.text);
+  assert.equal(noted.json.request.note, 'スタック名は foundation-admin、Permissions は AdministratorAccess');
+  assert.equal((await f.request('/api/access-requests/' + noted.json.request.id)).json.request.note, 'スタック名は foundation-admin、Permissions は AdministratorAccess');
+  assert.equal((await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { ...input, note: '別の補足' } })).status, 409, 'a different note is a different request');
+  assert.equal((await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: key(), data: { ...input, note: 'x'.repeat(301) } })).json.error.code, 'invalid_note');
+  assert.equal((await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: key(), data: { ...input, note: 'bad\u0007' } })).json.error.code, 'invalid_note');
+});
