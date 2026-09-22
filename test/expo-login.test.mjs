@@ -8,6 +8,7 @@ import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { expoLoginFixture, LOGIN_PASSWORD, LOGIN_OTP } from './expo-login-helper.mjs';
 import { json, USER_A } from './helpers.mjs';
+import { CREDENTIAL_LIMIT } from '../src/store.mjs';
 
 const credential = (f, id, token) => f.request('/v1/credentials/' + id + '/deliver', { method: 'POST', token, anonymous: true, data: {} });
 // A registration request for an Expo login, from a key the owner has approved.
@@ -29,17 +30,17 @@ test('Expo password login stores only an encrypted session, never password/OTP o
   const account = f.app.store.credential(USER_A, result.json.credential_id), secrets = f.app.store.secret(account);
   assert.equal(secrets.credential_type, 'expo_session'); assert.deepEqual(secrets.scopes, ['expo:session']);
   assert.equal(secrets.expires_at, null); assert.equal(secrets.expiry_known, false);
-  assert.ok(f.expo.sessions.has(secrets.access_token));
+  assert.ok(f.expo.sessions.has(secrets.renewal.access_token));
   assert.ok(!JSON.stringify(secrets).includes(LOGIN_PASSWORD));
   const disk = await readFile(database);
-  assert.ok(!disk.includes(Buffer.from(LOGIN_PASSWORD))); assert.ok(!disk.includes(Buffer.from(secrets.access_token)));
+  assert.ok(!disk.includes(Buffer.from(LOGIN_PASSWORD))); assert.ok(!disk.includes(Buffer.from(secrets.renewal.access_token)));
   const state = await f.request('/api/state'); safeResponse(state);
   assert.equal(state.json.credentials[0].label, 'fixture-user'); assert.equal(state.json.credentials[0].can_revoke, true);
   assert.equal(f.app.store.agents(USER_A).length, 0, 'root connection alone never grants a runtime');
   assert.equal(result.headers.get('cache-control'), 'no-store');
   assert.ok(f.expo.calls[0].url.endsWith('/auth/loginAsync'));
   assert.deepEqual(JSON.parse(f.expo.calls[0].options.body), { username: 'fixture-user', password: LOGIN_PASSWORD });
-  assert.equal(f.expo.calls[1].options.headers['expo-session'], secrets.access_token);
+  assert.equal(f.expo.calls[1].options.headers['expo-session'], secrets.renewal.access_token);
   assert.equal(f.expo.calls[1].options.headers.authorization, undefined);
 });
 
@@ -107,10 +108,10 @@ for (const kind of ['cancel', 'deny', 'expire', 'logout', 'switch-user']) test('
 
 test('A registration that cannot be stored rolls back and logs out upstream; nested transactions preserve an outer transaction', async t => {
   const f = await expoLoginFixture(t), { input } = await requestAccess(f);
-  for (let i = 0; i < 25; i++) f.app.store.register(USER_A, { adapter: 'expo.token', service: 'Expo', subject: 'token:' + i, name: 'filler ' + i }, { access_token: 'x' });
+  for (let i = 0; i < CREDENTIAL_LIMIT; i++) f.app.store.register(USER_A, { adapter: 'expo.token', service: 'Expo', subject: 'token:' + i, name: 'filler ' + i }, { renewal: { access_token: 'x' } });
   const result = await f.loginExpo(input);
   assert.equal(result.status, 409, result.text); assert.equal(result.json.error.code, 'credential_limit'); safeResponse(result);
-  assert.equal(f.app.store.credentials(USER_A).length, 25); assert.equal(f.expo.sessions.size, 0);
+  assert.equal(f.app.store.credentials(USER_A).length, CREDENTIAL_LIMIT); assert.equal(f.expo.sessions.size, 0);
   assert.equal(f.app.store.transactionDepth, 0);
   f.app.store.transaction(() => {
     assert.throws(() => f.app.store.transaction(() => { throw new Error('rollback nested only'); }));

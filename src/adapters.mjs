@@ -64,7 +64,7 @@ export function githubOauth(client) {
     id: 'github.oauth', service: GITHUB, label: 'GitHubで接続', register: 'oauth', client,
     intro: 'GitHubでログインし、リポジトリへのアクセスを許可します。',
     access: { name: 'リポジトリの読み書き', description: 'あなたがアクセスできるすべてのリポジトリ (非公開を含む) の読み書き、Actions のワークフローの変更、Gist の作成、組織の閲覧', restrictions: 'リポジトリや組織の削除・管理者設定の変更は許可しません。登録を解除すると、GitHub側の許可も取り消します。' },
-    ai: 'gh と多くのツールがそのまま使える。git の push/pull は gh 経由の認証で行う (exec の中で gh auth setup-git してから git を使う)。スコープは repo, workflow, read:org, gist。',
+    ai: 'gh and most tools read it directly. For git push/pull, run gh auth setup-git inside the exec, then use git. Scopes: repo, workflow, read:org, gist.',
     variables: ['GH_TOKEN', 'GITHUB_TOKEN'], deliver: secret => ({ environment: { GH_TOKEN: secret.access_token, GITHUB_TOKEN: secret.access_token } }),
   };
 }
@@ -77,7 +77,7 @@ export function expoToken(client) {
     schema: defineSchema([{ id: 'token', label: 'アクセストークン', secret: true }]),
     instructions: 'Expoのアクセストークン (個人用またはRobot) を受け付けます。登録時にExpoへ照会して持ち主を確認します。',
     access: { name: 'トークンの権限でExpoを利用', description: '個人用トークンは、本人がアクセスできるすべてのアカウント・組織で操作できます。ビルドなどは課金を伴う場合があります。', restrictions: '読み取り専用ではありません。対象や操作を絞る場合は、Expoで権限を制限したRobotのトークンを使ってください。' },
-    ai: 'アクセストークン (個人用または Robot) を受け付ける。',
+    ai: 'Takes an access token (personal or Robot).',
     variables: ['EXPO_TOKEN'], deliver: secret => ({ environment: { EXPO_TOKEN: secret.access_token } }),
   };
 }
@@ -89,7 +89,7 @@ export function expoLogin(client) {
     id: 'expo.login', service: EXPO, kind: 'ログイン', label: 'Expoにログイン', register: 'login', client, canReconnect: false, credentialType: 'expo_session',
     intro: 'Expoにログインして登録します。',
     access: { name: 'Expoアカウントの利用', description: 'このAIに、Expoであなたと同じ権限での操作を許可します。ビルド・公開など、課金を伴う操作も含みます。', restrictions: '登録を解除すると、このログインセッションを無効にできます。' },
-    ai: 'Expo のログインセッションを、exec の間だけ Expo 自身のログイン状態として渡す (eas などがそのまま読む)。環境変数は使わない。',
+    ai: 'Hands the Expo login session to the command as Expo\'s own login state, for the length of the exec (eas and friends read it directly). No environment variable.',
     variables: [], deliver: secret => ({ expo_session: { secret: secret.access_token, profile: { user_id: secret.details.actor_id, username: secret.details.label } } }),
   };
 }
@@ -102,7 +102,7 @@ export function supabaseAccessToken(client) {
     schema: defineSchema([{ id: 'token', label: 'アクセストークン', secret: true }]),
     instructions: 'Supabaseのアカウントのアクセストークン (sbp_ で始まる) を受け付けます。登録時にSupabaseへ照会して持ち主を確認します。',
     access: { name: 'アカウントの権限でSupabaseを利用', description: 'アカウントがアクセスできるすべての組織とプロジェクトを、Management APIとCLIから操作できます。プロジェクトの作成・削除や設定変更も含みます。', restrictions: '読み取り専用ではありません。プロジェクトのデータベースのキー (anon / service_role) はこのトークンでは渡しません。' },
-    ai: 'アカウントのアクセストークン (sbp_...) を受け付ける。Supabase CLI は SUPABASE_ACCESS_TOKEN を読む。',
+    ai: 'Takes an account access token (sbp_...). The Supabase CLI reads SUPABASE_ACCESS_TOKEN.',
     variables: ['SUPABASE_ACCESS_TOKEN'], deliver: secret => ({ environment: { SUPABASE_ACCESS_TOKEN: secret.access_token } }),
   };
 }
@@ -118,7 +118,7 @@ export function cloudflareApiToken(client) {
     ]),
     instructions: 'CloudflareのユーザーAPIトークンを受け付けます (Global API Key と R2 の S3互換キーは不可)。登録時にCloudflareへ照会して、トークンが有効か確認します。',
     access: { name: 'トークンの権限でCloudflareを利用', description: 'このトークンに与えた権限の範囲で、Cloudflareを操作できます。', restrictions: '利用できる範囲はトークンに与えた全権限です。ここで指定するアカウントIDや用途では制限されません。読み取り専用のトークンを使ってください。' },
-    ai: 'ユーザー API トークンとアカウント ID を受け付ける (Global API Key と R2 の S3 互換キーは不可)。登録時に確かめるのはトークンが有効かどうかだけで、何に届くかは確かめない。アカウント ID は認証情報の cloudflare_account_id として読める。Foundation はトークンの権限を狭めない。',
+    ai: 'Takes a user API token and an account ID (not a Global API Key, not an R2 S3-compatible key). Registration checks only that the token works, never what it reaches. The account ID is readable as the credential\'s cloudflare_account_id. Foundation does not narrow the token.',
     variables: ['CLOUDFLARE_API_TOKEN'], deliver: secret => ({ environment: { CLOUDFLARE_API_TOKEN: secret.access_token } }),
   };
 }
@@ -140,7 +140,7 @@ export function appleApiKey(client) {
     instructions: 'App Store Connect API のチームキー (.p8) と、Key ID・Issuer ID・Team ID・チーム種別を受け付けます。登録時にAppleへ1回読み取りで照会して確認します。',
     note: '登録時にAppleへ1回だけ読み取りで問い合わせ、キーが有効か確認します。証明書やプロファイルの作成はEASが行い、Foundationは関与しません。',
     access: { name: 'App Store Connect APIキーの権限でAppleを利用', description: 'このキーにAppleで与えた役割の範囲で、アプリID・端末・証明書・プロビジョニングプロファイルの作成や更新ができます。', restrictions: '読み取り専用ではありません。Team API キーは単一アプリに限定できません。' },
-    ai: 'チームキーの .p8 と Key ID / Issuer ID / Team ID / チーム種別を受け付ける。.p8 は exec の間だけ存在するファイルで渡す。EAS の署名準備には Admin の役割が要る。',
+    ai: 'Takes a team .p8 key plus Key ID / Issuer ID / Team ID / team type. The .p8 is delivered as a file that exists only during the exec. EAS signing setup needs the Admin role.',
     variables: ['EXPO_ASC_API_KEY_PATH', 'EXPO_ASC_KEY_ID', 'EXPO_ASC_ISSUER_ID', 'EXPO_APPLE_TEAM_ID', 'EXPO_APPLE_TEAM_TYPE'],
     deliver: secret => ({ files: [{ env: 'EXPO_ASC_API_KEY_PATH', filename: 'AuthKey_' + secret.details.key_id + '.p8', content: secret.access_token }],
       environment: { EXPO_ASC_KEY_ID: secret.details.key_id, EXPO_ASC_ISSUER_ID: secret.details.issuer_id, EXPO_APPLE_TEAM_ID: secret.details.team_id, EXPO_APPLE_TEAM_TYPE: secret.details.team_type } }),
@@ -154,7 +154,7 @@ export function generic(client) {
     id: 'generic', service: null, label: 'キーを登録', register: 'paste', client, canReconnect: false, canRevoke: false, credentialType: 'api_key', declared: true,
     intro: 'サービスの設定画面で作成したキーを登録します。Foundationはキーの権限や有効性を検証しません。',
     access: { name: 'キーの権限で利用', description: 'このキーで行える操作は、サービス側でキーに与えた権限のとおりです。Foundationはその内容を確認できません。', restrictions: '読み取り専用とは限りません。範囲を絞る場合は、サービス側で権限を制限したキーを作成してください。' },
-    ai: 'foundation connect --service <サービス名> --site <https://キー作成ページ> --field <環境変数名>[=<表示名>] [--field ...] [--multiline-field ...] で申告する。--field ごとに 1 つ値を受け取り、その名前の環境変数で渡す。値は検証しない。',
+    ai: 'Declare it: foundation connect --service <service> --site <https://page where the key is made> --field <ENV_NAME>[=<label>] [--field ...] [--multiline-field ...]. Each --field takes one value and delivers it as that environment variable. Values are not verified.',
     deliver: secret => ({ environment: { ...secret.values } }),
   };
 }

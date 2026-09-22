@@ -95,7 +95,34 @@ async function main() {
       options = { name: basename(target), type: parsed.values.type || TYPES[extname(target).toLowerCase()] || 'application/octet-stream', minutes, content: await readFile(target) };
     }
   }
-  else if (!(['adapters', 'credentials', 'files', 'cancel', 'whoami', 'leave', 'request'].includes(action) && !args.length) && !(action === 'exec' && credentialIds.length && credentialIds.every(id => /^[a-f0-9-]{36}$/.test(id)) && new Set(credentialIds).size === credentialIds.length && command.length)) throw new Error('Invalid command. Use --help.');
+  // Storage on its own: values a command will read as environment variables, and documents read back whole.
+  else if (action === 'keep') {
+    const parsed = parseArgs({ args, options: { service: { type: 'string' }, value: { type: 'string', multiple: true, default: [] } }, strict: true, allowPositionals: false }).values;
+    if (!parsed.service || !parsed.value.length) throw new Error('Usage: keep --service <name> --value NAME=VALUE [--value ...]');
+    options = { service: parsed.service, values: Object.fromEntries(parsed.value.map(pair => {
+      const at = pair.indexOf('=');
+      if (at < 1 || !validEnvName(pair.slice(0, at))) throw new Error('--value takes NAME=VALUE, where NAME is an environment variable name (' + pair.slice(0, Math.max(at, 0)) + ').');
+      return [pair.slice(0, at), pair.slice(at + 1)];
+    })) };
+  }
+  else if (action === 'forget') {
+    if (args.length !== 1 || !/^[a-f0-9-]{36}$/.test(args[0])) throw new Error('Usage: forget <value-id>');
+    options = { id: args[0] };
+  }
+  else if (action === 'write' || action === 'read' || action === 'erase') {
+    const parsed = parseArgs({ args, options: action === 'write' ? { file: { type: 'string' } } : {}, strict: true, allowPositionals: true });
+    if (parsed.positionals.length !== 1 || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(parsed.positionals[0])) throw new Error('Usage: ' + action + ' <collection>/<name>' + (action === 'write' ? ' [--file <path>] (JSON on stdin by default)' : ''));
+    options = { path: parsed.positionals[0] };
+    if (action === 'write') {
+      const text = parsed.values.file ? await readFile(parsed.values.file, 'utf8') : await new Promise((resolve, reject) => { let input = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', part => { input += part; }); process.stdin.once('end', () => resolve(input)); process.stdin.once('error', reject); });
+      try { options.body = JSON.parse(text); } catch { throw new Error('write takes JSON, on stdin or from --file.'); }
+    }
+  }
+  else if (action === 'documents') {
+    const parsed = parseArgs({ args, options: { collection: { type: 'string' } }, strict: true, allowPositionals: false }).values;
+    options = { collection: parsed.collection };
+  }
+  else if (!(['adapters', 'credentials', 'files', 'values', 'cancel', 'whoami', 'leave', 'request'].includes(action) && !args.length) && !(action === 'exec' && credentialIds.length && credentialIds.every(id => /^[a-f0-9-]{36}$/.test(id)) && new Set(credentialIds).size === credentialIds.length && command.length)) throw new Error('Invalid command. Use --help.');
   const url = new URL(process.env.FOUNDATION_URL || '');
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('FOUNDATION_URL must be an HTTPS origin (HTTP is allowed only on localhost).');
   // Without --adapter, connect asks for this key to be approved. With it, an approved key asks for a registration.
@@ -103,11 +130,16 @@ async function main() {
   if (action === 'connect' && !options.adapter) { delete options.purpose; }
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
   const token = action === 'adapters' ? null : await runtimeKey(keyPath, action === 'connect', !process.env.FOUNDATION_RUNTIME_KEY_FILE);
+  const documentPath = () => '/v1/documents/' + options.path.split('/').map(encodeURIComponent).join('/');
   const path = action === 'adapters' ? '/v1/adapters' : action === 'credentials' ? '/v1/credentials' : action === 'files' ? '/v1/files' : action === 'link' ? '/v1/files/' + encodeURIComponent(options.id) + '/link'
-    : action === 'put' ? '/v1/files?' + new URLSearchParams({ name: options.name, ...(options.minutes === undefined ? {} : { minutes: String(options.minutes) }) }) : action === 'exec' ? '/v1/credentials/' + credentialIds[0] + '/deliver' : ['whoami', 'leave', 'rename'].includes(action) ? '/v1/me' : action === 'cancel' || action === 'request' ? '/v1/access-requests/current' : '/v1/access-requests';
-  const method = ['connect', 'exec', 'put', 'link'].includes(action) ? 'POST' : action === 'rename' ? 'PATCH' : action === 'cancel' || action === 'leave' ? 'DELETE' : 'GET';
+    : action === 'put' ? '/v1/files?' + new URLSearchParams({ name: options.name, ...(options.minutes === undefined ? {} : { minutes: String(options.minutes) }) })
+    : action === 'values' || action === 'keep' ? '/v1/vault' : action === 'forget' ? '/v1/vault/' + options.id
+    : action === 'documents' ? '/v1/documents' + (options.collection ? '?' + new URLSearchParams({ collection: options.collection }) : '') : ['write', 'read', 'erase'].includes(action) ? documentPath()
+    : action === 'exec' ? '/v1/credentials/' + credentialIds[0] + '/deliver' : ['whoami', 'leave', 'rename'].includes(action) ? '/v1/me' : action === 'cancel' || action === 'request' ? '/v1/access-requests/current' : '/v1/access-requests';
+  const method = ['connect', 'exec', 'put', 'link', 'keep'].includes(action) ? 'POST' : action === 'write' ? 'PUT' : action === 'rename' ? 'PATCH' : ['cancel', 'leave', 'forget', 'erase'].includes(action) ? 'DELETE' : 'GET';
   async function request(timeout = 30_000, target = path) {
-    const payload = action === 'put' ? options.content : JSON.stringify(action === 'connect' || action === 'rename' ? options : action === 'link' ? { minutes: options.minutes } : {});
+    const payload = action === 'put' ? options.content
+      : JSON.stringify(['connect', 'rename', 'keep'].includes(action) ? options : action === 'write' ? { body: options.body } : action === 'link' ? { minutes: options.minutes } : {});
     const response = await fetch(url.origin + target, { method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), 'content-type': action === 'put' ? options.type : 'application/json' }, ...(method !== 'GET' ? { body: payload } : {}), redirect: 'error', signal: AbortSignal.timeout(timeout) });
     const data = await response.json();
     if (!response.ok) throw new Error('Foundation request failed (' + response.status + ', ' + (data.error?.code || 'unknown') + '). ' + (data.error?.message || 'Check the connection and runtime permission.'));
@@ -130,7 +162,7 @@ async function main() {
   };
   let expoSession = null;
   for (const item of issued) {
-    const label = item.credential?.adapter + ':' + item.credential?.id, delivery = item.delivery;
+    const label = (item.credential?.adapter || item.credential?.service) + ':' + item.credential?.id, delivery = item.delivery;
     if (!item.credential?.id || !delivery || typeof delivery.environment !== 'object' || !Array.isArray(delivery.files)) throw new Error('Foundation returned an invalid delivery.');
     if (delivery.expo_session) { if (issued.length > 1) throw new Error('An Expo login session cannot be combined with other credentials.'); expoSession = delivery.expo_session; }
     for (const [name, value] of Object.entries(delivery.environment)) assign(name, value, label);

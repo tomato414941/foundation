@@ -150,6 +150,6 @@ export class AccessRequests {
     return { id: row.id, kind: row.adapter ? 'register' : 'approve', adapter: row.adapter ? this.adapters.describe(row.adapter, details) : null, requester_name: row.requester_name, purpose: row.purpose, details, guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
       ...(code && row.confirmation_code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
       status, created_at: row.created_at, expires_at: row.expires_at, ...(row.credential_id ? { credential_id: row.credential_id } : {}),
-      ...(status === 'approved' ? { agent_id: row.agent_id, ...(credential ? { credential: { id: credential.id, service: credential.service, subject: credential.subject, label: this.adapters.get(credential.adapter).client.facts?.(this.store.secret(credential))?.label || credential.subject } } : {}) } : {}) };
+      ...(status === 'approved' ? { agent_id: row.agent_id, ...(credential ? { credential: { id: credential.id, service: credential.service, subject: credential.subject, label: this.store.secret(credential).facts.label || credential.name } } : {}) } : {}) };
   }
 }

@@ -132,7 +132,7 @@ async function refresh() {
   render();
 }
 // Unknown for credentials registered before this was recorded; then only the date is shown.
-const registeredBy = credential => credential.requested_by ? credential.requested_by + 'の依頼' : credential.requested_by === '' ? '管理画面から' : '';
+const registeredBy = credential => credential.kept_by ? credential.kept_by + 'の依頼' : credential.kept_by === '' ? '管理画面から' : '';
 const cameFrom = credential => [new Date(credential.created_at).toLocaleDateString('ja-JP') + ' 登録', registeredBy(credential)].filter(Boolean).join(' · ');
 function details(credential) {
   if (!credential) return '';

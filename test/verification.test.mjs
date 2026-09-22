@@ -84,7 +84,7 @@ test('Generic API keys report once that they were not verified, and record the k
   assert.equal(result.status, 200, result.text);
   const report = await shown(f, result.json.credential_id);
   assert.deepEqual(report.checks.map(item => [item.check, item.status, item.code]), [['credential', 'unknown', 'not_checked']]);
-  assert.equal((await f.request('/api/state')).json.credentials.find(item => item.id === result.json.credential_id).requested_by, row.requester_name);
+  assert.equal((await f.request('/api/state')).json.credentials.find(item => item.id === result.json.credential_id).kept_by, row.requester_name);
   assert.doesNotMatch(JSON.stringify(report), /example-private-key/);
 });
 
