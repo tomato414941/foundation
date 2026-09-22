@@ -119,6 +119,7 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .ai-guidance p + p { margin-top: 8px; }
 .register-body { margin-top: 18px; }
 .setup-links { margin: 14px 0 18px; }
+.declared-field + .declared-field { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 .declared-link { margin: 0; overflow-wrap: anywhere; font-size: 15px; }
 .file-pick { display: block; margin-top: 10px; }
 .setup-link + .setup-link { margin-top: 10px; }

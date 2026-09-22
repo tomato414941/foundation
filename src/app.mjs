@@ -55,6 +55,11 @@ async function raw(req, max) {
   }
   return Buffer.concat(chunks);
 }
+// The owner's name for the group a credential belongs to; it starts from the adapter's or the request's, and may be changed.
+function serviceValue(value) {
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > 40 || /[\x00-\x1f<>]/.test(value)) fail(400, 'invalid_service', 'サービス名は1〜40文字で入力してください。');
+  return value.trim();
+}
 function purposeValue(value = '') {
   if (typeof value !== 'string' || value.length > 240 || /[\x00-\x1f]/.test(value)) fail(400, 'invalid_purpose', '用途は240文字以内で入力してください。');
   return value.trim();
@@ -250,7 +255,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             () => adapter.client.exchange({ ...flow, code, range: adapter.range }, previous ? { subject: previous.subject, secret: store.secret(previous) } : undefined),
             result => {
               if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true);
-              const id = store.register(user.id, { adapter: adapter.id, service: adapter.service.name, name: credentialName(adapter, result.secret, result.subject, flow.name), requested_by: flow.requestedBy, subject: result.subject }, result.secret, previous);
+              const id = store.register(user.id, { adapter: adapter.id, service: flow.service || adapter.service.name, name: credentialName(adapter, result.secret, result.subject, flow.name), requested_by: flow.requestedBy, subject: result.subject }, result.secret, previous);
               if (flow.accessRequestId) requests.registered(flow.accessRequestId, user.id, id);
               return id;
             });
@@ -352,6 +357,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           if (accessRequest && adapter.id !== accessRequest.adapter) fail(400, 'scope_mismatch', '依頼された接続方法で登録してください。');
           // Who asked for it, as they were called then. A registration from the dashboard was asked by no one.
           const given = givenName(input.name), requestedBy = accessRequest?.requester_name ?? '';
+          const chosenService = input.service === undefined || input.service === '' ? null : serviceValue(input.service);
           if (adapter.register === 'login') {
             let result, committed = false;
             try {
@@ -359,7 +365,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
               const saved = await verifyConnection(req, session, user, async () => { result = await adapter.client.login(input); return result; }, () => {
                 if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
                 if (result.challenge) return { challenge: result.challenge };
-                const id = store.register(user.id, { adapter: adapter.id, service: adapter.service.name, name: credentialName(adapter, result.secret, result.subject, given), requested_by: requestedBy, subject: result.subject }, result.secret);
+                const id = store.register(user.id, { adapter: adapter.id, service: chosenService || adapter.service.name, name: credentialName(adapter, result.secret, result.subject, given), requested_by: requestedBy, subject: result.subject }, result.secret);
                 const done = accessRequest ? requests.registered(accessRequest.id, user.id, id) : null;
                 return { connected: true, credential_id: id, ...(done ? { request: requests.summary(done, origin, { code: false }) } : {}) };
               });
@@ -387,7 +393,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
               () => adapter.client.importToken({ values, details }),
               (result, report) => {
                 if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
-                const id = store.register(user.id, { adapter: adapter.id, service: adapters.service(adapter.id, details).name, name: credentialName(adapter, result.secret, result.subject, given), requested_by: requestedBy, subject: result.subject }, result.secret);
+                const id = store.register(user.id, { adapter: adapter.id, service: chosenService || adapters.service(adapter.id, details).name, name: credentialName(adapter, result.secret, result.subject, given), requested_by: requestedBy, subject: result.subject }, result.secret);
                 if (accessRequest) requests.registered(accessRequest.id, user.id, id);
                 return { connected: true, credential_id: id, verification: report };
               });
@@ -398,7 +404,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const redirectUri = origin + '/oauth/' + adapter.id + '/callback';
           if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
           if (accessRequest) requests.claim(accessRequest.id, user.id);
-          const flow = { adapter: adapter.id, name: given, requestedBy, verifier, redirectUri, accessRequestId: accessRequest?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
+          const flow = { adapter: adapter.id, name: given, service: chosenService, requestedBy, verifier, redirectUri, accessRequestId: accessRequest?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
           const state = store.addFlow(session.id, flow);
           return send(200, { url: adapter.client.authorize({ state, verifier, redirectUri, range: adapter.range, email: previous?.subject }) });
         }
@@ -407,7 +413,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const credential = credentialFor(user.id, credentialRoute[1]);
           if (method === 'PATCH') {
             const input = await body(req);
-            store.updateCredential(user.id, credential.id, nameValue(input.name, '表示名'));
+            store.updateCredential(user.id, credential.id, nameValue(input.name, '表示名'), serviceValue(input.service ?? credential.service));
             return send(200, { ok: true });
           }
           if (method === 'DELETE') {

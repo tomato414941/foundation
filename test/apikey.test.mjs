@@ -85,7 +85,8 @@ test('The owner pastes each declared value; each reaches the command under its o
   assert.equal(account.access.name, 'キーの権限で利用');
   const done = (await f.request('/api/access-requests/' + row.id)).json.request;
   assert.equal(done.status, 'approved', 'registering completes the request');
-  assert.equal(done.credential.label, 'Anthropic キー …' + account.subject.split(':')[1].slice(0, 8));
+  assert.equal(done.credential.label, 'Anthropic');
+  assert.equal(account.fingerprint, account.subject.split(':')[1].slice(0, 8), 'unverified values are told apart by a fingerprint');
   // Two values from one registration: both reach the command, each under its declared name.
   const twilio = { service: 'Twilio', site: 'https://console.twilio.com/', fields: [{ id: 'TWILIO_ACCOUNT_SID', label: 'Account SID', kind: 'line' }, { id: 'TWILIO_AUTH_TOKEN', label: 'Auth Token', kind: 'line' }] };
   const second = (await create(f, token, twilio)).json.request;
