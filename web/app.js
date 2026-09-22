@@ -192,10 +192,8 @@ function renderRequest() {
       : `${same.filter(account => account.status === 'reconnect_required' && row.service.can_reconnect).map(account => `<button class="button secondary full request-connect" type="button" data-action="request-connect" data-id="${esc(account.id)}">${esc(accountLabel(account))} を再接続</button>`).join('')}
         <button class="button primary full request-connect" type="button" data-action="request-connect">${esc(connectLabel)} ${icon('arrow')}</button>
         ${row.service.id === 'openrouter' && ['failed', 'scope', 'retry', 'changed'].includes(resultCode) ? '<p class="permission-note">接続できなくても、OpenRouterで作成済みのキーが残る場合があります。<a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">不要なキーはOpenRouterで削除してください ↗</a></p>' : ''}`;
-    // A key already approved sees what it already has; the request means it wants another.
-    const already = registeredKey && same.length ? `<p class="permission-note">${esc(row.service.name)}は登録済み (${same.map(account => esc(accountLabel(account) || account.name)).join('、')}) で、${esc(row.requester_name)}はそれを使えます。この依頼は別のアカウントを求めています。</p>` : '';
     app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(connectLabel)}</h1></div></header>
-      ${row.purpose ? `<dl class="approval-facts"><div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div></dl>` : ''}${already}
+      ${row.purpose ? `<dl class="approval-facts"><div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div></dl>` : ''}
       ${guidanceBlock(row.guidance)}
       <div class="register-body">${body}</div>
       ${!registeredKey && same.length ? '<button class="text-button full" type="button" data-action="back-to-approve">登録せずに戻る</button>' : registeredKey ? '<button class="text-button full" type="button" data-action="deny-request">登録しない</button>' : deny}${expiry}</section>`);
