@@ -31,7 +31,7 @@ const gmailDelivery = (secret, credential) => ({ environment: { GOOGLE_OAUTH_ACC
 
 export function gmailReadonly(client) {
   return {
-    id: 'gmail.readonly', service: GMAIL, label: 'Googleで接続', register: 'oauth', client, range: 'readonly',
+    id: 'gmail.readonly', service: GMAIL, kind: 'メールの読み取り', label: 'Googleで接続', register: 'oauth', client, range: 'readonly',
     intro: 'Googleアカウントでログインし、メールの読み取りを許可します。',
     access: { name: 'メールの読み取り', description: '本文・添付ファイルを含む、すべてのメール', restrictions: '送信・変更・削除は許可しません。' },
     variables: GMAIL_VARIABLES, deliver: gmailDelivery,
@@ -40,7 +40,7 @@ export function gmailReadonly(client) {
 
 export function gmailMetadata(client) {
   return {
-    id: 'gmail.metadata', service: GMAIL, label: 'Googleで接続', register: 'oauth', client, range: 'metadata',
+    id: 'gmail.metadata', service: GMAIL, kind: '件名・差出人などの読み取り', label: 'Googleで接続', register: 'oauth', client, range: 'metadata',
     intro: 'Googleアカウントでログインし、件名・差出人などの読み取りを許可します。',
     access: { name: '件名・差出人などの読み取り', description: '本文・添付ファイルは対象外', restrictions: '本文の取得・送信・変更・削除は許可しません。' },
     variables: GMAIL_VARIABLES, deliver: gmailDelivery,
@@ -71,7 +71,7 @@ export function githubOauth(client) {
 
 export function expoToken(client) {
   return {
-    id: 'expo.token', service: EXPO, label: 'Expoのトークンを登録', register: 'paste', client, canReconnect: false, canRevoke: false, credentialType: 'api_key',
+    id: 'expo.token', service: EXPO, kind: 'アクセストークン', label: 'Expoのトークンを登録', register: 'paste', client, canReconnect: false, canRevoke: false, credentialType: 'api_key',
     intro: 'Expoで発行したアクセストークンを登録します。',
     links: [{ label: 'Expoのアクセストークン管理ページを開く', href: EXPO_TOKENS }],
     schema: defineSchema([{ id: 'token', label: 'アクセストークン', secret: true }]),
@@ -86,7 +86,7 @@ export function expoToken(client) {
 // and the command receives it as Expo's own login state rather than as a variable.
 export function expoLogin(client) {
   return {
-    id: 'expo.login', service: EXPO, label: 'Expoにログイン', register: 'login', client, canReconnect: false, credentialType: 'expo_session',
+    id: 'expo.login', service: EXPO, kind: 'ログイン', label: 'Expoにログイン', register: 'login', client, canReconnect: false, credentialType: 'expo_session',
     intro: 'Expoにログインして登録します。',
     access: { name: 'Expoアカウントの利用', description: 'このAIに、Expoであなたと同じ権限での操作を許可します。ビルド・公開など、課金を伴う操作も含みます。', restrictions: '登録を解除すると、このログインセッションを無効にできます。' },
     ai: 'Expo のログインセッションを、exec の間だけ Expo 自身のログイン状態として渡す (eas などがそのまま読む)。環境変数は使わない。',
@@ -201,7 +201,7 @@ export class Adapters {
     const adapter = this.get(id), form = this.form(id, details);
     return { id, service: this.service(id, details), label: adapter.declared && details?.service ? details.service + 'のキーを登録' : adapter.label, register: adapter.register, available: adapter.client.enabled,
       intro: adapter.intro || '', access: adapter.access, variables: this.variables(id, details), declared: Boolean(adapter.declared), request_fields: adapter.declared ? [{ id: 'service', label: 'サービス' }, { id: 'site', label: 'キーの作成ページ', type: 'url' }] : [],
-      ...(adapter.instructions ? { instructions: adapter.instructions } : {}), ...(adapter.ai ? { ai: adapter.ai } : {}), ...(adapter.note ? { note: adapter.note } : {}), ...(adapter.failureNote ? { failure_note: adapter.failureNote } : {}), ...(form ? { form } : {}),
+      ...(adapter.instructions ? { instructions: adapter.instructions } : {}), ...(adapter.ai ? { ai: adapter.ai } : {}), ...(adapter.note ? { note: adapter.note } : {}), ...(adapter.kind ? { kind: adapter.kind } : {}), ...(adapter.failureNote ? { failure_note: adapter.failureNote } : {}), ...(form ? { form } : {}),
       can_reconnect: adapter.canReconnect !== false, can_revoke: adapter.canRevoke !== false, credential_type: adapter.credentialType || 'oauth2_access_token' };
   }
 }

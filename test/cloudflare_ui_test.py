@@ -110,7 +110,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     # To correct the account ID the owner removes that credential and registers again through a new request.
     wrong = cli('credentials')['credentials'][0]
     page.goto(args.base, wait_until='networkidle')
-    page.locator('[aria-labelledby="cloudflare-title"] .credential-row').click()
     page.locator('[aria-labelledby="cloudflare-title"]').get_by_role('button', name='登録を解除', exact=True).click()
     dialog.get_by_role('checkbox', name='キーの無効化はCloudflareで行うことを確認しました', exact=True).check()
     dialog.get_by_role('button', name='登録を解除', exact=True).click()
@@ -137,7 +136,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
 
     page.goto(args.base, wait_until='networkidle')
     section = page.locator('[aria-labelledby="cloudflare-title"]')
-    section.locator('.credential-row').click()
     section.get_by_role('button', name='検証する', exact=True).click()
     expect(page.get_by_text('Cloudflareで検証できました。', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:

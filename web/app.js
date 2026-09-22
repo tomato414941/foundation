@@ -141,12 +141,18 @@ const siteOf = value => {
   } catch { return ''; }
 };
 const whereOf = credential => siteOf(credential.management_url || adapterOf(credential)?.service?.management_url) || credential.service;
-const registeredBy = credential => credential.requested_by ? credential.requested_by + 'の依頼' : credential.requested_by === '' ? '管理画面から' : '依頼元の記録なし';
-function details(credential) {
-  const adapter = adapterOf(credential), name = credential.service;
+// Unknown for credentials registered before this was recorded; then only the date is shown.
+const registeredBy = credential => credential.requested_by ? credential.requested_by + 'の依頼' : credential.requested_by === '' ? '管理画面から' : '';
+// What needs the owner is shown; a usable, verified credential says nothing about its state.
+const flags = credential => `${credential.verified === false ? '<span class="status neutral">未確認</span>' : ''}${credential.status !== 'connected' ? `<span class="status warning">${statusName(credential)}</span>` : ''}`;
+const cameFrom = credential => [new Date(credential.created_at).toLocaleDateString('ja-JP') + ' 登録', registeredBy(credential)].filter(Boolean).join(' · ');
+function details(credential, group) {
+  const adapter = adapterOf(credential), name = credential.service, declared = credential.service !== group.name ? credential.service : '';
   const verified = credential.verified !== false && credentialLabel(credential) !== credential.name ? credentialLabel(credential) : '';
+  const facts = `${adapter.kind ? `<div><dt>種類</dt><dd>${esc(adapter.kind)}</dd></div>` : ''}${verified ? `<div><dt>確認済み</dt><dd>${esc(verified)}</dd></div>` : ''}${Array.isArray(credential.organizations) ? `<div><dt>組織</dt><dd>${credential.organizations.length ? credential.organizations.map(item => esc(item.name)).join('、') : 'なし'}</dd></div>` : ''}${claimRows(adapter, credential.details)}`;
   const manage = credential.credential_type === 'expo_session' ? '' : `<a class="text-button" href="${esc(credential.management_url || adapter.service?.management_url)}" target="_blank" rel="noopener noreferrer">${esc(name)}の管理ページ ↗</a>`;
-  return `<dl class="credential-facts">${verified ? `<div><dt>確認済み</dt><dd>${esc(verified)}</dd></div>` : ''}<div><dt>届く範囲</dt><dd>${esc(accessName(credential))}</dd></div>${Array.isArray(credential.organizations) ? `<div><dt>組織</dt><dd>${credential.organizations.length ? credential.organizations.map(item => esc(item.name)).join('、') : 'なし'}</dd></div>` : ''}${claimRows(adapter, credential.details)}</dl>${keyFacts(credential)}
+  return `<div class="credential-heading"><h3>${esc(credential.name)}${declared ? ` <small>${esc(declared)}</small>` : ''}</h3>${flags(credential)}<p class="credential-meta">${esc(cameFrom(credential))}</p></div>
+    ${facts ? `<dl class="credential-facts">${facts}</dl>` : ''}${keyFacts(credential)}
     <div class="credential-actions">${credential.verified === false ? '' : `<button class="button secondary" data-action="check" data-id="${esc(credential.id)}" ${credential.status !== 'connected' || !adapter.available ? 'disabled' : ''}>検証する</button>`}${adapter.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(credential.id)}" ${credential.status === 'disconnecting' || !adapter.available ? 'disabled' : ''}>登録し直す</button>` : ''}<button class="text-button" data-action="edit-credential" data-id="${esc(credential.id)}">名前を変更</button>${manage}<button class="text-button danger" data-action="remove-credential" data-id="${esc(credential.id)}">${credential.status === 'disconnecting' ? '解除を再試行' : '登録を解除'}</button></div>
     ${verificationDetails(credential.verification)}<details class="credential-reference"><summary>詳細</summary><dl><dt>渡す変数</dt><dd>${credential.variables?.length ? credential.variables.map(name => `<code>${esc(name)}</code>`).join(' ') : 'Expo のログイン状態として渡します'}</dd><dt>認証情報ID</dt><dd><code>${esc(credential.id)}</code></dd></dl></details>`;
 }
@@ -162,28 +168,27 @@ function credentialGroups() {
   return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name, 'ja', { sensitivity: 'base' }));
 }
 const groupId = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'service-' + [...name].map(char => char.codePointAt(0).toString(36)).join('');
-// One line each: the name, what it was declared as when that differs from its group, and when and through whom it came.
-// Only a state that needs the owner is shown; a usable credential says nothing about it.
-function credentialRow(credential, group) {
-  const open = credential.id === selected, declared = credential.service !== group.name ? credential.service : '';
-  return `<li class="credential-entry"><button class="credential-row" data-action="select-credential" data-id="${esc(credential.id)}" aria-expanded="${open}"><span class="credential-title"><strong>${esc(credential.name)}</strong>${declared ? `<small>${esc(declared)}</small>` : ''}${credential.verified === false ? '<span class="status neutral">未確認</span>' : ''}${credential.status !== 'connected' ? `<span class="status warning">${statusName(credential)}</span>` : ''}</span><span class="credential-meta">${esc(new Date(credential.created_at).toLocaleDateString('ja-JP'))} · ${esc(registeredBy(credential))}</span></button>${open ? `<div class="credential-detail">${details(credential)}</div>` : ''}</li>`;
+// One section per group. With several credentials, a list beside the one shown; with one, just that one.
+function groupSection(group) {
+  const id = groupId(group.name), current = group.credentials.find(item => item.id === selected) || group.credentials[0];
+  const list = group.credentials.length > 1 ? `<div class="credential-list" role="group" aria-label="${esc(group.name)}の認証情報">${group.credentials.map(item => `<button class="credential-item ${item.id === current.id ? 'selected' : ''}" data-action="select-credential" data-id="${esc(item.id)}" aria-pressed="${item.id === current.id}"><strong>${esc(item.name)}</strong><span>${esc(cameFrom(item))}</span>${item.status !== 'connected' ? `<small class="warning-text">${statusName(item)}</small>` : ''}</button>`).join('')}</div>` : '';
+  return `<section class="resource-section" aria-labelledby="${id}-title"><div class="section-heading"><div class="section-label"><span class="service-icon">${icon(group.icon)}</span><h2 id="${id}-title">${esc(group.name)}</h2></div></div><div class="credential-workspace${list ? '' : ' single'}">${list}<div class="credential-pane">${details(current, group)}</div></div></section>`;
 }
 function credentialsSection() {
   const groups = credentialGroups(), services = [];
   for (const adapter of state.adapters) if (adapter.service && !adapter.declared && adapter.available && !services.some(item => item.name === adapter.service.name)) services.push(adapter.service);
   services.sort((a, b) => a.name.localeCompare(b.name, 'ja', { sensitivity: 'base' }));
-  return `<section class="resource-section" aria-labelledby="credentials-title"><div class="section-heading"><h2 id="credentials-title">預けた認証情報</h2></div>
-    ${groups.length ? groups.map(group => `<section class="credential-group" aria-labelledby="${groupId(group.name)}-title"><h3 class="group-title" id="${groupId(group.name)}-title"><span class="group-icon">${icon(group.icon)}</span>${esc(group.name)}</h3><ul class="credential-rows">${group.credentials.map(credential => credentialRow(credential, group)).join('')}</ul></section>`).join('') : '<p class="access-empty">まだありません。AIが登録を依頼すると、ここに追加されます。</p>'}
-    ${services.length ? `<div class="add-services"><span>管理画面から登録</span>${services.map(service => `<button class="button secondary" data-action="add-credential" data-service="${esc(service.name)}" aria-label="${esc(service.name)}を登録">${icon('plus')} ${esc(service.name)}</button>`).join('')}</div>` : ''}</section>`;
+  return `<div class="dashboard-heading"><h1>認証情報</h1>${services.length ? `<div class="add-services"><span>管理画面から登録</span>${services.map(service => `<button class="button secondary" data-action="add-credential" data-service="${esc(service.name)}" aria-label="${esc(service.name)}を登録">${icon('plus')} ${esc(service.name)}</button>`).join('')}</div>` : ''}</div>
+    ${groups.length ? groups.map(groupSection).join('') : '<section class="resource-section"><p class="access-empty">まだありません。AIが登録を依頼すると、ここに追加されます。</p></section>'}`;
 }
 function render() {
   if (!state) return;
   clearPrivateInput();
   if (requestId) { renderRequest(); return; }
   const byId = new Map(state.credentials.map((item) => [item.id, item]));
-  app.innerHTML = `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main><header class="page-heading"><h1>認証情報</h1><p>預けた認証情報と、AIのアクセスキーを管理</p></header>
+  app.innerHTML = `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main class="dashboard-main">
     ${credentialsSection()}
-    <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">AIのアクセスキー</h2><p>承認したキーは、預けた認証情報をすべて使えます</p></div></div><button class="button secondary" data-action="add-agent">${icon('plus')} アクセスキーを追加</button></div>
+    <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">AIのアクセスキー</h2></div></div><button class="button secondary" data-action="add-agent">${icon('plus')} アクセスキーを追加</button></div>
     ${state.agents.length ? `<div class="agent-list">${state.agents.map((agent) => `<article class="agent-row"><div class="agent-name"><h3>${esc(agent.name)}</h3><p>${agent.last_used_at ? '最終利用 ' + esc(new Date(agent.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(agent.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-agent" data-id="${esc(agent.id)}">名前を変更</button><button class="text-button danger" data-action="remove-agent" data-id="${esc(agent.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section></main></div>`;
 }
 const siteLink = value => { try { const url = new URL(value); return `<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer"><strong>${esc(url.host)}</strong>${esc(url.pathname === '/' ? '' : url.pathname)} ↗</a>`; } catch { return esc(value); } };
@@ -445,7 +450,7 @@ document.addEventListener('click', async (event) => {
     }
     if (action === 'add-credential') chooseAdapter(target.dataset.service);
     if (action === 'add-adapter') connect(null, target.dataset.adapter);
-    if (action === 'select-credential') { selected = selected === id ? null : id; render(); }
+    if (action === 'select-credential') { selected = id; render(); }
     if (action === 'reconnect') connect(state.credentials.find((a) => a.id === id));
     if (action === 'edit-credential') editCredential(state.credentials.find((a) => a.id === id));
     if (action === 'remove-credential') removeCredential(state.credentials.find((a) => a.id === id));
