@@ -213,7 +213,8 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
   .approval-card { padding: 24px 20px; }
   .approval-heading { align-items: flex-start; gap: 12px; }
   .approval-card h1 { font-size: 22px; }
-  .approval-facts > div { grid-template-columns: 80px minmax(0, 1fr); gap: 8px; }
+  .approval-facts > div { display: block; margin-top: 14px; }
+  .approval-facts dt { font-size: 13px; color: var(--muted); margin-bottom: 3px; }
   dialog { padding: 26px 20px; }
   .dialog-actions { flex-wrap: wrap; }
 }
