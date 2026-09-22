@@ -223,7 +223,7 @@ Resources:
           WantedBy=timers.target
           UNIT
           systemctl daemon-reload
-          systemctl enable foundation-backup.timer
+          systemctl enable --now foundation-backup.timer
           echo "bootstrap complete"
   Address:
     Type: AWS::EC2::EIP
