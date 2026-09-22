@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: A host for Foundation - one small Arm instance in its own network, a KMS key that wraps the data key, a private bucket for backups, and an instance role limited to those (and to the file space, when given). Nothing listens publicly: the service is reached through Tailscale and administered through SSM, never SSH keys. The key and the backups outlive the stack.
+Description: "A host for Foundation - one small Arm instance in its own network, a KMS key that wraps the data key, a private bucket for backups, and an instance role limited to those (and to the file space, when given). Nothing listens publicly: the service is reached through Tailscale and administered through SSM, never SSH keys. The key and the backups outlive the stack."
 Parameters:
   AmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
