@@ -79,6 +79,9 @@ svg { width: 19px; height: 19px; flex-shrink: 0; }
 .status svg { width: 16px; height: 16px; }
 .warning, .warning-text { color: #86531a; }
 .credential-facts { margin: 10px 0 12px; }
+/* A kept value and a kept document are shown as they are: wrapped, never truncated, never re-formatted. */
+.kept-value { font: 500 14px ui-monospace, monospace; overflow-wrap: anywhere; }
+.kept-document { font: 500 14px/1.5 ui-monospace, monospace; background: var(--soft); border-radius: 8px; padding: 12px; margin: 10px 0 0; max-height: 50vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .credential-facts > div { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 12px; margin-top: 6px; }
 dt { font-size: 14px; color: var(--muted); }
 dd { margin: 0; overflow-wrap: anywhere; }
