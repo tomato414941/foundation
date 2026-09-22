@@ -47,12 +47,12 @@ test('OAuth state is browser-bound and expires; cancel and forged callbacks cann
   assert.equal(f.gmail.exchangeCount, 0);
 });
 
-test('Multiple accounts carry purpose, actual scopes and native API discovery, and an approved key reaches all of them', async (t) => {
+test('Multiple accounts carry who registered them, actual scopes and native API discovery, and an approved key reaches all of them', async (t) => {
   const f = await fixture(t), a = await f.credential(), b = await f.credential('work', 'metadata');
   const agent = await f.agent();
   const list = await f.request('/v1/credentials', { token: agent.token });
   assert.deepEqual(list.json.credentials.map(item => item.id), [a.id, b.id]);
-  assert.equal(list.json.credentials[0].purpose, 'サービス登録');
+  assert.equal(list.json.credentials[0].requested_by, '', 'registered from the dashboard, through no request');
   assert.equal(list.json.credentials[0].api.base_url, 'https://gmail.googleapis.com/gmail/v1');
   assert.equal(list.json.credentials[0].delivery.method, 'POST');
   assert.doesNotMatch(list.text, /refresh_token|google-access-|"secret":/);
@@ -99,7 +99,7 @@ test('Registering again pins the Google account and stays within the same adapte
   assert.equal(seen.length, 1); assert.equal(seen[0].id, a.id);
 });
 
-test('Duplicate connection cannot overwrite identity, purpose or existing grants', async (t) => {
+test('Duplicate connection cannot overwrite identity, name or existing grants', async (t) => {
   const f = await fixture(t), a = await f.credential(), agent = await f.agent();
   const flow = await f.start({ name: 'replacement' });
   assert.equal((await f.callback(flow, 'personal-readonly')).headers.get('location'), '/?connection=already_connected&adapter=gmail.readonly');

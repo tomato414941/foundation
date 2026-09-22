@@ -39,7 +39,7 @@ export class GenericClient {
     const ids = this.variables(details);
     const digest = hash(ids.map(id => id + '=' + values[id]).join('\n'));
     return { subject: slug(details.service) + ':' + digest, secret: { values, credential_type: 'api_key', expires_at: null, expiry_known: false,
-      verification: verification([{ check: 'credential', status: 'unknown', code: 'not_checked' }, { check: 'permissions', status: 'unknown', code: 'permissions_unknown' }]),
+      verification: verification([{ check: 'credential', status: 'unknown', code: 'not_checked' }]),
       details: { service: details.service, site: details.site, fields: ids, key_hash: digest, checked_at: Date.now() } } };
   }
   async token(store, credential) {

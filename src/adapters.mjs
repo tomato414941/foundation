@@ -50,6 +50,8 @@ export function gmailMetadata(client) {
 export function openrouterOauth(client) {
   return {
     id: 'openrouter.oauth', service: OPENROUTER, label: 'OpenRouterで接続', register: 'oauth', client, canReconnect: false, canRevoke: false, credentialType: 'api_key',
+    // OpenRouter makes the key before Foundation receives it, so a registration that fails can leave one behind.
+    failureNote: { text: '登録できなくても、OpenRouterで作成済みのキーが残る場合があります。', link: '不要なキーはOpenRouterで削除してください', href: 'https://openrouter.ai/keys' },
     intro: 'OpenRouterでログインし、Foundation用のキーを作成します。',
     access: { name: 'APIキーの利用', description: 'このキーの権限でOpenRouter APIを利用できます。モデルの実行は課金を伴う場合があります。', restrictions: '利用上限と有効期限はOpenRouter側の設定が適用されます。読み取り専用のキーではありません。' },
     variables: ['OPENROUTER_API_KEY'], deliver: secret => ({ environment: { OPENROUTER_API_KEY: secret.access_token } }),
@@ -199,7 +201,7 @@ export class Adapters {
     const adapter = this.get(id), form = this.form(id, details);
     return { id, service: this.service(id, details), label: adapter.declared && details?.service ? details.service + 'のキーを登録' : adapter.label, register: adapter.register, available: adapter.client.enabled,
       intro: adapter.intro || '', access: adapter.access, variables: this.variables(id, details), declared: Boolean(adapter.declared), request_fields: adapter.declared ? [{ id: 'service', label: 'サービス' }, { id: 'site', label: 'キーの作成ページ', type: 'url' }] : [],
-      ...(adapter.instructions ? { instructions: adapter.instructions } : {}), ...(adapter.ai ? { ai: adapter.ai } : {}), ...(adapter.note ? { note: adapter.note } : {}), ...(form ? { form } : {}),
+      ...(adapter.instructions ? { instructions: adapter.instructions } : {}), ...(adapter.ai ? { ai: adapter.ai } : {}), ...(adapter.note ? { note: adapter.note } : {}), ...(adapter.failureNote ? { failure_note: adapter.failureNote } : {}), ...(form ? { form } : {}),
       can_reconnect: adapter.canReconnect !== false, can_revoke: adapter.canRevoke !== false, credential_type: adapter.credentialType || 'oauth2_access_token' };
   }
 }

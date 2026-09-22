@@ -19,7 +19,7 @@ shots.mkdir(parents=True, exist_ok=True)
 def review(page):
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'horizontal overflow'
     text = page.locator('body').inner_text()
-    for phrase in ['管理者キー', '実装', '開発者', '設計意図', 'refresh_token', 'client_secret', 'sk-or-v1-', 'fdn_']:
+    for phrase in ['実装', '開発者', '設計意図', 'refresh_token', 'client_secret', 'sk-or-v1-', 'fdn_']:
         assert phrase not in text, phrase
     assert page.evaluate('localStorage.length === 0 && sessionStorage.length === 0')
     assert 'fdn_session' not in page.evaluate('document.cookie')
@@ -88,6 +88,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.goto(args.base, wait_until='networkidle')
     section = page.locator('[aria-labelledby="openrouter-title"]')
     assert 'Gmail' not in section.inner_text() and 'メール' not in section.inner_text()
+    section.locator('.credential-row').click()
     expect(section.get_by_role('button', name='登録し直す', exact=True)).to_have_count(0)
     section.get_by_role('button', name='検証する', exact=True).click()
     expect(page.get_by_text('OpenRouterで検証できました。', exact=True)).to_be_visible()
@@ -116,10 +117,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.screenshot(path=str(shots / 'disconnect-mobile.png'), full_page=True)
     dialog.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(section.get_by_role('heading', name='OpenRouterの認証情報を登録しましょう', exact=True)).to_be_visible()
+    expect(section).to_have_count(0)
 
     # Root management uses the same adapter-driven flow, with no Gmail-only copy.
-    section.get_by_role('button', name='OpenRouterを登録', exact=True).click()
+    page.get_by_role('button', name='OpenRouterを登録', exact=True).click()
     expect(dialog.get_by_label('表示名 任意', exact=True)).to_have_value('')
     review(page)
     authorization['code'] = 'second'

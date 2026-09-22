@@ -91,7 +91,7 @@ test('Password/code login and malformed or ambiguous callback URLs cannot authen
   const f = await fixture(t, { login: false });
   const cookie = challengeCookie(await send(f));
   for (const data of [{ code: '123456' }, { email: 'new@example.test', password: 'obsolete' }, { access_token: 'forged', refresh_token: 'forged' }]) {
-    assert.equal((await f.request('/api/session', { method: 'POST', data, headers: { cookie } })).status, 400);
+    assert.equal((await f.request('/api/session', { method: 'POST', data, headers: { cookie } })).status, 401);
   }
   for (const suffix of ['', '?code=123456', '?error=access_denied&error_description=secret-value', '?code=valid-looking-code-000&code=duplicate']) {
     const result = await f.request('/auth/callback' + suffix, { headers: { cookie } });

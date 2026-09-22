@@ -7,12 +7,14 @@ import { fail } from './errors.mjs';
 
 export const digest = (value) => createHash('sha256').update(value).digest('hex');
 const now = () => new Date().toISOString();
-const publicColumns = 'id, owner_id, adapter, subject, service, name, purpose, status, generation, created_at, updated_at';
+const publicColumns = 'id, owner_id, adapter, subject, service, name, requested_by, status, generation, created_at, updated_at';
 const binding = credential => `credential:${credential.owner_id}:${credential.id}`;
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 // credentials: what the owner handed over, one row each. adapter is how it is handled; subject identifies it
 //   at the service; service is the name of what it reaches; secret is sealed and bound to owner and id.
+//   requested_by is the name of the key whose request it was registered through, as it was then; empty when the owner
+//   registered it from the dashboard.
 // agents: access keys the owner approved; each may use every credential of its owner.
 // access_requests: one request from a runtime, as it asked and as it went. adapter is empty when the request only asks
 //   for the key to be approved.
@@ -21,7 +23,7 @@ const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE credentials (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, adapter TEXT NOT NULL, subject TEXT NOT NULL, service TEXT NOT NULL,
-    name TEXT NOT NULL, purpose TEXT NOT NULL, status TEXT NOT NULL, secret TEXT NOT NULL,
+    name TEXT NOT NULL, requested_by TEXT, status TEXT NOT NULL, secret TEXT NOT NULL,
     generation INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     UNIQUE(owner_id, adapter, subject)
   );
@@ -92,20 +94,20 @@ export class Store {
         const current = this.credential(ownerId, previous.id);
         if (!current || current.generation !== previous.generation || current.status === 'disconnecting') fail(409, 'connection_changed', '認証情報の状態が変わりました。もう一度お試しください。');
         if (current.subject !== details.subject) fail(409, 'account_changed', '登録し直すには同じアカウントを選んでください。');
-        this.db.prepare("UPDATE credentials SET name=?, purpose=?, secret=?, status='connected', generation=generation+1, updated_at=? WHERE id=?").run(details.name, details.purpose, this.vault.seal(secret, binding(current)), stamp, current.id);
+        this.db.prepare("UPDATE credentials SET name=?, secret=?, status='connected', generation=generation+1, updated_at=? WHERE id=?").run(details.name, this.vault.seal(secret, binding(current)), stamp, current.id);
         return current.id;
       }
       if (this.credentials(ownerId).length >= 25) fail(409, 'credential_limit', '登録できる認証情報は25件までです。');
       if (this.db.prepare('SELECT 1 FROM credentials WHERE owner_id=? AND adapter=? AND subject=?').get(ownerId, details.adapter, details.subject)) fail(409, 'already_connected', 'この認証情報は登録済みです。');
       const id = randomUUID();
-      this.db.prepare('INSERT INTO credentials (id,owner_id,adapter,subject,service,name,purpose,status,secret,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-        .run(id, ownerId, details.adapter, details.subject, details.service, details.name, details.purpose, 'connected', this.vault.seal(secret, binding({ owner_id: ownerId, id })), stamp, stamp);
+      this.db.prepare('INSERT INTO credentials (id,owner_id,adapter,subject,service,name,requested_by,status,secret,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+        .run(id, ownerId, details.adapter, details.subject, details.service, details.name, details.requested_by ?? '', 'connected', this.vault.seal(secret, binding({ owner_id: ownerId, id })), stamp, stamp);
       return id;
     });
   }
-  updateCredential(ownerId, id, name, purpose) {
+  updateCredential(ownerId, id, name) {
     if (!this.credential(ownerId, id)) fail(404, 'not_found', '認証情報が見つかりません。');
-    this.db.prepare('UPDATE credentials SET name=?, purpose=?, updated_at=? WHERE owner_id=? AND id=?').run(name, purpose, now(), ownerId, id);
+    this.db.prepare('UPDATE credentials SET name=?, updated_at=? WHERE owner_id=? AND id=?').run(name, now(), ownerId, id);
   }
   saveSecret(credential, secret) {
     const result = this.db.prepare("UPDATE credentials SET secret=? WHERE owner_id=? AND id=? AND generation=? AND status='connected'").run(this.vault.seal(secret, binding(credential)), credential.owner_id, credential.id, credential.generation);

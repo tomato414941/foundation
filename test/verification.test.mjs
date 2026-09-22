@@ -92,14 +92,15 @@ test('A provider outage is an error to the owner, never proof of bad credentials
   assert.deepEqual((await usable(f, token)).json.credentials, []);
 });
 
-test('Generic API keys report unverified to the owner, without pretending to verify the provider or permissions', async t => {
+test('Generic API keys report once that they were not verified, and record the key that asked for them', async t => {
   const gmail = new FakeGmail(), f = await fixture(t, { gmail, adapters: [gmailReadonly(gmail), gmailMetadata(gmail), generic(new GenericClient())] });
   const details = { service: 'Example', site: 'https://example.test/keys', fields: [{ id: 'EXAMPLE_API_KEY' }] };
   const { row } = await create(f, key(), { adapter: 'generic', details });
   const result = await f.request('/api/adapters/generic/connect', { method: 'POST', data: { name: 'Example', values: { EXAMPLE_API_KEY: 'example-private-key' }, accessRequestId: row.id } });
   assert.equal(result.status, 200, result.text);
   const report = await shown(f, result.json.credential_id);
-  assert.deepEqual(report.checks.map(item => item.status), ['unknown', 'unknown']);
+  assert.deepEqual(report.checks.map(item => [item.check, item.status, item.code]), [['credential', 'unknown', 'not_checked']]);
+  assert.equal((await f.request('/api/state')).json.credentials.find(item => item.id === result.json.credential_id).requested_by, row.requester_name);
   assert.doesNotMatch(JSON.stringify(report), /example-private-key/);
 });
 

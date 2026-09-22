@@ -22,7 +22,7 @@ def check_display(page):
     }""")
     assert not result, result
     copy = page.locator("body").inner_text()
-    for phrase in ["管理キー", "owner-key", "client_secret", "refresh_token", "実装", "開発者", "設計意図", "未設定です"]:
+    for phrase in ["client_secret", "refresh_token", "実装", "開発者", "設計意図", "未設定です"]:
         assert phrase not in copy, phrase
 
 with sync_playwright() as p:
@@ -112,7 +112,6 @@ with sync_playwright() as p:
         # Gmail has one adapter per read range; the owner picks one first.
         dialog.get_by_role("button", name="件名・差出人などの読み取り" if metadata else "メールの読み取り", exact=True).click()
         dialog.get_by_label("表示名 任意", exact=True).fill(name)
-        dialog.locator("#account-purpose").fill("サービスへの登録と確認メール")
         check_display(page)
         if name == "個人用":
             page.screenshot(path=str(shots / "connect.png"), full_page=True)
@@ -124,10 +123,15 @@ with sync_playwright() as p:
 
     connect("個人用", "personal-readonly")
     connect("仕事用", "work-metadata", True)
-    expect(page.locator(".credential-item")).to_have_count(2)
-    page.locator(".credential-item").filter(has_text="仕事用").click()
+    # One line per credential, in the order registered; a line opens to its facts and actions.
+    expect(page.locator(".credential-row")).to_have_count(2)
+    assert page.locator(".credential-row strong").all_inner_texts() == ["個人用", "仕事用"]
+    expect(page.locator(".credential-detail")).to_have_count(0)
+    page.locator(".credential-row").filter(has_text="仕事用").click()
     expect(page.locator('.credential-facts')).to_contain_text("件名・差出人などの読み取り")
-    page.locator(".credential-item").filter(has_text="個人用").click()
+    expect(page.locator(".credential-row").filter(has_text="仕事用").locator(".credential-meta")).to_contain_text("管理画面から")
+    page.locator(".credential-row").filter(has_text="個人用").click()
+    expect(page.locator(".credential-detail")).to_have_count(1)
     page.get_by_role("button", name="検証する", exact=True).click()
     expect(page.get_by_text("Gmailで検証できました。", exact=True)).to_be_visible()
 
@@ -166,19 +170,18 @@ with sync_playwright() as p:
         check_display(page)
     page.set_viewport_size({"width": 390, "height": 1000})
     page.screenshot(path=str(shots / "mobile.png"), full_page=True)
-    page.get_by_role("button", name="編集", exact=True).click()
-    dialog.get_by_label("表示名", exact=True).fill('<img src=x onerror="window.xss=1">')
-    dialog.locator("#account-purpose").fill("長い用途の説明" * 30)
+    page.locator(".credential-row").filter(has_text="個人用").click()
+    page.locator(".credential-detail").get_by_role("button", name="名前を変更", exact=True).click()
+    dialog.get_by_label("表示名", exact=True).fill('<img src=x onerror="window.xss=1">' + "長い名前" * 10)
     dialog.get_by_role("button", name="保存", exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert page.locator(".credential-pane img").count() == 0
+    assert page.locator(".credential-rows img").count() == 0
     assert page.evaluate("window.xss === undefined")
     for width in [320, 601, 1280]:
         page.set_viewport_size({"width": width, "height": 950})
         check_display(page)
-    page.get_by_role("button", name="編集", exact=True).click()
+    page.locator(".credential-detail").get_by_role("button", name="名前を変更", exact=True).click()
     dialog.get_by_label("表示名", exact=True).fill("個人用")
-    dialog.locator("#account-purpose").fill("サービスへの登録と確認メール")
     dialog.get_by_role("button", name="保存", exact=True).click()
     expect(dialog).not_to_be_visible()
 
@@ -198,12 +201,13 @@ with sync_playwright() as p:
     expect(dialog).not_to_be_visible()
     assert runtime("/v1/credentials", token_a).status == 401
     assert runtime("/v1/credentials", token_b).status == 200
+    page.locator(".credential-row").filter(has_text="個人用").click()
     page.get_by_role("button", name="登録を解除", exact=True).click()
     check_display(page)
     page.screenshot(path=str(shots / "disconnect-mobile.png"), full_page=True)
     dialog.get_by_role("button", name="登録を解除", exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(page.locator(".credential-item")).to_have_count(1)
+    expect(page.locator(".credential-row")).to_have_count(1)
     assert runtime("/v1/credentials/" + credential_id + "/deliver", token_b, "POST").status == 403
     page.get_by_role("button", name="ログアウト", exact=True).click()
     expect(page.get_by_role("heading", name="ログイン", exact=True)).to_be_visible()

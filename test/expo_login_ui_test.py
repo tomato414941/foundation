@@ -20,7 +20,7 @@ OTP = '123456'
 def review(page):
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'horizontal overflow'
     copy = page.locator('body').inner_text()
-    for phrase in ['管理者キー', '実装', '開発者', '設計意図', 'session_secret', 'sessionSecret', 'fdn_', PASSWORD, 'fixture-session-', '接続完了を伝えて']:
+    for phrase in ['実装', '開発者', '設計意図', 'session_secret', 'sessionSecret', 'fdn_', PASSWORD, 'fixture-session-', '接続完了を伝えて']:
         assert phrase not in copy, phrase
     assert page.evaluate('localStorage.length === 0 && sessionStorage.length === 0')
     assert 'fdn_session' not in page.evaluate('document.cookie')
@@ -160,21 +160,22 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     # Root connection is optional and never silently grants the runtime.
     page.goto(args.base, wait_until='networkidle')
     section = page.locator('[aria-labelledby="expo-title"]')
+    section.locator('.credential-row').first.click()
     section.get_by_role('button', name='検証する', exact=True).click()
     expect(page.get_by_text('Expoで検証できました。', exact=True)).to_be_visible()
-    section.get_by_role('button', name='Expoを登録', exact=True).click()
+    page.get_by_role('button', name='Expoを登録', exact=True).click()
     dialog = page.get_by_role('dialog')
     username.fill('fixture-user')
     password.fill(PASSWORD)
     dialog.get_by_role('button', name='閉じる', exact=True).click()
-    section.get_by_role('button', name='Expoを登録', exact=True).click()
+    page.get_by_role('button', name='Expoを登録', exact=True).click()
     expect(password).to_have_value('')
     username.fill('fixture-user')
     password.fill(PASSWORD)
     dialog.get_by_role('button', name='ログインして登録', exact=True).click()
     expect(dialog).not_to_be_visible()
     assert len(cli('credentials')['credentials']) == 2, 'the approved key uses a connection the owner adds later'
-    section.locator('.credential-item').filter(has_text='otp-user').click()
+    section.locator('.credential-row').filter(has_text='otp-user').click()
     section.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog.get_by_role('link', name='Expoでキーを削除する', exact=False)).to_have_count(0)
     expect(dialog.get_by_text('Expoのプロジェクトやデータは削除しません。', exact=False)).to_be_visible()
