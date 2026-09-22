@@ -55,28 +55,27 @@ export class AppleClient {
     return { access_token: normalized, credential_type: 'private_key', expires_at: null, expiry_known: false, scopes: [APPLE_SCOPE],
       details: { ...fields, key_hash: digest(normalized), apps_visible: data.data.length, checked_at: Date.now() } };
   }
-  async importToken({ values, permission }) {
+  async importToken({ values }) {
     const { key: token, ...fields } = values;
     this.check();
-    if (permission !== 'api-key') fail(400, 'invalid_permission', '利用する権限を選び直してください。');
-    const credentials = await this.inspect(token, fields);
-    return { subject: 'key:' + credentials.details.key_hash, credentials };
+    const secret = await this.inspect(token, fields);
+    return { subject: 'key:' + secret.details.key_hash, secret };
   }
-  async token(store, account) {
+  async token(store, credential) {
     this.check();
-    if (account.status !== 'connected') fail(409, 'reconnect_required', 'Appleでキーを確認し、新しい接続を追加してください。');
+    if (credential.status !== 'connected') fail(409, 'reconnect_required', 'Appleでキーを確認し、新しく登録し直してください。');
     try {
-      const previous = store.secrets(account), next = await this.inspect(previous.access_token, previous.details);
-      if (account.subject !== 'key:' + next.details.key_hash) invalidResponse();
-      store.saveCredentials(account, next);
+      const previous = store.secret(credential), next = await this.inspect(previous.access_token, previous.details);
+      if (credential.subject !== 'key:' + next.details.key_hash) invalidResponse();
+      store.saveSecret(credential, next);
       return next;
     } catch (error) {
-      if (error instanceof HttpError && error.code === 'reconnect_required') store.reconnectRequired(account);
+      if (error instanceof HttpError && error.code === 'reconnect_required') store.reconnectRequired(credential);
       throw error;
     }
   }
-  accountInfo(credentials) {
-    const detail = credentials.details;
+  facts(secret) {
+    const detail = secret.details;
     return { label: 'Team ' + detail.team_id + ' / Key ' + detail.key_id, credential_type: 'private_key', expires_at: null, expiry_known: false, management_url: APPLE_KEYS,
       apple: { key_id: detail.key_id, issuer_id: detail.issuer_id, team_id: detail.team_id, team_type: detail.team_type }, checked_at: detail.checked_at };
   }

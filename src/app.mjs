@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { Store } from './store.mjs';
 import { fail, HttpError, nameValue } from './errors.mjs';
-import { Adapters, SERVICES } from './adapters.mjs';
+import { Adapters } from './adapters.mjs';
 import { acceptValues } from './schema.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { AccessRequests } from './access-requests.mjs';
@@ -120,39 +120,39 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   function requireOrigin(req, origin) {
     if (req.headers.origin !== origin) fail(403, 'origin_denied', 'この操作はFoundationの画面から行ってください。');
   }
-  function accountFor(ownerId, id) {
-    const account = store.account(ownerId, id);
-    if (!account) fail(404, 'not_found', '接続が見つかりません。');
-    return account;
+  function credentialFor(ownerId, id) {
+    const credential = store.credential(ownerId, id);
+    if (!credential) fail(404, 'not_found', '認証情報が見つかりません。');
+    return credential;
   }
-  function currentAccount(account) {
-    const current = accountFor(account.owner_id, account.id);
-    if (current.status !== 'connected' || current.generation !== account.generation) fail(409, 'connection_changed', '接続状態が変わりました。');
+  function stillCurrent(credential) {
+    const current = credentialFor(credential.owner_id, credential.id);
+    if (current.status !== 'connected' || current.generation !== credential.generation) fail(409, 'connection_changed', '認証情報の状態が変わりました。');
   }
-  // Runs a service exchange, records what was verified on the stored credentials (for the owner's screens only),
-  // and commits atomically. Foundation never reports these outcomes to the runtime; it learns only whether it can use a connection.
+  // A credential is named by what was verified about it, unless the owner names it.
+  const credentialName = (adapter, secret, subject, given) => given || String(adapter.client.facts?.(secret)?.label || subject).slice(0, 80);
+  const givenName = value => value === undefined || value === '' ? '' : nameValue(value, '表示名');
+  // Runs a service exchange, records what was verified on the stored secret (for the owner's screens only),
+  // and commits atomically. Foundation never reports these outcomes to the runtime; it learns only which credentials it can use.
   async function verifyConnection(req, session, user, operation, commit) {
-    const stillCurrent = () => { if (req.aborted || req.socket.destroyed || localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。'); };
     const result = await operation();
-    stillCurrent();
+    if (req.aborted || req.socket.destroyed || localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
     const report = verificationResult(result);
-    if (result.credentials) result.credentials.verification = report;
+    if (result.secret) result.secret.verification = report;
     return store.transaction(() => commit(result, report));
   }
-  // What the owner sees of a stored credential: the row, what its adapter can say about it, the verification, and which permission it satisfies.
-  function publicAccount(account, ownerId) {
-    const adapter = adapters.get(account.adapter);
-    const credentials = store.secrets(store.account(ownerId, account.id));
-    const info = adapter.client.accountInfo?.(credentials) || {};
-    return { ...account, service: adapter.service, ...info, ...(credentials.verification ? { verification: credentials.verification } : {}), permission: adapters.permissionOf(account) };
+  // What the owner sees of a credential: the row, what its adapter verified about it, and how it is delivered.
+  function ownerView(credential) {
+    const adapter = adapters.get(credential.adapter), secret = store.secret(credentialFor(credential.owner_id, credential.id));
+    const { owner_id: _owner, generation: _generation, ...row } = credential;
+    return { ...row, ...(adapter.client.facts?.(secret) || {}), access: adapter.access, variables: adapters.delivered(adapter.id, secret), ...(secret.verification ? { verification: secret.verification } : {}) };
   }
-  // What a runtime sees: the same, plus how it will receive the credential. Never the secret.
-  function resource(account, ownerId) {
-    const adapter = adapters.get(account.adapter);
-    const info = publicAccount(account, ownerId), api = adapter.service ? SERVICES[adapter.service].api : { base_url: '', documentation_url: '' };
-    const endpoint = '/v1/accounts/' + account.id + '/credentials';
-    if (adapter.credentialType === 'expo_session') return { ...info, api, authentication: { method: 'POST', credential_endpoint: endpoint, type: 'expo_session', header: 'expo-session', revocation: 'Stopping a runtime only stops future delivery. Remove this credential with service revocation to invalidate its Expo session. No artificial expiry is applied.' } };
-    return { ...info, api, token_env: adapters.deliver(account.adapter, store.secrets(store.account(ownerId, account.id)), account).token_env, authentication: { method: 'POST', credential_endpoint: endpoint, type: adapter.credentialType === 'api_key' ? 'api_key_bearer' : 'oauth2_bearer', revocation: adapter.canRevoke === false ? 'Stops future credential delivery only. Already delivered keys remain usable until the service expires or deletes them. No artificial short expiry is applied.' : 'Stops future credential issuance; already issued tokens may remain valid until expiry or service revocation.' } };
+  // What a runtime sees: the same, and where to ask for delivery. Never the secret.
+  function runtimeView(credential) {
+    const adapter = adapters.get(credential.adapter), secret = store.secret(credentialFor(credential.owner_id, credential.id));
+    return { ...ownerView(credential), api: adapters.service(adapter.id, secret.details)?.api || { base_url: '', documentation_url: '' },
+      delivery: { method: 'POST', endpoint: '/v1/credentials/' + credential.id + '/deliver',
+        revocation: adapter.canRevoke === false ? 'Stops future delivery only. Keys already delivered remain usable until the service expires or deletes them. No artificial short expiry is applied.' : 'Stops future delivery; tokens already delivered may remain valid until they expire or the service revokes them.' } };
   }
   const server = createServer(async (req, res) => {
     const send = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
@@ -230,13 +230,18 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           if (!code || code.length > 8192) fail(400, 'invalid_state', '接続をやり直してください。');
           let previous;
           if (flow.previous) {
-            previous = accountFor(user.id, flow.previous.id);
+            previous = credentialFor(user.id, flow.previous.id);
             if (previous.generation !== flow.previous.generation || previous.status === 'disconnecting') fail(409, 'connection_changed', '接続状態が変わりました。');
           }
           if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true);
           await verifyConnection(req, session, user,
-            () => adapter.client.exchange({ ...flow, code }, previous ? { subject: previous.subject, credentials: store.secrets(previous) } : undefined),
-            result => { if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true); const id = store.connect(user.id, { adapter: adapter.id, name: flow.name, purpose: flow.purpose, subject: result.subject, scopes: result.credentials.scopes }, result.credentials, previous); if (flow.accessRequestId) requests.registered(flow.accessRequestId, user.id, id); return id; });
+            () => adapter.client.exchange({ ...flow, code, range: adapter.range }, previous ? { subject: previous.subject, secret: store.secret(previous) } : undefined),
+            result => {
+              if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true);
+              const id = store.register(user.id, { adapter: adapter.id, service: adapter.service.name, name: credentialName(adapter, result.secret, result.subject, flow.name), purpose: flow.purpose, subject: result.subject }, result.secret, previous);
+              if (flow.accessRequestId) requests.registered(flow.accessRequestId, user.id, id);
+              return id;
+            });
           if (flow.accessRequestId) requests.record(flow.accessRequestId, 'connected', { adapter: adapter.id });
           return redirect(connectionLocation('connected'));
         } catch (error) {
@@ -285,7 +290,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       }
       // Pairing bootstraps a runtime without a previously issued Foundation key.
       // Possessing the approval URL alone never gives access to this endpoint.
-      // A runtime learns whether it may use a connection from /v1/accounts. When its owner asks for help,
+      // A runtime learns which credentials it may use from /v1/credentials. When its owner asks for help,
       // it may read its own current request raw (what was requested, and what happened at the approval URL).
       if (path === '/v1/adapters' && method === 'GET') return send(200, { adapters: adapters.ids().map(id => adapters.describe(id)) });
       if (path === '/v1/access-requests' || path === '/v1/access-requests/current') {
@@ -296,9 +301,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         if (path === '/v1/access-requests' && method === 'POST') {
           const input = await body(req);
           const name = nameValue(input.name, '依頼元'), purpose = purposeValue(input.purpose);
-          adapters.permission(input.adapter, input.permission);
+          adapters.get(input.adapter);
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
-          return send(201, { request: requests.summary(requests.create(token, { name, purpose, adapter: input.adapter, permission: input.permission, details: input.details, guidance: input.guidance ?? '', validMinutes: input.valid_minutes ?? 30 }), origin) });
+          return send(201, { request: requests.summary(requests.create(token, { name, purpose, adapter: input.adapter, details: input.details, guidance: input.guidance ?? '', validMinutes: input.valid_minutes ?? 30 }), origin) });
         }
         if (path.endsWith('/current') && method === 'GET') return send(200, { request: { ...requests.runtimeView(token), verification_uri: origin + '/connect/' + requests.current(token).id } });
         if (path.endsWith('/current') && method === 'DELETE') {
@@ -311,7 +316,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       if (path.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(method)) requireOrigin(req, origin);
         const { user, session } = await principal(req);
-        if (path === '/api/state' && method === 'GET') return send(200, { user, accounts: store.accounts(user.id).map(account => publicAccount(account, user.id)), agents: store.agents(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
+        if (path === '/api/state' && method === 'GET') return send(200, { user, credentials: store.credentials(user.id).map(ownerView), agents: store.agents(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
         const requestRoute = path.match(/^\/api\/access-requests\/([A-Za-z0-9_-]{43})(\/(?:approve|deny))?$/);
         if (requestRoute) {
           const row = requests.forUser(requestRoute[1], user.id);
@@ -336,9 +341,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const accessRequest = input.accessRequestId === undefined ? null : requests.forUser(input.accessRequestId, user.id, true);
           progressRequestId = accessRequest?.id || null;
           if (accessRequest) requests.record(accessRequest.id, 'connect_started', { adapter: adapter.id });
-          if (accessRequest && (input.permission !== accessRequest.permission || adapter.id !== accessRequest.adapter)) fail(400, 'scope_mismatch', '依頼された接続方法と権限で登録してください。');
-          adapters.permission(adapter.id, input.permission);
-          const name = nameValue(input.name, '表示名'), purpose = purposeValue(input.purpose);
+          if (accessRequest && adapter.id !== accessRequest.adapter) fail(400, 'scope_mismatch', '依頼された接続方法で登録してください。');
+          const given = givenName(input.name), purpose = purposeValue(input.purpose ?? accessRequest?.purpose ?? '');
           if (adapter.register === 'login') {
             let result, committed = false;
             try {
@@ -347,10 +351,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
               const saved = await verifyConnection(req, session, user, async () => { result = await adapter.client.login(input); return result; }, () => {
                 if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
                 if (result.challenge) return { challenge: result.challenge };
-                const id = store.connect(user.id, { adapter: adapter.id, name, purpose, subject: result.subject, scopes: result.credentials.scopes }, result.credentials);
+                const id = store.register(user.id, { adapter: adapter.id, service: adapter.service.name, name: credentialName(adapter, result.secret, result.subject, given), purpose, subject: result.subject }, result.secret);
                 let done = null;
                 if (accessRequest) { done = requests.registered(accessRequest.id, user.id, id); if (!accessRequest.agent_id) done = requests.approve(accessRequest.id, user.id, input.confirmationCode); }
-                return { connected: true, account_id: id, ...(done ? { request: requests.summary(done, origin, { code: false }) } : {}) };
+                return { connected: true, credential_id: id, ...(done ? { request: requests.summary(done, origin, { code: false }) } : {}) };
               });
               if (result.challenge) return send(202, saved);
               committed = true;
@@ -359,14 +363,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             } finally {
               input.password = ''; input.otp = '';
               // A session the service created must not outlive a registration that did not complete. Never log service errors.
-              if (result?.credentials && !committed) await adapter.client.revoke(result.credentials).catch(() => {});
+              if (result?.secret && !committed) await adapter.client.revoke(result.secret).catch(() => {});
             }
           }
-          const previous = input.accountId ? accountFor(user.id, input.accountId) : undefined;
+          const previous = input.credentialId ? credentialFor(user.id, input.credentialId) : undefined;
           if (previous && previous.adapter !== adapter.id) fail(400, 'invalid_adapter', '接続方法が一致しません。');
           if (previous && adapter.canReconnect === false) fail(400, 'new_connection_required', '新しく登録してください。');
           if (previous?.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
-          if (accessRequest && previous && !requests.matches(accessRequest, previous)) fail(400, 'scope_mismatch', 'この依頼では既存の読み取り範囲を変更できません。');
           if (adapter.register === 'paste') {
             // A request fixes what the runtime declared; a registration from the owner's own screen declares it there.
             const details = accessRequest ? requests.details(accessRequest) : adapters.details(adapter.id, input.details);
@@ -374,15 +377,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             input.values = null;
             if (accessRequest) requests.claim(accessRequest.id, user.id);
             const saved = await verifyConnection(req, session, user,
-              () => adapter.client.importToken({ values, permission: input.permission, details }),
+              () => adapter.client.importToken({ values, details }),
               (result, report) => {
                 // Only the candidate this request registered can be corrected while the request is open.
                 const row = accessRequest && requests.forUser(accessRequest.id, user.id, true);
-                const candidate = row?.account_id && store.account(user.id, row.account_id);
+                const candidate = row?.credential_id && store.credential(user.id, row.credential_id);
                 const retry = candidate?.subject === result.subject && candidate.adapter === adapter.id && candidate.status === 'connected' ? candidate : undefined;
-                const accountId = store.connect(user.id, { adapter: adapter.id, name, purpose, subject: result.subject, scopes: result.credentials.scopes }, result.credentials, retry);
-                if (row) requests.registered(row.id, user.id, accountId);
-                return { connected: true, account_id: accountId, verification: report };
+                const id = store.register(user.id, { adapter: adapter.id, service: adapters.service(adapter.id, details).name, name: credentialName(adapter, result.secret, result.subject, given), purpose, subject: result.subject }, result.secret, retry);
+                if (row) requests.registered(row.id, user.id, id);
+                return { connected: true, credential_id: id, verification: report };
               });
             if (accessRequest) requests.record(accessRequest.id, 'connected', { adapter: adapter.id });
             return send(200, saved);
@@ -391,39 +394,39 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const redirectUri = origin + '/oauth/' + adapter.id + '/callback';
           if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
           if (accessRequest) requests.claim(accessRequest.id, user.id);
-          const flow = { adapter: adapter.id, name, purpose, permission: input.permission, verifier, redirectUri, accessRequestId: accessRequest?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
+          const flow = { adapter: adapter.id, name: given, purpose, verifier, redirectUri, accessRequestId: accessRequest?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
           const state = store.addFlow(session.id, flow);
-          return send(200, { url: adapter.client.authorize({ state, verifier, redirectUri, permission: input.permission, email: previous?.subject }) });
+          return send(200, { url: adapter.client.authorize({ state, verifier, redirectUri, range: adapter.range, email: previous?.subject }) });
         }
-        const accountRoute = path.match(/^\/api\/accounts\/([a-f0-9-]{36})(\/check)?$/);
-        if (accountRoute) {
-          const account = accountFor(user.id, accountRoute[1]);
-          if (!accountRoute[2] && method === 'PATCH') {
+        const credentialRoute = path.match(/^\/api\/credentials\/([a-f0-9-]{36})(\/check)?$/);
+        if (credentialRoute) {
+          const credential = credentialFor(user.id, credentialRoute[1]);
+          if (!credentialRoute[2] && method === 'PATCH') {
             const input = await body(req);
-            store.updateAccount(user.id, account.id, nameValue(input.name, '表示名'), purposeValue(input.purpose));
+            store.updateCredential(user.id, credential.id, nameValue(input.name, '表示名'), purposeValue(input.purpose));
             return send(200, { ok: true });
           }
-          if (!accountRoute[2] && method === 'DELETE') {
+          if (!credentialRoute[2] && method === 'DELETE') {
             const input = await body(req);
             if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
-            const adapter = adapters.get(account.adapter), canRevoke = adapter.client.canRevoke?.(store.secrets(account)) ?? adapter.canRevoke !== false;
+            const adapter = adapters.get(credential.adapter), canRevoke = adapter.client.canRevoke?.(store.secret(credential)) ?? adapter.canRevoke !== false;
             if (input.revoke && !canRevoke) fail(409, 'manual_revocation_required', 'キーの無効化は接続先のキー管理画面で行ってください。');
-            if (disconnects.has(account.id)) fail(409, 'disconnect_in_progress', '接続を解除しています。');
-            disconnects.add(account.id);
+            if (disconnects.has(credential.id)) fail(409, 'disconnect_in_progress', '登録を解除しています。');
+            disconnects.add(credential.id);
             try {
-              const previous = store.disconnect(user.id, account.id);
-              if (input.revoke) await adapter.client.revoke(store.secrets(previous));
-              store.removeAccount(user.id, account.id);
+              const previous = store.disconnect(user.id, credential.id);
+              if (input.revoke) await adapter.client.revoke(store.secret(previous));
+              store.removeCredential(user.id, credential.id);
               return send(200, { ok: true, service_revoked: input.revoke });
-            } finally { disconnects.delete(account.id); }
+            } finally { disconnects.delete(credential.id); }
           }
-          if (accountRoute[2] && method === 'POST') {
+          if (credentialRoute[2] && method === 'POST') {
             await body(req);
-            rateLimit('check:' + account.id, 4);
-            const credentials = await adapters.get(account.adapter).client.token(store, account, true);
+            rateLimit('check:' + credential.id, 4);
+            const secret = await adapters.get(credential.adapter).client.token(store, credential, true);
             localSession(req);
-            currentAccount(account);
-            return send(200, { ok: true, ...(credentials.verification ? { verification: credentials.verification } : {}) });
+            stillCurrent(credential);
+            return send(200, { ok: true, ...(secret.verification ? { verification: secret.verification } : {}) });
           }
         }
         if (path === '/api/agents' && method === 'POST') {
@@ -446,7 +449,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       if (path.startsWith('/v1/')) {
         const agent = actor(req);
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
-        if (path === '/v1/accounts' && method === 'GET') return send(200, { accounts: store.accounts(agent.owner_id).filter(account => account.status !== 'disconnecting').map(account => resource(account, agent.owner_id)) });
+        if (path === '/v1/credentials' && method === 'GET') return send(200, { credentials: store.credentials(agent.owner_id).filter(credential => credential.status !== 'disconnecting').map(runtimeView) });
         if (path === '/v1/me' && method === 'GET') return send(200, { agent: store.agentDetails(agent) });
         if (path === '/v1/me' && method === 'PATCH') {
           const input = await body(req);
@@ -459,23 +462,25 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           store.removeAgent(agent.owner_id, agent.id);
           return send(200, { ok: true });
         }
-        const route = path.match(/^\/v1\/accounts\/([a-f0-9-]{36})\/credentials$/);
+        // Delivery: the adapter makes what the command receives from the stored secret, at the moment of use.
+        const route = path.match(/^\/v1\/credentials\/([a-f0-9-]{36})\/deliver$/);
         if (route && method === 'POST') {
           const input = await body(req);
           if (input.duration !== undefined && (!Number.isInteger(input.duration) || input.duration < 1 || input.duration > 86400 * 7)) fail(400, 'invalid_duration', '期間は秒数の整数で指定してください。');
           store.requireAccess(agent, route[1]);
-          const account = accountFor(agent.owner_id, route[1]);
+          const credential = credentialFor(agent.owner_id, route[1]);
           rateLimit('issue:' + agent.id, 30);
-          const adapter = adapters.get(account.adapter);
-          const credentials = await adapter.client.token(store, account, false, { duration: input.duration });
-          const expoSession = credentials.credential_type === 'expo_session';
-          if (!(Number.isFinite(credentials.expires_at) && credentials.expires_at > Date.now()) && !(['api_key', 'private_key', 'aws_temporary'].includes(credentials.credential_type) || expoSession) || credentials.expires_at !== null && !Number.isFinite(credentials.expires_at)) fail(502, 'service_response', '認証情報の有効期限を確認できませんでした。');
+          const adapter = adapters.get(credential.adapter);
+          const secret = await adapter.client.token(store, credential, false, { duration: input.duration });
+          if (secret.expires_at !== null && !(Number.isFinite(secret.expires_at) && secret.expires_at > Date.now())) fail(502, 'service_response', '認証情報の有効期限を確認できませんでした。');
           actor(req);
-          store.requireAccess(agent, account.id);
-          currentAccount(account);
-          store.recordIssuance(agent, credentials.expires_at);
-          const info = adapter.client.accountInfo?.(credentials) || {};
-          return send(200, { access_token: credentials.access_token, token_type: expoSession ? 'Expo-Session' : 'Bearer', credential_type: credentials.credential_type || 'oauth2_access_token', expires_at: credentials.expires_at, expires_in: credentials.expires_at === null ? null : Math.max(0, Math.floor((credentials.expires_at - Date.now()) / 1000)), scope: credentials.scopes.join(' '), account: { id: account.id, adapter: account.adapter, service: adapter.service, subject: account.subject, label: info.label || account.subject }, ...(expoSession ? { credential_header: 'expo-session', session_profile: { user_id: credentials.details.actor_id, username: credentials.details.label } } : {}), ...(info.key_info ? { key_info: info.key_info } : {}), ...(credentials.verification ? { verification: credentials.verification } : {}), ...adapters.deliver(account.adapter, credentials, account), api_base_url: adapter.service ? SERVICES[adapter.service].api.base_url : '' });
+          store.requireAccess(agent, credential.id);
+          stillCurrent(credential);
+          store.recordIssuance(agent, secret.expires_at);
+          const facts = adapter.client.facts?.(secret) || {};
+          return send(200, { credential: { id: credential.id, adapter: credential.adapter, service: credential.service, name: credential.name, label: facts.label || credential.subject },
+            expires_at: secret.expires_at, expires_in: secret.expires_at === null ? null : Math.max(0, Math.floor((secret.expires_at - Date.now()) / 1000)),
+            delivery: adapters.deliver(credential.adapter, secret, credential), ...(facts.key_info ? { key_info: facts.key_info } : {}), ...(secret.verification ? { verification: secret.verification } : {}) });
         }
       }
       fail(404, 'not_found', '指定された操作が見つかりません。');

@@ -1,5 +1,5 @@
 import { AwsClient, signedRequest } from '../src/services/aws.mjs';
-import { awsIamUserKey, gmailOauth } from '../src/adapters.mjs';
+import { awsIamUserKey, gmailReadonly, gmailMetadata } from '../src/adapters.mjs';
 import { FakeGmail, fixture, json } from './helpers.mjs';
 
 export const AWS_KEY_ID = 'AKIAIOSFODNN7EXAMPLE';
@@ -34,12 +34,12 @@ export class FakeAws extends AwsClient {
 
 export async function awsFixture(t, options = {}) {
   const aws = options.aws || new FakeAws(), gmail = new FakeGmail();
-  const f = await fixture(t, { gmail, adapters: [awsIamUserKey(aws), gmailOauth(gmail)], ...options });
-  const importAws = ({ token = AWS_CODE, ...extra } = {}) => f.request('/api/adapters/aws.iam-user-key/connect', { method: 'POST', data: { name: 'AWS', permission: 'assume-role', values: { code: token }, ...extra } });
+  const f = await fixture(t, { gmail, adapters: [awsIamUserKey(aws), gmailReadonly(gmail), gmailMetadata(gmail)], ...options });
+  const importAws = ({ token = AWS_CODE, ...extra } = {}) => f.request('/api/adapters/aws.iam-user-key/connect', { method: 'POST', data: { name: 'AWS', values: { code: token }, ...extra } });
   async function awsAccount(extra = {}) {
     const result = await importAws(extra);
     if (result.status !== 200) throw new Error(result.text);
-    return (await f.request('/api/state')).json.accounts.find(account => account.id === result.json.account_id);
+    return (await f.request('/api/state')).json.credentials.find(account => account.id === result.json.credential_id);
   }
   return { ...f, aws, importAws, awsAccount };
 }

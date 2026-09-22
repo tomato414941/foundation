@@ -10,7 +10,7 @@ import { appleFixture, APPLE_P8, APPLE_FIELDS } from './apple-helper.mjs';
 import { json, USER_A } from './helpers.mjs';
 
 const key = () => 'fdn_' + randomBytes(32).toString('base64url');
-const credential = (f, id, token) => f.request('/v1/accounts/' + id + '/credentials', { method: 'POST', anonymous: true, token, data: {} });
+const credential = (f, id, token) => f.request('/v1/credentials/' + id + '/deliver', { method: 'POST', anonymous: true, token, data: {} });
 const execute = (args, env) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, ['src/runtime.mjs', ...args], { env: { ...process.env, ...env } });
   let out = '', err = '';
@@ -47,7 +47,6 @@ test('Apple rejects wrong identifiers, non-P-256 keys, malformed keys and keys A
   assert.equal(f.apple.calls.length, 0, 'format checks never contact Apple');
   const wrongFields = await f.importApple({ fields: { ...APPLE_FIELDS, key_id: 'short' } });
   assert.equal(wrongFields.status, 400); assert.equal(wrongFields.json.error.code, 'invalid_values');
-  assert.equal((await f.importApple({ permission: 'session' })).status, 400);
   // A key Apple no longer accepts: valid PEM, wrong key id for the signature.
   const other = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' });
   const refused = await f.importApple({ token: other });
@@ -59,13 +58,13 @@ test('Apple rejects wrong identifiers, non-P-256 keys, malformed keys and keys A
   f.apple.handler = () => json({ nope: true });
   assert.equal((await f.importApple()).json.error.code, 'service_response');
   f.apple.handler = null;
-  assert.equal(f.app.store.accounts(USER_A).length, 0);
+  assert.equal(f.app.store.credentials(USER_A).length, 0);
   assert.equal((await f.importApple()).status, 200);
   assert.equal((await f.importApple()).status, 409, 'same key twice');
 });
 
 test('The runtime receives the .p8 as a file that exists only while the command runs, alongside the identifiers and another connection', async t => {
-  const f = await appleFixture(t), apple = await f.appleAccount(), gmail = await f.account();
+  const f = await appleFixture(t), apple = await f.appleAccount(), gmail = await f.credential();
   const { dir, env } = await grant(f, [apple.id, gmail.id]); t.after(() => rm(dir, { recursive: true, force: true }));
   const issued = await credential(f, apple.id, (await f.request('/api/state')).json.agents && null);
   assert.equal(issued.status, 401, 'anonymous issuance still requires a key');
@@ -74,7 +73,7 @@ test('The runtime receives the .p8 as a file that exists only while the command 
     const stat = fs.statSync(p); const pem = fs.readFileSync(p, 'utf8');
     if ((stat.mode & 0o777) !== 0o600 || !pem.startsWith('-----BEGIN PRIVATE KEY-----')) process.exit(2);
     if (process.env.EXPO_ASC_KEY_ID !== 'ABC1234567' || process.env.EXPO_APPLE_TEAM_TYPE !== 'INDIVIDUAL' || !process.env.GOOGLE_OAUTH_ACCESS_TOKEN) process.exit(3);
-    if (process.env.FOUNDATION_ACCESS_TOKEN !== '' || process.env.FOUNDATION_ADAPTER !== 'apple.api-key' || process.env.FOUNDATION_ACCOUNT_IDS.split(',').length !== 2) process.exit(4);
+    if (process.env.FOUNDATION_CREDENTIAL_IDS.split(',').length !== 2) process.exit(4);
     console.log(p);`];
   const run = await execute(['exec', apple.id, gmail.id, '--', process.execPath, ...probe], env);
   assert.equal(run.code, 0, run.err + run.out);
@@ -84,7 +83,7 @@ test('The runtime receives the .p8 as a file that exists only while the command 
   assert.deepEqual((await readdir(dir)).filter(name => name.startsWith('foundation-')), [], 'secret directory removed after exit');
   assert.ok(!run.out.includes('PRIVATE KEY') && !run.err.includes('PRIVATE KEY'));
   // Two connections that would set the same variable are refused before anything runs.
-  const second = await f.account('second');
+  const second = await f.credential('second');
   const both = await grant(f, [gmail.id, second.id]); t.after(() => rm(both.dir, { recursive: true, force: true }));
   const clash = await execute(['exec', gmail.id, second.id, '--', process.execPath, '-e', 'console.log("must-not-run")'], both.env);
   assert.equal(clash.code, 1); assert.match(clash.err, /GOOGLE_OAUTH_ACCESS_TOKEN/); assert.doesNotMatch(clash.out, /must-not-run/);
@@ -103,6 +102,6 @@ test('A key Apple stops accepting marks the connection for reconnection on next 
   f.apple.handler = () => json({ errors: [] }, 401);
   const revoked = await credential(f, apple.id, runtime.token);
   assert.equal(revoked.status, 409); assert.equal(revoked.json.error.code, 'reconnect_required');
-  assert.equal((await f.request('/api/state')).json.accounts[0].status, 'reconnect_required');
-  assert.equal((await f.request('/api/accounts/' + apple.id, { method: 'DELETE', data: { revoke: true } })).json.error.code, 'manual_revocation_required');
+  assert.equal((await f.request('/api/state')).json.credentials[0].status, 'reconnect_required');
+  assert.equal((await f.request('/api/credentials/' + apple.id, { method: 'DELETE', data: { revoke: true } })).json.error.code, 'manual_revocation_required');
 });

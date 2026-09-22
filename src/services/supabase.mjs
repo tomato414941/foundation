@@ -35,28 +35,27 @@ export class SupabaseClient {
     return { access_token: token, credential_type: 'api_key', expires_at: null, expiry_known: false, scopes: [SUPABASE_SCOPE],
       details: { token_hash: digest(token), user_id: profile.gotrue_id, email: profile.primary_email.toLowerCase(), username: profile.username, organizations: organizations.map(item => ({ slug: item.slug, name: item.name })), checked_at: Date.now() } };
   }
-  async importToken({ values, permission }) {
+  async importToken({ values }) {
     const { token } = values;
     this.check();
-    if (permission !== 'access-token') fail(400, 'invalid_permission', '利用する権限を選び直してください。');
-    const credentials = await this.inspect(token);
-    return { subject: 'token:' + credentials.details.token_hash, credentials };
+    const secret = await this.inspect(token);
+    return { subject: 'token:' + secret.details.token_hash, secret };
   }
-  async token(store, account) {
+  async token(store, credential) {
     this.check();
-    if (account.status !== 'connected') fail(409, 'reconnect_required', 'Supabaseでトークンを確認し、新しい接続を追加してください。');
+    if (credential.status !== 'connected') fail(409, 'reconnect_required', 'Supabaseでトークンを確認し、新しく登録し直してください。');
     try {
-      const previous = store.secrets(account), next = await this.inspect(previous.access_token);
-      if (account.subject !== 'token:' + next.details.token_hash || previous.details.user_id !== next.details.user_id) invalidResponse();
-      store.saveCredentials(account, next);
+      const previous = store.secret(credential), next = await this.inspect(previous.access_token);
+      if (credential.subject !== 'token:' + next.details.token_hash || previous.details.user_id !== next.details.user_id) invalidResponse();
+      store.saveSecret(credential, next);
       return next;
     } catch (error) {
-      if (error instanceof HttpError && error.code === 'reconnect_required') store.reconnectRequired(account);
+      if (error instanceof HttpError && error.code === 'reconnect_required') store.reconnectRequired(credential);
       throw error;
     }
   }
-  accountInfo(credentials) {
-    const detail = credentials.details;
+  facts(secret) {
+    const detail = secret.details;
     return { label: detail.email, credential_type: 'api_key', expires_at: null, expiry_known: false, management_url: SUPABASE_TOKENS,
       key_info: null, organizations: detail.organizations, checked_at: detail.checked_at };
   }

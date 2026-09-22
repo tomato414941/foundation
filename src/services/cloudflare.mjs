@@ -63,35 +63,34 @@ export class CloudflareClient {
       verification: verification([{ check: 'credential', status: 'passed', code: 'active' }, r2, { check: 'permissions', status: 'unknown', code: 'permissions_unknown' }]),
       details: { token_hash: digest(token), token_id: verified.id, account_id: id, checked_at: Date.now() } };
   }
-  async importToken({ values, permission }) {
+  async importToken({ values }) {
     const { token, account_id: accountId } = values;
     this.check();
-    if (permission !== 'api-token') fail(400, 'invalid_permission', '利用する権限を選び直してください。');
-    let credentials;
-    try { credentials = await this.inspect(token, accountId); }
+    let secret;
+    try { secret = await this.inspect(token, accountId); }
     catch (error) {
       error.verification = verification([failedCheck(error, error.code === 'invalid_account' ? 'input' : 'credential'), { check: 'r2_bucket_list', status: 'unknown', code: 'not_checked' }, { check: 'permissions', status: 'unknown', code: 'permissions_unknown' }]);
       throw error;
     }
     // One token must not appear to be several separately scoped connections.
-    return { subject: 'token:' + credentials.details.token_hash, credentials };
+    return { subject: 'token:' + secret.details.token_hash, secret };
   }
-  async token(store, account) {
+  async token(store, credential) {
     this.check();
-    if (account.status !== 'connected') fail(409, 'reconnect_required', 'Cloudflareでトークンを確認し、新しい接続を追加してください。');
+    if (credential.status !== 'connected') fail(409, 'reconnect_required', 'Cloudflareでトークンを確認し、新しく登録し直してください。');
     try {
-      const previous = store.secrets(account), next = await this.inspect(previous.access_token, previous.details.account_id);
-      if (account.subject !== 'token:' + next.details.token_hash || previous.details.token_id !== next.details.token_id || previous.details.account_id !== next.details.account_id) invalidResponse();
-      store.saveCredentials(account, next);
+      const previous = store.secret(credential), next = await this.inspect(previous.access_token, previous.details.account_id);
+      if (credential.subject !== 'token:' + next.details.token_hash || previous.details.token_id !== next.details.token_id || previous.details.account_id !== next.details.account_id) invalidResponse();
+      store.saveSecret(credential, next);
       return next;
     } catch (error) {
-      if (error instanceof HttpError && error.code === 'reconnect_required') store.reconnectRequired(account);
+      if (error instanceof HttpError && error.code === 'reconnect_required') store.reconnectRequired(credential);
       throw error;
     }
   }
-  accountInfo(credentials) {
-    const detail = credentials.details;
-    return { label: 'Cloudflare ' + detail.account_id, credential_type: 'api_key', expires_at: credentials.expires_at, expiry_known: true,
+  facts(secret) {
+    const detail = secret.details;
+    return { label: 'Cloudflare ' + detail.account_id, credential_type: 'api_key', expires_at: secret.expires_at, expiry_known: true,
       management_url: CLOUDFLARE_TOKENS, cloudflare_account_id: detail.account_id, checked_at: detail.checked_at };
   }
   async revoke() { fail(409, 'manual_revocation_required', 'トークンの無効化はCloudflareのAPIトークン管理画面で行ってください。'); }

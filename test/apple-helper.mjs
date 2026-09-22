@@ -1,6 +1,6 @@
 import { createPrivateKey, createPublicKey, verify } from 'node:crypto';
 import { AppleClient, APPLE_API } from '../src/services/apple.mjs';
-import { appleApiKey, gmailOauth } from '../src/adapters.mjs';
+import { appleApiKey, gmailReadonly, gmailMetadata } from '../src/adapters.mjs';
 import { FakeGmail, fixture, json } from './helpers.mjs';
 
 // A fixed test key so every process (unit tests, fixture server, browser tests) agrees on it. Never used outside tests.
@@ -36,12 +36,12 @@ export class FakeApple extends AppleClient {
 
 export async function appleFixture(t, options = {}) {
   const apple = options.apple || new FakeApple(), gmail = new FakeGmail();
-  const f = await fixture(t, { gmail, adapters: [appleApiKey(apple), gmailOauth(gmail)], ...options });
-  const importApple = ({ token = APPLE_P8, fields = APPLE_FIELDS, ...extra } = {}) => f.request('/api/adapters/apple.api-key/connect', { method: 'POST', data: { name: 'Apple', permission: 'api-key', values: { ...fields, key: token }, ...extra } });
+  const f = await fixture(t, { gmail, adapters: [appleApiKey(apple), gmailReadonly(gmail), gmailMetadata(gmail)], ...options });
+  const importApple = ({ token = APPLE_P8, fields = APPLE_FIELDS, ...extra } = {}) => f.request('/api/adapters/apple.api-key/connect', { method: 'POST', data: { name: 'Apple', values: { ...fields, key: token }, ...extra } });
   async function appleAccount(extra = {}) {
     const result = await importApple(extra);
     if (result.status !== 200) throw new Error(result.text);
-    return (await f.request('/api/state')).json.accounts.find(account => account.id === result.json.account_id);
+    return (await f.request('/api/state')).json.credentials.find(account => account.id === result.json.credential_id);
   }
   return { ...f, apple, importApple, appleAccount };
 }

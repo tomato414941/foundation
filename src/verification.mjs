@@ -46,7 +46,7 @@ export function failedCheck(error, check = 'connection') {
 }
 
 export function verificationResult(result, error) {
-  const supplied = error?.verification || result?.credentials?.verification;
+  const supplied = error?.verification || result?.secret?.verification;
   if (supplied?.checks) return verification(supplied.checks);
   if (error) return verification([failedCheck(error)]);
   if (result?.challenge) return verification([{ check: 'connection', status: 'unknown', code: 'challenge_required' }]);

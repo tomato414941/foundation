@@ -8,7 +8,7 @@ import { AppleClient } from './services/apple.mjs';
 import { AwsClient } from './services/aws.mjs';
 import { CloudflareClient } from './services/cloudflare.mjs';
 import { GenericClient } from './generic.mjs';
-import { gmailOauth, openrouterOauth, expoToken, expoLogin, supabaseAccessToken, cloudflareApiToken, appleApiKey, awsIamUserKey, generic } from './adapters.mjs';
+import { gmailReadonly, gmailMetadata, openrouterOauth, expoToken, expoLogin, supabaseAccessToken, cloudflareApiToken, appleApiKey, awsIamUserKey, generic } from './adapters.mjs';
 import { SupabaseAuth } from './auth.mjs';
 import { Kms, resolveEncryptionKey } from './kms.mjs';
 
@@ -17,7 +17,7 @@ const kms = config.kms.keyId ? new Kms({ keyId: config.kms.keyId, region: config
 const encryptionKey = await resolveEncryptionKey({ database: config.database, encryptionKey: config.encryptionKey, kms });
 const auth = new SupabaseAuth(config.supabase);
 const gmail = new GmailClient(config.google), expo = new ExpoClient(config.expo);
-const adapters = [openrouterOauth(new OpenRouterClient()), expoToken(expo), ...(config.expo.sessionLogin ? [expoLogin(expo)] : []), supabaseAccessToken(new SupabaseClient()), cloudflareApiToken(new CloudflareClient()), appleApiKey(new AppleClient()), awsIamUserKey(new AwsClient(), config.aws), gmailOauth(gmail), generic(new GenericClient())];
+const adapters = [openrouterOauth(new OpenRouterClient()), expoToken(expo), ...(config.expo.sessionLogin ? [expoLogin(expo)] : []), supabaseAccessToken(new SupabaseClient()), cloudflareApiToken(new CloudflareClient()), appleApiKey(new AppleClient()), awsIamUserKey(new AwsClient(), config.aws), gmailReadonly(gmail), gmailMetadata(gmail), generic(new GenericClient())];
 const app = createApp({ database: config.database, encryptionKey, publicOrigin: config.publicOrigin, trustedProxies: config.trustedProxies, auth, adapters });
 app.server.listen(config.port, config.bind, () => {
   console.log(`Foundation: http://${config.bind}:${config.port}`);
