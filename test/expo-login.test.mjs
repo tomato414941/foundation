@@ -10,12 +10,14 @@ import { expoLoginFixture, LOGIN_PASSWORD, LOGIN_OTP } from './expo-login-helper
 import { json, USER_A } from './helpers.mjs';
 
 const credential = (f, id, token) => f.request('/v1/credentials/' + id + '/deliver', { method: 'POST', token, anonymous: true, data: {} });
+// A registration request for an Expo login, from a key the owner has approved.
 async function requestAccess(f, extra = {}) {
   const token = 'fdn_' + randomBytes(32).toString('base64url');
-  const created = await f.request('/v1/access-requests', { method: 'POST', token, data: { name: 'dev-us のAI', adapter: 'expo.login', purpose: '接続の確認のみ', ...extra } });
+  await f.approveKey(token);
+  const created = await f.request('/v1/access-requests', { method: 'POST', token, data: { adapter: 'expo.login', purpose: '接続の確認のみ', ...extra } });
   assert.equal(created.status, 201, created.text);
   const row = created.json.request;
-  return { token, row, input: { accessRequestId: row.id, confirmationCode: row.confirmation_code } };
+  return { token, row, input: { accessRequestId: row.id } };
 }
 const safeResponse = response => assert.doesNotMatch(response.text, /fixture-password|fixture-session|"password"\s*:|sessionSecret|"otp"\s*:\s*"123456"/);
 
@@ -41,10 +43,10 @@ test('Expo password login stores only an encrypted session, never password/OTP o
   assert.equal(f.expo.calls[1].options.headers.authorization, undefined);
 });
 
-test('Single login-and-allow atomically approves the exact request and delivers a typed session to the runtime', async t => {
+test('Logging in through a registration request completes it and delivers a typed session to the runtime', async t => {
   const f = await expoLoginFixture(t), { token, row, input } = await requestAccess(f);
-  assert.equal(row.adapter.register, 'login');
-  assert.equal((await f.request('/v1/credentials', { token })).status, 401);
+  assert.equal(row.adapter.register, 'login'); assert.equal(row.confirmation_code, undefined);
+  assert.deepEqual((await f.request('/v1/credentials', { token })).json.credentials, []);
   const result = await f.loginExpo(input); assert.equal(result.status, 200, result.text); safeResponse(result);
   assert.equal(result.json.request.status, 'approved');
   const listed = await f.request('/v1/credentials', { token }); safeResponse(listed);
@@ -62,7 +64,7 @@ test('Expo MFA keeps no server-side password challenge, grants nothing before va
   const challenge = await f.loginExpo({ ...input, username: 'otp-user' });
   assert.equal(challenge.status, 202); safeResponse(challenge);
   assert.deepEqual(challenge.json, { challenge: { type: 'otp', delivery: 'authenticator' } });
-  assert.equal(f.app.store.credentials(USER_A).length, 0); assert.equal(f.app.store.agents(USER_A).length, 0);
+  assert.equal(f.app.store.credentials(USER_A).length, 0);
   const wrong = await f.loginExpo({ ...input, username: 'otp-user', otp: '000000' });
   assert.equal(wrong.status, 400); safeResponse(wrong); assert.doesNotMatch(wrong.text, /000000/);
   const complete = await f.loginExpo({ ...input, username: 'otp-user', otp: LOGIN_OTP });
@@ -74,11 +76,10 @@ test('Expo MFA keeps no server-side password challenge, grants nothing before va
   assert.deepEqual(sms.json, { challenge: { type: 'otp', delivery: 'sms' } });
 });
 
-test('Login cannot be invoked by an anonymous runtime, another origin, a wrong confirmation code, or a request for another adapter', async t => {
+test('Login cannot be invoked by an anonymous runtime, another origin, or a request for another adapter', async t => {
   const f = await expoLoginFixture(t), request = await requestAccess(f);
   assert.equal((await f.loginExpo(request.input, { anonymous: true, token: request.token })).status, 401);
   assert.equal((await f.loginExpo(request.input, { headers: { origin: 'https://attacker.example' } })).status, 403);
-  assert.equal((await f.loginExpo({ ...request.input, confirmationCode: 'wrong' })).json.error.code, 'confirmation_required');
   const wrongScope = await requestAccess(f, { adapter: 'expo.token' });
   assert.equal((await f.loginExpo(wrongScope.input)).json.error.code, 'scope_mismatch');
   assert.equal(f.expo.calls.length, 0);
@@ -99,17 +100,17 @@ for (const kind of ['cancel', 'deny', 'expire', 'logout', 'switch-user']) test('
   if (kind === 'switch-user') await f.login('other@example.test');
   release(); const result = await pending;
   assert.ok(result.status >= 400, result.text); safeResponse(result);
-  assert.equal(f.app.store.credentials(USER_A).length, 0); assert.equal(f.app.store.agents(USER_A).length, 0);
+  assert.equal(f.app.store.credentials(USER_A).length, 0);
   assert.equal(f.expo.sessions.size, 0);
   assert.equal(f.expo.calls.filter(call => call.url.endsWith('/auth/logout')).length, 1);
 });
 
-test('A failed key approval rolls back the connection and logs out upstream; nested transactions preserve an outer transaction', async t => {
+test('A registration that cannot be stored rolls back and logs out upstream; nested transactions preserve an outer transaction', async t => {
   const f = await expoLoginFixture(t), { input } = await requestAccess(f);
-  for (let i = 0; i < 50; i++) f.app.store.addAgent(USER_A, 'key ' + i);
+  for (let i = 0; i < 25; i++) f.app.store.register(USER_A, { adapter: 'expo.token', service: 'Expo', subject: 'token:' + i, name: 'filler ' + i, purpose: '' }, { access_token: 'x' });
   const result = await f.loginExpo(input);
-  assert.equal(result.status, 409, result.text); safeResponse(result);
-  assert.equal(f.app.store.credentials(USER_A).length, 0); assert.equal(f.expo.sessions.size, 0);
+  assert.equal(result.status, 409, result.text); assert.equal(result.json.error.code, 'credential_limit'); safeResponse(result);
+  assert.equal(f.app.store.credentials(USER_A).length, 25); assert.equal(f.expo.sessions.size, 0);
   assert.equal(f.app.store.transactionDepth, 0);
   f.app.store.transaction(() => {
     assert.throws(() => f.app.store.transaction(() => { throw new Error('rollback nested only'); }));
@@ -132,10 +133,10 @@ test('Closing the browser request during login discards and logs out the upstrea
     headers: { origin: f.base, cookie: f.cookie(), 'content-type': 'application/json' }, body: JSON.stringify({ ...input, name: 'Expo', username: 'fixture-user', password: LOGIN_PASSWORD }) });
   const aborted = assert.rejects(pending, { name: 'AbortError' });
   await began; controller.abort(); await aborted; await closed; release(); await loggedOut;
-  assert.equal(f.expo.sessions.size, 0); assert.equal(f.app.store.credentials(USER_A).length, 0); assert.equal(f.app.store.agents(USER_A).length, 0);
+  assert.equal(f.expo.sessions.size, 0); assert.equal(f.app.store.credentials(USER_A).length, 0);
 });
 
-test('Concurrent login submissions cannot create two connections or grants for one request', async t => {
+test('Concurrent login submissions cannot create two credentials for one request', async t => {
   const f = await expoLoginFixture(t), { input } = await requestAccess(f);
   const release = []; let started;
   const began = new Promise(resolve => started = resolve);
@@ -186,9 +187,11 @@ test('EAS reads the isolated session; no EXPO_TOKEN, shared login overwrite, cre
     const child = spawn(process.execPath, ['src/runtime.mjs', ...args], { env }); let out = '', err = '';
     child.stdout.on('data', chunk => out += chunk); child.stderr.on('data', chunk => err += chunk); child.once('error', reject); child.once('exit', code => resolve({ code, out, err }));
   });
-  const created = await execute(['connect', '--adapter', 'expo.login']); assert.equal(created.code, 0, created.err);
+  const asked = JSON.parse((await execute(['connect'])).out).request;
+  await f.request('/api/access-requests/' + asked.id + '/approve', { method: 'POST', data: { confirmationCode: asked.confirmation_code } });
+  const created = await execute(['connect', '--adapter', 'expo.login', '--purpose', 'EAS のビルド']); assert.equal(created.code, 0, created.err);
   const row = JSON.parse(created.out).request; assert.equal(row.adapter.id, 'expo.login');
-  const result = await f.loginExpo({ accessRequestId: row.id, confirmationCode: row.confirmation_code });
+  const result = await f.loginExpo({ accessRequestId: row.id });
   const id = result.json.credential_id;
   const fingerprint = async () => { try { return createHash('sha256').update(await readFile(join(homedir(), '.expo/state.json'))).digest('hex'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
   const before = await fingerprint();

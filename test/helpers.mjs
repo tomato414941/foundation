@@ -97,6 +97,14 @@ export async function fixture(t, options = {}) {
     assert.equal(response.headers.get('location'), '/?connection=connected&adapter=gmail.' + range, response.text);
     return (await request('/api/state')).json.credentials.find((item) => item.subject === code + '@example.test');
   }
+  // Makes a runtime key known to the owner: the key asks to be approved and the owner types its code.
+  async function approveKey(token, name = 'dev-us') {
+    const asked = await request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { name } });
+    assert.equal(asked.status, 201, asked.text);
+    const done = await request('/api/access-requests/' + asked.json.request.id + '/approve', { method: 'POST', data: { confirmationCode: asked.json.request.confirmation_code } });
+    assert.equal(done.status, 200, done.text);
+    return asked.json.request;
+  }
   async function agent(name = 'dev-us') {
     const result = await request('/api/agents', { method: 'POST', data: { name } });
     assert.equal(result.status, 201, result.text);
@@ -107,5 +115,5 @@ export async function fixture(t, options = {}) {
     app.store.saveSecret(credential, { ...app.store.secret(credential), expires_at: Date.now() - 1 });
   }
   if (options.login !== false) await login();
-  return { app, auth, gmail, base, request, login, start, callback, credential, agent, expire, cookie: () => cookie };
+  return { app, auth, gmail, base, request, login, start, callback, credential, agent, approveKey, expire, cookie: () => cookie };
 }

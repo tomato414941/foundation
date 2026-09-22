@@ -10,7 +10,8 @@ import { FakeExpo, expoFixture } from './expo-helper.mjs';
 import { json, USER_A } from './helpers.mjs';
 
 const credential = (f, id, token) => f.request('/v1/credentials/' + id + '/deliver', { method: 'POST', anonymous: true, token, data: {} });
-const createRequest = async (f, token) => (await f.request('/v1/access-requests', { method: 'POST', token, data: { adapter: 'expo.token', name: 'dev-us のAI', purpose: 'アカウントの確認のみ。ビルドしません。' } })).json.request;
+// A registration request comes from a key the owner has approved.
+const createRequest = async (f, token) => { await f.approveKey(token); return (await f.request('/v1/access-requests', { method: 'POST', token, anonymous: true, data: { adapter: 'expo.token', purpose: 'アカウントの確認のみ。ビルドしません。' } })).json.request; };
 const execute = (args, env) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, ['src/runtime.mjs', ...args], { env: { ...process.env, ...env } });
   let out = '', err = '';
@@ -66,11 +67,9 @@ test('Expo supports Robot and SSO identities without pretending tokens are read-
 
 test('Expo approval binds requesting runtime, retains explicit consent and prevents later delivery after revocation', async t => {
   const f = await expoFixture(t), token = 'fdn_' + randomBytes(32).toString('base64url');
+  assert.equal((await f.request('/v1/credentials', { token, anonymous: true })).status, 401, 'nothing before the key is approved');
   const row = await createRequest(f, token), account = await f.expoAccount({ accessRequestId: row.id });
-  assert.equal((await credential(f, account.id, token)).status, 401);
-  assert.equal((await f.request('/v1/credentials', { token, anonymous: true })).status, 401);
-  const approve = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { credentialId: account.id, confirmationCode: row.confirmation_code } });
-  assert.equal(approve.status, 200);
+  assert.equal((await f.request('/api/access-requests/' + row.id)).json.request.status, 'approved', 'registering completes the request');
   const listed = await f.request('/v1/credentials', { token });
   assert.deepEqual(listed.json.credentials[0].variables, ['EXPO_TOKEN']);
   assert.match(listed.json.credentials[0].delivery.revocation, /until the service expires or deletes them/);
@@ -81,7 +80,7 @@ test('Expo approval binds requesting runtime, retains explicit consent and preve
   assert.equal(listed.json.credentials[0].api.base_url, EXPO_API);
   assert.equal(f.app.store.agents(USER_A)[0].issued_nonexpiring, 1);
   assert.equal(f.expo.calls.length, 2, 'identity is rechecked on delivery');
-  await f.request('/api/agents/' + approve.json.request.agent_id, { method: 'DELETE' });
+  await f.request('/api/agents/' + f.app.store.agents(USER_A)[0].id, { method: 'DELETE' });
   assert.equal((await credential(f, account.id, token)).status, 401);
 });
 
@@ -150,18 +149,16 @@ test('CLI resumes Expo approval and injects EXPO_TOKEN only into selected comman
   const f = await expoFixture(t), account = await f.expoAccount();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-expo-cli-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'runtime-key'), EXPO_TOKEN: 'unrelated-existing-token', OPENROUTER_API_KEY: 'unrelated-key', GOOGLE_OAUTH_ACCESS_TOKEN: 'unrelated-google' };
-  const start = await execute(['connect', '--adapter', 'expo.token', '--name', 'dev-us のAI'], env);
+  const start = await execute(['connect', '--name', 'dev-us のAI'], env);
   assert.equal(start.code, 0, start.err);
   const row = JSON.parse(start.out).request;
-  assert.equal(row.adapter.id, 'expo.token');
-  await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { credentialId: account.id, confirmationCode: row.confirmation_code } });
+  assert.equal(row.kind, 'approve');
+  assert.equal((await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code } })).status, 200);
   const run = await execute(['exec', account.id, '--', process.execPath, '-e', 'if(!process.env.EXPO_TOKEN || process.env.EXPO_TOKEN==="unrelated-existing-token" || process.env.FOUNDATION_RUNTIME_KEY_FILE) process.exit(2); console.log("expo-ready")'], env);
   assert.equal(run.code, 0, run.err); assert.equal(run.out.trim(), 'expo-ready');
   assert.ok(!(start.out + start.err + run.out + run.err).includes(f.expo.tokenValue()));
   assert.doesNotMatch(start.out + start.err + run.out + run.err, /fdn_/);
   const gmail = await f.credential();
-  const agent = f.app.store.agents(USER_A)[0];
-  await f.request('/api/agents/' + agent.id + '/grants', { method: 'PUT', data: { accountIds: [account.id, gmail.id] } });
   const other = await execute(['exec', gmail.id, '--', process.execPath, '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN) process.exit(2)'], env);
   assert.equal(other.code, 0, other.err);
 });

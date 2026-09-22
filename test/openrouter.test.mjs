@@ -63,18 +63,18 @@ test('OpenRouter callback cannot use another session, forged state, or a denied 
   assert.equal(f.openrouter.calls.length, 0);
 });
 
-test('API key is delivered only after explicit approval; revocation metadata never promises short expiry', async t => {
+test('API key is delivered only to an approved key; revocation metadata never promises short expiry', async t => {
   const f = await openrouterFixture(t), token = 'fdn_' + randomBytes(32).toString('base64url');
-  const created = await f.request('/v1/access-requests', { method: 'POST', token, data: { adapter: 'openrouter.oauth', name: 'AI', purpose: 'キー情報を確認。モデルは実行しない。' } });
+  assert.equal((await f.request('/v1/credentials', { token, anonymous: true })).status, 401, 'nothing before the key is approved');
+  await f.approveKey(token);
+  const created = await f.request('/v1/access-requests', { method: 'POST', token, data: { adapter: 'openrouter.oauth', purpose: 'キー情報を確認。モデルは実行しない。' } });
   const row = created.json.request;
   assert.equal(row.adapter.can_revoke, false);
   assert.match(row.adapter.access.restrictions, /読み取り専用のキーではありません/);
   const callback = await f.callbackOpenRouter(await f.startOpenRouter({ accessRequestId: row.id }));
   assert.equal(callback.headers.get('location'), '/connect/' + row.id + '?connection=connected');
   const account = (await f.request('/api/state')).json.credentials[0];
-  assert.equal((await credential(f, account.id, token)).status, 401);
-  const approved = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { credentialId: account.id, confirmationCode: row.confirmation_code } });
-  assert.equal(approved.status, 200);
+  assert.equal((await f.request('/api/access-requests/' + row.id)).json.request.status, 'approved', 'registering completes the request');
   const listed = await f.request('/v1/credentials', { token });
   assert.deepEqual(listed.json.credentials[0].variables, ['OPENROUTER_API_KEY']);
   assert.match(listed.json.credentials[0].delivery.revocation, /Keys already delivered/);
@@ -85,7 +85,7 @@ test('API key is delivered only after explicit approval; revocation metadata nev
   assert.equal(issued.json.expires_at, null);
   assert.equal(issued.json.expires_in, null);
   assert.equal(f.app.store.agents(USER_A)[0].issued_nonexpiring, 1);
-  await f.request('/api/agents/' + approved.json.request.agent_id, { method: 'DELETE' });
+  await f.request('/api/agents/' + f.app.store.agents(USER_A)[0].id, { method: 'DELETE' });
   assert.equal((await credential(f, account.id, token)).status, 401);
 });
 
@@ -167,15 +167,15 @@ test('OpenRouter accepts explicit unlimited and zero budgets without changing th
   assert.equal((await client.inspect(client.key())).details.limit, 0);
 });
 
-test('CLI connects through the OpenRouter adapter, resumes approval, injects key only into child process, then denies after removal', async t => {
+test('CLI asks for approval, then injects the OpenRouter key only into the child process, and is refused after the key is revoked', async t => {
   const f = await openrouterFixture(t), account = await f.openrouterAccount();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-openrouter-cli-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'runtime-key') };
-  const start = await execute(['connect', '--adapter', 'openrouter.oauth', '--name', 'dev-us'], env);
+  const start = await execute(['connect', '--name', 'dev-us'], env);
   assert.equal(start.code, 0, start.err);
   const row = JSON.parse(start.out).request;
-  assert.equal(row.adapter.id, 'openrouter.oauth');
-  const approved = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { credentialId: account.id, confirmationCode: row.confirmation_code } });
+  assert.equal(row.kind, 'approve');
+  const approved = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code } });
   assert.equal(approved.status, 200);
   const run = await execute(['exec', account.id, '--', process.execPath, '-e', 'if(!process.env.OPENROUTER_API_KEY || process.env.GOOGLE_OAUTH_ACCESS_TOKEN || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2); console.log("authenticated")'], env);
   assert.equal(run.code, 0, run.err); assert.equal(run.out.trim(), 'authenticated');

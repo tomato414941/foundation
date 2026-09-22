@@ -34,7 +34,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
         assert 'fdn_' not in result.stdout and 'google-access-' not in result.stdout
         return json.loads(result.stdout) if success else None
 
-    request = cli('connect', '--adapter', 'gmail.readonly', '--name', 'dev-us のAI', '--purpose', '届いたメールを確認する')['request']
+    # 1. A new key asks only to be approved. The owner types the code; nothing is registered here.
+    request = cli('connect', '--name', 'dev-us のAI')['request']
+    assert request['kind'] == 'approve' and request['confirmation_code']
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 1050})
     page = context.new_page()
@@ -48,15 +50,38 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     callback = context.new_page()
     callback.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
-    expect(callback.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
+    expect(callback.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
     assert callback.url == request['verification_uri']
     callback.close()
     page.bring_to_front()
     page.evaluate('window.dispatchEvent(new Event("focus"))')
-    expect(page.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
     expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
     assert request['confirmation_code'] not in page.content()
-    expect(page.get_by_role('button', name='承認する', exact=True)).to_have_count(0)
+    expect(page.get_by_role('button', name='Googleで接続', exact=True)).to_have_count(0)
+    expect(page.get_by_role('button', name='承認する', exact=True)).to_be_disabled()
+    for width in [1280, 390, 320]:
+        page.set_viewport_size({'width': width, 'height': 1050})
+        review(page)
+        if width in [1280, 390]:
+            page.screenshot(path=str(shots / ('request-desktop.png' if width == 1280 else 'request-mobile.png')), full_page=True)
+    page.get_by_label('確認コード', exact=True).fill('0000-0000')
+    page.get_by_role('button', name='承認する', exact=True).click()
+    expect(page.get_by_role('alert')).to_contain_text('確認コードを入力してください')
+    cli('whoami', success=False)
+    page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'].lower())
+    page.get_by_role('button', name='承認する', exact=True).click()
+    expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
+    review(page)
+    assert cli('credentials')['credentials'] == []
+
+    # 2. The approved key asks for a registration, on its own link and without a code.
+    request = cli('connect', '--adapter', 'gmail.readonly', '--purpose', '届いたメールを確認する')['request']
+    assert request['kind'] == 'register' and 'confirmation_code' not in request
+    page.goto(request['verification_uri'], wait_until='networkidle')
+    expect(page.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
+    expect(page.get_by_text('メールの読み取り', exact=True)).to_be_visible()
+    expect(page.get_by_label('確認コード', exact=True)).to_have_count(0)
     review(page)
     page.screenshot(path=str(shots / 'request-before-connection.png'), full_page=True)
     authorization = {'deny': True}
@@ -73,63 +98,55 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_text('登録をキャンセルしました。', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']
-    cli('credentials', success=False)
+    assert cli('credentials')['credentials'] == []
     authorization['deny'] = False
     page.get_by_role('button', name='Googleで接続', exact=True).click()
-    expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
-    expect(page.get_by_text('personal@example.test', exact=True)).to_be_visible()
-    expect(page.get_by_role('radio')).to_have_count(0)
-    assert page.url == request['verification_uri']
-    cli('credentials', success=False)
-    expect(page.get_by_role('button', name='承認する', exact=True)).to_be_disabled()
-    for width in [1280, 390, 320]:
-        page.set_viewport_size({'width': width, 'height': 1050})
-        review(page)
-        if width in [1280, 390]:
-            page.screenshot(path=str(shots / ('request-desktop.png' if width == 1280 else 'request-mobile.png')), full_page=True)
-    page.get_by_label('確認コード', exact=True).fill('0000-0000')
-    page.get_by_role('button', name='承認する', exact=True).click()
-    expect(page.get_by_role('alert')).to_contain_text('確認コードを入力してください')
-    cli('credentials', success=False)
-    page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'].lower())
-    page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    expect(page.get_by_text('personal@example.test', exact=False)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'request-approved.png'), full_page=True)
     approved = {'account': cli('credentials')['credentials'][0]}
     command = subprocess.run(['node', 'src/runtime.mjs', 'exec', approved['account']['id'], '--', 'node', '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
+    # 3. Revoking the key stops it; its open registration link says so.
+    pending = cli('connect', '--adapter', 'gmail.metadata', '--purpose', '件名を確認する')['request']
     page.goto(args.base, wait_until='networkidle')
     runtime = page.locator('.agent-row').filter(has_text='dev-us のAI')
     runtime.get_by_role('button', name='失効', exact=True).click()
     page.get_by_role('dialog').get_by_role('button', name='失効させる', exact=True).click()
     expect(page.get_by_role('dialog')).not_to_be_visible()
     cli('credentials', success=False)
-    page.goto(request['verification_uri'], wait_until='networkidle')
+    page.goto(pending['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='アクセスキーは失効しています', exact=True)).to_be_visible()
 
-    request = cli('connect', '--adapter', 'gmail.readonly', '--name', 'dev-us のAI')['request']
+    # 4. The same key file is now unknown again: it may ask to be approved, and the owner may refuse.
+    request = cli('connect', '--name', 'dev-us のAI')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
-    page.get_by_role('button', name='許可しない', exact=True).click()
-    expect(page.get_by_role('heading', name='利用を許可しませんでした', exact=True)).to_be_visible()
+    page.get_by_role('button', name='承認しない', exact=True).click()
+    expect(page.get_by_role('heading', name='承認しませんでした', exact=True)).to_be_visible()
     cli('credentials', success=False)
 
-    request = cli('connect', '--adapter', 'gmail.metadata')['request']
+    # 5. Approved again, the key asks for a metadata-only Gmail credential: another kind, its own registration.
+    request = cli('connect', '--name', 'dev-us のAI')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
-    # Only a readonly Gmail credential exists; a metadata one is another kind, so the request opens on registration.
-    expect(page.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
+    page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
+    page.get_by_role('button', name='承認する', exact=True).click()
+    expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
+    request = cli('connect', '--adapter', 'gmail.metadata', '--purpose', '件名を確認する')['request']
+    page.goto(request['verification_uri'], wait_until='networkidle')
+    expect(page.get_by_text('件名・差出人などの読み取り', exact=True)).to_be_visible()
     page.get_by_role('button', name='Googleで接続', exact=True).click()
-    expect(page.get_by_text('headers@example.test', exact=True)).to_be_visible()
-    expect(page.get_by_text('件名・差出人などの読み取り', exact=False)).to_be_visible()
-    expect(page.get_by_text('本文の取得・送信・変更・削除は許可しません。', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    expect(page.get_by_text('headers@example.test', exact=False)).to_be_visible()
     review(page)
+    request = cli('connect', '--adapter', 'gmail.readonly', '--purpose', '確認')['request']
     cli('cancel')
-    page.reload(wait_until='networkidle')
+    page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='依頼は取り消されました', exact=True)).to_be_visible()
 
-    request = cli('connect', '--adapter', 'gmail.readonly', '--name', '<img src=x onerror="window.xss=1">', '--purpose', '長い用途' * 50)['request']
+    request = cli('connect', '--adapter', 'gmail.readonly', '--purpose', '<img src=x onerror="window.xss=1">' + '長い用途' * 50)['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     assert page.locator('.approval-card img').count() == 0
     assert page.evaluate('window.xss === undefined')
@@ -143,4 +160,4 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     assert not errors, errors
     context.close()
     browser.close()
-    print('Approval flow passed: CLI bootstrap, email-link return, Google consent/cancellation, explicit approval, CLI resume, native credentials, revocation, denial, metadata-only access, cancellation, invalid link, mobile, XSS and visible copy.')
+    print('Approval flow passed: key approval with code, then separate registration, Google consent/cancellation, native credentials, revocation, refusal, metadata-only credential, cancellation, invalid link, mobile, XSS and visible copy.')

@@ -37,30 +37,34 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
         return json.loads(result.stdout) if success else None
 
     def request():
-        return cli('connect', '--adapter', 'expo.login', '--name', 'dev-us のAI', '--purpose', 'Expoのアカウントを確認します。ビルド・公開は行いません。')['request']
+        return cli('connect', '--adapter', 'expo.login', '--purpose', 'Expoのアカウントを確認します。ビルド・公開は行いません。')['request']
 
-    row = request()
-    assert row['adapter']['id'] == 'expo.login'
+    approval = cli('connect', '--name', 'dev-us のAI')['request']
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 800})
     page = context.new_page()
     errors, logs = [], []
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.on('console', lambda message: logs.append(message.text))
-    page.goto(row['verification_uri'], wait_until='networkidle')
+    page.goto(approval['verification_uri'], wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='ログインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     page.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
+    # The key is approved first; the Expo login is its own registration request, with no code.
+    page.get_by_label('確認コード', exact=True).fill(approval['confirmation_code'])
+    page.get_by_role('button', name='承認する', exact=True).click()
+    expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
+    row = request()
+    assert row['adapter']['id'] == 'expo.login' and 'confirmation_code' not in row
+    page.goto(row['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='Expoにログイン', exact=True)).to_be_visible()
-    expect(page.get_by_text(row['confirmation_code'], exact=True)).to_have_count(0)
-    code = page.get_by_label('確認コード', exact=True)
-    expect(code).to_be_visible()
+    expect(page.get_by_label('確認コード', exact=True)).to_have_count(0)
     expect(page.get_by_role('dialog')).not_to_be_visible()
     expect(page.get_by_role('button', name='承認する', exact=True)).to_have_count(0)
     expect(page.get_by_text('トークンを登録', exact=False)).to_have_count(0)
     username, password = page.get_by_label('Expoのメールアドレスまたはユーザー名', exact=True), page.get_by_label('パスワード', exact=True)
-    submit = page.get_by_role('button', name='ログインして承認', exact=True)
+    submit = page.get_by_role('button', name='ログインして登録', exact=True)
     expect(password).to_have_attribute('type', 'password')
     expect(password).to_have_attribute('autocomplete', 'off')
     expect(page.get_by_text('入力内容はFoundationを経由してExpoへ送信します。', exact=False)).to_be_visible()
@@ -70,16 +74,14 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
         review(page)
         if width != 320:
             page.screenshot(path=str(shots / ('login-desktop.png' if width == 1280 else 'login-mobile.png')), full_page=True)
-    code.fill(row['confirmation_code'])
     username.fill('otp-user')
     password.fill('fixture-wrong-password')
     submit.click()
     expect(page.get_by_role('alert')).to_contain_text('Expoにログインできませんでした')
     expect(password).to_have_value('')
-    expect(code).to_have_value(row['confirmation_code'])
-    cli('credentials', success=False)
+    assert cli('credentials')['credentials'] == []
 
-    # The runtime learns nothing until approval; it just tries accounts.
+    # Nothing is stored until the login completes.
     try:
         username.fill('otp-user')
         password.fill(PASSWORD)
@@ -90,20 +92,20 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
         expect(otp).to_be_visible()
         expect(password).to_have_value('')
         expect(password).to_be_disabled()
-        cli('credentials', success=False)
+        assert cli('credentials')['credentials'] == []
         for width in [1280, 390, 320]:
             page.set_viewport_size({'width': width, 'height': 844})
             review(page)
             if width != 320:
                 page.screenshot(path=str(shots / ('mfa-desktop.png' if width == 1280 else 'mfa-mobile.png')), full_page=True)
         otp.fill('000000')
-        page.get_by_role('button', name='確認して承認', exact=True).click()
+        page.get_by_role('button', name='確認して登録', exact=True).click()
         expect(page.get_by_role('alert')).to_contain_text('Expoにログインできませんでした')
         expect(otp).to_have_value('')
         expect(otp).to_be_visible()
         otp.fill(OTP)
         with page.expect_response(lambda response: response.url.endswith('/api/adapters/expo.login/connect')) as reply:
-            page.get_by_role('button', name='確認して承認', exact=True).click()
+            page.get_by_role('button', name='確認して登録', exact=True).click()
         assert reply.value.status == 200 and PASSWORD not in reply.value.text() and 'fixture-session-' not in reply.value.text()
         expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
         expect(page.get_by_text('この画面は閉じて構いません。', exact=False)).to_be_visible()
@@ -151,7 +153,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     username.fill('unused-user')
     password.fill(PASSWORD)
     page.get_by_role('button', name='登録しない', exact=True).click()
-    expect(page.get_by_role('heading', name='利用を許可しませんでした', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='登録しませんでした', exact=True)).to_be_visible()
     expect(password).to_have_count(0)
     review(page)
 

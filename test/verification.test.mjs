@@ -9,8 +9,10 @@ import { verification, verificationResult } from '../src/verification.mjs';
 import { HttpError } from '../src/errors.mjs';
 
 const key = () => 'fdn_' + randomBytes(32).toString('base64url');
+// A registration request, from a key the owner has approved.
 async function create(f, token = key(), extra = {}) {
-  const result = await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { name: 'dev-us', adapter: 'cloudflare.api-token', purpose: 'R2の一覧を確認', ...extra } });
+  await f.approveKey(token);
+  const result = await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { adapter: 'cloudflare.api-token', purpose: 'R2の一覧を確認', ...extra } });
   assert.equal(result.status, 201, result.text);
   return { token, row: result.json.request };
 }
@@ -26,10 +28,9 @@ test('A failed import stores no secret, tells the owner in the response, and tel
   const failed = await f.importCloudflare({ accessRequestId: row.id, token: 'invalid-token-with-valid-syntax' });
   assert.equal(failed.status, 409); assert.equal(failed.json.error.code, 'reconnect_required');
   assert.equal(f.app.store.credentials(USER_A).length, 0);
-  assert.equal(f.app.store.agents(USER_A).length, 0);
   const stored = JSON.stringify(f.app.store.db.prepare('SELECT * FROM access_requests').all());
   assert.doesNotMatch(stored, /invalid-token-with-valid-syntax|fixturetoken|test-bucket-do-not-store|verification/);
-  assert.equal((await usable(f, token)).status, 401);
+  assert.deepEqual((await usable(f, token)).json.credentials, [], 'nothing was stored for the runtime to see');
   assert.equal((await f.request('/v1/access-requests/current', { anonymous: true, token })).json.request.events.at(-1).code, 'reconnect_required', 'the runtime may read what happened, not the token');
   const originalCookie = 'fdn_session=' + f.app.store.createSession(f.auth.value());
   await f.login('other@example.test');
@@ -39,10 +40,10 @@ test('A failed import stores no secret, tells the owner in the response, and tel
   assert.equal(valid.status, 200, valid.text);
   assert.equal(check(valid.json.verification, 'credential').status, 'passed');
   assert.equal(check(valid.json.verification, 'permissions').status, 'unknown');
-  assert.equal((await credentials(f, valid.json.credential_id, token)).status, 401);
+  assert.equal((await credentials(f, valid.json.credential_id, token)).status, 200, 'the approved key uses what its owner registered');
 });
 
-test('R2 failure permits explicit approval and delivery; the failed observation stays on the connection for the owner', async t => {
+test('An R2 failure does not block registration or delivery; the failed observation stays on the credential for the owner', async t => {
   const f = await cloudflareFixture(t), { row, token } = await create(f);
   f.cloudflare.handler = url => url.includes('/r2/') ? json({ success: false, errors: [{ message: CLOUDFLARE_TOKEN }] }, 403) : null;
   const imported = await f.importCloudflare({ accessRequestId: row.id });
@@ -50,9 +51,6 @@ test('R2 failure permits explicit approval and delivery; the failed observation 
   assert.equal(check(imported.json.verification, 'credential').status, 'passed');
   assert.equal(check(imported.json.verification, 'r2_bucket_list').http_status, 403);
   assert.equal(check(await shown(f, imported.json.credential_id), 'r2_bucket_list').status, 'failed');
-  assert.equal((await credentials(f, imported.json.credential_id, token)).status, 401);
-  const result = await approve(f, row);
-  assert.equal(result.status, 200, result.text);
   const issued = await credentials(f, imported.json.credential_id, token);
   assert.equal(issued.status, 200);
   assert.equal(issued.json.delivery.environment.CLOUDFLARE_API_TOKEN, CLOUDFLARE_TOKEN);
@@ -60,20 +58,16 @@ test('R2 failure permits explicit approval and delivery; the failed observation 
   assert.ok(!JSON.stringify(issued.json.verification).includes(CLOUDFLARE_TOKEN));
 });
 
-test('Correcting an account ID while the request is open updates this request\'s candidate; approval closes it', async t => {
+test('Registering completes the request; a second registration through it is refused', async t => {
   const f = await cloudflareFixture(t), { row, token } = await create(f);
   const first = await f.importCloudflare({ accessRequestId: row.id, fields: { account_id: 'f'.repeat(32) } });
   assert.equal(first.status, 200);
   assert.equal(check(first.json.verification, 'r2_bucket_list').status, 'failed');
-  const second = await f.importCloudflare({ accessRequestId: row.id });
-  assert.equal(second.status, 200, second.text); assert.equal(second.json.credential_id, first.json.credential_id);
+  assert.equal((await f.request('/api/access-requests/' + row.id)).json.request.status, 'approved');
+  const again = await f.importCloudflare({ accessRequestId: row.id });
+  assert.equal(again.status, 409); assert.equal(again.json.error.code, 'request_finished');
   assert.equal(f.app.store.credentials(USER_A).length, 1);
-  assert.equal(check(await shown(f, second.json.credential_id), 'r2_bucket_list').status, 'passed');
-  assert.equal((await approve(f, row)).status, 200);
-  const retry = await f.importCloudflare({ accessRequestId: row.id, fields: { account_id: 'e'.repeat(32) } });
-  assert.equal(retry.status, 409);
-  assert.equal((await credentials(f, second.json.credential_id, token)).status, 200);
-  assert.equal(f.app.store.secret(f.app.store.credential(USER_A, second.json.credential_id)).details.account_id, CLOUDFLARE_ACCOUNT);
+  assert.equal((await credentials(f, first.json.credential_id, token)).status, 200);
 });
 
 test('Verification output is a bounded allowlist, not upstream messages or input fields', () => {
@@ -95,7 +89,7 @@ test('A provider outage is an error to the owner, never proof of bad credentials
   assert.equal(outage.status, 502); assert.equal(outage.json.error.code, 'service_unavailable');
   assert.ok(!outage.text.includes(CLOUDFLARE_TOKEN));
   assert.equal(f.app.store.credentials(USER_A).length, 0);
-  assert.equal((await usable(f, token)).status, 401);
+  assert.deepEqual((await usable(f, token)).json.credentials, []);
 });
 
 test('Generic API keys report unverified to the owner, without pretending to verify the provider or permissions', async t => {
@@ -109,7 +103,7 @@ test('Generic API keys report unverified to the owner, without pretending to ver
   assert.doesNotMatch(JSON.stringify(report), /example-private-key/);
 });
 
-test('OAuth failures return to the approval page and the connection records what passed', async t => {
+test('OAuth failures return to the request page and the credential records what passed', async t => {
   const f = await fixture(t), { row, token } = await create(f, key(), { adapter: 'gmail.metadata' });
   const begin = async () => new URL((await f.request('/api/adapters/gmail.metadata/connect', { method: 'POST', data: { name: 'Gmail', accessRequestId: row.id } })).json.url);
   const failed = await f.callback(await begin(), 'personal-readonly');
@@ -119,7 +113,7 @@ test('OAuth failures return to the approval page and the connection records what
   assert.match(succeeded.headers.get('location'), /connection=connected/);
   const account = f.app.store.credentials(USER_A)[0];
   assert.equal(check(await shown(f, account.id), 'connection').status, 'passed');
-  assert.equal((await usable(f, token)).status, 401);
+  assert.deepEqual((await usable(f, token)).json.credentials.map(item => item.id), [account.id]);
 });
 
 for (const end of ['cancel', 'logout', 'newer']) test('A stale import cannot create a connection after ' + end, { timeout: 8000 }, async t => {
@@ -139,5 +133,5 @@ for (const end of ['cancel', 'logout', 'newer']) test('A stale import cannot cre
   } finally { release(); }
   assert.notEqual((await first).status, 200);
   assert.equal(f.app.store.credentials(USER_A).length, end === 'newer' ? 1 : 0);
-  assert.equal((await usable(f, token)).status, 401);
+  assert.equal((await usable(f, token)).json.credentials.length, end === 'newer' ? 1 : 0);
 });

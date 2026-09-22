@@ -24,12 +24,13 @@ async function apikeyFixture(t) {
   const gmail = new FakeGmail();
   return fixture(t, { gmail, adapters: [generic(new GenericClient()), gmailReadonly(gmail), gmailMetadata(gmail)] });
 }
-const create = (f, token, details = claim, extra = {}) => f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { adapter: 'generic', name: 'dev-us のAI', purpose: 'Claude APIでの要約', details, ...extra } });
+const create = (f, token, details = claim, extra = {}) => f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { adapter: 'generic', purpose: 'Claude APIでの要約', details, ...extra } });
 
 test('The generic client rejects credentials in a site, a local site and a lowercase name', () => {
   const client = new GenericClient(), code = details => { try { client.details(details); } catch (error) { return error.code; } };
   assert.equal(code({ ...claim, site: 'https://user:pw@example.com/' }), 'invalid_site');
   assert.equal(code({ ...claim, site: 'https://localhost/keys' }), 'invalid_site');
+  assert.equal(code({ ...claim, service: '<b>x</b>' }), 'invalid_service');
   assert.equal(code(field('anthropic_api_key')), 'invalid_env');
 });
 
@@ -44,7 +45,8 @@ test('Declared names cannot hijack the child process or take a variable another 
 
 test('A runtime declares the service, the key page and the fields; the declaration is validated and shown, never trusted as a scope', async t => {
   const f = await apikeyFixture(t), token = key();
-  for (const [details, code] of [[null, 'invalid_details'], [{ ...claim, service: '' }, 'invalid_service'], [{ ...claim, service: '<b>x</b>' }, 'invalid_service'], [{ ...claim, site: 'http://example.com/keys' }, 'invalid_site'],
+  await f.approveKey(token);
+  for (const [details, code] of [[null, 'invalid_details'], [{ ...claim, service: '' }, 'invalid_service'], [{ ...claim, site: 'http://example.com/keys' }, 'invalid_site'],
     [field('PATH'), 'invalid_env'], [field('GOOGLE_OAUTH_ACCESS_TOKEN'), 'invalid_env'], [{ ...claim, fields: [] }, 'invalid_fields'], [{ ...claim, fields: [...claim.fields, ...claim.fields] }, 'invalid_fields'], [{ ...claim, fields: [{ id: 'A_KEY', kind: 'file' }] }, 'invalid_fields']]) {
     const response = await create(f, token, details);
     assert.equal(response.status, 400, JSON.stringify(details)); assert.equal(response.json.error.code, code, JSON.stringify(details));
@@ -66,6 +68,7 @@ test('A runtime declares the service, the key page and the fields; the declarati
 
 test('The owner pastes each declared value; each reaches the command under its own name, unverified', async t => {
   const f = await apikeyFixture(t), token = key();
+  await f.approveKey(token);
   const row = (await create(f, token)).json.request;
   const register = (values, extra = {}) => f.request('/api/adapters/generic/connect', { method: 'POST', data: { name: 'Anthropic', values, accessRequestId: row.id, ...extra } });
   // Values are taken for the request's declared fields only; what the browser sends as a declaration is ignored.
@@ -80,9 +83,9 @@ test('The owner pastes each declared value; each reaches the command under its o
   assert.equal(account.management_url, claim.site);
   assert.doesNotMatch(JSON.stringify(state), new RegExp(secret));
   assert.equal(account.access.name, 'キーの権限で利用');
-  const approved = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code } });
-  assert.equal(approved.status, 200, approved.text);
-  assert.equal(approved.json.request.credential.label, 'Anthropic キー …' + account.subject.split(':')[1].slice(0, 8));
+  const done = (await f.request('/api/access-requests/' + row.id)).json.request;
+  assert.equal(done.status, 'approved', 'registering completes the request');
+  assert.equal(done.credential.label, 'Anthropic キー …' + account.subject.split(':')[1].slice(0, 8));
   // Two values from one registration: both reach the command, each under its declared name.
   const twilio = { service: 'Twilio', site: 'https://console.twilio.com/', fields: [{ id: 'TWILIO_ACCOUNT_SID', label: 'Account SID', kind: 'line' }, { id: 'TWILIO_AUTH_TOKEN', label: 'Auth Token', kind: 'line' }] };
   const second = (await create(f, token, twilio)).json.request;
@@ -112,6 +115,8 @@ test('The CLI builds a generic request from --field declarations and refuses res
   const f = await apikeyFixture(t);
   const dir = await mkdtemp(join(tmpdir(), 'foundation-apikey-cli-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'runtime-key') };
+  const asked = JSON.parse((await execute(['connect'], env)).out).request;
+  assert.equal((await f.request('/api/access-requests/' + asked.id + '/approve', { method: 'POST', data: { confirmationCode: asked.confirmation_code } })).status, 200);
   const reserved = await execute(['connect', '--service', 'Anthropic', '--site', claim.site, '--field', 'LD_PRELOAD'], env);
   assert.equal(reserved.code, 1); assert.match(reserved.err, /reserved/);
   const partial = await execute(['connect', '--service', 'Anthropic'], env);

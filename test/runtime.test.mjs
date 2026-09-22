@@ -47,15 +47,15 @@ test('CLI bootstraps and resumes approval without printing or manually copying a
   const missing = await execute(['credentials'], env);
   assert.equal(missing.code, 1);
   assert.match(missing.err, /connect/);
-  const connected = await execute(['connect', '--adapter', 'gmail.readonly', '--name', 'dev-us のAI', '--purpose', 'メールの確認'], env);
+  const connected = await execute(['connect', '--name', 'dev-us のAI'], env);
   assert.equal(connected.code, 0, connected.err);
   const row = JSON.parse(connected.out).request, secret = (await readFile(keyPath, 'utf8')).trim();
-  assert.equal(row.status, 'pending');
+  assert.equal(row.status, 'pending'); assert.equal(row.kind, 'approve');
   assert.equal((await stat(keyPath)).mode & 0o777, 0o600);
   assert.ok(!connected.out.includes(secret));
   const pending = await execute(['credentials'], env);
   assert.equal(pending.code, 1); assert.match(pending.err, /not_approved/);
-  const approval = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { credentialId: account.id, confirmationCode: row.confirmation_code } });
+  const approval = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code } });
   assert.equal(approval.status, 200, approval.text);
   assert.equal((await execute(['credentials'], env)).code, 0);
   assert.equal(JSON.parse((await execute(['credentials'], env)).out).credentials[0].id, account.id);
@@ -64,11 +64,13 @@ test('CLI bootstraps and resumes approval without printing or manually copying a
   assert.equal(run.out.trim(), 'connected');
   assert.equal((await readFile(keyPath, 'utf8')).trim(), secret);
   for (const result of [connected, pending, run]) assert.doesNotMatch(result.out + result.err, /fdn_|google-access|refresh_token/);
-  const next = await execute(['connect', '--adapter', 'gmail.readonly'], env);
-  assert.equal(next.code, 0, next.err);
+  // Approved, the same key now asks for a registration; cancelling it does not undo the approval.
+  const next = await execute(['connect', '--adapter', 'gmail.metadata', '--purpose', '件名の確認'], env);
+  assert.equal(next.code, 0, next.err); assert.equal(JSON.parse(next.out).request.kind, 'register');
+  assert.equal(JSON.parse(next.out).request.confirmation_code, undefined);
   const cancelled = await execute(['cancel'], env);
   assert.equal(JSON.parse(cancelled.out).request.status, 'cancelled');
-  assert.equal((await execute(['credentials'], env)).code, 0, 'cancelling a new request does not revoke an earlier grant');
+  assert.equal((await execute(['credentials'], env)).code, 0, 'cancelling a registration request does not revoke the key');
 });
 
 test('CLI never overwrites or follows an existing insecure key file', async t => {
@@ -76,22 +78,22 @@ test('CLI never overwrites or follows an existing insecure key file', async t =>
   const dir = await mkdtemp(join(tmpdir(), 'foundation-keyfile-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const existing = join(dir, 'existing'), link = join(dir, 'link');
   await writeFile(existing, 'do-not-overwrite', { mode: 0o644 });
-  let result = await execute(['connect', '--adapter', 'gmail.readonly'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: existing });
+  let result = await execute(['connect'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: existing });
   assert.equal(result.code, 1);
   assert.match(result.err, /private/);
   assert.equal(await readFile(existing, 'utf8'), 'do-not-overwrite');
   await symlink(existing, link);
-  result = await execute(['connect', '--adapter', 'gmail.readonly'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: link });
+  result = await execute(['connect'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: link });
   assert.equal(result.code, 1);
   assert.match(result.err, /symbolic link/);
   assert.equal(await readFile(existing, 'utf8'), 'do-not-overwrite');
 });
 
-test('accounts answers 401 until approval, then lists what was granted', async t => {
+test('credentials answers 401 until approval, then lists what the owner registered', async t => {
   const f = await fixture(t), account = await f.credential();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-poll-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'runtime-key') };
-  const connected = await execute(['connect', '--adapter', 'gmail.readonly'], env), row = JSON.parse(connected.out).request;
+  const connected = await execute(['connect'], env), row = JSON.parse(connected.out).request;
   const before = await execute(['credentials'], env);
   assert.equal(before.code, 1); assert.match(before.err, /not_approved/);
   const raw = await execute(['request'], env);
@@ -101,8 +103,8 @@ test('accounts answers 401 until approval, then lists what was granted', async t
   await f.request('/api/access-requests/' + row.id + '/deny', { method: 'POST', data: {} });
   const denied = await execute(['credentials'], env);
   assert.equal(denied.code, 1); assert.match(denied.err, /not_approved/, 'denial is indistinguishable from waiting');
-  const again = JSON.parse((await execute(['connect', '--adapter', 'gmail.readonly'], env)).out).request;
-  await f.request('/api/access-requests/' + again.id + '/approve', { method: 'POST', data: { credentialId: account.id, confirmationCode: again.confirmation_code } });
+  const again = JSON.parse((await execute(['connect'], env)).out).request;
+  await f.request('/api/access-requests/' + again.id + '/approve', { method: 'POST', data: { confirmationCode: again.confirmation_code } });
   const after = await execute(['credentials'], env);
   assert.equal(after.code, 0, after.err); assert.equal(JSON.parse(after.out).credentials[0].id, account.id);
   assert.doesNotMatch(connected.out + before.err + after.out, /fdn_|google-access|refresh_token/);
@@ -113,7 +115,7 @@ test('--help prints the agent procedure in Japanese and, when a server is reacha
   const offline = await execute(['--help'], { FOUNDATION_URL: '' });
   assert.equal(offline.code, 0, offline.err);
   assert.match(offline.out, /foundation adapters で確認する/);
-  assert.match(offline.out, /verification_uri を利用者に伝える。confirmation_code があれば/);
+  assert.match(offline.out, /出力の verification_uri と confirmation_code を利用者に伝える/);
   assert.doesNotMatch(offline.out, /foundation connect --adapter gmail/);
   const online = await execute(['--help'], { FOUNDATION_URL: f.base });
   assert.equal(online.code, 0, online.err);
@@ -152,9 +154,9 @@ test('FOUNDATION_AGENT gives each AI its own key file and default name; whoami a
   const f = await fixture(t), account = await f.credential();
   const home = await mkdtemp(join(tmpdir(), 'foundation-agent-home-')); t.after(() => rm(home, { recursive: true, force: true }));
   const base = { FOUNDATION_URL: f.base, HOME: home, FOUNDATION_RUNTIME_KEY_FILE: '' };
-  const claude = await execute(['connect', '--adapter', 'gmail.readonly', '--purpose', 'メールの確認'], { ...base, FOUNDATION_AGENT: 'claude' });
+  const claude = await execute(['connect'], { ...base, FOUNDATION_AGENT: 'claude' });
   assert.equal(claude.code, 0, claude.err);
-  const codex = await execute(['connect', '--adapter', 'gmail.readonly', '--purpose', 'メールの確認'], { ...base, FOUNDATION_AGENT: 'codex' });
+  const codex = await execute(['connect'], { ...base, FOUNDATION_AGENT: 'codex' });
   assert.equal(codex.code, 0, codex.err);
   const rows = [JSON.parse(claude.out).request, JSON.parse(codex.out).request];
   assert.notEqual(rows[0].id, rows[1].id);
@@ -164,7 +166,7 @@ test('FOUNDATION_AGENT gives each AI its own key file and default name; whoami a
   assert.equal(keys.length, 2); assert.ok(keys.some(name => name.endsWith('-claude.key')) && keys.some(name => name.endsWith('-codex.key')));
   const bad = await execute(['whoami'], { ...base, FOUNDATION_AGENT: '../x' });
   assert.equal(bad.code, 1); assert.match(bad.err, /FOUNDATION_AGENT/);
-  await f.request('/api/access-requests/' + rows[0].id + '/approve', { method: 'POST', data: { credentialId: account.id, confirmationCode: rows[0].confirmation_code } });
+  await f.request('/api/access-requests/' + rows[0].id + '/approve', { method: 'POST', data: { confirmationCode: rows[0].confirmation_code } });
   const who = await execute(['whoami'], { ...base, FOUNDATION_AGENT: 'claude' });
   assert.equal(who.code, 0, who.err); assert.match(JSON.parse(who.out).agent.name, / の claude$/);
   const other = await execute(['whoami'], { ...base, FOUNDATION_AGENT: 'codex' });

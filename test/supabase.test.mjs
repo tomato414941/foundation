@@ -6,7 +6,8 @@ import { FakeSupabase, supabaseFixture, SUPABASE_TOKEN } from './supabase-helper
 import { json, USER_A } from './helpers.mjs';
 
 const credential = (f, id, token) => f.request('/v1/credentials/' + id + '/deliver', { method: 'POST', anonymous: true, token, data: {} });
-const createRequest = async (f, token) => (await f.request('/v1/access-requests', { method: 'POST', token, anonymous: true, data: { adapter: 'supabase.access-token', name: 'dev-us', purpose: 'プロジェクト一覧の確認' } })).json.request;
+// A registration request comes from a key the owner has approved.
+const createRequest = async (f, token) => { await f.approveKey(token); return (await f.request('/v1/access-requests', { method: 'POST', token, anonymous: true, data: { adapter: 'supabase.access-token', purpose: 'プロジェクト一覧の確認' } })).json.request; };
 
 test('Supabase import verifies the token against the Management API and shows who it belongs to', async t => {
   const f = await supabaseFixture(t), account = await f.supabaseAccount();
@@ -45,8 +46,7 @@ test('Supabase approval delivers SUPABASE_ACCESS_TOKEN to the runtime and stops 
   const f = await supabaseFixture(t), token = 'fdn_' + randomBytes(32).toString('base64url');
   const row = await createRequest(f, token), account = await f.supabaseAccount({ accessRequestId: row.id });
   assert.match(account.access.name, /Supabase/);
-  const approved = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { credentialId: account.id, confirmationCode: row.confirmation_code } });
-  assert.equal(approved.status, 200, approved.text);
+  assert.equal((await f.request('/api/access-requests/' + row.id)).json.request.status, 'approved', 'registering completes the request');
   const listed = await f.request('/v1/credentials', { token, anonymous: true });
   assert.deepEqual(listed.json.credentials[0].variables, ['SUPABASE_ACCESS_TOKEN']);
   const issued = await credential(f, account.id, token);

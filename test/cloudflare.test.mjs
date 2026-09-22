@@ -12,7 +12,8 @@ import { cloudflareFixture, FakeCloudflare, CLOUDFLARE_TOKEN, CLOUDFLARE_ACCOUNT
 import { json, USER_A } from './helpers.mjs';
 
 const credential = (f, id, token) => f.request('/v1/credentials/' + id + '/deliver', { method: 'POST', anonymous: true, token, data: {} });
-const createRequest = async (f, token) => (await f.request('/v1/access-requests', { method: 'POST', token, anonymous: true, data: { adapter: 'cloudflare.api-token', name: 'dev-us', purpose: 'R2のバケット一覧を確認。変更は行わない。' } })).json.request;
+// A registration request comes from a key the owner has approved.
+const createRequest = async (f, token) => { await f.approveKey(token); return (await f.request('/v1/access-requests', { method: 'POST', token, anonymous: true, data: { adapter: 'cloudflare.api-token', purpose: 'R2のバケット一覧を確認。変更は行わない。' } })).json.request; };
 const inspect = provider => provider.inspect(CLOUDFLARE_TOKEN, CLOUDFLARE_ACCOUNT);
 const code = expected => error => error.code === expected;
 
@@ -105,11 +106,11 @@ test('Cloudflare requires explicit approval, keeps tokens encrypted and stops de
   const dir = await mkdtemp(join(tmpdir(), 'foundation-cloudflare-test-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const database = join(dir, 'state.db'), f = await cloudflareFixture(t, { database });
-  const token = 'fdn_' + randomBytes(32).toString('base64url'), row = await createRequest(f, token);
+  const token = 'fdn_' + randomBytes(32).toString('base64url');
+  assert.equal((await f.request('/v1/credentials', { token, anonymous: true })).status, 401, 'nothing before the key is approved');
+  const row = await createRequest(f, token);
   const account = await f.cloudflareAccount({ accessRequestId: row.id });
-  assert.equal((await credential(f, account.id, token)).status, 401);
-  const approved = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { credentialId: account.id, confirmationCode: row.confirmation_code } });
-  assert.equal(approved.status, 200, approved.text);
+  assert.equal((await f.request('/api/access-requests/' + row.id)).json.request.status, 'approved', 'registering completes the request');
   const listed = await f.request('/v1/credentials', { token, anonymous: true });
   assert.deepEqual(listed.json.credentials[0].variables, ['CLOUDFLARE_API_TOKEN']);
   assert.equal(listed.json.credentials[0].cloudflare_account_id, CLOUDFLARE_ACCOUNT);

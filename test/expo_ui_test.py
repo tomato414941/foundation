@@ -34,17 +34,23 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
         assert token not in result.stdout + result.stderr and 'fdn_' not in result.stdout
         return json.loads(result.stdout) if success else None
 
-    request = cli('connect', '--adapter', 'expo.token', '--name', 'dev-us のAI', '--purpose', 'Expoのアカウントを確認。ビルドは実行しません。')['request']
+    approval = cli('connect', '--name', 'dev-us のAI')['request']
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 1050})
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
-    page.goto(request['verification_uri'], wait_until='networkidle')
+    page.goto(approval['verification_uri'], wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='ログインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     page.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
+    # The key is approved first; the registration is a separate request with no code.
+    page.get_by_label('確認コード', exact=True).fill(approval['confirmation_code'])
+    page.get_by_role('button', name='承認する', exact=True).click()
+    expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
+    request = cli('connect', '--adapter', 'expo.token', '--purpose', 'Expoのアカウントを確認。ビルドは実行しません。')['request']
+    page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='Expoのトークンを登録', exact=True)).to_be_visible()
     expect(page.get_by_role('button', name='承認する', exact=True)).to_have_count(0)
     review(page)
@@ -82,22 +88,14 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     register.get_by_role('button', name='登録する', exact=True).click()
     expect(register.get_by_role('alert')).to_contain_text('トークンが無効か')
     expect(field).to_have_value('')
-    cli('credentials', success=False)
+    assert cli('credentials')['credentials'] == []
     review(page)
     field.fill(token)
     with page.expect_response(lambda response: '/api/adapters/expo.token/connect' in response.url) as response_event:
         register.get_by_role('button', name='登録する', exact=True).click()
     assert token not in response_event.value.text()
-    expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
-    expect(page.get_by_text('Expoへのアクセス', exact=True)).to_be_visible()
-    expect(page.get_by_role('radio')).to_have_count(0)
-    cli('credentials', success=False)
-    cli('credentials', success=False)
-    review(page)
-    expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
-    page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
-    page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    review(page)
     assert cli('credentials')['credentials'][0]['adapter'] == 'expo.token'
     account = cli('credentials')['credentials'][0]
     command = subprocess.run(['node', 'src/runtime.mjs', 'exec', account['id'], '--', 'node', '-e', 'if(!process.env.EXPO_TOKEN || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)

@@ -59,7 +59,7 @@ test('A new database is created in the current shape; a database of any other sh
   const reopened = new Store(path, KEY); t.after(() => reopened.close());
   assert.equal(reopened.secret(reopened.credential(USER_A, id)).refresh_token, 'keep-private');
   assert.equal(reopened.agents(USER_A)[0].issued_nonexpiring, 1);
-  for (const shape of ['CREATE TABLE accounts(id TEXT); INSERT INTO accounts VALUES (\'existing\');', 'CREATE TABLE accounts(id TEXT); PRAGMA user_version=6;', 'PRAGMA user_version=2;']) {
+  for (const shape of ['CREATE TABLE accounts(id TEXT); INSERT INTO accounts VALUES (\'existing\');', 'CREATE TABLE accounts(id TEXT); PRAGMA user_version=6;', 'PRAGMA user_version=1;']) {
     const other = join(dir, 'other-' + Math.random().toString(36).slice(2) + '.sqlite'), db = new DatabaseSync(other);
     db.exec(shape); db.close();
     assert.throws(() => new Store(other, KEY), /not created by this version/, shape);

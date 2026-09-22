@@ -170,68 +170,60 @@ function claimRows(adapter, details) {
 const guidanceBlock = (text) => text ? `<section class="ai-guidance"><h3>依頼元のAIからの案内</h3>${text.split(/\n{2,}/).map(part => `<p>${esc(part).replace(/\n/g, '<br>')}</p>`).join('')}</section>` : '';
 const codeComplete = form => /^[0-9a-fA-F]{8}$/.test((form.elements.confirmationCode?.value || '').replace(/[^0-9a-zA-Z]/g, ''));
 function codeField(enabled = true) {
-  return `<label for="confirmation-code">確認コード</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="0000-0000" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">AIとの会話に表示されたコードを入力してください。心当たりのない依頼は許可しないでください。</p>`;
+  return `<label for="confirmation-code">確認コード</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="0000-0000" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">AIとの会話に表示されたコードを入力してください。心当たりのない依頼は承認しないでください。</p>`;
 }
-// The approval URL shows one of two screens. Registering an credential is between the owner and the service, and
-// completes the request of a key the owner already approved. Approving a key is the owner's one-time acknowledgement
-// that the key is theirs; from then on it uses every credential they registered. The AI's guidance is about registering.
-let requestScreen = null;
+// The link of a request shows the one screen its kind calls for:
+//   approve   a key not yet approved: the owner accepts it with the code. Nothing is registered here.
+//   register  an approved key: the owner registers one credential. No code; the AI's guidance is shown.
 function renderRequest() {
   const row = accessRequest;
   const shell = (content) => `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main class="approval-main">${content}</main></div>`;
   const finished = {
-    approved: row?.credential ? ['登録しました', `${row.credential.label || row.credential.subject} を、${row.requester_name}から利用できます。この画面は閉じて構いません。`] : ['承認しました', `${row?.requester_name || ''}から、預けた認証情報を利用できるようになりました。この画面は閉じて構いません。`],
-    denied: ['利用を許可しませんでした', 'この依頼による変更はありません。'],
+    approved: row?.kind === 'register' ? ['登録しました', `${row.credential?.label || ''} を、${row.requester_name}から利用できます。この画面は閉じて構いません。`] : ['承認しました', `${row?.requester_name || ''}から、預けた認証情報を利用できるようになりました。この画面は閉じて構いません。`],
+    denied: row?.kind === 'register' ? ['登録しませんでした', 'この依頼による変更はありません。'] : ['承認しませんでした', 'このアクセスキーは使えません。'],
     cancelled: ['依頼は取り消されました', '必要な場合は、AIに新しい依頼を作ってもらってください。'],
     revoked: ['アクセスキーは失効しています', 'この依頼元のキーは利用できません。'],
     reconnect_required: ['登録し直しが必要です', '管理画面から認証情報を登録し直してください。'],
   };
   if (!row || row.status !== 'pending') {
     const [title, description] = row ? finished[row.status] || ['依頼を確認できません', '依頼のリンクを開き直してください。'] : ['依頼を確認できません', requestError];
-    app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(row?.status === 'approved' ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p><a class="button secondary" href="/">認証情報を管理</a></section>`);
+    // A registration ends here, so what Foundation verified about the new credential is shown here too.
+    const registered = row?.status === 'approved' && row.kind === 'register' ? state.credentials.find(credential => credential.id === row.credential?.id) : null;
+    app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(row?.status === 'approved' ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p>${registered ? keyFacts(registered) + verificationDetails(registered.verification) : ''}<a class="button secondary" href="/">認証情報を管理</a></section>`);
     return;
   }
-  const registeredKey = Boolean(row.agent_name);
+  const expiry = `<p class="request-expiry">この依頼は ${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで有効です。</p>`;
+  if (row.kind === 'approve') { renderApproval(row, shell, expiry); return; }
   const adapter = row.adapter, name = serviceName(adapter);
   const same = state.credentials.filter(credential => credential.adapter === adapter.id && credential.status !== 'disconnecting');
-  const expiry = `<p class="request-expiry">この依頼は ${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで有効です。</p>`;
-  const deny = '<button class="text-button full" type="button" data-action="deny-request">許可しない</button>';
-  const screen = registeredKey || requestScreen === 'register' || !same.length ? 'register' : 'approve';
-  if (screen === 'register') {
-    const connectLabel = adapter.label;
-    const unavailable = `<p class="form-error" role="status">現在${esc(name)}を登録できません。</p>`;
-    const body = !adapter.available ? unavailable : adapter.register === 'login' ? expoLoginMarkup(row) : adapter.register === 'paste' ? schemaFormMarkup(adapter.form)
-      : `${same.filter(credential => credential.status === 'reconnect_required' && adapter.can_reconnect).map(credential => `<button class="button secondary full request-connect" type="button" data-action="request-connect" data-id="${esc(credential.id)}">${esc(credentialLabel(credential))} を登録し直す</button>`).join('')}
-        <button class="button primary full request-connect" type="button" data-action="request-connect">${esc(connectLabel)} ${icon('arrow')}</button>
-        ${adapter.id === 'openrouter.oauth' && ['failed', 'scope', 'retry', 'changed'].includes(resultCode) ? '<p class="permission-note">登録できなくても、OpenRouterで作成済みのキーが残る場合があります。<a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">不要なキーはOpenRouterで削除してください ↗</a></p>' : ''}`;
-    app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(connectLabel)}</h1></div></header>
-      ${row.purpose ? `<dl class="approval-facts"><div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div></dl>` : ''}
-      ${guidanceBlock(row.guidance)}${!row.guidance && adapter.instructions ? `<p class="permission-note">${esc(adapter.instructions)}</p>` : ''}
-      <div class="register-body">${body}</div>
-      ${!registeredKey && same.length ? '<button class="text-button full" type="button" data-action="back-to-approve">登録せずに戻る</button>' : registeredKey ? '<button class="text-button full" type="button" data-action="deny-request">登録しない</button>' : deny}${expiry}</section>`);
-    const container = app.querySelector('.register-body');
-    if (adapter.available && adapter.register === 'login') bindExpoLogin(container, row);
-    if (adapter.available && adapter.register === 'paste') bindSchemaForm(container, adapter.form, async values => {
-      let result;
-      try { result = await api(`/api/adapters/${adapter.id}/connect`, { method: 'POST', data: { values, purpose: row.purpose, accessRequestId: row.id } }); }
-      catch (error) { if ([401, 404].includes(error.status)) await refresh(); throw error; }
-      selected = result.credential_id; requestScreen = null;
-      await refresh(); toast(`${name}の認証情報を登録しました。`);
-    });
-    return;
-  }
+  const unavailable = `<p class="form-error" role="status">現在${esc(name)}を登録できません。</p>`;
+  const body = !adapter.available ? unavailable : adapter.register === 'login' ? expoLoginMarkup(row) : adapter.register === 'paste' ? schemaFormMarkup(adapter.form)
+    : `${same.filter(credential => credential.status === 'reconnect_required' && adapter.can_reconnect).map(credential => `<button class="button secondary full request-connect" type="button" data-action="request-connect" data-id="${esc(credential.id)}">${esc(credentialLabel(credential))} を登録し直す</button>`).join('')}
+      <button class="button primary full request-connect" type="button" data-action="request-connect">${esc(adapter.label)} ${icon('arrow')}</button>
+      ${adapter.id === 'openrouter.oauth' && ['failed', 'scope', 'retry', 'changed'].includes(resultCode) ? '<p class="permission-note">登録できなくても、OpenRouterで作成済みのキーが残る場合があります。<a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">不要なキーはOpenRouterで削除してください ↗</a></p>' : ''}`;
+  app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(adapter.label)}</h1></div></header>
+    <dl class="approval-facts">${row.purpose ? `<div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}<div><dt>届く範囲</dt><dd>${esc(adapter.access.name)}</dd></div></dl>
+    ${guidanceBlock(row.guidance)}${!row.guidance && adapter.instructions ? `<p class="permission-note">${esc(adapter.instructions)}</p>` : ''}
+    <div class="register-body">${body}</div>
+    <button class="text-button full" type="button" data-action="deny-request">登録しない</button>${expiry}</section>`);
+  const container = app.querySelector('.register-body');
+  if (adapter.available && adapter.register === 'login') bindExpoLogin(container, row);
+  if (adapter.available && adapter.register === 'paste') bindSchemaForm(container, adapter.form, async values => {
+    let result;
+    try { result = await api(`/api/adapters/${adapter.id}/connect`, { method: 'POST', data: { values, purpose: row.purpose, accessRequestId: row.id } }); }
+    catch (error) { if ([401, 404].includes(error.status)) await refresh(); throw error; }
+    selected = result.credential_id;
+    await refresh(); toast(`${name}の認証情報を登録しました。`);
+  });
+}
+// Approving a key: only who is asking, what the key will reach, and the code.
+function renderApproval(row, shell, expiry) {
   const usable = state.credentials.filter(credential => credential.status !== 'disconnecting');
-  const fresh = same.find(credential => credential.id === row.credential_id);
-  const credentialCard = credential => `<div class="approval-credential"><div class="choice"><span><strong>${esc(credential.name)}</strong>${otherLabel(credential) ? `<small>${esc(otherLabel(credential))}</small>` : ''}</span></div>${keyFacts(credential)}${verificationDetails(credential.verification)}</div>`;
-  app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(name)}へのアクセス</p><h1>このアクセスキーを承認しますか？</h1></div></header>
-    <dl class="approval-facts"><div><dt>依頼元</dt><dd>${esc(row.requester_name)}<span class="muted block">新しいアクセスキーです。承認すると、預けた認証情報をすべて使えるようになります。</span></dd></div>${row.purpose ? `<div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}<div><dt>届く範囲</dt><dd>${esc(adapter.access.name)}${adapter.access.restrictions ? `<span class="muted block">${esc(adapter.access.restrictions)}</span>` : ''}</dd></div>${claimRows(adapter, row.details)}</dl>${adapter.declared ? '<p class="permission-note claim-note">サービス名と作成ページはAIの申告です。作成ページのドメインが正しいか確認してください。</p>' : ''}
-    <form id="access-request-form">
-    ${fresh ? `<h2 class="approval-section">この依頼で登録した認証情報</h2>${credentialCard(fresh)}` : `<h2 class="approval-section">登録済みの${esc(name)}の認証情報</h2>${same.map(credentialCard).join('')}`}
-    <p class="permission-note">承認後に使える認証情報: ${usable.map(credential => esc(credential.service) + ' (' + esc(credential.name) + ')').join('、')}</p>
-    <button class="text-button full" type="button" data-action="open-register" ${adapter.available ? '' : 'disabled'}>別の認証情報を登録する</button>
-    ${codeField()}
+  app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">新しいアクセスキー</p><h1>このアクセスキーを承認しますか？</h1></div></header>
+    <dl class="approval-facts"><div><dt>依頼元</dt><dd>${esc(row.requester_name)}</dd></div><div><dt>使えるもの</dt><dd>${usable.length ? `預けた認証情報すべて<span class="muted block">${usable.map(credential => esc(credential.service) + ' · ' + esc(credential.name)).join('<br>')}</span>` : '今後預ける認証情報すべて'}</dd></div></dl>
+    <form id="access-request-form">${codeField()}
     <p class="form-error" role="alert"></p>
-    <button class="button primary full" type="submit" disabled>承認する ${icon('arrow')}</button>${deny}</form>${expiry}</section>`);
+    <button class="button primary full" type="submit" disabled>承認する ${icon('arrow')}</button><button class="text-button full" type="button" data-action="deny-request">承認しない</button></form>${expiry}</section>`);
   const form = document.querySelector('#access-request-form'), submit = form.querySelector('[type="submit"]');
   const update = () => { submit.disabled = !codeComplete(form); };
   form.addEventListener('change', update); form.addEventListener('input', update);
@@ -246,8 +238,6 @@ function renderRequest() {
     } catch (error) { if (form.isConnected) { errorElement.textContent = error.message; submit.disabled = false; } }
   });
 }
-// The browser's back gesture returns from the register screen to the approval screen.
-window.addEventListener('popstate', () => { if (requestId && requestScreen === 'register') { requestScreen = null; renderRequest(); } });
 function openDialog(content) {
   clearPrivateInput();
   dialog.innerHTML = `<button class="dialog-close icon-button" data-action="close-dialog" aria-label="閉じる">${icon('close')}</button>${content}`;
@@ -297,9 +287,9 @@ function connect(credential, adapterId = credential?.adapter) {
 function expoLoginMarkup(request) {
   return `<form class="expo-login-form" autocomplete="off"><div class="expo-password-fields"><label for="expo-username">Expoのメールアドレスまたはユーザー名</label><input id="expo-username" name="username" required maxlength="254" autocomplete="off" autocapitalize="none" spellcheck="false"><label for="expo-password">パスワード</label><input id="expo-password" name="password" type="password" required maxlength="1024" autocomplete="off"></div>
     <div class="expo-otp-fields" hidden><label for="expo-otp">認証コード</label><input id="expo-otp" name="otp" maxlength="64" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" disabled><p class="expo-otp-help permission-note"></p><button type="button" class="text-button expo-reset">ログイン情報を入力し直す</button></div>
-    ${request && !request.agent_name ? codeField() : ''}<p class="permission-note auth-privacy">入力内容はFoundationを経由してExpoへ送信します。パスワード・認証コードは保存しません。</p>
+    <p class="permission-note auth-privacy">入力内容はFoundationを経由してExpoへ送信します。パスワード・認証コードは保存しません。</p>
     <p class="permission-note auth-permission">${request ? esc(request.adapter.access.description) : 'Expoのログイン状態を保存します。承認済みのアクセスキーから使えるようになります。'}</p><p class="form-error" role="alert"></p>
-    <button class="button primary full" type="submit" ${request && !request.adapter.available ? 'disabled' : ''}>${request && !request.agent_name ? 'ログインして承認' : 'ログインして登録'} ${icon('arrow')}</button></form>`;
+    <button class="button primary full" type="submit" ${request && !request.adapter.available ? 'disabled' : ''}>ログインして登録 ${icon('arrow')}</button></form>`;
 }
 function bindExpoLogin(container, request) {
   clearPrivateInput();
@@ -308,11 +298,10 @@ function bindExpoLogin(container, request) {
   let password = '', username = '', active = true, busy = false, deadline, controller;
   function reset() {
     password = ''; username = ''; clearTimeout(deadline); controller?.abort(); busy = false;
-    const code = form.elements.confirmationCode?.value || '';
-    form.reset(); if (form.elements.confirmationCode) form.elements.confirmationCode.value = code;
+    form.reset();
     passwordFields.hidden = false; otpFields.hidden = true;
     form.elements.password.disabled = false; form.elements.username.disabled = false; form.elements.otp.disabled = true; form.elements.otp.required = false;
-    button.disabled = Boolean(request && !request.adapter.available); button.textContent = request && !request.agent_name ? 'ログインして承認' : 'ログインして登録';
+    button.disabled = Boolean(request && !request.adapter.available); button.textContent = 'ログインして登録';
   }
   disposePrivateInput = () => { active = false; reset(); };
   form.querySelector('.expo-reset').addEventListener('click', () => { reset(); errorElement.textContent = ''; form.elements.username.focus(); });
@@ -328,14 +317,14 @@ function bindExpoLogin(container, request) {
     busy = true; button.disabled = true; button.textContent = '確認中…'; errorElement.textContent = ''; controller = new AbortController();
     const signal = controller.signal;
     try {
-      const result = await api('/api/adapters/expo.login/connect', { method: 'POST', signal, data: { purpose: request?.purpose || '', username, password, ...(otp === undefined ? {} : { otp }), ...(request ? { accessRequestId: request.id, ...(form.elements.confirmationCode ? { confirmationCode: form.elements.confirmationCode.value } : {}) } : {}) } });
+      const result = await api('/api/adapters/expo.login/connect', { method: 'POST', signal, data: { purpose: request?.purpose || '', username, password, ...(otp === undefined ? {} : { otp }), ...(request ? { accessRequestId: request.id } : {}) } });
       if (!active || signal.aborted) return;
       if (result.challenge) {
         passwordFields.hidden = true; otpFields.hidden = false;
         form.elements.password.disabled = true; form.elements.username.disabled = true; form.elements.otp.disabled = false; form.elements.otp.required = true;
         form.querySelector('.expo-otp-help').textContent = result.challenge.delivery === 'sms' ? 'Expoから届いたSMSのコード、またはバックアップコードを入力してください。' : '認証アプリのコード、またはバックアップコードを入力してください。';
         if (!initial) errorElement.textContent = '認証コードを確認してください。';
-        button.textContent = request && !request.agent_name ? '確認して承認' : '確認して登録'; form.elements.otp.focus();
+        button.textContent = '確認して登録'; form.elements.otp.focus();
       } else {
         password = ''; username = ''; clearTimeout(deadline);
         selected = result.credential_id; closeDialog(); await refresh();
@@ -344,7 +333,7 @@ function bindExpoLogin(container, request) {
     } catch (error) {
       if (!active || signal.aborted) return;
       if (initial || error.code !== 'expo_login_failed') reset();
-      else button.textContent = request && !request.agent_name ? '確認して承認' : '確認して登録';
+      else button.textContent = '確認して登録';
       errorElement.textContent = error.message;
     } finally { if (active && !signal.aborted) { busy = false; button.disabled = false; } }
   });
@@ -417,8 +406,6 @@ document.addEventListener('click', async (event) => {
   try {
     if (action === 'close-dialog') closeDialog();
     if (action === 'logout') { clearPrivateInput(); target.disabled = true; await api('/api/session', { method: 'DELETE' }); await showLogin(); }
-    if (action === 'open-register') { requestScreen = 'register'; history.pushState({ screen: 'register' }, ''); renderRequest(); window.scrollTo(0, 0); return; }
-    if (action === 'back-to-approve') { if (history.state?.screen === 'register') history.back(); else { requestScreen = null; renderRequest(); } return; }
     if (action === 'request-connect') {
       target.disabled = true;
       const credential = state.credentials.find(item => item.id === id);

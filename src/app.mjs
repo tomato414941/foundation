@@ -300,8 +300,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         rateLimit('request-poll:' + hash, 30);
         if (path === '/v1/access-requests' && method === 'POST') {
           const input = await body(req);
-          const name = nameValue(input.name, '依頼元'), purpose = purposeValue(input.purpose);
-          adapters.get(input.adapter);
+          // Only a key not yet approved introduces itself by name; an approved key is known by the name its owner keeps.
+          const name = input.name === undefined ? '' : nameValue(input.name, '依頼元'), purpose = purposeValue(input.purpose);
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
           return send(201, { request: requests.summary(requests.create(token, { name, purpose, adapter: input.adapter, details: input.details, guidance: input.guidance ?? '', validMinutes: input.valid_minutes ?? 30 }), origin) });
         }
@@ -341,19 +341,18 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const accessRequest = input.accessRequestId === undefined ? null : requests.forUser(input.accessRequestId, user.id, true);
           progressRequestId = accessRequest?.id || null;
           if (accessRequest) requests.record(accessRequest.id, 'connect_started', { adapter: adapter.id });
+          if (accessRequest && !accessRequest.adapter) fail(409, 'approval_only', 'この依頼はアクセスキーの承認だけです。認証情報の登録には使えません。');
           if (accessRequest && adapter.id !== accessRequest.adapter) fail(400, 'scope_mismatch', '依頼された接続方法で登録してください。');
           const given = givenName(input.name), purpose = purposeValue(input.purpose ?? accessRequest?.purpose ?? '');
           if (adapter.register === 'login') {
             let result, committed = false;
             try {
-              if (accessRequest && !accessRequest.agent_id) requests.verifyCode(accessRequest.id, user.id, input.confirmationCode);
               if (accessRequest) requests.claim(accessRequest.id, user.id);
               const saved = await verifyConnection(req, session, user, async () => { result = await adapter.client.login(input); return result; }, () => {
                 if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
                 if (result.challenge) return { challenge: result.challenge };
                 const id = store.register(user.id, { adapter: adapter.id, service: adapter.service.name, name: credentialName(adapter, result.secret, result.subject, given), purpose, subject: result.subject }, result.secret);
-                let done = null;
-                if (accessRequest) { done = requests.registered(accessRequest.id, user.id, id); if (!accessRequest.agent_id) done = requests.approve(accessRequest.id, user.id, input.confirmationCode); }
+                const done = accessRequest ? requests.registered(accessRequest.id, user.id, id) : null;
                 return { connected: true, credential_id: id, ...(done ? { request: requests.summary(done, origin, { code: false }) } : {}) };
               });
               if (result.challenge) return send(202, saved);
@@ -379,12 +378,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             const saved = await verifyConnection(req, session, user,
               () => adapter.client.importToken({ values, details }),
               (result, report) => {
-                // Only the candidate this request registered can be corrected while the request is open.
-                const row = accessRequest && requests.forUser(accessRequest.id, user.id, true);
-                const candidate = row?.credential_id && store.credential(user.id, row.credential_id);
-                const retry = candidate?.subject === result.subject && candidate.adapter === adapter.id && candidate.status === 'connected' ? candidate : undefined;
-                const id = store.register(user.id, { adapter: adapter.id, service: adapters.service(adapter.id, details).name, name: credentialName(adapter, result.secret, result.subject, given), purpose, subject: result.subject }, result.secret, retry);
-                if (row) requests.registered(row.id, user.id, id);
+                if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
+                const id = store.register(user.id, { adapter: adapter.id, service: adapters.service(adapter.id, details).name, name: credentialName(adapter, result.secret, result.subject, given), purpose, subject: result.subject }, result.secret);
+                if (accessRequest) requests.registered(accessRequest.id, user.id, id);
                 return { connected: true, credential_id: id, verification: report };
               });
             if (accessRequest) requests.record(accessRequest.id, 'connected', { adapter: adapter.id });

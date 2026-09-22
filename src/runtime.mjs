@@ -89,7 +89,9 @@ async function main() {
   else if (!(['adapters', 'credentials', 'cancel', 'whoami', 'leave', 'request'].includes(action) && !args.length) && !(action === 'exec' && credentialIds.length && credentialIds.every(id => /^[a-f0-9-]{36}$/.test(id)) && new Set(credentialIds).size === credentialIds.length && command.length)) throw new Error('Invalid command. Use --help.');
   const url = new URL(process.env.FOUNDATION_URL || '');
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('FOUNDATION_URL must be an HTTPS origin (HTTP is allowed only on localhost).');
-  if (action === 'connect' && !options.adapter) throw new Error('Choose how to connect with --adapter <id>. Run adapters to see them.');
+  // Without --adapter, connect asks for this key to be approved. With it, an approved key asks for a registration.
+  if (action === 'connect' && !options.adapter && (options.purpose || options.guidance)) throw new Error('--purpose and --guide belong to a registration request; add --adapter <id>.');
+  if (action === 'connect' && !options.adapter) { delete options.purpose; }
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
   const token = action === 'adapters' ? null : await runtimeKey(keyPath, action === 'connect', !process.env.FOUNDATION_RUNTIME_KEY_FILE);
   const path = action === 'adapters' ? '/v1/adapters' : action === 'credentials' ? '/v1/credentials' : action === 'exec' ? '/v1/credentials/' + credentialIds[0] + '/deliver' : ['whoami', 'leave', 'rename'].includes(action) ? '/v1/me' : action === 'cancel' || action === 'request' ? '/v1/access-requests/current' : '/v1/access-requests';

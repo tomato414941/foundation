@@ -35,21 +35,26 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
         assert token not in result.stdout + result.stderr and 'fdn_' not in result.stdout
         return json.loads(result.stdout) if success else None
 
-    request = cli('connect', '--adapter', 'cloudflare.api-token', '--name', 'dev-us のAI', '--purpose', 'R2のバケット一覧を確認。変更やデータ転送は行いません。')['request']
+    approval = cli('connect', '--name', 'dev-us のAI')['request']
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 1050})
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
-    page.goto(request['verification_uri'], wait_until='networkidle')
+    page.goto(approval['verification_uri'], wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='ログインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     page.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
-    # Without a usable account the link opens on the register screen; the decision comes after.
+    # The key is approved first, on its own screen; the registration comes as a separate request.
+    page.get_by_label('確認コード', exact=True).fill(approval['confirmation_code'])
+    page.get_by_role('button', name='承認する', exact=True).click()
+    expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
+    request = cli('connect', '--adapter', 'cloudflare.api-token', '--purpose', 'R2のバケット一覧を確認。変更やデータ転送は行いません。')['request']
+    page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='Cloudflareのトークンを登録', exact=True)).to_be_visible()
     expect(page.get_by_text('dev-us のAIの依頼', exact=True)).to_be_visible()
-    expect(page.get_by_role('button', name='承認する', exact=True)).to_have_count(0)
+    expect(page.get_by_label('確認コード', exact=True)).to_have_count(0)
     review(page)
 
     dialog = page.get_by_role('dialog')
@@ -87,47 +92,40 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     expect(field).to_have_value('')
     expect(account_field).to_have_value(account_id)
     review(page)
-    cli('credentials', success=False)
+    assert cli('credentials')['credentials'] == []
     cli('wait', success=False)
 
-    # A valid token with an inaccessible account is a reported fact, not a hard gate.
+    # A valid token with an inaccessible account is a reported fact, not a hard gate; the result shows it.
     account_field.fill('f' * 32)
     field.fill(token)
     register.get_by_role('button', name='登録する', exact=True).click()
-    expect(dialog).not_to_be_visible()
+    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
     expect(page.get_by_text('R2の一覧を取得できませんでした。', exact=False)).to_be_visible()
-    expect(page.get_by_role('button', name='承認する', exact=True)).to_be_disabled()
-    cli('credentials', success=False)
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
         if width != 320:
             page.screenshot(path=str(shots / ('verification-desktop.png' if width == 1280 else 'verification-mobile.png')), full_page=True)
 
-    # The same approval URL supports correcting the ID without adding another connection.
-    page.get_by_role('button', name='別の認証情報を登録する', exact=True).click()
-    expect(page.get_by_role('heading', name='Cloudflareのトークンを登録', exact=True)).to_be_visible()
-    page.get_by_role('button', name='登録せずに戻る', exact=True).click()
-    expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
-    page.get_by_role('button', name='別の認証情報を登録する', exact=True).click()
-    expect(field).to_have_value('')
+    # To correct the account ID the owner removes that credential and registers again through a new request.
+    wrong = cli('credentials')['credentials'][0]
+    page.goto(args.base, wait_until='networkidle')
+    page.locator('[aria-labelledby="cloudflare-title"]').get_by_role('button', name='登録を解除', exact=True).click()
+    dialog.get_by_role('checkbox', name='キーの無効化はCloudflareで行うことを確認しました', exact=True).check()
+    dialog.get_by_role('button', name='登録を解除', exact=True).click()
+    expect(dialog).not_to_be_visible()
+    assert [item['id'] for item in cli('credentials')['credentials']] == []
+    request = cli('connect', '--adapter', 'cloudflare.api-token', '--purpose', 'R2のバケット一覧を確認。')['request']
+    page.goto(request['verification_uri'], wait_until='networkidle')
     account_field.fill(account_id)
     field.fill(token)
     with page.expect_response(lambda response: '/api/adapters/cloudflare.api-token/connect' in response.url) as response_event:
         register.get_by_role('button', name='登録する', exact=True).click()
     assert token not in response_event.value.text()
-    expect(dialog).not_to_be_visible()
-    expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
-    expect(page.get_by_role('radio')).to_have_count(0)
-    page.get_by_text('検証結果', exact=True).last.click()
-    expect(page.get_by_text('R2のバケット一覧を取得できました。', exact=False)).to_be_visible()
-    cli('credentials', success=False)
-    expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
-    expect(page.get_by_text('有効期限', exact=True)).to_be_visible()
-    page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
-    review(page)
-    page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    page.get_by_text('検証結果', exact=True).click()
+    expect(page.get_by_text('R2のバケット一覧を取得できました。', exact=False)).to_be_visible()
+    review(page)
     account = cli('credentials')['credentials'][0]
     assert account['cloudflare_account_id'] == account_id
     assert account['variables'] == ['CLOUDFLARE_API_TOKEN']
@@ -175,4 +173,4 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     assert not errors, errors
     context.close()
     browser.close()
-    print('Cloudflare browser flow passed: failed verification stays on the owner screen, permission failure is nonblocking, same-link correction, explicit approval, native credential delivery, secret clearing and mobile copy review. All Cloudflare calls mocked; no resources or objects changed.')
+    print('Cloudflare browser flow passed: key approval first, registration as its own request, verification shown on the result, R2 failure nonblocking, correction by registering again, native credential delivery, secret clearing and mobile copy review. All Cloudflare calls mocked.')
