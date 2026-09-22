@@ -51,5 +51,4 @@ export class GenericClient {
     // Nothing was verified, so the name is only what was declared; the fingerprint tells two of them apart.
     return { label: detail.service, fingerprint: detail.key_hash.slice(0, 8), credential_type: 'api_key', expires_at: null, expiry_known: false, verified: false, management_url: detail.site, details: { service: detail.service, site: detail.site, fields: detail.fields } };
   }
-  async revoke() { fail(409, 'manual_revocation_required', 'キーの無効化はサービスのキー管理画面で行ってください。'); }
 }

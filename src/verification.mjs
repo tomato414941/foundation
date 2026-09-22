@@ -22,7 +22,6 @@ const messages = {
   authorization_denied: '接続先での認証は許可されませんでした。',
   verification_unknown: '検証を完了できませんでした。原因は未確認です。',
   already_connected: '同じ認証情報の接続がすでに登録されています。',
-  account_limit: '接続の登録件数が上限に達しています。',
 };
 const labels = { connection: '接続先の認証', input: '入力形式', credential: 'トークンの有効性', permissions: '権限全体' };
 

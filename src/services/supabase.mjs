@@ -59,5 +59,4 @@ export class SupabaseClient {
     return { label: detail.email, credential_type: 'api_key', expires_at: null, expiry_known: false, management_url: SUPABASE_TOKENS,
       key_info: null, organizations: detail.organizations, checked_at: detail.checked_at };
   }
-  async revoke() { fail(409, 'manual_revocation_required', 'トークンの無効化はSupabaseのトークン管理画面で行ってください。'); }
 }

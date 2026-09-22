@@ -79,5 +79,4 @@ export class AppleClient {
     return { label: 'Team ' + detail.team_id + ' / Key ' + detail.key_id, credential_type: 'private_key', expires_at: null, expiry_known: false, management_url: APPLE_KEYS,
       apple: { key_id: detail.key_id, issuer_id: detail.issuer_id, team_id: detail.team_id, team_type: detail.team_type }, checked_at: detail.checked_at };
   }
-  async revoke() { fail(409, 'manual_revocation_required', 'キーの無効化はApp Store Connectの「統合」画面で行ってください。'); }
 }
