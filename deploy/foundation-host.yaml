@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: A host for Foundation - one small Arm instance in its own network, a KMS key that wraps the data key, a private bucket for backups, and an instance role limited to those two. Administration goes through SSM and Tailscale, never SSH keys.
+Description: A host for Foundation - one small Arm instance in its own network, a KMS key that wraps the data key, a private bucket for backups, and an instance role limited to those (and to the file space, when given). Nothing listens publicly: the service is reached through Tailscale and administered through SSM, never SSH keys. The key and the backups outlive the stack.
 Parameters:
   AmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
@@ -13,6 +13,12 @@ Parameters:
     Type: String
     Default: https://github.com/tomato414941/foundation.git
     Description: Where the Foundation code is cloned from.
+  FilesBucket:
+    Type: String
+    Default: ''
+    Description: An existing bucket for the file space (empty for none). The host may create and read objects under files/ only.
+Conditions:
+  HasFiles: !Not [!Equals [!Ref FilesBucket, '']]
 Resources:
   Vpc:
     Type: AWS::EC2::VPC
@@ -55,14 +61,14 @@ Resources:
   SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Foundation host - HTTPS and HTTP for the reverse proxy only. No SSH.
+      GroupDescription: Foundation host - no inbound traffic. Tailscale and SSM connect outward.
       VpcId: !Ref Vpc
-      SecurityGroupIngress:
-        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
-        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
       Tags: [{ Key: Name, Value: foundation }]
+  # Deleting the key would make every credential and every backup unreadable, so it is never deleted with the stack.
   DataKey:
     Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Description: Wraps the key that seals every credential Foundation stores.
       EnableKeyRotation: true
@@ -81,6 +87,8 @@ Resources:
       TargetKeyId: !Ref DataKey
   BackupBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BucketEncryption:
         ServerSideEncryptionConfiguration:
@@ -113,6 +121,12 @@ Resources:
               - Effect: Allow
                 Action: [s3:PutObject, s3:GetObject, s3:ListBucket]
                 Resource: [!GetAtt BackupBucket.Arn, !Sub '${BackupBucket.Arn}/*']
+              - !If
+                - HasFiles
+                - Effect: Allow
+                  Action: [s3:PutObject, s3:GetObject]
+                  Resource: !Sub 'arn:${AWS::Partition}:s3:::${FilesBucket}/files/*'
+                - !Ref AWS::NoValue
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
@@ -137,27 +151,27 @@ Resources:
           set -euo pipefail
           exec > >(tee /var/log/foundation-bootstrap.log) 2>&1
           dnf -y update
-          dnf -y install git sqlite tar
+          dnf -y install git sqlite tar dnf-automatic
+          sed -i 's/^upgrade_type.*/upgrade_type = security/; s/^apply_updates.*/apply_updates = yes/' /etc/dnf/automatic.conf
+          systemctl enable --now dnf-automatic.timer
           curl -fsSL https://rpm.nodesource.com/setup_24.x | bash -
           dnf -y install nodejs
           curl -fsSL https://pkgs.tailscale.com/stable/amazon-linux/2023/tailscale.repo -o /etc/yum.repos.d/tailscale.repo
           dnf -y install tailscale
           systemctl enable --now tailscaled
-          CADDY=$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest | grep -o '"tag_name": *"v[^"]*"' | grep -o 'v[0-9][^"]*' | head -1)
-          curl -fsSL "https://github.com/caddyserver/caddy/releases/download/${!CADDY}/caddy_${!CADDY#v}_linux_arm64.tar.gz" | tar -xz -C /usr/local/bin caddy
           useradd --system --home /opt/foundation --shell /sbin/nologin foundation || true
-          mkdir -p /opt/foundation /var/lib/foundation /etc/foundation /etc/caddy /var/lib/caddy
+          mkdir -p /opt/foundation /var/lib/foundation /etc/foundation
           git clone --depth 1 ${Repository} /opt/foundation/app
           (cd /opt/foundation/app && npm ci --omit=dev)
           cat > /etc/foundation/env <<'ENV'
           FOUNDATION_DATA_DIR=/var/lib/foundation
           FOUNDATION_PORT=3417
           FOUNDATION_BIND=127.0.0.1
-          FOUNDATION_TRUSTED_PROXIES=127.0.0.1,::1,::ffff:127.0.0.1
           ENV
           echo "FOUNDATION_KMS_KEY_ID=${DataKey.Arn}" >> /etc/foundation/env
           echo "FOUNDATION_AWS_REGION=${AWS::Region}" >> /etc/foundation/env
           echo "FOUNDATION_BACKUP_BUCKET=${BackupBucket}" >> /etc/foundation/env
+          if [ -n "${FilesBucket}" ]; then echo "FOUNDATION_FILES_BUCKET=${FilesBucket}" >> /etc/foundation/env; echo "FOUNDATION_FILES_REGION=${AWS::Region}" >> /etc/foundation/env; fi
           chown -R foundation:foundation /opt/foundation /var/lib/foundation /etc/foundation
           chmod 700 /var/lib/foundation && chmod 600 /etc/foundation/env
           cat > /etc/systemd/system/foundation.service <<'UNIT'
@@ -207,17 +221,6 @@ Resources:
           Persistent=true
           [Install]
           WantedBy=timers.target
-          UNIT
-          cat > /etc/systemd/system/caddy.service <<'UNIT'
-          [Unit]
-          Description=Caddy reverse proxy
-          After=network-online.target
-          [Service]
-          ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
-          Restart=always
-          Environment=XDG_DATA_HOME=/var/lib
-          [Install]
-          WantedBy=multi-user.target
           UNIT
           systemctl daemon-reload
           systemctl enable foundation-backup.timer
