@@ -32,7 +32,7 @@ export function configuration(env = process.env) {
   if (encryptionKey && (encryptionKey.length !== 32 || encryptionKey.toString('base64') !== encodedKey)) throw new Error('FOUNDATION_ENCRYPTION_KEY must be 32 bytes encoded as base64');
   if (!encryptionKey && !kms.keyId) throw new Error('No encryption key: set FOUNDATION_ENCRYPTION_KEY, keep the key file, or configure FOUNDATION_KMS_KEY_ID');
   return {
-    dataDir, database, port, bind, encryptionKey, kms,
+    dataDir, database, port, bind, encryptionKey, kms, trustedProxies: (env.FOUNDATION_TRUSTED_PROXIES || '').split(',').map(value => value.trim()).filter(Boolean),
     publicOrigin: env.FOUNDATION_PUBLIC_ORIGIN || undefined,
     supabase: { url: env.FOUNDATION_SUPABASE_URL || '', key: env.FOUNDATION_SUPABASE_PUBLISHABLE_KEY || '', emailEnabled: env.FOUNDATION_EMAIL_LOGIN_ENABLED === 'true' },
     google: { clientId: env.FOUNDATION_GOOGLE_CLIENT_ID || '', clientSecret: env.FOUNDATION_GOOGLE_CLIENT_SECRET || '' },
