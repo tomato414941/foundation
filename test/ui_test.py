@@ -117,7 +117,7 @@ with sync_playwright() as p:
             page.screenshot(path=str(shots / "connect.png"), full_page=True)
         dialog.get_by_role("button", name="Googleで接続", exact=False).click()
         expect(page.get_by_role("heading", name="認証情報", exact=True)).to_be_visible()
-        expect(page.get_by_text("Gmailの認証情報を登録しました。", exact=True)).to_be_visible()
+        expect(page.get_by_text("認証情報を登録しました。", exact=True)).to_be_visible()
         page.wait_for_load_state("networkidle")
         assert "code=" not in page.url and "state=" not in page.url
 
@@ -185,7 +185,7 @@ with sync_playwright() as p:
     authorization["deny"] = True
     page.get_by_role("button", name="登録し直す", exact=True).click()
     dialog.get_by_role("button", name="Googleで接続", exact=False).click()
-    expect(page.get_by_text("Gmailの登録をキャンセルしました。", exact=True)).to_be_visible()
+    expect(page.get_by_text("登録をキャンセルしました。", exact=True)).to_be_visible()
     authorization["deny"] = False
 
     page.set_viewport_size({"width": 390, "height": 844})

@@ -478,14 +478,10 @@ document.addEventListener('click', async (event) => {
 });
 const resultCode = new URL(location.href).searchParams.get('connection');
 window.addEventListener('pageshow', event => { if (event.persisted) void refresh().catch(() => {}); });
-const resultAdapter = new URL(location.href).searchParams.get('adapter');
 if (location.search || location.hash) history.replaceState(null, '', pagePath);
 try { await refresh(); } catch (error) { if (error.status !== 401) { await showLogin(); toast(error.message); } }
-const connectionMessages = { connected: 'Gmailの認証情報を登録しました。', denied: 'Gmailの登録をキャンセルしました。', expired: '登録の手続きが切れました。ログインして、もう一度お試しください。', wrong_account: '登録し直すには同じGoogleアカウントを選んでください。', already_connected: 'このGmailは登録済みです。', scope: '読み取り範囲とGoogleの許可が一致しません。Google側の許可を確認してください。', retry: '継続利用の許可を取得できませんでした。もう一度登録してください。', changed: '認証情報の状態が変わりました。もう一度お試しください。', failed: 'Gmailを登録できませんでした。もう一度お試しください。' };
-if (requestId) {
-  const requestMessages = { denied: '登録をキャンセルしました。', expired: '登録の手続きが切れました。もう一度お試しください。', wrong_account: '登録し直すには同じアカウントを選んでください。', already_connected: 'この認証情報は登録済みです。', scope: '依頼された範囲とサービスの許可が一致しません。', retry: '継続利用の許可を取得できませんでした。もう一度登録してください。', changed: '認証情報の状態が変わりました。もう一度お試しください。', failed: '登録できませんでした。もう一度お試しください。' };
-  if (requestMessages[resultCode]) toast(requestMessages[resultCode]);
-} else if (resultAdapter && !resultAdapter.startsWith('gmail.') && resultCode) {
-  const messages = { connected: '認証情報を登録しました。', denied: '登録をキャンセルしました。', expired: '登録の手続きが切れました。もう一度お試しください。', failed: '登録できませんでした。OpenRouterで作成済みのキーは残る場合があります。不要なキーはOpenRouterで削除してください。' };
-  toast(messages[resultCode] || '登録を確認し、もう一度お試しください。');
-} else if (connectionMessages[resultCode]) toast(connectionMessages[resultCode]);
+// What came back from an OAuth round trip, in words that hold for any service.
+const resultMessages = { connected: '認証情報を登録しました。', denied: '登録をキャンセルしました。', expired: '登録の手続きが切れました。もう一度お試しください。',
+  wrong_account: '登録し直すには同じアカウントを選んでください。', already_connected: 'この認証情報は登録済みです。', scope: '求めた範囲とサービスの許可が一致しません。',
+  retry: '継続利用の許可を取得できませんでした。もう一度登録してください。', changed: '認証情報の状態が変わりました。もう一度お試しください。', failed: '登録できませんでした。もう一度お試しください。' };
+if (resultCode) toast(resultMessages[resultCode] || '登録を確認し、もう一度お試しください。');
