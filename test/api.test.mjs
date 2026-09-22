@@ -52,7 +52,7 @@ test('Multiple accounts carry who registered them, actual scopes and native API 
   const agent = await f.agent();
   const list = await f.request('/v1/credentials', { token: agent.token });
   assert.deepEqual(list.json.credentials.map(item => item.id), [a.id, b.id]);
-  assert.equal(list.json.credentials[0].requested_by, '', 'registered from the dashboard, through no request');
+  assert.equal(list.json.credentials[0].kept_by, '', 'registered from the dashboard, through no request');
   assert.equal(list.json.credentials[0].api.base_url, 'https://gmail.googleapis.com/gmail/v1');
   assert.equal(list.json.credentials[0].delivery.method, 'POST');
   assert.doesNotMatch(list.text, /refresh_token|google-access-|"secret":/);

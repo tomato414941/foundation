@@ -110,9 +110,11 @@ export async function fixture(t, options = {}) {
     assert.equal(result.status, 201, result.text);
     return result.json.agent;
   }
+  // Ages a credential past its expiry, in the record storage holds and in the shape its adapter reads back.
   function expire(credentialId, owner = USER_A) {
     const credential = app.store.credential(owner, credentialId);
-    app.store.saveSecret(credential, { ...app.store.secret(credential), expires_at: Date.now() - 1 });
+    const record = app.store.secret(credential), expires_at = Date.now() - 1;
+    app.store.saveSecret(credential, { ...record, expires_at, renewal: { ...record.renewal, expires_at } });
   }
   if (options.login !== false) await login();
   return { app, auth, gmail, base, request, login, start, callback, credential, agent, approveKey, expire, cookie: () => cookie };

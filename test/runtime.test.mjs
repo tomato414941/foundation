@@ -110,16 +110,16 @@ test('credentials answers 401 until approval, then lists what the owner register
   assert.doesNotMatch(connected.out + before.err + after.out, /fdn_|google-access|refresh_token/);
 });
 
-test('--help prints the agent procedure in Japanese and, when a server is reachable, which adapters it offers', async t => {
+test('--help prints the agent procedure, and when a server is reachable, which adapters it offers', async t => {
   const f = await fixture(t);
   const offline = await execute(['--help'], { FOUNDATION_URL: '' });
   assert.equal(offline.code, 0, offline.err);
-  assert.match(offline.out, /foundation adapters で確認する/);
-  assert.match(offline.out, /出力の verification_uri と confirmation_code を利用者に伝える/);
+  assert.match(offline.out, /Run `foundation adapters` for the available adapters/);
+  assert.match(offline.out, /give the owner the verification_uri and the confirmation_code/);
   assert.doesNotMatch(offline.out, /foundation connect --adapter gmail/);
   const online = await execute(['--help'], { FOUNDATION_URL: f.base });
   assert.equal(online.code, 0, online.err);
-  assert.match(online.out, /gmail.readonly  Gmail \/ メールの読み取り  渡す変数: GOOGLE_OAUTH_ACCESS_TOKEN/);
+  assert.match(online.out, /gmail.readonly  Gmail \/ メールの読み取り  delivers: GOOGLE_OAUTH_ACCESS_TOKEN/);
   assert.match(online.out, /foundation connect --adapter gmail.metadata/);
   assert.doesNotMatch(online.out, /expo\./, 'only the adapters this server offers');
 });

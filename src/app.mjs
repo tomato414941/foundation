@@ -10,6 +10,8 @@ import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { AccessRequests } from './access-requests.mjs';
 import { verificationResult } from './verification.mjs';
 import { Files, FILE_MAX } from './files.mjs';
+import { Records } from './records.mjs';
+import { serviceName, keptValues, documentPath, documentBody, VALUE_BODY_MAX, DOCUMENT_BODY_MAX } from './kept.mjs';
 
 const PUBLIC = new URL('../web/', import.meta.url);
 const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
@@ -22,20 +24,22 @@ const MAX_BODY = 12_000;
 const SESSION_AGE = 14 * 86400;
 const LOGIN_CALLBACK = '/auth/callback';
 const CONNECT_PAGE = /^\/connect\/[A-Za-z0-9_-]{43}$/;
+// A value a key kept itself passed through no adapter, so Foundation has nothing to say about what it reaches.
+const KEPT_ACCESS = Object.freeze({ name: '中身は確認していません', description: 'AIが自分で預けた値です。Foundationは何の値かも、何ができるかも確認していません。', restrictions: '心当たりのないものは削除してください。' });
 
 function returnPath(value = '/') {
   if (value !== '/' && (typeof value !== 'string' || !CONNECT_PAGE.test(value))) fail(400, 'invalid_return', '接続リンクを開き直してください。');
   return value;
 }
 
-async function body(req) {
+async function body(req, max = MAX_BODY) {
   if (req.headers['content-type']?.split(';')[0] !== 'application/json') fail(415, 'json_required', 'JSON形式で送信してください。');
-  if (Number(req.headers['content-length']) > MAX_BODY) fail(413, 'body_too_large', '送信内容が大きすぎます。');
+  if (Number(req.headers['content-length']) > max) fail(413, 'body_too_large', '送信内容が大きすぎます。');
   const chunks = [];
   let length = 0;
   for await (const chunk of req) {
     length += chunk.length;
-    if (length > MAX_BODY) fail(413, 'body_too_large', '送信内容が大きすぎます。');
+    if (length > max) fail(413, 'body_too_large', '送信内容が大きすぎます。');
     chunks.push(chunk);
   }
   let result;
@@ -83,6 +87,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
     return forwarded.at(-1) || socket;
   };
   const adapters = new Adapters(adapterList);
+  const records = new Records(store, adapters);
   const requests = new AccessRequests(store, adapters);
   const files = new Files(store, fileBackend);
   const logins = new EmailLogins({ now: loginClock });
@@ -143,12 +148,24 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
     if (!credential) fail(404, 'not_found', '認証情報が見つかりません。');
     return credential;
   }
+  // A value a key kept itself: no adapter, so the routes for keeping values refuse anything else.
+  function keptOnly(ownerId, id) {
+    const credential = credentialFor(ownerId, id);
+    if (credential.adapter) fail(404, 'not_found', '保管された値が見つかりません。');
+    return credential;
+  }
+  const keptView = credential => ({ id: credential.id, service: credential.service, names: credential.names, kept_by: credential.kept_by, created_at: credential.created_at, updated_at: credential.updated_at });
   function stillCurrent(credential) {
     const current = credentialFor(credential.owner_id, credential.id);
     if (current.status !== 'connected' || current.generation !== credential.generation) fail(409, 'connection_changed', '認証情報の状態が変わりました。');
   }
   // A credential is named by what was verified about it, unless the owner names it.
-  const credentialName = (adapter, secret, subject, given) => given || String(adapter.client.facts?.(secret)?.label || subject).slice(0, 80);
+  const credentialName = (record, subject, given) => given || String(record.facts.label || subject).slice(0, 80);
+  // Everything acquisition produced, in the shape storage holds and delivery reads.
+  const store_ = (adapterId, result, previous, rest) => {
+    const record = records.build(adapterId, result.secret, { subject: result.subject });
+    return { record, details: { adapter: adapterId, subject: result.subject, names: records.names(record), ...rest, name: credentialName(record, result.subject, rest.name) } };
+  };
   const givenName = value => value === undefined || value === '' ? '' : nameValue(value, '表示名');
   // Runs a service exchange, records what was verified on the stored secret (for the owner's screens only),
   // and commits atomically. Foundation never reports these outcomes to the runtime; it learns only which credentials it can use.
@@ -161,16 +178,19 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   }
   // What the owner sees of a credential: the row, what its adapter verified about it, and how it is delivered.
   function ownerView(credential) {
-    const adapter = adapters.get(credential.adapter), secret = store.secret(credentialFor(credential.owner_id, credential.id));
-    const { owner_id: _owner, generation: _generation, ...row } = credential;
-    return { ...row, ...(adapter.client.facts?.(secret) || {}), access: adapter.access, variables: adapters.delivered(adapter.id, secret), ...(secret.verification ? { verification: secret.verification } : {}) };
+    const record = store.secret(credentialFor(credential.owner_id, credential.id));
+    const { owner_id: _owner, generation: _generation, secret: _secret, ...row } = credential;
+    const access = credential.adapter ? adapters.get(credential.adapter).access : KEPT_ACCESS;
+    return { ...row, ...record.facts, expires_at: record.expires_at, expiry_known: record.expiry_known, credential_type: record.credential_type,
+      access, variables: credential.names, ...(record.verification ? { verification: record.verification } : {}) };
   }
   // What a runtime sees: the same, and where to ask for delivery. Never the secret.
   function runtimeView(credential) {
-    const adapter = adapters.get(credential.adapter), secret = store.secret(credentialFor(credential.owner_id, credential.id));
-    return { ...ownerView(credential), api: adapters.service(adapter.id, secret.details)?.api || { base_url: '', documentation_url: '' },
+    const adapter = credential.adapter ? adapters.get(credential.adapter) : null;
+    const record = store.secret(credentialFor(credential.owner_id, credential.id));
+    return { ...ownerView(credential), api: (adapter ? adapters.service(adapter.id, record.renewal?.details) : null)?.api || { base_url: '', documentation_url: '' },
       delivery: { method: 'POST', endpoint: '/v1/credentials/' + credential.id + '/deliver',
-        revocation: adapter.canRevoke === false ? 'Stops future delivery only. Keys already delivered remain usable until the service expires or deletes them. No artificial short expiry is applied.' : 'Stops future delivery; tokens already delivered may remain valid until they expire or the service revokes them.' } };
+        revocation: adapter && adapter.canRevoke !== false ? 'Stops future delivery; tokens already delivered may remain valid until they expire or the service revokes them.' : 'Stops future delivery only. Keys already delivered remain usable until the service expires or deletes them. No artificial short expiry is applied.' } };
   }
   const server = createServer(async (req, res) => {
     const send = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
@@ -252,10 +272,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           }
           if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true);
           await verifyConnection(req, session, user,
-            () => adapter.client.exchange({ ...flow, code, range: adapter.range }, previous ? { subject: previous.subject, secret: store.secret(previous) } : undefined),
+            () => adapter.client.exchange({ ...flow, code, range: adapter.range }, previous ? { subject: previous.subject, secret: store.secret(previous).renewal } : undefined),
             result => {
               if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true);
-              const id = store.register(user.id, { adapter: adapter.id, service: flow.service || adapter.service.name, name: credentialName(adapter, result.secret, result.subject, flow.name), requested_by: flow.requestedBy, subject: result.subject }, result.secret, previous);
+              const held = store_(adapter.id, result, previous, { service: flow.service || adapter.service.name, name: flow.name, kept_by: flow.requestedBy });
+              const id = store.register(user.id, held.details, held.record, previous);
               if (flow.accessRequestId) requests.registered(flow.accessRequestId, user.id, id);
               return id;
             });
@@ -328,7 +349,38 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       if (path.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(method)) requireOrigin(req, origin);
         const { user, session } = await principal(req);
-        if (path === '/api/state' && method === 'GET') return send(200, { user, credentials: store.credentials(user.id).map(ownerView), agents: store.agents(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
+        if (path === '/api/state' && method === 'GET') return send(200, { user, credentials: store.credentials(user.id).filter(row => row.adapter).map(ownerView), agents: store.agents(user.id), values: store.credentials(user.id).filter(row => !row.adapter).map(keptView), documents: store.documents(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
+        // What a key kept is the owner's: they read it, rename the group it sits in, and remove it.
+        const keptRoute = path.match(/^\/api\/values\/([a-f0-9-]{36})$/);
+        if (keptRoute) {
+          if (method === 'GET') return send(200, { values: store.secret(keptOnly(user.id, keptRoute[1])).environment });
+          if (method === 'PATCH') {
+            const input = await body(req);
+            const credential = keptOnly(user.id, keptRoute[1]);
+            store.updateCredential(user.id, credential.id, serviceValue(input.service), serviceValue(input.service));
+            return send(200, { ok: true });
+          }
+          if (method === 'DELETE') {
+            await body(req);
+            keptOnly(user.id, keptRoute[1]);
+            store.removeCredential(user.id, keptRoute[1]);
+            return send(200, { ok: true });
+          }
+        }
+        const keptDocumentRoute = path.match(/^\/api\/documents\/([^/]+)\/([^/]+)$/);
+        if (keptDocumentRoute) {
+          const { collection, name } = documentPath(decodeURIComponent(keptDocumentRoute[1]), decodeURIComponent(keptDocumentRoute[2]));
+          if (method === 'GET') {
+            const document = store.document(user.id, collection, name);
+            if (!document) fail(404, 'not_found', '記録が見つかりません。');
+            return send(200, { document: { collection, name, body: document.body, kept_by: document.kept_by, updated_at: document.updated_at } });
+          }
+          if (method === 'DELETE') {
+            await body(req);
+            if (!store.removeDocument(user.id, collection, name)) fail(404, 'not_found', '記録が見つかりません。');
+            return send(200, { ok: true });
+          }
+        }
         const requestRoute = path.match(/^\/api\/access-requests\/([A-Za-z0-9_-]{43})(\/(?:approve|deny))?$/);
         if (requestRoute) {
           const row = requests.forUser(requestRoute[1], user.id);
@@ -365,7 +417,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
               const saved = await verifyConnection(req, session, user, async () => { result = await adapter.client.login(input); return result; }, () => {
                 if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
                 if (result.challenge) return { challenge: result.challenge };
-                const id = store.register(user.id, { adapter: adapter.id, service: chosenService || adapter.service.name, name: credentialName(adapter, result.secret, result.subject, given), requested_by: requestedBy, subject: result.subject }, result.secret);
+                const held = store_(adapter.id, result, undefined, { service: chosenService || adapter.service.name, name: given, kept_by: requestedBy });
+                const id = store.register(user.id, held.details, held.record);
                 const done = accessRequest ? requests.registered(accessRequest.id, user.id, id) : null;
                 return { connected: true, credential_id: id, ...(done ? { request: requests.summary(done, origin, { code: false }) } : {}) };
               });
@@ -393,7 +446,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
               () => adapter.client.importToken({ values, details }),
               (result, report) => {
                 if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
-                const id = store.register(user.id, { adapter: adapter.id, service: chosenService || adapters.service(adapter.id, details).name, name: credentialName(adapter, result.secret, result.subject, given), requested_by: requestedBy, subject: result.subject }, result.secret);
+                const held = store_(adapter.id, result, undefined, { service: chosenService || adapters.service(adapter.id, details).name, name: given, kept_by: requestedBy });
+                const id = store.register(user.id, held.details, held.record);
                 if (accessRequest) requests.registered(accessRequest.id, user.id, id);
                 return { connected: true, credential_id: id, verification: report };
               });
@@ -419,7 +473,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           if (method === 'DELETE') {
             const input = await body(req);
             if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
-            const adapter = adapters.get(credential.adapter), canRevoke = adapter.client.canRevoke?.(store.secret(credential)) ?? adapter.canRevoke !== false;
+            const adapter = credential.adapter ? adapters.get(credential.adapter) : null, canRevoke = adapter ? (adapter.client.canRevoke?.(store.secret(credential).renewal) ?? adapter.canRevoke !== false) : false;
             if (disconnects.has(credential.id)) fail(409, 'disconnect_in_progress', '登録を解除しています。');
             disconnects.add(credential.id);
             try {
@@ -427,7 +481,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
               const previous = store.disconnect(user.id, credential.id);
               let revoked = null;
               if (input.revoke && canRevoke) {
-                try { await adapter.client.revoke(store.secret(previous)); revoked = true; }
+                try { await adapter.client.revoke(store.secret(previous).renewal); revoked = true; }
                 catch { revoked = false; }
               }
               store.removeCredential(user.id, credential.id);
@@ -455,7 +509,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       if (path.startsWith('/v1/')) {
         const agent = actor(req);
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
-        if (path === '/v1/credentials' && method === 'GET') return send(200, { credentials: store.credentials(agent.owner_id).filter(credential => credential.status !== 'disconnecting').map(runtimeView) });
+        if (path === '/v1/credentials' && method === 'GET') return send(200, { credentials: store.credentials(agent.owner_id).filter(credential => credential.adapter && credential.status !== 'disconnecting').map(runtimeView) });
         if (path === '/v1/me' && method === 'GET') return send(200, { agent: store.agentDetails(agent) });
         if (path === '/v1/me' && method === 'PATCH') {
           const input = await body(req);
@@ -483,24 +537,76 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           rateLimit('files:' + agent.id, 20);
           return send(200, await files.link(agent, fileRoute[1], input.minutes));
         }
-        // Delivery: the adapter makes what the command receives from the stored secret, at the moment of use.
+        // Storage on its own: a key keeps values under names a command will read, with no adapter and no
+        // approval behind them. They land in the same place as everything else the owner keeps.
+        if (path === '/v1/vault' && method === 'GET') return send(200, { values: store.credentials(agent.owner_id).filter(row => !row.adapter).map(keptView) });
+        if (path === '/v1/vault' && method === 'POST') {
+          const input = await body(req, VALUE_BODY_MAX);
+          rateLimit('vault:' + agent.id, 60);
+          const values = keptValues(input.values, adapters.owned);
+          const id = store.register(agent.owner_id, { service: serviceName(input.service), name: serviceName(input.service), names: Object.keys(values), kept_by: agent.name }, records.keep(values));
+          return send(201, { value: keptView(credentialFor(agent.owner_id, id)) });
+        }
+        const valueRoute = path.match(/^\/v1\/vault\/([a-f0-9-]{36})$/);
+        if (valueRoute && method === 'PUT') {
+          const input = await body(req, VALUE_BODY_MAX);
+          rateLimit('vault:' + agent.id, 60);
+          const credential = keptOnly(agent.owner_id, valueRoute[1]);
+          const values = keptValues(input.values, adapters.owned);
+          store.saveSecret(credential, records.keep(values), Object.keys(values));
+          return send(200, { value: keptView(credentialFor(agent.owner_id, credential.id)) });
+        }
+        if (valueRoute && method === 'DELETE') {
+          await body(req);
+          keptOnly(agent.owner_id, valueRoute[1]);
+          store.removeCredential(agent.owner_id, valueRoute[1]);
+          return send(200, { ok: true });
+        }
+        // Documents: the same storage, for what the key reads back whole rather than hands to a command.
+        if (path === '/v1/documents' && method === 'GET') return send(200, { documents: store.documents(agent.owner_id, url.searchParams.get('collection') ?? undefined) });
+        const documentRoute = path.match(/^\/v1\/documents\/([^/]+)\/([^/]+)$/);
+        if (documentRoute) {
+          const { collection, name } = documentPath(decodeURIComponent(documentRoute[1]), decodeURIComponent(documentRoute[2]));
+          if (method === 'GET') {
+            const document = store.document(agent.owner_id, collection, name);
+            if (!document) fail(404, 'not_found', '記録が見つかりません。');
+            const { body: content, owner_id: _owner, ...row } = document;
+            return send(200, { document: { ...row, body: content } });
+          }
+          if (method === 'PUT') {
+            const input = await body(req, DOCUMENT_BODY_MAX);
+            rateLimit('documents:' + agent.id, 120);
+            store.writeDocument(agent.owner_id, { collection, name, body: documentBody(input.body), keptBy: agent.name });
+            return send(200, { document: store.documents(agent.owner_id, collection).find(row => row.name === name) });
+          }
+          if (method === 'DELETE') {
+            await body(req);
+            if (!store.removeDocument(agent.owner_id, collection, name)) fail(404, 'not_found', '記録が見つかりません。');
+            return send(200, { ok: true });
+          }
+        }
+        // Delivery reads storage and nothing else. When an adapter stands behind the credential it is given a
+        // chance first to check or refresh it, which writes a new record; what is handed over is that record.
         const route = path.match(/^\/v1\/credentials\/([a-f0-9-]{36})\/deliver$/);
         if (route && method === 'POST') {
           await body(req);
           store.requireAccess(agent, route[1]);
-          const credential = credentialFor(agent.owner_id, route[1]);
+          let credential = credentialFor(agent.owner_id, route[1]);
           rateLimit('issue:' + agent.id, 30);
-          const adapter = adapters.get(credential.adapter);
-          const secret = await adapter.client.token(store, credential, false);
-          if (secret.expires_at !== null && !(Number.isFinite(secret.expires_at) && secret.expires_at > Date.now())) fail(502, 'service_response', '認証情報の有効期限を確認できませんでした。');
-          actor(req);
-          store.requireAccess(agent, credential.id);
-          stillCurrent(credential);
-          store.recordIssuance(agent, secret.expires_at);
-          const facts = adapter.client.facts?.(secret) || {};
-          return send(200, { credential: { id: credential.id, adapter: credential.adapter, service: credential.service, name: credential.name, label: facts.label || credential.subject },
-            expires_at: secret.expires_at, expires_in: secret.expires_at === null ? null : Math.max(0, Math.floor((secret.expires_at - Date.now()) / 1000)),
-            delivery: adapters.deliver(credential.adapter, secret, credential), ...(facts.key_info ? { key_info: facts.key_info } : {}), ...(secret.verification ? { verification: secret.verification } : {}) });
+          if (credential.adapter) {
+            const adapter = adapters.get(credential.adapter);
+            await adapter.client.token(records.clientStore(adapter.id), credential, false);
+            actor(req);
+            store.requireAccess(agent, credential.id);
+            stillCurrent(credential);
+            credential = credentialFor(agent.owner_id, credential.id);
+          }
+          const record = store.secret(credential);
+          if (record.expires_at !== null && !(Number.isFinite(record.expires_at) && record.expires_at > Date.now())) fail(502, 'service_response', '認証情報の有効期限を確認できませんでした。');
+          store.recordIssuance(agent, record.expires_at);
+          return send(200, { credential: { id: credential.id, adapter: credential.adapter || null, service: credential.service, name: credential.name, label: record.facts.label || credential.name },
+            expires_at: record.expires_at, expires_in: record.expires_at === null ? null : Math.max(0, Math.floor((record.expires_at - Date.now()) / 1000)),
+            delivery: records.delivery(record), ...(record.facts.key_info ? { key_info: record.facts.key_info } : {}), ...(record.verification ? { verification: record.verification } : {}) });
         }
       }
       fail(404, 'not_found', '指定された操作が見つかりません。');
