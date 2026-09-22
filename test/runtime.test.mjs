@@ -113,7 +113,7 @@ test('--help prints the agent procedure in Japanese and, when a server is reacha
   const offline = await execute(['--help'], { FOUNDATION_URL: '' });
   assert.equal(offline.code, 0, offline.err);
   assert.match(offline.out, /foundation adapters で確認する/);
-  assert.match(offline.out, /verification_uri と confirmation_code/);
+  assert.match(offline.out, /verification_uri を利用者に伝える。confirmation_code があれば/);
   assert.doesNotMatch(offline.out, /foundation connect --adapter gmail/);
   const online = await execute(['--help'], { FOUNDATION_URL: f.base });
   assert.equal(online.code, 0, online.err);
