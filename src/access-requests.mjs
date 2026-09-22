@@ -33,21 +33,27 @@ export class AccessRequests {
     if (!row) fail(410, 'request_expired', '接続依頼がありません。新しい接続リンクを作成してください。');
     return row;
   }
-  // The runtime writes the guidance the owner reads on the approval page; Foundation only frames it as the AI's words.
-  // The runtime chooses how long the link stays open (default 30 minutes, at most a day): a phone user may need time for the other service.
-  create(token, { name, adapter, purpose, details, guidance = '', validMinutes = 30 }) {
-    this.adapters.get(adapter);
+  // A request is one of two kinds, decided by the key that makes it:
+  //   approve   a key not yet approved asks its owner to accept it; the owner types the code the runtime showed
+  //   register  an approved key asks its owner to register a credential through one adapter; there is no code
+  // The two never share a request. The runtime writes the purpose and guidance of a registration; Foundation
+  // only frames them as the AI's words. The runtime chooses how long the link stays open (at most a day).
+  create(token, { name, adapter, purpose = '', details, guidance = '', validMinutes = 30 }) {
     if (!Number.isInteger(validMinutes) || validMinutes < 1 || validMinutes * 60_000 > MAX_REQUEST_TTL) fail(400, 'invalid_validity', '有効期間は1〜1440分で指定してください。');
     if (typeof guidance !== 'string' || guidance.length > 2000 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(guidance)) fail(400, 'invalid_guidance', '案内は2000文字以内で入力してください。');
     guidance = guidance.replace(/\r\n?/g, '\n').trim();
-    const encoded = JSON.stringify(this.adapters.details(adapter, details));
     this.store.sweep();
     const hash = this.key(token);
     // A registered key is known by the name its owner gave it; what the runtime calls itself matters only the first time.
     const agent = this.store.authenticate(token), requesterName = agent?.name || name;
-    const previous = this.db.prepare("SELECT * FROM access_requests WHERE token_hash=? AND status='pending' AND expires_at>? ORDER BY created_at DESC LIMIT 1").get(hash, Date.now());
+    if (!agent && (adapter !== undefined || details !== undefined || purpose || guidance)) fail(409, 'approval_required', 'このアクセスキーはまだ承認されていません。先に承認を依頼し (foundation connect)、承認されてから登録を依頼してください。');
+    if (!agent && !name) fail(400, 'invalid_name', '依頼元は1〜80文字で入力してください。');
+    if (agent && adapter === undefined) fail(409, 'already_approved', 'このアクセスキーは承認済みです。登録を依頼するときは接続方法 (--adapter) を指定してください。');
+    const encoded = agent ? JSON.stringify(this.adapters.details(adapter, details)) : '{}', kind = agent ? adapter : null;
+    // One open request per key at a time. A request left open by an earlier approval of the key, since revoked, does not count.
+    const previous = this.db.prepare("SELECT * FROM access_requests WHERE token_hash=? AND status='pending' AND expires_at>? AND COALESCE(agent_id, '')=? ORDER BY created_at DESC LIMIT 1").get(hash, Date.now(), agent?.id || '');
     if (previous) {
-      if (previous.requester_name !== requesterName || previous.adapter !== adapter || previous.purpose !== purpose || previous.details !== encoded || previous.guidance !== guidance || previous.expires_at - previous.created_at !== validMinutes * 60_000) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
+      if (previous.requester_name !== requesterName || previous.adapter !== kind || previous.purpose !== purpose || previous.details !== encoded || previous.guidance !== guidance || previous.expires_at - previous.created_at !== validMinutes * 60_000) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
       return previous;
     }
     if (this.db.prepare('SELECT count(*) n FROM access_requests').get().n >= 1000) fail(429, 'request_limit', '接続依頼が混み合っています。しばらく待ってからお試しください。');
@@ -55,7 +61,7 @@ export class AccessRequests {
     const id = randomBytes(32).toString('base64url'), code = agent ? '' : randomBytes(4).toString('hex').toUpperCase();
     const now = Date.now();
     this.db.prepare('INSERT INTO access_requests (id,token_hash,requester_name,adapter,purpose,details,guidance,confirmation_code,owner_id,agent_id,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-      .run(id, hash, requesterName, adapter, purpose, encoded, guidance, code && code.slice(0, 4) + '-' + code.slice(4), agent?.owner_id || null, agent?.id || null, now, now + validMinutes * 60_000);
+      .run(id, hash, requesterName, kind, purpose, encoded, guidance, code && code.slice(0, 4) + '-' + code.slice(4), agent?.owner_id || null, agent?.id || null, now, now + validMinutes * 60_000);
     return this.get(id);
   }
   details(row) { return JSON.parse(row.details); }
@@ -77,11 +83,11 @@ export class AccessRequests {
     const row = this.current(token);
     return { ...this.summary(row, ''), events: this.eventsOf(row) };
   }
-  // A request from a key the owner already approved asks for nothing but a registration: registering completes it.
+  // A registration request is complete when the owner registers a credential through it.
   registered(id, ownerId, credentialId) {
     const row = this.forUser(id, ownerId, true);
-    if (row.agent_id) this.db.prepare("UPDATE access_requests SET owner_id=?, credential_id=?, status='approved' WHERE id=?").run(ownerId, credentialId, row.id);
-    else this.db.prepare('UPDATE access_requests SET owner_id=?, credential_id=? WHERE id=?').run(ownerId, credentialId, row.id);
+    if (!row.adapter) fail(409, 'approval_only', 'この依頼はアクセスキーの承認だけです。認証情報の登録には使えません。');
+    this.db.prepare("UPDATE access_requests SET owner_id=?, credential_id=?, status='approved' WHERE id=?").run(ownerId, credentialId, row.id);
     return this.get(id);
   }
   claim(id, ownerId) {
@@ -141,7 +147,7 @@ export class AccessRequests {
     }
     const registered = row.agent_id ? this.db.prepare('SELECT name FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash) : undefined;
     const details = this.details(row);
-    return { id: row.id, adapter: this.adapters.describe(row.adapter, details), requester_name: row.requester_name, purpose: row.purpose, details, guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
+    return { id: row.id, kind: row.adapter ? 'register' : 'approve', adapter: row.adapter ? this.adapters.describe(row.adapter, details) : null, requester_name: row.requester_name, purpose: row.purpose, details, guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
       ...(code && row.confirmation_code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
       status, created_at: row.created_at, expires_at: row.expires_at, ...(row.credential_id ? { credential_id: row.credential_id } : {}),
       ...(status === 'approved' ? { agent_id: row.agent_id, ...(credential ? { credential: { id: credential.id, service: credential.service, subject: credential.subject, label: this.adapters.get(credential.adapter).client.facts?.(this.store.secret(credential))?.label || credential.subject } } : {}) } : {}) };

@@ -10,11 +10,12 @@ const now = () => new Date().toISOString();
 const publicColumns = 'id, owner_id, adapter, subject, service, name, purpose, status, generation, created_at, updated_at';
 const binding = credential => `credential:${credential.owner_id}:${credential.id}`;
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 // credentials: what the owner handed over, one row each. adapter is how it is handled; subject identifies it
 //   at the service; service is the name of what it reaches; secret is sealed and bound to owner and id.
 // agents: access keys the owner approved; each may use every credential of its owner.
-// access_requests: one request from a runtime, as it asked and as it went.
+// access_requests: one request from a runtime, as it asked and as it went. adapter is empty when the request only asks
+//   for the key to be approved.
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE credentials (
@@ -30,7 +31,7 @@ const SCHEMA = `
   CREATE TABLE sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL, expires_at INTEGER NOT NULL);
   CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);
   CREATE TABLE access_requests (
-    id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, requester_name TEXT NOT NULL, adapter TEXT NOT NULL,
+    id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, requester_name TEXT NOT NULL, adapter TEXT,
     purpose TEXT NOT NULL, details TEXT NOT NULL, guidance TEXT NOT NULL, confirmation_code TEXT NOT NULL, confirmation_attempts INTEGER NOT NULL DEFAULT 0,
     progress TEXT, owner_id TEXT, agent_id TEXT, credential_id TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
   );

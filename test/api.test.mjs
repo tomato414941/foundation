@@ -208,7 +208,7 @@ test('Login attempts are bounded; provider error text is never exposed', async (
 test('Behind a named proxy the client address comes from X-Forwarded-For; an unnamed proxy cannot spoof it; HSTS only on the public origin', async t => {
   const { fixture } = await import('./helpers.mjs');
   const { randomBytes } = await import('node:crypto');
-  const create = (f, forwarded) => f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: 'fdn_' + randomBytes(32).toString('base64url'), headers: forwarded ? { 'x-forwarded-for': forwarded } : {}, data: { adapter: 'gmail.readonly', name: 'x', purpose: 'y' } });
+  const create = (f, forwarded) => f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: 'fdn_' + randomBytes(32).toString('base64url'), headers: forwarded ? { 'x-forwarded-for': forwarded } : {}, data: { name: 'x' } });
   const trusting = await fixture(t, { login: false, trustedProxies: ['127.0.0.1', '::ffff:127.0.0.1', '::1'] });
   for (let i = 0; i < 12; i++) assert.equal((await create(trusting, '203.0.113.10, 10.0.0.2')).status, 201);
   assert.equal((await create(trusting, '203.0.113.10, 10.0.0.2')).status, 429, 'the last hop is the client');
