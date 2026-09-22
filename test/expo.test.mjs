@@ -116,14 +116,14 @@ for (const change of ['logout', 'cancel', 'expire', 'deny']) test('Expo does not
   assert.ok(!result.text.includes(f.expo.tokenValue()));
 });
 
-test('Revoked Expo token is not delivered and local disconnect never claims to revoke at Expo', async t => {
+test('Revoked Expo token is not delivered, and removing it never claims to revoke at Expo', async t => {
   const f = await expoFixture(t), account = await f.expoAccount(), agent = await f.agent();
-  assert.equal((await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: true } })).json.error.code, 'manual_revocation_required');
   f.expo.identityHandler = () => json({ errors: [{ message: f.expo.tokenValue() }] }, 401);
   const result = await credential(f, account.id, agent.token);
   assert.equal(result.json.error.code, 'reconnect_required'); assert.ok(!result.text.includes(f.expo.tokenValue()));
   assert.equal(f.app.store.credential(USER_A, account.id).status, 'reconnect_required');
-  assert.equal((await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: false } })).json.service_revoked, false);
+  const removed = await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: true } });
+  assert.equal(removed.status, 200); assert.equal(removed.json.service_revoked, null, 'a pasted token is not revoked from here');
   assert.equal((await credential(f, account.id, agent.token)).status, 403);
 });
 

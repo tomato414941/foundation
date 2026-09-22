@@ -5,8 +5,6 @@ import { HttpError } from './errors.mjs';
 const messages = {
   completed: '接続先の認証処理が完了しました。',
   active: 'トークンが有効であることを確認しました。',
-  available: 'R2のバケット一覧を取得できました。',
-  r2_unavailable: 'R2の一覧を取得できませんでした。権限不足、アカウントID、R2の利用設定のどれが原因かは未確認です。',
   not_checked: 'この項目は検証していません。',
   permissions_unknown: 'トークンの権限全体や、余分な権限の有無は未確認です。',
   invalid_account: 'アカウントIDの形式を確認できませんでした。',
@@ -26,7 +24,7 @@ const messages = {
   already_connected: '同じ認証情報の接続がすでに登録されています。',
   account_limit: '接続の登録件数が上限に達しています。',
 };
-const labels = { connection: '接続先の認証', input: '入力形式', credential: 'トークンの有効性', r2_bucket_list: 'R2の一覧取得', permissions: '権限全体' };
+const labels = { connection: '接続先の認証', input: '入力形式', credential: 'トークンの有効性', permissions: '権限全体' };
 
 export function verification(checks, checkedAt = Date.now()) {
   const items = Array.isArray(checks) && checks.length ? checks : [{}];

@@ -58,8 +58,8 @@ test('Supabase approval delivers SUPABASE_ACCESS_TOKEN to the runtime and stops 
   const revoked = await credential(f, account.id, token);
   assert.equal(revoked.status, 409); assert.equal(revoked.json.error.code, 'reconnect_required');
   assert.equal((await f.request('/api/state')).json.credentials[0].status, 'reconnect_required');
-  assert.equal((await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: true } })).json.error.code, 'manual_revocation_required');
-  assert.equal((await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: false } })).status, 200);
+  const removed = await f.request('/api/credentials/' + account.id, { method: 'DELETE', data: { revoke: true } });
+  assert.equal(removed.status, 200); assert.equal(removed.json.service_revoked, null);
 });
 
 test('A generic key request may not borrow the Supabase variable name', async t => {

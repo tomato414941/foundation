@@ -114,10 +114,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
 
     section.get_by_role('button', name='登録を解除', exact=True).click()
     assert 'OpenRouter' not in dialog.inner_text() and 'Google' not in dialog.inner_text()
-    expect(dialog.get_by_role('link', name='Expoでキーを削除する', exact=False)).to_have_attribute('href', 'https://expo.dev/settings/access-tokens')
-    dialog.get_by_role('button', name='登録を解除', exact=True).click()
-    expect(dialog).to_be_visible()
-    dialog.get_by_role('checkbox', name='キーの無効化はExpoで行うことを確認しました', exact=True).check()
+    expect(dialog.get_by_role('link', name='Expoでキーを確認・削除する', exact=False)).to_have_attribute('href', 'https://expo.dev/settings/access-tokens')
     review(page)
     dialog.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog).not_to_be_visible()

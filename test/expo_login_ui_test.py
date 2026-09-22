@@ -174,8 +174,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     assert len(cli('credentials')['credentials']) == 2, 'the approved key uses a connection the owner adds later'
     section.locator('.credential-item').filter(has_text='otp-user').click()
     section.get_by_role('button', name='登録を解除', exact=True).click()
-    expect(dialog.get_by_role('link', name='Expoでキーを削除する', exact=False)).to_have_count(0)
-    expect(dialog.get_by_text('Expoのプロジェクトやデータは削除しません。', exact=False)).to_be_visible()
+    expect(dialog.get_by_text('すでにAIに渡した値と、Expo側のキーは残ります。', exact=False)).to_be_visible()
+    expect(dialog.get_by_role('checkbox', name='Expo側の許可も取り消す', exact=False)).to_be_checked()
     dialog.get_by_role('button', name='登録を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
     assert len(cli('credentials')['credentials']) == 1, 'the other connection stays usable'

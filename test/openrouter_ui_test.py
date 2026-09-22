@@ -105,11 +105,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     cli('credentials', success=False)
 
     section.get_by_role('button', name='登録を解除', exact=True).click()
-    expect(dialog.get_by_text('受け渡し済みのAPIキーは、この操作では無効になりません。', exact=False)).to_be_visible()
-    expect(dialog.get_by_role('link', name='OpenRouterでキーを削除する', exact=False)).to_have_attribute('href', account['management_url'])
-    dialog.get_by_role('button', name='登録を解除', exact=True).click()
-    expect(dialog).to_be_visible()
-    dialog.get_by_role('checkbox', name='キーの無効化はOpenRouterで行うことを確認しました', exact=True).check()
+    expect(dialog.get_by_text('すでにAIに渡した値と、OpenRouter側のキーは残ります。', exact=False)).to_be_visible()
+    expect(dialog.get_by_role('link', name='OpenRouterでキーを確認・削除する', exact=False)).to_have_attribute('href', account['management_url'])
     review(page)
     page.screenshot(path=str(shots / 'disconnect-mobile.png'), full_page=True)
     dialog.get_by_role('button', name='登録を解除', exact=True).click()

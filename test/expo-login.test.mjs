@@ -155,13 +155,16 @@ test('Disconnect revokes only this Expo session and blocks issuance during an up
   const id = result.json.credential_id;
   f.expo.logoutHandler = () => json({ errors: [{ message: 'private upstream body' }] }, 503);
   const failed = await f.request('/api/credentials/' + id, { method: 'DELETE', data: { revoke: true } });
-  assert.equal(failed.status, 502); assert.doesNotMatch(failed.text, /private upstream/);
-  assert.equal(f.app.store.credential(USER_A, id).status, 'disconnecting');
+  assert.equal(failed.status, 200); assert.equal(failed.json.service_revoked, false);
+  assert.doesNotMatch(failed.text, /private upstream/);
+  assert.equal(f.app.store.credential(USER_A, id), undefined, 'it leaves Foundation whether or not Expo answered');
   assert.equal((await credential(f, id, token)).status, 403);
+  // A session Foundation could log out is logged out.
   f.expo.logoutHandler = null;
-  const removed = await f.request('/api/credentials/' + id, { method: 'DELETE', data: { revoke: true } });
-  assert.equal(removed.json.service_revoked, true); assert.equal(f.expo.sessions.size, 0);
-  assert.equal(f.app.store.credential(USER_A, id), undefined);
+  const second = await f.loginExpo((await requestAccess(f)).input);
+  const removed = await f.request('/api/credentials/' + second.json.credential_id, { method: 'DELETE', data: { revoke: true } });
+  assert.equal(removed.json.service_revoked, true);
+  assert.equal(f.app.store.credential(USER_A, second.json.credential_id), undefined);
 });
 
 test('Login is rate limited, transient errors redacted, and identity failure logs out the new session', async t => {

@@ -19,20 +19,17 @@ const timestamp = value => {
   return time;
 };
 
-// User API tokens, not Global API keys or R2 S3 access keys. Checking one
-// bucket-list page proves access, not the absence of any other token grants.
-// Bucket names/content are never kept in Foundation.
+// User API tokens, not Global API keys or R2 S3 access keys. Foundation checks that Cloudflare accepts the
+// token, which is what the owner can get wrong here; what the token may reach is Cloudflare's to say.
 export class CloudflareClient {
   constructor({ fetcher = fetch } = {}) { this.enabled = true; this.fetcher = fetcher; }
   check() { if (!this.enabled) fail(503, 'cloudflare_unavailable', '現在Cloudflareに接続できません。'); }
-  async request(path, token, verify = false) {
+  async request(path, token) {
     let response;
     try { response = await this.fetcher(CLOUDFLARE_API + path, { method: 'GET', headers: { authorization: 'Bearer ' + token }, redirect: 'error', signal: AbortSignal.timeout(12_000) }); }
     catch { fail(502, 'service_unavailable', 'Cloudflareに接続できませんでした。時間をおいて再度お試しください。'); }
     if (response.status === 429) fail(503, 'service_rate_limit', 'Cloudflareへの確認が続いています。時間をおいて再度お試しください。');
-    const denied = () => { const error = new HttpError(409, verify ? 'reconnect_required' : 'r2_unavailable', verify
-      ? 'トークンが無効か、失効しています。Cloudflareのプロフィールから作成したAPIトークンを確認してください。'
-      : 'R2の一覧を確認できません。アカウントID、対象アカウントの Workers R2 Storage: Read 権限、R2の利用設定を確認してください。'); error.upstreamStatus = response.status; throw error; };
+    const denied = () => { const error = new HttpError(409, 'reconnect_required', 'トークンが無効か、失効しています。Cloudflareのプロフィールから作成したAPIトークンを確認してください。'); error.upstreamStatus = response.status; throw error; };
     if ([400, 401, 403, 404].includes(response.status)) denied();
     if (!response.ok) fail(502, 'service_unavailable', 'Cloudflareで処理を完了できませんでした。');
     let data;
@@ -44,23 +41,12 @@ export class CloudflareClient {
   async inspect(token, id) {
     id = accountId(id);
     if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{20,256}$/.test(token) || /^cf(?:k|at)_/.test(token)) fail(400, 'invalid_credential', 'Cloudflareのプロフィールから作成したAPIトークンを入力してください。Global API KeyやR2のSecret Access Keyは使えません。');
-    const verified = await this.request('/user/tokens/verify', token, true);
+    const verified = await this.request('/user/tokens/verify', token);
     if (!/^[a-f0-9]{32}$/.test(verified.id || '') || !['active', 'disabled', 'expired'].includes(verified.status)) invalidResponse();
     const expiresAt = timestamp(verified.expires_on), notBefore = timestamp(verified.not_before);
     if (verified.status !== 'active' || expiresAt !== null && expiresAt <= Date.now() || notBefore !== null && notBefore > Date.now()) fail(409, 'reconnect_required', 'このAPIトークンは現在使えません。Cloudflareで状態と有効期限を確認してください。');
-    // Only a permission probe; never download objects, enumerate all buckets,
-    // or grant token-management/account-management permissions to inspect it.
-    let r2;
-    try {
-      const result = await this.request('/accounts/' + id + '/r2/buckets?per_page=1', token);
-      if (!Array.isArray(result.buckets) || result.buckets.some(bucket => !bucket || typeof bucket.name !== 'string' || !bucket.name || bucket.name.length > 64)) invalidResponse();
-      r2 = { check: 'r2_bucket_list', status: 'passed', code: 'available' };
-    } catch (error) {
-      // Capability observations are not Foundation access-control decisions.
-      r2 = failedCheck(error, 'r2_bucket_list');
-    }
     return { access_token: token, credential_type: 'api_key', expires_at: expiresAt, expiry_known: true, scopes: [CLOUDFLARE_SCOPE],
-      verification: verification([{ check: 'credential', status: 'passed', code: 'active' }, r2, { check: 'permissions', status: 'unknown', code: 'permissions_unknown' }]),
+      verification: verification([{ check: 'credential', status: 'passed', code: 'active' }, { check: 'permissions', status: 'unknown', code: 'permissions_unknown' }]),
       details: { token_hash: digest(token), token_id: verified.id, account_id: id, checked_at: Date.now() } };
   }
   async importToken({ values }) {
@@ -69,7 +55,7 @@ export class CloudflareClient {
     let secret;
     try { secret = await this.inspect(token, accountId); }
     catch (error) {
-      error.verification = verification([failedCheck(error, error.code === 'invalid_account' ? 'input' : 'credential'), { check: 'r2_bucket_list', status: 'unknown', code: 'not_checked' }, { check: 'permissions', status: 'unknown', code: 'permissions_unknown' }]);
+      error.verification = verification([failedCheck(error, error.code === 'invalid_account' ? 'input' : 'credential'), { check: 'permissions', status: 'unknown', code: 'permissions_unknown' }]);
       throw error;
     }
     // One token must not appear to be several separately scoped connections.
