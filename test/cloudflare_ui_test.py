@@ -123,7 +123,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
         register.get_by_role('button', name='登録する', exact=True).click()
     assert token not in response_event.value.text()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
-    page.get_by_text('検証結果', exact=True).click()
     expect(page.get_by_text('R2のバケット一覧を取得できました。', exact=False)).to_be_visible()
     review(page)
     account = cli('credentials')['credentials'][0]

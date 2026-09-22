@@ -39,11 +39,14 @@ const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span
 const statusName = (credential) => ({ connected: '利用可能', reconnect_required: '登録し直しが必要', disconnecting: '解除待ち' }[credential.status] || '確認が必要');
 const accessName = credential => credential.access?.name || 'サービスで許可した範囲';
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
-function verificationDetails(report) {
+// Folded where it sits beside other things (the dashboard pane); laid open where it is the point (a registration result).
+function verificationDetails(report, { open = false } = {}) {
   if (!report?.checks?.length) return '';
   const attention = report.checks.some(item => item.status === 'failed' || item.status === 'unknown' && item.check !== 'permissions');
   const statuses = { passed: '成功', failed: '失敗', unknown: '未確認' };
-  return `<details class="verification-result" ${attention ? 'open' : ''}><summary>検証結果</summary><ul>${report.checks.map(item => `<li><span class="verification-label">${esc(item.label)}<small>${esc(statuses[item.status] || '未確認')}</small></span><p>${esc(item.message)}</p></li>`).join('')}</ul></details>`;
+  const list = `<ul>${report.checks.map(item => `<li><span class="verification-label">${esc(item.label)}<small>${esc(statuses[item.status] || '未確認')}</small></span><p>${esc(item.message)}</p></li>`).join('')}</ul>`;
+  if (open) return `<section class="verification-result"><h2 class="verification-heading">検証結果</h2>${list}</section>`;
+  return `<details class="verification-result" ${attention ? 'open' : ''}><summary>検証結果</summary>${list}</details>`;
 }
 function keyFacts(credential) {
   if (!credential.key_info) return credential.credential_type === 'api_key' && credential.expiry_known === true ? `<dl class="key-facts"><div><dt>有効期限</dt><dd>${credential.expires_at === null ? '期限の指定なし' : esc(new Date(credential.expires_at).toLocaleString('ja-JP'))}</dd></div></dl>` : '';
@@ -189,7 +192,7 @@ function renderRequest() {
     const [title, description] = row ? finished[row.status] || ['依頼を確認できません', '依頼のリンクを開き直してください。'] : ['依頼を確認できません', requestError];
     // A registration ends here, so what Foundation verified about the new credential is shown here too.
     const registered = row?.status === 'approved' && row.kind === 'register' ? state.credentials.find(credential => credential.id === row.credential?.id) : null;
-    app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(row?.status === 'approved' ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p>${registered ? keyFacts(registered) + verificationDetails(registered.verification) : ''}<a class="button secondary" href="/">認証情報を管理</a></section>`);
+    app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(row?.status === 'approved' ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p>${registered ? keyFacts(registered) + verificationDetails(registered.verification, { open: true }) : ''}<a class="button secondary" href="/">認証情報を管理</a></section>`);
     return;
   }
   const expiry = `<p class="request-expiry">この依頼は ${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで有効です。</p>`;
