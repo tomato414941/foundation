@@ -118,6 +118,7 @@ export function awsConnection(client, { templateUrl = '', region = 'ap-northeast
       instructions: quickCreate ? 'ボタンを押すと、AWSにFoundation用のユーザーとロールを作る画面が開きます。' : '定義ファイルをダウンロードしてから、CloudFormationに投入します。',
       steps: quickCreate ? [
         '「AWS で作成する」を押し、AWSにログインする。',
+        'Permissions で、このAIに許す範囲を選ぶ (読み取りだけなら ReadOnlyAccess、通常の構築なら PowerUserAccess、IAM を含む作業なら AdministratorAccess)。',
         '画面下の「AWS CloudFormation によって IAM リソースが作成される場合があることを承認します」にチェックして、「スタックの作成」を押す。',
         '1分ほど待ち、状態が「CREATE_COMPLETE」になったら「出力」タブを開く。',
         '「CopyToFoundation」の値をコピーして、下の欄に貼り付ける。',
@@ -125,7 +126,7 @@ export function awsConnection(client, { templateUrl = '', region = 'ap-northeast
         '「定義ファイルをダウンロード」を押す (foundation-agent.yaml が保存される)。',
         '「CloudFormation を開く」を押し、AWSにログインする。',
         '「既存のテンプレートを選択」→「テンプレートファイルのアップロード」→「ファイルの選択」で、保存したファイルを選び、「次へ」。',
-        'スタック名に foundation と入れる。Permissions はそのままで「次へ」、次の画面も「次へ」。',
+        'スタック名を入れる (例: foundation。同じ名前が既にあれば別の名前)。Permissions で、このAIに許す範囲を選ぶ。読み取りだけなら ReadOnlyAccess、通常の構築なら PowerUserAccess、IAM を含む作業なら AdministratorAccess。「次へ」、次の画面も「次へ」。',
         '最後の画面の下にある「AWS CloudFormation によって IAM リソースが作成される場合があることを承認します」にチェックして、「送信」。',
         '1分ほど待ち、状態が「CREATE_COMPLETE」になったら「出力」タブを開く。',
         '「CopyToFoundation」の値をコピーして、下の欄に貼り付ける。',
