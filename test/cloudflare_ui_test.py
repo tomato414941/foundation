@@ -52,16 +52,17 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     expect(page.get_by_text('ここで指定するアカウントIDや用途では制限されません。', exact=False)).to_be_visible()
     review(page)
 
-    page.get_by_role('button', name='Cloudflareのトークンを登録', exact=True).click()
     dialog = page.get_by_role('dialog')
-    field = dialog.get_by_label('APIトークン', exact=True)
-    account_field = dialog.get_by_label('アカウントID', exact=True)
+    register = page.locator('.register-section')
+    expect(register.get_by_role('heading', name='Cloudflareのトークンを登録', exact=True)).to_be_visible()
+    field = register.get_by_label('APIトークン', exact=True)
+    account_field = register.get_by_label('アカウントID', exact=True)
     expect(field).to_have_attribute('type', 'password')
     expect(field).to_have_attribute('autocomplete', 'off')
-    expect(dialog.get_by_text('Global API Key と R2 の S3互換キーは不可', exact=False)).to_be_visible()
-    expect(dialog.get_by_text('トークンの権限全体は確認・制限しません。', exact=False)).to_be_visible()
+    expect(register.get_by_text('Global API Key と R2 の S3互換キーは不可', exact=False)).to_be_visible()
+    expect(register.get_by_text('トークンの権限全体は確認・制限しません。', exact=False)).to_be_visible()
     context.route('https://dash.cloudflare.com/profile/api-tokens', lambda route: route.fulfill(status=200, content_type='text/html', body='<h1>Cloudflare token settings fixture</h1>'))
-    link = dialog.get_by_role('link', name='CloudflareのAPIトークン管理ページを開く', exact=False)
+    link = register.get_by_role('link', name='CloudflareのAPIトークン管理ページを開く', exact=False)
     expect(link).to_have_attribute('rel', 'noopener noreferrer')
     with page.expect_popup() as popup_event:
         link.click()
@@ -74,7 +75,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
-        assert dialog.evaluate('(el) => el.scrollWidth <= el.clientWidth')
+        assert register.evaluate('(el) => el.scrollWidth <= el.clientWidth')
         if width != 320:
             page.screenshot(path=str(shots / ('token-desktop.png' if width == 1280 else 'token-mobile.png')), full_page=True)
 
@@ -83,8 +84,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     assert not account_field.evaluate('(el) => el.checkValidity()')
     account_field.fill(account_id)
     field.fill('invalid-token-with-valid-syntax')
-    dialog.get_by_role('button', name='登録する', exact=True).click()
-    expect(dialog.get_by_role('alert')).to_contain_text('トークンが無効か')
+    register.get_by_role('button', name='登録する', exact=True).click()
+    expect(register.get_by_role('alert')).to_contain_text('トークンが無効か')
     expect(field).to_have_value('')
     expect(account_field).to_have_value(account_id)
     review(page)
@@ -94,7 +95,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     # A valid token with an inaccessible account is a reported fact, not a hard gate.
     account_field.fill('f' * 32)
     field.fill(token)
-    dialog.get_by_role('button', name='登録する', exact=True).click()
+    register.get_by_role('button', name='登録する', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(page.get_by_text('R2の一覧を取得できませんでした。', exact=False)).to_be_visible()
     expect(page.get_by_role('button', name='利用を許可', exact=True)).to_be_disabled()
@@ -106,12 +107,13 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
             page.screenshot(path=str(shots / ('verification-desktop.png' if width == 1280 else 'verification-mobile.png')), full_page=True)
 
     # The same approval URL supports correcting the ID without adding another connection.
-    page.get_by_role('button', name='Cloudflareのトークンを登録', exact=True).click()
+    page.get_by_role('button', name='別のCloudflareのキーを登録', exact=True).click()
+    expect(register).to_be_visible()
     expect(field).to_have_value('')
     account_field.fill(account_id)
     field.fill(token)
     with page.expect_response(lambda response: '/api/connections/cloudflare/connect' in response.url) as response_event:
-        dialog.get_by_role('button', name='登録する', exact=True).click()
+        register.get_by_role('button', name='登録する', exact=True).click()
     assert token not in response_event.value.text()
     expect(dialog).not_to_be_visible()
     expect(page.get_by_role('radio')).to_have_count(1)
@@ -153,7 +155,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     assert cli('accounts')['accounts'] == []
 
     # Root imports use the same small form and do not restore revoked grants.
+    # The dashboard registers through the dialog.
     section.get_by_role('button', name='Cloudflareを接続', exact=True).click()
+    field = dialog.get_by_label('APIトークン', exact=True)
+    account_field = dialog.get_by_label('アカウントID', exact=True)
     field.fill(token)
     dialog.get_by_role('button', name='閉じる', exact=True).click()
     section.get_by_role('button', name='Cloudflareを接続', exact=True).click()

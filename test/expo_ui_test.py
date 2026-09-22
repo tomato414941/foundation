@@ -49,20 +49,20 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     expect(page.get_by_text('Expoへのアクセス', exact=True)).to_be_visible()
     expect(page.get_by_role('button', name='利用を許可', exact=True)).to_be_disabled()
     review(page)
-    page.get_by_role('button', name='Expoのトークンを登録', exact=True).click()
     dialog = page.get_by_role('dialog')
-    expect(dialog.get_by_role('heading', name='Expoを接続', exact=True)).to_be_visible()
-    field = dialog.get_by_label('アクセストークン', exact=True)
+    register = page.locator('.register-section')
+    expect(register.get_by_role('heading', name='Expoのトークンを登録', exact=True)).to_be_visible()
+    field = register.get_by_label('アクセストークン', exact=True)
     expect(field).to_have_attribute('type', 'password')
     expect(field).to_have_attribute('autocomplete', 'off')
-    expect(dialog.get_by_text('すべてのアカウント・組織', exact=False)).to_have_count(0)
-    expect(dialog.locator('input[name="purpose"]')).to_have_value(request['purpose'])
-    expect(dialog.get_by_label('用途 任意', exact=True)).to_have_count(0)
+    expect(register.get_by_text('すべてのアカウント・組織', exact=False)).to_have_count(0)
+    expect(register.locator('input[name="purpose"]')).to_have_value(request['purpose'])
+    expect(register.get_by_label('用途 任意', exact=True)).to_have_count(0)
 
     # Verify the external login is an isolated official-site tab, never a
     # Foundation password form or an iframe. No real account is used.
     context.route('https://expo.dev/settings/access-tokens', lambda route: route.fulfill(status=200, content_type='text/html', body='<h1>Official token settings fixture</h1>'))
-    link = dialog.get_by_role('link', name='Expoのアクセストークン管理ページを開く', exact=False)
+    link = register.get_by_role('link', name='Expoのアクセストークン管理ページを開く', exact=False)
     expect(link).to_have_attribute('rel', 'noopener noreferrer')
     with page.expect_popup() as popup_event:
         link.click()
@@ -76,21 +76,21 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
-        assert dialog.evaluate('(el) => el.scrollWidth <= el.clientWidth')
+        assert register.evaluate('(el) => el.scrollWidth <= el.clientWidth')
         if width != 320:
             page.screenshot(path=str(shots / ('token-desktop.png' if width == 1280 else 'token-mobile.png')), full_page=True)
 
     field.fill('syntactically-valid-but-revoked')
-    dialog.get_by_role('button', name='登録する', exact=True).click()
-    expect(dialog.get_by_role('alert')).to_contain_text('トークンが無効か')
+    register.get_by_role('button', name='登録する', exact=True).click()
+    expect(register.get_by_role('alert')).to_contain_text('トークンが無効か')
     expect(field).to_have_value('')
     cli('accounts', success=False)
     review(page)
     field.fill(token)
     with page.expect_response(lambda response: '/api/connections/expo/connect' in response.url) as response_event:
-        dialog.get_by_role('button', name='登録する', exact=True).click()
+        register.get_by_role('button', name='登録する', exact=True).click()
     assert token not in response_event.value.text()
-    expect(dialog).not_to_be_visible()
+    expect(register).to_be_hidden()
     expect(page.get_by_role('radio')).to_have_count(1)
     cli('accounts', success=False)
     cli('accounts', success=False)
@@ -127,7 +127,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     expect(dialog).not_to_be_visible()
     assert cli('accounts')['accounts'] == []
 
+    # The dashboard registers through the dialog.
     section.get_by_role('button', name='Expoを接続', exact=True).click()
+    field = dialog.get_by_label('アクセストークン', exact=True)
     field.fill(token)
     dialog.get_by_role('button', name='閉じる', exact=True).click()
     section.get_by_role('button', name='Expoを接続', exact=True).click()

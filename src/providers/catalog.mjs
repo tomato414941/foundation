@@ -116,7 +116,7 @@ export function awsConnection(client, { templateUrl = '', region = 'ap-northeast
     environment: credentials => ({ AWS_ACCESS_KEY_ID: credentials.details.session_access_key_id, AWS_SESSION_TOKEN: credentials.details.session_token, AWS_REGION: credentials.details.region, AWS_DEFAULT_REGION: credentials.details.region }),
     tokenSetup: { links: quickCreate ? [{ label: 'AWS で作成する', href: quickCreate }] : [{ label: '定義ファイルをダウンロード', href: AWS_TEMPLATE_PATH }, { label: 'CloudFormation を開く', href: createUrl }], label: 'AWSの「出力」に表示された値 (CopyToFoundation)', step_label: 'AWSにFoundation用のユーザーとロールを作る',
       instructions: 'CloudFormationのスタックが作った「出力」の CopyToFoundation の値 1 つを受け付けます。登録時に GetCallerIdentity と AssumeRole を1回ずつ試して確認します。',
-      note: '作られるのは、ロールを引き受けることしかできないユーザーと、AIが使うロール、そのアクセスキーです。不要になったらスタックを削除すれば全部消えます。登録時に GetCallerIdentity と AssumeRole を1回ずつ試して確認します。',
+      note: '作られるのは、ロールを引き受けることしかできないユーザーと、AIが使うロール、そのアクセスキーです。不要になったらスタックを削除すれば全部消えます。',
       },
     api: { base_url: '', documentation_url: AWS_DOCS },
     permissions: [{ id: 'assume-role', name: 'ロールの権限でAWSを利用', connection_method: 'token',
