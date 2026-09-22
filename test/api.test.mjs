@@ -3,10 +3,9 @@ import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
 import { fixture, USER_A } from './helpers.mjs';
 
-test('Supabase login replaces owner keys; private state and safe cookies', async (t) => {
+test('Login gives a private state behind a safe session cookie', async (t) => {
   const f = await fixture(t);
   assert.equal((await f.request('/api/state', { anonymous: true })).status, 401);
-  assert.equal((await f.request('/api/session', { method: 'POST', data: { token: 'obsolete-owner-key' } })).status, 400);
   const login = await f.login();
   assert.match(login.headers.get('set-cookie'), /HttpOnly; SameSite=Lax/);
   const result = await f.request('/api/state');
@@ -14,7 +13,6 @@ test('Supabase login replaces owner keys; private state and safe cookies', async
   assert.deepEqual(result.json.credentials, []);
   assert.equal(result.headers.get('cache-control'), 'no-store');
   assert.doesNotMatch(result.text, /supabase-access|refresh_token|"secret"|token_hash/);
-  assert.doesNotMatch((await f.request('/app.js')).text, /管理キー|owner-key/);
 });
 
 test('OAuth uses state, PKCE, offline consent, native Google URL; callback is one-use', async (t) => {

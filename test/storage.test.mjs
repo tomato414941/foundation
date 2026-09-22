@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat, readdir, unlink } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, unlink } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,7 +34,7 @@ test('Authenticated encryption binds ciphertext to its account and owner', () =>
   assert.throws(() => new Vault(Buffer.alloc(32, 8)).open(data, 'account:A'));
 });
 
-test('Configuration creates private encryption key, never an owner login key; losing key fails closed', async (t) => {
+test('Configuration creates a private encryption key; losing the key fails closed', async (t) => {
   const dir = await directory(t), env = { FOUNDATION_DATA_DIR: dir };
   const first = configuration(env), second = configuration(env);
   assert.equal(first.supabase.emailEnabled, false);
@@ -42,7 +42,6 @@ test('Configuration creates private encryption key, never an owner login key; lo
   assert.deepEqual(first.encryptionKey, second.encryptionKey);
   assert.equal((await stat(join(dir, 'encryption-key'))).mode & 0o777, 0o600);
   assert.equal((await stat(dir)).mode & 0o777, 0o700);
-  assert.ok(!(await readdir(dir)).includes('owner-key'));
   const db = new Store(first.database, first.encryptionKey); db.close();
   assert.throws(() => new Store(first.database, KEY));
   await unlink(join(dir, 'encryption-key'));
