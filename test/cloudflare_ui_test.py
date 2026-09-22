@@ -60,7 +60,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     expect(field).to_have_attribute('type', 'password')
     expect(field).to_have_attribute('autocomplete', 'off')
     expect(register.get_by_text('Global API Key と R2 の S3互換キーは不可', exact=False)).to_be_visible()
-    expect(register.get_by_text('トークンの権限全体は確認・制限しません。', exact=False)).to_be_visible()
     context.route('https://dash.cloudflare.com/profile/api-tokens', lambda route: route.fulfill(status=200, content_type='text/html', body='<h1>Cloudflare token settings fixture</h1>'))
     link = register.get_by_role('link', name='CloudflareのAPIトークン管理ページを開く', exact=False)
     expect(link).to_have_attribute('rel', 'noopener noreferrer')

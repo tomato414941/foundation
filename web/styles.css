@@ -119,6 +119,7 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .register-section { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--line); }
 .register-section h2 { font-size: 18px; margin-bottom: 6px; }
 .register-section + form { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--line); }
+.setup-links { margin: 14px 0 18px; }
 .token-intro { color: var(--muted); margin-bottom: 4px; overflow-wrap: anywhere; }
 .file-pick { display: block; margin-top: 10px; }
 .setup-link + .setup-link { margin-top: 10px; }
