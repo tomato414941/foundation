@@ -402,15 +402,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const state = store.addFlow(session.id, flow);
           return send(200, { url: adapter.client.authorize({ state, verifier, redirectUri, range: adapter.range, email: previous?.subject }) });
         }
-        const credentialRoute = path.match(/^\/api\/credentials\/([a-f0-9-]{36})(\/check)?$/);
+        const credentialRoute = path.match(/^\/api\/credentials\/([a-f0-9-]{36})$/);
         if (credentialRoute) {
           const credential = credentialFor(user.id, credentialRoute[1]);
-          if (!credentialRoute[2] && method === 'PATCH') {
+          if (method === 'PATCH') {
             const input = await body(req);
             store.updateCredential(user.id, credential.id, nameValue(input.name, '表示名'));
             return send(200, { ok: true });
           }
-          if (!credentialRoute[2] && method === 'DELETE') {
+          if (method === 'DELETE') {
             const input = await body(req);
             if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
             const adapter = adapters.get(credential.adapter), canRevoke = adapter.client.canRevoke?.(store.secret(credential)) ?? adapter.canRevoke !== false;
@@ -423,14 +423,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
               store.removeCredential(user.id, credential.id);
               return send(200, { ok: true, service_revoked: input.revoke });
             } finally { disconnects.delete(credential.id); }
-          }
-          if (credentialRoute[2] && method === 'POST') {
-            await body(req);
-            rateLimit('check:' + credential.id, 4);
-            const secret = await adapters.get(credential.adapter).client.token(store, credential, true);
-            localSession(req);
-            stillCurrent(credential);
-            return send(200, { ok: true, ...(secret.verification ? { verification: secret.verification } : {}) });
           }
         }
         if (path === '/api/agents' && method === 'POST') {

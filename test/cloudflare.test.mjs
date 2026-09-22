@@ -165,7 +165,7 @@ test('Cloudflare cannot be imported across user sessions or after an approval re
   const account = await f.cloudflareAccount(), agent = await f.agent();
   await f.login('other@example.test');
   assert.equal((await f.request('/api/state')).json.credentials.length, 0);
-  assert.equal((await f.request('/api/credentials/' + account.id + '/check', { method: 'POST', data: {} })).status, 404);
+  assert.equal((await f.request('/api/credentials/' + account.id, { method: 'PATCH', data: { name: 'taken' } })).status, 404);
   const otherAccount = await f.credential('other'), other = await f.agent();
   assert.equal((await credential(f, account.id, other.token)).status, 403);
   assert.equal((await credential(f, account.id, agent.token)).status, 200);

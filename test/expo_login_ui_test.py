@@ -160,8 +160,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     # Root connection is optional and never silently grants the runtime.
     page.goto(args.base, wait_until='networkidle')
     section = page.locator('[aria-labelledby="expo-title"]')
-    section.get_by_role('button', name='検証する', exact=True).click()
-    expect(page.get_by_text('Expoで検証できました。', exact=True)).to_be_visible()
     page.get_by_role('button', name='Expoを登録', exact=True).click()
     dialog = page.get_by_role('dialog')
     username.fill('fixture-user')

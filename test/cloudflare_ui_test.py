@@ -136,8 +136,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
 
     page.goto(args.base, wait_until='networkidle')
     section = page.locator('[aria-labelledby="cloudflare-title"]')
-    section.get_by_role('button', name='検証する', exact=True).click()
-    expect(page.get_by_text('Cloudflareで検証できました。', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
