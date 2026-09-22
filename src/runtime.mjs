@@ -70,8 +70,9 @@ async function main() {
   }
   let options;
   if (action === 'connect') {
-    const { service, site, env, ...values } = parseArgs({ args, options: { provider: { type: 'string' }, name: { type: 'string', default: hostname() + ' の ' + (agentName || 'AI') }, purpose: { type: 'string', default: '' }, note: { type: 'string', default: '' }, mode: { type: 'string' }, service: { type: 'string' }, site: { type: 'string' }, env: { type: 'string' } }, strict: true, allowPositionals: false }).values;
+    const { service, site, env, ...values } = parseArgs({ args, options: { provider: { type: 'string' }, name: { type: 'string', default: hostname() + ' の ' + (agentName || 'AI') }, purpose: { type: 'string', default: '' }, guide: { type: 'string', default: '' }, mode: { type: 'string' }, service: { type: 'string' }, site: { type: 'string' }, env: { type: 'string' } }, strict: true, allowPositionals: false }).values;
     options = values;
+    if (options.guide) { options.guidance = options.guide; } delete options.guide;
     if (service !== undefined || site !== undefined || env !== undefined) {
       if (!service || !site || !validRequestedEnvName(env)) throw new Error('--service, --site (https) and --env (UPPER_CASE, not reserved) are all required for a key request.');
       options.provider ||= 'apikey'; options.details = { service, site, env };

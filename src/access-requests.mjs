@@ -33,9 +33,11 @@ export class AccessRequests {
     if (!row) fail(410, 'request_expired', '接続依頼がありません。新しい接続リンクを作成してください。');
     return row;
   }
-  create(token, { name, provider, purpose, mode, details, note = '' }) {
+  // The runtime writes the guidance the owner reads on the approval page; Foundation only frames it as the AI's words.
+  create(token, { name, provider, purpose, mode, details, guidance = '' }) {
     this.providers.permission(provider, mode);
-    if (typeof note !== 'string' || note.length > 300 || /[\x00-\x08\x0b-\x1f]/.test(note)) fail(400, 'invalid_note', '補足は300文字以内で入力してください。');
+    if (typeof guidance !== 'string' || guidance.length > 2000 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(guidance)) fail(400, 'invalid_guidance', '案内は2000文字以内で入力してください。');
+    guidance = guidance.replace(/\r\n?/g, '\n').trim();
     const encoded = JSON.stringify(this.providers.details(provider, details));
     this.store.sweep();
     const hash = this.key(token);
@@ -43,14 +45,14 @@ export class AccessRequests {
     const agent = this.store.authenticate(token), requesterName = agent?.name || name;
     const previous = this.db.prepare("SELECT * FROM access_requests WHERE token_hash=? AND status='pending' AND expires_at>? ORDER BY created_at DESC LIMIT 1").get(hash, Date.now());
     if (previous) {
-      if (previous.requester_name !== requesterName || previous.provider !== provider || previous.purpose !== purpose || previous.mode !== mode || previous.details !== encoded || previous.note !== note.trim()) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
+      if (previous.requester_name !== requesterName || previous.provider !== provider || previous.purpose !== purpose || previous.mode !== mode || previous.details !== encoded || previous.guidance !== guidance) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
       return previous;
     }
     if (this.db.prepare('SELECT count(*) n FROM access_requests').get().n >= 1000) fail(429, 'request_limit', '接続依頼が混み合っています。しばらく待ってからお試しください。');
     const id = randomBytes(32).toString('base64url'), code = randomBytes(4).toString('hex').toUpperCase();
     const now = Date.now();
-    this.db.prepare('INSERT INTO access_requests (id,token_hash,requester_name,provider,purpose,mode,details,note,confirmation_code,owner_id,agent_id,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
-      .run(id, hash, requesterName, provider, purpose, mode, encoded, note.trim(), code.slice(0, 4) + '-' + code.slice(4), agent?.owner_id || null, agent?.id || null, now, now + REQUEST_TTL);
+    this.db.prepare('INSERT INTO access_requests (id,token_hash,requester_name,provider,purpose,mode,details,guidance,confirmation_code,owner_id,agent_id,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(id, hash, requesterName, provider, purpose, mode, encoded, guidance, code.slice(0, 4) + '-' + code.slice(4), agent?.owner_id || null, agent?.id || null, now, now + REQUEST_TTL);
     return this.get(id);
   }
   details(row) { try { return JSON.parse(row.details || '{}'); } catch { return {}; } }
@@ -138,7 +140,7 @@ export class AccessRequests {
       else if (account.status !== 'connected') status = 'reconnect_required';
     }
     const registered = row.agent_id ? this.db.prepare('SELECT name FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash) : undefined;
-    return { id: row.id, provider: row.provider, service: this.providers.describe(row.provider), permission: this.providers.permission(row.provider, row.mode), requester_name: row.requester_name, purpose: row.purpose, mode: row.mode, details: this.details(row), note: row.note || '', ...(registered ? { agent_name: registered.name } : {}),
+    return { id: row.id, provider: row.provider, service: this.providers.describe(row.provider), permission: this.providers.permission(row.provider, row.mode), requester_name: row.requester_name, purpose: row.purpose, mode: row.mode, details: this.details(row), guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
       ...(code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
       status, created_at: row.created_at, expires_at: row.expires_at,
       ...(status === 'approved' ? { account: { id: account.id, email: account.email, label: this.providers.get(row.provider).client.accountInfo?.(this.store.secrets(account))?.label || account.email }, agent_id: row.agent_id } : {}) };

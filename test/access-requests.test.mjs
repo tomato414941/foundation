@@ -308,13 +308,14 @@ test('A runtime can read its own request raw: what it asked for, and what happen
   assert.equal((await view()).id, next.row.id);
 });
 
-test('A request may carry one note for the owner, shown as the AI\'s claim, bounded, and part of what makes a request distinct', async t => {
+test('The runtime writes the guidance its owner reads on the approval page; Foundation frames it and bounds it', async t => {
   const f = await fixture(t), token = key();
-  const noted = await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { ...input, note: ' スタック名は foundation-admin、Permissions は AdministratorAccess ' } });
-  assert.equal(noted.status, 201, noted.text);
-  assert.equal(noted.json.request.note, 'スタック名は foundation-admin、Permissions は AdministratorAccess');
-  assert.equal((await f.request('/api/access-requests/' + noted.json.request.id)).json.request.note, 'スタック名は foundation-admin、Permissions は AdministratorAccess');
-  assert.equal((await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { ...input, note: '別の補足' } })).status, 409, 'a different note is a different request');
-  assert.equal((await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: key(), data: { ...input, note: 'x'.repeat(301) } })).json.error.code, 'invalid_note');
-  assert.equal((await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: key(), data: { ...input, note: 'bad\u0007' } })).json.error.code, 'invalid_note');
+  const guidance = '1. 定義ファイルをダウンロード\n2. スタック名は foundation-admin\n\n出力の値を貼る';
+  const created = await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { ...input, guidance: guidance + '\r\n' } });
+  assert.equal(created.status, 201, created.text);
+  assert.equal(created.json.request.guidance, guidance);
+  assert.equal((await f.request('/api/access-requests/' + created.json.request.id)).json.request.guidance, guidance);
+  assert.equal((await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { ...input, guidance: 'different' } })).status, 409, 'different guidance is a different request');
+  assert.equal((await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: key(), data: { ...input, guidance: 'x'.repeat(2001) } })).json.error.code, 'invalid_guidance');
+  assert.equal((await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: key(), data: { ...input, guidance: 'bad\u0007' } })).json.error.code, 'invalid_guidance');
 });
