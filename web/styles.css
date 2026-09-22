@@ -218,7 +218,13 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 .key-facts dd { margin: 0; overflow-wrap: anywhere; }
 .key-caption { font-size: 12px; line-height: 1.6; }
 .key-management { display: inline-block; margin: 4px 0 14px; font-size: 13px; }
-.approval-account + .approval-account { margin-top: 18px; }
+.approval-account + .approval-account { margin-top: 12px; }
+/* One card per candidate: the choice on top, its facts and verification below it, visibly inside the same frame. */
+.approval-account { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.approval-account:has(input:checked) { border-color: #a8c4b1; }
+.approval-account .choice { border: 0; border-radius: 0; }
+.approval-account .key-facts { margin: 0; padding: 10px 14px; border-top: 1px solid var(--line); background: #fff; }
+.approval-account .verification-result { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: #fff; }
 .verification-result { margin: 18px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; overflow-wrap: anywhere; }
 .verification-result summary { cursor: pointer; font-weight: 600; }
 .verification-result ul { list-style: none; padding: 0; margin: 14px 0 0; }
