@@ -49,37 +49,38 @@ test('OAuth state is browser-bound and expires; cancel and forged callbacks cann
   assert.equal(f.gmail.exchangeCount, 0);
 });
 
-test('Multiple accounts carry purpose, actual scopes and native API discovery, not email proxies', async (t) => {
+test('Multiple accounts carry purpose, actual scopes and native API discovery, and an approved key reaches all of them', async (t) => {
   const f = await fixture(t), a = await f.account(), b = await f.account('work', 'metadata');
-  const agent = await f.agent([a.id]);
+  const agent = await f.agent();
   const list = await f.request('/v1/accounts', { token: agent.token });
-  assert.equal(list.json.accounts.length, 1);
+  assert.deepEqual(list.json.accounts.map(item => item.id), [a.id, b.id]);
   assert.equal(list.json.accounts[0].purpose, 'サービス登録');
   assert.equal(list.json.accounts[0].api.base_url, 'https://gmail.googleapis.com/gmail/v1');
   assert.equal(list.json.accounts[0].authentication.method, 'POST');
-  assert.doesNotMatch(list.text, /refresh_token|google-access-|credentials":|work@example/);
+  assert.doesNotMatch(list.text, /refresh_token|google-access-|credentials":/);
   const result = await f.request('/v1/accounts/' + a.id + '/credentials', { method: 'POST', data: {}, token: agent.token });
   assert.equal(result.status, 200);
   assert.equal(result.json.access_token, 'google-access-personal-readonly');
   assert.equal(result.json.account.email, a.email);
   assert.ok(result.json.expires_in > 3500);
   assert.doesNotMatch(result.text, /refresh_token/);
-  assert.equal((await f.request('/v1/accounts/' + b.id + '/credentials', { method: 'POST', data: {}, token: agent.token })).status, 403);
+  assert.equal((await f.request('/v1/accounts/' + b.id + '/credentials', { method: 'POST', data: {}, token: agent.token })).json.access_token, 'google-access-work-metadata');
   assert.equal((await f.request('/v1/accounts/' + a.id + '/credentials', { token: agent.token })).status, 404);
   assert.equal((await f.request('/v1/accounts/' + a.id + '/messages', { token: agent.token })).status, 404);
   assert.equal((await f.request('/api/accounts/' + a.id + '/messages')).status, 404);
   assert.ok(!f.gmail.calls.some((call) => call.url.includes('/messages')));
 });
 
-test('Supabase users cannot see, edit, disconnect or grant each other connections', async (t) => {
-  const f = await fixture(t), first = await f.account(), runtime = await f.agent([first.id]);
+test('Supabase users cannot see, edit, disconnect or reach each other\'s connections', async (t) => {
+  const f = await fixture(t), first = await f.account(), runtime = await f.agent();
   await f.login('second@example.test');
   const state = await f.request('/api/state');
   assert.deepEqual(state.json.accounts, []);
   assert.deepEqual(state.json.agents, []);
   for (const [method, data] of [['PATCH', { name: 'takeover' }], ['DELETE', { revoke: true }]]) assert.equal((await f.request('/api/accounts/' + first.id, { method, data })).status, 404);
-  assert.equal((await f.request('/api/agents', { method: 'POST', data: { name: 'intruder', accountIds: [first.id] } })).status, 400);
-  assert.equal((await f.request('/api/agents/' + runtime.id + '/grants', { method: 'PUT', data: { accountIds: [] } })).status, 404);
+  const intruder = (await f.request('/api/agents', { method: 'POST', data: { name: 'intruder' } })).json.agent;
+  assert.deepEqual((await f.request('/v1/accounts', { token: intruder.token })).json.accounts, []);
+  assert.equal((await f.request('/v1/accounts/' + first.id + '/credentials', { method: 'POST', data: {}, token: intruder.token })).status, 403);
   await f.request('/api/agents/' + runtime.id, { method: 'DELETE' });
   assert.equal((await f.request('/v1/accounts', { token: runtime.token })).json.accounts.length, 1);
   const second = await f.account();
@@ -87,37 +88,34 @@ test('Supabase users cannot see, edit, disconnect or grant each other connection
   assert.equal((await f.request('/api/state')).json.accounts.length, 1);
 });
 
-test('Reauthorization pins identity and clears runtime grants if scopes change', async (t) => {
-  const f = await fixture(t), a = await f.account('personal', 'metadata'), agent = await f.agent([a.id]);
+test('Reauthorization pins identity and the reconnected account stays usable with its new scopes', async (t) => {
+  const f = await fixture(t), a = await f.account('personal', 'metadata'), agent = await f.agent();
   let flow = await f.start({ accountId: a.id, mode: 'readonly' });
   assert.equal(flow.searchParams.get('login_hint'), 'personal@example.test');
   assert.equal((await f.callback(flow, 'work-readonly')).headers.get('location'), '/?connection=wrong_account');
   assert.equal((await f.request('/v1/accounts', { token: agent.token })).json.accounts.length, 1);
   flow = await f.start({ accountId: a.id, mode: 'readonly' });
   assert.equal((await f.callback(flow, 'personal-readonly')).headers.get('location'), '/?connection=connected');
-  assert.equal((await f.request('/v1/accounts', { token: agent.token })).json.accounts.length, 0);
+  const seen = (await f.request('/v1/accounts', { token: agent.token })).json.accounts;
+  assert.equal(seen.length, 1); assert.match(seen[0].scopes.join(' '), /gmail\.readonly/);
   assert.equal((await f.request('/api/state')).json.accounts[0].id, a.id);
 });
 
 test('Duplicate connection cannot overwrite identity, purpose or existing grants', async (t) => {
-  const f = await fixture(t), a = await f.account(), agent = await f.agent([a.id]);
+  const f = await fixture(t), a = await f.account(), agent = await f.agent();
   const flow = await f.start({ name: 'replacement', mode: 'metadata' });
   assert.equal((await f.callback(flow, 'personal-metadata')).headers.get('location'), '/?connection=already_connected');
   assert.equal((await f.request('/api/state')).json.accounts[0].name, 'personal');
   assert.equal((await f.request('/v1/accounts', { token: agent.token })).json.accounts.length, 1);
 });
 
-for (const change of ['grant', 'agent', 'account', 'grant-readded']) test('In-flight token withheld after ' + change, async (t) => {
-  const f = await fixture(t), a = await f.account(), runtime = await f.agent([a.id]); f.expire(a.id);
+for (const change of ['agent', 'account']) test('In-flight token withheld after ' + change, async (t) => {
+  const f = await fixture(t), a = await f.account(), runtime = await f.agent(); f.expire(a.id);
   let began, finish;
   const started = new Promise((resolve) => { began = resolve; });
   f.gmail.refreshHandler = () => { began(); return new Promise((resolve) => { finish = resolve; }); };
   const pending = f.request('/v1/accounts/' + a.id + '/credentials', { method: 'POST', data: {}, token: runtime.token });
   await started;
-  if (change.startsWith('grant')) {
-    await f.request('/api/agents/' + runtime.id + '/grants', { method: 'PUT', data: { accountIds: [] } });
-    if (change === 'grant-readded') await f.request('/api/agents/' + runtime.id + '/grants', { method: 'PUT', data: { accountIds: [a.id] } });
-  }
   if (change === 'agent') await f.request('/api/agents/' + runtime.id, { method: 'DELETE' });
   if (change === 'account') await f.request('/api/accounts/' + a.id, { method: 'DELETE', data: { revoke: false } });
   finish();
@@ -127,7 +125,7 @@ for (const change of ['grant', 'agent', 'account', 'grant-readded']) test('In-fl
 });
 
 test('Token refresh is coalesced and invalid grants become reconnect_required', async (t) => {
-  const f = await fixture(t), a = await f.account(), agent = await f.agent([a.id]); f.expire(a.id);
+  const f = await fixture(t), a = await f.account(), agent = await f.agent(); f.expire(a.id);
   let calls = 0, finish;
   f.gmail.refreshHandler = () => { calls++; return new Promise((resolve) => { finish = resolve; }); };
   const path = '/v1/accounts/' + a.id + '/credentials', opts = { method: 'POST', data: {}, token: agent.token };
@@ -144,7 +142,7 @@ test('Token refresh is coalesced and invalid grants become reconnect_required', 
 });
 
 test('Disconnect failure stops issuance, keeps retryable secret, and allows explicit local-only removal', async (t) => {
-  const f = await fixture(t), a = await f.account(), agent = await f.agent([a.id]);
+  const f = await fixture(t), a = await f.account(), agent = await f.agent();
   f.gmail.revokeHandler = () => new Response('{}', { status: 503 });
   const path = '/api/accounts/' + a.id;
   assert.equal((await f.request(path, { method: 'DELETE', data: { revoke: true } })).status, 502);

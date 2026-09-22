@@ -105,11 +105,11 @@ for (const kind of ['cancel', 'deny', 'expire', 'logout', 'switch-user']) test('
   assert.equal(f.expo.calls.filter(call => call.url.endsWith('/auth/logout')).length, 1);
 });
 
-test('Failed atomic grant rolls back connection and logs out upstream; nested transactions preserve an outer transaction', async t => {
+test('A failed key approval rolls back the connection and logs out upstream; nested transactions preserve an outer transaction', async t => {
   const f = await expoLoginFixture(t), { input } = await requestAccess(f);
-  f.expo.loginHandler = async () => { f.expo.enabled = false; };
+  for (let i = 0; i < 50; i++) f.app.store.addAgent(USER_A, 'key ' + i);
   const result = await f.loginExpo(input);
-  assert.equal(result.status, 503, result.text); safeResponse(result);
+  assert.equal(result.status, 409, result.text); safeResponse(result);
   assert.equal(f.app.store.accounts(USER_A).length, 0); assert.equal(f.expo.sessions.size, 0);
   assert.equal(f.app.store.transactionDepth, 0);
   f.app.store.transaction(() => {

@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
     expect(page.get_by_role('heading', name='OpenRouterで接続', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']
-    expect(page.get_by_role('button', name='利用を許可', exact=True)).to_have_count(0)
+    expect(page.get_by_role('button', name='承認する', exact=True)).to_have_count(0)
     review(page)
     authorization = {'deny': True, 'code': 'personal'}
 
@@ -67,11 +67,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     cli('accounts', success=False)
     authorization['deny'] = False
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
-    expect(page.get_by_role('heading', name='利用を許可しますか？', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
     expect(page.get_by_text('OpenRouterへのアクセス', exact=True)).to_be_visible()
     expect(page.get_by_text('APIキーの利用', exact=False)).to_be_visible()
     expect(page.get_by_text('利用上限と有効期限はOpenRouter側の設定が適用されます。', exact=False)).to_be_visible()
-    expect(page.get_by_role('button', name='利用を許可', exact=True)).to_be_disabled()
+    expect(page.get_by_role('button', name='承認する', exact=True)).to_be_disabled()
     expect(page.get_by_role('radio')).to_have_count(0)
     expect(page.get_by_text('期限の指定なし', exact=True)).to_be_visible()
     expect(page.get_by_text('$0.00 · リセットなし', exact=True)).to_be_visible()
@@ -84,8 +84,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
             page.screenshot(path=str(shots / ('approval-desktop.png' if width == 1280 else 'approval-mobile.png')), full_page=True)
     expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
-    page.get_by_role('button', name='利用を許可', exact=True).click()
-    expect(page.get_by_role('heading', name='利用を許可しました', exact=True)).to_be_visible()
+    page.get_by_role('button', name='承認する', exact=True).click()
+    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
     account = cli('accounts')['accounts'][0]
     assert account['authentication']['type'] == 'api_key_bearer'
     command = subprocess.run(['node', 'src/runtime.mjs', 'exec', account['id'], '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY!==process.env.FOUNDATION_ACCESS_TOKEN || process.env.FOUNDATION_TOKEN_EXPIRES_AT!=="")process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)

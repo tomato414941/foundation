@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     # Without a usable account the link opens on the register screen; the decision comes after.
     expect(page.get_by_role('heading', name='Cloudflareのトークンを登録', exact=True)).to_be_visible()
     expect(page.get_by_text('dev-us のAIの依頼', exact=True)).to_be_visible()
-    expect(page.get_by_role('button', name='利用を許可', exact=True)).to_have_count(0)
+    expect(page.get_by_role('button', name='承認する', exact=True)).to_have_count(0)
     review(page)
 
     dialog = page.get_by_role('dialog')
@@ -96,7 +96,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     register.get_by_role('button', name='登録する', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(page.get_by_text('R2の一覧を取得できませんでした。', exact=False)).to_be_visible()
-    expect(page.get_by_role('button', name='利用を許可', exact=True)).to_be_disabled()
+    expect(page.get_by_role('button', name='承認する', exact=True)).to_be_disabled()
     cli('accounts', success=False)
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
@@ -108,7 +108,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     page.get_by_role('button', name='別のアカウントを登録する', exact=True).click()
     expect(page.get_by_role('heading', name='Cloudflareのトークンを登録', exact=True)).to_be_visible()
     page.get_by_role('button', name='登録せずに戻る', exact=True).click()
-    expect(page.get_by_role('heading', name='利用を許可しますか？', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
     page.get_by_role('button', name='別のアカウントを登録する', exact=True).click()
     expect(field).to_have_value('')
     account_field.fill(account_id)
@@ -117,7 +117,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
         register.get_by_role('button', name='登録する', exact=True).click()
     assert token not in response_event.value.text()
     expect(dialog).not_to_be_visible()
-    expect(page.get_by_role('heading', name='利用を許可しますか？', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
     expect(page.get_by_role('radio')).to_have_count(0)
     page.get_by_text('検証結果', exact=True).last.click()
     expect(page.get_by_text('R2のバケット一覧を取得できました。', exact=False)).to_be_visible()
@@ -126,8 +126,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     expect(page.get_by_text('有効期限', exact=True)).to_be_visible()
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
     review(page)
-    page.get_by_role('button', name='利用を許可', exact=True).click()
-    expect(page.get_by_role('heading', name='利用を許可しました', exact=True)).to_be_visible()
+    page.get_by_role('button', name='承認する', exact=True).click()
+    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
     account = cli('accounts')['accounts'][0]
     assert account['cloudflare_account_id'] == account_id
     assert account['token_env'] == 'CLOUDFLARE_API_TOKEN'
@@ -170,7 +170,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     field.fill(token)
     dialog.get_by_role('button', name='登録する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert cli('accounts')['accounts'] == []
+    assert len(cli('accounts')['accounts']) == 1, 'the approved key uses a connection the owner registers later'
     review(page)
     assert not errors, errors
     context.close()

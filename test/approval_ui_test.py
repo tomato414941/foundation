@@ -56,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
     expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
     assert request['confirmation_code'] not in page.content()
-    expect(page.get_by_role('button', name='利用を許可', exact=True)).to_have_count(0)
+    expect(page.get_by_role('button', name='承認する', exact=True)).to_have_count(0)
     review(page)
     page.screenshot(path=str(shots / 'request-before-connection.png'), full_page=True)
     authorization = {'deny': True}
@@ -76,24 +76,24 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     cli('accounts', success=False)
     authorization['deny'] = False
     page.get_by_role('button', name='Googleで接続', exact=True).click()
-    expect(page.get_by_role('heading', name='利用を許可しますか？', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
     expect(page.get_by_text('personal@example.test', exact=True)).to_be_visible()
     expect(page.get_by_role('radio')).to_have_count(0)
     assert page.url == request['verification_uri']
     cli('accounts', success=False)
-    expect(page.get_by_role('button', name='利用を許可', exact=True)).to_be_disabled()
+    expect(page.get_by_role('button', name='承認する', exact=True)).to_be_disabled()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
         if width in [1280, 390]:
             page.screenshot(path=str(shots / ('request-desktop.png' if width == 1280 else 'request-mobile.png')), full_page=True)
     page.get_by_label('確認コード', exact=True).fill('0000-0000')
-    page.get_by_role('button', name='利用を許可', exact=True).click()
+    page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('alert')).to_contain_text('確認コードを入力してください')
     cli('accounts', success=False)
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'].lower())
-    page.get_by_role('button', name='利用を許可', exact=True).click()
-    expect(page.get_by_role('heading', name='利用を許可しました', exact=True)).to_be_visible()
+    page.get_by_role('button', name='承認する', exact=True).click()
+    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'request-approved.png'), full_page=True)
     approved = {'account': cli('accounts')['accounts'][0]}
@@ -107,18 +107,20 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_role('dialog')).not_to_be_visible()
     cli('accounts', success=False)
     page.goto(request['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_role('heading', name='利用許可は停止されています', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='アクセスキーは失効しています', exact=True)).to_be_visible()
 
     request = cli('connect', '--name', 'dev-us のAI')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_role('heading', name='利用を許可しますか？', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
     page.get_by_role('button', name='許可しない', exact=True).click()
     expect(page.get_by_role('heading', name='利用を許可しませんでした', exact=True)).to_be_visible()
     cli('accounts', success=False)
 
     request = cli('connect', '--mode', 'metadata')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
+    # Gmail is already registered, so the key's request opens on approval; another account is one step away.
+    expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
+    page.get_by_role('button', name='別のアカウントを登録する', exact=True).click()
     page.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_text('headers@example.test', exact=True)).to_be_visible()
     expect(page.get_by_text('件名・差出人などの読み取り', exact=False)).to_be_visible()

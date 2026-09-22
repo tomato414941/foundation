@@ -94,8 +94,8 @@ export async function fixture(t, options = {}) {
     assert.equal(response.headers.get('location'), '/?connection=connected', response.text);
     return (await request('/api/state')).json.accounts.find((item) => item.email === code + '@example.test');
   }
-  async function agent(ids, name = 'dev-us') {
-    const result = await request('/api/agents', { method: 'POST', data: { name, accountIds: ids } });
+  async function agent(name = 'dev-us') {
+    const result = await request('/api/agents', { method: 'POST', data: { name } });
     assert.equal(result.status, 201, result.text);
     return result.json.agent;
   }

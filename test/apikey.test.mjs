@@ -48,7 +48,6 @@ test('A runtime declares service, key page and variable; the declaration is vali
   assert.equal((await create(f, token, { ...claim, env: 'OTHER_KEY' })).status, 409);
   const page = await f.request('/api/access-requests/' + row.id);
   assert.deepEqual(page.json.request.details, claim);
-  assert.deepEqual(page.json.request.eligible_account_ids, []);
   assert.equal(page.json.request.confirmation_code, undefined);
   return { f, token, row };
 });
@@ -70,21 +69,16 @@ test('The user pastes the key; it is bound to the declaration, delivered under t
   assert.equal(account.permission.id, 'key');
   // Duplicate key content is rejected; the same key cannot be registered twice.
   assert.equal((await f.request('/api/connections/apikey/connect', { method: 'POST', data: { name: 'Anthropic', mode: 'key', token: secret, details: claim } })).status, 409);
-  // A key declared for another service or variable is not eligible for this request.
+  // A key for another service registered outside the request is an ordinary second connection.
   const other = await f.request('/api/connections/apikey/connect', { method: 'POST', data: { name: 'Stripe', mode: 'key', token: 'sk_live_fixture_' + randomBytes(8).toString('hex'), details: { service: 'Stripe', site: 'https://dashboard.stripe.com/apikeys', env: 'STRIPE_SECRET_KEY' } } });
   assert.equal(other.status, 200, other.text);
-  const page = (await f.request('/api/access-requests/' + row.id)).json.request;
-  assert.deepEqual(page.eligible_account_ids, [account.id]);
-  const wrong = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { accountId: other.json.account_id, confirmationCode: row.confirmation_code } });
-  assert.equal(wrong.status, 409);
-  const approved = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { accountId: account.id, confirmationCode: row.confirmation_code } });
+  const approved = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code } });
   assert.equal(approved.status, 200, approved.text);
   assert.equal(approved.json.request.account.label, 'Anthropic キー …' + account.email.split(':')[1].slice(0, 8));
   // Runtime side: listing names the variable; exec sets it and nothing else leaks.
   const listed = await f.request('/v1/accounts', { token, anonymous: true });
-  assert.equal(listed.json.accounts.length, 1);
-  assert.equal(listed.json.accounts[0].token_env, 'ANTHROPIC_API_KEY');
-  assert.equal(listed.json.accounts[0].authentication.type, 'api_key_bearer');
+  assert.deepEqual(listed.json.accounts.map(item => item.token_env).sort(), ['ANTHROPIC_API_KEY', 'STRIPE_SECRET_KEY']);
+  assert.equal(listed.json.accounts.find(item => item.id === account.id).authentication.type, 'api_key_bearer');
   assert.doesNotMatch(listed.text, new RegExp(secret));
   const issued = await f.request('/v1/accounts/' + account.id + '/credentials', { method: 'POST', token, anonymous: true, data: {} });
   assert.equal(issued.status, 200, issued.text);

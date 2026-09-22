@@ -79,6 +79,13 @@ export class AccessRequests {
   matches(row, account) {
     return account && account.provider === row.provider && this.providers.get(row.provider).matches(row.mode, account, { ...row, details: this.details(row) });
   }
+  // A request from a key the owner already approved asks for nothing but a registration: registering completes it.
+  registered(id, ownerId, accountId) {
+    const row = this.forUser(id, ownerId, true);
+    if (row.agent_id) this.db.prepare("UPDATE access_requests SET owner_id=?, account_id=?, status='approved' WHERE id=?").run(ownerId, accountId, row.id);
+    else this.db.prepare('UPDATE access_requests SET owner_id=?, account_id=? WHERE id=?').run(ownerId, accountId, row.id);
+    return this.get(id);
+  }
   claim(id, ownerId) {
     const row = this.forUser(id, ownerId, true);
     this.db.prepare('UPDATE access_requests SET owner_id=? WHERE id=?').run(ownerId, row.id);
@@ -98,25 +105,17 @@ export class AccessRequests {
     this.db.prepare('UPDATE access_requests SET confirmation_attempts=? WHERE id=?').run(attempts, row.id);
     fail(400, 'confirmation_required', 'AIとの会話に表示された確認コードを入力してください。');
   }
-  approve(id, ownerId, accountId, code) {
+  // Approval is the owner acknowledging the key as theirs: once, with the code. From then on the key uses every account the owner has.
+  approve(id, ownerId, code) {
     this.verifyCode(id, ownerId, code);
     return this.store.transaction(() => {
       const row = this.verifyCode(id, ownerId, code);
-      this.providers.get(row.provider).client.check();
-      const account = typeof accountId === 'string' ? this.store.account(ownerId, accountId) : null;
-      if (!account || account.status !== 'connected' || !this.matches(row, account)) fail(409, 'account_unavailable', '依頼された権限で利用できるアカウントを選んでください。');
-      let agentId = row.agent_id;
-      if (!agentId) {
-        if (this.db.prepare('SELECT 1 FROM agents WHERE token_hash=?').get(row.token_hash)) fail(409, 'request_changed', '依頼元の状態が変わりました。接続リンクを作成し直してください。');
-        if (this.store.agents(ownerId).length >= 50) fail(409, 'agent_limit', '登録できるアクセスキーは50件までです。');
-        agentId = randomUUID();
-        this.db.prepare('INSERT INTO agents (id,owner_id,name,token_hash,created_at) VALUES (?,?,?,?,?)').run(agentId, ownerId, row.requester_name, row.token_hash, new Date().toISOString());
-      } else {
-        // The owner names the key; a later request never renames it.
-        this.db.prepare('UPDATE agents SET generation=generation+1 WHERE id=?').run(agentId);
-      }
-      this.db.prepare('INSERT OR IGNORE INTO grants (agent_id,account_id) VALUES (?,?)').run(agentId, account.id);
-      this.db.prepare("UPDATE access_requests SET owner_id=?,agent_id=?,account_id=?,status='approved' WHERE id=?").run(ownerId, agentId, account.id, row.id);
+      if (row.agent_id) fail(409, 'request_changed', 'このアクセスキーは承認済みです。');
+      if (this.db.prepare('SELECT 1 FROM agents WHERE token_hash=?').get(row.token_hash)) fail(409, 'request_changed', '依頼元の状態が変わりました。接続リンクを作成し直してください。');
+      if (this.store.agents(ownerId).length >= 50) fail(409, 'agent_limit', '登録できるアクセスキーは50件までです。');
+      const agentId = randomUUID();
+      this.db.prepare('INSERT INTO agents (id,owner_id,name,token_hash,created_at) VALUES (?,?,?,?,?)').run(agentId, ownerId, row.requester_name, row.token_hash, new Date().toISOString());
+      this.db.prepare("UPDATE access_requests SET owner_id=?,agent_id=?,status='approved' WHERE id=?").run(ownerId, agentId, row.id);
       return this.get(id);
     });
   }
@@ -135,16 +134,16 @@ export class AccessRequests {
     let status = row.status, account;
     if (status === 'pending' && row.agent_id && !this.db.prepare('SELECT 1 FROM agents WHERE id=? AND owner_id=? AND token_hash=?').get(row.agent_id, row.owner_id, row.token_hash)) status = 'revoked';
     if (status === 'approved') {
-      account = this.store.account(row.owner_id, row.account_id);
       const agent = this.db.prepare('SELECT * FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash);
-      const grant = this.db.prepare('SELECT 1 FROM grants WHERE agent_id=? AND account_id=?').get(row.agent_id, row.account_id);
-      if (!agent || agent.owner_id !== row.owner_id || !grant || !this.matches(row, account) || account.status === 'disconnecting') status = 'revoked';
-      else if (account.status !== 'connected') status = 'reconnect_required';
+      account = row.account_id ? this.store.account(row.owner_id, row.account_id) : null;
+      if (!agent || agent.owner_id !== row.owner_id) status = 'revoked';
+      else if (account && account.status === 'disconnecting') account = null;
+      else if (account && account.status !== 'connected') status = 'reconnect_required';
     }
     const registered = row.agent_id ? this.db.prepare('SELECT name FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash) : undefined;
     return { id: row.id, provider: row.provider, service: this.providers.describe(row.provider), permission: this.providers.permission(row.provider, row.mode), requester_name: row.requester_name, purpose: row.purpose, mode: row.mode, details: this.details(row), guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
       ...(code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
-      status, created_at: row.created_at, expires_at: row.expires_at,
-      ...(status === 'approved' ? { account: { id: account.id, email: account.email, label: this.providers.get(row.provider).client.accountInfo?.(this.store.secrets(account))?.label || account.email }, agent_id: row.agent_id } : {}) };
+      status, created_at: row.created_at, expires_at: row.expires_at, ...(row.account_id ? { account_id: row.account_id } : {}),
+      ...(status === 'approved' ? { agent_id: row.agent_id, ...(account ? { account: { id: account.id, email: account.email, label: this.providers.get(row.provider).client.accountInfo?.(this.store.secrets(account))?.label || account.email } } : {}) } : {}) };
   }
 }

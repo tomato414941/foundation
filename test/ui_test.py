@@ -88,7 +88,7 @@ with sync_playwright() as p:
     page.evaluate('window.dispatchEvent(new Event("focus"))')
     expect(page.get_by_role("heading", name="接続", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="Gmailを接続", exact=True)).to_be_enabled()
-    expect(page.get_by_role("button", name="アクセスキーを追加", exact=True)).to_be_disabled()
+    expect(page.get_by_role("button", name="アクセスキーを追加", exact=True)).to_be_enabled()
     assert page.evaluate("localStorage.length === 0 && sessionStorage.length === 0")
     assert "fdn_session" not in page.evaluate("document.cookie")
     page.screenshot(path=str(shots / "empty.png"), full_page=True)
@@ -131,11 +131,9 @@ with sync_playwright() as p:
     page.get_by_role("button", name="接続を確認", exact=True).click()
     expect(page.get_by_text("Gmailに接続できました。", exact=True)).to_be_visible()
 
-    def create_runtime(name, indices):
+    def create_runtime(name):
         page.get_by_role("button", name="アクセスキーを追加", exact=True).click()
         dialog.get_by_label("アクセスキーの名前", exact=True).fill(name)
-        for index in indices:
-            dialog.get_by_role("checkbox").nth(index).check()
         dialog.get_by_role("button", name="アクセスキーを発行", exact=True).click()
         expect(dialog.locator("#agent-token")).to_be_visible()
         token = dialog.locator("#agent-token").input_value()
@@ -143,13 +141,13 @@ with sync_playwright() as p:
         dialog.get_by_role("button", name="閉じる", exact=True).last.click()
         return token
 
-    token_a = create_runtime("dev-us", [0])
-    token_b = create_runtime("別のアクセスキー", [0, 1])
+    token_a = create_runtime("dev-us")
+    token_b = create_runtime("別のアクセスキー")
     caller = p.request.new_context(base_url=args.base)
     def runtime(path, token, method="GET"):
         return caller.fetch(path, method=method, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data="{}" if method == "POST" else None)
     accounts = runtime("/v1/accounts", token_a).json()["accounts"]
-    assert len(accounts) == 1
+    assert len(accounts) == 2, "an issued key uses every registered connection"
     account_id = accounts[0]["id"]
     issued = runtime("/v1/accounts/" + account_id + "/credentials", token_a, "POST")
     assert issued.status == 200 and issued.json()["access_token"].startswith("google-access-")
@@ -161,12 +159,6 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "desktop.png"), full_page=True)
 
     row = page.locator(".agent-row").filter(has_text="dev-us")
-    row.get_by_role("button", name="許可を変更", exact=True).click()
-    dialog.get_by_role("checkbox").first.uncheck()
-    dialog.get_by_role("button", name="許可を保存", exact=True).click()
-    expect(dialog).not_to_be_visible()
-    expect(row.get_by_text("許可なし", exact=True)).to_be_visible()
-    assert runtime("/v1/accounts/" + account_id + "/credentials", token_a, "POST").status == 403
     assert runtime("/v1/accounts/" + account_id + "/credentials", token_b, "POST").status == 200
 
     for width in [1280, 800, 768, 601, 600, 390, 320]:
@@ -174,10 +166,6 @@ with sync_playwright() as p:
         check_display(page)
     page.set_viewport_size({"width": 390, "height": 1000})
     page.screenshot(path=str(shots / "mobile.png"), full_page=True)
-    row.get_by_role("button", name="許可を変更", exact=True).click()
-    check_display(page)
-    page.screenshot(path=str(shots / "permissions-mobile.png"), full_page=True)
-    page.keyboard.press("Escape")
     page.get_by_role("button", name="編集", exact=True).click()
     dialog.get_by_label("表示名", exact=True).fill('<img src=x onerror="window.xss=1">')
     dialog.locator("#account-purpose").fill("長い用途の説明" * 30)

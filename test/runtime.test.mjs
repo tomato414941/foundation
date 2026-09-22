@@ -14,7 +14,7 @@ const execute = (args, env) => new Promise((resolve, reject) => {
 });
 
 test('Runtime discovers native Gmail and injects credentials only into selected process', async (t) => {
-  const f = await fixture(t), account = await f.account(), runtime = await f.agent([account.id]);
+  const f = await fixture(t), account = await f.account(), runtime = await f.agent();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-runtime-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'runtime-key'); await writeFile(keyPath, runtime.token, { mode: 0o600 });
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };

@@ -95,20 +95,20 @@ test('OpenRouter keys are owner-separated, cannot silently replace connections, 
   const dir = await mkdtemp(join(tmpdir(), 'foundation-openrouter-storage-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const database = join(dir, 'state.sqlite'), f = await openrouterFixture(t, { database });
-  const account = await f.openrouterAccount(), agent = await f.agent([account.id]);
+  const account = await f.openrouterAccount(), agent = await f.agent();
   assert.ok(!(await readFile(database)).includes(Buffer.from(f.openrouter.key())));
   const replacement = await f.request('/api/connections/openrouter/connect', { method: 'POST', data: { accountId: account.id, name: 'replacement', mode: 'api-key' } });
   assert.equal(replacement.json.error.code, 'new_connection_required');
   await f.login('other@example.test');
   assert.equal((await f.request('/api/state')).json.accounts.length, 0);
   assert.equal((await f.request('/api/accounts/' + account.id, { method: 'DELETE', data: { revoke: false } })).status, 404);
-  const own = await f.openrouterAccount('other'), other = await f.agent([own.id]);
+  const own = await f.openrouterAccount('other'), other = await f.agent();
   assert.equal((await credential(f, account.id, other.token)).status, 403);
   assert.equal((await credential(f, own.id, agent.token)).status, 403);
 });
 
 test('Local disconnect never pretends to delete OpenRouter key or calls a management endpoint', async t => {
-  const f = await openrouterFixture(t), account = await f.openrouterAccount(), agent = await f.agent([account.id]);
+  const f = await openrouterFixture(t), account = await f.openrouterAccount(), agent = await f.agent();
   const refused = await f.request('/api/accounts/' + account.id, { method: 'DELETE', data: { revoke: true } });
   assert.equal(refused.json.error.code, 'manual_revocation_required');
   assert.equal((await credential(f, account.id, agent.token)).status, 200);
@@ -122,7 +122,7 @@ test('Local disconnect never pretends to delete OpenRouter key or calls a manage
 test('Provider expiry, revocation and budget updates are checked before every API key delivery', async t => {
   const f = await openrouterFixture(t);
   f.openrouter.info.expires_at = new Date(Date.now() + 86_400_000).toISOString();
-  const account = await f.openrouterAccount(), agent = await f.agent([account.id]);
+  const account = await f.openrouterAccount(), agent = await f.agent();
   f.openrouter.info.limit = 10; f.openrouter.info.limit_remaining = 8; f.openrouter.info.limit_reset = 'monthly';
   let issued = await credential(f, account.id, agent.token);
   assert.equal(issued.json.expires_at, Date.parse(f.openrouter.info.expires_at));
@@ -136,17 +136,17 @@ test('Provider expiry, revocation and budget updates are checked before every AP
   assert.equal(f.app.store.account(USER_A, account.id).status, 'reconnect_required');
 });
 
-test('OpenRouter in-flight key is withheld after runtime permission changes', async t => {
-  const f = await openrouterFixture(t), account = await f.openrouterAccount(), agent = await f.agent([account.id]);
+test('OpenRouter in-flight key is withheld after the key is revoked', async t => {
+  const f = await openrouterFixture(t), account = await f.openrouterAccount(), agent = await f.agent();
   let release, started;
   const waiting = new Promise(resolve => started = resolve);
   f.openrouter.keyHandler = async () => { started(); await new Promise(resolve => release = resolve); return json({ data: f.openrouter.info }); };
   const pending = credential(f, account.id, agent.token);
   await waiting;
-  await f.request('/api/agents/' + agent.id + '/grants', { method: 'PUT', data: { accountIds: [] } });
+  await f.request('/api/agents/' + agent.id, { method: 'DELETE' });
   release();
   const result = await pending;
-  assert.equal(result.status, 403);
+  assert.equal(result.status, 401);
   assert.doesNotMatch(result.text, /sk-or-v1-/);
 });
 
