@@ -112,9 +112,12 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .approval-facts > div { display: grid; grid-template-columns: 94px minmax(0, 1fr); gap: 12px; margin-top: 12px; }
 #confirmation-code { font: 600 20px/1.4 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
 .claim-note { margin: 6px 0 0; }
+.ai-guidance { margin: 18px 0 0; padding: 14px 16px; border-left: 3px solid #a8c4b1; background: var(--soft); border-radius: 0 8px 8px 0; }
+.ai-guidance h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin-bottom: 8px; }
+.ai-guidance p { font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
+.ai-guidance p + p { margin-top: 8px; }
+.ai-guidance.compact { margin: 0 0 14px; }
 .file-pick { display: block; margin-top: 10px; }
-.setup-steps { margin: 8px 0 14px 20px; padding: 0; color: var(--muted); font-size: 14px; }
-.setup-steps li { margin: 6px 0; }
 .setup-link + .setup-link { margin-top: 10px; }
 .file-pick input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .file-pick:focus-within .button { outline: 2px solid var(--accent); }

@@ -27,8 +27,14 @@ export function guide(providers) {
   if (ids.includes('apikey')) lines.push('   例: foundation connect --service Anthropic --site https://console.anthropic.com/settings/keys --env ANTHROPIC_API_KEY --purpose "Claude API で要約を生成する"');
   if (ids.includes('cloudflare')) lines.push('   Cloudflare はユーザーAPIトークン。R2のS3互換API用Access Key/Secret Keyではない。バケット一覧は公式APIの /accounts/<cloudflare_account_id>/r2/buckets (ページ送りは result_info.cursor) を使う。',
     '   Foundationはトークン全体の権限を狭めない。登録したアカウントと依頼された用途にだけ使う。');
-  lines.push('   --note "<補足>" で、承認ページと登録画面に利用者向けの補足を 1 つ添えられる (300 文字まで。AIの申告として表示される)。',
-    '   例: 2 つ目の AWS ロールを頼むときに「スタック名は foundation-admin、Permissions は AdministratorAccess」と添える。',
+  lines.push('   --guide "<案内>" に、利用者が承認ページで何をすればよいかを書く (2000 文字まで、改行可)。承認ページと登録画面に「依頼元のAIからの案内」として出る。',
+    '   Foundation 自身は手順書を持たない。利用者の状況 (初めてか、既に何があるか、今回の特別な指定) を知っているのは AI なので、AI が書く。',
+    '   例 (AWS の 2 つ目のロールを頼むとき):',
+    '     1. 「定義ファイルをダウンロード」→「CloudFormation を開く」→ AWS にログイン',
+    '     2. 「既存のテンプレートを選択」→「テンプレートファイルのアップロード」で保存したファイルを選び「次へ」',
+    '     3. スタック名は foundation-admin (foundation は既にあるため)。Permissions は AdministratorAccess。「次へ」「次へ」',
+    '     4. 「IAM リソースが作成される場合があることを承認します」にチェックして「送信」。1 分ほど待つ',
+    '     5. 「出力」タブの CopyToFoundation の値をコピーして貼り付け',
     '2. 出力の verification_uri と confirmation_code を、そのまま利用者に伝える。',
     '   利用者はブラウザで URL を開き、必要ならサービス側でキーを作って登録し、コードを入力して許可する。',
     '   コードは利用者が手で打つので必ず表示する。',
