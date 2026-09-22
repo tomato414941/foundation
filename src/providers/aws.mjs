@@ -1,5 +1,6 @@
-import { createHash, createHmac } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { fail, HttpError } from '../errors.mjs';
+import { signAws } from '../aws-sigv4.mjs';
 
 export const AWS_DOCS = 'https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html';
 export const AWS_KEYS = 'https://console.aws.amazon.com/iam/home#/security_credentials';
@@ -68,21 +69,12 @@ export function quickCreateUrl(templateUrl, region) {
 }
 const STS_VERSION = '2011-06-15';
 const digest = value => createHash('sha256').update(value).digest('hex');
-const hmac = (key, value) => createHmac('sha256', key).update(value).digest();
 const invalidResponse = () => fail(502, 'provider_response', 'AWSからの応答を確認できませんでした。');
 
-// AWS Signature Version 4 for the STS query API. Kept here so Foundation needs no AWS SDK.
+// STS query API over the generic signer.
 export function signedRequest({ accessKeyId, secretAccessKey, region, params, now = new Date() }) {
-  const host = 'sts.' + region + '.amazonaws.com', body = new URLSearchParams(params).toString();
-  const amzDate = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''), date = amzDate.slice(0, 8);
-  const headers = { host, 'content-type': 'application/x-www-form-urlencoded; charset=utf-8', 'x-amz-date': amzDate, accept: 'application/json' };
-  const signedHeaders = Object.keys(headers).sort().join(';');
-  const canonical = ['POST', '/', '', ...Object.keys(headers).sort().map(name => name + ':' + headers[name]), '', signedHeaders, digest(body)].join('\n');
-  const scope = date + '/' + region + '/sts/aws4_request';
-  const toSign = ['AWS4-HMAC-SHA256', amzDate, scope, digest(canonical)].join('\n');
-  const signingKey = hmac(hmac(hmac(hmac('AWS4' + secretAccessKey, date), region), 'sts'), 'aws4_request');
-  const signature = createHmac('sha256', signingKey).update(toSign).digest('hex');
-  return { url: 'https://' + host + '/', method: 'POST', body, headers: { ...headers, authorization: `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}` } };
+  return signAws({ service: 'sts', region, host: 'sts.' + region + '.amazonaws.com', body: new URLSearchParams(params).toString(), credentials: { accessKeyId, secretAccessKey },
+    headers: { 'content-type': 'application/x-www-form-urlencoded; charset=utf-8', accept: 'application/json' }, now });
 }
 
 // Foundation keeps the long-lived IAM user key and hands runtimes only temporary
