@@ -107,7 +107,7 @@ for (const kind of ['cancel', 'deny', 'expire', 'logout', 'switch-user']) test('
 
 test('A registration that cannot be stored rolls back and logs out upstream; nested transactions preserve an outer transaction', async t => {
   const f = await expoLoginFixture(t), { input } = await requestAccess(f);
-  for (let i = 0; i < 25; i++) f.app.store.register(USER_A, { adapter: 'expo.token', service: 'Expo', subject: 'token:' + i, name: 'filler ' + i, purpose: '' }, { access_token: 'x' });
+  for (let i = 0; i < 25; i++) f.app.store.register(USER_A, { adapter: 'expo.token', service: 'Expo', subject: 'token:' + i, name: 'filler ' + i }, { access_token: 'x' });
   const result = await f.loginExpo(input);
   assert.equal(result.status, 409, result.text); assert.equal(result.json.error.code, 'credential_limit'); safeResponse(result);
   assert.equal(f.app.store.credentials(USER_A).length, 25); assert.equal(f.expo.sessions.size, 0);

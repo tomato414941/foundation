@@ -9,7 +9,7 @@ function setup(t, mode = 'readonly') {
   t.after(() => store.close());
   const scopes = [mode === 'metadata' ? METADATA_SCOPE : READONLY_SCOPE];
   const credentials = { access_token: 'google-access-personal-' + mode, refresh_token: 'refresh-personal-' + mode, scopes, expires_at: Date.now() - 1 };
-  const id = store.register(USER_A, { adapter: 'gmail.' + mode, service: 'Gmail', name: '個人用', purpose: '', subject: 'personal@example.test' }, credentials);
+  const id = store.register(USER_A, { adapter: 'gmail.' + mode, service: 'Gmail', name: '個人用', subject: 'personal@example.test' }, credentials);
   return { store, gmail, account: () => store.credential(USER_A, id), credentials };
 }
 

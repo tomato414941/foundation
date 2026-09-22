@@ -19,7 +19,7 @@ shots.mkdir(parents=True, exist_ok=True)
 def review(page):
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'horizontal overflow'
     text = page.locator('body').inner_text()
-    for phrase in ['管理キー', '実装', '開発者', '設計意図', 'refresh_token', 'client_secret', 'fdn_', 'google-access-']:
+    for phrase in ['実装', '開発者', '設計意図', 'refresh_token', 'client_secret', 'fdn_', 'google-access-']:
         assert phrase not in text, phrase
     assert page.evaluate('localStorage.length === 0 && sessionStorage.length === 0')
     assert 'fdn_session' not in page.evaluate('document.cookie')

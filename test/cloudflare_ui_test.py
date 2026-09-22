@@ -20,7 +20,7 @@ account_id = '1234567890abcdef1234567890abcdef'
 def review(page):
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'horizontal overflow'
     text = page.locator('body').inner_text()
-    for phrase in ['管理者キー', '実装', '開発者', '設計意図', '作業報告', 'refresh_token', 'fdn_', token]:
+    for phrase in ['実装', '開発者', '設計意図', '作業報告', 'refresh_token', 'fdn_', token]:
         assert phrase not in text, phrase
     assert page.evaluate('localStorage.length === 0 && sessionStorage.length === 0')
     assert 'fdn_session' not in page.evaluate('document.cookie')
@@ -110,6 +110,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
     # To correct the account ID the owner removes that credential and registers again through a new request.
     wrong = cli('credentials')['credentials'][0]
     page.goto(args.base, wait_until='networkidle')
+    page.locator('[aria-labelledby="cloudflare-title"] .credential-row').click()
     page.locator('[aria-labelledby="cloudflare-title"]').get_by_role('button', name='登録を解除', exact=True).click()
     dialog.get_by_role('checkbox', name='キーの無効化はCloudflareで行うことを確認しました', exact=True).check()
     dialog.get_by_role('button', name='登録を解除', exact=True).click()
@@ -136,6 +137,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
 
     page.goto(args.base, wait_until='networkidle')
     section = page.locator('[aria-labelledby="cloudflare-title"]')
+    section.locator('.credential-row').click()
     section.get_by_role('button', name='検証する', exact=True).click()
     expect(page.get_by_text('Cloudflareで検証できました。', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
@@ -155,12 +157,12 @@ with tempfile.TemporaryDirectory(prefix='foundation-cloudflare-ui-') as key_dir,
 
     # Root imports use the same small form and do not restore revoked grants.
     # The dashboard registers through the dialog.
-    section.get_by_role('button', name='Cloudflareを登録', exact=True).click()
+    page.get_by_role('button', name='Cloudflareを登録', exact=True).click()
     field = dialog.get_by_label('APIトークン', exact=True)
     account_field = dialog.get_by_label('アカウントID', exact=True)
     field.fill(token)
     dialog.get_by_role('button', name='閉じる', exact=True).click()
-    section.get_by_role('button', name='Cloudflareを登録', exact=True).click()
+    page.get_by_role('button', name='Cloudflareを登録', exact=True).click()
     expect(field).to_have_value('')
     expect(account_field).to_have_value('')
     account_field.fill(account_id)

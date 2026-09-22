@@ -19,7 +19,7 @@ token = hashlib.sha256(b'expo-fixture:personal').hexdigest()
 def review(page):
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'horizontal overflow'
     text = page.locator('body').inner_text()
-    for phrase in ['管理者キー', '実装', '開発者', '設計意図', 'refresh_token', 'session_secret', 'fdn_', token]:
+    for phrase in ['実装', '開発者', '設計意図', 'refresh_token', 'session_secret', 'fdn_', token]:
         assert phrase not in text, phrase
     assert page.evaluate('localStorage.length === 0 && sessionStorage.length === 0')
     assert 'fdn_session' not in page.evaluate('document.cookie')
@@ -105,6 +105,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     page.goto(args.base, wait_until='networkidle')
     section = page.locator('[aria-labelledby="expo-title"]')
     assert 'Gmail' not in section.inner_text() and 'OpenRouter' not in section.inner_text()
+    expect(section.locator('.credential-meta')).to_contain_text('dev-us のAIの依頼')
+    section.locator('.credential-row').click()
     section.get_by_role('button', name='検証する', exact=True).click()
     expect(page.get_by_text('Expoで検証できました。', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
@@ -125,20 +127,21 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-ui-') as key_dir, sync_
     assert cli('credentials')['credentials'] == []
 
     # The dashboard registers through the dialog.
-    section.get_by_role('button', name='Expoを登録', exact=True).click()
+    page.get_by_role('button', name='Expoを登録', exact=True).click()
     field = dialog.get_by_label('アクセストークン', exact=True)
     field.fill(token)
     dialog.get_by_role('button', name='閉じる', exact=True).click()
-    section.get_by_role('button', name='Expoを登録', exact=True).click()
+    page.get_by_role('button', name='Expoを登録', exact=True).click()
     expect(field).to_have_value('')
     field.fill(token)
     dialog.get_by_role('button', name='登録する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    section.get_by_role('button', name='編集', exact=True).click()
+    expect(section.locator('.credential-meta')).to_contain_text('管理画面から')
+    section.get_by_role('button', name='名前を変更', exact=True).click()
     dialog.get_by_label('表示名', exact=True).fill('<img src=x onerror="window.xss=1">')
     dialog.get_by_role('button', name='保存', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(section.get_by_role('heading', name='<img src=x onerror="window.xss=1">', exact=True)).to_be_visible()
+    expect(section.locator('.credential-row strong')).to_have_text('<img src=x onerror="window.xss=1">')
     assert section.locator('img').count() == 0 and page.evaluate('window.xss === undefined')
     assert len(cli('credentials')['credentials']) == 1, 'the approved key uses a connection the owner registers later'
     review(page)

@@ -82,8 +82,8 @@ export async function fixture(t, options = {}) {
     return response;
   }
   // Gmail's read range is its adapter: gmail.readonly or gmail.metadata.
-  async function start({ name = '個人用', range = 'readonly', purpose = 'サービス登録', credentialId } = {}) {
-    const result = await request('/api/adapters/gmail.' + range + '/connect', { method: 'POST', data: { name, purpose, credentialId } });
+  async function start({ name = '個人用', range = 'readonly', credentialId } = {}) {
+    const result = await request('/api/adapters/gmail.' + range + '/connect', { method: 'POST', data: { name, credentialId } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }

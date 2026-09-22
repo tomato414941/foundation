@@ -51,7 +51,7 @@ test('Configuration creates a private encryption key; losing the key fails close
 test('A new database is created in the current shape; a database of any other shape is refused and left unchanged', async (t) => {
   const dir = await directory(t), path = join(dir, 'state.sqlite');
   const created = new Store(path, KEY);
-  const id = created.register(USER_A, { adapter: 'gmail.readonly', service: 'Gmail', subject: 'kept@example.test', name: 'kept', purpose: '' }, { refresh_token: 'keep-private' });
+  const id = created.register(USER_A, { adapter: 'gmail.readonly', service: 'Gmail', subject: 'kept@example.test', name: 'kept' }, { refresh_token: 'keep-private' });
   const agent = created.addAgent(USER_A, 'runtime');
   created.recordIssuance(agent, null);
   created.close();

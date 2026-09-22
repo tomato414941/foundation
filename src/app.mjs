@@ -250,7 +250,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             () => adapter.client.exchange({ ...flow, code, range: adapter.range }, previous ? { subject: previous.subject, secret: store.secret(previous) } : undefined),
             result => {
               if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true);
-              const id = store.register(user.id, { adapter: adapter.id, service: adapter.service.name, name: credentialName(adapter, result.secret, result.subject, flow.name), purpose: flow.purpose, subject: result.subject }, result.secret, previous);
+              const id = store.register(user.id, { adapter: adapter.id, service: adapter.service.name, name: credentialName(adapter, result.secret, result.subject, flow.name), requested_by: flow.requestedBy, subject: result.subject }, result.secret, previous);
               if (flow.accessRequestId) requests.registered(flow.accessRequestId, user.id, id);
               return id;
             });
@@ -283,11 +283,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         requireOrigin(req, origin);
         logins.cancel(loginToken); setNamedCookie('fdn_login', '', 0);
         return send(200, { ok: true });
-      }
-      if (path === '/api/session' && method === 'POST') {
-        requireOrigin(req, origin);
-        await body(req);
-        fail(400, 'email_link_required', 'メールのリンクからログインしてください。');
       }
       if (path === '/api/session' && method === 'DELETE') {
         requireOrigin(req, origin);
@@ -355,7 +350,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           if (accessRequest) requests.record(accessRequest.id, 'connect_started', { adapter: adapter.id });
           if (accessRequest && !accessRequest.adapter) fail(409, 'approval_only', 'この依頼はアクセスキーの承認だけです。認証情報の登録には使えません。');
           if (accessRequest && adapter.id !== accessRequest.adapter) fail(400, 'scope_mismatch', '依頼された接続方法で登録してください。');
-          const given = givenName(input.name), purpose = purposeValue(input.purpose ?? accessRequest?.purpose ?? '');
+          // Who asked for it, as they were called then. A registration from the dashboard was asked by no one.
+          const given = givenName(input.name), requestedBy = accessRequest?.requester_name ?? '';
           if (adapter.register === 'login') {
             let result, committed = false;
             try {
@@ -363,7 +359,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
               const saved = await verifyConnection(req, session, user, async () => { result = await adapter.client.login(input); return result; }, () => {
                 if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
                 if (result.challenge) return { challenge: result.challenge };
-                const id = store.register(user.id, { adapter: adapter.id, service: adapter.service.name, name: credentialName(adapter, result.secret, result.subject, given), purpose, subject: result.subject }, result.secret);
+                const id = store.register(user.id, { adapter: adapter.id, service: adapter.service.name, name: credentialName(adapter, result.secret, result.subject, given), requested_by: requestedBy, subject: result.subject }, result.secret);
                 const done = accessRequest ? requests.registered(accessRequest.id, user.id, id) : null;
                 return { connected: true, credential_id: id, ...(done ? { request: requests.summary(done, origin, { code: false }) } : {}) };
               });
@@ -391,7 +387,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
               () => adapter.client.importToken({ values, details }),
               (result, report) => {
                 if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
-                const id = store.register(user.id, { adapter: adapter.id, service: adapters.service(adapter.id, details).name, name: credentialName(adapter, result.secret, result.subject, given), purpose, subject: result.subject }, result.secret);
+                const id = store.register(user.id, { adapter: adapter.id, service: adapters.service(adapter.id, details).name, name: credentialName(adapter, result.secret, result.subject, given), requested_by: requestedBy, subject: result.subject }, result.secret);
                 if (accessRequest) requests.registered(accessRequest.id, user.id, id);
                 return { connected: true, credential_id: id, verification: report };
               });
@@ -402,7 +398,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const redirectUri = origin + '/oauth/' + adapter.id + '/callback';
           if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
           if (accessRequest) requests.claim(accessRequest.id, user.id);
-          const flow = { adapter: adapter.id, name: given, purpose, verifier, redirectUri, accessRequestId: accessRequest?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
+          const flow = { adapter: adapter.id, name: given, requestedBy, verifier, redirectUri, accessRequestId: accessRequest?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
           const state = store.addFlow(session.id, flow);
           return send(200, { url: adapter.client.authorize({ state, verifier, redirectUri, range: adapter.range, email: previous?.subject }) });
         }
@@ -411,7 +407,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const credential = credentialFor(user.id, credentialRoute[1]);
           if (!credentialRoute[2] && method === 'PATCH') {
             const input = await body(req);
-            store.updateCredential(user.id, credential.id, nameValue(input.name, '表示名'), purposeValue(input.purpose));
+            store.updateCredential(user.id, credential.id, nameValue(input.name, '表示名'));
             return send(200, { ok: true });
           }
           if (!credentialRoute[2] && method === 'DELETE') {
