@@ -81,12 +81,12 @@ with sync_playwright() as p:
     code = hashlib.sha256(b"new@example.test").hexdigest()
     link_page = context.new_page()
     link_page.goto(args.base + "/auth/callback?code=" + code, wait_until="networkidle")
-    expect(link_page.get_by_role("heading", name="認証情報", exact=True)).to_be_visible()
+    expect(link_page.get_by_role("heading", name="預けているもの", exact=True)).to_be_visible()
     assert "code=" not in link_page.url and "#" not in link_page.url
     link_page.close()
     page.bring_to_front()
     page.evaluate('window.dispatchEvent(new Event("focus"))')
-    expect(page.get_by_role("heading", name="認証情報", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="預けているもの", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="Gmailを登録", exact=True)).to_be_enabled()
     expect(page.get_by_role("button", name="アクセスキーを追加", exact=True)).to_be_enabled()
     assert page.evaluate("localStorage.length === 0 && sessionStorage.length === 0")
@@ -116,7 +116,7 @@ with sync_playwright() as p:
         if name == "個人用":
             page.screenshot(path=str(shots / "connect.png"), full_page=True)
         dialog.get_by_role("button", name="Googleで接続", exact=False).click()
-        expect(page.get_by_role("heading", name="認証情報", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="預けているもの", exact=True)).to_be_visible()
         expect(page.get_by_text("認証情報を登録しました。", exact=True)).to_be_visible()
         page.wait_for_load_state("networkidle")
         assert "code=" not in page.url and "state=" not in page.url
