@@ -341,6 +341,31 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         const { user, session } = await principal(req);
         if (path === '/api/state' && method === 'GET') return send(200, { user, entries: entries.list(user.id), acquisitions: store.acquisitions(user.id).map(acquisitionView), agents: store.agents(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
         // What a key kept is the owner's: they read it, rename the group it sits in, and remove it.
+        // The same space the keys use, from the owner's own screen: what is there, and putting, taking
+        // and removing one thing. The owner is the one paying for it, so they must be able to clear it.
+        if (path === '/api/objects' && method === 'GET') {
+          if (!objects.enabled) return send(200, { available: false, objects: [], usage: null });
+          const space = await objects.usage(user.id);
+          return send(200, { available: true, objects: space.objects,
+            usage: { count: space.count, bytes: space.bytes, count_max: space.count_max, bytes_max: space.bytes_max } });
+        }
+        const ownObject = path.match(/^\/api\/objects\/(.+?)(\/link)?$/);
+        if (ownObject) {
+          const key = decodeURIComponent(ownObject[1]);
+          if (ownObject[2] && method === 'POST') return send(200, await objects.link(user.id, key, (await body(req)).minutes));
+          if (method === 'PUT') {
+            const content = await raw(req, OBJECT_MAX);
+            return send(200, await objects.put(user.id, key, content, req.headers['content-type'] || 'application/octet-stream'));
+          }
+          if (method === 'GET') {
+            const found = await objects.get(user.id, key);
+            res.writeHead(200, { 'content-type': found.contentType, 'content-length': found.content.length,
+              'content-disposition': `attachment; filename="${key.split('/').pop()}"` });
+            return res.end(found.content);
+          }
+          if (method === 'DELETE') { await body(req); await objects.remove(user.id, key); return send(200, { ok: true }); }
+          fail(405, 'method_not_allowed', 'この操作は利用できません。');
+        }
         // Everything, in one file, for the owner alone. Lending someone a place to keep things means they
         // can take them away again; without this the promise is words. Keys are included in full, because
         // a copy that leaves the secrets behind is not a copy.
