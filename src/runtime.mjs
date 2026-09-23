@@ -5,7 +5,6 @@ import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { homedir, hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { spawnExpoSession } from './expo-runtime.mjs';
 import { validEnvName } from './env-name.mjs';
 import { guide } from './guide.mjs';
 
@@ -153,7 +152,7 @@ async function main() {
   process.once('exit', cleanup);
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => { cleanup(); process.exit(1); });
   try {
-    const child = delivery.expo_session ? await spawnExpoSession(command, environment, delivery.expo_session) : spawn(command[0], command.slice(1), { stdio: 'inherit', env: environment, shell: false });
+    const child = spawn(command[0], command.slice(1), { stdio: 'inherit', env: environment, shell: false });
     process.exitCode = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (value, signal) => resolve(value ?? (signal ? 1 : 0))); });
   } finally { cleanup(); }
 }

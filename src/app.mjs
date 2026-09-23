@@ -157,7 +157,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
     const adapter = adapters.get(row.adapter);
     return { prefix: row.prefix, adapter: row.adapter, service: adapter.service, label: row.label, status: row.status,
       access: adapter.access, api: adapter.service?.api || { base_url: '', documentation_url: '' },
-      secrets: store.secrets(row.owner_id, row.prefix).map(entry => ({ path: entry.path, session: entry.session })) };
+      secrets: store.secrets(row.owner_id, row.prefix).map(entry => ({ path: entry.path })) };
   };
   function acquisitionFor(ownerId, prefix) {
     const row = store.acquisition(ownerId, prefix);

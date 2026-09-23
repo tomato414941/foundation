@@ -26,19 +26,18 @@ export class Acquisitions {
   // never has to ask an adapter anything.
   entries(adapterId, secret, subject, prefix) {
     const adapter = this.adapters.get(adapterId);
-    const { environment = {}, files = [], expo_session = null } = adapter.deliver(secret, { subject }) || {};
+    const { environment = {}, files = [] } = adapter.deliver(secret, { subject }) || {};
     const declared = new Set(adapter.variables || []);
     const rows = [];
     for (const [name, value] of Object.entries(environment)) {
       if (!declared.has(name)) throw new Error('Adapter ' + adapterId + ' delivered an undeclared variable: ' + name);
-      rows.push({ path: prefix + '/' + leaf(name), content: Buffer.from(String(value), 'utf8'), session: null, readable: 0 });
+      rows.push({ path: prefix + '/' + leaf(name), content: Buffer.from(String(value), 'utf8'), readable: 0 });
     }
     for (const file of files) {
       if (!declared.has(file.env)) throw new Error('Adapter ' + adapterId + ' delivered an undeclared variable: ' + file.env);
-      rows.push({ path: prefix + '/' + leaf(file.env), content: Buffer.from(file.content, 'utf8'), session: null, readable: 0 });
+      rows.push({ path: prefix + '/' + leaf(file.env), content: Buffer.from(file.content, 'utf8'), readable: 0 });
     }
     // A login session is handed to the command as the tool's own login state. The store does not read it.
-    if (expo_session) rows.push({ path: prefix + '/session', content: Buffer.from(JSON.stringify(expo_session), 'utf8'), session: 'expo', readable: 0 });
     if (!rows.length) throw new Error('Adapter ' + adapterId + ' produced nothing to keep');
     for (const row of rows) if (row.content.length > VALUE_MAX * 4) fail(502, 'service_response', '受け取った内容が大きすぎます。');
     return rows;
