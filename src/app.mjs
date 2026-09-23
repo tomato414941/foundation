@@ -17,7 +17,9 @@ import { guide } from './guide.mjs';
 const VERSION = createRequire(import.meta.url)('../package.json').version;
 
 const PUBLIC = new URL('../web/', import.meta.url);
-const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
+// The owner's pages. Each is the same shell; the script decides what to show from the path.
+const PAGES = ['/', '/objects'];
+const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/objects', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
 // The runtime CLI is served by the server it talks to, so a new machine needs
 // only this origin: `curl -fsSL <origin>/cli/install.sh | sh`.
 const CLI_FILES = ['runtime.mjs', 'env-name.mjs', 'guide.mjs', 'expo-runtime.mjs'];
@@ -31,7 +33,7 @@ const CONNECT_PAGE = /^\/connect\/[A-Za-z0-9_-]{43}$/;
 const KEPT_ACCESS = Object.freeze({ name: '中身は確認していません', description: 'AIが自分で預けた値です。Foundationは何の値かも、何ができるかも確認していません。', restrictions: '心当たりのないものは削除してください。' });
 
 function returnPath(value = '/') {
-  if (value !== '/' && (typeof value !== 'string' || !CONNECT_PAGE.test(value))) fail(400, 'invalid_return', '接続リンクを開き直してください。');
+  if (!PAGES.includes(value) && (typeof value !== 'string' || !CONNECT_PAGE.test(value))) fail(400, 'invalid_return', '接続リンクを開き直してください。');
   return value;
 }
 
