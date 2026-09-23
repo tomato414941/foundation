@@ -82,10 +82,21 @@ test('hands out a time-limited URL for something that only takes a URL', async (
 
 test('refuses a name that is not a name', async (t) => {
   const f = await space(t);
-  for (const key of ['/leading', 'trailing/', 'double//slash', '../escape']) {
+  for (const key of ['/leading', 'trailing/', 'double//slash', '../escape', 'with\\backslash']) {
     const result = await f.request('/v1/objects/' + encodeURIComponent(key), { method: 'PUT', token: KEY, raw: Buffer.from('x'), type: 'text/plain' });
     assert.equal(result.json.error.code, 'invalid_key', key);
   }
+});
+
+test('takes a name in the owner\'s own language', async (t) => {
+  const f = await space(t);
+  const put = await f.request('/v1/objects/' + encodeURIComponent('見積書/2026年 9月.pdf'), { method: 'PUT', token: KEY, raw: Buffer.from('%PDF'), type: 'application/pdf' });
+  assert.equal(put.status, 200, put.text);
+  assert.equal(put.json.key, '見積書/2026年 9月.pdf');
+  const listed = await f.request('/v1/objects', { token: KEY });
+  assert.deepEqual(listed.json.objects.map(item => item.key), ['見積書/2026年 9月.pdf']);
+  const back = await f.request('/v1/objects/' + encodeURIComponent('見積書/2026年 9月.pdf'), { token: KEY });
+  assert.equal(back.text, '%PDF');
 });
 
 test('says so when no bucket is configured', async (t) => {
