@@ -63,9 +63,9 @@ export class Secrets {
   constructor(store) { this.store = store; }
   list(ownerId, prefix) { return this.store.secrets(ownerId, prefix === undefined ? undefined : String(prefix)); }
   // Writing the same path again replaces what is there, including how it is delivered.
-  put(ownerId, { path, content, secret }, ifVersion) {
+  put(ownerId, { path, content, secret }) {
     if (content.length > SECRET_MAX) fail(413, 'secret_too_large', '1件あたり1MBまでです。');
-    return this.store.writeSecret(ownerId, { path: secretPath(path), content, session: null, readable: secret ? 0 : 1 }, ifVersion);
+    return this.store.writeSecret(ownerId, { path: secretPath(path), content, session: null, readable: secret ? 0 : 1 });
   }
   at(ownerId, path) {
     const row = this.store.secret(ownerId, secretPath(path));
