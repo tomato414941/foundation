@@ -6,8 +6,6 @@ import { validEnvName } from './env-name.mjs';
 // One thing is kept: bytes, at a path the writer chose. Foundation does not read them and has no
 // notion of what kinds of thing exist, because that cannot be known in advance. What it keeps beside
 // the bytes is only what it needs in order to give them back:
-//   media_type  what the writer says these bytes are. Never checked, never parsed. It decides nothing
-//               but how the owner's screen tries to show them.
 //   env         the environment variable a command receives them as; null when they are not delivered
 //   filename    when set, the bytes become a file of that name while a command runs, and `env` holds
 //               its path instead of the bytes
@@ -20,7 +18,6 @@ export const SECRET_COUNT_MAX = 200;
 export const SECRET_TOTAL_MAX = 20 * 1024 * 1024;
 export const VALUE_MAX = 16384;
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const MEDIA_TYPE = /^[a-z0-9][a-z0-9.+-]{0,62}\/[a-z0-9][a-z0-9.+-]{0,62}(;\s?charset=[A-Za-z0-9-]{1,20})?$/;
 
 // Paths are the only names. They carry no meaning for Foundation; a leading segment groups what the
 // writer wants grouped, and that is all grouping is.
@@ -33,10 +30,6 @@ export function secretPath(value) {
   return value;
 }
 
-export function mediaType(value = 'application/octet-stream') {
-  if (typeof value !== 'string' || !MEDIA_TYPE.test(value)) fail(400, 'invalid_media_type', '形式は text/plain のように指定してください。');
-  return value;
-}
 
 // The name a command receives something under belongs to the command, not to what is kept: `aws` reads
 // AWS_ACCESS_KEY_ID whatever Foundation calls the value. So the caller names it at delivery, and when it
@@ -70,9 +63,9 @@ export class Secrets {
   constructor(store) { this.store = store; }
   list(ownerId, prefix) { return this.store.secrets(ownerId, prefix === undefined ? undefined : String(prefix)); }
   // Writing the same path again replaces what is there, including how it is delivered.
-  put(ownerId, { path, content, type, secret, keptBy }, ifVersion) {
+  put(ownerId, { path, content, secret, keptBy }, ifVersion) {
     if (content.length > SECRET_MAX) fail(413, 'secret_too_large', '1件あたり1MBまでです。');
-    return this.store.writeSecret(ownerId, { path: secretPath(path), content, media_type: mediaType(type), session: null, readable: secret ? 0 : 1, kept_by: keptBy }, ifVersion);
+    return this.store.writeSecret(ownerId, { path: secretPath(path), content, session: null, readable: secret ? 0 : 1, kept_by: keptBy }, ifVersion);
   }
   at(ownerId, path) {
     const row = this.store.secret(ownerId, secretPath(path));
@@ -151,5 +144,5 @@ export function declaration(input) {
   }
   if (typeof input.label !== 'string' || !input.label.trim() || input.label.trim().length > 60 || /[\x00-\x1f\x7f<>]/.test(input.label)) fail(400, 'invalid_label', '何を入れてもらうかを1〜60文字で指定してください。');
   if (input.multiline !== undefined && typeof input.multiline !== 'boolean') fail(400, 'invalid_declaration', '複数行かどうかは true か false で指定してください。');
-  return { path: secretPath(input.path), secret: input.secret !== false, label: input.label.trim(), site: site?.href ?? '', multiline: input.multiline === true, type: mediaType(input.type ?? 'text/plain') };
+  return { path: secretPath(input.path), secret: input.secret !== false, label: input.label.trim(), site: site?.href ?? '', multiline: input.multiline === true };
 }

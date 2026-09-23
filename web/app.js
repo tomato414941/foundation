@@ -237,7 +237,7 @@ function connectionRow(connection, secrets) {
 // The heading is the path without the group it already sits under, so a name is never read twice.
 const within = path => path.slice(path.indexOf('/') + 1);
 function secretRow(entry, owned) {
-  return `<article class="agent-row"><div class="agent-name"><h3>${esc(within(entry.path))}</h3><p>${esc(entry.media_type)} · ${esc(kiloBytes(entry.size))}</p></div>
+  return `<article class="agent-row"><div class="agent-name"><h3>${esc(within(entry.path))}</h3><p>${esc(kiloBytes(entry.size))}</p></div>
     <div class="agent-permissions"><span class="muted">${esc(putBy(entry))} · ${esc(keptWhen(entry.updated_at))}</span></div>
     <div class="agent-actions"><button class="text-button" data-action="show-secret" data-path="${esc(entry.path)}">中身を見る</button>${owned ? '' : `<button class="text-button" data-action="edit-secret" data-path="${esc(entry.path)}">名前を変える</button><button class="text-button danger" data-action="drop-secret" data-path="${esc(entry.path)}">削除</button>`}</div></article>`;
 }
@@ -294,7 +294,8 @@ function render() {
     return;
   }
   const kept = groups();
-  app.innerHTML = shell(`<header class="page-heading"><h1>シークレット</h1></header>
+  app.innerHTML = shell(`<header class="page-heading page-heading-actions"><div><h1>シークレット</h1></div>
+    <button class="button secondary" data-action="add-secret">${icon('plus')} 追加</button></header>
     ${kept.length ? kept.map(groupSection).join('') : '<section class="resource-section"><div class="access-empty"><p>まだ何も預かっていません。AIが依頼を作ると、ここに並びます。</p></div></section>'}
     ${connectSection()}`);
 }
@@ -554,6 +555,22 @@ function removeAgent(agent) {
 }
 // One confirmation, for removing something a key kept. Nothing here can be undone, and nothing reaches the service.
 // The name and the way it reaches a command, changed without the value ever being handed back.
+// Something the owner has in hand, put there without an agent asking for it first.
+function addSecret() {
+  openDialog(`<h2 id="dialog-title">追加</h2>
+    <form><label for="new-path">名前</label><input id="new-path" name="path" required maxlength="200" placeholder="aws/session-token" autocomplete="off" spellcheck="false">
+    <label for="new-value">値</label><textarea id="new-value" name="value" rows="4" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>
+    <label class="checkbox"><input type="checkbox" name="readable"> AIが読み出せるようにする</label>
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加</button></form>`);
+  bindForm(async (form) => {
+    const path = form.get('path').trim(), open = form.get('readable') === 'on';
+    const response = await fetch('/api/secrets/' + encodeURIComponent(path) + (open ? '?secret=false' : ''),
+      { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'text/plain' }, body: String(form.get('value')) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
+    closeDialog(); await refresh(); toast(path + ' を追加しました。');
+  });
+}
 function editSecret(entry) {
   if (!entry) return;
   openDialog(`<h2 id="dialog-title">名前を変える</h2><p>中身はそのままです。AIがこれを指すときの名前を変えられます。</p>
@@ -591,11 +608,16 @@ document.addEventListener('click', async (event) => {
     if (action === 'disconnect') disconnect(state.acquisitions.find(item => item.prefix === target.dataset.prefix));
     if (action === 'show-secret') {
       const path = target.dataset.path, entry = state.secrets.find(item => item.path === path);
-      const readable = /^text\/|^application\/json/.test(entry.media_type);
+
       const response = await fetch('/api/secrets/' + encodeURIComponent(path), { credentials: 'same-origin', cache: 'no-store' });
       if (!response.ok) throw new Error('中身を取得できませんでした。');
-      const body = readable
-        ? `<pre class="kept-document">${esc(await response.text())}</pre>`
+      // What the bytes are is decided by looking at them: anything that is not plain text is offered as a file.
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const text = new TextDecoder('utf-8', { fatal: true });
+      let shown = null;
+      try { const value = text.decode(bytes); if (!/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)) shown = value; } catch {}
+      const body = shown !== null
+        ? `<pre class="kept-document">${esc(shown)}</pre>`
         : `<p>この形式は画面で表示できません。</p><a class="button secondary full" href="/api/secrets/${encodeURIComponent(path)}" download>ファイルとして保存</a>`;
       openDialog(`<h2 id="dialog-title">${esc(path)}</h2><p>${esc(putBy(entry))} が ${esc(keptWhen(entry.updated_at))} に保管しました。</p>${body}`);
     }
@@ -640,6 +662,7 @@ document.addEventListener('click', async (event) => {
       confirmRemoval(keys.length === 1 ? keys[0] + ' を削除しますか？' : keys.length + '件を削除しますか？', '置き場から消えます。元には戻せません。',
         async () => { for (const key of keys) await api('/api/objects/' + encodeURIComponent(key), { method: 'DELETE', data: {} }); objectChosen = new Set(); });
     }
+    if (action === 'add-secret') addSecret();
     if (action === 'edit-secret') editSecret((state.secrets || []).find(item => item.path === target.dataset.path));
     if (action === 'add-agent') editAgent();
     if (action === 'remove-agent') removeAgent(state.agents.find((a) => a.id === id));

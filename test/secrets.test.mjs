@@ -30,7 +30,7 @@ test('What is kept is bytes at a path, and the name a command receives them unde
   const kept = await put(f, token, 'github/gh-token', secret, { secret: 'true' });
   assert.equal(kept.status, 200, kept.text);
   assert.deepEqual({ ...kept.json.secret, created_at: 0, updated_at: 0 },
-    { path: 'github/gh-token', media_type: 'text/plain', size: secret.length, session: null, readable: false, version: 1, kept_by: 'dev-us', created_at: 0, updated_at: 0 });
+    { path: 'github/gh-token', size: secret.length, session: null, readable: false, version: 1, kept_by: 'dev-us', created_at: 0, updated_at: 0 });
   assert.doesNotMatch(kept.text, new RegExp(secret), 'writing never echoes the bytes back');
 
   const listed = await f.request('/v1/secrets', { token, anonymous: true });
@@ -52,7 +52,6 @@ test('Bytes with no delivery are kept and read back as they were written', async
   assert.equal((await put(f, token, 'release/2026-09-23', state, {}, 'application/json')).status, 200);
   const read = await f.request('/v1/secrets/release/2026-09-23', { token, anonymous: true });
   assert.equal(read.status, 200);
-  assert.equal(read.headers.get('content-type'), 'application/json');
   assert.equal(read.text, state);
   // The path gives no usable variable name, so handing it over needs one to be said.
   const asked = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { paths: ['release/2026-09-23'] } });
@@ -76,12 +75,11 @@ test('Bytes that cannot be an environment variable can still be delivered as a f
   assert.deepEqual(delivered.json.delivery.files, [{ env: 'EXPO_ASC_API_KEY_PATH', filename: 'AuthKey.p8', content: Buffer.from(pem).toString('base64'), encoding: 'base64' }]);
 });
 
-test('Paths and media types are checked when writing, names when handing over; nothing else about the bytes is', async t => {
+test('Paths are checked when writing, names when handing over; nothing else about the bytes is', async t => {
   const { f, token } = await keyed(t);
   const code = async (path, query = {}, type = 'text/plain') => (await put(f, token, path, 'x', query, type)).json.error?.code;
   assert.equal(await code('-leading/segment'), 'invalid_path');
   assert.equal(await code('a/b/c/d/e/f/g/h/i'), 'invalid_path');
-  assert.equal(await code('a/b', {}, 'not a media type'), 'invalid_media_type');
   assert.equal((await put(f, token, 'a/b', 'x')).status, 200);
   const handing = async as => (await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { paths: [{ path: 'a/b', as }] } })).json.error?.code;
   assert.equal(await handing('lower'), 'invalid_env');
