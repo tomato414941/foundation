@@ -12,7 +12,7 @@ const parse = row => ({ ...row, readable: row.readable === 1 });
 export const ACQUISITION_LIMIT = 50;
 const entryBinding = row => `entry:${row.owner_id}:${row.id}`;
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 // secrets: what the agent may not read, kept so that a command can be given it. Bytes at a path, sealed and bound to this owner and
 //   this row. session marks the one kind handed over as a tool's own login state; nothing here says what the
 //   how a command receives them, settled when they were written. readable is 0 when they may only be delivered.
@@ -25,6 +25,11 @@ const SCHEMA_VERSION = 5;
 const STEPS = {
   // Named for what it is: a value the agent may not read, kept so a command can be given it. The sealing
   // binding still says `entry:` because it is part of the ciphertext of every row already written.
+  // Who put it there was recorded for the owner's benefit, but only the request flow ever set it, so in
+  // practice it said the same thing about everything. Knowing it properly means recording every path.
+  6: `
+    ALTER TABLE secrets DROP COLUMN kept_by;
+  `,
   // What the writer said the bytes were was never checked, and the one thing it decided -- whether the
   // owner's screen tries to show them -- is decided better by looking at the bytes.
   5: `
@@ -68,7 +73,7 @@ const SCHEMA = `
   CREATE TABLE secrets (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, path TEXT NOT NULL,
     size INTEGER NOT NULL, session TEXT, readable INTEGER NOT NULL,
-    content TEXT NOT NULL, kept_by TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+    content TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     UNIQUE(owner_id, path)
   );
@@ -136,7 +141,7 @@ export class Store {
   }
   // Storage. Listing never opens anything; only reading and delivering do.
   secrets(ownerId, prefix) {
-    const columns = 'path, size, session, readable, kept_by, version, created_at, updated_at';
+    const columns = 'path, size, session, readable, version, created_at, updated_at';
     return (prefix === undefined
       ? this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? ORDER BY path`).all(ownerId)
       : this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? AND (path=? OR path LIKE ?) ORDER BY path`).all(ownerId, prefix, prefix.replaceAll('%', '\\%').replaceAll('_', '\\_') + '/%')).map(parse);
@@ -159,11 +164,11 @@ export class Store {
       const id = existing?.id ?? randomUUID();
       const sealed = this.vault.sealBytes(entry.content, `entry:${ownerId}:${id}`);
       if (existing) {
-        this.db.prepare('UPDATE secrets SET size=?, session=?, readable=?, content=?, kept_by=?, version=version+1, updated_at=? WHERE id=?')
-          .run(entry.content.length, entry.session ?? null, entry.readable, sealed, entry.kept_by, stamp, id);
+        this.db.prepare('UPDATE secrets SET size=?, session=?, readable=?, content=?, version=version+1, updated_at=? WHERE id=?')
+          .run(entry.content.length, entry.session ?? null, entry.readable, sealed, stamp, id);
       } else {
-        this.db.prepare('INSERT INTO secrets (id,owner_id,path,size,session,readable,content,kept_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
-          .run(id, ownerId, entry.path, entry.content.length, entry.session ?? null, entry.readable, sealed, entry.kept_by, stamp, stamp);
+        this.db.prepare('INSERT INTO secrets (id,owner_id,path,size,session,readable,content,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)')
+          .run(id, ownerId, entry.path, entry.content.length, entry.session ?? null, entry.readable, sealed, stamp, stamp);
       }
       return this.secrets(ownerId, entry.path)[0];
     });
@@ -209,16 +214,16 @@ export class Store {
       const sealed = this.vault.seal(state, `acquisition:${ownerId}:${id}`);
       if (existing) this.db.prepare("UPDATE acquisitions SET adapter=?, subject=?, label=?, state=?, status='connected', generation=generation+1, updated_at=? WHERE id=?").run(adapter, subject, label, sealed, stamp, id);
       else this.db.prepare("INSERT INTO acquisitions (id,owner_id,prefix,adapter,subject,label,state,status,kept_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,'connected',?,?,?)").run(id, ownerId, prefix, adapter, subject, label, sealed, keptBy ?? '', stamp, stamp);
-      this.replaceUnder(ownerId, prefix, entries, keptBy ?? '');
+      this.replaceUnder(ownerId, prefix, entries);
       return this.acquisition(ownerId, prefix);
     });
   }
   // The entries an acquisition produced this time, and only those.
-  replaceUnder(ownerId, prefix, entries, keptBy) {
+  replaceUnder(ownerId, prefix, entries) {
     return this.transaction(() => {
       const wanted = new Set(entries.map(entry => entry.path));
       for (const row of this.secrets(ownerId, prefix)) if (!wanted.has(row.path)) this.removeSecret(ownerId, row.path);
-      for (const entry of entries) this.writeSecret(ownerId, { ...entry, kept_by: keptBy });
+      for (const entry of entries) this.writeSecret(ownerId, entry);
     });
   }
   // A refresh that produced nothing new still says when it happened; one that failed marks the acquisition.
@@ -227,7 +232,7 @@ export class Store {
       const current = this.acquisition(acquisition.owner_id, acquisition.prefix);
       if (!current || current.generation !== acquisition.generation || current.status !== 'connected') fail(409, 'connection_changed', 'この接続は変更または解除されています。');
       this.db.prepare('UPDATE acquisitions SET state=?, updated_at=? WHERE id=?').run(this.vault.seal(state, `acquisition:${acquisition.owner_id}:${acquisition.id}`), now(), acquisition.id);
-      if (entries) this.replaceUnder(acquisition.owner_id, acquisition.prefix, entries, acquisition.kept_by);
+      if (entries) this.replaceUnder(acquisition.owner_id, acquisition.prefix, entries);
     });
   }
   reconnectRequired(acquisition) {

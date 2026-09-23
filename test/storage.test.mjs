@@ -60,12 +60,12 @@ test('A new database is created in the current shape; a database of any other sh
   assert.equal(reopened.acquisitionState(reopened.acquisition(USER_A, 'gmail/kept')).renewal.refresh_token, 'keep-private');
   assert.deepEqual(reopened.secrets(USER_A).map(row => row.path), ['gmail/kept/access-token']);
   assert.equal(reopened.agents(USER_A)[0].issued_nonexpiring, 1);
-  for (const shape of ['CREATE TABLE accounts(id TEXT); INSERT INTO accounts VALUES (\'existing\');', 'CREATE TABLE accounts(id TEXT); PRAGMA user_version=6;', 'PRAGMA user_version=1;', 'CREATE TABLE entries(id TEXT);']) {
+  for (const shape of ['CREATE TABLE accounts(id TEXT); INSERT INTO accounts VALUES (\'existing\');', 'CREATE TABLE accounts(id TEXT); PRAGMA user_version=999;', 'PRAGMA user_version=1;', 'CREATE TABLE entries(id TEXT);']) {
     const other = join(dir, 'other-' + Math.random().toString(36).slice(2) + '.sqlite'), db = new DatabaseSync(other);
     db.exec(shape); db.close();
     assert.throws(() => new Store(other, KEY), /not created by this version/, shape);
     const after = new DatabaseSync(other);
-    assert.equal(after.prepare('PRAGMA user_version').get().user_version, /user_version=(\d)/.exec(shape)?.[1] * 1 || 0);
+    assert.equal(after.prepare('PRAGMA user_version').get().user_version, /user_version=(\d+)/.exec(shape)?.[1] * 1 || 0);
     after.close();
   }
 });
