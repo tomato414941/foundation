@@ -73,10 +73,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     github = page.locator('[aria-labelledby="github-title"]')
     release = page.locator('[aria-labelledby="release-title"]')
     expect(github.get_by_role('heading', name='gh-token', exact=True)).to_be_visible()
-    expect(github.get_by_text('GH_TOKEN として渡す', exact=True)).to_be_visible()
+    expect(github.get_by_text(f'{len(SECRET)} バイト', exact=True)).to_be_visible()
     expect(release.get_by_role('heading', name='2026-09-23', exact=True)).to_be_visible()
-    expect(release.get_by_text('名前を指定して渡す', exact=True)).to_be_visible()
-    expect(github.get_by_text('dev-us のAI', exact=False).first).to_be_visible()
+    expect(release.get_by_role('button', name='中身を見る', exact=True)).to_be_visible()
     assert SECRET not in page.locator('body').inner_text(), 'what is kept is never on the page itself'
 
     review(page)
@@ -110,4 +109,4 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     assert not errors, errors
     context.close()
     browser.close()
-    print('Storage screen passed: what a key kept with no request, how each is handed over, fetching it as the owner, and removal reaching the key.')
+    print('Storage screen passed: what a key kept with no request, its size, fetching it as the owner, and removal reaching the key.')

@@ -208,10 +208,8 @@ async function refresh() {
 // what the writer said it is, how it reaches a command, and who put it there. Foundation read none of it.
 const keptWhen = value => new Date(value).toLocaleString('ja-JP');
 // The name a command receives it under is chosen when it is handed over; the path is where it comes from by default.
-const handedOver = entry => variableFor(entry.path) ? `${variableFor(entry.path)} として渡す` : '名前を指定して渡す';
 const kiloBytes = size => size < 1024 ? size + ' バイト' : size < 1024 * 1024 ? Math.round(size / 1024) + ' KB'
   : size < 1024 * 1024 * 1024 ? Math.round(size / (1024 * 1024)) + ' MB' : (size / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-const variableFor = path => { const leaf = path.split('/').pop().replace(/[^A-Za-z0-9]+/g, '_').toUpperCase(); return /^[A-Z][A-Z0-9_]*$/.test(leaf) ? leaf : null; };
 const groupId = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'g-' + [...name].map(char => char.codePointAt(0).toString(36)).join('');
 const statusName = status => ({ connected: '利用できます', reconnect_required: '接続し直しが必要です', disconnecting: '解除しています' }[status] || '確認が必要です');
 // Each group holds the secrets whose path starts with its name, and any connection that keeps some of them current.

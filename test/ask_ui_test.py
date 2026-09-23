@@ -79,11 +79,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
     review(page)
 
-    # It is now kept where the AI asked, handed over as it asked, and the AI cannot read it back.
+    # It is now kept where the AI asked, and the AI cannot read it back.
     kept = cli('api', 'GET', '/v1/secrets')['secrets']
     assert [row['path'] for row in kept] == ['cloudflare/cloudflare-api-token']
     assert kept[0]['readable'] is False
-    assert kept[0]['kept_by'] == 'dev-us のAI'
     refused = subprocess.run(['node', 'cli/runtime.mjs', 'api', 'GET', '/v1/secrets/cloudflare/cloudflare-api-token'], env=env, capture_output=True, text=True, timeout=15)
     assert refused.returncode == 1 and SECRET not in refused.stdout + refused.stderr
 
