@@ -9,7 +9,7 @@ import { Adapters } from './adapters.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { AccessRequests } from './access-requests.mjs';
 import { Acquisitions } from './acquisitions.mjs';
-import { Entries, ENTRY_MAX, entryPath } from './entries.mjs';
+import { Entries, ENTRY_MAX, ENTRY_COUNT_MAX, ENTRY_TOTAL_MAX, entryPath } from './entries.mjs';
 import { Objects, S3Space, OBJECT_MAX } from './objects.mjs';
 import { respond } from './mcp.mjs';
 import { guide } from './guide.mjs';
@@ -526,6 +526,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         }
         // A URL for something that can only take a URL. Only here because not every owner has cloud
         // storage of their own; one who does should use it directly instead.
+        // What this owner is using, and what they may use. Lending has a cost, so both sides can see it.
+        if (path === '/v1/usage' && method === 'GET') {
+          const kept = store.usage(agent.owner_id);
+          const space = objects.enabled ? await objects.usage(agent.owner_id) : null;
+          return send(200, { entries: { ...kept, count_max: ENTRY_COUNT_MAX, bytes_max: ENTRY_TOTAL_MAX },
+            objects: space ? { count: space.count, bytes: space.bytes, count_max: space.count_max, bytes_max: space.bytes_max } : null });
+        }
         // The owner's own space of objects. Lent from Foundation's bucket while the owner has none of
         // their own; the same calls reach a bucket of theirs once one is connected.
         if (path === '/v1/objects' && method === 'GET') {
