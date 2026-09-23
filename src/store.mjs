@@ -20,9 +20,11 @@ const SCHEMA_VERSION = 1;
 // acquisitions: the entries under `prefix` are obtained and kept current by Foundation itself, through one
 //   adapter, for one subject at that service. state holds what the adapter needs to refresh them, sealed.
 //   Every other entry has no row here and is simply what was put there.
+// files: what a key published behind a time-limited URL. There so that an owner with no cloud account of
+//   their own still has a way to hand something to a thing that can only take a URL. The bytes live in the
+//   backend under the id; a row is never changed.
 // agents: access keys the owner approved; each may use everything its owner keeps.
 // access_requests: one request from a runtime, as it asked and as it went.
-// files: what a key published in the sharing space. The bytes live in the backend under the id; a row is never changed.
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE agents (
@@ -37,11 +39,6 @@ const SCHEMA = `
     progress TEXT, owner_id TEXT, agent_id TEXT, credential_id TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
   );
   CREATE INDEX access_requests_token ON access_requests(token_hash, created_at);
-  CREATE TABLE files (
-    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, agent_id TEXT NOT NULL, name TEXT NOT NULL, content_type TEXT NOT NULL,
-    size INTEGER NOT NULL, sha256 TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
-  );
-  CREATE INDEX files_owner ON files(owner_id, created_at);
   CREATE TABLE entries (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, path TEXT NOT NULL, media_type TEXT NOT NULL,
     size INTEGER NOT NULL, env TEXT, filename TEXT, session TEXT, readable INTEGER NOT NULL,
@@ -57,6 +54,11 @@ const SCHEMA = `
   );
   CREATE INDEX acquisitions_owner ON acquisitions(owner_id, prefix);
   CREATE INDEX entries_owner ON entries(owner_id, path);
+  CREATE TABLE files (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, agent_id TEXT NOT NULL, name TEXT NOT NULL, content_type TEXT NOT NULL,
+    size INTEGER NOT NULL, sha256 TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX files_owner ON files(owner_id, created_at);
   PRAGMA user_version = ${SCHEMA_VERSION};
 `;
 

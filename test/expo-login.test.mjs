@@ -195,10 +195,11 @@ test('EAS reads the isolated session; no EXPO_TOKEN, shared login overwrite, cre
     const child = spawn(process.execPath, ['src/runtime.mjs', ...args], { env }); let out = '', err = '';
     child.stdout.on('data', chunk => out += chunk); child.stderr.on('data', chunk => err += chunk); child.once('error', reject); child.once('exit', code => resolve({ code, out, err }));
   });
-  const asked = JSON.parse((await execute(['connect'])).out).request;
+  const asked = JSON.parse((await execute(['connect'])).out.split('\n\nKey file')[0]).request;
   await f.request('/api/access-requests/' + asked.id + '/approve', { method: 'POST', data: { confirmationCode: asked.confirmation_code } });
-  const created = await execute(['connect', '--adapter', 'expo.login', '--purpose', 'EAS のビルド']); assert.equal(created.code, 0, created.err);
-  const row = JSON.parse(created.out).request; assert.equal(row.adapter.id, 'expo.login');
+  const created = await f.request('/v1/access-requests', { method: 'POST', token: (await readFile(join(dir, 'runtime-key'), 'utf8')).trim(), anonymous: true, data: { adapter: 'expo.login', purpose: 'EAS のビルド' } });
+  assert.equal(created.status, 201, created.text);
+  const row = created.json.request; assert.equal(row.adapter.id, 'expo.login');
   const result = await f.loginExpo({ accessRequestId: row.id });
   const id = result.json.prefix + '/session';
   const fingerprint = async () => { try { return createHash('sha256').update(await readFile(join(homedir(), '.expo/state.json'))).digest('hex'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };

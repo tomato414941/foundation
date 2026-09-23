@@ -7,9 +7,9 @@ import { fail, HttpError, nameValue } from './errors.mjs';
 import { Adapters } from './adapters.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { AccessRequests } from './access-requests.mjs';
-import { Files, FILE_MAX } from './files.mjs';
 import { Acquisitions } from './acquisitions.mjs';
 import { Entries, ENTRY_MAX, entryPath } from './entries.mjs';
+import { Files, FILE_MAX } from './files.mjs';
 
 const PUBLIC = new URL('../web/', import.meta.url);
 const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
@@ -68,13 +68,15 @@ function purposeValue(value = '') {
   return value.trim();
 }
 
-export function createApp({ database = ':memory:', encryptionKey, auth, adapters: adapterList, files: fileBackend = null, publicOrigin, loginClock, trustedProxies = [] }) {
+export function createApp({ database = ':memory:', encryptionKey, auth, adapters: adapterList, files: fileBackend = null, publicOrigin, owners: ownerList = [], loginClock, trustedProxies = [] }) {
   if (!auth || !Array.isArray(adapterList)) throw new Error('Authentication and adapters are required');
   let external;
   if (publicOrigin) {
     external = new URL(publicOrigin);
     if (external.protocol !== 'https:' || external.username || external.password || external.pathname !== '/' || external.search || external.hash) throw new Error('FOUNDATION_PUBLIC_ORIGIN must be an HTTPS origin without a path');
   }
+  // Who may become an owner here. Empty means anyone who can log in, which is only safe while nobody else can reach it.
+  const owners = ownerList.length ? new Set(ownerList.map(value => value.trim().toLowerCase()).filter(Boolean)) : null;
   const store = new Store(database, encryptionKey);
   // Behind a reverse proxy every socket has the proxy's address; the client is the last hop the proxy appended.
   // Only proxies the operator named are believed, otherwise the header is attacker-controlled.
@@ -87,9 +89,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   };
   const adapters = new Adapters(adapterList);
   const entries = new Entries(store, adapters.owned);
+  const files = new Files(store, fileBackend);
   const acquisitions = new Acquisitions(store, adapters);
   const requests = new AccessRequests(store, adapters);
-  const files = new Files(store, fileBackend);
   const logins = new EmailLogins({ now: loginClock });
   const refreshing = new Map(), limits = new Map(), disconnects = new Set();
   const timer = setInterval(() => {
@@ -270,6 +272,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         requireOrigin(req, origin);
         const input = await body(req);
         if (typeof input.email !== 'string' || input.email.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(input.email.trim())) fail(400, 'invalid_email', 'メールアドレスを確認してください。');
+        // Reachable from anywhere means anyone who finds the URL could otherwise make themselves an owner here.
+        if (owners && !owners.has(input.email.trim().toLowerCase())) fail(403, 'not_invited', 'このアドレスではご利用いただけません。');
         const destination = returnPath(input.returnTo);
         rateLimit('link-send:' + clientAddress(req), 12, 600_000);
         const { token, row } = logins.reserve(input.email.trim().toLowerCase());
@@ -304,7 +308,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       if (path === '/v1/adapters' && method === 'GET') return send(200, { adapters: adapters.ids().map(id => adapters.describe(id)) });
       if (path === '/v1/access-requests' || path === '/v1/access-requests/current') {
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
-        const token = req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
+        // A first request may arrive with no key at all: an agent that cannot generate a secret of its own is
+        // issued one here, returned once and never again. One that has a key keeps using it.
+        const given = req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
+        const issued = given === undefined && path === '/v1/access-requests' && method === 'POST' ? 'fdn_' + randomBytes(32).toString('base64url') : undefined;
+        const token = issued ?? given;
         const hash = requests.key(token);
         rateLimit('request-poll:' + hash, 30);
         if (path === '/v1/access-requests' && method === 'POST') {
@@ -312,7 +320,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           // Only a key not yet approved introduces itself by name; an approved key is known by the name its owner keeps.
           const name = input.name === undefined ? '' : nameValue(input.name, '依頼元'), purpose = purposeValue(input.purpose);
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
-          return send(201, { request: requests.summary(requests.create(token, { name, purpose, adapter: input.adapter, store: input.store, details: input.details, guidance: input.guidance ?? '', validMinutes: input.valid_minutes ?? 30 }), origin) });
+          const row = requests.create(token, { name, purpose, adapter: input.adapter, store: input.store, details: input.details, guidance: input.guidance ?? '', validMinutes: input.valid_minutes ?? 30 });
+          return send(201, { ...(issued ? { key: issued } : {}), request: requests.summary(row, origin) });
         }
         if (path.endsWith('/current') && method === 'GET') return send(200, { request: { ...requests.runtimeView(token), verification_uri: origin + '/connect/' + requests.current(token).id } });
         if (path.endsWith('/current') && method === 'DELETE') {
@@ -473,7 +482,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           store.removeAgent(agent.owner_id, agent.id);
           return send(200, { ok: true });
         }
-        // The file space, a tool the key may use: put a file, get a time-limited link that reads it.
+        // A URL for something that can only take a URL. Only here because not every owner has cloud
+        // storage of their own; one who does should use it directly instead.
         if (path === '/v1/files' && method === 'GET') return send(200, { files: files.list(agent.owner_id) });
         if (path === '/v1/files' && method === 'POST') {
           files.check();

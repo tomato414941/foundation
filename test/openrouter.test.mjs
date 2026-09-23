@@ -172,7 +172,7 @@ test('CLI asks for approval, then injects the OpenRouter key only into the child
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'runtime-key') };
   const start = await execute(['connect', '--name', 'dev-us'], env);
   assert.equal(start.code, 0, start.err);
-  const row = JSON.parse(start.out).request;
+  const row = JSON.parse(start.out.split('\n\nKey file')[0]).request;
   assert.equal(row.kind, 'approve');
   const approved = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code } });
   assert.equal(approved.status, 200);

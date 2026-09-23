@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import tempfile
+import urllib.request
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
@@ -34,9 +35,17 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
         result = subprocess.run(['node', 'src/runtime.mjs', *command], env=env, capture_output=True, text=True, timeout=15, input=stdin or '')
         assert result.returncode == 0, result.stderr
         assert SECRET not in result.stdout + result.stderr
-        return json.loads(result.stdout)
+        return json.loads(result.stdout.split('\n\nKey file')[0])
+
+    # Everything but connect and exec is plain HTTP, which is how an agent uses it.
+    def api(method, path, body=None, headers=None):
+        request = urllib.request.Request(args.base + path, method=method, data=body,
+                                         headers={'authorization': 'Bearer ' + key, **(headers or {})})
+        with urllib.request.urlopen(request) as response:
+            return json.loads(response.read() or b'{}')
 
     approval = cli('connect', '--name', 'dev-us のAI')['request']
+    key = open(key_dir + '/runtime-key').read().strip()
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 1000})
     page = context.new_page()
@@ -57,15 +66,15 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     review(page)
 
     # The key keeps two things, with no request and no approval: one handed to a command, one only read back.
-    cli('put', 'github/token', '--env', 'GH_TOKEN', '--secret', '--type', 'text/plain', stdin=SECRET)
-    cli('put', 'release/expo-v3', '--type', 'application/json', stdin=json.dumps({'step': 'レビュー待ち'}))
+    api('PUT', '/v1/entries/github/token?env=GH_TOKEN&secret=true', SECRET.encode(), {'content-type': 'text/plain'})
+    api('PUT', '/v1/entries/release/expo-v3', json.dumps({'step': 'レビュー待ち'}).encode(), {'content-type': 'application/json'})
     page.reload(wait_until='networkidle')
 
     github = page.locator('[aria-labelledby="github-title"]')
     release = page.locator('[aria-labelledby="release-title"]')
-    expect(github.get_by_role('heading', name='github/token', exact=True)).to_be_visible()
+    expect(github.get_by_role('heading', name='token', exact=True)).to_be_visible()
     expect(github.get_by_text('GH_TOKEN として渡す', exact=True)).to_be_visible()
-    expect(release.get_by_role('heading', name='release/expo-v3', exact=True)).to_be_visible()
+    expect(release.get_by_role('heading', name='expo-v3', exact=True)).to_be_visible()
     expect(release.get_by_text('渡さない', exact=True)).to_be_visible()
     expect(github.get_by_text('dev-us のAI', exact=False).first).to_be_visible()
     assert SECRET not in page.locator('body').inner_text(), 'what is kept is never on the page itself'
@@ -90,13 +99,13 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     expect(dialog.get_by_role('heading', name='release/expo-v3 を削除しますか？', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert [row['path'] for row in cli('list')['entries']] == ['github/token']
+    assert [row['path'] for row in api('GET', '/v1/entries')['entries']] == ['github/token']
 
     github.get_by_role('button', name='削除', exact=True).click()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(page.get_by_text('まだ何も預かっていません。', exact=False)).to_be_visible()
-    assert cli('list')['entries'] == []
+    assert api('GET', '/v1/entries')['entries'] == []
     review(page)
     assert not errors, errors
     context.close()

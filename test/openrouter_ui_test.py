@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
         result = subprocess.run(['node', 'src/runtime.mjs', *command], env=env, capture_output=True, text=True, timeout=15)
         assert (result.returncode == 0) == success, result.stderr
         assert 'sk-or-v1-' not in result.stdout + result.stderr and 'fdn_' not in result.stdout
-        return json.loads(result.stdout) if success else None
+        return json.loads(result.stdout.split('\n\nKey file')[0]) if success else None
 
     approval = cli('connect', '--name', 'dev-us のAI')['request']
     browser = p.chromium.launch(headless=True)
@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.get_by_label('確認コード', exact=True).fill(approval['confirmation_code'])
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
-    request = cli('connect', '--adapter', 'openrouter.oauth', '--purpose', '接続したキーの情報を確認。モデルは実行しません。')['request']
+    request = cli('api', 'POST', '/v1/access-requests', '--json', json.dumps({'adapter': 'openrouter.oauth', 'purpose': '接続したキーの情報を確認。モデルは実行しません。'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='OpenRouterで接続', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']
@@ -69,7 +69,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.route('https://openrouter.ai/auth?*', consent)
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
     expect(page.get_by_text('登録をキャンセルしました。', exact=True)).to_be_visible()
-    assert cli('list')['entries'] == []
+    assert cli('api', 'GET', '/v1/entries')['entries'] == []
     authorization['deny'] = False
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
@@ -78,7 +78,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
         review(page)
         if width != 320:
             page.screenshot(path=str(shots / ('approval-desktop.png' if width == 1280 else 'approval-mobile.png')), full_page=True)
-    kept = cli('list')['entries']
+    kept = cli('api', 'GET', '/v1/entries')['entries']
     assert [entry['env'] for entry in kept] == ['OPENROUTER_API_KEY']
     command = subprocess.run(['node', 'src/runtime.mjs', 'exec', kept[0]['path'], '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
@@ -100,7 +100,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     review(page)
     dialog.get_by_role('button', name='失効させる', exact=True).click()
     expect(dialog).not_to_be_visible()
-    cli('list', success=False)
+    cli('api', 'GET', '/v1/entries', success=False)
 
     section.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog.get_by_text('OpenRouter側のキーは残ります。', exact=False)).to_be_visible()
