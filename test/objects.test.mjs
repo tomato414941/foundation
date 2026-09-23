@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { fixture } from './helpers.mjs';
 import { Objects, S3Space } from '../src/objects.mjs';
@@ -113,7 +114,7 @@ test('signs a listing the way S3 asks for it', async (t) => {
     bucket: 'example-bucket', region: 'ap-northeast-1',
     credentials: async () => ({ accessKeyId: 'AKIAEXAMPLE', secretAccessKey: 'secret' }),
     fetcher: async (url, options) => {
-      seen.push({ url, authorization: options.headers.authorization });
+      seen.push({ url, authorization: options.headers.authorization, payload: options.headers['x-amz-content-sha256'] });
       return new Response('<ListBucketResult><Contents><Key>owners/1/a.txt</Key><Size>3</Size><LastModified>2026-09-23T00:00:00.000Z</LastModified></Contents><IsTruncated>false</IsTruncated></ListBucketResult>', { status: 200 });
     },
   });
@@ -124,4 +125,6 @@ test('signs a listing the way S3 asks for it', async (t) => {
   assert.match(seen[0].url, /list-type=2/);
   assert.match(seen[0].url, /prefix=owners%2F1%2F/);
   assert.match(seen[0].authorization, /^AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE\/\d{8}\/ap-northeast-1\/s3\/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=[0-9a-f]{64}$/);
+  // S3 checks the hash in the header against the one the signature covers; an empty body hashes to this.
+  assert.equal(seen[0].payload, createHash('sha256').update('').digest('hex'));
 });
