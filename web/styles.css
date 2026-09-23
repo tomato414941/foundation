@@ -280,3 +280,11 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 .approval-detail { margin: 4px 0 16px; }
 .approval-detail > summary { min-height: 44px; display: flex; align-items: center; font-size: 14px; color: var(--muted, #62716a); cursor: pointer; }
 .approval-detail .approval-facts { margin-top: 4px; }
+
+/* The home page: where to go, and what concerns everything rather than one kind of thing. */
+.home-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 0 0 16px; }
+.home-card { display: block; padding: 18px 20px; border: 1px solid var(--line, #dce4df); border-radius: 12px; background: var(--surface, #fff); text-decoration: none; color: inherit; }
+.home-card:hover { border-color: #b9c8bf; }
+.home-card h2 { margin: 0 0 4px; font-size: 17px; }
+.home-card p { margin: 0; font-size: 14px; color: var(--muted, #62716a); }
+.home-export { margin: 16px 0 0; font-size: 14px; }

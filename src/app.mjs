@@ -197,8 +197,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       const setNamedCookie = (name, value, age) => res.appendHeader('Set-Cookie', `${name}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${age}${external ? '; Secure' : ''}`);
       const setCookie = (value, age) => setNamedCookie('fdn_session', value, age);
       const loginToken = readCookie(req, 'fdn_login');
-      // The root is not a page of its own; it stands for the first one.
-      if (path === '/' && method === 'GET') return redirect('/secrets' + url.search);
       if ((STATIC.has(path) || CONNECT_PAGE.test(path)) && method === 'GET') {
         if (CONNECT_PAGE.test(path)) requests.record(path.slice('/connect/'.length), 'page_opened');
         const [filename, type] = STATIC.get(CONNECT_PAGE.test(path) ? '/' : path);

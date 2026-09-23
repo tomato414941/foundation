@@ -82,13 +82,15 @@ with sync_playwright() as p:
     code = hashlib.sha256(b"new@example.test").hexdigest()
     link_page = context.new_page()
     link_page.goto(args.base + "/auth/callback?code=" + code, wait_until="networkidle")
-    expect(link_page.get_by_role("heading", name="シークレット", exact=True)).to_be_visible()
+    expect(link_page.get_by_role("heading", name="Foundation", exact=True)).to_be_visible()
     assert "code=" not in link_page.url and "#" not in link_page.url
     link_page.close()
     page.bring_to_front()
     page.evaluate('window.dispatchEvent(new Event("focus"))')
-    expect(page.get_by_role("heading", name="シークレット", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Foundation", exact=True)).to_be_visible()
+    page.goto(args.base + "/secrets", wait_until="networkidle")
     expect(page.get_by_role("button", name="メールの読み取り", exact=True)).to_be_enabled()
+    page.goto(args.base, wait_until="networkidle")
     expect(page.get_by_role("button", name="アクセスキーを追加", exact=True)).to_be_enabled()
     assert page.evaluate("localStorage.length === 0 && sessionStorage.length === 0")
     assert "fdn_session" not in page.evaluate("document.cookie")
@@ -109,13 +111,15 @@ with sync_playwright() as p:
     # Each read range is its own connection; the owner starts the one they want.
     def connect(code, metadata=False):
         authorization["code"] = code
+        if "/secrets" not in page.url:
+            page.goto(args.base + "/secrets", wait_until="networkidle")
         page.locator(".agent-row").filter(has_text="Gmail").get_by_role("button", name="件名・差出人などの読み取り" if metadata else "メールの読み取り", exact=True).click()
         expect(dialog).to_be_visible()
         check_display(page)
         if not metadata:
             page.screenshot(path=str(shots / "connect.png"), full_page=True)
         dialog.locator("button[type=submit]").click()
-        expect(page.get_by_role("heading", name="シークレット", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="Foundation", exact=True)).to_be_visible()
         expect(page.get_by_text("認証情報を登録しました。", exact=True)).to_be_visible()
         page.wait_for_load_state("networkidle")
         assert "code=" not in page.url and "state=" not in page.url
@@ -123,6 +127,7 @@ with sync_playwright() as p:
     connect("personal-readonly")
     connect("work-metadata", True)
     # Both sit under one group, named by the paths they were kept at.
+    page.goto(args.base + "/secrets", wait_until="networkidle")
     gmail = page.locator('[aria-labelledby="gmail-title"]')
     expect(gmail.locator(".agent-name h3")).to_have_text(["personal@example.test", "work@example.test"])
     expect(gmail.get_by_text("件名・差出人などの読み取り", exact=True)).to_be_visible()
@@ -132,6 +137,7 @@ with sync_playwright() as p:
     expect(gmail.get_by_text("google-oauth-access-token", exact=True).first).to_be_visible()
 
     def create_runtime(name):
+        page.goto(args.base, wait_until="networkidle")
         page.get_by_role("button", name="アクセスキーを追加", exact=True).click()
         dialog.get_by_label("アクセスキーの名前", exact=True).fill(name)
         dialog.get_by_role("button", name="アクセスキーを発行", exact=True).click()
@@ -139,6 +145,7 @@ with sync_playwright() as p:
         token = dialog.locator("#agent-token").input_value()
         # Deliberately never screenshot keys, including test keys.
         dialog.get_by_role("button", name="閉じる", exact=True).last.click()
+        page.goto(args.base + "/secrets", wait_until="networkidle")
         return token
 
     token_a = create_runtime("dev-us")
@@ -169,6 +176,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "mobile.png"), full_page=True)
     # Cancellation returns a useful message without disclosing provider errors.
     authorization["deny"] = True
+    page.goto(args.base + "/secrets", wait_until="networkidle")
     gmail.get_by_role("button", name="接続し直す", exact=True).first.click()
     dialog.locator("button[type=submit]").click()
     expect(page.get_by_text("登録をキャンセルしました。", exact=True)).to_be_visible()
@@ -183,6 +191,7 @@ with sync_playwright() as p:
     expect(dialog).not_to_be_visible()
     assert runtime("/v1/acquisitions", token_a).status == 401
     assert runtime("/v1/acquisitions", token_b).status == 200
+    page.goto(args.base + "/secrets", wait_until="networkidle")
     gmail.get_by_role("button", name="接続を解除", exact=True).first.click()
     check_display(page)
     page.screenshot(path=str(shots / "disconnect-mobile.png"), full_page=True)

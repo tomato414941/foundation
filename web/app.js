@@ -1,8 +1,8 @@
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
 let state = null, toastTimer, loginTimer, revision = 0;
 const requestId = location.pathname.match(/^\/connect\/([A-Za-z0-9_-]{43})$/)?.[1];
-const page = location.pathname === '/objects' ? 'objects' : 'secrets';
-const pagePath = requestId ? '/connect/' + requestId : page === 'objects' ? '/objects' : '/secrets';
+const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : 'home';
+const pagePath = requestId ? '/connect/' + requestId : page === 'objects' ? '/objects' : page === 'secrets' ? '/secrets' : '/';
 let accessRequest = null, requestError = '';
 let disposePrivateInput = () => {};
 function clearPrivateInput() { const dispose = disposePrivateInput; disposePrivateInput = () => {}; dispose(); }
@@ -121,7 +121,7 @@ const icon = (name) => {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
 const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true">F</span>Foundation</a>';
-const nav = `<nav class="page-nav">${[['/secrets', 'secrets', 'シークレット'], ['/objects', 'objects', 'オブジェクト']]
+const nav = `<nav class="page-nav">${[['/', 'home', 'ホーム'], ['/secrets', 'secrets', 'シークレット'], ['/objects', 'objects', 'オブジェクト']]
   .map(([href, name, label]) => `<a href="${href}"${name === page ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
 function toast(text) {
@@ -192,7 +192,7 @@ window.addEventListener('focus', () => { if (document.querySelector('#email-sent
 async function refresh() {
   const current = ++revision, result = await api('/api/state');
   let space = null;
-  if (page === 'objects') { try { space = await api('/api/objects'); } catch { space = null; } }
+  if (page !== 'secrets') { try { space = await api('/api/objects'); } catch { space = null; } }
   if (requestId && current === revision) {
     try { accessRequest = (await api('/api/access-requests/' + requestId)).request; requestError = ''; }
     catch (error) { accessRequest = null; requestError = error.message; }
@@ -237,7 +237,7 @@ const within = path => path.slice(path.indexOf('/') + 1);
 function secretRow(entry, owned) {
   return `<article class="agent-row"><div class="agent-name"><h3>${esc(within(entry.path))}</h3><p>${esc(entry.media_type)} · ${esc(kiloBytes(entry.size))}</p></div>
     <div class="agent-permissions"><span class="muted">${esc(handedOver(entry))}</span><span class="muted block">${esc(putBy(entry))} · ${esc(keptWhen(entry.updated_at))}</span></div>
-    <div class="agent-actions"><button class="text-button" data-action="show-secret" data-path="${esc(entry.path)}">中身を見る</button>${owned ? '' : `<button class="text-button danger" data-action="drop-secret" data-path="${esc(entry.path)}">削除</button>`}</div></article>`;
+    <div class="agent-actions"><button class="text-button" data-action="show-secret" data-path="${esc(entry.path)}">中身を見る</button>${owned ? '' : `<button class="text-button" data-action="edit-secret" data-path="${esc(entry.path)}">名前と渡し方</button><button class="text-button danger" data-action="drop-secret" data-path="${esc(entry.path)}">削除</button>`}</div></article>`;
 }
 function groupSection(group) {
   const id = groupId(group.name);
@@ -277,12 +277,24 @@ function render() {
     bindObjects();
     return;
   }
+  if (page === 'home') {
+    const space = state.space, kept = state.secrets || [];
+    const bytes = kept.reduce((total, item) => total + item.size, 0);
+    const card = (href, title, line) => `<a class="home-card" href="${href}"><h2>${title}</h2><p>${esc(line)}</p></a>`;
+    app.innerHTML = shell(`<header class="page-heading"><h1>Foundation</h1></header>
+      <div class="home-cards">
+        ${card('/secrets', 'シークレット', `${kept.length} 件・${kiloBytes(bytes)}`)}
+        ${card('/objects', 'オブジェクト', space?.available ? `${space.usage.count} 件・${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}` : '使えません')}
+      </div>
+      <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">AIのアクセスキー</h2></div></div><button class="button secondary" data-action="add-agent">${icon('plus')} アクセスキーを追加</button></div>
+      ${state.agents.length ? `<div class="agent-list">${state.agents.map(agent => `<article class="agent-row"><div class="agent-name"><h3>${esc(agent.name)}</h3><p>${agent.last_used_at ? '最終利用 ' + esc(new Date(agent.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(agent.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-agent" data-id="${esc(agent.id)}">名前を変更</button><button class="text-button danger" data-action="remove-agent" data-id="${esc(agent.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section>
+      <p class="home-export"><a href="/api/export" download>まとめて取り出す</a></p>`);
+    return;
+  }
   const kept = groups();
-  app.innerHTML = shell(`<header class="page-heading"><h1>シークレット</h1><p>いつでも<a href="/api/export" download>まとめて取り出せます</a>。鍵の中身もそのまま含まれるので、保存先にご注意ください。</p></header>
+  app.innerHTML = shell(`<header class="page-heading"><h1>シークレット</h1></header>
     ${kept.length ? kept.map(groupSection).join('') : '<section class="resource-section"><div class="access-empty"><p>まだ何も預かっていません。AIが依頼を作ると、ここに並びます。</p></div></section>'}
-    ${connectSection()}
-    <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">AIのアクセスキー</h2></div></div><button class="button secondary" data-action="add-agent">${icon('plus')} アクセスキーを追加</button></div>
-    ${state.agents.length ? `<div class="agent-list">${state.agents.map((agent) => `<article class="agent-row"><div class="agent-name"><h3>${esc(agent.name)}</h3><p>${agent.last_used_at ? '最終利用 ' + esc(new Date(agent.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(agent.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-agent" data-id="${esc(agent.id)}">名前を変更</button><button class="text-button danger" data-action="remove-agent" data-id="${esc(agent.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section>`);
+    ${connectSection()}`);
 }
 function bindObjects() {
   const filter = document.querySelector('#object-filter');
@@ -535,6 +547,21 @@ function removeAgent(agent) {
   bindForm(async () => { await api(`/api/agents/${agent.id}`, { method: 'DELETE' }); closeDialog(); await refresh(); toast('アクセスキーを失効させました。'); });
 }
 // One confirmation, for removing something a key kept. Nothing here can be undone, and nothing reaches the service.
+// The name and the way it reaches a command, changed without the value ever being handed back.
+function editSecret(entry) {
+  if (!entry) return;
+  openDialog(`<h2 id="dialog-title">名前と渡し方</h2><p>中身はそのままです。AIがこれを指すときの名前と、コマンドの中での現れ方を変えられます。</p>
+    <form><label for="secret-path">名前</label><input id="secret-path" name="path" required maxlength="200" value="${esc(entry.path)}" autocomplete="off" spellcheck="false">
+    <label for="secret-env">コマンドの中での名前</label><input id="secret-env" name="env" maxlength="64" value="${esc(entry.env || '')}" placeholder="渡さないなら空のまま" autocomplete="off" spellcheck="false">
+    <label for="secret-filename">ファイルとして渡すときのファイル名</label><input id="secret-filename" name="filename" maxlength="64" value="${esc(entry.filename || '')}" placeholder="ファイルにしないなら空のまま" autocomplete="off" spellcheck="false">
+    <p class="permission-note">AIがすでにこの名前を使っている場合、変えると動かなくなることがあります。</p>
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">変更する</button></form>`);
+  bindForm(async (form) => {
+    await api('/api/secrets/' + encodeURIComponent(entry.path), { method: 'PATCH', data: {
+      path: form.get('path').trim(), env: form.get('env').trim() || null, filename: form.get('filename').trim() || null } });
+    closeDialog(); await refresh(); toast('変更しました。');
+  });
+}
 function confirmRemoval(title, body, run) {
   openDialog(`<h2 id="dialog-title">${esc(title)}</h2><form><p>${esc(body)}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">削除する</button></div></form>`);
   bindForm(async () => { await run(); closeDialog(); await refresh(); toast('削除しました。'); });
@@ -610,6 +637,7 @@ document.addEventListener('click', async (event) => {
       confirmRemoval(keys.length === 1 ? keys[0] + ' を削除しますか？' : keys.length + '件を削除しますか？', '置き場から消えます。元には戻せません。',
         async () => { for (const key of keys) await api('/api/objects/' + encodeURIComponent(key), { method: 'DELETE', data: {} }); objectChosen = new Set(); });
     }
+    if (action === 'edit-secret') editSecret((state.secrets || []).find(item => item.path === target.dataset.path));
     if (action === 'add-agent') editAgent();
     if (action === 'remove-agent') removeAgent(state.agents.find((a) => a.id === id));
     if (action === 'rename-agent') renameAgent(state.agents.find((a) => a.id === id));

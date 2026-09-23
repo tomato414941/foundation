@@ -97,7 +97,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
                           env=env, capture_output=True, text=True, timeout=15)
     assert used.returncode == 0 and used.stdout.strip() == 'ready', used.stderr
 
-    page.goto(args.base, wait_until='networkidle')
+    page.goto(args.base + '/secrets', wait_until='networkidle')
     expect(page.locator('[aria-labelledby="cloudflare-title"]').get_by_role('heading', name='token', exact=True)).to_be_visible()
     review(page)
     assert not errors, errors
