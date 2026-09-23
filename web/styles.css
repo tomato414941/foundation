@@ -276,3 +276,7 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
   .object-table th:first-child, .object-table td:first-child { padding-left: 16px; }
   .object-table th:last-child, .object-table td:last-child { padding-right: 16px; }
 }
+
+.approval-detail { margin: 4px 0 16px; }
+.approval-detail > summary { min-height: 44px; display: flex; align-items: center; font-size: 14px; color: var(--muted, #62716a); cursor: pointer; }
+.approval-detail .approval-facts { margin-top: 4px; }

@@ -111,7 +111,7 @@ export async function fixture(t, options = {}) {
   }
   // Everything one acquisition keeps, handed over as a command would receive it.
   async function deliver(acquisition, options = {}) {
-    const paths = (await request('/api/state')).json.entries.filter(entry => entry.path.startsWith(acquisition.prefix + '/')).map(entry => entry.path);
+    const paths = (await request('/api/state')).json.secrets.filter(entry => entry.path.startsWith(acquisition.prefix + '/')).map(entry => entry.path);
     return request('/v1/deliver', { method: 'POST', data: { paths }, ...options });
   }
   // Makes a runtime key known to the owner: the key asks to be approved and the owner types its code.

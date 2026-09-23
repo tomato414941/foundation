@@ -15,7 +15,7 @@ const execute = (args, env) => new Promise((resolve, reject) => {
   child.stdout.on('data', part => out += part); child.stderr.on('data', part => err += part);
   child.once('error', reject); child.once('exit', code => resolve({ code, out, err }));
 });
-const credential = (f, connection, token) => f.request('/v1/deliver', { method: 'POST', anonymous: true, token, data: { paths: connection.entries } });
+const credential = (f, connection, token) => f.request('/v1/deliver', { method: 'POST', anonymous: true, token, data: { paths: connection.secrets } });
 
 test('OpenRouter authorization binds state in callback and uses S256 without application secrets', () => {
   const client = new OpenRouterClient();
@@ -36,7 +36,7 @@ test('OpenRouter exchanges only PKCE code, preserves real expiry and zero budget
   const response = await f.request('/api/state');
   const account = response.json.acquisitions[0];
   assert.equal(account.adapter, 'openrouter.oauth');
-  assert.deepEqual(account.entries, [account.prefix + '/openrouter-api-key']);
+  assert.deepEqual(account.secrets, [account.prefix + '/openrouter-api-key']);
   assert.equal(account.key_info.limit, 0);
   assert.equal(account.expires_at, null);
   assert.match(account.label, /^キー [a-f0-9]{12}$/);
@@ -75,8 +75,8 @@ test('API key is delivered only to an approved key; revocation metadata never pr
   assert.equal(callback.headers.get('location'), '/connect/' + row.id + '?connection=connected');
   const account = (await f.request('/api/state')).json.acquisitions[0];
   assert.equal((await f.request('/api/access-requests/' + row.id)).json.request.status, 'approved', 'the request is complete');
-  const listed = await f.request('/v1/entries', { token });
-  assert.deepEqual(listed.json.entries.map(entry => entry.env), ['OPENROUTER_API_KEY']);
+  const listed = await f.request('/v1/secrets', { token });
+  assert.deepEqual(listed.json.secrets.map(entry => entry.env), ['OPENROUTER_API_KEY']);
   assert.doesNotMatch(listed.text, /sk-or-v1-/);
   const issued = await credential(f, account, token);
   assert.equal(issued.status, 200, issued.text);
@@ -176,9 +176,9 @@ test('CLI asks for approval, then injects the OpenRouter key only into the child
   assert.equal(row.kind, 'approve');
   const approved = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code } });
   assert.equal(approved.status, 200);
-  const run = await execute(['exec', account.entries[0], '--', process.execPath, '-e', 'if(!process.env.OPENROUTER_API_KEY || process.env.GOOGLE_OAUTH_ACCESS_TOKEN || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2); console.log("authenticated")'], env);
+  const run = await execute(['exec', account.secrets[0], '--', process.execPath, '-e', 'if(!process.env.OPENROUTER_API_KEY || process.env.GOOGLE_OAUTH_ACCESS_TOKEN || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2); console.log("authenticated")'], env);
   assert.equal(run.code, 0, run.err); assert.equal(run.out.trim(), 'authenticated');
   assert.doesNotMatch(start.out + start.err + run.out + run.err, /sk-or-v1-|fdn_/);
   await f.request('/api/agents/' + approved.json.request.agent_id, { method: 'DELETE' });
-  assert.equal((await execute(['exec', account.entries[0], '--', process.execPath, '-e', 'process.exit(0)'], env)).code, 1);
+  assert.equal((await execute(['exec', account.secrets[0], '--', process.execPath, '-e', 'process.exit(0)'], env)).code, 1);
 });

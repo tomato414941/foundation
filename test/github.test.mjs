@@ -34,7 +34,7 @@ test('A connected GitHub account is named by its login and delivered to an appro
   const [connection] = await f.connections();
   assert.equal(connection.label, 'octo');
   assert.equal(connection.prefix, 'github/octo');
-  assert.deepEqual(connection.entries, ['github/octo/gh-token', 'github/octo/github-token']);
+  assert.deepEqual(connection.secrets, ['github/octo/gh-token', 'github/octo/github-token']);
   assert.doesNotMatch(JSON.stringify(await f.request('/api/state')), /gho_/);
   const agent = await f.agent();
   const delivered = await f.request('/v1/deliver', { method: 'POST', token: agent.token, anonymous: true, data: { paths: ['github/octo/gh-token', 'github/octo/github-token'] } });
@@ -79,7 +79,7 @@ test('Disconnecting revokes the grant at GitHub', async t => {
   assert.equal(removed.status, 200, removed.text);
   assert.ok(f.github.revoked.has('gho_octo'));
   assert.deepEqual(await f.connections(), []);
-  assert.deepEqual((await f.request('/api/state')).json.entries, [], 'what it kept goes with it');
+  assert.deepEqual((await f.request('/api/state')).json.secrets, [], 'what it kept goes with it');
 });
 
 test('Without a client ID and secret GitHub is offered as unavailable', async t => {

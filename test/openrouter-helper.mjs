@@ -43,6 +43,6 @@ export async function openrouterFixture(t, options = {}) {
     const state = (await f.request('/api/state')).json;
     return state.acquisitions.filter(item => item.adapter === 'openrouter.oauth').at(-1);
   }
-  const deliver = (connection, options) => f.request('/v1/deliver', { method: 'POST', data: { paths: connection.entries }, ...options });
+  const deliver = (connection, options) => f.request('/v1/deliver', { method: 'POST', data: { paths: connection.secrets }, ...options });
   return { ...f, openrouter, startOpenRouter: start, callbackOpenRouter: callback, openrouterAccount: account, deliver };
 }

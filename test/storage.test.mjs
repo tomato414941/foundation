@@ -58,7 +58,7 @@ test('A new database is created in the current shape; a database of any other sh
   created.close();
   const reopened = new Store(path, KEY); t.after(() => reopened.close());
   assert.equal(reopened.acquisitionState(reopened.acquisition(USER_A, 'gmail/kept')).renewal.refresh_token, 'keep-private');
-  assert.deepEqual(reopened.entries(USER_A).map(row => row.path), ['gmail/kept/access-token']);
+  assert.deepEqual(reopened.secrets(USER_A).map(row => row.path), ['gmail/kept/access-token']);
   assert.equal(reopened.agents(USER_A)[0].issued_nonexpiring, 1);
   for (const shape of ['CREATE TABLE accounts(id TEXT); INSERT INTO accounts VALUES (\'existing\');', 'CREATE TABLE accounts(id TEXT); PRAGMA user_version=6;', 'PRAGMA user_version=1;', 'CREATE TABLE entries(id TEXT);']) {
     const other = join(dir, 'other-' + Math.random().toString(36).slice(2) + '.sqlite'), db = new DatabaseSync(other);

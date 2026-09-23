@@ -26,7 +26,7 @@ const rowStatus = (f, id) => f.app.store.db.prepare('SELECT status FROM access_r
 test('A new key asks only to be approved: no access before approval, the same private key after it', async t => {
   const f = await fixture(t, { login: false });
   const { token, row } = await create(f);
-  assert.equal(row.kind, 'approve'); assert.equal(row.adapter, null); assert.equal(row.status, 'pending');
+  assert.equal(row.kind, 'approve'); assert.equal(row.adapter, undefined); assert.equal(row.status, 'pending');
   assert.equal(row.verification_uri, f.base + '/connect/' + row.id);
   assert.match(row.confirmation_code, /^[A-F0-9]{4}-[A-F0-9]{4}$/);
   assert.doesNotMatch(JSON.stringify(row), /fdn_|token_hash|refresh_token/);
@@ -45,7 +45,7 @@ test('A new key asks only to be approved: no access before approval, the same pr
   assert.doesNotMatch(approved.text, /fdn_|google-access|refresh_token|token_hash/);
   const listed = await usable(f, token);
   assert.deepEqual(listed.json.acquisitions.map(a => a.prefix), [saved.prefix]);
-  assert.deepEqual(listed.json.acquisitions[0].entries.map(entry => entry.env).sort(), ['GMAIL_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_ACCESS_TOKEN', 'GOOGLE_OAUTH_EXPIRES_AT']);
+  assert.deepEqual(listed.json.acquisitions[0].secrets.map(entry => entry.env).sort(), ['GMAIL_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_ACCESS_TOKEN', 'GOOGLE_OAUTH_EXPIRES_AT']);
   const delivered = await f.deliver(saved, { token, anonymous: true });
   assert.equal(delivered.status, 200);
   assert.equal(delivered.json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal-readonly');
@@ -222,10 +222,10 @@ test('A second adapter uses the same request and delivery APIs without any Gmail
   assert.equal(callback.headers.get('location'), '/connect/' + row.id + '?connection=connected');
   const saved = f.app.store.acquisitions(USER_A)[0];
   assert.equal(saved.adapter, 'notes.oauth'); assert.equal(saved.prefix.split('/')[0], 'notes');
-  const delivered = await f.request('/v1/deliver', { method: 'POST', token, data: { paths: f.app.store.entries(USER_A, saved.prefix).map(entry => entry.path) } });
+  const delivered = await f.request('/v1/deliver', { method: 'POST', token, data: { paths: f.app.store.secrets(USER_A, saved.prefix).map(entry => entry.path) } });
   assert.deepEqual(delivered.json.delivery.environment, { NOTES_TOKEN: 'notes-access' });
   const listed = (await f.request('/v1/acquisitions', { token })).json.acquisitions[0];
-  assert.deepEqual(listed.entries.map(entry => entry.env), ['NOTES_TOKEN']); assert.equal(listed.api.documentation_url, 'https://notes.example.test/docs');
+  assert.deepEqual(listed.secrets.map(entry => entry.env), ['NOTES_TOKEN']); assert.equal(listed.api.documentation_url, 'https://notes.example.test/docs');
 });
 
 test('The approval page never receives the confirmation code; entry is normalized and locked after repeated mistakes', async t => {

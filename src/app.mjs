@@ -9,7 +9,7 @@ import { Adapters } from './adapters.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { AccessRequests } from './access-requests.mjs';
 import { Acquisitions } from './acquisitions.mjs';
-import { Entries, ENTRY_MAX, ENTRY_COUNT_MAX, ENTRY_TOTAL_MAX, entryPath } from './entries.mjs';
+import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX, secretPath } from './secrets.mjs';
 import { Objects, S3Space, OBJECT_MAX } from './objects.mjs';
 import { respond } from './mcp.mjs';
 import { guide } from './guide.mjs';
@@ -18,8 +18,8 @@ const VERSION = createRequire(import.meta.url)('../package.json').version;
 
 const PUBLIC = new URL('../web/', import.meta.url);
 // The owner's pages. Each is the same shell; the script decides what to show from the path.
-const PAGES = ['/', '/objects'];
-const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/objects', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
+const PAGES = ['/', '/secrets', '/objects'];
+const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/secrets', ['index.html', 'text/html; charset=utf-8']], ['/objects', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
 // The runtime CLI is served by the server it talks to, so a new machine needs
 // only this origin: `curl -fsSL <origin>/cli/install.sh | sh`.
 const CLI_FILES = ['runtime.mjs', 'env-name.mjs', 'guide.mjs', 'expo-runtime.mjs'];
@@ -95,7 +95,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
     return forwarded.at(-1) || socket;
   };
   const adapters = new Adapters(adapterList);
-  const entries = new Entries(store, adapters.owned);
+  const secrets = new Secrets(store, adapters.owned);
   const objects = new Objects(spaceBackend);
   const acquisitions = new Acquisitions(store, adapters);
   const requests = new AccessRequests(store, adapters);
@@ -157,7 +157,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
     const adapter = adapters.get(row.adapter);
     return { prefix: row.prefix, adapter: row.adapter, service: adapter.service, label: row.label, status: row.status,
       access: adapter.access, api: adapter.service?.api || { base_url: '', documentation_url: '' },
-      entries: store.entries(row.owner_id, row.prefix).map(entry => ({ path: entry.path, env: entry.env, filename: entry.filename, session: entry.session })) };
+      secrets: store.secrets(row.owner_id, row.prefix).map(entry => ({ path: entry.path, env: entry.env, filename: entry.filename, session: entry.session })) };
   };
   function acquisitionFor(ownerId, prefix) {
     const row = store.acquisition(ownerId, prefix);
@@ -175,7 +175,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
     const adapter = adapters.get(row.adapter), state = store.acquisitionState(row);
     const { owner_id: _owner, state: _state, ...rest } = row;
     return { ...rest, ...state.facts, expires_at: state.expires_at, access: adapter.access, service: adapter.service,
-      entries: store.entries(row.owner_id, row.prefix).map(entry => entry.path),
+      secrets: store.secrets(row.owner_id, row.prefix).map(entry => entry.path),
       can_reconnect: adapter.canReconnect !== false, can_revoke: adapter.canRevoke !== false, available: adapter.client.enabled };
   }
   const server = createServer(async (req, res) => {
@@ -197,6 +197,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       const setNamedCookie = (name, value, age) => res.appendHeader('Set-Cookie', `${name}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${age}${external ? '; Secure' : ''}`);
       const setCookie = (value, age) => setNamedCookie('fdn_session', value, age);
       const loginToken = readCookie(req, 'fdn_login');
+      // The root is not a page of its own; it stands for the first one.
+      if (path === '/' && method === 'GET') return redirect('/secrets' + url.search);
       if ((STATIC.has(path) || CONNECT_PAGE.test(path)) && method === 'GET') {
         if (CONNECT_PAGE.test(path)) requests.record(path.slice('/connect/'.length), 'page_opened');
         const [filename, type] = STATIC.get(CONNECT_PAGE.test(path) ? '/' : path);
@@ -341,7 +343,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       if (path.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(method)) requireOrigin(req, origin);
         const { user, session } = await principal(req);
-        if (path === '/api/state' && method === 'GET') return send(200, { user, entries: entries.list(user.id), acquisitions: store.acquisitions(user.id).map(acquisitionView), agents: store.agents(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
+        if (path === '/api/state' && method === 'GET') return send(200, { user, secrets: secrets.list(user.id), acquisitions: store.acquisitions(user.id).map(acquisitionView), agents: store.agents(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
         // What a key kept is the owner's: they read it, rename the group it sits in, and remove it.
         // The same space the keys use, from the owner's own screen: what is there, and putting, taking
         // and removing one thing. The owner is the one paying for it, so they must be able to clear it.
@@ -387,27 +389,35 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         // can take them away again; without this the promise is words. Keys are included in full, because
         // a copy that leaves the secrets behind is not a copy.
         if (path === '/api/export' && method === 'GET') {
-          const kept = entries.list(user.id).map(row => {
-            const full = entries.entry(user.id, row.path);
-            return { ...row, content: store.entryContent(full).toString('base64'), encoding: 'base64' };
+          const kept = secrets.list(user.id).map(row => {
+            const full = secrets.at(user.id, row.path);
+            return { ...row, content: store.secretContent(full).toString('base64'), encoding: 'base64' };
           });
           const value = { exported_at: new Date().toISOString(), owner: user.email, origin,
-            entries: kept, acquisitions: store.acquisitions(user.id).map(acquisitionView), agents: store.agents(user.id) };
+            secrets: kept, acquisitions: store.acquisitions(user.id).map(acquisitionView), agents: store.agents(user.id) };
           res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
             'content-disposition': `attachment; filename="foundation-${new Date().toISOString().slice(0, 10)}.json"` });
           return res.end(JSON.stringify(value, null, 2));
         }
-        const ownEntry = path.match(/^\/api\/entries\/(.+)$/);
-        if (ownEntry) {
+        const ownSecret = path.match(/^\/api\/secrets\/(.+)$/);
+        if (ownSecret) {
           if (method === 'GET') {
-            const row = entries.entry(user.id, decodeURIComponent(ownEntry[1]));
-            const content = store.entryContent(row);
+            const row = secrets.at(user.id, decodeURIComponent(ownSecret[1]));
+            const content = store.secretContent(row);
             res.writeHead(200, { 'content-type': row.media_type, 'content-length': content.length, 'content-disposition': `attachment; filename="${row.path.split('/').pop()}"` });
             return res.end(content);
           }
+          // The name and the way it reaches a command are the owner's to change; the value is not touched,
+          // and is never handed back in order to change them.
+          if (method === 'PATCH') {
+            const input = await body(req);
+            const moved = secrets.rename(user.id, decodeURIComponent(ownSecret[1]),
+              { path: input.path, env: input.env ?? null, filename: input.filename ?? null });
+            return send(200, { secret: moved });
+          }
           if (method === 'DELETE') {
             await body(req);
-            entries.remove(user.id, decodeURIComponent(ownEntry[1]));
+            secrets.remove(user.id, decodeURIComponent(ownSecret[1]));
             return send(200, { ok: true });
           }
         }
@@ -418,12 +428,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const row = requests.forUser(storeRoute[1], user.id, true);
           if (requests.kindOf(row) !== 'store') fail(409, 'wrong_kind', 'この依頼は保管の依頼ではありません。');
           const asked = requests.details(row);
-          const input = await body(req, ENTRY_MAX);
+          const input = await body(req, SECRET_MAX);
           if (typeof input.content !== 'string' || input.content === '') fail(400, 'invalid_values', '入力内容を確認してください。');
           progressRequestId = row.id;
           return store.transaction(() => {
             requests.forUser(row.id, user.id, true);
-            entries.put(user.id, { path: asked.path, content: Buffer.from(input.content, 'utf8'), type: asked.type, env: asked.env, filename: asked.filename, secret: asked.secret, keptBy: row.requester_name });
+            secrets.put(user.id, { path: asked.path, content: Buffer.from(input.content, 'utf8'), type: asked.type, env: asked.env, filename: asked.filename, secret: asked.secret, keptBy: row.requester_name });
             requests.registered(row.id, user.id, asked.path);
             requests.record(row.id, 'stored');
             return send(200, { stored: true, path: asked.path });
@@ -477,7 +487,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
               if (result?.secret && !committed) await adapter.client.revoke(result.secret).catch(() => {});
             }
           }
-          const previous = input.prefix ? acquisitionFor(user.id, entryPath(input.prefix)) : undefined;
+          const previous = input.prefix ? acquisitionFor(user.id, secretPath(input.prefix)) : undefined;
           if (previous && previous.adapter !== adapter.id) fail(400, 'invalid_adapter', '接続方法が一致しません。');
           if (previous && adapter.canReconnect === false) fail(400, 'new_connection_required', '新しく登録してください。');
           if (previous?.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
@@ -491,7 +501,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         }
         const acquisitionRoute = path.match(/^\/api\/acquisitions\/(.+)$/);
         if (acquisitionRoute && method === 'DELETE') {
-          const acquisition = acquisitionFor(user.id, entryPath(decodeURIComponent(acquisitionRoute[1])));
+          const acquisition = acquisitionFor(user.id, secretPath(decodeURIComponent(acquisitionRoute[1])));
           const input = await body(req);
           if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
           const adapter = adapters.get(acquisition.adapter);
@@ -549,7 +559,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const rooms = [];
           for (const room of store.rooms(product.id)) {
             const kept = store.usage(room.id);
-            rooms.push({ ...room, usage: { entries: kept, objects: objects.enabled ? await objects.usage(room.id).then(space => ({ count: space.count, bytes: space.bytes })) : null } });
+            rooms.push({ ...room, usage: { secrets: kept, objects: objects.enabled ? await objects.usage(room.id).then(space => ({ count: space.count, bytes: space.bytes })) : null } });
           }
           return send(200, { rooms });
         }
@@ -598,7 +608,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         if (path === '/v1/usage' && method === 'GET') {
           const kept = store.usage(agent.owner_id);
           const space = objects.enabled ? await objects.usage(agent.owner_id) : null;
-          return send(200, { entries: { ...kept, count_max: ENTRY_COUNT_MAX, bytes_max: ENTRY_TOTAL_MAX },
+          return send(200, { secrets: { ...kept, count_max: SECRET_COUNT_MAX, bytes_max: SECRET_TOTAL_MAX },
             objects: space ? { count: space.count, bytes: space.bytes, count_max: space.count_max, bytes_max: space.bytes_max } : null });
         }
         // The owner's own space of objects. Lent from Foundation's bucket while the owner has none of
@@ -632,26 +642,26 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         }
         // Storage: bytes at a path the key chose, with no adapter, no request and no approval behind them.
         // Foundation never reads them; what it was told at writing time is all it knows.
-        if (path === '/v1/entries' && method === 'GET') return send(200, { entries: entries.list(agent.owner_id, url.searchParams.get('prefix') ?? undefined) });
-        const entryRoute = path.match(/^\/v1\/entries\/(.+)$/);
-        if (entryRoute) {
-          const target = decodeURIComponent(entryRoute[1]);
+        if (path === '/v1/secrets' && method === 'GET') return send(200, { secrets: secrets.list(agent.owner_id, url.searchParams.get('prefix') ?? undefined) });
+        const secretRoute = path.match(/^\/v1\/secrets\/(.+)$/);
+        if (secretRoute) {
+          const target = decodeURIComponent(secretRoute[1]);
           if (method === 'PUT') {
-            rateLimit('entries:' + agent.id, 120);
-            const content = await raw(req, ENTRY_MAX);
+            rateLimit('secrets:' + agent.id, 120);
+            const content = await raw(req, SECRET_MAX);
             const ifVersion = url.searchParams.has('if_version') ? Number(url.searchParams.get('if_version')) : undefined;
             if (ifVersion !== undefined && !Number.isInteger(ifVersion)) fail(400, 'invalid_version', '版は整数で指定してください。');
-            return send(200, { entry: entries.put(agent.owner_id, { path: target, content, type: req.headers['content-type'],
+            return send(200, { secret: secrets.put(agent.owner_id, { path: target, content, type: req.headers['content-type'],
               env: url.searchParams.get('env'), filename: url.searchParams.get('filename'), secret: url.searchParams.get('secret') === 'true', keptBy: agent.name }, ifVersion) });
           }
           if (method === 'GET') {
-            const { row, content } = entries.read(agent.owner_id, target);
+            const { row, content } = secrets.read(agent.owner_id, target);
             res.writeHead(200, { 'content-type': row.media_type, 'content-length': content.length });
             return res.end(content);
           }
           if (method === 'DELETE') {
             await body(req);
-            entries.remove(agent.owner_id, target);
+            secrets.remove(agent.owner_id, target);
             return send(200, { ok: true });
           }
         }
@@ -661,20 +671,20 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const input = await body(req);
           rateLimit('issue:' + agent.id, 30);
           const paths = Array.isArray(input.paths) ? input.paths : [];
-          for (const path of paths) store.requireAccess(agent, entryPath(path));
+          for (const path of paths) store.requireAccess(agent, secretPath(path));
           const pending = new Map();
           for (const path of paths) {
-            const acquisition = store.acquisitionFor(agent.owner_id, entryPath(path));
+            const acquisition = store.acquisitionFor(agent.owner_id, secretPath(path));
             if (acquisition && acquisition.status === 'connected') pending.set(acquisition.prefix, acquisition);
           }
           for (const acquisition of pending.values()) await acquisitions.refresh(acquisition);
           actor(req);
-          for (const path of paths) store.requireAccess(agent, entryPath(path));
+          for (const path of paths) store.requireAccess(agent, secretPath(path));
           const expiry = [...pending.values()].map(acquisition => store.acquisitionState(store.acquisition(agent.owner_id, acquisition.prefix)).expires_at).filter(value => value !== null);
           for (const value of expiry) if (!(Number.isFinite(value) && value > Date.now())) fail(502, 'service_response', '有効期限を確認できませんでした。');
           const expires_at = expiry.length ? Math.min(...expiry) : null;
           store.recordIssuance(agent, expires_at);
-          return send(200, { delivery: entries.deliver(agent.owner_id, paths), expires_at,
+          return send(200, { delivery: secrets.deliver(agent.owner_id, paths), expires_at,
             expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
         }
       }

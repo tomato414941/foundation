@@ -61,13 +61,13 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
 
     # Nothing kept yet, and the page says so.
     page.goto(args.base, wait_until='networkidle')
-    expect(page.get_by_role('heading', name='預けているもの', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='シークレット', exact=True)).to_be_visible()
     expect(page.get_by_text('まだ何も預かっていません。', exact=False)).to_be_visible()
     review(page)
 
     # The key keeps two things, with no request and no approval: one handed to a command, one only read back.
-    api('PUT', '/v1/entries/github/token?env=GH_TOKEN&secret=true', SECRET.encode(), {'content-type': 'text/plain'})
-    api('PUT', '/v1/entries/release/expo-v3', json.dumps({'step': 'レビュー待ち'}).encode(), {'content-type': 'application/json'})
+    api('PUT', '/v1/secrets/github/token?env=GH_TOKEN&secret=true', SECRET.encode(), {'content-type': 'text/plain'})
+    api('PUT', '/v1/secrets/release/expo-v3', json.dumps({'step': 'レビュー待ち'}).encode(), {'content-type': 'application/json'})
     page.reload(wait_until='networkidle')
 
     github = page.locator('[aria-labelledby="github-title"]')
@@ -83,7 +83,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     page.screenshot(path=str(shots / 'kept-desktop.png'), full_page=True)
 
     # The owner can fetch anything they keep, including what the key itself may not read back.
-    opened = page.request.get(args.base + '/api/entries/github%2Ftoken')
+    opened = page.request.get(args.base + '/api/secrets/github%2Ftoken')
     assert opened.status == 200 and opened.text() == SECRET
     dialog = page.get_by_role('dialog')
 
@@ -99,13 +99,13 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     expect(dialog.get_by_role('heading', name='release/expo-v3 を削除しますか？', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert [row['path'] for row in api('GET', '/v1/entries')['entries']] == ['github/token']
+    assert [row['path'] for row in api('GET', '/v1/secrets')['secrets']] == ['github/token']
 
     github.get_by_role('button', name='削除', exact=True).click()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(page.get_by_text('まだ何も預かっていません。', exact=False)).to_be_visible()
-    assert api('GET', '/v1/entries')['entries'] == []
+    assert api('GET', '/v1/secrets')['secrets'] == []
     review(page)
     assert not errors, errors
     context.close()

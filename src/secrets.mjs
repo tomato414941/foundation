@@ -1,7 +1,7 @@
 import { fail } from './errors.mjs';
 import { validEnvName } from './env-name.mjs';
 
-// Storage, and the whole of it.
+// What the agent may not read, kept so that a command can be given it.
 //
 // One thing is kept: bytes, at a path the writer chose. Foundation does not read them and has no
 // notion of what kinds of thing exist, because that cannot be known in advance. What it keeps beside
@@ -15,16 +15,16 @@ import { validEnvName } from './env-name.mjs';
 // A short string delivered as a variable is what other systems call a key and a value; a JSON body with
 // no delivery is what they call a document; a PEM delivered as a file is what they call a file. Here
 // they are one thing, and a kind of content nobody has thought of yet needs no change.
-export const ENTRY_MAX = 1024 * 1024;
-export const ENTRY_COUNT_MAX = 200;
-export const ENTRY_TOTAL_MAX = 20 * 1024 * 1024;
+export const SECRET_MAX = 1024 * 1024;
+export const SECRET_COUNT_MAX = 200;
+export const SECRET_TOTAL_MAX = 20 * 1024 * 1024;
 export const VALUE_MAX = 16384;
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MEDIA_TYPE = /^[a-z0-9][a-z0-9.+-]{0,62}\/[a-z0-9][a-z0-9.+-]{0,62}(;\s?charset=[A-Za-z0-9-]{1,20})?$/;
 
 // Paths are the only names. They carry no meaning for Foundation; a leading segment groups what the
 // writer wants grouped, and that is all grouping is.
-export function entryPath(value) {
+export function secretPath(value) {
   if (typeof value !== 'string' || value.length > 200) fail(400, 'invalid_path', 'パスは200文字までです。');
   const segments = value.split('/');
   if (segments.length < 1 || segments.length > 8 || !segments.every(segment => SEGMENT.test(segment))) {
@@ -61,28 +61,37 @@ export function deliverable(content, { env, filename }) {
   }
 }
 
-export class Entries {
+export class Secrets {
   constructor(store, reserved = new Set()) { this.store = store; this.reserved = reserved; }
-  list(ownerId, prefix) { return this.store.entries(ownerId, prefix === undefined ? undefined : String(prefix)); }
+  list(ownerId, prefix) { return this.store.secrets(ownerId, prefix === undefined ? undefined : String(prefix)); }
   // Writing the same path again replaces what is there, including how it is delivered.
   put(ownerId, { path, content, type, env, filename, secret, keptBy }, ifVersion) {
     const declared = delivery({ env, filename, reserved: this.reserved });
-    if (content.length > ENTRY_MAX) fail(413, 'entry_too_large', '1件あたり1MBまでです。');
+    if (content.length > SECRET_MAX) fail(413, 'secret_too_large', '1件あたり1MBまでです。');
     deliverable(content, declared);
-    return this.store.writeEntry(ownerId, { path: entryPath(path), content, media_type: mediaType(type), ...declared, session: null, readable: secret ? 0 : 1, kept_by: keptBy }, ifVersion);
+    return this.store.writeSecret(ownerId, { path: secretPath(path), content, media_type: mediaType(type), ...declared, session: null, readable: secret ? 0 : 1, kept_by: keptBy }, ifVersion);
   }
-  entry(ownerId, path) {
-    const row = this.store.entry(ownerId, entryPath(path));
+  at(ownerId, path) {
+    const row = this.store.secret(ownerId, secretPath(path));
     if (!row) fail(404, 'not_found', '保管されたものが見つかりません。');
     return row;
   }
   read(ownerId, path) {
-    const row = this.entry(ownerId, path);
+    const row = this.at(ownerId, path);
     if (!row.readable) fail(403, 'write_only', 'これは渡すことしかできません。中身は持ち主の画面でのみ確認できます。');
-    return { row, content: this.store.entryContent(row) };
+    return { row, content: this.store.secretContent(row) };
+  }
+  // What it is called and how it reaches a command, changed without the value being handed back.
+  rename(ownerId, path, { path: to, env, filename }) {
+    const row = this.at(ownerId, path);
+    const declared = delivery({ env, filename, reserved: this.reserved });
+    if (row.session && (declared.env || declared.filename)) fail(409, 'invalid_delivery', 'ログイン状態として渡すものには変数名を付けられません。');
+    const moved = this.store.renameSecret(ownerId, path, { path: secretPath(to ?? path), ...declared, session: row.session });
+    if (!moved) fail(404, 'not_found', '保管されたものが見つかりません。');
+    return moved;
   }
   remove(ownerId, path) {
-    if (!this.store.removeEntry(ownerId, entryPath(path))) fail(404, 'not_found', '保管されたものが見つかりません。');
+    if (!this.store.removeSecret(ownerId, secretPath(path))) fail(404, 'not_found', '保管されたものが見つかりません。');
   }
   // What a command receives. Foundation reads only what it was told at writing time.
   deliver(ownerId, paths) {
@@ -90,8 +99,8 @@ export class Entries {
     const environment = {}, files = [], taken = new Map();
     let session = null;
     for (const path of paths) {
-      const row = this.entry(ownerId, path);
-      const content = this.store.entryContent(row);
+      const row = this.at(ownerId, path);
+      const content = this.store.secretContent(row);
       // A session is handed to the command as a tool's own login state. It takes no variable name.
       if (row.session) {
         if (session) fail(409, 'name_conflict', 'ログインセッションは1つだけ渡せます。');
@@ -120,5 +129,5 @@ export function declaration(input, reserved = new Set()) {
   }
   if (typeof input.label !== 'string' || !input.label.trim() || input.label.trim().length > 60 || /[\x00-\x1f\x7f<>]/.test(input.label)) fail(400, 'invalid_label', '何を入れてもらうかを1〜60文字で指定してください。');
   if (input.multiline !== undefined && typeof input.multiline !== 'boolean') fail(400, 'invalid_declaration', '複数行かどうかは true か false で指定してください。');
-  return { path: entryPath(input.path), ...declared, secret: input.secret !== false, label: input.label.trim(), site: site?.href ?? '', multiline: input.multiline === true, type: mediaType(input.type) };
+  return { path: secretPath(input.path), ...declared, secret: input.secret !== false, label: input.label.trim(), site: site?.href ?? '', multiline: input.multiline === true, type: mediaType(input.type) };
 }

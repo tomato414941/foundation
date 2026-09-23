@@ -82,12 +82,12 @@ with sync_playwright() as p:
     code = hashlib.sha256(b"new@example.test").hexdigest()
     link_page = context.new_page()
     link_page.goto(args.base + "/auth/callback?code=" + code, wait_until="networkidle")
-    expect(link_page.get_by_role("heading", name="預けているもの", exact=True)).to_be_visible()
+    expect(link_page.get_by_role("heading", name="シークレット", exact=True)).to_be_visible()
     assert "code=" not in link_page.url and "#" not in link_page.url
     link_page.close()
     page.bring_to_front()
     page.evaluate('window.dispatchEvent(new Event("focus"))')
-    expect(page.get_by_role("heading", name="預けているもの", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="シークレット", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="メールの読み取り", exact=True)).to_be_enabled()
     expect(page.get_by_role("button", name="アクセスキーを追加", exact=True)).to_be_enabled()
     assert page.evaluate("localStorage.length === 0 && sessionStorage.length === 0")
@@ -115,7 +115,7 @@ with sync_playwright() as p:
         if not metadata:
             page.screenshot(path=str(shots / "connect.png"), full_page=True)
         dialog.locator("button[type=submit]").click()
-        expect(page.get_by_role("heading", name="預けているもの", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="シークレット", exact=True)).to_be_visible()
         expect(page.get_by_text("認証情報を登録しました。", exact=True)).to_be_visible()
         page.wait_for_load_state("networkidle")
         assert "code=" not in page.url and "state=" not in page.url
@@ -150,7 +150,7 @@ with sync_playwright() as p:
         return caller.fetch("/v1/deliver", method="POST", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data=json.dumps({"paths": paths}))
     connections = runtime("/v1/acquisitions", token_a).json()["acquisitions"]
     assert len(connections) == 2, "an issued key uses everything its owner keeps"
-    paths = [entry["path"] for entry in connections[0]["entries"]]
+    paths = [entry["path"] for entry in connections[0]["secrets"]]
     issued = deliver(paths, token_a)
     assert issued.status == 200 and issued.json()["delivery"]["environment"]["GOOGLE_OAUTH_ACCESS_TOKEN"].startswith("google-access-")
     assert "google-access-" not in page.content()

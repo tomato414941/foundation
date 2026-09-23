@@ -1,5 +1,5 @@
 import { fail } from './errors.mjs';
-import { entryPath, deliverable, VALUE_MAX } from './entries.mjs';
+import { secretPath, deliverable, VALUE_MAX } from './secrets.mjs';
 
 // The seam between an acquisition and the store.
 //
@@ -20,7 +20,7 @@ export class Acquisitions {
   // Where an adapter's result is kept: the service, then whose account it is at that service.
   prefix(adapterId, label) {
     const adapter = this.adapters.get(adapterId);
-    return entryPath(slug(adapter.service.name) + '/' + (slug(label) || 'account'));
+    return secretPath(slug(adapter.service.name) + '/' + (slug(label) || 'account'));
   }
   // What the adapter produced, as entries. Every one of them says how it reaches a command, so delivery
   // never has to ask an adapter anything.
