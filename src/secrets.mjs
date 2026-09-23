@@ -65,7 +65,7 @@ export class Secrets {
   // Writing the same path again replaces what is there, including how it is delivered.
   put(ownerId, { path, content, secret }) {
     if (content.length > SECRET_MAX) fail(413, 'secret_too_large', '1件あたり1MBまでです。');
-    return this.store.writeSecret(ownerId, { path: secretPath(path), content, session: null, readable: secret ? 0 : 1 });
+    return this.store.writeSecret(ownerId, { path: secretPath(path), content, readable: secret ? 0 : 1 });
   }
   at(ownerId, path) {
     const row = this.store.secret(ownerId, secretPath(path));
@@ -93,17 +93,10 @@ export class Secrets {
     const wanted = (Array.isArray(asked) ? asked : []).map(item => typeof item === 'string' ? { path: item } : item);
     if (!wanted.length || wanted.length > 16) fail(400, 'invalid_paths', '渡すものを1〜16件で指定してください。');
     const environment = {}, files = [], taken = new Map();
-    let session = null;
     for (const item of wanted) {
       if (!item || typeof item !== 'object' || typeof item.path !== 'string') fail(400, 'invalid_paths', '渡すものはパス、または {path, as} で指定してください。');
       const row = this.at(ownerId, item.path);
       const content = this.store.secretContent(row);
-      // A session is handed to the command as a tool's own login state. It takes no variable name.
-      if (row.session) {
-        if (session) fail(409, 'name_conflict', 'ログインセッションは1つだけ渡せます。');
-        session = { kind: row.session, value: JSON.parse(content.toString('utf8')) };
-        continue;
-      }
       const name = item.as ?? variableFor(row.path);
       if (!name) fail(400, 'no_variable', `${row.path} から変数名を導けません。渡すときに as で指定してください。`);
       if (!validEnvName(name)) fail(400, 'invalid_env', '変数名は英大文字・数字・下線で指定してください。');
@@ -117,7 +110,7 @@ export class Secrets {
         environment[name] = content.toString('utf8');
       }
     }
-    return { environment, files, ...(session?.kind === 'expo' ? { expo_session: session.value } : {}) };
+    return { environment, files };
   }
 }
 

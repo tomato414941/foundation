@@ -1,7 +1,6 @@
 import { fail } from './errors.mjs';
 import { GMAIL_API, GMAIL_DOCS } from './services/gmail.mjs';
 import { OPENROUTER_API, OPENROUTER_DOCS } from './services/openrouter.mjs';
-import { EXPO_API, EXPO_DOCS, EXPO_TOKENS } from './services/expo.mjs';
 import { GITHUB_API, GITHUB_DOCS, GITHUB_SETTINGS } from './services/github.mjs';
 
 // An adapter is an acquisition Foundation performs itself, because nobody else can: an OAuth exchange
@@ -19,7 +18,6 @@ import { GITHUB_API, GITHUB_DOCS, GITHUB_SETTINGS } from './services/github.mjs'
 const service = (name, icon, management_url, api) => Object.freeze({ name, icon, management_url, api });
 const GMAIL = service('Gmail', 'mail', 'https://myaccount.google.com/connections', { base_url: GMAIL_API, documentation_url: GMAIL_DOCS });
 const OPENROUTER = service('OpenRouter', 'network', 'https://openrouter.ai/keys', { base_url: OPENROUTER_API, documentation_url: OPENROUTER_DOCS });
-const EXPO = service('Expo', 'device', EXPO_TOKENS, { base_url: EXPO_API, documentation_url: EXPO_DOCS });
 const GITHUB = service('GitHub', 'code', GITHUB_SETTINGS, { base_url: GITHUB_API, documentation_url: GITHUB_DOCS });
 
 const GMAIL_VARIABLES = ['GOOGLE_OAUTH_ACCESS_TOKEN', 'GMAIL_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT'];
@@ -65,17 +63,6 @@ export function githubOauth(client) {
   };
 }
 
-// Foundation relays the owner's Expo password to Expo once; only the resulting session is kept,
-// and the command receives it as Expo's own login state rather than as a variable.
-export function expoLogin(client) {
-  return {
-    id: 'expo.login', service: EXPO, kind: 'ログイン', label: 'Expoにログイン', register: 'login', client, canReconnect: false, credentialType: 'expo_session',
-    intro: 'Expoにログインして登録します。',
-    access: { name: 'Expoアカウントの利用', description: 'このAIに、Expoであなたと同じ権限での操作を許可します。ビルド・公開など、課金を伴う操作も含みます。', restrictions: '登録を解除すると、このログインセッションを無効にできます。' },
-    ai: 'Hands the Expo login session to the command as Expo\'s own login state, for the length of the exec (eas and friends read it directly). No environment variable.',
-    variables: [], deliver: secret => ({ expo_session: { secret: secret.access_token, profile: { user_id: secret.details.actor_id, username: secret.details.label } } }),
-  };
-}
 
 export class Adapters {
   constructor(adapters) {

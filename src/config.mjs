@@ -33,7 +33,6 @@ export function configuration(env = process.env) {
     supabase: { url: env.FOUNDATION_SUPABASE_URL || '', key: env.FOUNDATION_SUPABASE_PUBLISHABLE_KEY || '', emailEnabled: env.FOUNDATION_EMAIL_LOGIN_ENABLED === 'true' },
     google: { clientId: env.FOUNDATION_GOOGLE_CLIENT_ID || '', clientSecret: env.FOUNDATION_GOOGLE_CLIENT_SECRET || '' },
     github: { clientId: env.FOUNDATION_GITHUB_CLIENT_ID || '', clientSecret: env.FOUNDATION_GITHUB_CLIENT_SECRET || '' },
-    expo: { sessionLogin: env.FOUNDATION_EXPO_SESSION_LOGIN === 'true' },
     objects: { bucket: env.FOUNDATION_OBJECTS_BUCKET || '', region: env.FOUNDATION_OBJECTS_REGION || env.FOUNDATION_AWS_REGION || 'ap-northeast-1' },
   };
 }

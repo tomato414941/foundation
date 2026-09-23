@@ -12,9 +12,9 @@ const parse = row => ({ ...row, readable: row.readable === 1 });
 export const ACQUISITION_LIMIT = 50;
 const entryBinding = row => `entry:${row.owner_id}:${row.id}`;
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 // secrets: what the agent may not read, kept so that a command can be given it. Bytes at a path, sealed and bound to this owner and
-//   this row. session marks the one kind handed over as a tool's own login state; nothing here says what the
+//   this row. Nothing here says what the
 //   how a command receives them, settled when they were written. readable is 0 when they may only be delivered.
 //   version rises on every write, so a writer can refuse to overwrite what it has not seen.
 // acquisitions: the secrets under `prefix` are obtained and kept current by Foundation itself, through one
@@ -25,6 +25,11 @@ const SCHEMA_VERSION = 7;
 const STEPS = {
   // Named for what it is: a value the agent may not read, kept so a command can be given it. The sealing
   // binding still says `entry:` because it is part of the ciphertext of every row already written.
+  // One service's login state had a column of its own. What a tool wants is a file in a place it knows;
+  // which tool, and where, is the agent's to know, not Foundation's.
+  8: `
+    ALTER TABLE secrets DROP COLUMN session;
+  `,
   // Optimistic concurrency was built for a second writer that has not arrived.
   7: `
     ALTER TABLE secrets DROP COLUMN version;
@@ -76,7 +81,7 @@ const SCHEMA = `
   CREATE INDEX access_requests_token ON access_requests(token_hash, created_at);
   CREATE TABLE secrets (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, path TEXT NOT NULL,
-    size INTEGER NOT NULL, session TEXT, readable INTEGER NOT NULL,
+    size INTEGER NOT NULL, readable INTEGER NOT NULL,
     content TEXT NOT NULL,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     UNIQUE(owner_id, path)
@@ -145,7 +150,7 @@ export class Store {
   }
   // Storage. Listing never opens anything; only reading and delivering do.
   secrets(ownerId, prefix) {
-    const columns = 'path, size, session, readable, created_at, updated_at';
+    const columns = 'path, size, readable, created_at, updated_at';
     return (prefix === undefined
       ? this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? ORDER BY path`).all(ownerId)
       : this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? AND (path=? OR path LIKE ?) ORDER BY path`).all(ownerId, prefix, prefix.replaceAll('%', '\\%').replaceAll('_', '\\_') + '/%')).map(parse);
@@ -166,11 +171,11 @@ export class Store {
       const id = existing?.id ?? randomUUID();
       const sealed = this.vault.sealBytes(entry.content, `entry:${ownerId}:${id}`);
       if (existing) {
-        this.db.prepare('UPDATE secrets SET size=?, session=?, readable=?, content=?, updated_at=? WHERE id=?')
-          .run(entry.content.length, entry.session ?? null, entry.readable, sealed, stamp, id);
+        this.db.prepare('UPDATE secrets SET size=?, readable=?, content=?, updated_at=? WHERE id=?')
+          .run(entry.content.length, entry.readable, sealed, stamp, id);
       } else {
-        this.db.prepare('INSERT INTO secrets (id,owner_id,path,size,session,readable,content,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)')
-          .run(id, ownerId, entry.path, entry.content.length, entry.session ?? null, entry.readable, sealed, stamp, stamp);
+        this.db.prepare('INSERT INTO secrets (id,owner_id,path,size,readable,content,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
+          .run(id, ownerId, entry.path, entry.content.length, entry.readable, sealed, stamp, stamp);
       }
       return this.secrets(ownerId, entry.path)[0];
     });
