@@ -33,7 +33,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], description: 'HTTP method' },
-        path: { type: 'string', maxLength: 512, description: 'Path beginning with /v1/, for example /v1/secrets' },
+        path: { type: 'string', maxLength: 2048, description: 'Path beginning with /v1/, for example /v1/secrets' },
         body: { description: 'JSON body for anything but GET' },
       },
       required: ['method', 'path'],
@@ -79,7 +79,7 @@ async function runTool(name, args, { call, guide }) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) return { content: [text('Arguments must be an object with method and path.')], isError: true };
   const { method, path, body } = args;
   if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return { content: [text('method must be one of GET, POST, PUT, PATCH, DELETE.')], isError: true };
-  if (typeof path !== 'string' || !path.startsWith('/v1/') || path.length > 512 || /[\s\\]/.test(path)) return { content: [text('path must begin with /v1/. See foundation_guide.')], isError: true };
+  if (typeof path !== 'string' || !path.startsWith('/v1/') || path.length > 2048 || /[\s\\]/.test(path)) return { content: [text('path must begin with /v1/. See foundation_guide.')], isError: true };
   const result = await call({ method, path, body: method === 'GET' ? undefined : body ?? {} });
   let parsed;
   try { parsed = JSON.parse(result.text); } catch { parsed = undefined; }

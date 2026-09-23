@@ -5,7 +5,7 @@ import { gunzipSync, inflateSync, brotliDecompressSync } from 'node:zlib';
 import { fail } from './errors.mjs';
 
 // One HTTPS request sent on behalf of an agent that cannot run a command, with what is kept put into its headers
-// or body where the agent wrote {{foundation:<path>}}. The agent never sees those values: they are substituted
+// or body where the agent wrote {{foundation:<name>}}. The agent never sees those values: they are substituted
 // here, and taken back out of whatever comes back. What it can do is what a command given the same values could
 // do, and no more: the network it reaches is the public internet, never this host or anything beside it.
 export const FETCH_BODY_MAX = 1024 * 1024;
@@ -41,7 +41,7 @@ export function destination(value, ownHosts = []) {
   return url;
 }
 
-// The paths an agent named, in the order it named them.
+// The names an agent named, in the order it named them.
 export function placeholders(input) {
   const found = new Set();
   const scan = text => { for (const match of String(text).matchAll(PLACEHOLDER)) found.add(match[1]); };
@@ -64,9 +64,9 @@ export function prepare(input, ownHosts = []) {
   if (input.body !== undefined && typeof input.body !== 'string') fail(400, 'invalid_body', 'body は文字列で指定してください。');
   if (input.body_encoding !== undefined && !['utf8', 'base64'].includes(input.body_encoding)) fail(400, 'invalid_body', 'body_encoding は utf8 か base64 です。');
   if (input.body !== undefined && ['GET', 'HEAD'].includes(method)) fail(400, 'invalid_body', `${method} には body を付けられません。`);
-  const paths = placeholders(input);
-  if (paths.length > 8) fail(400, 'too_many_secrets', '1回に使えるのは8件までです。');
-  return { url, method, headers, body: input.body, bodyEncoding: input.body_encoding || 'utf8', paths };
+  const names = placeholders(input);
+  if (names.length > 8) fail(400, 'too_many_secrets', '1回に使えるのは8件までです。');
+  return { url, method, headers, body: input.body, bodyEncoding: input.body_encoding || 'utf8', names };
 }
 
 // Every form a value could come back in that an agent could read it from.
@@ -103,7 +103,7 @@ async function publicAddress(host, resolve, ownHosts) {
 // resolves differently a moment later changes nothing), redirects are handed back rather than followed, and the
 // answer is capped and cleaned of every value that went out.
 export async function send(prepared, values, { resolve = host => lookup(host, { all: true, verbatim: true }), createConnection, ca, ownHosts = [] } = {}) {
-  const fill = text => text.replace(PLACEHOLDER, (_, path) => values.get(path));
+  const fill = text => text.replace(PLACEHOLDER, (_, name) => values.get(name));
   const headers = {};
   for (const [name, value] of Object.entries(prepared.headers)) {
     const filled = fill(value);

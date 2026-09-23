@@ -48,22 +48,17 @@ test('OAuth state is browser-bound and expires; cancel and forged callbacks cann
   assert.equal(f.gmail.exchangeCount, 0);
 });
 
-test('What Foundation obtained is kept like anything else, under a path, and an approved key uses it the same way', async (t) => {
+test('Connections expose explicit credential outputs independently of saved names', async (t) => {
   const f = await fixture(t), a = await f.credential(), b = await f.credential('work', 'metadata');
   const agent = await f.issueKey();
-  assert.equal(a.prefix, 'gmail/personal-example-test');
-  assert.equal(b.prefix, 'gmail/work-example-test');
-
-  // Its values sit in the store beside everything else, saying how each reaches a command.
-  const kept = (await f.request('/v1/secrets', { token: agent.token })).json.secrets;
-  assert.deepEqual(kept.filter(entry => entry.path.startsWith(a.prefix)).map(entry => entry.path.split('/').pop()).sort(),
-    ['gmail-account-email', 'google-oauth-access-token', 'google-oauth-expires-at']);
-  assert.ok(kept.every(entry => entry.path.startsWith('gmail/')), 'each sits under the account it belongs to');
-  assert.doesNotMatch(JSON.stringify(kept), /refresh_token|google-access-/);
-
-  // What a key is told about the connection is where it keeps things, never what it holds.
+  assert.notEqual(a.id, b.id);
+  assert.equal(a.label, 'personal@example.test');
+  assert.equal(b.label, 'work@example.test');
+  const saved = await f.request('/api/secrets?name=gmail%2Fpersonal-example-test', { method: 'PUT', raw: 'independent-value' });
+  assert.equal(saved.status, 200);
+  assert.deepEqual((await f.request('/v1/secrets', { token: agent.token })).json.secrets.map(row => row.name), ['gmail/personal-example-test']);
   const connections = await f.request('/v1/acquisitions', { token: agent.token });
-  assert.deepEqual(connections.json.acquisitions.map(item => item.prefix), [a.prefix, b.prefix]);
+  assert.deepEqual(connections.json.acquisitions.map(item => item.id), [a.id, b.id]);
   assert.equal(connections.json.acquisitions[0].service.api.base_url, 'https://gmail.googleapis.com/gmail/v1');
   assert.doesNotMatch(connections.text, /refresh_token|google-access-|"state":/);
 
@@ -75,8 +70,8 @@ test('What Foundation obtained is kept like anything else, under a path, and an 
   assert.doesNotMatch(result.text, /refresh_token/);
   assert.equal((await f.deliver(b, { token: agent.token })).json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-work-metadata');
 
-  // What it keeps may only be delivered, never handed back.
-  assert.equal((await f.request('/v1/secrets/' + a.prefix + '/google-oauth-access-token', { token: agent.token })).status, 403);
+  // Credential processing leaves existing saved values unchanged.
+  assert.equal((await f.request('/api/secrets?name=gmail%2Fpersonal-example-test')).text, 'independent-value');
   assert.ok(!f.gmail.calls.some((call) => call.url.includes('/messages')));
 });
 
@@ -87,47 +82,47 @@ test('Owners cannot see, disconnect or reach each other\'s connections', async (
   assert.deepEqual(state.json.acquisitions, []);
   assert.deepEqual(state.json.secrets, []);
   assert.deepEqual(state.json.keys, []);
-  assert.equal((await f.request('/api/acquisitions/' + encodeURIComponent(first.prefix), { method: 'DELETE', data: { revoke: true } })).status, 404);
+  assert.equal((await f.request('/api/acquisitions/' + encodeURIComponent(first.id), { method: 'DELETE', data: { revoke: true } })).status, 404);
   const intruder = (await f.request('/api/keys', { method: 'POST', data: { name: 'intruder' } })).json.key;
   assert.deepEqual((await f.request('/v1/acquisitions', { token: intruder.token })).json.acquisitions, []);
-  assert.equal((await f.request('/v1/deliver', { method: 'POST', data: { paths: [first.prefix + '/access-token'] }, token: intruder.token })).status, 404);
+  assert.equal((await f.deliver(first, { token: intruder.token })).status, 404);
   await f.request('/api/keys/' + runtime.id, { method: 'DELETE' });
   assert.equal((await f.request('/v1/acquisitions', { token: runtime.token })).json.acquisitions.length, 1, 'the owner keeps it when one key is revoked');
   const second = await f.credential();
-  assert.equal(second.prefix, first.prefix);
+  assert.notEqual(second.id, first.id);
   assert.equal((await f.request('/api/state')).json.acquisitions.length, 1);
 });
 
 test('Connecting again pins the Google account and stays within the same adapter', async (t) => {
   const f = await fixture(t), a = await f.credential('personal', 'metadata'), agent = await f.issueKey();
-  assert.equal((await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { prefix: a.prefix } })).json.error.code, 'invalid_adapter');
-  let flow = await f.start({ range: 'metadata', prefix: a.prefix });
+  assert.equal((await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { connection_id: a.id } })).json.error.code, 'invalid_adapter');
+  let flow = await f.start({ range: 'metadata', connection_id: a.id });
   assert.equal(flow.searchParams.get('login_hint'), 'personal@example.test');
   assert.equal((await f.callback(flow, 'work-metadata')).headers.get('location'), '/?connection=wrong_account&adapter=gmail.metadata');
   assert.equal((await f.request('/v1/acquisitions', { token: agent.token })).json.acquisitions.length, 1);
-  flow = await f.start({ range: 'metadata', prefix: a.prefix });
+  flow = await f.start({ range: 'metadata', connection_id: a.id });
   assert.equal((await f.callback(flow, 'personal-metadata')).headers.get('location'), '/?connection=connected&adapter=gmail.metadata');
   const seen = (await f.request('/v1/acquisitions', { token: agent.token })).json.acquisitions;
-  assert.equal(seen.length, 1); assert.equal(seen[0].prefix, a.prefix);
+  assert.equal(seen.length, 1); assert.equal(seen[0].id, a.id);
 });
 
 test('The same account connected twice does not become two of them', async (t) => {
   const f = await fixture(t), a = await f.credential(), agent = await f.issueKey();
   const flow = await f.start();
   assert.equal((await f.callback(flow, 'personal-readonly')).headers.get('location'), '/?connection=already_connected&adapter=gmail.readonly');
-  assert.equal((await f.request('/api/state')).json.acquisitions[0].prefix, a.prefix);
+  assert.equal((await f.request('/api/state')).json.acquisitions[0].id, a.id);
   assert.equal((await f.request('/v1/acquisitions', { token: agent.token })).json.acquisitions.length, 1);
 });
 
 for (const change of ['agent', 'account']) test('In-flight token withheld after ' + change, async (t) => {
-  const f = await fixture(t), a = await f.credential(), runtime = await f.issueKey(); f.expire(a.prefix);
+  const f = await fixture(t), a = await f.credential(), runtime = await f.issueKey(); f.expire(a.id);
   let began, finish;
   const started = new Promise((resolve) => { began = resolve; });
   f.gmail.refreshHandler = () => { began(); return new Promise((resolve) => { finish = resolve; }); };
   const pending = f.deliver(a, { token: runtime.token });
   await started;
   if (change === 'agent') await f.request('/api/keys/' + runtime.id, { method: 'DELETE' });
-  if (change === 'account') await f.request('/api/acquisitions/' + encodeURIComponent(a.prefix), { method: 'DELETE', data: { revoke: false } });
+  if (change === 'account') await f.request('/api/acquisitions/' + encodeURIComponent(a.id), { method: 'DELETE', data: { revoke: false } });
   finish();
   const result = await pending;
   assert.ok([401, 403, 404, 409].includes(result.status), result.text);
@@ -135,14 +130,14 @@ for (const change of ['agent', 'account']) test('In-flight token withheld after 
 });
 
 test('Refreshing is coalesced, and an invalid grant asks the owner to connect again', async (t) => {
-  const f = await fixture(t), a = await f.credential(), agent = await f.issueKey(); f.expire(a.prefix);
+  const f = await fixture(t), a = await f.credential(), agent = await f.issueKey(); f.expire(a.id);
   let calls = 0, finish;
   f.gmail.refreshHandler = () => { calls++; return new Promise((resolve) => { finish = resolve; }); };
   const one = f.deliver(a, { token: agent.token }), two = f.deliver(a, { token: agent.token });
   while (!finish) await new Promise((resolve) => setTimeout(resolve, 5));
   await new Promise((resolve) => setTimeout(resolve, 20)); finish();
   assert.equal((await one).status, 200); assert.equal((await two).status, 200); assert.equal(calls, 1);
-  f.expire(a.prefix);
+  f.expire(a.id);
   f.gmail.refreshHandler = () => new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'secret-provider-detail' }), { status: 400 });
   const response = await f.deliver(a, { token: agent.token });
   assert.equal(response.status, 409);
@@ -150,15 +145,18 @@ test('Refreshing is coalesced, and an invalid grant asks the owner to connect ag
   assert.equal((await f.request('/api/state')).json.acquisitions[0].status, 'reconnect_required');
 });
 
-test('Disconnecting removes what it kept even when the service refuses to revoke, and says so', async (t) => {
+test('Disconnecting preserves saved values even when service revocation fails, and reports the failure', async (t) => {
   const f = await fixture(t), a = await f.credential(), agent = await f.issueKey();
+  await f.request('/api/secrets?name=gmail%2Fpersonal-example-test%2Ftoken', { method: 'PUT', raw: 'independent-copy' });
   f.gmail.revokeHandler = () => new Response('{}', { status: 503 });
-  const removed = await f.request('/api/acquisitions/' + encodeURIComponent(a.prefix), { method: 'DELETE', data: { revoke: true } });
+  const removed = await f.request('/api/acquisitions/' + encodeURIComponent(a.id), { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.status, 200);
   assert.equal(removed.json.service_revoked, false, 'the owner learns the grant is still at Google');
   const state = await f.request('/api/state');
   assert.deepEqual(state.json.acquisitions, []);
-  assert.deepEqual(state.json.secrets, [], 'what it kept goes with it');
+  assert.deepEqual(state.json.secrets.map(row => row.name), ['gmail/personal-example-test/token']);
+  assert.equal((await f.request('/api/secrets?name=gmail%2Fpersonal-example-test%2Ftoken')).text, 'independent-copy');
+  assert.equal((await f.deliver(a, { token: agent.token })).status, 404);
   assert.deepEqual((await f.request('/v1/acquisitions', { token: agent.token })).json.acquisitions, []);
 });
 

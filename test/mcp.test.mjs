@@ -41,7 +41,8 @@ test('hands over the guide an agent reads first', async (t) => {
   const f = await connected(t);
   const result = await modern(f, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'foundation_guide', arguments: {} } });
   assert.equal(result.status, 200, result.text);
-  assert.match(result.json.result.content[0].text, /Foundation is a store\./);
+  assert.match(result.json.result.content[0].text, /Foundation keeps user-controlled values and objects/);
+  assert.match(result.json.result.content[0].text, /GET \/v1\/functions/);
   assert.equal(result.json.result.isError, undefined);
 });
 
@@ -51,7 +52,20 @@ test('makes an API call with the caller\'s own key and returns what it said', as
   assert.equal(stored.status, 200, stored.text);
   const result = await modern(f, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'foundation_api', arguments: { method: 'GET', path: '/v1/secrets' } } });
   assert.equal(result.status, 200, result.text);
-  assert.deepEqual(result.json.result.structuredContent.secrets.map(entry => entry.path), ['notes/plan']);
+  assert.deepEqual(result.json.result.structuredContent.secrets.map(entry => entry.name), ['notes/plan']);
+});
+
+test('MCP discovers and invokes the credential function with metadata-only saved outputs', async t => {
+  const f = await connected(t), connection = await f.credential();
+  const call = (method, path, body) => modern(f, { jsonrpc: '2.0', id: 20, method: 'tools/call', params: { name: 'foundation_api', arguments: { method, path, body } } });
+  const catalog = await call('GET', '/v1/functions');
+  assert.ok(catalog.json.result.structuredContent.functions.some(fn => fn.id === 'connection.credentials'));
+  const name = '雪'.repeat(200);
+  const saved = await call('POST', '/v1/functions/connection.credentials', { connection_id: connection.id, save: { GOOGLE_OAUTH_ACCESS_TOKEN: name } });
+  assert.equal(saved.json.result.structuredContent.saved[0].name, name);
+  assert.doesNotMatch(saved.text, /google-access|refresh-personal/);
+  const exact = await call('GET', '/v1/secrets?name=' + encodeURIComponent(name));
+  assert.equal(exact.json.result.structuredContent.error.code, 'write_only');
 });
 
 test('reports a refused API call as a tool error the model can act on', async (t) => {

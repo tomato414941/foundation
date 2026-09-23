@@ -78,13 +78,14 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
         review(page)
         if width != 320:
             page.screenshot(path=str(shots / ('approval-desktop.png' if width == 1280 else 'approval-mobile.png')), full_page=True)
-    kept = cli('api', 'GET', '/v1/secrets')['secrets']
-    assert [entry['path'].split('/')[-1] for entry in kept] == ['openrouter-api-key']
-    command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', kept[0]['path'], '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
+    connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['connection_id']
+    saved = cli('api', 'POST', '/v1/functions/connection.credentials', '--json', json.dumps({'connection_id': connection, 'save': {'OPENROUTER_API_KEY': 'model key'}}))
+    assert saved['saved'][0]['name'] == 'model key'
+    command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'OPENROUTER_API_KEY=model key', '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
     page.goto(args.base + '/secrets', wait_until='networkidle')
-    section = page.locator('[aria-labelledby="openrouter-title"]')
+    section = page.locator('[aria-labelledby="connections-title"]')
     assert 'Gmail' not in section.inner_text() and 'メール' not in section.inner_text()
     expect(section.get_by_role('button', name='接続し直す', exact=True)).to_have_count(0)
     for width in [1280, 390, 320]:
@@ -110,7 +111,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.screenshot(path=str(shots / 'disconnect-mobile.png'), full_page=True)
     dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(page.locator('[aria-labelledby="openrouter-title"]')).to_have_count(0)
+    expect(page.locator('[aria-labelledby="connections-title"]')).to_have_count(0)
+    expect(page.get_by_role('heading', name='model key', exact=True)).to_be_visible()
 
     # Starting one from the dashboard uses the same flow, and asks for nothing the service decides.
     page.get_by_role('button', name='OpenRouterで接続', exact=True).first.click()

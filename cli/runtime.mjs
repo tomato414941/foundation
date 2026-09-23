@@ -91,16 +91,21 @@ async function main() {
     return;
   }
   const separatorAt = args.indexOf('--'), command = separatorAt >= 0 ? args.slice(separatorAt + 1) : [];
-  // Each thing to hand over is a path, optionally under the name the command expects it as:
-  //   exec aws/access-key-id -- …                     the name comes from the path
-  //   exec GH_TOKEN=github/token -- …                  the command decides what to call it
-  //   exec KEY_PATH=apple/key:AuthKey.p8 -- …          it arrives as a file, and the name holds its path
-  const paths = action === 'exec' && separatorAt > 0 ? args.slice(0, separatorAt).map(value => {
-    const at = value.indexOf('='), named = at > 0 ? value.slice(at + 1) : value;
-    const colon = named.lastIndexOf(':');
-    const path = colon > 0 ? named.slice(0, colon) : named, filename = colon > 0 ? named.slice(colon + 1) : undefined;
-    return { path, ...(at > 0 ? { as: value.slice(0, at) } : {}), ...(filename ? { filename } : {}) };
-  }) : [];
+  // Names remain literal. JSON inputs additionally support file delivery.
+  let names = [];
+  if (action === 'exec' && separatorAt > 0) {
+    const parsed = parseArgs({ args: args.slice(0, separatorAt), options: { inputs: { type: 'string' } }, strict: true, allowPositionals: true });
+    if (parsed.values.inputs !== undefined && parsed.positionals.length) throw new Error('--inputs and ENV=name are alternatives.');
+    if (parsed.values.inputs !== undefined) {
+      try { names = JSON.parse(parsed.values.inputs); } catch { throw new Error('--inputs must be a JSON array of {name, as, filename?}.'); }
+    } else names = parsed.positionals.map(value => {
+      const at = value.indexOf('=');
+      if (at < 1) throw new Error('Specify the environment variable explicitly: ENV=name');
+      return { name: value.slice(at + 1), as: value.slice(0, at) };
+    });
+    if (!Array.isArray(names) || !names.length || names.length > 16 || names.some(item => !item || typeof item.name !== 'string' || !item.name || !validEnvName(item.as))) throw new Error('Each input needs a name and a non-reserved environment variable in as.');
+    if (new Set(names.map(item => item.as)).size !== names.length) throw new Error('Each input needs a different environment variable.');
+  }
   let call, connectTo, name;
   if (action === 'connect') {
     const parsed = parseArgs({ args, options: { name: { type: 'string' } }, strict: true, allowPositionals: true });
@@ -118,8 +123,8 @@ async function main() {
     const content = parsed.values.from !== undefined ? await readFile(parsed.values.from) : parsed.values.json !== undefined ? Buffer.from(parsed.values.json) : method === 'GET' ? undefined : Buffer.from('{}');
     call = { method, target: parsed.positionals[1], body: content,
       type: parsed.values.type || (parsed.values.from !== undefined ? 'application/octet-stream' : 'application/json') };
-  } else if (!(action === 'exec' && paths.length && new Set(paths.map(item => (item.as ?? '') + ':' + item.path)).size === paths.length && command.length)) {
-    throw new Error('Usage: connect [<url>] [--name <name>] | exec [<NAME>=]<path> [...] -- <command> [args...] | api <method> </path> [--json <body>] [--from <file>]');
+  } else if (!(action === 'exec' && names.length && command.length)) {
+    throw new Error('Usage: connect [<url>] [--name <name>] | exec <ENV>=<name> [...] | exec --inputs <json> -- <command> [args...] | api <method> </path> [--json <body>] [--from <file>]');
   }
   const url = serverUrl(connectTo ?? configured);
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
@@ -150,7 +155,7 @@ async function main() {
     console.log('\nKey file: ' + keyPath + '\nServer: ' + url.origin + (connectTo !== undefined ? ' (saved to ' + configPath() + ')' : '') + '\nEverything else is HTTP: Authorization: Bearer <the contents of that file>');
     return;
   }
-  const { delivery } = await send('/v1/deliver', { paths });
+  const { delivery } = await send('/v1/deliver', { names });
   if (!delivery || typeof delivery.environment !== 'object' || !Array.isArray(delivery.files)) throw new Error('Foundation returned an invalid delivery.');
   // What each of them sets is the server's to say; this applies it and refuses anything it may not set.
   const environment = { ...process.env };
@@ -161,25 +166,27 @@ async function main() {
     environment[name] = value;
   };
   for (const [name, value] of Object.entries(delivery.environment)) assign(name, value);
+  const fileNames = new Set(), variables = new Set(Object.keys(delivery.environment));
   for (const file of delivery.files) {
-    if (typeof file.env !== 'string' || typeof file.filename !== 'string' || typeof file.content !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(file.filename) || file.filename.startsWith('.')) throw new Error('Foundation described an invalid file.');
+    if (typeof file.env !== 'string' || typeof file.filename !== 'string' || typeof file.content !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(file.filename) || file.filename.startsWith('.') || !validEnvName(file.env) || fileNames.has(file.filename) || variables.has(file.env)) throw new Error('Foundation described an invalid file.');
+    fileNames.add(file.filename); variables.add(file.env);
   }
-  environment.FOUNDATION_PATHS = paths.map(item => item.path).join(',');
+  environment.FOUNDATION_NAMES = JSON.stringify(names.map(item => item.name));
   // Files exist in a private directory for exactly as long as the command runs.
   let secretDir;
-  if (delivery.files.length) {
-    secretDir = await mkdtemp(join(process.env.XDG_RUNTIME_DIR && (await stat(process.env.XDG_RUNTIME_DIR).catch(() => null))?.isDirectory() ? process.env.XDG_RUNTIME_DIR : tmpdir(), 'foundation-'));
-    await chmod(secretDir, 0o700);
-    for (const file of delivery.files) {
-      const target = join(secretDir, file.filename);
-      await writeFile(target, file.encoding === 'base64' ? Buffer.from(file.content, 'base64') : file.content, { mode: 0o600, flag: 'wx' });
-      assign(file.env, target);
-    }
-  }
   const cleanup = () => { if (secretDir) rmSync(secretDir, { recursive: true, force: true }); };
   process.once('exit', cleanup);
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => { cleanup(); process.exit(1); });
   try {
+    if (delivery.files.length) {
+      secretDir = await mkdtemp(join(process.env.XDG_RUNTIME_DIR && (await stat(process.env.XDG_RUNTIME_DIR).catch(() => null))?.isDirectory() ? process.env.XDG_RUNTIME_DIR : tmpdir(), 'foundation-'));
+      await chmod(secretDir, 0o700);
+      for (const file of delivery.files) {
+        const target = join(secretDir, file.filename);
+        await writeFile(target, file.encoding === 'base64' ? Buffer.from(file.content, 'base64') : file.content, { mode: 0o600, flag: 'wx' });
+        assign(file.env, target);
+      }
+    }
     const child = spawn(command[0], command.slice(1), { stdio: 'inherit', env: environment, shell: false });
     process.exitCode = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (value, signal) => resolve(value ?? (signal ? 1 : 0))); });
   } finally { cleanup(); }

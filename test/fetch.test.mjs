@@ -29,6 +29,7 @@ async function service(t) {
       if (req.url === '/gzip') { res.writeHead(200, { 'content-type': 'application/json', 'content-encoding': 'gzip' }); return res.end(gzipSync(JSON.stringify({ authorization: req.headers.authorization }))); }
       if (req.url === '/compress') { res.writeHead(200, { 'content-type': 'text/plain', 'content-encoding': 'compress' }); return res.end('opaque'); }
       if (req.url === '/large') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end('x'.repeat(1024 * 1024 + 1)); }
+      if (req.url === '/bytes') { res.writeHead(200, { 'content-type': 'application/octet-stream' }); return res.end(Buffer.from([0, 255, 1])); }
       res.writeHead(200, { 'content-type': 'application/json', 'x-echo': req.headers.authorization || '' });
       res.end(JSON.stringify({ authorization: req.headers.authorization, encoded: Buffer.from(req.headers.authorization || '').toString('base64'), body }));
     });
@@ -146,4 +147,44 @@ test('Foundation itself is not reachable under another name that points at its o
   assert.equal(api.received.length, 0);
   const allowed = await f.request('/v1/fetch', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/echo' } });
   assert.equal(allowed.json.response.status, 200, allowed.text);
+});
+
+test('The HTTPS function binds opaque stored names explicitly and saves only its selected response body', async t => {
+  const { f, key, received } = await setup(t), connection = await f.credential();
+  const inputName = '{{入力}} /..,=x', outputName = '結果 /?';
+  const input = await f.request('/v1/secrets?name=' + encodeURIComponent(inputName) + '&secret=true', { method: 'PUT', token: key.token, raw: TOKEN });
+  assert.equal(input.status, 200);
+  f.expire(connection.id);
+  const calls = f.gmail.calls.length;
+  const saved = await f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: {
+    url: 'https://api.example.test/echo', headers: { authorization: 'Bearer {{foundation:chosen}}' },
+    bindings: { chosen: inputName }, save: outputName,
+  } });
+  assert.equal(saved.status, 200, saved.text);
+  assert.equal(received[0].headers.authorization, 'Bearer ' + TOKEN);
+  assert.deepEqual(saved.json.saved.map(row => row.name), [outputName]);
+  assert.equal(saved.json.response.status, 200);
+  assert.equal(saved.json.response.body, undefined);
+  const body = await f.request('/api/secrets?name=' + encodeURIComponent(outputName));
+  assert.equal(JSON.parse(body.text).authorization, 'Bearer [redacted]');
+  assert.equal(f.gmail.calls.length, calls, 'using a saved value does not process any connection');
+  assert.equal((await f.request('/v1/secrets?name=' + encodeURIComponent(outputName), { token: key.token })).status, 403);
+  assert.doesNotMatch(saved.text, new RegExp(TOKEN));
+
+  const binary = await f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/bytes', save: 'binary' } });
+  assert.equal(binary.status, 200);
+  const owner = f.app.store.authenticate(key.token).owner_id;
+  assert.deepEqual(f.app.store.secretContent(f.app.store.secret(owner, 'binary')), Buffer.from([0, 255, 1]));
+});
+
+test('The HTTPS function retains destination and owner checks, and validates output names before sending', async t => {
+  const { f, key, received } = await setup(t);
+  const call = (data, token = key.token) => f.request('/v1/functions/http.request', { method: 'POST', token, data });
+  assert.equal((await call({ url: 'https://127.0.0.1/' })).json.error.code, 'invalid_destination');
+  assert.equal((await call({ url: 'https://api.example.test/', save: '' })).json.error.code, 'invalid_name');
+  await f.login('second@example.test');
+  const other = await f.issueKey();
+  const refused = await call({ url: 'https://api.example.test/', headers: { authorization: '{{foundation:slot}}' }, bindings: { slot: 'api/token' } }, other.token);
+  assert.equal(refused.status, 404);
+  assert.equal(received.length, 0);
 });

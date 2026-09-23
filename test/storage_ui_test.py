@@ -62,7 +62,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     # Nothing kept yet, and the page says so.
     page.goto(args.base + '/secrets', wait_until='networkidle')
     expect(page.get_by_role('heading', name='シークレット', exact=True)).to_be_visible()
-    expect(page.get_by_text('まだ何も預かっていません。', exact=False)).to_be_visible()
+    expect(page.get_by_text('保存した値はありません。', exact=False)).to_be_visible()
     review(page)
 
     # The key keeps two things, with no request and no approval: one handed to a command, one only read back.
@@ -70,11 +70,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     api('PUT', '/v1/secrets/release/2026-09-23', json.dumps({'step': 'レビュー待ち'}).encode(), {'content-type': 'application/json'})
     page.reload(wait_until='networkidle')
 
-    github = page.locator('[aria-labelledby="github-title"]')
-    release = page.locator('[aria-labelledby="release-title"]')
-    expect(github.get_by_role('heading', name='gh-token', exact=True)).to_be_visible()
+    github = page.locator('[aria-label="保存した値"] .agent-row').filter(has=page.get_by_role('heading', name='github/gh-token', exact=True))
+    release = page.locator('[aria-label="保存した値"] .agent-row').filter(has=page.get_by_role('heading', name='release/2026-09-23', exact=True))
+    expect(github.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
     expect(github.get_by_text(f'{len(SECRET)} バイト', exact=True)).to_be_visible()
-    expect(release.get_by_role('heading', name='2026-09-23', exact=True)).to_be_visible()
+    expect(release.get_by_role('heading', name='release/2026-09-23', exact=True)).to_be_visible()
     expect(release.get_by_role('button', name='中身を見る', exact=True)).to_be_visible()
     assert SECRET not in page.locator('body').inner_text(), 'what is kept is never on the page itself'
 
@@ -98,12 +98,39 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     expect(dialog.get_by_role('heading', name='release/2026-09-23 を削除しますか？', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert [row['path'] for row in api('GET', '/v1/secrets')['secrets']] == ['github/gh-token']
+    assert [row['name'] for row in api('GET', '/v1/secrets')['secrets']] == ['github/gh-token']
 
     github.get_by_role('button', name='削除', exact=True).click()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(page.get_by_text('まだ何も預かっていません。', exact=False)).to_be_visible()
+    expect(page.get_by_text('保存した値はありません。', exact=False)).to_be_visible()
+    assert api('GET', '/v1/secrets')['secrets'] == []
+
+    # Opaque names survive the owner form, HTML rendering, rename and direct preview.
+    literal = ' a/aa/aaa, <img src=x onerror="window.foundationNameXss=1"> '
+    page.get_by_role('button', name='追加', exact=True).click()
+    dialog.get_by_label('名前', exact=True).fill(literal)
+    dialog.get_by_label('値', exact=True).fill(SECRET)
+    dialog.get_by_role('button', name='追加', exact=True).click()
+    expect(dialog).not_to_be_visible()
+    assert api('GET', '/v1/secrets')['secrets'][0]['name'] == literal
+    title = page.locator('[aria-label="保存した値"] .agent-name h3')
+    assert title.text_content() == literal
+    assert page.evaluate('window.foundationNameXss === undefined')
+    for width in [1280, 390, 320]:
+        page.set_viewport_size({'width': width, 'height': 1000})
+        review(page)
+    page.get_by_role('button', name='名前を変える', exact=True).click()
+    dialog.get_by_label('名前', exact=True).fill('..')
+    dialog.get_by_role('button', name='変更する', exact=True).click()
+    expect(dialog).not_to_be_visible()
+    expect(title).to_have_text('..')
+    page.get_by_role('button', name='中身を見る', exact=True).click()
+    expect(dialog.locator('.kept-document')).to_have_text(SECRET)
+    dialog.get_by_role('button', name='閉じる', exact=True).click()
+    page.get_by_role('button', name='削除', exact=True).click()
+    dialog.get_by_role('button', name='削除する', exact=True).click()
+    expect(dialog).not_to_be_visible()
     assert api('GET', '/v1/secrets')['secrets'] == []
     review(page)
     assert not errors, errors

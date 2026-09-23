@@ -105,8 +105,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_text('personal@example.test', exact=False)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'request-approved.png'), full_page=True)
-    kept = [entry['path'] for entry in cli('api', 'GET', '/v1/secrets')['secrets'] if entry['path'].endswith('google-oauth-access-token')]
-    command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', kept[0], '--', 'node', '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
+    connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['connection_id']
+    saved = cli('api', 'POST', '/v1/functions/connection.credentials', '--json', json.dumps({'connection_id': connection, 'save': {'GOOGLE_OAUTH_ACCESS_TOKEN': 'mail token'}}))
+    assert saved['saved'][0]['name'] == 'mail token'
+    command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'GOOGLE_OAUTH_ACCESS_TOKEN=mail token', '--', 'node', '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
     # 3. Revoking the key stops it; its open registration link says so.

@@ -19,7 +19,7 @@ test('Gmail and Supabase secrets are encrypted; keys and cookies never persist i
   const contents = await readFile(database);
   for (const value of ['google-access-personal', 'refresh-personal', 'supabase-access-owner', 'supabase-refresh-owner', agent.token, cookie.slice(12)]) assert.ok(!contents.includes(Buffer.from(value)), value);
   const second = new Store(database, KEY); t.after(() => second.close());
-  assert.equal(second.acquisitionState(second.acquisition(USER_A, account.prefix)).renewal.refresh_token, 'refresh-personal-readonly');
+  assert.equal(second.acquisitionState(second.acquisition(USER_A, account.id)).renewal.refresh_token, 'refresh-personal-readonly');
   assert.ok(second.session(cookie.slice(12)));
   assert.equal(second.authenticate(agent.token).owner_id, USER_A);
   const tables = second.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((item) => item.name);
@@ -51,14 +51,14 @@ test('Configuration creates a private encryption key; losing the key fails close
 test('A new database is created in the current shape; a database of any other shape is refused and left unchanged', async (t) => {
   const dir = await directory(t), path = join(dir, 'state.sqlite');
   const created = new Store(path, KEY);
-  created.saveAcquisition(USER_A, { prefix: 'gmail/kept', adapter: 'gmail.readonly', subject: 'kept@example.test', label: 'kept', state: { renewal: { refresh_token: 'keep-private' }, facts: {}, expires_at: null } },
-    [{ path: 'gmail/kept/access-token', content: Buffer.from('google-access'), media_type: 'text/plain', env: 'GOOGLE_OAUTH_ACCESS_TOKEN', filename: null, session: null, readable: 0 }]);
+  const connection = created.saveAcquisition(USER_A, { adapter: 'gmail.readonly', subject: 'kept@example.test', label: 'kept', state: { renewal: { refresh_token: 'keep-private' }, facts: {}, expires_at: null } });
+  created.writeSecret(USER_A, { name: 'gmail/kept/access-token', content: Buffer.from('google-access'), readable: 0 });
   const agent = created.addKey(USER_A, 'runtime');
   created.recordIssuance(agent, null);
   created.close();
   const reopened = new Store(path, KEY); t.after(() => reopened.close());
-  assert.equal(reopened.acquisitionState(reopened.acquisition(USER_A, 'gmail/kept')).renewal.refresh_token, 'keep-private');
-  assert.deepEqual(reopened.secrets(USER_A).map(row => row.path), ['gmail/kept/access-token']);
+  assert.equal(reopened.acquisitionState(reopened.acquisition(USER_A, connection.id)).renewal.refresh_token, 'keep-private');
+  assert.deepEqual(reopened.secrets(USER_A).map(row => row.name), ['gmail/kept/access-token']);
   assert.equal(reopened.keys(USER_A)[0].issued_nonexpiring, 1);
   for (const shape of ['CREATE TABLE accounts(id TEXT); INSERT INTO accounts VALUES (\'existing\');', 'CREATE TABLE accounts(id TEXT); PRAGMA user_version=999;', 'PRAGMA user_version=1;', 'CREATE TABLE entries(id TEXT);']) {
     const other = join(dir, 'other-' + Math.random().toString(36).slice(2) + '.sqlite'), db = new DatabaseSync(other);
@@ -69,4 +69,3 @@ test('A new database is created in the current shape; a database of any other sh
     after.close();
   }
 });
-
