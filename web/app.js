@@ -1,8 +1,8 @@
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
 let state = null, toastTimer, loginTimer, revision = 0;
 const requestId = location.pathname.match(/^\/connect\/([A-Za-z0-9_-]{43})$/)?.[1];
-const page = location.pathname === '/objects' ? 'objects' : 'home';
-const pagePath = requestId ? '/connect/' + requestId : page === 'objects' ? '/objects' : '/';
+const page = location.pathname === '/objects' ? 'objects' : 'secrets';
+const pagePath = requestId ? '/connect/' + requestId : page === 'objects' ? '/objects' : '/secrets';
 let accessRequest = null, requestError = '';
 let disposePrivateInput = () => {};
 function clearPrivateInput() { const dispose = disposePrivateInput; disposePrivateInput = () => {}; dispose(); }
@@ -121,7 +121,7 @@ const icon = (name) => {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
 const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true">F</span>Foundation</a>';
-const nav = `<nav class="page-nav">${[['/', 'home', '預けているもの'], ['/objects', 'objects', 'オブジェクト']]
+const nav = `<nav class="page-nav">${[['/secrets', 'secrets', 'シークレット'], ['/objects', 'objects', 'オブジェクト']]
   .map(([href, name, label]) => `<a href="${href}"${name === page ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
 function toast(text) {
@@ -210,43 +210,43 @@ const kiloBytes = size => size < 1024 ? size + ' バイト' : size < 1024 * 1024
 const putBy = entry => entry.kept_by || 'あなた';
 const groupId = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'g-' + [...name].map(char => char.codePointAt(0).toString(36)).join('');
 const statusName = status => ({ connected: '利用できます', reconnect_required: '接続し直しが必要です', disconnecting: '解除しています' }[status] || '確認が必要です');
-// Each group holds the entries whose path starts with its name, and any connection that keeps some of them current.
+// Each group holds the secrets whose path starts with its name, and any connection that keeps some of them current.
 function groups() {
   const byName = (a, b) => a.name.localeCompare(b.name, 'ja', { sensitivity: 'base' });
   const found = new Map();
   const group = name => {
-    if (!found.has(name)) found.set(name, { name, entries: [], connections: [] });
+    if (!found.has(name)) found.set(name, { name, secrets: [], connections: [] });
     return found.get(name);
   };
-  for (const entry of state.entries || []) group(entry.path.split('/')[0]).entries.push(entry);
+  for (const entry of state.secrets || []) group(entry.path.split('/')[0]).secrets.push(entry);
   for (const connection of state.acquisitions || []) group(connection.prefix.split('/')[0]).connections.push(connection);
   return [...found.values()].sort(byName);
 }
 // What an acquisition keeps is its own business: the owner sees the connection, and opens it only if they
 // want the values themselves. Listing them beside everything else would be showing them the machinery.
-function connectionRow(connection, entries) {
+function connectionRow(connection, secrets) {
   const warning = connection.status !== 'connected';
   const until = connection.expiry_known === false ? ' · 有効期限は不明です' : connection.expires_at ? ' · ' + esc(new Date(connection.expires_at).toLocaleString('ja-JP')) + 'まで' : '';
   return `<article class="agent-row"><div class="agent-name"><h3>${esc(connection.label)}</h3><p>${esc(connection.service?.name || '')}の接続 · <span class="${warning ? 'warning-text' : ''}">${esc(statusName(connection.status))}</span></p></div>
     <div class="agent-permissions"><span class="muted">${esc(connection.access?.name || '')}</span><span class="muted block">Foundationが保管し、更新します${until}</span>
-      <details class="kept-under"><summary>${esc(entries.length)}件の中身</summary><dl>${entries.map(entry => `<div><dt>${esc(entry.path.slice(connection.prefix.length + 1))}</dt><dd>${esc(handedOver(entry))} <button class="text-button" data-action="show-entry" data-path="${esc(entry.path)}">中身を見る</button></dd></div>`).join('')}</dl></details></div>
+      <details class="kept-under"><summary>${esc(secrets.length)}件の中身</summary><dl>${secrets.map(entry => `<div><dt>${esc(entry.path.slice(connection.prefix.length + 1))}</dt><dd>${esc(handedOver(entry))} <button class="text-button" data-action="show-secret" data-path="${esc(entry.path)}">中身を見る</button></dd></div>`).join('')}</dl></details></div>
     <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-prefix="${esc(connection.prefix)}" data-adapter="${esc(connection.adapter)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-prefix="${esc(connection.prefix)}">接続を解除</button></div></article>`;
 }
 // The heading is the path without the group it already sits under, so a name is never read twice.
 const within = path => path.slice(path.indexOf('/') + 1);
-function entryRow(entry, owned) {
+function secretRow(entry, owned) {
   return `<article class="agent-row"><div class="agent-name"><h3>${esc(within(entry.path))}</h3><p>${esc(entry.media_type)} · ${esc(kiloBytes(entry.size))}</p></div>
     <div class="agent-permissions"><span class="muted">${esc(handedOver(entry))}</span><span class="muted block">${esc(putBy(entry))} · ${esc(keptWhen(entry.updated_at))}</span></div>
-    <div class="agent-actions"><button class="text-button" data-action="show-entry" data-path="${esc(entry.path)}">中身を見る</button>${owned ? '' : `<button class="text-button danger" data-action="drop-entry" data-path="${esc(entry.path)}">削除</button>`}</div></article>`;
+    <div class="agent-actions"><button class="text-button" data-action="show-secret" data-path="${esc(entry.path)}">中身を見る</button>${owned ? '' : `<button class="text-button danger" data-action="drop-secret" data-path="${esc(entry.path)}">削除</button>`}</div></article>`;
 }
 function groupSection(group) {
   const id = groupId(group.name);
-  const under = connection => group.entries.filter(entry => entry.path === connection.prefix || entry.path.startsWith(connection.prefix + '/'));
+  const under = connection => group.secrets.filter(entry => entry.path === connection.prefix || entry.path.startsWith(connection.prefix + '/'));
   const owned = new Set(group.connections.flatMap(connection => under(connection).map(entry => entry.path)));
-  const loose = group.entries.filter(entry => !owned.has(entry.path));
+  const loose = group.secrets.filter(entry => !owned.has(entry.path));
   const count = group.connections.length + loose.length;
   return `<section class="resource-section" aria-labelledby="${id}-title"><div class="section-heading"><div class="section-label"><span class="service-icon">${icon(group.connections[0]?.service?.icon || 'note')}</span><div><h2 id="${id}-title">${esc(group.name)}</h2><p>${esc(count)}件</p></div></div></div>
-    <div class="agent-list">${group.connections.map(connection => connectionRow(connection, under(connection))).join('')}${loose.map(entry => entryRow(entry, false)).join('')}</div></section>`;
+    <div class="agent-list">${group.connections.map(connection => connectionRow(connection, under(connection))).join('')}${loose.map(entry => secretRow(entry, false)).join('')}</div></section>`;
 }
 // The acquisitions this server can perform itself. One row per service; where a service offers more than one
 // range, the owner chooses between them here rather than meeting the same service twice.
@@ -278,7 +278,7 @@ function render() {
     return;
   }
   const kept = groups();
-  app.innerHTML = shell(`<header class="page-heading"><h1>預けているもの</h1><p>いつでも<a href="/api/export" download>まとめて取り出せます</a>。鍵の中身もそのまま含まれるので、保存先にご注意ください。</p></header>
+  app.innerHTML = shell(`<header class="page-heading"><h1>シークレット</h1><p>いつでも<a href="/api/export" download>まとめて取り出せます</a>。鍵の中身もそのまま含まれるので、保存先にご注意ください。</p></header>
     ${kept.length ? kept.map(groupSection).join('') : '<section class="resource-section"><div class="access-empty"><p>まだ何も預かっていません。AIが依頼を作ると、ここに並びます。</p></div></section>'}
     ${connectSection()}
     <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">AIのアクセスキー</h2></div></div><button class="button secondary" data-action="add-agent">${icon('plus')} アクセスキーを追加</button></div>
@@ -361,12 +361,13 @@ function renderRequest() {
 // Foundation shows only where it will go and how it will be handed over.
 function renderStore(row, shell, expiry) {
   const asked = row.store;
-  const handedOver = asked.filename ? `ファイル ${asked.filename} として、${asked.env} が指す先に置かれます` : asked.env ? `${asked.env} という環境変数として渡されます` : 'コマンドには渡されません';
+  const handedOver = asked.filename ? `AIが動かすコマンドの中だけに ${asked.filename} というファイルとして現れます（場所は ${asked.env} が指します）` : asked.env ? `AIが動かすコマンドの中だけに ${asked.env} として現れます` : 'コマンドには渡されません';
   const field = asked.multiline
     ? `<textarea id="stored-value" name="content" rows="6" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>`
     : `<input id="stored-value" name="content" type="password" required maxlength="16384" autocomplete="off" spellcheck="false">`;
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(asked.label)}を預ける</h1></div></header>
-    <dl class="approval-facts">${row.purpose ? `<div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}<div><dt>保管先</dt><dd><code>${esc(asked.path)}</code></dd></div><div><dt>渡し方</dt><dd>${esc(handedOver)}</dd></div></dl>
+    <dl class="approval-facts">${row.purpose ? `<div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}</dl>
+    <details class="approval-detail"><summary>Foundationでの扱い</summary><dl class="approval-facts"><div><dt>名前</dt><dd><code>${esc(asked.path)}</code></dd></div><div><dt>AIへの渡り方</dt><dd>${esc(handedOver)}</dd></div></dl></details>
     ${guidanceBlock(row.guidance)}
     ${asked.site ? `<a class="button secondary full setup-link" href="${esc(asked.site)}" target="_blank" rel="noopener noreferrer"><span>${esc(new URL(asked.site).host)} を開く ↗</span></a>` : ''}
     <form id="store-request-form"><label for="stored-value">${esc(asked.label)}</label>${field}
@@ -383,7 +384,7 @@ function renderStore(row, shell, expiry) {
 // Approving a key: only who is asking, what the key will reach, and the code.
 function renderApproval(row, shell, expiry) {
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">新しいアクセスキー</p><h1>このアクセスキーを承認しますか？</h1></div></header>
-    <dl class="approval-facts"><div><dt>依頼元</dt><dd>${esc(row.requester_name)}</dd></div><div><dt>使えるもの</dt><dd>${state.entries.length ? `あなたが預けているものすべて<span class="muted block">${state.entries.map(entry => esc(entry.path)).join('<br>')}</span>` : '今後あなたが預けるものすべて'}</dd></div></dl>
+    <dl class="approval-facts"><div><dt>依頼元</dt><dd>${esc(row.requester_name)}</dd></div><div><dt>使えるもの</dt><dd>${state.secrets.length ? `あなたが預けているものすべて<span class="muted block">${state.secrets.map(entry => esc(entry.path)).join('<br>')}</span>` : '今後あなたが預けるものすべて'}</dd></div></dl>
     <form id="access-request-form">${codeField()}
     <p class="form-error" role="alert"></p>
     <button class="button primary full" type="submit" disabled>承認する ${icon('arrow')}</button><button class="text-button full" type="button" data-action="deny-request">承認しない</button></form>${expiry}</section>`);
@@ -490,7 +491,7 @@ function disconnect(connection) {
     ? `<label class="check"><input type="checkbox" name="revoke" checked> ${esc(connection.service?.name || '')}側の許可も取り消す</label>`
     : `<p class="permission-note">${esc(connection.service?.name || '')}側のキーは残ります。不要なら${esc(connection.service?.name || '')}で削除してください。</p>`;
   openDialog(`<h2 id="dialog-title">${esc(connection.label)} の接続を解除しますか？</h2><form>
-    <p>Foundationがここに保管している${esc(connection.entries.length)}件を削除し、AIは使えなくなります。</p>
+    <p>Foundationがここに保管している${esc(connection.secrets.length)}件を削除し、AIは使えなくなります。</p>
     <p class="permission-note">${esc(revocationNote)}</p>${revoke}<p class="form-error" role="alert"></p>
     <div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">接続を解除</button></div></form>`);
   bindForm(async (form) => {
@@ -558,19 +559,19 @@ document.addEventListener('click', async (event) => {
     if (action === 'add-adapter') connect(target.dataset.adapter);
     if (action === 'reconnect') connect(target.dataset.adapter, target.dataset.prefix);
     if (action === 'disconnect') disconnect(state.acquisitions.find(item => item.prefix === target.dataset.prefix));
-    if (action === 'show-entry') {
-      const path = target.dataset.path, entry = state.entries.find(item => item.path === path);
+    if (action === 'show-secret') {
+      const path = target.dataset.path, entry = state.secrets.find(item => item.path === path);
       const readable = /^text\/|^application\/json/.test(entry.media_type);
-      const response = await fetch('/api/entries/' + encodeURIComponent(path), { credentials: 'same-origin', cache: 'no-store' });
+      const response = await fetch('/api/secrets/' + encodeURIComponent(path), { credentials: 'same-origin', cache: 'no-store' });
       if (!response.ok) throw new Error('中身を取得できませんでした。');
       const body = readable
         ? `<pre class="kept-document">${esc(await response.text())}</pre>`
-        : `<p>この形式は画面で表示できません。</p><a class="button secondary full" href="/api/entries/${encodeURIComponent(path)}" download>ファイルとして保存</a>`;
+        : `<p>この形式は画面で表示できません。</p><a class="button secondary full" href="/api/secrets/${encodeURIComponent(path)}" download>ファイルとして保存</a>`;
       openDialog(`<h2 id="dialog-title">${esc(path)}</h2><p>${esc(putBy(entry))} が ${esc(keptWhen(entry.updated_at))} に保管しました。</p>${body}`);
     }
-    if (action === 'drop-entry') {
+    if (action === 'drop-secret') {
       const path = target.dataset.path;
-      confirmRemoval(path + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/api/entries/' + encodeURIComponent(path), { method: 'DELETE', data: {} }));
+      confirmRemoval(path + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/api/secrets/' + encodeURIComponent(path), { method: 'DELETE', data: {} }));
     }
     if (action === 'go-prefix') { objectPrefix = target.dataset.prefix; objectFilter = ''; objectLimit = 100; objectChosen = new Set(); render(); }
     if (action === 'more-objects') { objectLimit += 100; render(); }

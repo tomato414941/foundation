@@ -36,7 +36,7 @@ test('Expo password login stores only an encrypted session, never password/OTP o
   assert.ok(!disk.includes(Buffer.from(LOGIN_PASSWORD))); assert.ok(!disk.includes(Buffer.from(held.renewal.access_token)));
   const state = await f.request('/api/state'); safeResponse(state);
   assert.equal(state.json.acquisitions[0].label, 'fixture-user'); assert.equal(state.json.acquisitions[0].can_revoke, true);
-  assert.deepEqual(state.json.entries.map(entry => [entry.path, entry.session]), [[acquisition.prefix + '/session', 'expo']]);
+  assert.deepEqual(state.json.secrets.map(entry => [entry.path, entry.session]), [[acquisition.prefix + '/session', 'expo']]);
   assert.equal(f.app.store.agents(USER_A).length, 0, 'root connection alone never grants a runtime');
   assert.equal(result.headers.get('cache-control'), 'no-store');
   assert.ok(f.expo.calls[0].url.endsWith('/auth/loginAsync'));
@@ -51,8 +51,8 @@ test('Logging in through a registration request completes it and delivers a type
   assert.deepEqual((await f.request('/v1/acquisitions', { token })).json.acquisitions, []);
   const result = await f.loginExpo(input); assert.equal(result.status, 200, result.text); safeResponse(result);
   assert.equal(result.json.request.status, 'approved');
-  const listed = await f.request('/v1/entries', { token }); safeResponse(listed);
-  assert.deepEqual(listed.json.entries.map(entry => [entry.env, entry.session]), [[null, 'expo']], 'the session reaches the command as Expo login state, not a variable');
+  const listed = await f.request('/v1/secrets', { token }); safeResponse(listed);
+  assert.deepEqual(listed.json.secrets.map(entry => [entry.env, entry.session]), [[null, 'expo']], 'the session reaches the command as Expo login state, not a variable');
   const issued = await credential(f, result.json.prefix, token);
   assert.equal(issued.status, 200, issued.text);
   assert.deepEqual(issued.json.delivery.environment, {}); assert.equal(issued.json.expires_at, null);

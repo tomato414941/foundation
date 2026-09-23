@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Vault } from './crypto.mjs';
 import { fail } from './errors.mjs';
-import { ENTRY_COUNT_MAX, ENTRY_TOTAL_MAX } from './entries.mjs';
+import { SECRET_COUNT_MAX, SECRET_TOTAL_MAX } from './secrets.mjs';
 
 export const digest = (value) => createHash('sha256').update(value).digest('hex');
 const now = () => new Date().toISOString();
@@ -12,17 +12,22 @@ const parse = row => ({ ...row, readable: row.readable === 1 });
 export const ACQUISITION_LIMIT = 50;
 const entryBinding = row => `entry:${row.owner_id}:${row.id}`;
 
-const SCHEMA_VERSION = 2;
-// entries: everything Foundation keeps, whatever it is. Bytes at a path, sealed and bound to this owner and
+const SCHEMA_VERSION = 3;
+// secrets: what the agent may not read, kept so that a command can be given it. Bytes at a path, sealed and bound to this owner and
 //   this row. media_type is what the writer said they are and is never checked. env, filename and session are
 //   how a command receives them, settled when they were written. readable is 0 when they may only be delivered.
 //   version rises on every write, so a writer can refuse to overwrite what it has not seen.
-// acquisitions: the entries under `prefix` are obtained and kept current by Foundation itself, through one
+// acquisitions: the secrets under `prefix` are obtained and kept current by Foundation itself, through one
 //   adapter, for one subject at that service. state holds what the adapter needs to refresh them, sealed.
 //   Every other entry has no row here and is simply what was put there.
 // Steps from one shape to the next. A database is only ever one version behind at a time, and each step
 // adds what the next version expects; nothing that already holds data is rewritten.
 const STEPS = {
+  // Named for what it is: a value the agent may not read, kept so a command can be given it. The sealing
+  // binding still says `entry:` because it is part of the ciphertext of every row already written.
+  3: `
+    ALTER TABLE entries RENAME TO secrets;
+  `,
   2: `
     CREATE TABLE products (
       id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
@@ -50,7 +55,7 @@ const SCHEMA = `
     progress TEXT, owner_id TEXT, agent_id TEXT, credential_id TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
   );
   CREATE INDEX access_requests_token ON access_requests(token_hash, created_at);
-  CREATE TABLE entries (
+  CREATE TABLE secrets (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, path TEXT NOT NULL, media_type TEXT NOT NULL,
     size INTEGER NOT NULL, env TEXT, filename TEXT, session TEXT, readable INTEGER NOT NULL,
     content TEXT NOT NULL, kept_by TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
@@ -73,7 +78,7 @@ const SCHEMA = `
     UNIQUE(product_id, external_id)
   );
   CREATE INDEX acquisitions_owner ON acquisitions(owner_id, prefix);
-  CREATE INDEX entries_owner ON entries(owner_id, path);
+  CREATE INDEX secrets_owner ON secrets(owner_id, path);
   PRAGMA user_version = ${SCHEMA_VERSION};
 `;
 
@@ -120,44 +125,56 @@ export class Store {
     this.db.prepare('DELETE FROM access_requests WHERE expires_at<=?').run(Date.now());
   }
   // Storage. Listing never opens anything; only reading and delivering do.
-  entries(ownerId, prefix) {
+  secrets(ownerId, prefix) {
     const columns = 'path, media_type, size, env, filename, session, readable, kept_by, version, created_at, updated_at';
     return (prefix === undefined
-      ? this.db.prepare(`SELECT ${columns} FROM entries WHERE owner_id=? ORDER BY path`).all(ownerId)
-      : this.db.prepare(`SELECT ${columns} FROM entries WHERE owner_id=? AND (path=? OR path LIKE ?) ORDER BY path`).all(ownerId, prefix, prefix.replaceAll('%', '\\%').replaceAll('_', '\\_') + '/%')).map(parse);
+      ? this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? ORDER BY path`).all(ownerId)
+      : this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? AND (path=? OR path LIKE ?) ORDER BY path`).all(ownerId, prefix, prefix.replaceAll('%', '\\%').replaceAll('_', '\\_') + '/%')).map(parse);
   }
-  entry(ownerId, path) {
-    const row = this.db.prepare('SELECT * FROM entries WHERE owner_id=? AND path=?').get(ownerId, path);
+  secret(ownerId, path) {
+    const row = this.db.prepare('SELECT * FROM secrets WHERE owner_id=? AND path=?').get(ownerId, path);
     return row ? parse(row) : undefined;
   }
-  entryContent(row) { return this.vault.openBytes(row.content, entryBinding(row)); }
-  usage(ownerId) { return this.db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(size),0) AS bytes FROM entries WHERE owner_id=?').get(ownerId); }
+  secretContent(row) { return this.vault.openBytes(row.content, entryBinding(row)); }
+  usage(ownerId) { return this.db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(size),0) AS bytes FROM secrets WHERE owner_id=?').get(ownerId); }
   // Writing the same path again replaces it. `ifVersion` refuses to, unless it is still the version the
   // writer last saw, so two things working at once fail instead of quietly losing one another's work.
-  writeEntry(ownerId, entry, ifVersion) {
+  writeSecret(ownerId, entry, ifVersion) {
     return this.transaction(() => {
-      const stamp = now(), existing = this.entry(ownerId, entry.path);
+      const stamp = now(), existing = this.secret(ownerId, entry.path);
       if (ifVersion !== undefined && (existing?.version ?? 0) !== ifVersion) fail(409, 'version_conflict', `${entry.path} は他から変更されています。読み直してからやり直してください。`);
       const { count, bytes } = this.usage(ownerId);
-      if (!existing && count >= ENTRY_COUNT_MAX) fail(409, 'entry_limit', `保管できるのは${ENTRY_COUNT_MAX}件までです。使わないものを消してください。`);
-      if (bytes - (existing?.size ?? 0) + entry.content.length > ENTRY_TOTAL_MAX) fail(409, 'storage_full', '保管できる合計は20MBまでです。使わないものを消してください。');
+      if (!existing && count >= SECRET_COUNT_MAX) fail(409, 'secret_limit', `保管できるのは${SECRET_COUNT_MAX}件までです。使わないものを消してください。`);
+      if (bytes - (existing?.size ?? 0) + entry.content.length > SECRET_TOTAL_MAX) fail(409, 'storage_full', '保管できる合計は20MBまでです。使わないものを消してください。');
       const id = existing?.id ?? randomUUID();
       const sealed = this.vault.sealBytes(entry.content, `entry:${ownerId}:${id}`);
       if (existing) {
-        this.db.prepare('UPDATE entries SET media_type=?, size=?, env=?, filename=?, session=?, readable=?, content=?, kept_by=?, version=version+1, updated_at=? WHERE id=?')
+        this.db.prepare('UPDATE secrets SET media_type=?, size=?, env=?, filename=?, session=?, readable=?, content=?, kept_by=?, version=version+1, updated_at=? WHERE id=?')
           .run(entry.media_type, entry.content.length, entry.env, entry.filename, entry.session ?? null, entry.readable, sealed, entry.kept_by, stamp, id);
       } else {
-        this.db.prepare('INSERT INTO entries (id,owner_id,path,media_type,size,env,filename,session,readable,content,kept_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        this.db.prepare('INSERT INTO secrets (id,owner_id,path,media_type,size,env,filename,session,readable,content,kept_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
           .run(id, ownerId, entry.path, entry.media_type, entry.content.length, entry.env, entry.filename, entry.session ?? null, entry.readable, sealed, entry.kept_by, stamp, stamp);
       }
-      return this.entries(ownerId, entry.path)[0];
+      return this.secrets(ownerId, entry.path)[0];
     });
   }
-  removeEntry(ownerId, path) { return this.db.prepare('DELETE FROM entries WHERE owner_id=? AND path=?').run(ownerId, path).changes > 0; }
-  removeUnder(ownerId, prefix) {
-    return this.db.prepare('DELETE FROM entries WHERE owner_id=? AND (path=? OR path LIKE ?)').run(ownerId, prefix, prefix.replaceAll('%', '\\%').replaceAll('_', '\\_') + '/%').changes;
+  // The name and the way it is handed over are the owner's to change; the bytes are not touched, and the
+  // seal is bound to the row rather than the path, so moving one does not make it unreadable.
+  renameSecret(ownerId, path, { path: to, env, filename, session }) {
+    return this.transaction(() => {
+      const row = this.secret(ownerId, path);
+      if (!row) return undefined;
+      if (to !== path && this.secret(ownerId, to)) fail(409, 'path_taken', 'その名前はすでに使われています。');
+      this.db.prepare('UPDATE secrets SET path=?, env=?, filename=?, session=?, version=version+1, updated_at=? WHERE id=?')
+        .run(to, env, filename, session ?? null, now(), row.id);
+      return this.secrets(ownerId, to)[0];
+    });
   }
-  // An acquisition owns the entries under its prefix: it wrote them and it keeps them current.
+  removeSecret(ownerId, path) { return this.db.prepare('DELETE FROM secrets WHERE owner_id=? AND path=?').run(ownerId, path).changes > 0; }
+  removeUnder(ownerId, prefix) {
+    return this.db.prepare('DELETE FROM secrets WHERE owner_id=? AND (path=? OR path LIKE ?)').run(ownerId, prefix, prefix.replaceAll('%', '\\%').replaceAll('_', '\\_') + '/%').changes;
+  }
+  // An acquisition owns the secrets under its prefix: it wrote them and it keeps them current.
   acquisitions(ownerId) { return this.db.prepare('SELECT * FROM acquisitions WHERE owner_id=? ORDER BY prefix').all(ownerId); }
   acquisition(ownerId, prefix) { return this.db.prepare('SELECT * FROM acquisitions WHERE owner_id=? AND prefix=?').get(ownerId, prefix); }
   // Which acquisition, if any, keeps this path current.
@@ -165,7 +182,7 @@ export class Store {
     return this.db.prepare('SELECT * FROM acquisitions WHERE owner_id=? AND (?=prefix OR ? LIKE prefix || ?) ORDER BY length(prefix) DESC LIMIT 1').get(ownerId, path, path, '/%');
   }
   acquisitionState(row) { return this.vault.open(row.state, `acquisition:${row.owner_id}:${row.id}`); }
-  // Records an acquisition and everything it produced, together: the entries under its prefix are exactly
+  // Records an acquisition and everything it produced, together: the secrets under its prefix are exactly
   // what it last obtained, and nothing it no longer produces is left behind.
   saveAcquisition(ownerId, { prefix, adapter, subject, label, state, keptBy }, entries, previous) {
     return this.transaction(() => {
@@ -191,8 +208,8 @@ export class Store {
   replaceUnder(ownerId, prefix, entries, keptBy) {
     return this.transaction(() => {
       const wanted = new Set(entries.map(entry => entry.path));
-      for (const row of this.entries(ownerId, prefix)) if (!wanted.has(row.path)) this.removeEntry(ownerId, row.path);
-      for (const entry of entries) this.writeEntry(ownerId, { ...entry, kept_by: keptBy });
+      for (const row of this.secrets(ownerId, prefix)) if (!wanted.has(row.path)) this.removeSecret(ownerId, row.path);
+      for (const entry of entries) this.writeSecret(ownerId, { ...entry, kept_by: keptBy });
     });
   }
   // A refresh that produced nothing new still says when it happened; one that failed marks the acquisition.
@@ -278,7 +295,7 @@ export class Store {
   // its owner's. An acquisition being disconnected stops delivering before its entries are gone.
   requireAccess(agent, path) {
     if (agent.owner_id !== this.db.prepare('SELECT owner_id FROM agents WHERE id=?').get(agent.id)?.owner_id) fail(403, 'access_denied', 'これは利用できません。');
-    if (!this.entry(agent.owner_id, path)) fail(404, 'not_found', '保管されたものが見つかりません。');
+    if (!this.secret(agent.owner_id, path)) fail(404, 'not_found', '保管されたものが見つかりません。');
     if (this.acquisitionFor(agent.owner_id, path)?.status === 'disconnecting') fail(403, 'access_denied', 'これは利用できません。');
   }
   recordIssuance(agent, until) { this.db.prepare('UPDATE agents SET last_used_at=?, issued_until=MAX(COALESCE(issued_until,0),?), issued_nonexpiring=MAX(issued_nonexpiring,?) WHERE id=?').run(now(), until ?? 0, until === null ? 1 : 0, agent.id); }

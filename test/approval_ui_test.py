@@ -73,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
     review(page)
-    assert cli('api', 'GET', '/v1/entries')['entries'] == []
+    assert cli('api', 'GET', '/v1/secrets')['secrets'] == []
 
     # 2. The approved key asks for a registration, on its own link and without a code.
     request = cli('api', 'POST', '/v1/access-requests', '--json', json.dumps({'adapter': 'gmail.readonly', 'purpose': '届いたメールを確認する'}))['request']
@@ -98,14 +98,14 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_text('登録をキャンセルしました。', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']
-    assert cli('api', 'GET', '/v1/entries')['entries'] == []
+    assert cli('api', 'GET', '/v1/secrets')['secrets'] == []
     authorization['deny'] = False
     page.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
     expect(page.get_by_text('personal@example.test', exact=False)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'request-approved.png'), full_page=True)
-    kept = [entry['path'] for entry in cli('api', 'GET', '/v1/entries')['entries'] if entry['env'] == 'GOOGLE_OAUTH_ACCESS_TOKEN']
+    kept = [entry['path'] for entry in cli('api', 'GET', '/v1/secrets')['secrets'] if entry['env'] == 'GOOGLE_OAUTH_ACCESS_TOKEN']
     command = subprocess.run(['node', 'src/runtime.mjs', 'exec', kept[0], '--', 'node', '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
@@ -116,7 +116,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     runtime.get_by_role('button', name='失効', exact=True).click()
     page.get_by_role('dialog').get_by_role('button', name='失効させる', exact=True).click()
     expect(page.get_by_role('dialog')).not_to_be_visible()
-    cli('api', 'GET', '/v1/entries', success=False)
+    cli('api', 'GET', '/v1/secrets', success=False)
     page.goto(pending['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='アクセスキーは失効しています', exact=True)).to_be_visible()
 
@@ -126,7 +126,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
     page.get_by_role('button', name='承認しない', exact=True).click()
     expect(page.get_by_role('heading', name='承認しませんでした', exact=True)).to_be_visible()
-    cli('api', 'GET', '/v1/entries', success=False)
+    cli('api', 'GET', '/v1/secrets', success=False)
 
     # 5. Approved again, the key asks for a metadata-only Gmail credential: another kind, its own registration.
     request = cli('connect', '--name', 'dev-us のAI')['request']

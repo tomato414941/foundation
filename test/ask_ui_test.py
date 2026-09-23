@@ -63,8 +63,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     expect(page.get_by_role('heading', name='CloudflareのAPIトークンを預ける', exact=True)).to_be_visible()
     expect(page.get_by_text('dev-us のAIの依頼', exact=True)).to_be_visible()
     expect(page.get_by_text('DNSレコードの確認に使います。', exact=True)).to_be_visible()
+    # What Foundation calls it and how it reaches a command are folded away: they do not help the owner decide.
+    expect(page.get_by_text('cloudflare/token', exact=True)).to_be_hidden()
+    page.get_by_role('group').get_by_text('Foundationでの扱い', exact=True).click()
     expect(page.get_by_text('cloudflare/token', exact=True)).to_be_visible()
-    expect(page.get_by_text('CLOUDFLARE_API_TOKEN という環境変数として渡されます', exact=True)).to_be_visible()
+    expect(page.get_by_text('AIが動かすコマンドの中だけに CLOUDFLARE_API_TOKEN として現れます', exact=True)).to_be_visible()
     expect(page.get_by_text('APIトークンを作成 を押し', exact=False)).to_be_visible()
     expect(page.get_by_role('link', name='dash.cloudflare.com を開く ↗', exact=True)).to_have_attribute('target', '_blank')
     value = page.get_by_label('CloudflareのAPIトークン', exact=True)
@@ -82,11 +85,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     review(page)
 
     # It is now kept where the AI asked, handed over as it asked, and the AI cannot read it back.
-    kept = cli('api', 'GET', '/v1/entries')['entries']
+    kept = cli('api', 'GET', '/v1/secrets')['secrets']
     assert [row['path'] for row in kept] == ['cloudflare/token']
     assert kept[0]['env'] == 'CLOUDFLARE_API_TOKEN' and kept[0]['readable'] is False
     assert kept[0]['kept_by'] == 'dev-us のAI'
-    refused = subprocess.run(['node', 'src/runtime.mjs', 'api', 'GET', '/v1/entries/cloudflare/token'], env=env, capture_output=True, text=True, timeout=15)
+    refused = subprocess.run(['node', 'src/runtime.mjs', 'api', 'GET', '/v1/secrets/cloudflare/token'], env=env, capture_output=True, text=True, timeout=15)
     assert refused.returncode == 1 and SECRET not in refused.stdout + refused.stderr
 
     used = subprocess.run(['node', 'src/runtime.mjs', 'exec', 'cloudflare/token', '--', 'node', '-e',

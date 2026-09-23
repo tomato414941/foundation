@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { digest } from './store.mjs';
 import { fail } from './errors.mjs';
-import { declaration } from './entries.mjs';
+import { declaration } from './secrets.mjs';
 
 export const REQUEST_TTL = 30 * 60_000, MAX_REQUEST_TTL = 24 * 60 * 60_000;
 export const REQUEST_ID = /^[A-Za-z0-9_-]{43}$/;
@@ -155,9 +155,11 @@ export class AccessRequests {
       else if (result && result.status !== 'connected') status = 'reconnect_required';
     }
     const registered = row.agent_id ? this.db.prepare('SELECT name FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash) : undefined;
-    const details = this.details(row);
-    return { id: row.id, kind, adapter: row.adapter ? this.adapters.describe(row.adapter) : null, ...(kind === 'store' ? { store: details } : {}),
-      requester_name: row.requester_name, purpose: row.purpose, details, guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
+    // What a store request asks for goes out once, as `store`. There is no second copy under another name,
+    // and a request that asks for nothing to be stored carries no declaration at all.
+    return { id: row.id, kind, ...(row.adapter ? { adapter: this.adapters.describe(row.adapter) } : {}),
+      ...(kind === 'store' ? { store: this.details(row) } : {}),
+      requester_name: row.requester_name, purpose: row.purpose, guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
       ...(code && row.confirmation_code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
       status, created_at: row.created_at, expires_at: row.expires_at, ...(row.credential_id ? { credential_id: row.credential_id } : {}),
       ...(status === 'approved' ? { agent_id: row.agent_id, ...(result ? { result: { prefix: result.prefix, label: result.label } } : {}), ...(kind === 'store' && row.credential_id ? { result: { path: row.credential_id } } : {}) } : {}) };

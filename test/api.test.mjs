@@ -10,7 +10,7 @@ test('Login gives a private state behind a safe session cookie', async (t) => {
   assert.match(login.headers.get('set-cookie'), /HttpOnly; SameSite=Lax/);
   const result = await f.request('/api/state');
   assert.equal(result.json.user.id, USER_A);
-  assert.deepEqual(result.json.entries, []);
+  assert.deepEqual(result.json.secrets, []);
   assert.deepEqual(result.json.acquisitions, []);
   assert.equal(result.headers.get('cache-control'), 'no-store');
   assert.doesNotMatch(result.text, /supabase-access|refresh_token|"secret"|token_hash/);
@@ -55,7 +55,7 @@ test('What Foundation obtained is kept like anything else, under a path, and an 
   assert.equal(b.prefix, 'gmail/work-example-test');
 
   // Its values sit in the store beside everything else, saying how each reaches a command.
-  const kept = (await f.request('/v1/entries', { token: agent.token })).json.entries;
+  const kept = (await f.request('/v1/secrets', { token: agent.token })).json.secrets;
   assert.deepEqual(kept.filter(entry => entry.path.startsWith(a.prefix)).map(entry => entry.env).sort(),
     ['GMAIL_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_ACCESS_TOKEN', 'GOOGLE_OAUTH_EXPIRES_AT']);
   assert.ok(kept.every(entry => entry.path.startsWith('gmail/')), 'each sits under the account it belongs to');
@@ -76,7 +76,7 @@ test('What Foundation obtained is kept like anything else, under a path, and an 
   assert.equal((await f.deliver(b, { token: agent.token })).json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-work-metadata');
 
   // What it keeps may only be delivered, never handed back.
-  assert.equal((await f.request('/v1/entries/' + a.prefix + '/google-oauth-access-token', { token: agent.token })).status, 403);
+  assert.equal((await f.request('/v1/secrets/' + a.prefix + '/google-oauth-access-token', { token: agent.token })).status, 403);
   assert.ok(!f.gmail.calls.some((call) => call.url.includes('/messages')));
 });
 
@@ -85,7 +85,7 @@ test('Owners cannot see, disconnect or reach each other\'s connections', async (
   await f.login('second@example.test');
   const state = await f.request('/api/state');
   assert.deepEqual(state.json.acquisitions, []);
-  assert.deepEqual(state.json.entries, []);
+  assert.deepEqual(state.json.secrets, []);
   assert.deepEqual(state.json.agents, []);
   assert.equal((await f.request('/api/acquisitions/' + encodeURIComponent(first.prefix), { method: 'DELETE', data: { revoke: true } })).status, 404);
   const intruder = (await f.request('/api/agents', { method: 'POST', data: { name: 'intruder' } })).json.agent;
@@ -158,7 +158,7 @@ test('Disconnecting removes what it kept even when the service refuses to revoke
   assert.equal(removed.json.service_revoked, false, 'the owner learns the grant is still at Google');
   const state = await f.request('/api/state');
   assert.deepEqual(state.json.acquisitions, []);
-  assert.deepEqual(state.json.entries, [], 'what it kept goes with it');
+  assert.deepEqual(state.json.secrets, [], 'what it kept goes with it');
   assert.deepEqual((await f.request('/v1/acquisitions', { token: agent.token })).json.acquisitions, []);
 });
 

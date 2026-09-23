@@ -23,22 +23,22 @@ async function keyed(t) {
   return { f, token };
 }
 const put = (f, token, path, content, query = {}, type = 'text/plain') =>
-  f.request('/v1/entries/' + path + (Object.keys(query).length ? '?' + new URLSearchParams(query) : ''), { method: 'PUT', token, anonymous: true, raw: content, type });
+  f.request('/v1/secrets/' + path + (Object.keys(query).length ? '?' + new URLSearchParams(query) : ''), { method: 'PUT', token, anonymous: true, raw: content, type });
 
 test('What is kept is bytes at a path, and how they reach a command is settled when they are written', async t => {
   const { f, token } = await keyed(t);
   const kept = await put(f, token, 'github/token', secret, { env: 'GH_TOKEN', secret: 'true' });
   assert.equal(kept.status, 200, kept.text);
-  assert.deepEqual({ ...kept.json.entry, created_at: 0, updated_at: 0 },
+  assert.deepEqual({ ...kept.json.secret, created_at: 0, updated_at: 0 },
     { path: 'github/token', media_type: 'text/plain', size: secret.length, env: 'GH_TOKEN', filename: null, session: null, readable: false, version: 1, kept_by: 'dev-us', created_at: 0, updated_at: 0 });
   assert.doesNotMatch(kept.text, new RegExp(secret), 'writing never echoes the bytes back');
 
-  const listed = await f.request('/v1/entries', { token, anonymous: true });
-  assert.deepEqual(listed.json.entries.map(row => row.path), ['github/token']);
+  const listed = await f.request('/v1/secrets', { token, anonymous: true });
+  assert.deepEqual(listed.json.secrets.map(row => row.path), ['github/token']);
   assert.doesNotMatch(listed.text, new RegExp(secret), 'listing tells what is kept, never the bytes');
 
   // Written as a secret, so the key that wrote it cannot read it back.
-  const refused = await f.request('/v1/entries/github/token', { token, anonymous: true });
+  const refused = await f.request('/v1/secrets/github/token', { token, anonymous: true });
   assert.equal(refused.status, 403);
   assert.equal(refused.json.error.code, 'write_only');
 
@@ -50,7 +50,7 @@ test('Bytes with no delivery are kept and read back as they were written', async
   const { f, token } = await keyed(t);
   const state = JSON.stringify({ step: 'レビュー待ち', pull_request: 42 });
   assert.equal((await put(f, token, 'release/expo-v3', state, {}, 'application/json')).status, 200);
-  const read = await f.request('/v1/entries/release/expo-v3', { token, anonymous: true });
+  const read = await f.request('/v1/secrets/release/expo-v3', { token, anonymous: true });
   assert.equal(read.status, 200);
   assert.equal(read.headers.get('content-type'), 'application/json');
   assert.equal(read.text, state);
@@ -92,25 +92,25 @@ test('Writing the same path again replaces both the bytes and how they are deliv
   const { f, token } = await keyed(t);
   await put(f, token, 'github/token', 'first', { env: 'GH_TOKEN' });
   await put(f, token, 'github/token', 'second', { env: 'GITHUB_TOKEN' });
-  assert.equal((await f.request('/v1/entries', { token, anonymous: true })).json.entries.length, 1);
+  assert.equal((await f.request('/v1/secrets', { token, anonymous: true })).json.secrets.length, 1);
   const delivered = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { paths: ['github/token'] } });
   assert.deepEqual(delivered.json.delivery.environment, { GITHUB_TOKEN: 'second' });
-  assert.equal((await f.request('/v1/entries/github/token', { token, anonymous: true })).text, 'second', 'no longer a secret either');
+  assert.equal((await f.request('/v1/secrets/github/token', { token, anonymous: true })).text, 'second', 'no longer a secret either');
 });
 
 test('A write can refuse to overwrite what it has not seen, so two at once cannot lose each other\'s work', async t => {
   const { f, token } = await keyed(t);
   const first = await put(f, token, 'release/expo-v3', '{"step":"started"}', {}, 'application/json');
-  assert.equal(first.json.entry.version, 1);
+  assert.equal(first.json.secret.version, 1);
 
   // Two conversations read the same thing; the first to write wins and the second is told, rather than silently losing it.
   const one = await put(f, token, 'release/expo-v3', '{"step":"reminded"}', { if_version: '1' }, 'application/json');
   assert.equal(one.status, 200, one.text);
-  assert.equal(one.json.entry.version, 2);
+  assert.equal(one.json.secret.version, 2);
   const two = await put(f, token, 'release/expo-v3', '{"step":"released"}', { if_version: '1' }, 'application/json');
   assert.equal(two.status, 409);
   assert.equal(two.json.error.code, 'version_conflict');
-  assert.equal((await f.request('/v1/entries/release/expo-v3', { token, anonymous: true })).text, '{"step":"reminded"}');
+  assert.equal((await f.request('/v1/secrets/release/expo-v3', { token, anonymous: true })).text, '{"step":"reminded"}');
 
   // Reading again and retrying works; writing with no version at all still overwrites.
   const retried = await put(f, token, 'release/expo-v3', '{"step":"released"}', { if_version: '2' }, 'application/json');
@@ -135,19 +135,19 @@ test('Delivering several at once refuses two that want the same variable', async
 test('Listing narrows by path prefix, and each owner reaches only their own', async t => {
   const { f, token } = await keyed(t);
   for (const path of ['github/token', 'github/user', 'release/expo-v3']) await put(f, token, path, 'x');
-  const narrowed = await f.request('/v1/entries?prefix=github', { token, anonymous: true });
-  assert.deepEqual(narrowed.json.entries.map(row => row.path), ['github/token', 'github/user']);
+  const narrowed = await f.request('/v1/secrets?prefix=github', { token, anonymous: true });
+  assert.deepEqual(narrowed.json.secrets.map(row => row.path), ['github/token', 'github/user']);
 
   await f.login('other@example.test');
   const other = key();
   await f.approveKey(other, 'other-machine');
-  assert.deepEqual((await f.request('/v1/entries', { token: other, anonymous: true })).json.entries, []);
-  assert.equal((await f.request('/v1/entries/github/token', { token: other, anonymous: true })).status, 404);
-  assert.equal(f.app.store.entries(USER_B).length, 0);
+  assert.deepEqual((await f.request('/v1/secrets', { token: other, anonymous: true })).json.secrets, []);
+  assert.equal((await f.request('/v1/secrets/github/token', { token: other, anonymous: true })).status, 404);
+  assert.equal(f.app.store.secrets(USER_B).length, 0);
 
-  const dropped = await f.request('/v1/entries/github/token', { method: 'DELETE', token, anonymous: true, data: {} });
+  const dropped = await f.request('/v1/secrets/github/token', { method: 'DELETE', token, anonymous: true, data: {} });
   assert.equal(dropped.status, 200);
-  assert.equal((await f.request('/v1/entries/github/token', { token, anonymous: true })).status, 404);
+  assert.equal((await f.request('/v1/secrets/github/token', { token, anonymous: true })).status, 404);
 });
 
 test('What is kept is bounded, so one owner cannot fill the disk', async t => {
@@ -165,13 +165,13 @@ test('The owner reads and removes anything kept, including what the key may not 
   const { f, token } = await keyed(t);
   await put(f, token, 'github/token', secret, { env: 'GH_TOKEN', secret: 'true' });
   const state = await f.request('/api/state');
-  assert.deepEqual(state.json.entries.map(row => row.path), ['github/token']);
+  assert.deepEqual(state.json.secrets.map(row => row.path), ['github/token']);
   assert.doesNotMatch(state.text, new RegExp(secret));
-  const read = await f.request('/api/entries/github%2Ftoken');
+  const read = await f.request('/api/secrets/github%2Ftoken');
   assert.equal(read.status, 200);
   assert.equal(read.text, secret, 'the owner sees what they are keeping');
-  assert.equal((await f.request('/api/entries/github%2Ftoken', { method: 'DELETE', data: {} })).status, 200);
-  assert.deepEqual((await f.request('/v1/entries', { token, anonymous: true })).json.entries, []);
+  assert.equal((await f.request('/api/secrets/github%2Ftoken', { method: 'DELETE', data: {} })).status, 200);
+  assert.deepEqual((await f.request('/v1/secrets', { token, anonymous: true })).json.secrets, []);
 });
 
 test('The runtime hands what is kept to a command, as bytes and as a file, and nothing else', async t => {
@@ -205,9 +205,9 @@ test('The runtime hands what is kept to a command, as bytes and as a file, and n
 
 test('Storage needs an approved key, and the guide describes the API an agent calls itself', async t => {
   const f = await fixture(t), token = key();
-  assert.equal((await f.request('/v1/entries', { token, anonymous: true })).status, 401);
+  assert.equal((await f.request('/v1/secrets', { token, anonymous: true })).status, 401);
   const guide = (await run(['--help'], {})).out.toString();
-  assert.match(guide, /PUT \/v1\/entries\/<path>/);
+  assert.match(guide, /PUT \/v1\/secrets\/<path>/);
   assert.match(guide, /POST \/v1\/deliver/);
   assert.match(guide, /Nothing here needs a shell/);
   assert.match(guide, /foundation exec <path>/, 'and the one thing that does need one');

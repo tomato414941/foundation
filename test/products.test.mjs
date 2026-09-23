@@ -25,11 +25,11 @@ test('makes one room per user of the product, and keeps them apart', async (t) =
   const hanako = await f.request('/v1/rooms', { method: 'POST', token: f.product.token, anonymous: true, data: { external_id: 'u_hanako' } });
   assert.notEqual(taro.json.room.id, hanako.json.room.id);
 
-  await f.request('/v1/entries/notes/plan', { method: 'PUT', token: taro.json.key, anonymous: true, raw: 'taro のメモ', type: 'text/plain' });
-  const mine = await f.request('/v1/entries', { token: taro.json.key, anonymous: true });
-  assert.deepEqual(mine.json.entries.map(entry => entry.path), ['notes/plan']);
-  const theirs = await f.request('/v1/entries', { token: hanako.json.key, anonymous: true });
-  assert.deepEqual(theirs.json.entries, []);
+  await f.request('/v1/secrets/notes/plan', { method: 'PUT', token: taro.json.key, anonymous: true, raw: 'taro のメモ', type: 'text/plain' });
+  const mine = await f.request('/v1/secrets', { token: taro.json.key, anonymous: true });
+  assert.deepEqual(mine.json.secrets.map(entry => entry.path), ['notes/plan']);
+  const theirs = await f.request('/v1/secrets', { token: hanako.json.key, anonymous: true });
+  assert.deepEqual(theirs.json.secrets, []);
 });
 
 test('returns the same room when the same user comes back', async (t) => {
@@ -43,11 +43,11 @@ test('returns the same room when the same user comes back', async (t) => {
 test('tells the product what its rooms are using, and nothing of what is in them', async (t) => {
   const f = await product(t);
   const taro = await f.request('/v1/rooms', { method: 'POST', token: f.product.token, anonymous: true, data: { external_id: 'u_taro' } });
-  await f.request('/v1/entries/keys/token?secret=true', { method: 'PUT', token: taro.json.key, anonymous: true, raw: 'sh-a-secret', type: 'text/plain' });
+  await f.request('/v1/secrets/keys/token?secret=true', { method: 'PUT', token: taro.json.key, anonymous: true, raw: 'sh-a-secret', type: 'text/plain' });
   const rooms = await f.request('/v1/rooms', { token: f.product.token, anonymous: true });
   assert.equal(rooms.status, 200, rooms.text);
   assert.equal(rooms.json.rooms.length, 1);
-  assert.equal(rooms.json.rooms[0].usage.entries.count, 1);
+  assert.equal(rooms.json.rooms[0].usage.secrets.count, 1);
   assert.ok(!rooms.text.includes('sh-a-secret'));
   assert.ok(!rooms.text.includes('keys/token'));
 });
@@ -55,8 +55,8 @@ test('tells the product what its rooms are using, and nothing of what is in them
 test('keeps a product key out of the rooms themselves', async (t) => {
   const f = await product(t);
   const taro = await f.request('/v1/rooms', { method: 'POST', token: f.product.token, anonymous: true, data: { external_id: 'u_taro' } });
-  await f.request('/v1/entries/notes/plan', { method: 'PUT', token: taro.json.key, anonymous: true, raw: 'taro のメモ', type: 'text/plain' });
-  const refused = await f.request('/v1/entries', { token: f.product.token, anonymous: true });
+  await f.request('/v1/secrets/notes/plan', { method: 'PUT', token: taro.json.key, anonymous: true, raw: 'taro のメモ', type: 'text/plain' });
+  const refused = await f.request('/v1/secrets', { token: f.product.token, anonymous: true });
   assert.equal(refused.status, 401);
   assert.equal(refused.json.error.code, 'not_approved');
 });
