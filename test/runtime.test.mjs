@@ -66,7 +66,7 @@ test('CLI bootstraps and resumes approval without printing or manually copying a
   for (const result of [connected, pending, run]) assert.doesNotMatch(result.out + result.err, /fdn_|google-access|refresh_token/);
   // Approved, the same key now asks for a registration; cancelling it does not undo the approval.
   const next = await execute(['connect', '--adapter', 'gmail.metadata', '--purpose', '件名の確認'], env);
-  assert.equal(next.code, 0, next.err); assert.equal(JSON.parse(next.out).request.kind, 'register');
+  assert.equal(next.code, 0, next.err); assert.equal(JSON.parse(next.out).request.kind, 'connect');
   assert.equal(JSON.parse(next.out).request.confirmation_code, undefined);
   const cancelled = await execute(['cancel'], env);
   assert.equal(JSON.parse(cancelled.out).request.status, 'cancelled');

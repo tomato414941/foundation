@@ -77,17 +77,21 @@ async function main() {
   }
   let options;
   if (action === 'connect') {
-    const { service, site, field = [], 'multiline-field': multiline = [], ...values } = parseArgs({ args, options: { adapter: { type: 'string' }, name: { type: 'string', default: hostname() + ' の ' + (agentName || 'AI') }, purpose: { type: 'string', default: '' }, guide: { type: 'string', default: '' }, valid: { type: 'string', default: '' }, service: { type: 'string' }, site: { type: 'string' }, field: { type: 'string', multiple: true }, 'multiline-field': { type: 'string', multiple: true } }, strict: true, allowPositionals: false }).values;
-    options = values;
+    options = parseArgs({ args, options: { adapter: { type: 'string' }, name: { type: 'string', default: hostname() + ' の ' + (agentName || 'AI') }, purpose: { type: 'string', default: '' }, guide: { type: 'string', default: '' }, valid: { type: 'string', default: '' } }, strict: true, allowPositionals: false }).values;
     if (options.guide) { options.guidance = options.guide; } delete options.guide;
     if (options.valid) { if (!/^\d{1,4}$/.test(options.valid)) throw new Error('--valid takes the number of minutes the link stays open (1-1440).'); options.valid_minutes = Number(options.valid); } delete options.valid;
-    // The generic adapter: the runtime declares the service, where the key is made, and each value it wants as NAME[=label].
-    if (service !== undefined || site !== undefined || field.length || multiline.length) {
-      const declare = kind => text => { const at = text.indexOf('='), id = at < 0 ? text : text.slice(0, at); if (!validEnvName(id)) throw new Error('--field names are environment variables: UPPER_CASE and not reserved (' + id + ').'); return { id, label: at < 0 ? id : text.slice(at + 1), kind }; };
-      if (!service || !site || !(field.length + multiline.length)) throw new Error('--service, --site (https) and at least one --field are required for a generic request.');
-      if (options.adapter && options.adapter !== 'generic') throw new Error('--service, --site and --field belong to the generic adapter.');
-      options.adapter = 'generic'; options.details = { service, site, fields: [...field.map(declare('line')), ...multiline.map(declare('multiline'))] };
-    }
+  }
+  // Asking the owner to put something into storage: the key says where it goes and how it is handed over,
+  // and writes the instructions. Foundation is told nothing about the service.
+  else if (action === 'ask') {
+    const parsed = parseArgs({ args, options: { env: { type: 'string' }, file: { type: 'string' }, type: { type: 'string' }, label: { type: 'string' }, site: { type: 'string' },
+      purpose: { type: 'string', default: '' }, guide: { type: 'string', default: '' }, valid: { type: 'string' }, multiline: { type: 'boolean' }, readable: { type: 'boolean' } }, strict: true, allowPositionals: true });
+    if (parsed.positionals.length !== 1) throw new Error('Usage: ask <path> --label "<what to paste>" [--env NAME] [--file NAME] [--site <https://where it is made>] [--multiline] [--readable] [--purpose "..."] [--guide "..."] [--valid <minutes>]');
+    if (!parsed.values.label) throw new Error('--label says what the owner is being asked for; it is required.');
+    options = { purpose: parsed.values.purpose, guidance: parsed.values.guide,
+      store: { path: parsed.positionals[0], label: parsed.values.label, ...(parsed.values.env ? { env: parsed.values.env } : {}), ...(parsed.values.file ? { filename: parsed.values.file } : {}),
+        ...(parsed.values.site ? { site: parsed.values.site } : {}), ...(parsed.values.type ? { type: parsed.values.type } : {}), multiline: parsed.values.multiline === true, secret: parsed.values.readable !== true } };
+    if (parsed.values.valid) { if (!/^\d{1,4}$/.test(parsed.values.valid)) throw new Error('--valid takes the number of minutes the link stays open (1-1440).'); options.valid_minutes = Number(parsed.values.valid); }
   }
   else if (action === 'rename') {
     if (args.length !== 1 || !args[0].trim() || args[0].length > 80) throw new Error('Usage: rename <new name> (1-80 characters).');
@@ -128,7 +132,7 @@ async function main() {
   const url = new URL(process.env.FOUNDATION_URL || '');
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('FOUNDATION_URL must be an HTTPS origin (HTTP is allowed only on localhost).');
   // Without --adapter, connect asks for this key to be approved. With it, an approved key asks for a registration.
-  if (action === 'connect' && !options.adapter && (options.purpose || options.guidance)) throw new Error('--purpose and --guide belong to a registration request; add --adapter <id>.');
+  if (action === 'connect' && !options.adapter && (options.purpose || options.guidance)) throw new Error('--purpose and --guide belong to a request that asks for something; add --adapter <id>, or use ask.');
   if (action === 'connect' && !options.adapter) { delete options.purpose; }
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
   const token = action === 'adapters' ? null : await runtimeKey(keyPath, action === 'connect', !process.env.FOUNDATION_RUNTIME_KEY_FILE);
@@ -139,7 +143,7 @@ async function main() {
     : action === 'list' ? '/v1/entries' + (options.prefix ? '?' + new URLSearchParams({ prefix: options.prefix }) : '')
     : ['put', 'get', 'drop'].includes(action) ? entryUrl() + (action === 'put' && Object.keys(options.query).length ? '?' + new URLSearchParams(options.query) : '')
     : action === 'exec' ? '/v1/deliver' : ['whoami', 'leave', 'rename'].includes(action) ? '/v1/me' : action === 'cancel' || action === 'request' ? '/v1/access-requests/current' : '/v1/access-requests';
-  const method = ['connect', 'share', 'link'].includes(action) ? 'POST' : action === 'exec' ? 'POST' : action === 'put' ? 'PUT' : action === 'rename' ? 'PATCH' : ['cancel', 'leave', 'drop'].includes(action) ? 'DELETE' : 'GET';
+  const method = ['connect', 'ask', 'share', 'link'].includes(action) ? 'POST' : action === 'exec' ? 'POST' : action === 'put' ? 'PUT' : action === 'rename' ? 'PATCH' : ['cancel', 'leave', 'drop'].includes(action) ? 'DELETE' : 'GET';
   async function send(target, { timeout = 30_000, verb = method, payload, type = 'application/json', binary = false } = {}) {
     const response = await fetch(url.origin + target, { method: verb, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), 'content-type': type },
       ...(verb === 'GET' ? {} : { body: payload ?? '{}' }), redirect: 'error', signal: AbortSignal.timeout(timeout) });
@@ -155,7 +159,7 @@ async function main() {
     return;
   }
   const bodyFor = () => ['put', 'share'].includes(action) ? options.content
-    : JSON.stringify(['connect', 'rename'].includes(action) ? options : action === 'link' ? { minutes: options.minutes } : {});
+    : JSON.stringify(['connect', 'ask', 'rename'].includes(action) ? options : action === 'link' ? { minutes: options.minutes } : {});
   if (action !== 'exec') {
     const data = await send(path, { payload: bodyFor(), type: ['put', 'share'].includes(action) ? options.type : 'application/json' });
     if (action === 'leave') { console.log('Left Foundation: this access key was revoked. Delete ' + keyPath + ' if it is no longer needed.'); return; }

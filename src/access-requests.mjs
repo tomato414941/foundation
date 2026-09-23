@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { digest } from './store.mjs';
 import { fail } from './errors.mjs';
+import { declaration } from './entries.mjs';
 
 export const REQUEST_TTL = 30 * 60_000, MAX_REQUEST_TTL = 24 * 60 * 60_000;
 export const REQUEST_ID = /^[A-Za-z0-9_-]{43}$/;
@@ -12,6 +13,7 @@ const normalizeCode = value => typeof value === 'string' ? value.toUpperCase().r
 // independently generated runtime key is stored, even before user approval.
 export class AccessRequests {
   constructor(store, adapters) { this.store = store; this.db = store.db; this.adapters = adapters; }
+  kindOf(row) { return row.adapter ? 'connect' : row.details !== '{}' ? 'store' : 'approve'; }
   key(token) {
     if (typeof token !== 'string' || !RUNTIME_KEY.test(token)) fail(401, 'invalid_token', 'アクセスキーの形式が無効です。');
     return digest(token);
@@ -33,12 +35,14 @@ export class AccessRequests {
     if (!row) fail(410, 'request_expired', '接続依頼がありません。新しい接続リンクを作成してください。');
     return row;
   }
-  // A request is one of two kinds, decided by the key that makes it:
+  // A request is one of three kinds:
   //   approve   a key not yet approved asks its owner to accept it; the owner types the code the runtime showed
-  //   register  an approved key asks its owner to register a credential through one adapter; there is no code
-  // The two never share a request. The runtime writes the purpose and guidance of a registration; Foundation
-  // only frames them as the AI's words. The runtime chooses how long the link stays open (at most a day).
-  create(token, { name, adapter, purpose = '', details, guidance = '', validMinutes = 30 }) {
+  //   connect   an approved key asks for an acquisition Foundation performs itself, through one adapter
+  //   store     an approved key asks its owner to put something into storage: the key says where it goes and
+  //             how it should be handed over, and writes the instructions; Foundation knows nothing else
+  // The runtime writes the purpose and guidance; Foundation only frames them as the AI's words, and chooses
+  // nothing about the service involved. The runtime decides how long the link stays open (at most a day).
+  create(token, { name, adapter, store, purpose = '', details, guidance = '', validMinutes = 30 }) {
     if (!Number.isInteger(validMinutes) || validMinutes < 1 || validMinutes * 60_000 > MAX_REQUEST_TTL) fail(400, 'invalid_validity', '有効期間は1〜1440分で指定してください。');
     if (typeof guidance !== 'string' || guidance.length > 2000 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(guidance)) fail(400, 'invalid_guidance', '案内は2000文字以内で入力してください。');
     guidance = guidance.replace(/\r\n?/g, '\n').trim();
@@ -46,10 +50,14 @@ export class AccessRequests {
     const hash = this.key(token);
     // A registered key is known by the name its owner gave it; what the runtime calls itself matters only the first time.
     const agent = this.store.authenticate(token), requesterName = agent?.name || name;
-    if (!agent && (adapter !== undefined || details !== undefined || purpose || guidance)) fail(409, 'approval_required', 'このアクセスキーはまだ承認されていません。先に承認を依頼し (foundation connect)、承認されてから登録を依頼してください。');
+    const asks = adapter !== undefined || store !== undefined;
+    if (!agent && (asks || details !== undefined || purpose || guidance)) fail(409, 'approval_required', 'このアクセスキーはまだ承認されていません。先に承認を依頼し (foundation connect)、承認されてから登録を依頼してください。');
     if (!agent && !name) fail(400, 'invalid_name', '依頼元は1〜80文字で入力してください。');
-    if (agent && adapter === undefined) fail(409, 'already_approved', 'このアクセスキーは承認済みです。登録を依頼するときは接続方法 (--adapter) を指定してください。');
-    const encoded = agent ? JSON.stringify(this.adapters.details(adapter, details)) : '{}', kind = agent ? adapter : null;
+    if (agent && !asks) fail(409, 'already_approved', 'このアクセスキーは承認済みです。依頼するときは接続方法 (--adapter) か、保管するものの申告を指定してください。');
+    if (adapter !== undefined && store !== undefined) fail(400, 'invalid_request', '接続方法と保管の申告は同時に指定できません。');
+    const kind = adapter ?? null;
+    const encoded = JSON.stringify(store !== undefined ? declaration(store, this.adapters.owned) : {});
+    if (adapter !== undefined) this.adapters.get(adapter);
     // One open request per key at a time. A request left open by an earlier approval of the key, since revoked, does not count.
     const previous = this.db.prepare("SELECT * FROM access_requests WHERE token_hash=? AND status='pending' AND expires_at>? AND COALESCE(agent_id, '')=? ORDER BY created_at DESC LIMIT 1").get(hash, Date.now(), agent?.id || '');
     if (previous) {
@@ -83,10 +91,10 @@ export class AccessRequests {
     const row = this.current(token);
     return { ...this.summary(row, ''), events: this.eventsOf(row) };
   }
-  // A registration request is complete when the owner registers a credential through it.
+  // A request that asked for something is complete when that something exists.
   registered(id, ownerId, credentialId) {
     const row = this.forUser(id, ownerId, true);
-    if (!row.adapter) fail(409, 'approval_only', 'この依頼はアクセスキーの承認だけです。認証情報の登録には使えません。');
+    if (this.kindOf(row) === 'approve') fail(409, 'approval_only', 'この依頼はアクセスキーの承認だけです。登録には使えません。');
     this.db.prepare("UPDATE access_requests SET owner_id=?, credential_id=?, status='approved' WHERE id=?").run(ownerId, credentialId, row.id);
     return this.get(id);
   }
@@ -136,20 +144,22 @@ export class AccessRequests {
     return this.get(row.id);
   }
   summary(row, origin, { code = true } = {}) {
+    const kind = this.kindOf(row);
     let status = row.status, credential;
     if (status === 'pending' && row.agent_id && !this.db.prepare('SELECT 1 FROM agents WHERE id=? AND owner_id=? AND token_hash=?').get(row.agent_id, row.owner_id, row.token_hash)) status = 'revoked';
     if (status === 'approved') {
       const agent = this.db.prepare('SELECT * FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash);
-      credential = row.credential_id ? this.store.credential(row.owner_id, row.credential_id) : null;
+      credential = kind === 'connect' && row.credential_id ? this.store.credential(row.owner_id, row.credential_id) : null;
       if (!agent || agent.owner_id !== row.owner_id) status = 'revoked';
       else if (credential && credential.status === 'disconnecting') credential = null;
       else if (credential && credential.status !== 'connected') status = 'reconnect_required';
     }
     const registered = row.agent_id ? this.db.prepare('SELECT name FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash) : undefined;
     const details = this.details(row);
-    return { id: row.id, kind: row.adapter ? 'register' : 'approve', adapter: row.adapter ? this.adapters.describe(row.adapter, details) : null, requester_name: row.requester_name, purpose: row.purpose, details, guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
+    return { id: row.id, kind, adapter: row.adapter ? this.adapters.describe(row.adapter) : null, ...(kind === 'store' ? { store: details } : {}),
+      requester_name: row.requester_name, purpose: row.purpose, details, guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
       ...(code && row.confirmation_code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
       status, created_at: row.created_at, expires_at: row.expires_at, ...(row.credential_id ? { credential_id: row.credential_id } : {}),
-      ...(status === 'approved' ? { agent_id: row.agent_id, ...(credential ? { credential: { id: credential.id, service: credential.service, subject: credential.subject, label: this.store.secret(credential).facts.label || credential.name } } : {}) } : {}) };
+      ...(status === 'approved' ? { agent_id: row.agent_id, ...(credential ? { credential: { id: credential.id, service: credential.service, subject: credential.subject, label: this.store.secret(credential).facts.label || credential.name } } : {}), ...(kind === 'store' && row.credential_id ? { entry: { path: row.credential_id } } : {}) } : {}) };
   }
 }

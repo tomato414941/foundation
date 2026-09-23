@@ -76,7 +76,7 @@ export class GitHubClient {
       const identity = await this.inspect(existing.access_token);
       if ('user:' + identity.id !== credential.subject) fail(409, 'account_changed', 'GitHubのアカウントが変わりました。登録を確認してください。');
       const next = this.secret(existing.access_token, identity);
-      store.saveSecret(credential, { ...next, ...(existing.verification ? { verification: existing.verification } : {}) });
+      store.saveSecret(credential, next);
       return next;
     } catch (error) {
       if (error instanceof HttpError && ['reconnect_required', 'account_changed'].includes(error.code)) store.reconnectRequired(credential);

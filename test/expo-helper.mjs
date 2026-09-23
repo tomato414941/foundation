@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { ExpoClient, EXPO_API } from '../src/services/expo.mjs';
-import { expoToken, expoLogin, gmailReadonly, gmailMetadata } from '../src/adapters.mjs';
+import { expoLogin, gmailReadonly, gmailMetadata } from '../src/adapters.mjs';
 import { FakeGmail, fixture, json } from './helpers.mjs';
 
 export class FakeExpo extends ExpoClient {
@@ -22,7 +22,7 @@ export class FakeExpo extends ExpoClient {
 
 export async function expoFixture(t, options = {}) {
   const expo = options.expo || new FakeExpo(), gmail = new FakeGmail();
-  const f = await fixture(t, { gmail, adapters: [expoToken(expo), ...(expo.sessionLoginEnabled ? [expoLogin(expo)] : []), gmailReadonly(gmail), gmailMetadata(gmail)], ...options });
+  const f = await fixture(t, { gmail, adapters: [...(expo.sessionLoginEnabled ? [expoLogin(expo)] : []), gmailReadonly(gmail), gmailMetadata(gmail)], ...options });
   const importExpo = ({ token = expo.tokenValue(), ...extra } = {}, requestOptions = {}) => f.request('/api/adapters/expo.token/connect', { method: 'POST', data: { name: 'Expo', values: { token }, ...extra }, ...requestOptions });
   async function expoAccount(extra = {}) {
     const result = await importExpo(extra);

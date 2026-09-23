@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
 
     # 2. The approved key asks for a registration, on its own link and without a code.
     request = cli('connect', '--adapter', 'gmail.readonly', '--purpose', '届いたメールを確認する')['request']
-    assert request['kind'] == 'register' and 'confirmation_code' not in request
+    assert request['kind'] == 'connect' and 'confirmation_code' not in request
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
     expect(page.get_by_text('メールの読み取り', exact=True)).to_be_visible()

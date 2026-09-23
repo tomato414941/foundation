@@ -100,3 +100,18 @@ export class Entries {
     return { environment, files };
   }
 }
+
+// What an AI asks its owner to put into storage. Foundation holds no knowledge of the service involved:
+// the AI says where it goes, how it should be handed over, and writes the instructions the owner follows.
+export function declaration(input, reserved = new Set()) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'invalid_declaration', '保管するものの申告が必要です。');
+  const declared = delivery({ env: input.env, filename: input.filename, reserved });
+  let site;
+  if (input.site !== undefined && input.site !== '') {
+    try { site = new URL(input.site); } catch { fail(400, 'invalid_site', '作成ページはhttpsのURLで指定してください。'); }
+    if (site.protocol !== 'https:' || site.username || site.password || site.href.length > 300 || !site.hostname.includes('.')) fail(400, 'invalid_site', '作成ページはhttpsのURLで指定してください。');
+  }
+  if (typeof input.label !== 'string' || !input.label.trim() || input.label.trim().length > 60 || /[\x00-\x1f\x7f<>]/.test(input.label)) fail(400, 'invalid_label', '何を入れてもらうかを1〜60文字で指定してください。');
+  if (input.multiline !== undefined && typeof input.multiline !== 'boolean') fail(400, 'invalid_declaration', '複数行かどうかは true か false で指定してください。');
+  return { path: entryPath(input.path), ...declared, secret: input.secret !== false, label: input.label.trim(), site: site?.href ?? '', multiline: input.multiline === true, type: mediaType(input.type) };
+}

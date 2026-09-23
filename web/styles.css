@@ -208,7 +208,7 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
   .approval-heading { align-items: flex-start; gap: 12px; }
   .approval-card h1 { font-size: 22px; }
   .approval-facts > div { display: block; margin-top: 14px; }
-  .approval-facts dt { font-size: 13px; color: var(--muted); margin-bottom: 3px; }
+  .approval-facts dt { font-size: 14px; color: var(--muted); margin-bottom: 3px; }
   dialog { padding: 26px 20px; }
   .dialog-actions { flex-wrap: wrap; }
 }

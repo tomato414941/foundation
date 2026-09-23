@@ -81,8 +81,8 @@ test('Login cannot be invoked by an anonymous runtime, another origin, or a requ
   const f = await expoLoginFixture(t), request = await requestAccess(f);
   assert.equal((await f.loginExpo(request.input, { anonymous: true, token: request.token })).status, 401);
   assert.equal((await f.loginExpo(request.input, { headers: { origin: 'https://attacker.example' } })).status, 403);
-  const wrongScope = await requestAccess(f, { adapter: 'expo.token' });
-  assert.equal((await f.loginExpo(wrongScope.input)).json.error.code, 'scope_mismatch');
+  const wrongAdapter = await requestAccess(f, { adapter: 'gmail.readonly' });
+  assert.equal((await f.loginExpo(wrongAdapter.input)).json.error.code, 'scope_mismatch');
   assert.equal(f.expo.calls.length, 0);
   await f.loginExpo({ ...request.input, username: 'otp-user' });
   await f.login('other@example.test');
