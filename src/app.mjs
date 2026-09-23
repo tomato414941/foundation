@@ -658,10 +658,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           if (method === 'PUT') {
             rateLimit('secrets:' + agent.id, 120);
             const content = await raw(req, SECRET_MAX);
-            const ifVersion = url.searchParams.has('if_version') ? Number(url.searchParams.get('if_version')) : undefined;
-            if (ifVersion !== undefined && !Number.isInteger(ifVersion)) fail(400, 'invalid_version', '版は整数で指定してください。');
             return send(200, { secret: secrets.put(agent.owner_id, { path: target, content,
-              secret: url.searchParams.get('secret') === 'true' }, ifVersion) });
+              secret: url.searchParams.get('secret') === 'true' }) });
           }
           if (method === 'GET') {
             const { row, content } = secrets.read(agent.owner_id, target);

@@ -12,7 +12,7 @@ const parse = row => ({ ...row, readable: row.readable === 1 });
 export const ACQUISITION_LIMIT = 50;
 const entryBinding = row => `entry:${row.owner_id}:${row.id}`;
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 // secrets: what the agent may not read, kept so that a command can be given it. Bytes at a path, sealed and bound to this owner and
 //   this row. session marks the one kind handed over as a tool's own login state; nothing here says what the
 //   how a command receives them, settled when they were written. readable is 0 when they may only be delivered.
@@ -25,6 +25,10 @@ const SCHEMA_VERSION = 6;
 const STEPS = {
   // Named for what it is: a value the agent may not read, kept so a command can be given it. The sealing
   // binding still says `entry:` because it is part of the ciphertext of every row already written.
+  // Optimistic concurrency was built for a second writer that has not arrived.
+  7: `
+    ALTER TABLE secrets DROP COLUMN version;
+  `,
   // Who put it there was recorded for the owner's benefit, but only the request flow ever set it, so in
   // practice it said the same thing about everything. Knowing it properly means recording every path.
   6: `
@@ -73,7 +77,7 @@ const SCHEMA = `
   CREATE TABLE secrets (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, path TEXT NOT NULL,
     size INTEGER NOT NULL, session TEXT, readable INTEGER NOT NULL,
-    content TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+    content TEXT NOT NULL,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     UNIQUE(owner_id, path)
   );
@@ -141,7 +145,7 @@ export class Store {
   }
   // Storage. Listing never opens anything; only reading and delivering do.
   secrets(ownerId, prefix) {
-    const columns = 'path, size, session, readable, version, created_at, updated_at';
+    const columns = 'path, size, session, readable, created_at, updated_at';
     return (prefix === undefined
       ? this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? ORDER BY path`).all(ownerId)
       : this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? AND (path=? OR path LIKE ?) ORDER BY path`).all(ownerId, prefix, prefix.replaceAll('%', '\\%').replaceAll('_', '\\_') + '/%')).map(parse);
@@ -152,19 +156,17 @@ export class Store {
   }
   secretContent(row) { return this.vault.openBytes(row.content, entryBinding(row)); }
   usage(ownerId) { return this.db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(size),0) AS bytes FROM secrets WHERE owner_id=?').get(ownerId); }
-  // Writing the same path again replaces it. `ifVersion` refuses to, unless it is still the version the
-  // writer last saw, so two things working at once fail instead of quietly losing one another's work.
-  writeSecret(ownerId, entry, ifVersion) {
+  // Writing the same path again replaces what is there.
+  writeSecret(ownerId, entry) {
     return this.transaction(() => {
       const stamp = now(), existing = this.secret(ownerId, entry.path);
-      if (ifVersion !== undefined && (existing?.version ?? 0) !== ifVersion) fail(409, 'version_conflict', `${entry.path} は他から変更されています。読み直してからやり直してください。`);
       const { count, bytes } = this.usage(ownerId);
       if (!existing && count >= SECRET_COUNT_MAX) fail(409, 'secret_limit', `保管できるのは${SECRET_COUNT_MAX}件までです。使わないものを消してください。`);
       if (bytes - (existing?.size ?? 0) + entry.content.length > SECRET_TOTAL_MAX) fail(409, 'storage_full', '保管できる合計は20MBまでです。使わないものを消してください。');
       const id = existing?.id ?? randomUUID();
       const sealed = this.vault.sealBytes(entry.content, `entry:${ownerId}:${id}`);
       if (existing) {
-        this.db.prepare('UPDATE secrets SET size=?, session=?, readable=?, content=?, version=version+1, updated_at=? WHERE id=?')
+        this.db.prepare('UPDATE secrets SET size=?, session=?, readable=?, content=?, updated_at=? WHERE id=?')
           .run(entry.content.length, entry.session ?? null, entry.readable, sealed, stamp, id);
       } else {
         this.db.prepare('INSERT INTO secrets (id,owner_id,path,size,session,readable,content,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)')
@@ -180,7 +182,7 @@ export class Store {
       const row = this.secret(ownerId, path);
       if (!row) return undefined;
       if (to !== path && this.secret(ownerId, to)) fail(409, 'path_taken', 'その名前はすでに使われています。');
-      this.db.prepare('UPDATE secrets SET path=?, version=version+1, updated_at=? WHERE id=?').run(to, now(), row.id);
+      this.db.prepare('UPDATE secrets SET path=?, updated_at=? WHERE id=?').run(to, now(), row.id);
       return this.secrets(ownerId, to)[0];
     });
   }

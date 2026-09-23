@@ -30,7 +30,7 @@ test('What is kept is bytes at a path, and the name a command receives them unde
   const kept = await put(f, token, 'github/gh-token', secret, { secret: 'true' });
   assert.equal(kept.status, 200, kept.text);
   assert.deepEqual({ ...kept.json.secret, created_at: 0, updated_at: 0 },
-    { path: 'github/gh-token', size: secret.length, session: null, readable: false, version: 1, created_at: 0, updated_at: 0 });
+    { path: 'github/gh-token', size: secret.length, session: null, readable: false, created_at: 0, updated_at: 0 });
   assert.doesNotMatch(kept.text, new RegExp(secret), 'writing never echoes the bytes back');
 
   const listed = await f.request('/v1/secrets', { token, anonymous: true });
@@ -98,29 +98,6 @@ test('Writing the same path again replaces what is there', async t => {
   const delivered = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { paths: ['github/gh-token'] } });
   assert.deepEqual(delivered.json.delivery.environment, { GH_TOKEN: 'second' });
   assert.equal((await f.request('/v1/secrets/github/gh-token', { token, anonymous: true })).text, 'second', 'no longer a secret either');
-});
-
-test('A write can refuse to overwrite what it has not seen, so two at once cannot lose each other\'s work', async t => {
-  const { f, token } = await keyed(t);
-  const first = await put(f, token, 'release/expo-v3', '{"step":"started"}', {}, 'application/json');
-  assert.equal(first.json.secret.version, 1);
-
-  // Two conversations read the same thing; the first to write wins and the second is told, rather than silently losing it.
-  const one = await put(f, token, 'release/expo-v3', '{"step":"reminded"}', { if_version: '1' }, 'application/json');
-  assert.equal(one.status, 200, one.text);
-  assert.equal(one.json.secret.version, 2);
-  const two = await put(f, token, 'release/expo-v3', '{"step":"released"}', { if_version: '1' }, 'application/json');
-  assert.equal(two.status, 409);
-  assert.equal(two.json.error.code, 'version_conflict');
-  assert.equal((await f.request('/v1/secrets/release/expo-v3', { token, anonymous: true })).text, '{"step":"reminded"}');
-
-  // Reading again and retrying works; writing with no version at all still overwrites.
-  const retried = await put(f, token, 'release/expo-v3', '{"step":"released"}', { if_version: '2' }, 'application/json');
-  assert.equal(retried.status, 200, retried.text);
-  assert.equal((await put(f, token, 'release/expo-v3', 'plain')).status, 200);
-  // A path that is not there yet is version 0, so a writer can insist on creating it.
-  assert.equal((await put(f, token, 'release/new', 'x', { if_version: '1' })).json.error.code, 'version_conflict');
-  assert.equal((await put(f, token, 'release/new', 'x', { if_version: '0' })).status, 200);
 });
 
 test('Delivering several at once refuses two that want the same variable', async t => {
