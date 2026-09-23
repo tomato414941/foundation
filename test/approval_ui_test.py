@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     env = {**os.environ, 'FOUNDATION_URL': args.base, 'FOUNDATION_RUNTIME_KEY_FILE': key_dir + '/runtime-key'}
 
     def cli(*command, success=True):
-        result = subprocess.run(['node', 'src/runtime.mjs', *command], env=env, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(['node', 'cli/runtime.mjs', *command], env=env, capture_output=True, text=True, timeout=15)
         assert (result.returncode == 0) == success, ' '.join(command) + ': ' + result.stderr + result.stdout
         assert 'fdn_' not in result.stdout and 'google-access-' not in result.stdout
         return json.loads(result.stdout.split('\n\nKey file')[0]) if success else None
@@ -106,7 +106,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     review(page)
     page.screenshot(path=str(shots / 'request-approved.png'), full_page=True)
     kept = [entry['path'] for entry in cli('api', 'GET', '/v1/secrets')['secrets'] if entry['path'].endswith('google-oauth-access-token')]
-    command = subprocess.run(['node', 'src/runtime.mjs', 'exec', kept[0], '--', 'node', '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
+    command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', kept[0], '--', 'node', '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
     # 3. Revoking the key stops it; its open registration link says so.

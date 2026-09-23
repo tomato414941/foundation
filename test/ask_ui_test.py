@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     env = {**os.environ, 'FOUNDATION_URL': args.base, 'FOUNDATION_RUNTIME_KEY_FILE': key_dir + '/runtime-key'}
 
     def cli(*command):
-        result = subprocess.run(['node', 'src/runtime.mjs', *command], env=env, capture_output=True, text=True, timeout=15, input='')
+        result = subprocess.run(['node', 'cli/runtime.mjs', *command], env=env, capture_output=True, text=True, timeout=15, input='')
         assert result.returncode == 0, result.stderr
         assert SECRET not in result.stdout + result.stderr
         return json.loads(result.stdout.split('\n\nKey file')[0])
@@ -89,10 +89,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     assert [row['path'] for row in kept] == ['cloudflare/cloudflare-api-token']
     assert kept[0]['readable'] is False
     assert kept[0]['kept_by'] == 'dev-us のAI'
-    refused = subprocess.run(['node', 'src/runtime.mjs', 'api', 'GET', '/v1/secrets/cloudflare/cloudflare-api-token'], env=env, capture_output=True, text=True, timeout=15)
+    refused = subprocess.run(['node', 'cli/runtime.mjs', 'api', 'GET', '/v1/secrets/cloudflare/cloudflare-api-token'], env=env, capture_output=True, text=True, timeout=15)
     assert refused.returncode == 1 and SECRET not in refused.stdout + refused.stderr
 
-    used = subprocess.run(['node', 'src/runtime.mjs', 'exec', 'cloudflare/cloudflare-api-token', '--', 'node', '-e',
+    used = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'cloudflare/cloudflare-api-token', '--', 'node', '-e',
                            'if(process.env.CLOUDFLARE_API_TOKEN!==process.argv[1])process.exit(2);console.log("ready")', SECRET],
                           env=env, capture_output=True, text=True, timeout=15)
     assert used.returncode == 0 and used.stdout.strip() == 'ready', used.stderr

@@ -1,5 +1,5 @@
 import { fail } from './errors.mjs';
-import { validEnvName } from './env-name.mjs';
+import { validEnvName } from '../cli/env-name.mjs';
 
 // What the agent may not read, kept so that a command can be given it.
 //

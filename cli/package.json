@@ -1,0 +1,23 @@
+{
+  "name": "@tomato414941/foundation",
+  "version": "0.1.0",
+  "description": "Foundation CLI: make a key, and hand what is kept to a command without it passing through the agent.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "foundation": "runtime.mjs"
+  },
+  "files": [
+    "runtime.mjs",
+    "guide.mjs",
+    "env-name.mjs"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomato414941/foundation.git",
+    "directory": "cli"
+  },
+  "license": "UNLICENSED"
+}

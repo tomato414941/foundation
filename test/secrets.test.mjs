@@ -10,7 +10,7 @@ import { fixture, USER_B } from './helpers.mjs';
 const key = () => 'fdn_' + randomBytes(32).toString('base64url');
 const secret = 'ghp_entry-fixture-' + randomBytes(12).toString('hex');
 const run = (args, env, input) => new Promise((resolve, reject) => {
-  const child = spawn(process.execPath, ['src/runtime.mjs', ...args], { env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['cli/runtime.mjs', ...args], { env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
   const out = [], err = [];
   child.stdout.on('data', part => out.push(part)); child.stderr.on('data', part => err.push(part));
   child.stdin.end(input ?? '');

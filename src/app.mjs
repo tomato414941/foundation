@@ -12,7 +12,7 @@ import { Acquisitions } from './acquisitions.mjs';
 import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX, secretPath } from './secrets.mjs';
 import { Objects, S3Space, OBJECT_MAX } from './objects.mjs';
 import { respond } from './mcp.mjs';
-import { guide } from './guide.mjs';
+import { guide } from '../cli/guide.mjs';
 
 const VERSION = createRequire(import.meta.url)('../package.json').version;
 
@@ -20,11 +20,6 @@ const PUBLIC = new URL('../web/', import.meta.url);
 // The owner's pages. Each is the same shell; the script decides what to show from the path.
 const PAGES = ['/', '/secrets', '/objects'];
 const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/secrets', ['index.html', 'text/html; charset=utf-8']], ['/objects', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
-// The runtime CLI is served by the server it talks to, so a new machine needs
-// only this origin: `curl -fsSL <origin>/cli/install.sh | sh`.
-const CLI_FILES = ['runtime.mjs', 'env-name.mjs', 'guide.mjs', 'expo-runtime.mjs'];
-const CLI_DIR = new URL('./', import.meta.url);
-const installScript = async (origin) => (await readFile(fileURLToPath(new URL('install.sh', CLI_DIR)), 'utf8')).replace('__ORIGIN__', origin).replace('__FILES__', CLI_FILES.join(' '));
 const MAX_BODY = 12_000;
 const SESSION_AGE = 14 * 86400;
 const LOGIN_CALLBACK = '/auth/callback';
@@ -204,9 +199,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         return res.end(await readFile(fileURLToPath(new URL(filename, PUBLIC))));
       }
       if (path === '/health' && method === 'GET') return send(200, { status: 'ok' });
-      if (path === '/cli/install.sh' && method === 'GET') { res.writeHead(200, { 'content-type': 'text/x-shellscript; charset=utf-8' }); return res.end(await installScript(origin)); }
-      const cliFile = path.match(/^\/cli\/([a-z-]+\.mjs)$/)?.[1];
-      if (cliFile && CLI_FILES.includes(cliFile) && method === 'GET') { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' }); return res.end(await readFile(fileURLToPath(new URL(cliFile, CLI_DIR)))); }
       if (path === LOGIN_CALLBACK && method === 'GET') {
         let pending, destination = logins.get(loginToken)?.returnTo || '/';
         try {
