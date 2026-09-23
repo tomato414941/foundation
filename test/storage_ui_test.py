@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
 
     # Nothing kept yet, and the page says so.
-    page.goto(args.base, wait_until='networkidle')
+    page.goto(args.base + '/secrets', wait_until='networkidle')
     expect(page.get_by_role('heading', name='シークレット', exact=True)).to_be_visible()
     expect(page.get_by_text('まだ何も預かっていません。', exact=False)).to_be_visible()
     review(page)
