@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { fail } from './errors.mjs';
 import { presignAws, serverCredentials, signAws } from './aws-sigv4.mjs';
 
@@ -22,6 +23,8 @@ export function objectKey(value) {
   return value;
 }
 
+// S3 verifies the payload hash it is given in the header, so it must be the one the signature covers.
+const payloadHash = body => createHash('sha256').update(body ?? '').digest('hex');
 const tags = (xml, name) => [...xml.matchAll(new RegExp('<' + name + '>([\\s\\S]*?)</' + name + '>', 'g'))].map(match => match[1]);
 const tag = (xml, name) => tags(xml, name)[0];
 const unescape = value => value.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
@@ -37,10 +40,10 @@ export class S3Space {
   path(prefix, key) { return '/' + (prefix + key).split('/').map(encodeURIComponent).join('/'); }
   async call({ method, path, query, body, headers = {} }) {
     const request = signAws({ method, service: 's3', region: this.region, host: this.host, path, query, body: body ?? '',
-      credentials: await this.credentials(), headers: { ...headers, 'x-amz-content-sha256': 'UNSIGNED-PAYLOAD' } });
+      credentials: await this.credentials(), headers: { ...headers, 'x-amz-content-sha256': payloadHash(body) } });
     let response;
     try {
-      response = await this.fetcher(request.url, { method, headers: { ...request.headers, 'x-amz-content-sha256': 'UNSIGNED-PAYLOAD' },
+      response = await this.fetcher(request.url, { method, headers: request.headers,
         ...(body === undefined ? {} : { body }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
     } catch { fail(502, 'space_unavailable', '置き場に届きませんでした。時間をおいて再度お試しください。'); }
     return response;
