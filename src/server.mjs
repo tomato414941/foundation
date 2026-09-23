@@ -3,12 +3,8 @@ import { createApp } from './app.mjs';
 import { GmailClient } from './services/gmail.mjs';
 import { OpenRouterClient } from './services/openrouter.mjs';
 import { ExpoClient } from './services/expo.mjs';
-import { SupabaseClient } from './services/supabase.mjs';
-import { AppleClient } from './services/apple.mjs';
-import { CloudflareClient } from './services/cloudflare.mjs';
 import { GitHubClient } from './services/github.mjs';
-import { GenericClient } from './generic.mjs';
-import { gmailReadonly, gmailMetadata, openrouterOauth, expoToken, expoLogin, supabaseAccessToken, cloudflareApiToken, appleApiKey, githubOauth, generic } from './adapters.mjs';
+import { gmailReadonly, gmailMetadata, openrouterOauth, expoLogin, githubOauth } from './adapters.mjs';
 import { SupabaseAuth } from './auth.mjs';
 import { Kms, resolveEncryptionKey } from './kms.mjs';
 import { S3Files } from './files.mjs';
@@ -19,14 +15,14 @@ const encryptionKey = await resolveEncryptionKey({ database: config.database, en
 const auth = new SupabaseAuth(config.supabase);
 const gmail = new GmailClient(config.google), expo = new ExpoClient(config.expo);
 const github = new GitHubClient(config.github);
-const adapters = [githubOauth(github), openrouterOauth(new OpenRouterClient()), expoToken(expo), ...(config.expo.sessionLogin ? [expoLogin(expo)] : []), supabaseAccessToken(new SupabaseClient()), cloudflareApiToken(new CloudflareClient()), appleApiKey(new AppleClient()), gmailReadonly(gmail), gmailMetadata(gmail), generic(new GenericClient())];
+const adapters = [githubOauth(github), openrouterOauth(new OpenRouterClient()), ...(config.expo.sessionLogin ? [expoLogin(expo)] : []), gmailReadonly(gmail), gmailMetadata(gmail)];
 const app = createApp({ database: config.database, encryptionKey, files: new S3Files(config.files), publicOrigin: config.publicOrigin, trustedProxies: config.trustedProxies, auth, adapters });
 app.server.listen(config.port, config.bind, () => {
   console.log(`Foundation: http://${config.bind}:${config.port}`);
   console.log(`Encryption key: ${kms ? 'wrapped by KMS ' + config.kms.keyId : 'plaintext key file or variable'}`);
   if (config.publicOrigin) console.log(`Private preview: ${config.publicOrigin}`);
   console.log(`Supabase Auth: ${auth.enabled ? 'configured' : 'not configured'}; Gmail OAuth: ${gmail.enabled ? 'configured' : 'not configured'}; GitHub OAuth: ${github.enabled ? 'configured' : 'not configured'}`);
-  console.log(`Email login: ${auth.emailEnabled ? 'enabled' : 'disabled'}; File space: ${config.files.bucket || 'not configured'}`);
+  console.log(`Email login: ${auth.emailEnabled ? 'enabled' : 'disabled'}; Sharing space: ${config.files.bucket || 'not configured'}`);
 });
 let closing = false;
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => {

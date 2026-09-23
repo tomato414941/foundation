@@ -99,7 +99,7 @@ test('Approval requires the confirmation code; a registration keeps to the reque
   const { row } = await create(f);
   assert.equal((await approve(f, row, { confirmationCode: '' })).status, 400);
   const asked = await register(f, { adapter: 'gmail.metadata' });
-  assert.equal(asked.row.kind, 'register'); assert.equal(asked.row.confirmation_code, undefined);
+  assert.equal(asked.row.kind, 'connect'); assert.equal(asked.row.confirmation_code, undefined);
   const escalation = await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { name: 'Gmail', accessRequestId: asked.row.id } });
   assert.equal(escalation.status, 400); assert.equal(escalation.json.error.code, 'scope_mismatch');
   assert.equal((await approve(f, asked.row)).status, 409, 'a registration request is not approved with a code');

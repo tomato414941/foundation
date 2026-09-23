@@ -5,10 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { Store } from './store.mjs';
 import { fail, HttpError, nameValue } from './errors.mjs';
 import { Adapters } from './adapters.mjs';
-import { acceptValues } from './schema.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { AccessRequests } from './access-requests.mjs';
-import { verificationResult } from './verification.mjs';
 import { Files, FILE_MAX } from './files.mjs';
 import { Records } from './records.mjs';
 import { Entries, ENTRY_MAX } from './entries.mjs';
@@ -162,14 +160,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
     return { record, details: { adapter: adapterId, subject: result.subject, names: records.names(record), ...rest, name: credentialName(record, result.subject, rest.name) } };
   };
   const givenName = value => value === undefined || value === '' ? '' : nameValue(value, '表示名');
-  // Runs a service exchange, records what was verified on the stored secret (for the owner's screens only),
-  // and commits atomically. Foundation never reports these outcomes to the runtime; it learns only which credentials it can use.
+  // Runs a service exchange and commits it atomically, checking that the same person is still here.
   async function verifyConnection(req, session, user, operation, commit) {
     const result = await operation();
     if (req.aborted || req.socket.destroyed || localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
-    const report = verificationResult(result);
-    if (result.secret) result.secret.verification = report;
-    return store.transaction(() => commit(result, report));
+    return store.transaction(() => commit(result));
   }
   // What the owner sees of a credential: the row, what its adapter verified about it, and how it is delivered.
   function ownerView(credential) {
@@ -177,7 +172,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
     const { owner_id: _owner, generation: _generation, secret: _secret, ...row } = credential;
     const access = credential.adapter ? adapters.get(credential.adapter).access : KEPT_ACCESS;
     return { ...row, ...record.facts, expires_at: record.expires_at, expiry_known: record.expiry_known, credential_type: record.credential_type,
-      access, variables: credential.names, ...(record.verification ? { verification: record.verification } : {}) };
+      access, variables: credential.names };
   }
   // What a runtime sees: the same, and where to ask for delivery. Never the secret.
   function runtimeView(credential) {
@@ -331,7 +326,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           // Only a key not yet approved introduces itself by name; an approved key is known by the name its owner keeps.
           const name = input.name === undefined ? '' : nameValue(input.name, '依頼元'), purpose = purposeValue(input.purpose);
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
-          return send(201, { request: requests.summary(requests.create(token, { name, purpose, adapter: input.adapter, details: input.details, guidance: input.guidance ?? '', validMinutes: input.valid_minutes ?? 30 }), origin) });
+          return send(201, { request: requests.summary(requests.create(token, { name, purpose, adapter: input.adapter, store: input.store, details: input.details, guidance: input.guidance ?? '', validMinutes: input.valid_minutes ?? 30 }), origin) });
         }
         if (path.endsWith('/current') && method === 'GET') return send(200, { request: { ...requests.runtimeView(token), verification_uri: origin + '/connect/' + requests.current(token).id } });
         if (path.endsWith('/current') && method === 'DELETE') {
@@ -359,6 +354,24 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             entries.remove(user.id, decodeURIComponent(ownEntry[1]));
             return send(200, { ok: true });
           }
+        }
+        // The owner fulfils a storage request: what they typed becomes the entry the key asked for, exactly
+        // where and how the key declared it. Foundation adds nothing and checks nothing about the content.
+        const storeRoute = path.match(/^\/api\/access-requests\/([A-Za-z0-9_-]{43})\/store$/);
+        if (storeRoute && method === 'POST') {
+          const row = requests.forUser(storeRoute[1], user.id, true);
+          if (requests.kindOf(row) !== 'store') fail(409, 'wrong_kind', 'この依頼は保管の依頼ではありません。');
+          const asked = requests.details(row);
+          const input = await body(req, ENTRY_MAX);
+          if (typeof input.content !== 'string' || input.content === '') fail(400, 'invalid_values', '入力内容を確認してください。');
+          progressRequestId = row.id;
+          return store.transaction(() => {
+            requests.forUser(row.id, user.id, true);
+            entries.put(user.id, { path: asked.path, content: Buffer.from(input.content, 'utf8'), type: asked.type, env: asked.env, filename: asked.filename, secret: asked.secret, keptBy: row.requester_name });
+            requests.registered(row.id, user.id, asked.path);
+            requests.record(row.id, 'stored');
+            return send(200, { stored: true, path: asked.path });
+          });
         }
         const requestRoute = path.match(/^\/api\/access-requests\/([A-Za-z0-9_-]{43})(\/(?:approve|deny))?$/);
         if (requestRoute) {
@@ -415,24 +428,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           if (previous && previous.adapter !== adapter.id) fail(400, 'invalid_adapter', '接続方法が一致しません。');
           if (previous && adapter.canReconnect === false) fail(400, 'new_connection_required', '新しく登録してください。');
           if (previous?.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
-          if (adapter.register === 'paste') {
-            // A request fixes what the runtime declared; a registration from the owner's own screen declares it there.
-            const details = accessRequest ? requests.details(accessRequest) : adapters.details(adapter.id, input.details);
-            const values = acceptValues(adapters.form(adapter.id, details).schema, input.values);
-            input.values = null;
-            if (accessRequest) requests.claim(accessRequest.id, user.id);
-            const saved = await verifyConnection(req, session, user,
-              () => adapter.client.importToken({ values, details }),
-              (result, report) => {
-                if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
-                const held = store_(adapter.id, result, undefined, { service: chosenService || adapters.service(adapter.id, details).name, name: given, kept_by: requestedBy });
-                const id = store.register(user.id, held.details, held.record);
-                if (accessRequest) requests.registered(accessRequest.id, user.id, id);
-                return { connected: true, credential_id: id, verification: report };
-              });
-            if (accessRequest) requests.record(accessRequest.id, 'connected', { adapter: adapter.id });
-            return send(200, saved);
-          }
           const verifier = randomBytes(32).toString('base64url');
           const redirectUri = origin + '/oauth/' + adapter.id + '/callback';
           if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
@@ -567,7 +562,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           store.recordIssuance(agent, record.expires_at);
           return send(200, { credential: { id: credential.id, adapter: credential.adapter || null, service: credential.service, name: credential.name, label: record.facts.label || credential.name },
             expires_at: record.expires_at, expires_in: record.expires_at === null ? null : Math.max(0, Math.floor((record.expires_at - Date.now()) / 1000)),
-            delivery: records.delivery(record), ...(record.facts.key_info ? { key_info: record.facts.key_info } : {}), ...(record.verification ? { verification: record.verification } : {}) });
+            delivery: records.delivery(record), ...(record.facts.key_info ? { key_info: record.facts.key_info } : {}) });
         }
       }
       fail(404, 'not_found', '指定された操作が見つかりません。');

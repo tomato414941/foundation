@@ -21,7 +21,7 @@ export class Records {
     return held({ environment, files, session: expo_session, facts: adapter.client.facts?.(secret) || {}, renewal: secret,
       expires_at: secret.expires_at ?? null, expiry_known: secret.expiry_known ?? true,
       credential_type: secret.credential_type ?? adapter.credentialType ?? 'oauth2_access_token',
-      scopes: secret.scopes, verification: secret.verification });
+      scopes: secret.scopes });
   }
   names(record) { return names(record); }
   delivery(record) { return delivery(record); }
