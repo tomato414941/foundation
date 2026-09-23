@@ -19,7 +19,7 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':
 // The lent space, laid out the way an object browser is: a prefix acts as a folder, the list is a table
 // you can sort and select in, and everything acts on the level you are looking at. The keys only look
 // like paths, so the levels are worked out from the keys themselves rather than fetched one at a time.
-let objectPrefix = '', objectFilter = '', objectLimit = 100, objectSort = 'updated', objectDescending = true;
+let objectPrefix = '', objectFilter = '', objectLimit = 100, objectSort = 'updated', objectDescending = true, objectSearchPrefix = false;
 let objectChosen = new Set();
 function levelOf(objects) {
   const folders = new Map(), files = [];
@@ -34,15 +34,18 @@ function levelOf(objects) {
   }
   return { folders: [...folders.values()].sort((a, b) => a.name.localeCompare(b.name)), files };
 }
+// Only worth showing once you have stepped into something; at the top there is nowhere to go back to.
 function crumbs() {
   const parts = objectPrefix.split('/').filter(Boolean);
+  if (!parts.length) return '';
   const links = ['<button class="text-button" data-action="go-prefix" data-prefix="">すべて</button>'];
   let walked = '';
-  for (const part of parts) {
+  for (const [at, part] of parts.entries()) {
     walked += part + '/';
-    links.push(`<button class="text-button" data-action="go-prefix" data-prefix="${esc(walked)}">${esc(part)}</button>`);
+    links.push(at === parts.length - 1 ? `<span aria-current="location">${esc(part)}</span>`
+      : `<button class="text-button" data-action="go-prefix" data-prefix="${esc(walked)}">${esc(part)}</button>`);
   }
-  return `<nav class="crumbs" aria-label="現在の場所">${links.join('<span aria-hidden="true">›</span>')}</nav>`;
+  return `<nav class="crumbs" aria-label="パス">${links.join('<span aria-hidden="true">›</span>')}</nav>`;
 }
 const kindOf = name => { const cut = name.lastIndexOf('.'); return cut > 0 ? name.slice(cut + 1).toLowerCase() : '—'; };
 function sortFiles(files) {
@@ -51,26 +54,51 @@ function sortFiles(files) {
 }
 function spaceSection() {
   const space = state.space;
-  if (!space || !space.available) return '<section class="resource-section"><div class="access-empty"><p>置き場は現在使えません。</p></div></section>';
+  if (!space || !space.available) return '<section class="resource-section object-browser"><div class="access-empty"><p>置き場は現在使えません。</p></div></section>';
   const needle = objectFilter.trim().toLowerCase();
-  const matching = needle ? space.objects.filter(item => item.key.toLowerCase().includes(needle)) : space.objects;
-  const { folders, files } = needle ? { folders: [], files: matching.map(item => ({ ...item, name: item.key })) } : levelOf(matching);
-  const shown = sortFiles(files).slice(0, objectLimit);
-  const header = ['name', '名前', 'kind', '種類', 'size', 'サイズ', 'updated', '更新'];
-  const column = (key, label) => `<button class="column-head" data-action="sort-objects" data-sort="${key}" aria-sort="${objectSort === key ? (objectDescending ? 'descending' : 'ascending') : 'none'}">${label}${objectSort === key ? (objectDescending ? ' ↓' : ' ↑') : ''}</button>`;
-  const rows = folders.map(item => `<tr><td></td><td class="object-name"><span class="object-mark" aria-hidden="true">${icon('folder')}</span><button class="link-button" data-action="go-prefix" data-prefix="${esc(objectPrefix + item.name)}">${esc(item.name.slice(0, -1))}</button></td>
+  const matching = !needle ? space.objects
+    : objectSearchPrefix ? space.objects.filter(item => item.key.slice(objectPrefix.length).toLowerCase().startsWith(needle))
+    : space.objects.filter(item => item.key.toLowerCase().includes(needle));
+  const { folders, files } = needle && !objectSearchPrefix
+    ? { folders: [], files: matching.map(item => ({ ...item, name: item.key })) } : levelOf(matching);
+  const sorted = sortFiles(files), shown = sorted.slice(0, objectLimit);
+  const here = [...folders.map(item => objectPrefix + item.name), ...shown.map(item => item.key)];
+  const allChosen = here.length > 0 && here.every(key => objectChosen.has(key));
+  const column = (key, label) => `<button class="column-head" data-action="sort-objects" data-sort="${key}">${label}${objectSort === key ? (objectDescending ? ' ↓' : ' ↑') : ''}</button>`;
+  const rows = folders.map(item => `<tr><td><input type="checkbox" data-action="choose-object" data-key="${esc(objectPrefix + item.name)}" ${objectChosen.has(objectPrefix + item.name) ? 'checked' : ''} aria-label="${esc(item.name)} を選ぶ"></td>
+      <td class="object-name"><span class="object-mark" aria-hidden="true">${icon('folder')}</span><button class="link-button" data-action="go-prefix" data-prefix="${esc(objectPrefix + item.name)}">${esc(item.name.slice(0, -1))}</button></td>
       <td>フォルダ</td><td>${esc(kiloBytes(item.bytes))}</td><td>${item.count} 件</td></tr>`).join('')
     + shown.map(item => `<tr><td><input type="checkbox" data-action="choose-object" data-key="${esc(item.key)}" ${objectChosen.has(item.key) ? 'checked' : ''} aria-label="${esc(item.name)} を選ぶ"></td>
       <td class="object-name"><span class="object-mark" aria-hidden="true">${icon('note')}</span><a href="/api/objects/${encodeURIComponent(item.key)}" download>${esc(item.name)}</a></td>
       <td>${esc(kindOf(item.name))}</td><td>${esc(kiloBytes(item.size))}</td><td>${esc(keptWhen(item.updated_at))}</td></tr>`).join('');
   const body = space.objects.length === 0 ? '<div class="access-empty"><p>まだ何も置かれていません。AIに頼むか、ここから追加できます。</p></div>'
-    : folders.length + files.length === 0 ? `<div class="access-empty"><p>${needle ? `「${esc(objectFilter)}」に当てはまるものはありません。` : 'ここには何もありません。'}</p></div>`
-    : `<div class="object-table-wrap"><table class="object-table"><thead><tr><th></th><th>${column('name', '名前')}</th><th>種類</th><th>${column('size', 'サイズ')}</th><th>${column('updated', '更新')}</th></tr></thead><tbody>${rows}</tbody></table></div>${files.length > shown.length ? `<button class="button secondary full" data-action="more-objects">残り${files.length - shown.length}件を表示</button>` : ''}`;
-  const chosen = [...objectChosen].filter(key => space.objects.some(item => item.key === key));
-  const tools = `<div class="object-tools"><input class="filter-field" id="object-filter" type="search" placeholder="名前で絞り込む" value="${esc(objectFilter)}" autocomplete="off" aria-label="名前で絞り込む">
-    <button class="button secondary" data-action="link-chosen" ${chosen.length === 1 ? '' : 'disabled'}>リンクを作る</button>
+    : here.length === 0 ? `<div class="access-empty"><p>${needle ? `「${esc(objectFilter)}」に当てはまるものはありません。` : 'ここには何もありません。'}</p></div>`
+    : `<div class="object-table-wrap"><table class="object-table"><thead><tr>
+        <th><input type="checkbox" data-action="choose-all" ${allChosen ? 'checked' : ''} aria-label="この画面のものをすべて選ぶ"></th>
+        <th>${column('name', '名前')}</th><th>種類</th><th>${column('size', 'サイズ')}</th><th>${column('updated', '更新')}</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>${paging(sorted.length, shown.length)}`;
+  const chosen = chosenKeys();
+  const tools = `<div class="object-tools"><input class="filter-field" id="object-filter" type="search" placeholder="${objectSearchPrefix ? 'この場所を接頭辞で探す' : '名前で絞り込む'}" value="${esc(objectFilter)}" autocomplete="off" aria-label="絞り込む">
+    <button class="text-button" data-action="toggle-search">${objectSearchPrefix ? '部分一致にする' : '接頭辞で探す'}</button>
+    <button class="button secondary" data-action="copy-url" ${chosen.length === 1 && !chosen[0].endsWith('/') ? '' : 'disabled'}>URLをコピー</button>
     <button class="button secondary danger" data-action="drop-chosen" ${chosen.length ? '' : 'disabled'}>削除${chosen.length ? `（${chosen.length}）` : ''}</button></div>`;
-  return `<section class="resource-section" aria-label="置いてあるもの">${crumbs()}${tools}${body}</section>`;
+  return `<section class="resource-section object-browser" aria-label="置いてあるもの"><div class="object-count">オブジェクト（${space.usage?.count ?? space.objects.length}）</div>${crumbs()}${tools}${body}</section>`;
+}
+// A folder chosen means everything under it.
+function chosenKeys() {
+  const all = state.space?.objects || [];
+  const chosen = new Set();
+  for (const key of objectChosen) {
+    if (key.endsWith('/')) for (const item of all) { if (item.key.startsWith(key)) chosen.add(item.key); }
+    else if (all.some(item => item.key === key)) chosen.add(key);
+  }
+  return [...chosen];
+}
+function paging(total, showing) {
+  if (total <= objectLimit && objectLimit === 100) return '';
+  return `<div class="object-paging"><span>${showing} / ${total} 件</span>
+    ${total > showing ? `<button class="button secondary" data-action="more-objects">さらに100件</button>` : ''}
+    ${objectLimit > 100 ? `<button class="text-button" data-action="less-objects">最初の100件に戻す</button>` : ''}</div>`;
 }
 
 // The service an acquisition reaches.
@@ -543,6 +571,43 @@ document.addEventListener('click', async (event) => {
     if (action === 'drop-entry') {
       const path = target.dataset.path;
       confirmRemoval(path + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/api/entries/' + encodeURIComponent(path), { method: 'DELETE', data: {} }));
+    }
+    if (action === 'go-prefix') { objectPrefix = target.dataset.prefix; objectFilter = ''; objectLimit = 100; objectChosen = new Set(); render(); }
+    if (action === 'more-objects') { objectLimit += 100; render(); }
+    if (action === 'less-objects') { objectLimit = 100; render(); }
+    if (action === 'toggle-search') { objectSearchPrefix = !objectSearchPrefix; render(); }
+    if (action === 'sort-objects') {
+      const key = target.dataset.sort;
+      if (objectSort === key) objectDescending = !objectDescending; else { objectSort = key; objectDescending = key !== 'name'; }
+      render();
+    }
+    if (action === 'choose-object') {
+      if (target.checked) objectChosen.add(target.dataset.key); else objectChosen.delete(target.dataset.key);
+      render();
+    }
+    if (action === 'choose-all') {
+      const boxes = [...document.querySelectorAll('tbody [data-action="choose-object"]')];
+      for (const box of boxes) { if (target.checked) objectChosen.add(box.dataset.key); else objectChosen.delete(box.dataset.key); }
+      render();
+    }
+    if (action === 'copy-url') {
+      const key = chosenKeys()[0];
+      target.disabled = true;
+      try {
+        const result = await api('/api/objects/' + encodeURIComponent(key) + '/link', { method: 'POST', data: { minutes: 60 } });
+        try { await navigator.clipboard.writeText(result.url); toast('URLをコピーしました。1時間で切れます。'); }
+        catch {
+          openDialog(`<h2 id="dialog-title">取り出し用のURL</h2><p>${esc(key)} を、このURLを知っている人なら誰でも取り出せます。1時間で切れます。</p>
+            <label for="object-link">URL</label><input id="object-link" readonly value="${esc(result.url)}"><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">閉じる</button></div>`);
+          document.querySelector('#object-link')?.select();
+        }
+      } catch (error) { toast(error.message); }
+      finally { target.disabled = false; }
+    }
+    if (action === 'drop-chosen') {
+      const keys = chosenKeys();
+      confirmRemoval(keys.length === 1 ? keys[0] + ' を削除しますか？' : keys.length + '件を削除しますか？', '置き場から消えます。元には戻せません。',
+        async () => { for (const key of keys) await api('/api/objects/' + encodeURIComponent(key), { method: 'DELETE', data: {} }); objectChosen = new Set(); });
     }
     if (action === 'add-agent') editAgent();
     if (action === 'remove-agent') removeAgent(state.agents.find((a) => a.id === id));

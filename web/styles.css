@@ -250,9 +250,14 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 .object-tools .filter-field { flex: 1 1 220px; margin: 0; }
 .object-tools .button { min-height: 44px; padding: 0 14px; }
 .object-tools .button.danger { color: var(--danger, #a3392f); }
-.object-table-wrap { overflow-x: auto; border: 1px solid var(--line, #dce4df); border-radius: 10px; background: #fff; }
+.object-browser { padding: 16px 20px 4px; }
+.object-count { font-size: 14px; font-weight: 600; color: #4a574f; margin: 0 0 10px; }
+.object-table-wrap { overflow-x: auto; margin: 0 -20px; border-top: 1px solid var(--line, #dce4df); background: #fff; }
+.object-paging { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 0; font-size: 14px; color: var(--muted, #62716a); }
 .object-table { width: 100%; border-collapse: collapse; font-size: 15px; }
 .object-table th, .object-table td { padding: 12px 14px; text-align: left; white-space: nowrap; }
+.object-table th:first-child, .object-table td:first-child { padding-left: 20px; }
+.object-table th:last-child, .object-table td:last-child { padding-right: 20px; }
 .object-table thead th { background: #f4f7f3; border-bottom: 1px solid var(--line, #dce4df); font-size: 14px; font-weight: 600; color: #4a574f; }
 .object-table tbody tr + tr td { border-top: 1px solid #edf1ec; }
 .object-table tbody tr:hover td { background: #fafcf9; }
@@ -264,6 +269,10 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 .column-head { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; }
 .column-head:hover { text-decoration: underline; text-underline-offset: 4px; }
 @media (max-width: 720px) {
+  .object-browser { padding: 14px 16px 4px; }
+  .object-table-wrap { margin: 0 -16px; }
   .object-table th:nth-child(3), .object-table td:nth-child(3) { display: none; }
   .object-table th, .object-table td { padding: 10px 8px; }
+  .object-table th:first-child, .object-table td:first-child { padding-left: 16px; }
+  .object-table th:last-child, .object-table td:last-child { padding-right: 16px; }
 }
