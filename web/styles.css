@@ -273,9 +273,6 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
   .object-table th:last-child, .object-table td:last-child { padding-right: 16px; }
 }
 
-.approval-detail { margin: 4px 0 16px; }
-.approval-detail > summary { min-height: 44px; display: flex; align-items: center; font-size: 14px; color: var(--muted, #62716a); cursor: pointer; }
-.approval-detail .approval-facts { margin-top: 4px; }
 
 /* The home page: where to go, and what concerns everything rather than one kind of thing. */
 .home-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 0 0 16px; }
