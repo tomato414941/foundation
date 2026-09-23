@@ -170,18 +170,15 @@ function serviceSection(group) {
     ${credentials.length ? `<div class="credential-workspace"><div class="credential-list" role="group" aria-label="${esc(group.name)}の認証情報">${credentials.map(item => `<button class="credential-item ${item.id === credential.id ? 'selected' : ''}" data-action="select-credential" data-id="${esc(item.id)}" aria-pressed="${item.id === credential.id}"><strong>${esc(item.name)}</strong>${otherLabel(item) ? `<span>${esc(otherLabel(item))}</span>` : ''}${item.status !== 'connected' ? `<small class="warning-text">${statusName(item)}</small>` : ''}</button>`).join('')}</div><div class="credential-pane">${details(credential)}</div></div>` : `<div class="empty-state"><span class="empty-icon">${icon(group.icon)}</span><div><h3>${esc(group.name)}の認証情報を登録しましょう</h3><p>${esc(group.adapters.length > 1 ? group.adapters.map(adapter => adapter.access.name).join('、') + 'から選んで登録できます。' : group.adapters[0]?.intro)}</p></div></div>`}
     ${group.adapters.length && !available ? '<p class="availability" role="status">現在、新しい認証情報を登録できません。</p>' : ''}</section>`;
 }
-// What a key kept on its own: values a command reads, and documents it reads back whole. No adapter stands
-// behind either, so the owner sees where it came from and can look inside or remove it, and nothing else.
+// What a key kept on its own. Foundation never read any of it, so the owner is told only what it was
+// told: where it sits, what the writer said it is, how it reaches a command, and who wrote it.
 const keptWhen = value => new Date(value).toLocaleString('ja-JP');
-function keptValuesSection() {
-  const values = state.values || [];
-  return `<section class="resource-section" aria-labelledby="kept-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('lock')}</span><div><h2 id="kept-title">AIが預けた値</h2><p>AIが自分で保管した値です。Foundationは中身を確認していません</p></div></div></div>
-    ${values.length ? `<div class="agent-list">${values.map(value => `<article class="agent-row"><div class="agent-name"><h3>${esc(value.service)}</h3><p>${value.names.map(name => `<code>${esc(name)}</code>`).join(' ')}</p></div><div class="agent-permissions"><span class="muted">${esc(value.kept_by)} · ${esc(keptWhen(value.updated_at))}</span></div><div class="agent-actions"><button class="text-button" data-action="show-value" data-id="${esc(value.id)}">中身を見る</button><button class="text-button danger" data-action="remove-value" data-id="${esc(value.id)}">削除</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>AIが預けた値はありません。</p></div>'}</section>`;
-}
-function documentsSection() {
-  const documents = state.documents || [];
-  return `<section class="resource-section" aria-labelledby="documents-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('note')}</span><div><h2 id="documents-title">AIの記録</h2><p>AIが次の会話のために書き残したものです</p></div></div></div>
-    ${documents.length ? `<div class="agent-list">${documents.map(row => `<article class="agent-row"><div class="agent-name"><h3>${esc(row.collection)} / ${esc(row.name)}</h3><p>${esc(String(row.size))} バイト</p></div><div class="agent-permissions"><span class="muted">${esc(row.kept_by)} · ${esc(keptWhen(row.updated_at))}</span></div><div class="agent-actions"><button class="text-button" data-action="show-document" data-collection="${esc(row.collection)}" data-name="${esc(row.name)}">中身を見る</button><button class="text-button danger" data-action="remove-document" data-collection="${esc(row.collection)}" data-name="${esc(row.name)}">削除</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>AIの記録はありません。</p></div>'}</section>`;
+const handedOver = entry => entry.filename ? `ファイル ${entry.filename} として渡す (${entry.env})` : entry.env ? `${entry.env} として渡す` : '渡さない';
+const kiloBytes = size => size < 1024 ? size + ' バイト' : Math.round(size / 1024) + ' KB';
+function entriesSection() {
+  const entries = state.entries || [];
+  return `<section class="resource-section" aria-labelledby="kept-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('note')}</span><div><h2 id="kept-title">AIが預けたもの</h2><p>AIが自分で保管したものです。Foundationは中身を見ていません</p></div></div></div>
+    ${entries.length ? `<div class="agent-list">${entries.map(entry => `<article class="agent-row"><div class="agent-name"><h3>${esc(entry.path)}</h3><p>${esc(entry.media_type)} · ${esc(kiloBytes(entry.size))}</p></div><div class="agent-permissions"><span class="muted">${esc(handedOver(entry))}</span><span class="muted block">${esc(entry.kept_by)} · ${esc(keptWhen(entry.updated_at))}</span></div><div class="agent-actions"><a class="text-button" href="/api/entries/${encodeURIComponent(entry.path)}" download>中身を見る</a><button class="text-button danger" data-action="drop-entry" data-path="${esc(entry.path)}">削除</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>AIが預けたものはありません。</p></div>'}</section>`;
 }
 function render() {
   if (!state) return;
@@ -191,8 +188,7 @@ function render() {
   app.innerHTML = `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main><header class="page-heading"><h1>預けているもの</h1></header>
     ${credentialGroups().map(serviceSection).join('')}
     ${state.adapters.some(adapter => adapter.declared && adapter.available) ? `<section class="resource-section" aria-labelledby="other-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="other-title">ほかのサービス</h2><p>一覧にないサービスのキーを預けます</p></div></div><button class="button secondary" data-action="add-generic">${icon('plus')} キーを登録</button></div></section>` : ''}
-    ${keptValuesSection()}
-    ${documentsSection()}
+    ${entriesSection()}
     <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">AIのアクセスキー</h2></div></div><button class="button secondary" data-action="add-agent">${icon('plus')} アクセスキーを追加</button></div>
     ${state.agents.length ? `<div class="agent-list">${state.agents.map((agent) => `<article class="agent-row"><div class="agent-name"><h3>${esc(agent.name)}</h3><p>${agent.last_used_at ? '最終利用 ' + esc(new Date(agent.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(agent.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-agent" data-id="${esc(agent.id)}">名前を変更</button><button class="text-button danger" data-action="remove-agent" data-id="${esc(agent.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section></main></div>`;
 }
@@ -492,23 +488,9 @@ document.addEventListener('click', async (event) => {
     if (action === 'reconnect') connect(state.credentials.find((a) => a.id === id));
     if (action === 'edit-credential') editCredential(state.credentials.find((a) => a.id === id));
     if (action === 'remove-credential') removeCredential(state.credentials.find((a) => a.id === id));
-    if (action === 'show-value') {
-      const value = state.values.find(item => item.id === id);
-      const { values } = await api('/api/values/' + id);
-      openDialog(`<h2 id="dialog-title">${esc(value.service)}</h2><p>${esc(value.kept_by)} が保管した値です。</p><dl class="credential-facts">${Object.entries(values).map(([name, content]) => `<div><dt><code>${esc(name)}</code></dt><dd class="kept-value">${esc(content)}</dd></div>`).join('')}</dl>`);
-    }
-    if (action === 'remove-value') {
-      const value = state.values.find(item => item.id === id);
-      confirmRemoval(value.service + 'の値を削除しますか？', 'AIはこの値を使えなくなります。サービス側のキーはそのまま残ります。', () => api('/api/values/' + id, { method: 'DELETE', data: {} }));
-    }
-    if (action === 'show-document') {
-      const { collection, name } = target.dataset;
-      const { document: row } = await api(`/api/documents/${encodeURIComponent(collection)}/${encodeURIComponent(name)}`);
-      openDialog(`<h2 id="dialog-title">${esc(collection)} / ${esc(name)}</h2><p>${esc(row.kept_by)} が書いた記録です。</p><pre class="kept-document">${esc(JSON.stringify(row.body, null, 2))}</pre>`);
-    }
-    if (action === 'remove-document') {
-      const { collection, name } = target.dataset;
-      confirmRemoval(collection + ' / ' + name + ' を削除しますか？', 'AIはこの記録を読めなくなります。元には戻せません。', () => api(`/api/documents/${encodeURIComponent(collection)}/${encodeURIComponent(name)}`, { method: 'DELETE', data: {} }));
+    if (action === 'drop-entry') {
+      const path = target.dataset.path;
+      confirmRemoval(path + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/api/entries/' + encodeURIComponent(path), { method: 'DELETE', data: {} }));
     }
     if (action === 'add-agent') editAgent();
     if (action === 'remove-agent') removeAgent(state.agents.find((a) => a.id === id));
