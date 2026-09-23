@@ -50,9 +50,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
 
-    # The AI asks for something Foundation knows nothing about: it names the path, the variable and the steps.
+    # The AI asks for something Foundation knows nothing about: it chooses the saved name and the steps.
     asked = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
-        'store': {'path': 'cloudflare/cloudflare-api-token', 'label': 'CloudflareのAPIトークン',
+        'store': {'name': 'cloudflare/cloudflare-api-token', 'label': 'CloudflareのAPIトークン',
                   'site': 'https://dash.cloudflare.com/profile/api-tokens'},
         'purpose': 'DNSレコードの確認に使います。',
         'steps': ['APIトークンを作成 を押し、テンプレートから「Edit zone DNS」を選びます。', '対象のゾーンを選んで作成し、表示されたトークンを貼ってください。']}))['request']
@@ -81,18 +81,34 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
 
     # It is now kept where the AI asked, and the AI cannot read it back.
     kept = cli('api', 'GET', '/v1/secrets')['secrets']
-    assert [row['path'] for row in kept] == ['cloudflare/cloudflare-api-token']
+    assert [row['name'] for row in kept] == ['cloudflare/cloudflare-api-token']
     assert kept[0]['readable'] is False
     refused = subprocess.run(['node', 'cli/runtime.mjs', 'api', 'GET', '/v1/secrets/cloudflare/cloudflare-api-token'], env=env, capture_output=True, text=True, timeout=15)
     assert refused.returncode == 1 and SECRET not in refused.stdout + refused.stderr
 
-    used = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'cloudflare/cloudflare-api-token', '--', 'node', '-e',
+    used = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'CLOUDFLARE_API_TOKEN=cloudflare/cloudflare-api-token', '--', 'node', '-e',
                            'if(process.env.CLOUDFLARE_API_TOKEN!==process.argv[1])process.exit(2);console.log("ready")', SECRET],
                           env=env, capture_output=True, text=True, timeout=15)
     assert used.returncode == 0 and used.stdout.strip() == 'ready', used.stderr
 
     page.goto(args.base + '/secrets', wait_until='networkidle')
-    expect(page.locator('[aria-labelledby="cloudflare-title"]').get_by_role('heading', name='cloudflare-api-token', exact=True)).to_be_visible()
+    expect(page.locator('[aria-label="保存した値"]').get_by_role('heading', name='cloudflare/cloudflare-api-token', exact=True)).to_be_visible()
+    review(page)
+
+    # Stored names are not DOM form-property names, either.
+    names = ['querySelector', 'elements', '__proto__']
+    multiple = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
+        'store': [{'name': name, 'label': '入力 ' + str(index + 1)} for index, name in enumerate(names)],
+        'purpose': '値を保存します。'}))['request']
+    page.goto(multiple['verification_uri'], wait_until='networkidle')
+    for index in range(len(names)):
+        page.get_by_label('入力 ' + str(index + 1), exact=True).fill('fixture-value-' + str(index))
+    page.get_by_role('button', name='登録する', exact=True).click()
+    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    complete = cli('api', 'GET', '/v1/requests/' + multiple['id'])['request']
+    assert complete['result']['names'] == names
+    for name in names:
+        expect(page.get_by_text(name, exact=False)).to_be_visible()
     review(page)
     assert not errors, errors
     context.close()

@@ -113,7 +113,7 @@ export class Requests {
       requester_name: row.requester_name, purpose: row.purpose, steps: JSON.parse(row.steps), ...(key ? { key_name: key.name } : {}),
       verification_uri: origin + '/requests/' + row.id,
       status, created_at: row.created_at, expires_at: row.expires_at,
-      ...(status === 'done' ? { result: kind === 'store' ? { paths: row.credential_id.split(', ') } : result ? { prefix: result.prefix, label: result.label } : {} } : {}),
+      ...(status === 'done' ? { result: kind === 'store' ? { names: JSON.parse(row.credential_id) } : result ? { connection_id: result.id, label: result.label } : {} } : {}),
       ...(events ? { events: this.eventsOf(row) } : {}) };
   }
 }

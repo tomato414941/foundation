@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { fail, HttpError } from '../errors.mjs';
+import { fail } from '../errors.mjs';
 
 export const OPENROUTER_API = 'https://openrouter.ai/api/v1';
 export const OPENROUTER_DOCS = 'https://openrouter.ai/docs/api/api-reference/overview';
@@ -63,18 +63,12 @@ export class OpenRouterClient {
     // A connection identifies the authorized key, not an assumed email address.
     return { subject: 'key:' + secret.details.key_hash, secret };
   }
-  async token(store, credential) {
+  async token(existing, credential) {
     this.check();
     if (credential.status !== 'connected') fail(409, 'reconnect_required', 'OpenRouterのキーを確認するか、新しく登録してください。');
-    try {
-      const next = await this.inspect(store.secret(credential).access_token);
-      if (credential.subject !== 'key:' + next.details.key_hash) invalidResponse();
-      store.saveSecret(credential, next);
-      return next;
-    } catch (error) {
-      if (error instanceof HttpError && ['reconnect_required', 'scope_mismatch'].includes(error.code)) store.reconnectRequired(credential);
-      throw error;
-    }
+    const next = await this.inspect(existing.access_token);
+    if (credential.subject !== 'key:' + next.details.key_hash) invalidResponse();
+    return next;
   }
   facts(secret) {
     const detail = secret.details;

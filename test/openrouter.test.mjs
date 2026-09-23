@@ -15,7 +15,7 @@ const execute = (args, env) => new Promise((resolve, reject) => {
   child.stdout.on('data', part => out += part); child.stderr.on('data', part => err += part);
   child.once('error', reject); child.once('exit', code => resolve({ code, out, err }));
 });
-const credential = (f, connection, token) => f.request('/v1/deliver', { method: 'POST', anonymous: true, token, data: { paths: connection.secrets } });
+const credential = (f, connection, token) => f.deliver(connection, { token, anonymous: true });
 
 test('OpenRouter authorization binds state in callback and uses S256 without application secrets', () => {
   const client = new OpenRouterClient();
@@ -36,7 +36,7 @@ test('OpenRouter exchanges only PKCE code, preserves real expiry and zero budget
   const response = await f.request('/api/state');
   const account = response.json.acquisitions[0];
   assert.equal(account.adapter, 'openrouter.oauth');
-  assert.deepEqual(account.secrets, [account.prefix + '/openrouter-api-key']);
+  assert.deepEqual(account.outputs, ['OPENROUTER_API_KEY']);
   assert.equal(account.key_info.limit, 0);
   assert.equal(account.expires_at, null);
   assert.match(account.label, /^キー [a-f0-9]{12}$/);
@@ -75,8 +75,8 @@ test('API key is delivered only to an approved key; revocation metadata never pr
   assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?connection=connected');
   const account = (await f.request('/api/state')).json.acquisitions[0];
   assert.equal((await f.request('/api/requests/' + row.id)).json.request.status, 'done', 'the request is complete');
-  const listed = await f.request('/v1/secrets', { token });
-  assert.deepEqual(listed.json.secrets.map(entry => entry.path.split('/').pop()), ['openrouter-api-key']);
+  const listed = await f.request('/v1/acquisitions', { token });
+  assert.deepEqual(listed.json.acquisitions[0].outputs, ['OPENROUTER_API_KEY']);
   assert.doesNotMatch(listed.text, /sk-or-v1-/);
   const issued = await credential(f, account, token);
   assert.equal(issued.status, 200, issued.text);
@@ -94,11 +94,11 @@ test('OpenRouter keys are owner-separated, cannot silently replace connections, 
   const database = join(dir, 'state.sqlite'), f = await openrouterFixture(t, { database });
   const account = await f.openrouterAccount(), agent = await f.issueKey();
   assert.ok(!(await readFile(database)).includes(Buffer.from(f.openrouter.key())));
-  const replacement = await f.request('/api/adapters/openrouter.oauth/connect', { method: 'POST', data: { prefix: account.prefix } });
+  const replacement = await f.request('/api/adapters/openrouter.oauth/connect', { method: 'POST', data: { connection_id: account.id } });
   assert.equal(replacement.json.error.code, 'new_connection_required');
   await f.login('other@example.test');
   assert.equal((await f.request('/api/state')).json.acquisitions.length, 0);
-  assert.equal((await f.request('/api/acquisitions/' + encodeURIComponent(account.prefix), { method: 'DELETE', data: { revoke: false } })).status, 404);
+  assert.equal((await f.request('/api/acquisitions/' + encodeURIComponent(account.id), { method: 'DELETE', data: { revoke: false } })).status, 404);
   const own = await f.openrouterAccount('other'), other = await f.issueKey();
   assert.equal((await credential(f, account, other.token)).status, 404);
   assert.equal((await credential(f, own, agent.token)).status, 404);
@@ -107,11 +107,11 @@ test('OpenRouter keys are owner-separated, cannot silently replace connections, 
 test('Local disconnect never pretends to delete OpenRouter key or calls a management endpoint', async t => {
   const f = await openrouterFixture(t), account = await f.openrouterAccount(), agent = await f.issueKey();
   assert.equal((await credential(f, account, agent.token)).status, 200);
-  const removed = await f.request('/api/acquisitions/' + encodeURIComponent(account.prefix), { method: 'DELETE', data: { revoke: true } });
+  const removed = await f.request('/api/acquisitions/' + encodeURIComponent(account.id), { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.status, 200);
   assert.equal(removed.json.service_revoked, null, 'the key stays at OpenRouter, and nothing pretends otherwise');
   assert.equal((await credential(f, account, agent.token)).status, 404);
-  assert.equal(f.app.store.acquisition(USER_A, account.prefix), undefined);
+  assert.equal(f.app.store.acquisition(USER_A, account.id), undefined);
   assert.ok(f.openrouter.calls.every(call => ['/auth/keys', '/key'].some(path => call.url === OPENROUTER_API + path)));
 });
 
@@ -130,7 +130,7 @@ test('Provider expiry, revocation and budget updates are checked before every AP
   issued = await credential(f, account, agent.token);
   assert.equal(issued.json.error.code, 'reconnect_required');
   assert.doesNotMatch(issued.text, /secret upstream|sk-or-v1-/);
-  assert.equal(f.app.store.acquisition(USER_A, account.prefix).status, 'reconnect_required');
+  assert.equal(f.app.store.acquisition(USER_A, account.id).status, 'reconnect_required');
 });
 
 test('OpenRouter in-flight key is withheld after the key is revoked', async t => {
@@ -176,9 +176,12 @@ test('CLI asks for approval, then injects the OpenRouter key only into the child
   assert.match(row.verification_uri, /\/keys\//);
   const approved = await f.request('/api/key-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code } });
   assert.equal(approved.status, 200);
-  const run = await execute(['exec', account.secrets[0], '--', process.execPath, '-e', 'if(!process.env.OPENROUTER_API_KEY || process.env.GOOGLE_OAUTH_ACCESS_TOKEN || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2); console.log("authenticated")'], env);
+  const saved = await execute(['api', 'POST', '/v1/functions/connection.credentials', '--json', JSON.stringify({ connection_id: account.id, save: { OPENROUTER_API_KEY: 'model key' } })], env);
+  assert.equal(saved.code, 0, saved.err);
+  assert.doesNotMatch(saved.out + saved.err, /sk-or-v1-/);
+  const run = await execute(['exec', 'OPENROUTER_API_KEY=model key', '--', process.execPath, '-e', 'if(!process.env.OPENROUTER_API_KEY || process.env.GOOGLE_OAUTH_ACCESS_TOKEN || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2); console.log("authenticated")'], env);
   assert.equal(run.code, 0, run.err); assert.equal(run.out.trim(), 'authenticated');
   assert.doesNotMatch(start.out + start.err + run.out + run.err, /sk-or-v1-|fdn_/);
   await f.request('/api/keys/' + approved.json.request.key_id, { method: 'DELETE' });
-  assert.equal((await execute(['exec', account.secrets[0], '--', process.execPath, '-e', 'process.exit(0)'], env)).code, 1);
+  assert.equal((await execute(['exec', 'OPENROUTER_API_KEY=model key', '--', process.execPath, '-e', 'process.exit(0)'], env)).code, 1);
 });

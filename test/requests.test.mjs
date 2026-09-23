@@ -43,8 +43,8 @@ test('A new key asks only to be approved: no access before approval, the same pr
   assert.equal(approved.json.request.status, 'approved');
   assert.doesNotMatch(approved.text, /fdn_|google-access|refresh_token|token_hash/);
   const listed = await usable(f, token);
-  assert.deepEqual(listed.json.acquisitions.map(a => a.prefix), [saved.prefix]);
-  assert.deepEqual(listed.json.acquisitions[0].secrets.map(entry => entry.path.split('/').pop()).sort(), ['gmail-account-email', 'google-oauth-access-token', 'google-oauth-expires-at']);
+  assert.deepEqual(listed.json.acquisitions.map(a => a.id), [saved.id]);
+  assert.deepEqual(listed.json.acquisitions[0].outputs, ['GOOGLE_OAUTH_ACCESS_TOKEN', 'GMAIL_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT']);
   const delivered = await f.deliver(saved, { token, anonymous: true });
   assert.equal(delivered.status, 200);
   assert.equal(delivered.json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal-readonly');
@@ -179,9 +179,9 @@ test('Cross-site creation, invalid names and cross-origin approval are rejected'
 test('What a key sees reflects a connection needing attention, one removed, and its own key revoked', async t => {
   const f = await fixture(t), saved = await f.credential(), { token, row } = await create(f);
   await approve(f, row);
-  f.app.store.reconnectRequired(f.app.store.acquisition(USER_A, saved.prefix));
+  f.app.store.reconnectRequired(f.app.store.acquisition(USER_A, saved.id));
   assert.equal((await usable(f, token)).json.acquisitions[0].status, 'reconnect_required');
-  f.app.store.disconnect(USER_A, saved.prefix);
+  f.app.store.disconnect(USER_A, saved.id);
   assert.deepEqual((await usable(f, token)).json.acquisitions, []);
   f.app.store.removeKey(USER_A, f.app.store.keys(USER_A)[0].id);
   assert.equal((await usable(f, token)).status, 401);
@@ -195,7 +195,7 @@ test('Unavailable services cannot register through a request; expired request re
   f.app.store.db.prepare('UPDATE requests SET expires_at=0 WHERE id=?').run(row.id);
   f.app.store.sweep();
   assert.equal(rowStatus(f, row.id), undefined);
-  assert.equal((await usable(f, token)).json.acquisitions[0].prefix, saved.prefix);
+  assert.equal((await usable(f, token)).json.acquisitions[0].id, saved.id);
 });
 
 test('A second adapter uses the same request and delivery APIs without any Gmail-specific logic', async t => {
@@ -207,7 +207,7 @@ test('A second adapter uses the same request and delivery APIs without any Gmail
     variables: ['NOTES_TOKEN'], deliver: secret => ({ environment: { NOTES_TOKEN: secret.access_token } }),
     client: { enabled: true, check() {}, authorize: ({ state, redirectUri }) => 'https://notes.example.test/auth?' + new URLSearchParams({ state, redirect_uri: redirectUri }),
       async exchange() { return { subject: 'notes-user', secret: { access_token: 'notes-access', refresh_token: 'notes-refresh', expires_at: Date.now() + 3600_000, scopes: ['notes.read'] } }; },
-      async token(store, account) { return store.secret(account); }, async revoke() {},
+      async token(value) { return value; }, async revoke() {},
     },
   };
   const f = await fixture(t, { gmail, adapters: [gmailReadonly(gmail), gmailMetadata(gmail), notes] });
@@ -222,11 +222,11 @@ test('A second adapter uses the same request and delivery APIs without any Gmail
   const callback = await f.request('/oauth/notes.oauth/callback?state=' + new URL(start.json.url).searchParams.get('state') + '&code=notes-code');
   assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?connection=connected');
   const saved = f.app.store.acquisitions(USER_A)[0];
-  assert.equal(saved.adapter, 'notes.oauth'); assert.equal(saved.prefix.split('/')[0], 'notes');
-  const delivered = await f.request('/v1/deliver', { method: 'POST', token, data: { paths: f.app.store.secrets(USER_A, saved.prefix).map(entry => entry.path) } });
+  assert.equal(saved.adapter, 'notes.oauth'); assert.equal(saved.subject, 'notes-user');
+  const delivered = await f.deliver(saved, { token });
   assert.deepEqual(delivered.json.delivery.environment, { NOTES_TOKEN: 'notes-access' });
   const listed = (await f.request('/v1/acquisitions', { token })).json.acquisitions[0];
-  assert.deepEqual(listed.secrets.map(entry => entry.path.split('/').pop()), ['notes-token']); assert.equal(listed.api.documentation_url, 'https://notes.example.test/docs');
+  assert.deepEqual(listed.outputs, ['NOTES_TOKEN']); assert.equal(listed.api.documentation_url, 'https://notes.example.test/docs');
 });
 
 test('The approval page never receives the confirmation code; entry is normalized and locked after repeated mistakes', async t => {
@@ -264,7 +264,7 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
   const me = await f.request('/v1/me', { token, anonymous: true });
   assert.equal(me.status, 200, me.text);
   assert.equal(me.json.key.name, 'dev-us の claude');
-  assert.deepEqual((await usable(f, token)).json.acquisitions.map(item => item.prefix), [saved.prefix]);
+  assert.deepEqual((await usable(f, token)).json.acquisitions.map(item => item.id), [saved.id]);
   assert.doesNotMatch(me.text, /token_hash|fdn_/);
   // A later request from the same key is shown under the registered name, whatever the runtime calls itself.
   const next = await create(f, token, { name: 'dev-us の Claude Code' }, registration);

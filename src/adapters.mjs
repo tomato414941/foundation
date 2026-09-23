@@ -3,9 +3,8 @@ import { GMAIL_API, GMAIL_DOCS } from './services/gmail.mjs';
 import { OPENROUTER_API, OPENROUTER_DOCS } from './services/openrouter.mjs';
 import { GITHUB_API, GITHUB_DOCS, GITHUB_SETTINGS } from './services/github.mjs';
 
-// An adapter is an acquisition Foundation performs itself, because nobody else can: an OAuth exchange
-// that needs the operator's client secret. It decides how
-// the credential is obtained, how it is kept current, and the names a command receives it under.
+// An adapter performs a built-in OAuth flow and describes its credential outputs.
+// Renewal state belongs to that connection. Output identifiers do not reserve saved names.
 //
 // Everything a person can simply go and fetch for themselves has no adapter. There the owner is asked
 // to put the value into storage, following instructions the requesting AI wrote, and Foundation holds
@@ -67,8 +66,6 @@ export function githubOauth(client) {
 export class Adapters {
   constructor(adapters) {
     this.adapters = new Map(adapters.map(adapter => [adapter.id, adapter]));
-    // Names an adapter delivers. Nothing kept in storage may take one, so the two can never collide.
-    this.owned = new Set(adapters.flatMap(adapter => adapter.variables || []));
   }
   get(id) {
     const adapter = typeof id === 'string' && this.adapters.get(id);

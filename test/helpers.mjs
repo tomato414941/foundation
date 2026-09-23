@@ -58,13 +58,18 @@ export class FakeGmail extends GmailClient {
     throw new Error('Unexpected provider request');
   }
 }
-// A store with one acquisition already in it, for testing a service's client on its own. The client is
-// handed the same narrow view the server gives it: its own shape in, entries out.
-export function acquired(store, adapters, adapterId, { subject, secret, prefix = 'test/account' }) {
+// The processing layer owns private renewal state; service clients receive plain values.
+export function acquired(store, adapters, adapterId, { subject, secret }) {
   const acquisitions = new Acquisitions(store, new Adapters(adapters));
-  acquisitions.save(USER_A, adapterId, { subject, secret }, { keptBy: 'test' });
-  const row = () => store.acquisition(USER_A, store.acquisitions(USER_A)[0].prefix);
-  return { acquisitions, row, client: () => acquisitions.clientStore(row()) };
+  const saved = acquisitions.save(USER_A, adapterId, { subject, secret }, { keptBy: 'test' });
+  const row = () => store.acquisition(USER_A, saved.id);
+  const state = () => store.acquisitionState(row());
+  const run = async () => {
+    const current = row(), result = await acquisitions.obtain(current);
+    store.saveState(current, result.state);
+    return result;
+  };
+  return { acquisitions, row, run, state };
 }
 export async function fixture(t, options = {}) {
   const { gmail = new FakeGmail(), adapters = [gmailReadonly(gmail), gmailMetadata(gmail)], ...rest } = options, auth = options.auth || new FakeAuth();
@@ -93,8 +98,8 @@ export async function fixture(t, options = {}) {
     return response;
   }
   // Gmail's read range is its adapter: gmail.readonly or gmail.metadata.
-  async function start({ range = 'readonly', prefix } = {}) {
-    const result = await request('/api/adapters/gmail.' + range + '/connect', { method: 'POST', data: { prefix } });
+  async function start({ range = 'readonly', connection_id } = {}) {
+    const result = await request('/api/adapters/gmail.' + range + '/connect', { method: 'POST', data: { connection_id } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
@@ -102,17 +107,16 @@ export async function fixture(t, options = {}) {
   async function callback(url, code = 'personal-readonly', extra = {}) {
     return request(new URL(url.searchParams.get('redirect_uri')).pathname + '?state=' + url.searchParams.get('state') + '&code=' + code, extra);
   }
-  // Connects one Gmail account and returns the acquisition, which owns the entries under its prefix.
+  // Connects one Gmail account and returns its independent connection.
   async function credential(code = 'personal', range = 'readonly') {
     const url = await start({ range });
     const response = await callback(url, code + '-' + range);
     assert.equal(response.headers.get('location'), '/?connection=connected&adapter=gmail.' + range, response.text);
     return (await request('/api/state')).json.acquisitions.find((item) => item.subject === code + '@example.test');
   }
-  // Everything one acquisition keeps, handed over as a command would receive it.
+  // Explicit credential processing: storage reads never call this operation.
   async function deliver(acquisition, options = {}) {
-    const paths = (await request('/api/state')).json.secrets.filter(entry => entry.path.startsWith(acquisition.prefix + '/')).map(entry => entry.path);
-    return request('/v1/deliver', { method: 'POST', data: { paths }, ...options });
+    return request('/v1/functions/connection.credentials', { method: 'POST', data: { connection_id: acquisition.id }, ...options });
   }
   // Makes a runtime key known to the owner: the key asks to be approved and the owner types its code.
   async function approveKey(token, name = 'dev-us') {
@@ -129,8 +133,8 @@ export async function fixture(t, options = {}) {
     return result.json.key;
   }
   // Ages an acquisition past its expiry, in what the store holds and in the shape its adapter reads back.
-  function expire(prefix, owner = USER_A) {
-    const acquisition = app.store.acquisition(owner, prefix);
+  function expire(id, owner = USER_A) {
+    const acquisition = app.store.acquisition(owner, id);
     const state = app.store.acquisitionState(acquisition), expires_at = Date.now() - 1;
     app.store.saveState(acquisition, { ...state, expires_at, renewal: { ...state.renewal, expires_at } });
   }

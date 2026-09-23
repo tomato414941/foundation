@@ -33,11 +33,11 @@ test('A connected GitHub account is named by its login and delivered to an appro
   assert.match(done.headers.get('location'), /connection=connected/);
   const [connection] = await f.connections();
   assert.equal(connection.label, 'octo');
-  assert.equal(connection.prefix, 'github/octo');
-  assert.deepEqual(connection.secrets, ['github/octo/gh-token', 'github/octo/github-token']);
+  assert.ok(connection.id);
+  assert.deepEqual(connection.outputs, ['GH_TOKEN', 'GITHUB_TOKEN']);
   assert.doesNotMatch(JSON.stringify(await f.request('/api/state')), /gho_/);
   const agent = await f.issueKey();
-  const delivered = await f.request('/v1/deliver', { method: 'POST', token: agent.token, anonymous: true, data: { paths: ['github/octo/gh-token', 'github/octo/github-token'] } });
+  const delivered = await f.deliver((await f.connections())[0], { token: agent.token, anonymous: true });
   assert.equal(delivered.status, 200, delivered.text);
   assert.deepEqual(delivered.json.delivery.environment, { GH_TOKEN: 'gho_octo', GITHUB_TOKEN: 'gho_octo' });
 });
@@ -55,7 +55,7 @@ test('A token revoked at GitHub stops delivery and asks the owner to register ag
   await f.back(await f.start(), 'octo');
   const agent = await f.issueKey();
   f.github.revoked.add('gho_octo');
-  const refused = await f.request('/v1/deliver', { method: 'POST', token: agent.token, anonymous: true, data: { paths: ['github/octo/gh-token', 'github/octo/github-token'] } });
+  const refused = await f.deliver((await f.connections())[0], { token: agent.token, anonymous: true });
   assert.equal(refused.status, 409);
   assert.equal((await f.connections())[0].status, 'reconnect_required');
 });
@@ -64,9 +64,9 @@ test('Registering again must use the same GitHub account', async t => {
   const f = await githubFixture(t);
   await f.back(await f.start(), 'octo');
   const [connection] = await f.connections();
-  const other = await f.back(await f.start({ prefix: connection.prefix }), 'other');
+  const other = await f.back(await f.start({ connection_id: connection.id }), 'other');
   assert.match(other.headers.get('location'), /connection=wrong_account/);
-  const same = await f.back(await f.start({ prefix: connection.prefix }), 'octo');
+  const same = await f.back(await f.start({ connection_id: connection.id }), 'octo');
   assert.match(same.headers.get('location'), /connection=connected/);
   assert.equal((await f.connections()).length, 1);
 });
@@ -75,11 +75,11 @@ test('Disconnecting revokes the grant at GitHub', async t => {
   const f = await githubFixture(t);
   await f.back(await f.start(), 'octo');
   const [connection] = await f.connections();
-  const removed = await f.request('/api/acquisitions/' + encodeURIComponent(connection.prefix), { method: 'DELETE', data: { revoke: true } });
+  const removed = await f.request('/api/acquisitions/' + encodeURIComponent(connection.id), { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.status, 200, removed.text);
   assert.ok(f.github.revoked.has('gho_octo'));
   assert.deepEqual(await f.connections(), []);
-  assert.deepEqual((await f.request('/api/state')).json.secrets, [], 'what it kept goes with it');
+  assert.equal(removed.json.service_revoked, true);
 });
 
 test('Without a client ID and secret GitHub is offered as unavailable', async t => {

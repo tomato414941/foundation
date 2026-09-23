@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { fail, HttpError } from '../errors.mjs';
+import { fail } from '../errors.mjs';
 
 export const METADATA_SCOPE = 'https://www.googleapis.com/auth/gmail.metadata';
 export const READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -77,25 +77,18 @@ export class GmailClient {
     if (previous && previous.subject !== email) fail(409, 'account_changed', '登録し直すには同じGoogleアカウントを選んでください。');
     return { subject: email, secret: this.grant(data, range, previous?.secret) };
   }
-  async token(store, credential, force = false) {
+  async token(existing, credential, force = false) {
     this.check();
     if (credential.status !== 'connected') fail(409, 'reconnect_required', 'Gmailの登録し直しが必要です。');
-    const existing = store.secret(credential);
     if (!force && existing.expires_at > Date.now() + 60_000) return existing;
     const key = credential.id + ':' + credential.generation;
     if (this.pending.has(key)) return this.pending.get(key);
     const pending = (async () => {
-      try {
-        const data = await this.tokenRequest({ grant_type: 'refresh_token', refresh_token: existing.refresh_token });
-        const next = this.grant(data, existing.scopes.includes(READONLY_SCOPE) ? 'readonly' : 'metadata', existing);
-        if (JSON.stringify(next.scopes) !== JSON.stringify(existing.scopes.slice().sort())) fail(409, 'scope_mismatch', 'Googleの許可範囲が変わりました。Gmailを登録し直してください。');
-        if (await this.identity(next.access_token) !== credential.subject) fail(409, 'account_changed', 'Gmailのアカウントが変わりました。登録を確認してください。');
-        store.saveSecret(credential, next);
-        return next;
-      } catch (error) {
-        if (error instanceof HttpError && ['reconnect_required', 'scope_mismatch', 'account_changed', 'refresh_missing'].includes(error.code)) store.reconnectRequired(credential);
-        throw error;
-      }
+      const data = await this.tokenRequest({ grant_type: 'refresh_token', refresh_token: existing.refresh_token });
+      const next = this.grant(data, existing.scopes.includes(READONLY_SCOPE) ? 'readonly' : 'metadata', existing);
+      if (JSON.stringify(next.scopes) !== JSON.stringify(existing.scopes.slice().sort())) fail(409, 'scope_mismatch', 'Googleの許可範囲が変わりました。Gmailを登録し直してください。');
+      if (await this.identity(next.access_token) !== credential.subject) fail(409, 'account_changed', 'Gmailのアカウントが変わりました。登録を確認してください。');
+      return next;
     })();
     this.pending.set(key, pending);
     try { return await pending; } finally { this.pending.delete(key); }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fixture, USER_B } from './helpers.mjs';
@@ -22,19 +22,19 @@ async function keyed(t) {
   await f.approveKey(token);
   return { f, token };
 }
-const put = (f, token, path, content, query = {}, type = 'text/plain') =>
-  f.request('/v1/secrets/' + path + (Object.keys(query).length ? '?' + new URLSearchParams(query) : ''), { method: 'PUT', token, anonymous: true, raw: content, type });
+const put = (f, token, name, content, query = {}, type = 'text/plain') =>
+  f.request('/v1/secrets?' + new URLSearchParams({ ...query, name }), { method: 'PUT', token, anonymous: true, raw: content, type });
 
-test('What is kept is bytes at a path, and the name a command receives them under comes from that path', async t => {
+test('Stored names and caller-selected environment variables are independent', async t => {
   const { f, token } = await keyed(t);
   const kept = await put(f, token, 'github/gh-token', secret, { secret: 'true' });
   assert.equal(kept.status, 200, kept.text);
   assert.deepEqual({ ...kept.json.secret, created_at: 0, updated_at: 0 },
-    { path: 'github/gh-token', size: secret.length, readable: false, created_at: 0, updated_at: 0 });
+    { name: 'github/gh-token', size: secret.length, readable: false, created_at: 0, updated_at: 0 });
   assert.doesNotMatch(kept.text, new RegExp(secret), 'writing never echoes the bytes back');
 
   const listed = await f.request('/v1/secrets', { token, anonymous: true });
-  assert.deepEqual(listed.json.secrets.map(row => row.path), ['github/gh-token']);
+  assert.deepEqual(listed.json.secrets.map(row => row.name), ['github/gh-token']);
   assert.doesNotMatch(listed.text, new RegExp(secret), 'listing tells what is kept, never the bytes');
 
   // Written as a secret, so the key that wrote it cannot read it back.
@@ -42,7 +42,7 @@ test('What is kept is bytes at a path, and the name a command receives them unde
   assert.equal(refused.status, 403);
   assert.equal(refused.json.error.code, 'write_only');
 
-  const delivered = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { paths: ['github/gh-token'] } });
+  const delivered = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'github/gh-token', as: 'GH_TOKEN' }] } });
   assert.deepEqual(delivered.json.delivery, { environment: { GH_TOKEN: secret }, files: [] });
 });
 
@@ -53,11 +53,11 @@ test('Bytes with no delivery are kept and read back as they were written', async
   const read = await f.request('/v1/secrets/release/2026-09-23', { token, anonymous: true });
   assert.equal(read.status, 200);
   assert.equal(read.text, state);
-  // The path gives no usable variable name, so handing it over needs one to be said.
-  const asked = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { paths: ['release/2026-09-23'] } });
+  // Delivery needs an explicit destination variable regardless of the saved name.
+  const asked = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: ['release/2026-09-23'] } });
   assert.equal(asked.status, 400);
   assert.equal(asked.json.error.code, 'no_variable');
-  const named = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { paths: [{ path: 'release/2026-09-23', as: 'RELEASE_STATE' }] } });
+  const named = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'release/2026-09-23', as: 'RELEASE_STATE' }] } });
   assert.deepEqual(named.json.delivery.environment, { RELEASE_STATE: state });
 });
 
@@ -66,36 +66,39 @@ test('Bytes that cannot be an environment variable can still be delivered as a f
   const pem = '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN\n-----END PRIVATE KEY-----\n';
   const stored = await put(f, token, 'apple/key', pem, { secret: 'true' });
   assert.equal(stored.status, 200, stored.text);
-  const refused = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { paths: [{ path: 'apple/key', as: 'APPLE_KEY' }] } });
+  const refused = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'apple/key', as: 'APPLE_KEY' }] } });
   assert.equal(refused.status, 400);
   assert.equal(refused.json.error.code, 'invalid_value');
   const delivered = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true,
-    data: { paths: [{ path: 'apple/key', as: 'EXPO_ASC_API_KEY_PATH', filename: 'AuthKey.p8' }] } });
+    data: { names: [{ name: 'apple/key', as: 'EXPO_ASC_API_KEY_PATH', filename: 'AuthKey.p8' }] } });
   assert.deepEqual(delivered.json.delivery.environment, {});
   assert.deepEqual(delivered.json.delivery.files, [{ env: 'EXPO_ASC_API_KEY_PATH', filename: 'AuthKey.p8', content: Buffer.from(pem).toString('base64'), encoding: 'base64' }]);
 });
 
-test('Paths are checked when writing, names when handing over; nothing else about the bytes is', async t => {
+test('Stored names accept literal text, while delivery destinations are validated', async t => {
   const { f, token } = await keyed(t);
   const code = async (path, query = {}, type = 'text/plain') => (await put(f, token, path, 'x', query, type)).json.error?.code;
-  assert.equal(await code('-leading/segment'), 'invalid_path');
-  assert.equal(await code('a/b/c/d/e/f/g/h/i'), 'invalid_path');
+  assert.equal(await code(''), 'invalid_name');
+  assert.equal(await code('a\nb'), 'invalid_name');
+  assert.equal(await code('a'.repeat(201)), 'invalid_name');
+  assert.equal((await put(f, token, '-leading/segment', 'x')).status, 200);
+  assert.equal((await put(f, token, 'a/b/c/d/e/f/g/h/i', 'x')).status, 200);
   assert.equal((await put(f, token, 'a/b', 'x')).status, 200);
-  const handing = async as => (await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { paths: [{ path: 'a/b', as }] } })).json.error?.code;
+  const handing = async as => (await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'a/b', as }] } })).json.error?.code;
   assert.equal(await handing('lower'), 'invalid_env');
   assert.equal(await handing('PATH'), 'invalid_env');
-  const badFile = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { paths: [{ path: 'a/b', as: 'A_KEY', filename: '../escape' }] } });
+  const badFile = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'a/b', as: 'A_KEY', filename: '../escape' }] } });
   assert.equal(badFile.json.error.code, 'invalid_filename');
   // Anything at all may be kept, as long as Foundation is not asked to make it a variable.
   assert.equal((await put(f, token, 'raw/bytes', '\u0000\u0001 binary �', {}, 'application/octet-stream')).status, 200);
 });
 
-test('Writing the same path again replaces what is there', async t => {
+test('Writing the same name again replaces what is there', async t => {
   const { f, token } = await keyed(t);
   await put(f, token, 'github/gh-token', 'first', { secret: 'true' });
   await put(f, token, 'github/gh-token', 'second');
   assert.equal((await f.request('/v1/secrets', { token, anonymous: true })).json.secrets.length, 1);
-  const delivered = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { paths: ['github/gh-token'] } });
+  const delivered = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'github/gh-token', as: 'GH_TOKEN' }] } });
   assert.deepEqual(delivered.json.delivery.environment, { GH_TOKEN: 'second' });
   assert.equal((await f.request('/v1/secrets/github/gh-token', { token, anonymous: true })).text, 'second', 'no longer a secret either');
 });
@@ -104,19 +107,19 @@ test('Delivering several at once refuses two that want the same variable', async
   const { f, token } = await keyed(t);
   await put(f, token, 'work/gh-token', 'one');
   await put(f, token, 'personal/gh-token', 'two');
-  const clash = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { paths: ['work/gh-token', 'personal/gh-token'] } });
+  const clash = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'work/gh-token', as: 'GH_TOKEN' }, { name: 'personal/gh-token', as: 'GH_TOKEN' }] } });
   assert.equal(clash.status, 409);
   assert.equal(clash.json.error.code, 'name_conflict');
   const apart = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true,
-    data: { paths: ['work/gh-token', { path: 'personal/gh-token', as: 'PERSONAL_GH_TOKEN' }] } });
+    data: { names: [{ name: 'work/gh-token', as: 'GH_TOKEN' }, { name: 'personal/gh-token', as: 'PERSONAL_GH_TOKEN' }] } });
   assert.deepEqual(apart.json.delivery.environment, { GH_TOKEN: 'one', PERSONAL_GH_TOKEN: 'two' }, 'saying a different name is enough');
 });
 
-test('Listing narrows by path prefix, and each owner reaches only their own', async t => {
+test('Listing narrows by a literal name prefix, and each owner reaches only their own', async t => {
   const { f, token } = await keyed(t);
   for (const path of ['github/token', 'github/user', 'release/expo-v3']) await put(f, token, path, 'x');
   const narrowed = await f.request('/v1/secrets?prefix=github', { token, anonymous: true });
-  assert.deepEqual(narrowed.json.secrets.map(row => row.path), ['github/token', 'github/user']);
+  assert.deepEqual(narrowed.json.secrets.map(row => row.name), ['github/token', 'github/user']);
 
   await f.login('other@example.test');
   const other = key();
@@ -136,10 +139,10 @@ test('What is kept is bounded, so one owner cannot fill the disk', async t => {
   assert.equal(big.status, 413);
   assert.equal(big.json.error.code, 'too_large');
   assert.equal((await put(f, token, 'long/value', 'a'.repeat(20_000))).status, 200);
-  const asVariable = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { paths: ['long/value'] } });
+  const asVariable = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'long/value', as: 'VALUE' }] } });
   assert.equal(asVariable.status, 413);
   assert.equal(asVariable.json.error.code, 'value_too_large');
-  const asFile = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { paths: [{ path: 'long/value', as: 'LONG_VALUE', filename: 'value.txt' }] } });
+  const asFile = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'long/value', as: 'LONG_VALUE', filename: 'value.txt' }] } });
   assert.equal(asFile.status, 200, 'the same bytes are fine when they become a file');
 });
 
@@ -147,7 +150,7 @@ test('The owner reads and removes anything kept, including what the key may not 
   const { f, token } = await keyed(t);
   await put(f, token, 'github/token', secret, { env: 'GH_TOKEN', secret: 'true' });
   const state = await f.request('/api/state');
-  assert.deepEqual(state.json.secrets.map(row => row.path), ['github/token']);
+  assert.deepEqual(state.json.secrets.map(row => row.name), ['github/token']);
   assert.doesNotMatch(state.text, new RegExp(secret));
   const read = await f.request('/api/secrets/github%2Ftoken');
   assert.equal(read.status, 200);
@@ -167,17 +170,29 @@ test('The runtime hands what is kept to a command, as bytes and as a file, and n
   const pem = '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN\n-----END PRIVATE KEY-----\n';
   await put(f, token, 'apple/key', pem, { secret: 'true' }, 'application/octet-stream');
 
-  const script = `const fs=require('fs');if(process.env.GH_TOKEN!==${JSON.stringify(secret)})process.exit(2);if(fs.readFileSync(process.env.APPLE_KEY_PATH,'utf8')!==${JSON.stringify(pem)})process.exit(3);if(!process.env.APPLE_KEY_PATH.endsWith('AuthKey.p8'))process.exit(4);if(process.env.FOUNDATION_PATHS!=='github/gh-token,apple/key')process.exit(5);console.log('ready')`;
-  const used = await run(['exec', 'github/gh-token', 'APPLE_KEY_PATH=apple/key:AuthKey.p8', '--', process.execPath, '-e', script], env);
+  const script = `const fs=require('fs');if(process.env.GH_TOKEN!==${JSON.stringify(secret)})process.exit(2);if(fs.readFileSync(process.env.APPLE_KEY_PATH,'utf8')!==${JSON.stringify(pem)})process.exit(3);if(!process.env.APPLE_KEY_PATH.endsWith('AuthKey.p8'))process.exit(4);if(process.env.FOUNDATION_NAMES!==JSON.stringify(['github/gh-token','apple/key']))process.exit(5);console.log('ready')`;
+  const used = await run(['exec', '--inputs', JSON.stringify([{ name: 'github/gh-token', as: 'GH_TOKEN' }, { name: 'apple/key', as: 'APPLE_KEY_PATH', filename: 'AuthKey.p8' }]), '--', process.execPath, '-e', script], env);
   assert.equal(used.code, 0, used.err);
   assert.equal(used.out.toString().trim(), 'ready');
   assert.doesNotMatch(used.out.toString() + used.err, new RegExp(secret));
 
   // The file it wrote exists only while the command runs.
-  const where = await run(['exec', 'APPLE_KEY_PATH=apple/key:AuthKey.p8', '--', process.execPath, '-e', 'console.log(process.env.APPLE_KEY_PATH)'], env);
+  const where = await run(['exec', '--inputs', JSON.stringify([{ name: 'apple/key', as: 'APPLE_KEY_PATH', filename: 'AuthKey.p8' }]), '--', process.execPath, '-e', 'console.log(process.env.APPLE_KEY_PATH)'], env);
   assert.equal(where.code, 0, where.err);
   const { access } = await import('node:fs/promises');
   await assert.rejects(access(where.out.toString().trim()));
+
+  // A command that cannot start still leaves no delivered files on disk.
+  const failed = await run(['exec', '--inputs', JSON.stringify([{ name: 'apple/key', as: 'KEY_FILE', filename: 'AuthKey.p8' }]), '--', join(dir, 'no-such-command')], { ...env, XDG_RUNTIME_DIR: dir });
+  assert.equal(failed.code, 1);
+  assert.deepEqual(await readdir(dir), ['runtime-key']);
+
+  const duplicate = await run(['exec', '--inputs', JSON.stringify([
+    { name: 'apple/key', as: 'FIRST_FILE', filename: 'same.p8' },
+    { name: 'apple/key', as: 'SECOND_FILE', filename: 'same.p8' },
+  ]), '--', process.execPath, '-e', 'console.log("must-not-run")'], { ...env, XDG_RUNTIME_DIR: dir });
+  assert.equal(duplicate.code, 1); assert.match(duplicate.err, /filename_conflict/);
+  assert.equal(duplicate.out.length, 0); assert.deepEqual(await readdir(dir), ['runtime-key']);
 
   // Nothing else is a command: everything the agent can do for itself is left to it.
   const refused = await run(['list'], env);
@@ -189,10 +204,10 @@ test('Storage needs an approved key, and the guide describes the API an agent ca
   const f = await fixture(t), token = key();
   assert.equal((await f.request('/v1/secrets', { token, anonymous: true })).status, 401);
   const guide = (await run(['--help'], {})).out.toString();
-  assert.match(guide, /PUT \/v1\/secrets\/<path>/);
+  assert.match(guide, /PUT \/v1\/secrets\?name=<name>/);
   assert.match(guide, /POST \/v1\/deliver/);
   assert.match(guide, /Nothing here needs a shell/);
-  assert.match(guide, /foundation exec \[<NAME>/, 'and the one thing that does need one');
+  assert.match(guide, /foundation exec <ENV>/, 'and the one thing that does need one');
 });
 
 test('An agent that cannot make a secret of its own is issued one, once', async t => {

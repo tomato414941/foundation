@@ -126,15 +126,12 @@ with sync_playwright() as p:
 
     connect("personal-readonly")
     connect("work-metadata", True)
-    # Both sit under one group, named by the paths they were kept at.
+    # Connections are listed independently of saved values.
     page.goto(args.base + "/secrets", wait_until="networkidle")
-    gmail = page.locator('[aria-labelledby="gmail-title"]')
+    gmail = page.locator('[aria-labelledby="connections-title"]')
     expect(gmail.locator(".agent-name h3")).to_have_text(["personal@example.test", "work@example.test"])
     expect(gmail.get_by_text("件名・差出人などの読み取り", exact=True)).to_be_visible()
-    # What a connection keeps is its own business; the owner opens it only to look.
-    expect(gmail.get_by_text("google-oauth-access-token", exact=True).first).to_be_hidden()
-    gmail.get_by_text("3件の中身", exact=True).first.click()
-    expect(gmail.get_by_text("google-oauth-access-token", exact=True).first).to_be_visible()
+    expect(page.get_by_text("保存した値はありません。", exact=True)).to_be_visible()
 
     def create_runtime(name):
         page.goto(args.base, wait_until="networkidle")
@@ -153,12 +150,12 @@ with sync_playwright() as p:
     caller = p.request.new_context(base_url=args.base)
     def runtime(path, token, method="GET"):
         return caller.fetch(path, method=method, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data="{}" if method == "POST" else None)
-    def deliver(paths, token):
-        return caller.fetch("/v1/deliver", method="POST", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data=json.dumps({"paths": paths}))
+    def deliver(connection_id, token):
+        return caller.fetch("/v1/functions/connection.credentials", method="POST", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data=json.dumps({"connection_id": connection_id}))
     connections = runtime("/v1/acquisitions", token_a).json()["acquisitions"]
     assert len(connections) == 2, "an issued key uses everything its owner keeps"
-    paths = [entry["path"] for entry in connections[0]["secrets"]]
-    issued = deliver(paths, token_a)
+    connection_id = connections[0]["id"]
+    issued = deliver(connection_id, token_a)
     assert issued.status == 200 and issued.json()["delivery"]["environment"]["GOOGLE_OAUTH_ACCESS_TOKEN"].startswith("google-access-")
     assert "google-access-" not in page.content()
     page.reload()
@@ -167,7 +164,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "desktop.png"), full_page=True)
 
     row = page.locator(".agent-row").filter(has_text="dev-us")
-    assert deliver(paths, token_b).status == 200
+    assert deliver(connection_id, token_b).status == 200
 
     for width in [1280, 800, 768, 601, 600, 390, 320]:
         page.set_viewport_size({"width": width, "height": 950})
@@ -198,11 +195,11 @@ with sync_playwright() as p:
     dialog.get_by_role("button", name="接続を解除", exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(gmail.locator(".agent-name h3")).to_have_text(["work@example.test"])
-    assert deliver(paths, token_b).status == 404, "what it kept went with it"
+    assert deliver(connection_id, token_b).status == 404, "processing requires a connected account"
     page.get_by_role("button", name="ログアウト", exact=True).click()
     expect(page.get_by_role("heading", name="ログイン", exact=True)).to_be_visible()
     assert not errors, errors
-    print("Browser checks passed: email-link signup/login, invalid links, reload, email change, cross-tab login, two connections, what each keeps, delivery, revoke, disconnect, mobile and copy.")
+    print("Browser checks passed: email-link signup/login, invalid links, reload, email change, cross-tab login, two connections, explicit processing, delivery, revoke, disconnect, mobile and copy.")
     print("Screenshots:", str(shots))
     caller.dispose()
     context.close()

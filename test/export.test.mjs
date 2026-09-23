@@ -15,7 +15,7 @@ test('hands the owner everything they have, secrets included', async (t) => {
   assert.match(exported.headers.get('content-disposition'), /attachment; filename="foundation-\d{4}-\d{2}-\d{2}\.json"/);
   const value = exported.json;
   assert.equal(value.owner, 'owner@example.test');
-  const byPath = Object.fromEntries(value.secrets.map(entry => [entry.path, entry]));
+  const byPath = Object.fromEntries(value.secrets.map(entry => [entry.name, entry]));
   assert.deepEqual(Object.keys(byPath).sort(), ['keys/token', 'notes/plan']);
   assert.equal(Buffer.from(byPath['notes/plan'].content, 'base64').toString(), 'read me');
   assert.equal(Buffer.from(byPath['keys/token'].content, 'base64').toString(), 'sh-secret-value');

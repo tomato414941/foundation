@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { fail, HttpError } from '../errors.mjs';
+import { fail } from '../errors.mjs';
 
 export const GITHUB_API = 'https://api.github.com';
 export const GITHUB_DOCS = 'https://docs.github.com/rest';
@@ -68,20 +68,13 @@ export class GitHubClient {
     return { subject, secret: this.secret(data.access_token, identity) };
   }
   // The token does not expire; each use asks GitHub whether it still works and for whom.
-  async token(store, credential) {
+  async token(existing, credential) {
     this.check();
     if (credential.status !== 'connected') fail(409, 'reconnect_required', 'GitHubの許可が取り消されたか、無効になっています。登録し直してください。');
-    const existing = store.secret(credential);
-    try {
-      const identity = await this.inspect(existing.access_token);
-      if ('user:' + identity.id !== credential.subject) fail(409, 'account_changed', 'GitHubのアカウントが変わりました。登録を確認してください。');
-      const next = this.secret(existing.access_token, identity);
-      store.saveSecret(credential, next);
-      return next;
-    } catch (error) {
-      if (error instanceof HttpError && ['reconnect_required', 'account_changed'].includes(error.code)) store.reconnectRequired(credential);
-      throw error;
-    }
+    const identity = await this.inspect(existing.access_token);
+    if ('user:' + identity.id !== credential.subject) fail(409, 'account_changed', 'GitHubのアカウントが変わりました。登録を確認してください。');
+    const next = this.secret(existing.access_token, identity);
+    return next;
   }
   facts(secret) {
     return { label: secret.details.login, credential_type: 'oauth2_access_token', expires_at: null, expiry_known: true, management_url: GITHUB_SETTINGS + '/' + this.clientId, scopes: secret.scopes };

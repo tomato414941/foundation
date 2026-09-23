@@ -95,6 +95,7 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .credential-reference a, .credential-footer a { text-decoration: underline; text-underline-offset: 4px; }
 .credential-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
 .agent-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto; gap: 16px; align-items: center; padding: 10px 20px; border-top: 1px solid var(--line); }
+.agent-name h3 { white-space: pre-wrap; }
 .agent-name p { color: var(--muted); font-size: 14px; margin-top: 3px; }
 .agent-permissions ul { list-style: none; padding: 0; margin: 0; }
 /* What a connection keeps, opened only when the owner wants to look at the values themselves. */
