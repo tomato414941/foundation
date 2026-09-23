@@ -78,3 +78,20 @@ test('asks for several things at once, and keeps them together or not at all', a
   assert.equal(kept.json.secrets.find(one => one.path === 'apple/key-id').readable, true, 'an identifier is not a secret');
   assert.equal(kept.json.secrets.find(one => one.path === 'apple/auth-key').readable, false);
 });
+
+test('lets the owner put something there themselves', async (t) => {
+  const f = await fixture(t);
+  await f.approveKey(KEY);
+  const put = await f.request('/api/secrets/' + encodeURIComponent('aws/session-token'),
+    { method: 'PUT', raw: 'sh-token-value', type: 'text/plain' });
+  assert.equal(put.status, 200, put.text);
+  assert.equal(put.json.secret.path, 'aws/session-token');
+  assert.equal(put.json.secret.readable, false, 'a secret unless said otherwise');
+
+  const delivered = await f.request('/v1/deliver', { method: 'POST', token: KEY, anonymous: true, data: { paths: ['aws/session-token'] } });
+  assert.deepEqual(delivered.json.delivery.environment, { SESSION_TOKEN: 'sh-token-value' });
+
+  const open = await f.request('/api/secrets/' + encodeURIComponent('aws/region') + '?secret=false',
+    { method: 'PUT', raw: 'ap-northeast-1', type: 'text/plain' });
+  assert.equal(open.json.secret.readable, true);
+});

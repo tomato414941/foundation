@@ -402,8 +402,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           if (method === 'GET') {
             const row = secrets.at(user.id, decodeURIComponent(ownSecret[1]));
             const content = store.secretContent(row);
-            res.writeHead(200, { 'content-type': row.media_type, 'content-length': content.length, 'content-disposition': `attachment; filename="${row.path.split('/').pop()}"` });
+            res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length, 'content-disposition': `attachment; filename="${row.path.split('/').pop()}"` });
             return res.end(content);
+          }
+          // The owner puts something there themselves, without asking an agent to ask them for it.
+          if (method === 'PUT') {
+            const content = await raw(req, SECRET_MAX);
+            if (!content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
+            return send(200, { secret: secrets.put(user.id, { path: decodeURIComponent(ownSecret[1]), content,
+              secret: url.searchParams.get('secret') !== 'false', keptBy: '' }) });
           }
           // The name and the way it reaches a command are the owner's to change; the value is not touched,
           // and is never handed back in order to change them.
@@ -434,7 +441,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           return store.transaction(() => {
             requests.forUser(row.id, user.id, true);
             for (const one of asked) {
-              secrets.put(user.id, { path: one.path, content: Buffer.from(given[one.path], 'utf8'), type: one.type, secret: one.secret, keptBy: row.requester_name });
+              secrets.put(user.id, { path: one.path, content: Buffer.from(given[one.path], 'utf8'), secret: one.secret, keptBy: row.requester_name });
             }
             requests.registered(row.id, user.id, asked.map(one => one.path).join(', '));
             requests.record(row.id, 'stored');
@@ -653,12 +660,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             const content = await raw(req, SECRET_MAX);
             const ifVersion = url.searchParams.has('if_version') ? Number(url.searchParams.get('if_version')) : undefined;
             if (ifVersion !== undefined && !Number.isInteger(ifVersion)) fail(400, 'invalid_version', '版は整数で指定してください。');
-            return send(200, { secret: secrets.put(agent.owner_id, { path: target, content, type: req.headers['content-type'],
+            return send(200, { secret: secrets.put(agent.owner_id, { path: target, content,
               secret: url.searchParams.get('secret') === 'true', keptBy: agent.name }, ifVersion) });
           }
           if (method === 'GET') {
             const { row, content } = secrets.read(agent.owner_id, target);
-            res.writeHead(200, { 'content-type': row.media_type, 'content-length': content.length });
+            res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length });
             return res.end(content);
           }
           if (method === 'DELETE') {

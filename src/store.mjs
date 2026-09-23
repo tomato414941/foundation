@@ -12,9 +12,9 @@ const parse = row => ({ ...row, readable: row.readable === 1 });
 export const ACQUISITION_LIMIT = 50;
 const entryBinding = row => `entry:${row.owner_id}:${row.id}`;
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 // secrets: what the agent may not read, kept so that a command can be given it. Bytes at a path, sealed and bound to this owner and
-//   this row. media_type is what the writer said they are and is never checked. env, filename and session are
+//   this row. session marks the one kind handed over as a tool's own login state; nothing here says what the
 //   how a command receives them, settled when they were written. readable is 0 when they may only be delivered.
 //   version rises on every write, so a writer can refuse to overwrite what it has not seen.
 // acquisitions: the secrets under `prefix` are obtained and kept current by Foundation itself, through one
@@ -25,6 +25,11 @@ const SCHEMA_VERSION = 4;
 const STEPS = {
   // Named for what it is: a value the agent may not read, kept so a command can be given it. The sealing
   // binding still says `entry:` because it is part of the ciphertext of every row already written.
+  // What the writer said the bytes were was never checked, and the one thing it decided -- whether the
+  // owner's screen tries to show them -- is decided better by looking at the bytes.
+  5: `
+    ALTER TABLE secrets DROP COLUMN media_type;
+  `,
   // The name a command receives something under belongs to the command, so it is said at delivery.
   4: `
     ALTER TABLE secrets DROP COLUMN env;
@@ -61,7 +66,7 @@ const SCHEMA = `
   );
   CREATE INDEX access_requests_token ON access_requests(token_hash, created_at);
   CREATE TABLE secrets (
-    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, path TEXT NOT NULL, media_type TEXT NOT NULL,
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, path TEXT NOT NULL,
     size INTEGER NOT NULL, session TEXT, readable INTEGER NOT NULL,
     content TEXT NOT NULL, kept_by TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
@@ -131,7 +136,7 @@ export class Store {
   }
   // Storage. Listing never opens anything; only reading and delivering do.
   secrets(ownerId, prefix) {
-    const columns = 'path, media_type, size, session, readable, kept_by, version, created_at, updated_at';
+    const columns = 'path, size, session, readable, kept_by, version, created_at, updated_at';
     return (prefix === undefined
       ? this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? ORDER BY path`).all(ownerId)
       : this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? AND (path=? OR path LIKE ?) ORDER BY path`).all(ownerId, prefix, prefix.replaceAll('%', '\\%').replaceAll('_', '\\_') + '/%')).map(parse);
@@ -154,11 +159,11 @@ export class Store {
       const id = existing?.id ?? randomUUID();
       const sealed = this.vault.sealBytes(entry.content, `entry:${ownerId}:${id}`);
       if (existing) {
-        this.db.prepare('UPDATE secrets SET media_type=?, size=?, session=?, readable=?, content=?, kept_by=?, version=version+1, updated_at=? WHERE id=?')
-          .run(entry.media_type, entry.content.length, entry.session ?? null, entry.readable, sealed, entry.kept_by, stamp, id);
+        this.db.prepare('UPDATE secrets SET size=?, session=?, readable=?, content=?, kept_by=?, version=version+1, updated_at=? WHERE id=?')
+          .run(entry.content.length, entry.session ?? null, entry.readable, sealed, entry.kept_by, stamp, id);
       } else {
-        this.db.prepare('INSERT INTO secrets (id,owner_id,path,media_type,size,session,readable,content,kept_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-          .run(id, ownerId, entry.path, entry.media_type, entry.content.length, entry.session ?? null, entry.readable, sealed, entry.kept_by, stamp, stamp);
+        this.db.prepare('INSERT INTO secrets (id,owner_id,path,size,session,readable,content,kept_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+          .run(id, ownerId, entry.path, entry.content.length, entry.session ?? null, entry.readable, sealed, entry.kept_by, stamp, stamp);
       }
       return this.secrets(ownerId, entry.path)[0];
     });
