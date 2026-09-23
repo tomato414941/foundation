@@ -158,7 +158,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-expo-login-ui-') as key_dir,
     review(page)
 
     # Root connection is optional and never silently grants the runtime.
-    page.goto(args.base, wait_until='networkidle')
+    page.goto(args.base + '/secrets', wait_until='networkidle')
     section = page.locator('[aria-labelledby="expo-title"]')
     page.get_by_role('button', name='Expoにログイン', exact=True).click()
     dialog = page.get_by_role('dialog')

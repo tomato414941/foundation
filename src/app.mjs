@@ -95,7 +95,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
     return forwarded.at(-1) || socket;
   };
   const adapters = new Adapters(adapterList);
-  const secrets = new Secrets(store, adapters.owned);
+  const secrets = new Secrets(store);
   const objects = new Objects(spaceBackend);
   const acquisitions = new Acquisitions(store, adapters);
   const requests = new AccessRequests(store, adapters);
@@ -157,7 +157,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
     const adapter = adapters.get(row.adapter);
     return { prefix: row.prefix, adapter: row.adapter, service: adapter.service, label: row.label, status: row.status,
       access: adapter.access, api: adapter.service?.api || { base_url: '', documentation_url: '' },
-      secrets: store.secrets(row.owner_id, row.prefix).map(entry => ({ path: entry.path, env: entry.env, filename: entry.filename, session: entry.session })) };
+      secrets: store.secrets(row.owner_id, row.prefix).map(entry => ({ path: entry.path, session: entry.session })) };
   };
   function acquisitionFor(ownerId, prefix) {
     const row = store.acquisition(ownerId, prefix);
@@ -409,8 +409,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           // and is never handed back in order to change them.
           if (method === 'PATCH') {
             const input = await body(req);
-            const moved = secrets.rename(user.id, decodeURIComponent(ownSecret[1]),
-              { path: input.path, env: input.env ?? null, filename: input.filename ?? null });
+            const moved = secrets.rename(user.id, decodeURIComponent(ownSecret[1]), { path: input.path });
             return send(200, { secret: moved });
           }
           if (method === 'DELETE') {
@@ -431,7 +430,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           progressRequestId = row.id;
           return store.transaction(() => {
             requests.forUser(row.id, user.id, true);
-            secrets.put(user.id, { path: asked.path, content: Buffer.from(input.content, 'utf8'), type: asked.type, env: asked.env, filename: asked.filename, secret: asked.secret, keptBy: row.requester_name });
+            secrets.put(user.id, { path: asked.path, content: Buffer.from(input.content, 'utf8'), type: asked.type, secret: asked.secret, keptBy: row.requester_name });
             requests.registered(row.id, user.id, asked.path);
             requests.record(row.id, 'stored');
             return send(200, { stored: true, path: asked.path });
@@ -650,7 +649,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             const ifVersion = url.searchParams.has('if_version') ? Number(url.searchParams.get('if_version')) : undefined;
             if (ifVersion !== undefined && !Number.isInteger(ifVersion)) fail(400, 'invalid_version', '版は整数で指定してください。');
             return send(200, { secret: secrets.put(agent.owner_id, { path: target, content, type: req.headers['content-type'],
-              env: url.searchParams.get('env'), filename: url.searchParams.get('filename'), secret: url.searchParams.get('secret') === 'true', keptBy: agent.name }, ifVersion) });
+              secret: url.searchParams.get('secret') === 'true', keptBy: agent.name }, ifVersion) });
           }
           if (method === 'GET') {
             const { row, content } = secrets.read(agent.owner_id, target);
@@ -668,16 +667,16 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         if (path === '/v1/deliver' && method === 'POST') {
           const input = await body(req);
           rateLimit('issue:' + agent.id, 30);
-          const paths = Array.isArray(input.paths) ? input.paths : [];
-          for (const path of paths) store.requireAccess(agent, secretPath(path));
+          const paths = (Array.isArray(input.paths) ? input.paths : []).map(item => typeof item === 'string' ? { path: item } : item);
+          for (const item of paths) store.requireAccess(agent, secretPath(item?.path));
           const pending = new Map();
-          for (const path of paths) {
-            const acquisition = store.acquisitionFor(agent.owner_id, secretPath(path));
+          for (const item of paths) {
+            const acquisition = store.acquisitionFor(agent.owner_id, secretPath(item.path));
             if (acquisition && acquisition.status === 'connected') pending.set(acquisition.prefix, acquisition);
           }
           for (const acquisition of pending.values()) await acquisitions.refresh(acquisition);
           actor(req);
-          for (const path of paths) store.requireAccess(agent, secretPath(path));
+          for (const item of paths) store.requireAccess(agent, secretPath(item.path));
           const expiry = [...pending.values()].map(acquisition => store.acquisitionState(store.acquisition(agent.owner_id, acquisition.prefix)).expires_at).filter(value => value !== null);
           for (const value of expiry) if (!(Number.isFinite(value) && value > Date.now())) fail(502, 'service_response', '有効期限を確認できませんでした。');
           const expires_at = expiry.length ? Math.min(...expiry) : null;

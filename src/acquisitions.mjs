@@ -1,5 +1,5 @@
 import { fail } from './errors.mjs';
-import { secretPath, deliverable, VALUE_MAX } from './secrets.mjs';
+import { secretPath, VALUE_MAX } from './secrets.mjs';
 
 // The seam between an acquisition and the store.
 //
@@ -31,16 +31,14 @@ export class Acquisitions {
     const rows = [];
     for (const [name, value] of Object.entries(environment)) {
       if (!declared.has(name)) throw new Error('Adapter ' + adapterId + ' delivered an undeclared variable: ' + name);
-      const content = Buffer.from(String(value), 'utf8');
-      deliverable(content, { env: name, filename: null });
-      rows.push({ path: prefix + '/' + leaf(name), content, media_type: 'text/plain', env: name, filename: null, session: null, readable: 0 });
+      rows.push({ path: prefix + '/' + leaf(name), content: Buffer.from(String(value), 'utf8'), media_type: 'text/plain', session: null, readable: 0 });
     }
     for (const file of files) {
       if (!declared.has(file.env)) throw new Error('Adapter ' + adapterId + ' delivered an undeclared variable: ' + file.env);
-      rows.push({ path: prefix + '/' + leaf(file.env), content: Buffer.from(file.content, 'utf8'), media_type: 'application/octet-stream', env: file.env, filename: file.filename, session: null, readable: 0 });
+      rows.push({ path: prefix + '/' + leaf(file.env), content: Buffer.from(file.content, 'utf8'), media_type: 'application/octet-stream', session: null, readable: 0 });
     }
     // A login session is handed to the command as the tool's own login state. The store does not read it.
-    if (expo_session) rows.push({ path: prefix + '/session', content: Buffer.from(JSON.stringify(expo_session), 'utf8'), media_type: 'application/json', env: null, filename: null, session: 'expo', readable: 0 });
+    if (expo_session) rows.push({ path: prefix + '/session', content: Buffer.from(JSON.stringify(expo_session), 'utf8'), media_type: 'application/json', session: 'expo', readable: 0 });
     if (!rows.length) throw new Error('Adapter ' + adapterId + ' produced nothing to keep');
     for (const row of rows) if (row.content.length > VALUE_MAX * 4) fail(502, 'service_response', '受け取った内容が大きすぎます。');
     return rows;

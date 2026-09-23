@@ -52,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
 
     # The AI asks for something Foundation knows nothing about: it names the path, the variable and the steps.
     asked = cli('api', 'POST', '/v1/access-requests', '--json', json.dumps({
-        'store': {'path': 'cloudflare/token', 'label': 'CloudflareのAPIトークン', 'env': 'CLOUDFLARE_API_TOKEN',
+        'store': {'path': 'cloudflare/cloudflare-api-token', 'label': 'CloudflareのAPIトークン',
                   'site': 'https://dash.cloudflare.com/profile/api-tokens'},
         'purpose': 'DNSレコードの確認に使います。',
         'guidance': 'APIトークンを作成 を押し、テンプレートから「Edit zone DNS」を選びます。\n対象のゾーンを選んで作成し、表示されたトークンを貼ってください。'}))['request']
@@ -64,9 +64,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     expect(page.get_by_text('dev-us のAIの依頼', exact=True)).to_be_visible()
     expect(page.get_by_text('DNSレコードの確認に使います。', exact=True)).to_be_visible()
     # What Foundation calls it and how it reaches a command are folded away: they do not help the owner decide.
-    expect(page.get_by_text('cloudflare/token', exact=True)).to_be_hidden()
+    expect(page.get_by_text('cloudflare/cloudflare-api-token', exact=True)).to_be_hidden()
     page.get_by_role('group').get_by_text('Foundationでの扱い', exact=True).click()
-    expect(page.get_by_text('cloudflare/token', exact=True)).to_be_visible()
+    expect(page.get_by_text('cloudflare/cloudflare-api-token', exact=True)).to_be_visible()
     expect(page.get_by_text('AIが動かすコマンドの中だけに CLOUDFLARE_API_TOKEN として現れます', exact=True)).to_be_visible()
     expect(page.get_by_text('APIトークンを作成 を押し', exact=False)).to_be_visible()
     expect(page.get_by_role('link', name='dash.cloudflare.com を開く ↗', exact=True)).to_have_attribute('target', '_blank')
@@ -86,19 +86,19 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
 
     # It is now kept where the AI asked, handed over as it asked, and the AI cannot read it back.
     kept = cli('api', 'GET', '/v1/secrets')['secrets']
-    assert [row['path'] for row in kept] == ['cloudflare/token']
-    assert kept[0]['env'] == 'CLOUDFLARE_API_TOKEN' and kept[0]['readable'] is False
+    assert [row['path'] for row in kept] == ['cloudflare/cloudflare-api-token']
+    assert kept[0]['readable'] is False
     assert kept[0]['kept_by'] == 'dev-us のAI'
-    refused = subprocess.run(['node', 'src/runtime.mjs', 'api', 'GET', '/v1/secrets/cloudflare/token'], env=env, capture_output=True, text=True, timeout=15)
+    refused = subprocess.run(['node', 'src/runtime.mjs', 'api', 'GET', '/v1/secrets/cloudflare/cloudflare-api-token'], env=env, capture_output=True, text=True, timeout=15)
     assert refused.returncode == 1 and SECRET not in refused.stdout + refused.stderr
 
-    used = subprocess.run(['node', 'src/runtime.mjs', 'exec', 'cloudflare/token', '--', 'node', '-e',
+    used = subprocess.run(['node', 'src/runtime.mjs', 'exec', 'cloudflare/cloudflare-api-token', '--', 'node', '-e',
                            'if(process.env.CLOUDFLARE_API_TOKEN!==process.argv[1])process.exit(2);console.log("ready")', SECRET],
                           env=env, capture_output=True, text=True, timeout=15)
     assert used.returncode == 0 and used.stdout.strip() == 'ready', used.stderr
 
     page.goto(args.base + '/secrets', wait_until='networkidle')
-    expect(page.locator('[aria-labelledby="cloudflare-title"]').get_by_role('heading', name='token', exact=True)).to_be_visible()
+    expect(page.locator('[aria-labelledby="cloudflare-title"]').get_by_role('heading', name='cloudflare-api-token', exact=True)).to_be_visible()
     review(page)
     assert not errors, errors
     context.close()

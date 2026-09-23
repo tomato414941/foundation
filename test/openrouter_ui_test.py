@@ -79,11 +79,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
         if width != 320:
             page.screenshot(path=str(shots / ('approval-desktop.png' if width == 1280 else 'approval-mobile.png')), full_page=True)
     kept = cli('api', 'GET', '/v1/secrets')['secrets']
-    assert [entry['env'] for entry in kept] == ['OPENROUTER_API_KEY']
+    assert [entry['path'].split('/')[-1] for entry in kept] == ['openrouter-api-key']
     command = subprocess.run(['node', 'src/runtime.mjs', 'exec', kept[0]['path'], '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
-    page.goto(args.base, wait_until='networkidle')
+    page.goto(args.base + '/secrets', wait_until='networkidle')
     section = page.locator('[aria-labelledby="openrouter-title"]')
     assert 'Gmail' not in section.inner_text() and 'メール' not in section.inner_text()
     expect(section.get_by_role('button', name='接続し直す', exact=True)).to_have_count(0)
@@ -93,6 +93,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
         if width != 320:
             page.screenshot(path=str(shots / ('connections-desktop.png' if width == 1280 else 'connections-mobile.png')), full_page=True)
 
+    page.goto(args.base, wait_until='networkidle')
     runtime = page.locator('.agent-row').filter(has_text='dev-us のAI')
     runtime.get_by_role('button', name='失効', exact=True).click()
     dialog = page.get_by_role('dialog')
@@ -102,6 +103,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     expect(dialog).not_to_be_visible()
     cli('api', 'GET', '/v1/secrets', success=False)
 
+    page.goto(args.base + '/secrets', wait_until='networkidle')
     section.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog.get_by_text('OpenRouter側のキーは残ります。', exact=False)).to_be_visible()
     review(page)

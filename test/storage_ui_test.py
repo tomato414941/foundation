@@ -66,16 +66,16 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     review(page)
 
     # The key keeps two things, with no request and no approval: one handed to a command, one only read back.
-    api('PUT', '/v1/secrets/github/token?env=GH_TOKEN&secret=true', SECRET.encode(), {'content-type': 'text/plain'})
-    api('PUT', '/v1/secrets/release/expo-v3', json.dumps({'step': 'レビュー待ち'}).encode(), {'content-type': 'application/json'})
+    api('PUT', '/v1/secrets/github/gh-token?secret=true', SECRET.encode(), {'content-type': 'text/plain'})
+    api('PUT', '/v1/secrets/release/2026-09-23', json.dumps({'step': 'レビュー待ち'}).encode(), {'content-type': 'application/json'})
     page.reload(wait_until='networkidle')
 
     github = page.locator('[aria-labelledby="github-title"]')
     release = page.locator('[aria-labelledby="release-title"]')
-    expect(github.get_by_role('heading', name='token', exact=True)).to_be_visible()
+    expect(github.get_by_role('heading', name='gh-token', exact=True)).to_be_visible()
     expect(github.get_by_text('GH_TOKEN として渡す', exact=True)).to_be_visible()
-    expect(release.get_by_role('heading', name='expo-v3', exact=True)).to_be_visible()
-    expect(release.get_by_text('渡さない', exact=True)).to_be_visible()
+    expect(release.get_by_role('heading', name='2026-09-23', exact=True)).to_be_visible()
+    expect(release.get_by_text('名前を指定して渡す', exact=True)).to_be_visible()
     expect(github.get_by_text('dev-us のAI', exact=False).first).to_be_visible()
     assert SECRET not in page.locator('body').inner_text(), 'what is kept is never on the page itself'
 
@@ -83,7 +83,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     page.screenshot(path=str(shots / 'kept-desktop.png'), full_page=True)
 
     # The owner can fetch anything they keep, including what the key itself may not read back.
-    opened = page.request.get(args.base + '/api/secrets/github%2Ftoken')
+    opened = page.request.get(args.base + '/api/secrets/github%2Fgh-token')
     assert opened.status == 200 and opened.text() == SECRET
     dialog = page.get_by_role('dialog')
 
@@ -96,10 +96,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
 
     # Removing one takes it away from the key too.
     release.get_by_role('button', name='削除', exact=True).click()
-    expect(dialog.get_by_role('heading', name='release/expo-v3 を削除しますか？', exact=True)).to_be_visible()
+    expect(dialog.get_by_role('heading', name='release/2026-09-23 を削除しますか？', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert [row['path'] for row in api('GET', '/v1/secrets')['secrets']] == ['github/token']
+    assert [row['path'] for row in api('GET', '/v1/secrets')['secrets']] == ['github/gh-token']
 
     github.get_by_role('button', name='削除', exact=True).click()
     dialog.get_by_role('button', name='削除する', exact=True).click()

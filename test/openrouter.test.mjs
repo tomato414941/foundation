@@ -76,7 +76,7 @@ test('API key is delivered only to an approved key; revocation metadata never pr
   const account = (await f.request('/api/state')).json.acquisitions[0];
   assert.equal((await f.request('/api/access-requests/' + row.id)).json.request.status, 'approved', 'the request is complete');
   const listed = await f.request('/v1/secrets', { token });
-  assert.deepEqual(listed.json.secrets.map(entry => entry.env), ['OPENROUTER_API_KEY']);
+  assert.deepEqual(listed.json.secrets.map(entry => entry.path.split('/').pop()), ['openrouter-api-key']);
   assert.doesNotMatch(listed.text, /sk-or-v1-/);
   const issued = await credential(f, account, token);
   assert.equal(issued.status, 200, issued.text);

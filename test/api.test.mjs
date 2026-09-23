@@ -56,8 +56,8 @@ test('What Foundation obtained is kept like anything else, under a path, and an 
 
   // Its values sit in the store beside everything else, saying how each reaches a command.
   const kept = (await f.request('/v1/secrets', { token: agent.token })).json.secrets;
-  assert.deepEqual(kept.filter(entry => entry.path.startsWith(a.prefix)).map(entry => entry.env).sort(),
-    ['GMAIL_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_ACCESS_TOKEN', 'GOOGLE_OAUTH_EXPIRES_AT']);
+  assert.deepEqual(kept.filter(entry => entry.path.startsWith(a.prefix)).map(entry => entry.path.split('/').pop()).sort(),
+    ['gmail-account-email', 'google-oauth-access-token', 'google-oauth-expires-at']);
   assert.ok(kept.every(entry => entry.path.startsWith('gmail/')), 'each sits under the account it belongs to');
   assert.doesNotMatch(JSON.stringify(kept), /refresh_token|google-access-/);
 
