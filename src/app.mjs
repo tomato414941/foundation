@@ -366,6 +366,21 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           if (method === 'DELETE') { await body(req); await objects.remove(user.id, key); return send(200, { ok: true }); }
           fail(405, 'method_not_allowed', 'この操作は利用できません。');
         }
+        // A product that embeds Foundation. Its key makes rooms for its own users; the owner who
+        // registered it is the one billed for what those rooms hold.
+        if (path === '/api/products' && method === 'GET') {
+          return send(200, { products: store.products(user.id).map(product => ({ ...product, rooms: store.rooms(product.id).length })) });
+        }
+        if (path === '/api/products' && method === 'POST') {
+          const input = await body(req);
+          return send(201, { product: store.addProduct(user.id, nameValue(input.name, '製品')) });
+        }
+        const ownProduct = path.match(/^\/api\/products\/([0-9a-f-]{36})$/);
+        if (ownProduct && method === 'DELETE') {
+          await body(req);
+          if (!store.removeProduct(user.id, ownProduct[1])) fail(404, 'not_found', '製品が見つかりません。');
+          return send(200, { ok: true });
+        }
         // Everything, in one file, for the owner alone. Lending someone a place to keep things means they
         // can take them away again; without this the promise is words. Keys are included in full, because
         // a copy that leaves the secrets behind is not a copy.
@@ -512,6 +527,32 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       }
       // The MCP door. It carries no capability of its own: a tool call is the same request to the same
       // API, made with the same key. Agents whose harness connects them to nothing else arrive here.
+      // What a product calls. A product key reaches no room's contents: it makes rooms and reads what
+      // they use. The key it is handed back is an ordinary key, and everything else treats it as one.
+      if (path.startsWith('/v1/rooms')) {
+        if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
+        const product = store.product(bearer(req));
+        if (!product) fail(401, 'not_a_product', 'この製品キーは無効です。');
+        rateLimit('product:' + product.id, 120);
+        if (path === '/v1/rooms' && method === 'POST') {
+          const input = await body(req);
+          if (typeof input.external_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(input.external_id)) {
+            fail(400, 'invalid_external_id', '製品側の利用者IDを指定してください。');
+          }
+          const room = store.room(product.id, input.external_id);
+          const key = store.addAgent(room.id, nameValue(input.name ?? product.name, '依頼元'));
+          return send(201, { room: { id: room.id, external_id: room.external_id, created_at: room.created_at }, key: key.token });
+        }
+        if (path === '/v1/rooms' && method === 'GET') {
+          const rooms = [];
+          for (const room of store.rooms(product.id)) {
+            const kept = store.usage(room.id);
+            rooms.push({ ...room, usage: { entries: kept, objects: objects.enabled ? await objects.usage(room.id).then(space => ({ count: space.count, bytes: space.bytes })) : null } });
+          }
+          return send(200, { rooms });
+        }
+        fail(405, 'method_not_allowed', 'この操作は利用できません。');
+      }
       if (path === '/mcp') {
         if (method !== 'POST') fail(405, 'method_not_allowed', 'MCPのエンドポイントはPOSTのみです。');
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
