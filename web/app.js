@@ -231,14 +231,14 @@ function connectionRow(connection, secrets) {
   const until = connection.expiry_known === false ? ' · 有効期限は不明です' : connection.expires_at ? ' · ' + esc(new Date(connection.expires_at).toLocaleString('ja-JP')) + 'まで' : '';
   return `<article class="agent-row"><div class="agent-name"><h3>${esc(connection.label)}</h3><p>${esc(connection.service?.name || '')}の接続 · <span class="${warning ? 'warning-text' : ''}">${esc(statusName(connection.status))}</span></p></div>
     <div class="agent-permissions"><span class="muted">${esc(connection.access?.name || '')}</span><span class="muted block">Foundationが保管し、更新します${until}</span>
-      <details class="kept-under"><summary>${esc(secrets.length)}件の中身</summary><dl>${secrets.map(entry => `<div><dt>${esc(entry.path.slice(connection.prefix.length + 1))}</dt><dd>${esc(handedOver(entry))} <button class="text-button" data-action="show-secret" data-path="${esc(entry.path)}">中身を見る</button></dd></div>`).join('')}</dl></details></div>
+      <details class="kept-under"><summary>${esc(secrets.length)}件の中身</summary><dl>${secrets.map(entry => `<div><dt>${esc(entry.path.slice(connection.prefix.length + 1))}</dt><dd><button class="text-button" data-action="show-secret" data-path="${esc(entry.path)}">中身を見る</button></dd></div>`).join('')}</dl></details></div>
     <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-prefix="${esc(connection.prefix)}" data-adapter="${esc(connection.adapter)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-prefix="${esc(connection.prefix)}">接続を解除</button></div></article>`;
 }
 // The heading is the path without the group it already sits under, so a name is never read twice.
 const within = path => path.slice(path.indexOf('/') + 1);
 function secretRow(entry, owned) {
   return `<article class="agent-row"><div class="agent-name"><h3>${esc(within(entry.path))}</h3><p>${esc(entry.media_type)} · ${esc(kiloBytes(entry.size))}</p></div>
-    <div class="agent-permissions"><span class="muted">${esc(handedOver(entry))}</span><span class="muted block">${esc(putBy(entry))} · ${esc(keptWhen(entry.updated_at))}</span></div>
+    <div class="agent-permissions"><span class="muted">${esc(putBy(entry))} · ${esc(keptWhen(entry.updated_at))}</span></div>
     <div class="agent-actions"><button class="text-button" data-action="show-secret" data-path="${esc(entry.path)}">中身を見る</button>${owned ? '' : `<button class="text-button" data-action="edit-secret" data-path="${esc(entry.path)}">名前を変える</button><button class="text-button danger" data-action="drop-secret" data-path="${esc(entry.path)}">削除</button>`}</div></article>`;
 }
 function groupSection(group) {
@@ -374,23 +374,27 @@ function renderRequest() {
 // The owner puts something into storage for a key. Everything specific to the service is the AI's words;
 // Foundation shows only where it will go and how it will be handed over.
 function renderStore(row, shell, expiry) {
-  const asked = row.store;
-  const handedOver = variableFor(asked.path) ? `AIが動かすコマンドの中だけに ${variableFor(asked.path)} として現れます` : 'AIが名前を指定して、コマンドの中だけで使います';
-  const field = asked.multiline
-    ? `<textarea id="stored-value" name="content" rows="6" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>`
-    : `<input id="stored-value" name="content" type="password" required maxlength="16384" autocomplete="off" spellcheck="false">`;
-  app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(asked.label)}を預ける</h1></div></header>
+  const asked = Array.isArray(row.store) ? row.store : [row.store];
+  const title = asked.length === 1 ? `${esc(asked[0].label)}を預ける` : `${asked.length}件を預ける`;
+  const site = asked.find(one => one.site)?.site;
+  const handedOver = one => variableFor(one.path) ? `AIが動かすコマンドの中だけに ${variableFor(one.path)} として現れます` : 'AIが名前を指定して、コマンドの中だけで使います';
+  const field = (one, at) => one.multiline
+    ? `<textarea id="stored-${at}" name="${esc(one.path)}" rows="6" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>`
+    : `<input id="stored-${at}" name="${esc(one.path)}" type="${one.secret ? 'password' : 'text'}" required maxlength="16384" autocomplete="off" spellcheck="false">`;
+  const secretly = asked.some(one => one.secret), openly = asked.some(one => !one.secret);
+  app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${title}</h1></div></header>
     <dl class="approval-facts">${row.purpose ? `<div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}</dl>
-    <details class="approval-detail"><summary>Foundationでの扱い</summary><dl class="approval-facts"><div><dt>名前</dt><dd><code>${esc(asked.path)}</code></dd></div><div><dt>AIへの渡り方</dt><dd>${esc(handedOver)}</dd></div></dl></details>
+    <details class="approval-detail"><summary>Foundationでの扱い</summary><dl class="approval-facts">${asked.map(one => `<div><dt><code>${esc(one.path)}</code></dt><dd>${esc(handedOver(one))}</dd></div>`).join('')}</dl></details>
     ${guidanceBlock(row.guidance)}
-    ${asked.site ? `<a class="button secondary full setup-link" href="${esc(asked.site)}" target="_blank" rel="noopener noreferrer"><span>${esc(new URL(asked.site).host)} を開く ↗</span></a>` : ''}
-    <form id="store-request-form"><label for="stored-value">${esc(asked.label)}</label>${field}
-    <p class="permission-note">Foundationは中身を確認しません。${asked.secret ? '登録後、AIはこの値を読み出せません（渡すことだけができます）。' : '登録後、AIはこの値を読み出せます。'}</p>
+    ${site ? `<a class="button secondary full setup-link" href="${esc(site)}" target="_blank" rel="noopener noreferrer"><span>${esc(new URL(site).host)} を開く ↗</span></a>` : ''}
+    <form id="store-request-form">${asked.map((one, at) => `<label for="stored-${at}">${esc(one.label)}</label>${field(one, at)}`).join('')}
+    <p class="permission-note">Foundationは中身を確認しません。${secretly ? '登録後、AIは' + (openly ? '伏せた欄の値を' : 'この値を') + '読み出せません（渡すことだけができます）。' : '登録後、AIはこの値を読み出せます。'}</p>
     <p class="form-error" role="alert"></p>
     <button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>
     <button class="text-button full" type="button" data-action="deny-request">登録しない</button>${expiry}</section>`);
   bindForm(async (data) => {
-    try { await api(`/api/access-requests/${row.id}/store`, { method: 'POST', data: { content: String(data.get('content')) } }); }
+    const contents = Object.fromEntries(asked.map(one => [one.path, String(data.get(one.path) ?? '')]));
+    try { await api(`/api/access-requests/${row.id}/store`, { method: 'POST', data: { contents } }); }
     catch (error) { if ([401, 404].includes(error.status)) await refresh(); throw error; }
     await refresh(); toast('登録しました。');
   }, app);

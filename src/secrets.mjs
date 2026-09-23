@@ -130,6 +130,18 @@ export class Secrets {
 
 // What an AI asks its owner to put into storage. Foundation holds no knowledge of the service involved:
 // the AI says where it goes, how it should be handed over, and writes the instructions the owner follows.
+// Some things only make sense together: an Apple key is a .p8 and three identifiers, and asking for them
+// one screen at a time is four trips for the owner. So a request may declare several, and they are filled
+// in and kept in one go. Foundation still knows nothing about what they are for.
+export function declarations(input) {
+  const many = Array.isArray(input) ? input : [input];
+  if (!many.length || many.length > 8) fail(400, 'invalid_declaration', '一度に預けられるのは1〜8件です。');
+  const declared = many.map(one => declaration(one));
+  const paths = new Set(declared.map(one => one.path));
+  if (paths.size !== declared.length) fail(400, 'invalid_declaration', '同じ保管先を2回指定できません。');
+  return declared;
+}
+
 export function declaration(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'invalid_declaration', '保管するものの申告が必要です。');
   let site;
