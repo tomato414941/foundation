@@ -30,7 +30,7 @@ test('What is kept is bytes at a path, and the name a command receives them unde
   const kept = await put(f, token, 'github/gh-token', secret, { secret: 'true' });
   assert.equal(kept.status, 200, kept.text);
   assert.deepEqual({ ...kept.json.secret, created_at: 0, updated_at: 0 },
-    { path: 'github/gh-token', size: secret.length, session: null, readable: false, version: 1, kept_by: 'dev-us', created_at: 0, updated_at: 0 });
+    { path: 'github/gh-token', size: secret.length, session: null, readable: false, version: 1, created_at: 0, updated_at: 0 });
   assert.doesNotMatch(kept.text, new RegExp(secret), 'writing never echoes the bytes back');
 
   const listed = await f.request('/v1/secrets', { token, anonymous: true });

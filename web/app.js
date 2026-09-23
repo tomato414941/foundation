@@ -208,7 +208,6 @@ const keptWhen = value => new Date(value).toLocaleString('ja-JP');
 const handedOver = entry => entry.session ? 'ログイン状態として渡す' : variableFor(entry.path) ? `${variableFor(entry.path)} として渡す` : '名前を指定して渡す';
 const kiloBytes = size => size < 1024 ? size + ' バイト' : size < 1024 * 1024 ? Math.round(size / 1024) + ' KB'
   : size < 1024 * 1024 * 1024 ? Math.round(size / (1024 * 1024)) + ' MB' : (size / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-const putBy = entry => entry.kept_by || 'あなた';
 const variableFor = path => { const leaf = path.split('/').pop().replace(/[^A-Za-z0-9]+/g, '_').toUpperCase(); return /^[A-Z][A-Z0-9_]*$/.test(leaf) ? leaf : null; };
 const groupId = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'g-' + [...name].map(char => char.codePointAt(0).toString(36)).join('');
 const statusName = status => ({ connected: '利用できます', reconnect_required: '接続し直しが必要です', disconnecting: '解除しています' }[status] || '確認が必要です');
@@ -238,7 +237,7 @@ function connectionRow(connection, secrets) {
 const within = path => path.slice(path.indexOf('/') + 1);
 function secretRow(entry, owned) {
   return `<article class="agent-row"><div class="agent-name"><h3>${esc(within(entry.path))}</h3><p>${esc(kiloBytes(entry.size))}</p></div>
-    <div class="agent-permissions"><span class="muted">${esc(putBy(entry))} · ${esc(keptWhen(entry.updated_at))}</span></div>
+    <div class="agent-permissions"><span class="muted">${esc(keptWhen(entry.updated_at))}</span></div>
     <div class="agent-actions"><button class="text-button" data-action="show-secret" data-path="${esc(entry.path)}">中身を見る</button>${owned ? '' : `<button class="text-button" data-action="edit-secret" data-path="${esc(entry.path)}">名前を変える</button><button class="text-button danger" data-action="drop-secret" data-path="${esc(entry.path)}">削除</button>`}</div></article>`;
 }
 function groupSection(group) {
@@ -619,7 +618,7 @@ document.addEventListener('click', async (event) => {
       const body = shown !== null
         ? `<pre class="kept-document">${esc(shown)}</pre>`
         : `<p>この形式は画面で表示できません。</p><a class="button secondary full" href="/api/secrets/${encodeURIComponent(path)}" download>ファイルとして保存</a>`;
-      openDialog(`<h2 id="dialog-title">${esc(path)}</h2><p>${esc(putBy(entry))} が ${esc(keptWhen(entry.updated_at))} に保管しました。</p>${body}`);
+      openDialog(`<h2 id="dialog-title">${esc(path)}</h2><p>${esc(keptWhen(entry.updated_at))}</p>${body}`);
     }
     if (action === 'drop-secret') {
       const path = target.dataset.path;
