@@ -92,7 +92,7 @@ async function main() {
     const content = parsed.values.from !== undefined ? await readFile(parsed.values.from) : parsed.values.json !== undefined ? Buffer.from(parsed.values.json) : method === 'GET' ? undefined : Buffer.from('{}');
     call = { method, target: parsed.positionals[1], body: content,
       type: parsed.values.type || (parsed.values.from !== undefined ? 'application/octet-stream' : 'application/json') };
-  } else if (!(action === 'exec' && paths.length && new Set(paths.map(item => item.path)).size === paths.length && command.length)) {
+  } else if (!(action === 'exec' && paths.length && new Set(paths.map(item => (item.as ?? '') + ':' + item.path)).size === paths.length && command.length)) {
     throw new Error('Usage: connect [--name <name>] | exec [<NAME>=]<path> [...] -- <command> [args...] | api <method> </path> [--json <body>] [--from <file>]');
   }
   const url = new URL(process.env.FOUNDATION_URL || '');
