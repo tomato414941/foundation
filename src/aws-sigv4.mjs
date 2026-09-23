@@ -10,15 +10,17 @@ const signature = (credentials, date, region, service, toSign) => createHmac('sh
 // AWS Signature Version 4 for a request to a regional service endpoint. Kept here so Foundation needs no AWS SDK.
 // `credentials` may carry a session token (temporary credentials from a role); it is then signed as well.
 // `path` is sent as given, so it must already be in canonical (URI-encoded) form.
-export function signAws({ method = 'POST', service, region, host, path = '/', body, headers = {}, credentials, now = new Date() }) {
+export function signAws({ method = 'POST', service, region, host, path = '/', query = {}, body, headers = {}, credentials, now = new Date() }) {
   const { amzDate, date } = stamp(now);
   const all = { host, 'x-amz-date': amzDate, ...Object.fromEntries(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value])) };
   if (credentials.sessionToken) all['x-amz-security-token'] = credentials.sessionToken;
   const names = Object.keys(all).sort(), signedHeaders = names.join(';');
-  const canonical = [method, path, '', ...names.map(name => name + ':' + String(all[name]).trim()), '', signedHeaders, digest(body)].join('\n');
+  const canonicalQuery = Object.keys(query).sort().map(name => encode(name) + '=' + encode(query[name])).join('&');
+  const canonical = [method, path, canonicalQuery, ...names.map(name => name + ':' + String(all[name]).trim()), '', signedHeaders, digest(body)].join('\n');
   const scope = date + '/' + region + '/' + service + '/aws4_request';
   const toSign = ['AWS4-HMAC-SHA256', amzDate, scope, digest(canonical)].join('\n');
-  return { url: 'https://' + host + path, method, body, headers: { ...all, authorization: `AWS4-HMAC-SHA256 Credential=${credentials.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature(credentials, date, region, service, toSign)}` } };
+  return { url: 'https://' + host + path + (canonicalQuery ? '?' + canonicalQuery : ''), method, body,
+    headers: { ...all, authorization: `AWS4-HMAC-SHA256 Credential=${credentials.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature(credentials, date, region, service, toSign)}` } };
 }
 
 // A presigned URL: whoever holds it may make this one request until it expires (or the signing credentials do).
