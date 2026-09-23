@@ -11,6 +11,7 @@ import { AccessRequests } from './access-requests.mjs';
 import { Acquisitions } from './acquisitions.mjs';
 import { Entries, ENTRY_MAX, entryPath } from './entries.mjs';
 import { Files, FILE_MAX } from './files.mjs';
+import { Objects, S3Space, OBJECT_MAX } from './objects.mjs';
 import { respond } from './mcp.mjs';
 import { guide } from './guide.mjs';
 
@@ -73,7 +74,7 @@ function purposeValue(value = '') {
   return value.trim();
 }
 
-export function createApp({ database = ':memory:', encryptionKey, auth, adapters: adapterList, files: fileBackend = null, publicOrigin, owners: ownerList = [], loginClock, trustedProxies = [] }) {
+export function createApp({ database = ':memory:', encryptionKey, auth, adapters: adapterList, files: fileBackend = null, space: spaceBackend = null, publicOrigin, owners: ownerList = [], loginClock, trustedProxies = [] }) {
   if (!auth || !Array.isArray(adapterList)) throw new Error('Authentication and adapters are required');
   let external;
   if (publicOrigin) {
@@ -95,6 +96,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   const adapters = new Adapters(adapterList);
   const entries = new Entries(store, adapters.owned);
   const files = new Files(store, fileBackend);
+  const objects = new Objects(spaceBackend);
   const acquisitions = new Acquisitions(store, adapters);
   const requests = new AccessRequests(store, adapters);
   const logins = new EmailLogins({ now: loginClock });
@@ -512,6 +514,35 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         }
         // A URL for something that can only take a URL. Only here because not every owner has cloud
         // storage of their own; one who does should use it directly instead.
+        // The owner's own space of objects. Lent from Foundation's bucket while the owner has none of
+        // their own; the same calls reach a bucket of theirs once one is connected.
+        if (path === '/v1/objects' && method === 'GET') {
+          objects.check();
+          rateLimit('objects:' + agent.id, 60);
+          return send(200, await objects.list(agent.owner_id, url.searchParams.get('prefix') ?? '', url.searchParams.get('cursor') ?? undefined));
+        }
+        const objectRoute = path.match(/^\/v1\/objects\/(.+?)(\/link)?$/);
+        if (objectRoute) {
+          objects.check();
+          rateLimit('objects:' + agent.id, 60);
+          const key = decodeURIComponent(objectRoute[1]);
+          if (objectRoute[2]) {
+            if (method !== 'POST') fail(405, 'method_not_allowed', 'この操作は利用できません。');
+            const input = await body(req);
+            return send(200, await objects.link(agent.owner_id, key, input.minutes));
+          }
+          if (method === 'PUT') {
+            const content = await raw(req, OBJECT_MAX);
+            return send(200, await objects.put(agent.owner_id, key, content, req.headers['content-type'] || 'application/octet-stream'));
+          }
+          if (method === 'GET') {
+            const found = await objects.get(agent.owner_id, key);
+            res.writeHead(200, { 'content-type': found.contentType });
+            return res.end(found.content);
+          }
+          if (method === 'DELETE') { await body(req); await objects.remove(agent.owner_id, key); return send(200, { ok: true }); }
+          fail(405, 'method_not_allowed', 'この操作は利用できません。');
+        }
         if (path === '/v1/files' && method === 'GET') return send(200, { files: files.list(agent.owner_id) });
         if (path === '/v1/files' && method === 'POST') {
           files.check();
