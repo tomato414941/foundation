@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +11,10 @@ import { AccessRequests } from './access-requests.mjs';
 import { Acquisitions } from './acquisitions.mjs';
 import { Entries, ENTRY_MAX, entryPath } from './entries.mjs';
 import { Files, FILE_MAX } from './files.mjs';
+import { respond } from './mcp.mjs';
+import { guide } from './guide.mjs';
+
+const VERSION = createRequire(import.meta.url)('../package.json').version;
 
 const PUBLIC = new URL('../web/', import.meta.url);
 const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
@@ -465,6 +470,29 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             return send(200, { ok: true });
           }
         }
+      }
+      // The MCP door. It carries no capability of its own: a tool call is the same request to the same
+      // API, made with the same key. Agents whose harness connects them to nothing else arrive here.
+      if (path === '/mcp') {
+        if (method !== 'POST') fail(405, 'method_not_allowed', 'MCPのエンドポイントはPOSTのみです。');
+        if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
+        const agent = actor(req);
+        rateLimit('mcp:' + agent.id, 120);
+        const authorization = req.headers.authorization;
+        const answer = await respond(await body(req), req.headers, {
+          serverInfo: { name: 'foundation', version: VERSION },
+          guide: () => guide(adapters.ids().map(id => adapters.describe(id))),
+          call: async ({ method: verb, path: target, body: payload }) => {
+            const response = await fetch(`http://127.0.0.1:${port}${target}`, {
+              method: verb, redirect: 'error', signal: AbortSignal.timeout(20_000),
+              headers: { authorization, ...(payload === undefined ? {} : { 'content-type': 'application/json' }) },
+              ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+            });
+            return { ok: response.ok, text: await response.text() };
+          },
+        });
+        if (answer.body === null) { res.writeHead(answer.status); return res.end(); }
+        return send(answer.status, answer.body);
       }
       if (path.startsWith('/v1/')) {
         const agent = actor(req);
