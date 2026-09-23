@@ -8,6 +8,7 @@ import { fail, HttpError, nameValue } from './errors.mjs';
 import { Adapters } from './adapters.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { AccessRequests } from './access-requests.mjs';
+import { KeyRequests } from './key-requests.mjs';
 import { Acquisitions } from './acquisitions.mjs';
 import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX, secretPath } from './secrets.mjs';
 import { Objects, S3Space, OBJECT_MAX } from './objects.mjs';
@@ -23,12 +24,12 @@ const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/se
 const MAX_BODY = 12_000;
 const SESSION_AGE = 14 * 86400;
 const LOGIN_CALLBACK = '/auth/callback';
-const CONNECT_PAGE = /^\/connect\/[A-Za-z0-9_-]{43}$/;
+const CONNECT_PAGE = /^\/connect\/[A-Za-z0-9_-]{43}$/, KEY_PAGE = /^\/keys\/[A-Za-z0-9_-]{43}$/;
 // A value a key kept itself passed through no adapter, so Foundation has nothing to say about what it reaches.
 const KEPT_ACCESS = Object.freeze({ name: '中身は確認していません', description: 'AIが自分で預けた値です。Foundationは何の値かも、何ができるかも確認していません。', restrictions: '心当たりのないものは削除してください。' });
 
 function returnPath(value = '/') {
-  if (!PAGES.includes(value) && (typeof value !== 'string' || !CONNECT_PAGE.test(value))) fail(400, 'invalid_return', '接続リンクを開き直してください。');
+  if (!PAGES.includes(value) && (typeof value !== 'string' || !(CONNECT_PAGE.test(value) || KEY_PAGE.test(value)))) fail(400, 'invalid_return', '接続リンクを開き直してください。');
   return value;
 }
 
@@ -93,7 +94,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   const secrets = new Secrets(store);
   const objects = new Objects(spaceBackend);
   const acquisitions = new Acquisitions(store, adapters);
-  const requests = new AccessRequests(store, adapters);
+  const requests = new AccessRequests(store, adapters), keyRequests = new KeyRequests(store);
   const logins = new EmailLogins({ now: loginClock });
   const refreshing = new Map(), limits = new Map(), disconnects = new Set();
   const timer = setInterval(() => {
@@ -140,9 +141,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   }
   const bearer = req => req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
   function actor(req) {
-    const agent = store.authenticate(bearer(req));
-    if (!agent) fail(401, 'not_approved', 'このアクセスキーはまだ承認されていないか、失効しています。foundation connect で接続依頼を作り、承認後にお試しください。');
-    return agent;
+    const key = store.authenticate(bearer(req));
+    if (!key) fail(401, 'not_approved', 'このアクセスキーはまだ承認されていないか、失効しています。foundation connect (POST /v1/keys) で承認を依頼し、承認後にお試しください。');
+    return key;
   }
   function requireOrigin(req, origin) {
     if (req.headers.origin !== origin) fail(403, 'origin_denied', 'この操作はFoundationの画面から行ってください。');
@@ -192,9 +193,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       const setNamedCookie = (name, value, age) => res.appendHeader('Set-Cookie', `${name}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${age}${external ? '; Secure' : ''}`);
       const setCookie = (value, age) => setNamedCookie('fdn_session', value, age);
       const loginToken = readCookie(req, 'fdn_login');
-      if ((STATIC.has(path) || CONNECT_PAGE.test(path)) && method === 'GET') {
+      if ((STATIC.has(path) || CONNECT_PAGE.test(path) || KEY_PAGE.test(path)) && method === 'GET') {
         if (CONNECT_PAGE.test(path)) requests.record(path.slice('/connect/'.length), 'page_opened');
-        const [filename, type] = STATIC.get(CONNECT_PAGE.test(path) ? '/' : path);
+        if (KEY_PAGE.test(path)) keyRequests.record(path.slice('/keys/'.length), 'page_opened');
+        const [filename, type] = STATIC.get(STATIC.has(path) ? path : '/');
         res.writeHead(200, { 'content-type': type });
         return res.end(await readFile(fileURLToPath(new URL(filename, PUBLIC))));
       }
@@ -305,22 +307,40 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       // A runtime learns which credentials it may use from /v1/credentials. When its owner asks for help,
       // it may read its own current request raw (what was requested, and what happened at the approval URL).
       if (path === '/v1/adapters' && method === 'GET') return send(200, { adapters: adapters.ids().map(id => adapters.describe(id)) });
+      // A key not yet approved asks its owner to accept it. It may arrive with no key at all: an agent that cannot
+      // generate a secret of its own is issued one here, returned once and never again. While it waits, it may read
+      // its own request raw (what it asked, and what happened at the page), or cancel it.
+      if (path === '/v1/keys' || path === '/v1/keys/current') {
+        if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
+        const given = bearer(req);
+        const issued = given === undefined && path === '/v1/keys' && method === 'POST' ? 'fdn_' + randomBytes(32).toString('base64url') : undefined;
+        const token = issued ?? given;
+        rateLimit('request-poll:' + keyRequests.key(token), 30);
+        if (path === '/v1/keys' && method === 'POST') {
+          const input = await body(req);
+          rateLimit('request-create:' + clientAddress(req), 12, 600_000);
+          const row = keyRequests.create(token, { name: nameValue(input.name, '依頼元'), validMinutes: input.valid_minutes ?? 30 });
+          return send(201, { ...(issued ? { key: issued } : {}), request: keyRequests.summary(row, origin) });
+        }
+        if (path === '/v1/keys/current' && method === 'GET') return send(200, { request: keyRequests.runtimeView(token, origin) });
+        if (path === '/v1/keys/current' && method === 'DELETE') {
+          await body(req);
+          const cancelled = keyRequests.cancel(token); keyRequests.record(cancelled.id, 'cancelled');
+          return send(200, { request: keyRequests.summary(cancelled, origin) });
+        }
+        fail(405, 'method_not_allowed', 'この操作は利用できません。');
+      }
+      // What an approved key asks its owner for: something to keep, or a connection Foundation makes itself.
       if (path === '/v1/access-requests' || path === '/v1/access-requests/current') {
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
-        // A first request may arrive with no key at all: an agent that cannot generate a secret of its own is
-        // issued one here, returned once and never again. One that has a key keeps using it.
-        const given = req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
-        const issued = given === undefined && path === '/v1/access-requests' && method === 'POST' ? 'fdn_' + randomBytes(32).toString('base64url') : undefined;
-        const token = issued ?? given;
-        const hash = requests.key(token);
-        rateLimit('request-poll:' + hash, 30);
+        const token = bearer(req);
+        rateLimit('request-poll:' + requests.key(token), 30);
         if (path === '/v1/access-requests' && method === 'POST') {
           const input = await body(req);
-          // Only a key not yet approved introduces itself by name; an approved key is known by the name its owner keeps.
-          const name = input.name === undefined ? '' : nameValue(input.name, '依頼元'), purpose = purposeValue(input.purpose);
+          const purpose = purposeValue(input.purpose);
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
-          const row = requests.create(token, { name, purpose, adapter: input.adapter, store: input.store, details: input.details, guidance: input.guidance ?? '', validMinutes: input.valid_minutes ?? 30 });
-          return send(201, { ...(issued ? { key: issued } : {}), request: requests.summary(row, origin) });
+          const row = requests.create(token, { purpose, adapter: input.adapter, store: input.store, details: input.details, guidance: input.guidance ?? '', validMinutes: input.valid_minutes ?? 30 });
+          return send(201, { request: requests.summary(row, origin) });
         }
         if (path.endsWith('/current') && method === 'GET') return send(200, { request: { ...requests.runtimeView(token), verification_uri: origin + '/connect/' + requests.current(token).id } });
         if (path.endsWith('/current') && method === 'DELETE') {
@@ -333,7 +353,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       if (path.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(method)) requireOrigin(req, origin);
         const { user, session } = await principal(req);
-        if (path === '/api/state' && method === 'GET') return send(200, { user, secrets: secrets.list(user.id), acquisitions: store.acquisitions(user.id).map(acquisitionView), agents: store.agents(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
+        if (path === '/api/state' && method === 'GET') return send(200, { user, secrets: secrets.list(user.id), acquisitions: store.acquisitions(user.id).map(acquisitionView), keys: store.keys(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
         // What a key kept is the owner's: they read it, rename the group it sits in, and remove it.
         // The same space the keys use, from the owner's own screen: what is there, and putting, taking
         // and removing one thing. The owner is the one paying for it, so they must be able to clear it.
@@ -369,7 +389,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             return { ...row, content: store.secretContent(full).toString('base64'), encoding: 'base64' };
           });
           const value = { exported_at: new Date().toISOString(), owner: user.email, origin,
-            secrets: kept, acquisitions: store.acquisitions(user.id).map(acquisitionView), agents: store.agents(user.id) };
+            secrets: kept, acquisitions: store.acquisitions(user.id).map(acquisitionView), keys: store.keys(user.id) };
           res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
             'content-disposition': `attachment; filename="foundation-${new Date().toISOString().slice(0, 10)}.json"` });
           return res.end(JSON.stringify(value, null, 2));
@@ -425,17 +445,32 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             return send(200, { stored: true, path: asked.path });
           });
         }
-        const requestRoute = path.match(/^\/api\/access-requests\/([A-Za-z0-9_-]{43})(\/(?:approve|deny))?$/);
+        const requestRoute = path.match(/^\/api\/access-requests\/([A-Za-z0-9_-]{43})(\/deny)?$/);
         if (requestRoute) {
           const row = requests.forUser(requestRoute[1], user.id);
-          if (!requestRoute[2] && method === 'GET') { requests.record(row.id, 'page_viewed'); return send(200, { request: requests.summary(row, origin, { code: false }) }); }
+          if (!requestRoute[2] && method === 'GET') { requests.record(row.id, 'page_viewed'); return send(200, { request: requests.summary(row, origin) }); }
           if (method === 'POST' && requestRoute[2]) {
-            const input = await body(req);
+            await body(req);
             if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
             progressRequestId = row.id;
-            const result = requestRoute[2] === '/deny' ? requests.deny(row.id, user.id) : requests.approve(row.id, user.id, input.confirmationCode);
-            requests.record(row.id, requestRoute[2] === '/deny' ? 'denied' : 'approved');
-            return send(200, { request: requests.summary(result, origin, { code: false }) });
+            const result = requests.deny(row.id, user.id);
+            requests.record(row.id, 'denied');
+            return send(200, { request: requests.summary(result, origin) });
+          }
+        }
+        // The owner accepts a new key with the code the runtime showed, or turns it away.
+        const keyRequestRoute = path.match(/^\/api\/key-requests\/([A-Za-z0-9_-]{43})(\/(?:approve|deny))?$/);
+        if (keyRequestRoute) {
+          const row = keyRequests.forUser(keyRequestRoute[1], user.id);
+          if (!keyRequestRoute[2] && method === 'GET') { keyRequests.record(row.id, 'page_viewed'); return send(200, { request: keyRequests.summary(row, origin, { code: false }) }); }
+          if (method === 'POST' && keyRequestRoute[2]) {
+            const input = await body(req);
+            if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
+            let result;
+            try { result = keyRequestRoute[2] === '/deny' ? keyRequests.deny(row.id, user.id) : keyRequests.approve(row.id, user.id, input.confirmationCode); }
+            catch (error) { if (error instanceof HttpError) keyRequests.record(row.id, 'connect_failed', { code: error.code, message: error.message }); throw error; }
+            keyRequests.record(row.id, keyRequestRoute[2] === '/deny' ? 'denied' : 'approved');
+            return send(200, { request: keyRequests.summary(result, origin, { code: false }) });
           }
         }
         // Starting an acquisition Foundation performs itself: an OAuth round trip, or a login relayed once.
@@ -506,19 +541,19 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             return send(200, { ok: true, service_revoked: revoked });
           } finally { disconnects.delete(acquisition.id); }
         }
-        if (path === '/api/agents' && method === 'POST') {
+        if (path === '/api/keys' && method === 'POST') {
           const input = await body(req);
-          return send(201, { agent: store.addAgent(user.id, nameValue(input.name)) });
+          return send(201, { key: store.addKey(user.id, nameValue(input.name)) });
         }
-        const agentRoute = path.match(/^\/api\/agents\/([a-f0-9-]{36})$/);
-        if (agentRoute) {
+        const keyRoute = path.match(/^\/api\/keys\/([a-f0-9-]{36})$/);
+        if (keyRoute) {
           if (method === 'DELETE') {
-            store.removeAgent(user.id, agentRoute[1]);
+            store.removeKey(user.id, keyRoute[1]);
             return send(200, { ok: true });
           }
           if (method === 'PATCH') {
             const input = await body(req);
-            store.renameAgent(user.id, agentRoute[1], nameValue(input.name));
+            store.renameKey(user.id, keyRoute[1], nameValue(input.name));
             return send(200, { ok: true });
           }
         }
@@ -528,8 +563,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       if (path === '/mcp') {
         if (method !== 'POST') fail(405, 'method_not_allowed', 'MCPのエンドポイントはPOSTのみです。');
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
-        const agent = actor(req);
-        rateLimit('mcp:' + agent.id, 120);
+        const caller = actor(req);
+        rateLimit('mcp:' + caller.id, 120);
         const authorization = req.headers.authorization;
         const answer = await respond(await body(req), req.headers, {
           serverInfo: { name: 'foundation', version: VERSION },
@@ -547,27 +582,27 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         return send(answer.status, answer.body);
       }
       if (path.startsWith('/v1/')) {
-        const agent = actor(req);
+        const caller = actor(req);
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
-        if (path === '/v1/acquisitions' && method === 'GET') return send(200, { acquisitions: store.acquisitions(agent.owner_id).filter(row => row.status !== 'disconnecting').map(runtimeAcquisition) });
-        if (path === '/v1/me' && method === 'GET') return send(200, { agent: store.agentDetails(agent) });
+        if (path === '/v1/acquisitions' && method === 'GET') return send(200, { acquisitions: store.acquisitions(caller.owner_id).filter(row => row.status !== 'disconnecting').map(runtimeAcquisition) });
+        if (path === '/v1/me' && method === 'GET') return send(200, { key: store.keyDetails(caller) });
         if (path === '/v1/me' && method === 'PATCH') {
           const input = await body(req);
-          store.renameAgent(agent.owner_id, agent.id, nameValue(input.name));
-          return send(200, { agent: store.agentDetails(agent) });
+          store.renameKey(caller.owner_id, caller.id, nameValue(input.name));
+          return send(200, { key: store.keyDetails(caller) });
         }
         if (path === '/v1/me' && method === 'DELETE') {
           await body(req);
           // The key retires itself: it stops working. Connections stay with the owner.
-          store.removeAgent(agent.owner_id, agent.id);
+          store.removeKey(caller.owner_id, caller.id);
           return send(200, { ok: true });
         }
         // A URL for something that can only take a URL. Only here because not every owner has cloud
         // storage of their own; one who does should use it directly instead.
         // What this owner is using, and what they may use. Lending has a cost, so both sides can see it.
         if (path === '/v1/usage' && method === 'GET') {
-          const kept = store.usage(agent.owner_id);
-          const space = objects.enabled ? await objects.usage(agent.owner_id) : null;
+          const kept = store.usage(caller.owner_id);
+          const space = objects.enabled ? await objects.usage(caller.owner_id) : null;
           return send(200, { secrets: { ...kept, count_max: SECRET_COUNT_MAX, bytes_max: SECRET_TOTAL_MAX },
             objects: space ? { count: space.count, bytes: space.bytes, count_max: space.count_max, bytes_max: space.bytes_max } : null });
         }
@@ -575,51 +610,51 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         // their own; the same calls reach a bucket of theirs once one is connected.
         if (path === '/v1/objects' && method === 'GET') {
           objects.check();
-          rateLimit('objects:' + agent.id, 60);
-          return send(200, await objects.list(agent.owner_id, url.searchParams.get('prefix') ?? '', url.searchParams.get('cursor') ?? undefined));
+          rateLimit('objects:' + caller.id, 60);
+          return send(200, await objects.list(caller.owner_id, url.searchParams.get('prefix') ?? '', url.searchParams.get('cursor') ?? undefined));
         }
         const objectRoute = path.match(/^\/v1\/objects\/(.+?)(\/link)?$/);
         if (objectRoute) {
           objects.check();
-          rateLimit('objects:' + agent.id, 60);
+          rateLimit('objects:' + caller.id, 60);
           const key = decodeURIComponent(objectRoute[1]);
           if (objectRoute[2]) {
             if (method !== 'POST') fail(405, 'method_not_allowed', 'この操作は利用できません。');
             const input = await body(req);
-            return send(200, await objects.link(agent.owner_id, key, input.minutes));
+            return send(200, await objects.link(caller.owner_id, key, input.minutes));
           }
           if (method === 'PUT') {
             const content = await raw(req, OBJECT_MAX);
-            return send(200, await objects.put(agent.owner_id, key, content, req.headers['content-type'] || 'application/octet-stream'));
+            return send(200, await objects.put(caller.owner_id, key, content, req.headers['content-type'] || 'application/octet-stream'));
           }
           if (method === 'GET') {
-            const found = await objects.get(agent.owner_id, key);
+            const found = await objects.get(caller.owner_id, key);
             res.writeHead(200, { 'content-type': found.contentType });
             return res.end(found.content);
           }
-          if (method === 'DELETE') { await body(req); await objects.remove(agent.owner_id, key); return send(200, { ok: true }); }
+          if (method === 'DELETE') { await body(req); await objects.remove(caller.owner_id, key); return send(200, { ok: true }); }
           fail(405, 'method_not_allowed', 'この操作は利用できません。');
         }
         // Storage: bytes at a path the key chose, with no adapter, no request and no approval behind them.
         // Foundation never reads them; what it was told at writing time is all it knows.
-        if (path === '/v1/secrets' && method === 'GET') return send(200, { secrets: secrets.list(agent.owner_id, url.searchParams.get('prefix') ?? undefined) });
+        if (path === '/v1/secrets' && method === 'GET') return send(200, { secrets: secrets.list(caller.owner_id, url.searchParams.get('prefix') ?? undefined) });
         const secretRoute = path.match(/^\/v1\/secrets\/(.+)$/);
         if (secretRoute) {
           const target = decodeURIComponent(secretRoute[1]);
           if (method === 'PUT') {
-            rateLimit('secrets:' + agent.id, 120);
+            rateLimit('secrets:' + caller.id, 120);
             const content = await raw(req, SECRET_MAX);
-            return send(200, { secret: secrets.put(agent.owner_id, { path: target, content,
+            return send(200, { secret: secrets.put(caller.owner_id, { path: target, content,
               secret: url.searchParams.get('secret') === 'true' }) });
           }
           if (method === 'GET') {
-            const { row, content } = secrets.read(agent.owner_id, target);
+            const { row, content } = secrets.read(caller.owner_id, target);
             res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length });
             return res.end(content);
           }
           if (method === 'DELETE') {
             await body(req);
-            secrets.remove(agent.owner_id, target);
+            secrets.remove(caller.owner_id, target);
             return send(200, { ok: true });
           }
         }
@@ -627,22 +662,22 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         // keeps current is brought up to date first; after that, delivery reads storage and nothing else.
         if (path === '/v1/deliver' && method === 'POST') {
           const input = await body(req);
-          rateLimit('issue:' + agent.id, 30);
+          rateLimit('issue:' + caller.id, 30);
           const paths = (Array.isArray(input.paths) ? input.paths : []).map(item => typeof item === 'string' ? { path: item } : item);
-          for (const item of paths) store.requireAccess(agent, secretPath(item?.path));
+          for (const item of paths) store.requireAccess(caller, secretPath(item?.path));
           const pending = new Map();
           for (const item of paths) {
-            const acquisition = store.acquisitionFor(agent.owner_id, secretPath(item.path));
+            const acquisition = store.acquisitionFor(caller.owner_id, secretPath(item.path));
             if (acquisition && acquisition.status === 'connected') pending.set(acquisition.prefix, acquisition);
           }
           for (const acquisition of pending.values()) await acquisitions.refresh(acquisition);
           actor(req);
-          for (const item of paths) store.requireAccess(agent, secretPath(item.path));
-          const expiry = [...pending.values()].map(acquisition => store.acquisitionState(store.acquisition(agent.owner_id, acquisition.prefix)).expires_at).filter(value => value !== null);
+          for (const item of paths) store.requireAccess(caller, secretPath(item.path));
+          const expiry = [...pending.values()].map(acquisition => store.acquisitionState(store.acquisition(caller.owner_id, acquisition.prefix)).expires_at).filter(value => value !== null);
           for (const value of expiry) if (!(Number.isFinite(value) && value > Date.now())) fail(502, 'service_response', '有効期限を確認できませんでした。');
           const expires_at = expiry.length ? Math.min(...expiry) : null;
-          store.recordIssuance(agent, expires_at);
-          return send(200, { delivery: secrets.deliver(agent.owner_id, paths), expires_at,
+          store.recordIssuance(caller, expires_at);
+          return send(200, { delivery: secrets.deliver(caller.owner_id, paths), expires_at,
             expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
         }
       }

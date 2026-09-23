@@ -12,7 +12,7 @@ const parse = row => ({ ...row, readable: row.readable === 1 });
 export const ACQUISITION_LIMIT = 50;
 const entryBinding = row => `entry:${row.owner_id}:${row.id}`;
 
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 // secrets: what the agent may not read, kept so that a command can be given it. Bytes at a path, sealed and bound to this owner and
 //   this row. Nothing here says what the
 //   how a command receives them, settled when they were written. readable is 0 when they may only be delivered.
@@ -23,6 +23,22 @@ const SCHEMA_VERSION = 9;
 // Steps from one shape to the next. A database is only ever one version behind at a time, and each step
 // adds what the next version expects; nothing that already holds data is rewritten.
 const STEPS = {
+  // What a row here is: a key, the secret a caller holds and what its owner decided about it. A key not yet
+  // approved asks through a request of its own; asking for approval was never a request for something to keep.
+  // Approvals still open are dropped with the columns only they used: each lasts a day at most, and asking again works.
+  10: `
+    ALTER TABLE agents RENAME TO keys;
+    CREATE TABLE key_requests (
+      id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, name TEXT NOT NULL, confirmation_code TEXT NOT NULL,
+      confirmation_attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, owner_id TEXT, key_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX key_requests_token ON key_requests(token_hash, created_at);
+    DELETE FROM access_requests WHERE adapter IS NULL AND details = '[]';
+    ALTER TABLE access_requests DROP COLUMN confirmation_code;
+    ALTER TABLE access_requests DROP COLUMN confirmation_attempts;
+    ALTER TABLE access_requests RENAME COLUMN agent_id TO key_id;
+  `,
   // Holding stores on behalf of another product's users was built before that relationship was decided.
   9: `
     DROP TABLE rooms;
@@ -72,16 +88,22 @@ const STEPS = {
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
-  CREATE TABLE agents (
+  CREATE TABLE keys (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
     last_used_at TEXT, issued_until INTEGER, issued_nonexpiring INTEGER NOT NULL DEFAULT 0
   );
   CREATE TABLE sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL, expires_at INTEGER NOT NULL);
   CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);
+  CREATE TABLE key_requests (
+    id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, name TEXT NOT NULL, confirmation_code TEXT NOT NULL,
+    confirmation_attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, owner_id TEXT, key_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX key_requests_token ON key_requests(token_hash, created_at);
   CREATE TABLE access_requests (
     id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, requester_name TEXT NOT NULL, adapter TEXT,
-    purpose TEXT NOT NULL, details TEXT NOT NULL, guidance TEXT NOT NULL, confirmation_code TEXT NOT NULL, confirmation_attempts INTEGER NOT NULL DEFAULT 0,
-    progress TEXT, owner_id TEXT, agent_id TEXT, credential_id TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    purpose TEXT NOT NULL, details TEXT NOT NULL, guidance TEXT NOT NULL,
+    progress TEXT, owner_id TEXT, key_id TEXT, credential_id TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
   );
   CREATE INDEX access_requests_token ON access_requests(token_hash, created_at);
   CREATE TABLE secrets (
@@ -143,6 +165,7 @@ export class Store {
     this.db.prepare('DELETE FROM oauth_flows WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM access_requests WHERE expires_at<=?').run(Date.now());
+    this.db.prepare('DELETE FROM key_requests WHERE expires_at<=?').run(Date.now());
   }
   // Storage. Listing never opens anything; only reading and delivering do.
   secrets(ownerId, prefix) {
@@ -255,35 +278,35 @@ export class Store {
       return this.db.prepare('DELETE FROM acquisitions WHERE owner_id=? AND prefix=?').run(ownerId, prefix).changes > 0;
     });
   }
-  agents(ownerId) {
-    return this.db.prepare('SELECT id,name,created_at,last_used_at,issued_until,issued_nonexpiring FROM agents WHERE owner_id=? ORDER BY created_at,id').all(ownerId);
+  keys(ownerId) {
+    return this.db.prepare('SELECT id,name,created_at,last_used_at,issued_until,issued_nonexpiring FROM keys WHERE owner_id=? ORDER BY created_at,id').all(ownerId);
   }
   // A key issued from the dashboard: the owner carries the secret to the runtime themselves.
-  addAgent(ownerId, name) {
-    if (this.agents(ownerId).length >= 50) fail(409, 'agent_limit', '登録できるアクセスキーは50件までです。');
+  addKey(ownerId, name) {
+    if (this.keys(ownerId).length >= 50) fail(409, 'key_limit', '登録できるアクセスキーは50件までです。');
     const id = randomUUID(), token = `fdn_${randomBytes(32).toString('base64url')}`;
-    this.db.prepare('INSERT INTO agents (id,owner_id,name,token_hash,created_at) VALUES (?,?,?,?,?)').run(id, ownerId, name, digest(token), now());
-    return { ...this.agents(ownerId).find((agent) => agent.id === id), token };
+    this.db.prepare('INSERT INTO keys (id,owner_id,name,token_hash,created_at) VALUES (?,?,?,?,?)').run(id, ownerId, name, digest(token), now());
+    return { ...this.keys(ownerId).find((key) => key.id === id), token };
   }
-  removeAgent(ownerId, id) { this.db.prepare('DELETE FROM agents WHERE owner_id=? AND id=?').run(ownerId, id); }
-  renameAgent(ownerId, id, name) {
-    if (!this.db.prepare('UPDATE agents SET name=? WHERE owner_id=? AND id=?').run(name, ownerId, id).changes) fail(404, 'not_found', 'アクセスキーが見つかりません。');
+  removeKey(ownerId, id) { this.db.prepare('DELETE FROM keys WHERE owner_id=? AND id=?').run(ownerId, id); }
+  renameKey(ownerId, id, name) {
+    if (!this.db.prepare('UPDATE keys SET name=? WHERE owner_id=? AND id=?').run(name, ownerId, id).changes) fail(404, 'not_found', 'アクセスキーが見つかりません。');
   }
-  agentDetails(agent) {
-    return this.db.prepare('SELECT id,name,created_at,last_used_at,issued_until,issued_nonexpiring FROM agents WHERE id=?').get(agent.id);
+  keyDetails(key) {
+    return this.db.prepare('SELECT id,name,created_at,last_used_at,issued_until,issued_nonexpiring FROM keys WHERE id=?').get(key.id);
   }
   authenticate(token) {
     if (typeof token !== 'string' || !/^fdn_[A-Za-z0-9_-]{43}$/.test(token)) return;
-    return this.db.prepare('SELECT id,owner_id,name FROM agents WHERE token_hash=?').get(digest(token));
+    return this.db.prepare('SELECT id,owner_id,name FROM keys WHERE token_hash=?').get(digest(token));
   }
   // Possession of an approved key is the whole authorization: the key still exists, and what it asks for is
   // its owner's. An acquisition being disconnected stops delivering before its entries are gone.
-  requireAccess(agent, path) {
-    if (agent.owner_id !== this.db.prepare('SELECT owner_id FROM agents WHERE id=?').get(agent.id)?.owner_id) fail(403, 'access_denied', 'これは利用できません。');
-    if (!this.secret(agent.owner_id, path)) fail(404, 'not_found', '保管されたものが見つかりません。');
-    if (this.acquisitionFor(agent.owner_id, path)?.status === 'disconnecting') fail(403, 'access_denied', 'これは利用できません。');
+  requireAccess(key, path) {
+    if (key.owner_id !== this.db.prepare('SELECT owner_id FROM keys WHERE id=?').get(key.id)?.owner_id) fail(403, 'access_denied', 'これは利用できません。');
+    if (!this.secret(key.owner_id, path)) fail(404, 'not_found', '保管されたものが見つかりません。');
+    if (this.acquisitionFor(key.owner_id, path)?.status === 'disconnecting') fail(403, 'access_denied', 'これは利用できません。');
   }
-  recordIssuance(agent, until) { this.db.prepare('UPDATE agents SET last_used_at=?, issued_until=MAX(COALESCE(issued_until,0),?), issued_nonexpiring=MAX(issued_nonexpiring,?) WHERE id=?').run(now(), until ?? 0, until === null ? 1 : 0, agent.id); }
+  recordIssuance(key, until) { this.db.prepare('UPDATE keys SET last_used_at=?, issued_until=MAX(COALESCE(issued_until,0),?), issued_nonexpiring=MAX(issued_nonexpiring,?) WHERE id=?').run(now(), until ?? 0, until === null ? 1 : 0, key.id); }
   createSession(value) {
     this.sweep();
     const token = randomBytes(32).toString('base64url'), id = digest(token);

@@ -144,7 +144,7 @@ async function main() {
   // Asking the owner to approve this key. The key itself is never printed: it stays in the file.
   // A key the owner already approved has nothing to ask; connecting again only changes which server is remembered.
   if (action === 'connect') {
-    const answer = await send('/v1/access-requests', { name: name ?? hostname() + ' の ' + (agentName || 'AI') }, data => data.error?.code === 'already_approved');
+    const answer = await send('/v1/keys', { name: name ?? hostname() + ' の ' + (agentName || 'AI') }, data => data.error?.code === 'already_approved');
     if (connectTo !== undefined) await saveUrl(url.origin);
     console.log(answer.error ? 'Already approved on ' + url.origin + '.' : JSON.stringify(answer, null, 2));
     console.log('\nKey file: ' + keyPath + '\nServer: ' + url.origin + (connectTo !== undefined ? ' (saved to ' + configPath() + ')' : '') + '\nEverything else is HTTP: Authorization: Bearer <the contents of that file>');

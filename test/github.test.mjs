@@ -36,7 +36,7 @@ test('A connected GitHub account is named by its login and delivered to an appro
   assert.equal(connection.prefix, 'github/octo');
   assert.deepEqual(connection.secrets, ['github/octo/gh-token', 'github/octo/github-token']);
   assert.doesNotMatch(JSON.stringify(await f.request('/api/state')), /gho_/);
-  const agent = await f.agent();
+  const agent = await f.issueKey();
   const delivered = await f.request('/v1/deliver', { method: 'POST', token: agent.token, anonymous: true, data: { paths: ['github/octo/gh-token', 'github/octo/github-token'] } });
   assert.equal(delivered.status, 200, delivered.text);
   assert.deepEqual(delivered.json.delivery.environment, { GH_TOKEN: 'gho_octo', GITHUB_TOKEN: 'gho_octo' });
@@ -53,7 +53,7 @@ test('A grant without repository access is refused and nothing is registered', a
 test('A token revoked at GitHub stops delivery and asks the owner to register again', async t => {
   const f = await githubFixture(t);
   await f.back(await f.start(), 'octo');
-  const agent = await f.agent();
+  const agent = await f.issueKey();
   f.github.revoked.add('gho_octo');
   const refused = await f.request('/v1/deliver', { method: 'POST', token: agent.token, anonymous: true, data: { paths: ['github/octo/gh-token', 'github/octo/github-token'] } });
   assert.equal(refused.status, 409);

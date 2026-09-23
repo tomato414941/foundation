@@ -197,12 +197,12 @@ test('Storage needs an approved key, and the guide describes the API an agent ca
 
 test('An agent that cannot make a secret of its own is issued one, once', async t => {
   const f = await fixture(t);
-  const asked = await f.request('/v1/access-requests', { method: 'POST', anonymous: true, data: { name: 'an agent with no randomness' } });
+  const asked = await f.request('/v1/keys', { method: 'POST', anonymous: true, data: { name: 'an agent with no randomness' } });
   assert.equal(asked.status, 201, asked.text);
   assert.match(asked.json.key, /^fdn_[A-Za-z0-9_-]{43}$/);
   // It is the key: approving the request approves it, and it works from then on.
-  await f.request('/api/access-requests/' + asked.json.request.id + '/approve', { method: 'POST', data: { confirmationCode: asked.json.request.confirmation_code } });
+  await f.request('/api/key-requests/' + asked.json.request.id + '/approve', { method: 'POST', data: { confirmationCode: asked.json.request.confirmation_code } });
   assert.equal((await f.request('/v1/me', { token: asked.json.key, anonymous: true })).status, 200);
-  const again = await f.request('/v1/access-requests/current', { token: asked.json.key, anonymous: true });
+  const again = await f.request('/v1/keys/current', { token: asked.json.key, anonymous: true });
   assert.equal(again.json.request.key, undefined, 'never handed out a second time');
 });
