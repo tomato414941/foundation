@@ -10,7 +10,6 @@ import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { AccessRequests } from './access-requests.mjs';
 import { Acquisitions } from './acquisitions.mjs';
 import { Entries, ENTRY_MAX, entryPath } from './entries.mjs';
-import { Files, FILE_MAX } from './files.mjs';
 import { Objects, S3Space, OBJECT_MAX } from './objects.mjs';
 import { respond } from './mcp.mjs';
 import { guide } from './guide.mjs';
@@ -74,7 +73,7 @@ function purposeValue(value = '') {
   return value.trim();
 }
 
-export function createApp({ database = ':memory:', encryptionKey, auth, adapters: adapterList, files: fileBackend = null, space: spaceBackend = null, publicOrigin, owners: ownerList = [], loginClock, trustedProxies = [] }) {
+export function createApp({ database = ':memory:', encryptionKey, auth, adapters: adapterList, space: spaceBackend = null, publicOrigin, owners: ownerList = [], loginClock, trustedProxies = [] }) {
   if (!auth || !Array.isArray(adapterList)) throw new Error('Authentication and adapters are required');
   let external;
   if (publicOrigin) {
@@ -95,7 +94,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   };
   const adapters = new Adapters(adapterList);
   const entries = new Entries(store, adapters.owned);
-  const files = new Files(store, fileBackend);
   const objects = new Objects(spaceBackend);
   const acquisitions = new Acquisitions(store, adapters);
   const requests = new AccessRequests(store, adapters);
@@ -556,20 +554,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           }
           if (method === 'DELETE') { await body(req); await objects.remove(agent.owner_id, key); return send(200, { ok: true }); }
           fail(405, 'method_not_allowed', 'この操作は利用できません。');
-        }
-        if (path === '/v1/files' && method === 'GET') return send(200, { files: files.list(agent.owner_id) });
-        if (path === '/v1/files' && method === 'POST') {
-          files.check();
-          rateLimit('files:' + agent.id, 20);
-          const minutes = url.searchParams.has('minutes') ? Number(url.searchParams.get('minutes')) : undefined;
-          const content = await raw(req, FILE_MAX);
-          return send(201, await files.put(agent, { name: url.searchParams.get('name'), contentType: req.headers['content-type'] || 'application/octet-stream', body: content, minutes }));
-        }
-        const fileRoute = path.match(/^\/v1\/files\/([A-Za-z0-9_-]{32})\/link$/);
-        if (fileRoute && method === 'POST') {
-          const input = await body(req);
-          rateLimit('files:' + agent.id, 20);
-          return send(200, await files.link(agent, fileRoute[1], input.minutes));
         }
         // Storage: bytes at a path the key chose, with no adapter, no request and no approval behind them.
         // Foundation never reads them; what it was told at writing time is all it knows.
