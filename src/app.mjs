@@ -13,6 +13,7 @@ import { Acquisitions } from './acquisitions.mjs';
 import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX, secretPath } from './secrets.mjs';
 import { Objects, S3Space, OBJECT_MAX } from './objects.mjs';
 import { respond } from './mcp.mjs';
+import { prepare as prepareFetch, send as sendFetch, FETCH_BODY_MAX } from './fetch.mjs';
 import { guide } from '../cli/guide.mjs';
 
 const VERSION = createRequire(import.meta.url)('../package.json').version;
@@ -71,7 +72,7 @@ function purposeValue(value = '') {
   return value.trim();
 }
 
-export function createApp({ database = ':memory:', encryptionKey, auth, adapters: adapterList, space: spaceBackend = null, publicOrigin, owners: ownerList = [], loginClock, trustedProxies = [] }) {
+export function createApp({ database = ':memory:', encryptionKey, auth, adapters: adapterList, space: spaceBackend = null, publicOrigin, owners: ownerList = [], loginClock, trustedProxies = [], outbound = {} }) {
   if (!auth || !Array.isArray(adapterList)) throw new Error('Authentication and adapters are required');
   let external;
   if (publicOrigin) {
@@ -657,27 +658,47 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             return send(200, { ok: true });
           }
         }
-        // What a command receives: the bytes, under the names they were kept with. Anything an acquisition
-        // keeps current is brought up to date first; after that, delivery reads storage and nothing else.
-        if (path === '/v1/deliver' && method === 'POST') {
-          const input = await body(req);
-          rateLimit('issue:' + caller.id, 30);
-          const paths = (Array.isArray(input.paths) ? input.paths : []).map(item => typeof item === 'string' ? { path: item } : item);
-          for (const item of paths) store.requireAccess(caller, secretPath(item?.path));
+        // Before anything kept leaves: the key may use each path, anything an acquisition keeps current is
+        // brought up to date, and the key is checked again afterwards (it may have been revoked meanwhile).
+        const release = async (paths) => {
+          for (const path of paths) store.requireAccess(caller, secretPath(path));
           const pending = new Map();
-          for (const item of paths) {
-            const acquisition = store.acquisitionFor(caller.owner_id, secretPath(item.path));
+          for (const path of paths) {
+            const acquisition = store.acquisitionFor(caller.owner_id, secretPath(path));
             if (acquisition && acquisition.status === 'connected') pending.set(acquisition.prefix, acquisition);
           }
           for (const acquisition of pending.values()) await acquisitions.refresh(acquisition);
           actor(req);
-          for (const item of paths) store.requireAccess(caller, secretPath(item.path));
+          for (const path of paths) store.requireAccess(caller, secretPath(path));
           const expiry = [...pending.values()].map(acquisition => store.acquisitionState(store.acquisition(caller.owner_id, acquisition.prefix)).expires_at).filter(value => value !== null);
           for (const value of expiry) if (!(Number.isFinite(value) && value > Date.now())) fail(502, 'service_response', '有効期限を確認できませんでした。');
           const expires_at = expiry.length ? Math.min(...expiry) : null;
           store.recordIssuance(caller, expires_at);
+          return expires_at;
+        };
+        // What a command receives: the bytes, under the names they were kept with.
+        if (path === '/v1/deliver' && method === 'POST') {
+          const input = await body(req);
+          rateLimit('issue:' + caller.id, 30);
+          const paths = (Array.isArray(input.paths) ? input.paths : []).map(item => typeof item === 'string' ? { path: item } : item);
+          const expires_at = await release(paths.map(item => item?.path));
           return send(200, { delivery: secrets.deliver(caller.owner_id, paths), expires_at,
             expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
+        }
+        // For an agent that cannot run a command: one HTTPS request sent from here, with what is kept put in where
+        // it wrote {{foundation:<path>}}. The values never reach the agent; see fetch.mjs for what it may reach.
+        if (path === '/v1/fetch' && method === 'POST') {
+          const input = await body(req, FETCH_BODY_MAX * 2);
+          rateLimit('fetch:' + caller.id, 30);
+          const ownHosts = [url.hostname, ...(external ? [external.hostname] : [])];
+          const prepared = prepareFetch(input, ownHosts);
+          await release(prepared.paths);
+          const values = new Map(prepared.paths.map(item => {
+            const content = store.secretContent(secrets.at(caller.owner_id, item)), text = content.toString('utf8');
+            if (!Buffer.from(text, 'utf8').equals(content)) fail(400, 'not_text', `${item} は文字列ではないため、リクエストには入れられません。`);
+            return [item, text];
+          }));
+          return send(200, { response: await sendFetch(prepared, values, { ...outbound, ownHosts }) });
         }
       }
       fail(404, 'not_found', '指定された操作が見つかりません。');
