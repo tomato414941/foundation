@@ -92,10 +92,10 @@ export class AccessRequests {
     return { ...this.summary(row, ''), events: this.eventsOf(row) };
   }
   // A request that asked for something is complete when that something exists.
-  registered(id, ownerId, credentialId) {
+  registered(id, ownerId, where) {
     const row = this.forUser(id, ownerId, true);
     if (this.kindOf(row) === 'approve') fail(409, 'approval_only', 'この依頼はアクセスキーの承認だけです。登録には使えません。');
-    this.db.prepare("UPDATE access_requests SET owner_id=?, credential_id=?, status='approved' WHERE id=?").run(ownerId, credentialId, row.id);
+    this.db.prepare("UPDATE access_requests SET owner_id=?, credential_id=?, status='approved' WHERE id=?").run(ownerId, where, row.id);
     return this.get(id);
   }
   claim(id, ownerId) {
@@ -118,7 +118,7 @@ export class AccessRequests {
     this.db.prepare('UPDATE access_requests SET confirmation_attempts=? WHERE id=?').run(attempts, row.id);
     fail(400, 'confirmation_required', 'AIとの会話に表示された確認コードを入力してください。');
   }
-  // Approval is the owner acknowledging the key as theirs: once, with the code. From then on the key uses every credential the owner has.
+  // Approval is the owner acknowledging the key as theirs: once, with the code. From then on the key uses everything the owner keeps.
   approve(id, ownerId, code) {
     this.verifyCode(id, ownerId, code);
     return this.store.transaction(() => {
@@ -145,14 +145,14 @@ export class AccessRequests {
   }
   summary(row, origin, { code = true } = {}) {
     const kind = this.kindOf(row);
-    let status = row.status, credential;
+    let status = row.status, result;
     if (status === 'pending' && row.agent_id && !this.db.prepare('SELECT 1 FROM agents WHERE id=? AND owner_id=? AND token_hash=?').get(row.agent_id, row.owner_id, row.token_hash)) status = 'revoked';
     if (status === 'approved') {
       const agent = this.db.prepare('SELECT * FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash);
-      credential = kind === 'connect' && row.credential_id ? this.store.credential(row.owner_id, row.credential_id) : null;
+      result = kind === 'connect' && row.credential_id ? this.store.acquisition(row.owner_id, row.credential_id) : null;
       if (!agent || agent.owner_id !== row.owner_id) status = 'revoked';
-      else if (credential && credential.status === 'disconnecting') credential = null;
-      else if (credential && credential.status !== 'connected') status = 'reconnect_required';
+      else if (result && result.status === 'disconnecting') result = null;
+      else if (result && result.status !== 'connected') status = 'reconnect_required';
     }
     const registered = row.agent_id ? this.db.prepare('SELECT name FROM agents WHERE id=? AND token_hash=?').get(row.agent_id, row.token_hash) : undefined;
     const details = this.details(row);
@@ -160,6 +160,6 @@ export class AccessRequests {
       requester_name: row.requester_name, purpose: row.purpose, details, guidance: row.guidance || '', ...(registered ? { agent_name: registered.name } : {}),
       ...(code && row.confirmation_code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/connect/' + row.id,
       status, created_at: row.created_at, expires_at: row.expires_at, ...(row.credential_id ? { credential_id: row.credential_id } : {}),
-      ...(status === 'approved' ? { agent_id: row.agent_id, ...(credential ? { credential: { id: credential.id, service: credential.service, subject: credential.subject, label: this.store.secret(credential).facts.label || credential.name } } : {}), ...(kind === 'store' && row.credential_id ? { entry: { path: row.credential_id } } : {}) } : {}) };
+      ...(status === 'approved' ? { agent_id: row.agent_id, ...(result ? { result: { prefix: result.prefix, label: result.label } } : {}), ...(kind === 'store' && row.credential_id ? { result: { path: row.credential_id } } : {}) } : {}) };
   }
 }

@@ -1,5 +1,5 @@
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
-let state = null, selected = null, toastTimer, loginTimer, revision = 0;
+let state = null, toastTimer, loginTimer, revision = 0;
 const requestId = location.pathname.match(/^\/connect\/([A-Za-z0-9_-]{43})$/)?.[1];
 const pagePath = requestId ? '/connect/' + requestId : '/';
 let accessRequest = null, requestError = '';
@@ -15,11 +15,7 @@ const loginMessages = {
 };
 let loginNotice = loginMessages[new URL(location.href).searchParams.get('login')] || '';
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
-const credentialLabel = credential => credential?.label || credential?.subject || '';
-// The verified label, shown under the name only when the owner gave the credential another name.
-const otherLabel = credential => credentialLabel(credential) === credential?.name ? '' : credentialLabel(credential);
-const adapterOf = credential => state.adapters.find(adapter => adapter.id === credential.adapter);
-// What a credential reaches. A stored credential carries the name; an adapter carries it, or for the generic adapter the request does.
+// The service an acquisition reaches.
 const serviceName = adapter => adapter.service?.name || adapter.label;
 const icon = (name) => {
   const paths = {
@@ -38,15 +34,7 @@ const icon = (name) => {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
 const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true">F</span>Foundation</a>';
-const statusName = (credential) => ({ connected: '利用可能', reconnect_required: '登録し直しが必要' }[credential.status] || '確認が必要');
-const accessName = credential => credential.access?.name || 'サービスで許可した範囲';
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
-function keyFacts(credential) {
-  if (!credential.key_info) return credential.credential_type === 'api_key' && credential.expiry_known === true ? `<dl class="key-facts"><div><dt>有効期限</dt><dd>${credential.expires_at === null ? '期限の指定なし' : esc(new Date(credential.expires_at).toLocaleString('ja-JP'))}</dd></div></dl>` : '';
-  const info = credential.key_info, dollars = value => value === null ? '上限なし' : new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }).format(value);
-  const reset = { daily: '毎日', weekly: '毎週', monthly: '毎月' }[info.limit_reset] || 'リセットなし';
-  return `<dl class="key-facts"><div><dt>キーの利用上限</dt><dd>${esc(dollars(info.limit))} · ${esc(reset)}</dd></div><div><dt>残りの上限額</dt><dd>${info.limit_remaining === null && info.limit !== null ? '情報がありません' : esc(dollars(info.limit_remaining))}</dd></div><div><dt>有効期限</dt><dd>${credential.expiry_known === false ? '情報がありません' : credential.expires_at === null ? '期限の指定なし' : esc(new Date(credential.expires_at).toLocaleString('ja-JP'))}</dd></div><div><dt>持ち込みキーの利用分</dt><dd>${info.include_byok_in_limit ? '上限に含む' : '上限に含まない'}</dd></div></dl><p class="muted key-caption">${esc(new Date(info.checked_at).toLocaleString('ja-JP'))} 時点。上限と期限はOpenRouterで管理します。</p><a class="key-management" href="${esc(credential.management_url)}" target="_blank" rel="noopener noreferrer">OpenRouterで上限・期限を確認 ↗</a>`;
-}
 function toast(text) {
   clearTimeout(toastTimer); notice.textContent = text; notice.hidden = false;
   toastTimer = setTimeout(() => { notice.hidden = true; }, 5500);
@@ -65,7 +53,7 @@ async function api(path, { method = 'GET', data, signal } = {}) {
 }
 async function showLogin({ email = '', message = loginNotice } = {}) {
   clearInterval(loginTimer);
-  const current = ++revision; state = null; selected = null; closeDialog();
+  const current = ++revision; state = null; closeDialog();
   let config = { available: false, pending: null };
   try { config = await api('/api/auth/config'); } catch {}
   if (current !== revision) return;
@@ -120,65 +108,60 @@ async function refresh() {
   }
   if (current !== revision) return;
   state = result;
-  if (!state.credentials.some((credential) => credential.id === selected)) selected = null;
   render();
 }
-// Unknown for credentials registered before this was recorded; then only the date is shown.
-const registeredBy = credential => credential.kept_by ? credential.kept_by + 'の依頼' : credential.kept_by === '' ? '管理画面から' : '';
-const cameFrom = credential => [new Date(credential.created_at).toLocaleDateString('ja-JP') + ' 登録', registeredBy(credential)].filter(Boolean).join(' · ');
-function details(credential) {
-  if (!credential) return '';
-  const adapter = adapterOf(credential), name = credential.service;
-  return `<div class="credential-heading"><span class="status ${credential.status === 'connected' ? '' : 'warning'}">${credential.status === 'connected' ? icon('check') : ''}${statusName(credential)}</span><h3>${esc(credential.name)}</h3>${otherLabel(credential) ? `<p class="credential-email">${esc(otherLabel(credential))}</p>` : ''}<p class="credential-meta">${esc(cameFrom(credential))}</p></div>
-    <dl class="credential-facts">${adapter.kind ? `<div><dt>種類</dt><dd>${esc(adapter.kind)}</dd></div>` : ''}${Array.isArray(credential.organizations) ? `<div><dt>組織</dt><dd>${credential.organizations.length ? credential.organizations.map(item => esc(item.name)).join('、') : 'なし'}</dd></div>` : ''}<div><dt>渡す変数</dt><dd>${credential.variables?.length ? credential.variables.map(name => `<code>${esc(name)}</code>`).join(' ') : 'Expo のログイン状態として渡します'}</dd></div></dl>${keyFacts(credential)}
-    <div class="credential-actions">${adapter.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(credential.id)}" ${!adapter.available ? 'disabled' : ''}>登録し直す</button>` : ''}<button class="text-button" data-action="edit-credential" data-id="${esc(credential.id)}">編集</button></div>
-    <details class="credential-reference"><summary>識別情報</summary><dl>${credential.fingerprint ? `<dt>値の指紋</dt><dd><code>${esc(credential.fingerprint)}</code></dd>` : ''}<dt>認証情報ID</dt><dd><code>${esc(credential.id)}</code></dd></dl>${adapter.service?.api.documentation_url ? `<a href="${esc(adapter.service.api.documentation_url)}" target="_blank" rel="noopener noreferrer">${esc(name)} APIの公式ドキュメント ↗</a>` : ''}</details>
-    <div class="credential-footer">${credential.credential_type === 'expo_session' ? '' : `<a href="${esc(credential.management_url || adapter.service?.management_url)}" target="_blank" rel="noopener noreferrer">${esc(name)}の管理ページ ↗</a>`}<button class="text-button danger" data-action="remove-credential" data-id="${esc(credential.id)}">登録を解除</button></div>`;
-}
-// A credential belongs to the service its owner named. Registered services come first, then the ones that can be
-// registered from here, each in name order. Credentials keep the order they were registered.
-const adaptersOf = name => state.adapters.filter(adapter => adapter.service?.name === name);
-function credentialGroups() {
-  const byName = (a, b) => a.name.localeCompare(b.name, 'ja', { sensitivity: 'base' });
-  const groups = new Map(), open = [];
-  for (const credential of state.credentials) {
-    const name = credential.service;
-    if (!groups.has(name)) groups.set(name, { name, icon: adaptersOf(name)[0]?.service.icon || 'key', adapters: adaptersOf(name), credentials: [] });
-    groups.get(name).credentials.push(credential);
-  }
-  for (const adapter of state.adapters) {
-    const service = adapter.service;
-    if (!service || !adapter.available || groups.has(service.name) || open.some(group => group.name === service.name)) continue;
-    open.push({ name: service.name, icon: service.icon, adapters: adaptersOf(service.name), credentials: [] });
-  }
-  return [...[...groups.values()].sort(byName), ...open.sort(byName)];
-}
-const groupId = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'service-' + [...name].map(char => char.codePointAt(0).toString(36)).join('');
-function serviceSection(group) {
-  const id = groupId(group.name), credentials = group.credentials;
-  const available = group.adapters.some(adapter => adapter.available), credential = credentials.find(item => item.id === selected) || credentials[0];
-  return `<section class="resource-section" aria-labelledby="${id}-title"><div class="section-heading"><div class="section-label"><span class="service-icon">${icon(group.icon)}</span><div><h2 id="${id}-title">${esc(group.name)}</h2><p>${credentials.length ? `${credentials.length}件の認証情報` : '未登録'}</p></div></div>${group.adapters.length ? `<button class="button primary" data-action="add-credential" data-service="${esc(group.name)}" ${available ? '' : 'disabled'}>${icon('plus')} ${esc(group.name)}を登録</button>` : ''}</div>
-    ${credentials.length ? `<div class="credential-workspace"><div class="credential-list" role="group" aria-label="${esc(group.name)}の認証情報">${credentials.map(item => `<button class="credential-item ${item.id === credential.id ? 'selected' : ''}" data-action="select-credential" data-id="${esc(item.id)}" aria-pressed="${item.id === credential.id}"><strong>${esc(item.name)}</strong>${otherLabel(item) ? `<span>${esc(otherLabel(item))}</span>` : ''}${item.status !== 'connected' ? `<small class="warning-text">${statusName(item)}</small>` : ''}</button>`).join('')}</div><div class="credential-pane">${details(credential)}</div></div>` : `<div class="empty-state"><span class="empty-icon">${icon(group.icon)}</span><div><h3>${esc(group.name)}の認証情報を登録しましょう</h3><p>${esc(group.adapters.length > 1 ? group.adapters.map(adapter => adapter.access.name).join('、') + 'から選んで登録できます。' : group.adapters[0]?.intro)}</p></div></div>`}
-    ${group.adapters.length && !available ? '<p class="availability" role="status">現在、新しい認証情報を登録できません。</p>' : ''}</section>`;
-}
-// What a key kept on its own. Foundation never read any of it, so the owner is told only what it was
-// told: where it sits, what the writer said it is, how it reaches a command, and who wrote it.
+// Everything the owner keeps is one list, grouped by the first segment of its path. A row says where it sits,
+// what the writer said it is, how it reaches a command, and who put it there. Foundation read none of it.
 const keptWhen = value => new Date(value).toLocaleString('ja-JP');
-const handedOver = entry => entry.filename ? `ファイル ${entry.filename} として渡す (${entry.env})` : entry.env ? `${entry.env} として渡す` : '渡さない';
+const handedOver = entry => entry.session ? 'ログイン状態として渡す' : entry.filename ? `ファイル ${entry.filename} として渡す (${entry.env})` : entry.env ? `${entry.env} として渡す` : '渡さない';
 const kiloBytes = size => size < 1024 ? size + ' バイト' : Math.round(size / 1024) + ' KB';
-function entriesSection() {
-  const entries = state.entries || [];
-  return `<section class="resource-section" aria-labelledby="kept-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('note')}</span><div><h2 id="kept-title">AIが預けたもの</h2><p>AIが自分で保管したものです。Foundationは中身を見ていません</p></div></div></div>
-    ${entries.length ? `<div class="agent-list">${entries.map(entry => `<article class="agent-row"><div class="agent-name"><h3>${esc(entry.path)}</h3><p>${esc(entry.media_type)} · ${esc(kiloBytes(entry.size))}</p></div><div class="agent-permissions"><span class="muted">${esc(handedOver(entry))}</span><span class="muted block">${esc(entry.kept_by)} · ${esc(keptWhen(entry.updated_at))}</span></div><div class="agent-actions"><a class="text-button" href="/api/entries/${encodeURIComponent(entry.path)}" download>中身を見る</a><button class="text-button danger" data-action="drop-entry" data-path="${esc(entry.path)}">削除</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>AIが預けたものはありません。</p></div>'}</section>`;
+const putBy = entry => entry.kept_by || 'あなた';
+const groupId = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'g-' + [...name].map(char => char.codePointAt(0).toString(36)).join('');
+const statusName = status => ({ connected: '利用できます', reconnect_required: '接続し直しが必要です', disconnecting: '解除しています' }[status] || '確認が必要です');
+// Each group holds the entries whose path starts with its name, and any connection that keeps some of them current.
+function groups() {
+  const byName = (a, b) => a.name.localeCompare(b.name, 'ja', { sensitivity: 'base' });
+  const found = new Map();
+  const group = name => {
+    if (!found.has(name)) found.set(name, { name, entries: [], connections: [] });
+    return found.get(name);
+  };
+  for (const entry of state.entries || []) group(entry.path.split('/')[0]).entries.push(entry);
+  for (const connection of state.acquisitions || []) group(connection.prefix.split('/')[0]).connections.push(connection);
+  return [...found.values()].sort(byName);
+}
+function connectionRow(connection) {
+  const warning = connection.status !== 'connected';
+  return `<article class="agent-row"><div class="agent-name"><h3>${esc(connection.label)}</h3><p>${esc(connection.service?.name || '')}の接続 · <span class="${warning ? 'warning-text' : ''}">${esc(statusName(connection.status))}</span></p></div>
+    <div class="agent-permissions"><span class="muted">${esc(connection.access?.name || '')}</span><span class="muted block">Foundationが${esc(connection.entries.length)}件を保管し、更新します${connection.expiry_known === false ? ' · 有効期限は不明です' : connection.expires_at ? ' · ' + esc(new Date(connection.expires_at).toLocaleString('ja-JP')) + 'まで' : ''}</span></div>
+    <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-prefix="${esc(connection.prefix)}" data-adapter="${esc(connection.adapter)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-prefix="${esc(connection.prefix)}">接続を解除</button></div></article>`;
+}
+function entryRow(entry, owned) {
+  return `<article class="agent-row"><div class="agent-name"><h3>${esc(entry.path)}</h3><p>${esc(entry.media_type)} · ${esc(kiloBytes(entry.size))}</p></div>
+    <div class="agent-permissions"><span class="muted">${esc(handedOver(entry))}</span><span class="muted block">${esc(putBy(entry))} · ${esc(keptWhen(entry.updated_at))}</span></div>
+    <div class="agent-actions"><a class="text-button" href="/api/entries/${encodeURIComponent(entry.path)}" download>中身を見る</a>${owned ? '' : `<button class="text-button danger" data-action="drop-entry" data-path="${esc(entry.path)}">削除</button>`}</div></article>`;
+}
+function groupSection(group) {
+  const id = groupId(group.name);
+  const owned = path => group.connections.some(connection => path === connection.prefix || path.startsWith(connection.prefix + '/'));
+  return `<section class="resource-section" aria-labelledby="${id}-title"><div class="section-heading"><div class="section-label"><span class="service-icon">${icon(group.connections[0]?.service?.icon || 'note')}</span><div><h2 id="${id}-title">${esc(group.name)}</h2><p>${esc(group.entries.length)}件</p></div></div></div>
+    <div class="agent-list">${group.connections.map(connectionRow).join('')}${group.entries.map(entry => entryRow(entry, owned(entry.path))).join('')}</div></section>`;
+}
+// The acquisitions this server can perform itself. Everything else arrives through the store.
+function connectSection() {
+  const available = state.adapters.filter(adapter => adapter.available);
+  if (!available.length) return '';
+  return `<section class="resource-section" aria-labelledby="connect-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('lock')}</span><div><h2 id="connect-title">接続を追加</h2><p>Foundationが自分で受け取り、更新し続けられるもの</p></div></div></div>
+    <div class="agent-list">${available.map(adapter => `<article class="agent-row"><div class="agent-name"><h3>${esc(adapter.service?.name || adapter.label)}</h3><p>${esc(adapter.kind || adapter.access.name)}</p></div><div class="agent-permissions"><span class="muted">${esc(adapter.access.name)}</span></div><div class="agent-actions"><button class="button secondary" data-action="add-adapter" data-adapter="${esc(adapter.id)}">${icon('plus')} ${esc(adapter.label)}</button></div></article>`).join('')}</div></section>`;
 }
 function render() {
   if (!state) return;
   clearPrivateInput();
   if (requestId) { renderRequest(); return; }
-  const byId = new Map(state.credentials.map((item) => [item.id, item]));
+  const kept = groups();
   app.innerHTML = `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main><header class="page-heading"><h1>預けているもの</h1></header>
-    ${credentialGroups().map(serviceSection).join('')}
-    ${entriesSection()}
+    ${kept.length ? kept.map(groupSection).join('') : '<section class="resource-section"><div class="access-empty"><p>まだ何も預かっていません。AIが依頼を作ると、ここに並びます。</p></div></section>'}
+    ${connectSection()}
     <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">AIのアクセスキー</h2></div></div><button class="button secondary" data-action="add-agent">${icon('plus')} アクセスキーを追加</button></div>
     ${state.agents.length ? `<div class="agent-list">${state.agents.map((agent) => `<article class="agent-row"><div class="agent-name"><h3>${esc(agent.name)}</h3><p>${agent.last_used_at ? '最終利用 ' + esc(new Date(agent.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(agent.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-agent" data-id="${esc(agent.id)}">名前を変更</button><button class="text-button danger" data-action="remove-agent" data-id="${esc(agent.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section></main></div>`;
 }
@@ -197,34 +180,30 @@ function renderRequest() {
   const row = accessRequest;
   const shell = (content) => `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main class="approval-main">${content}</main></div>`;
   const finished = {
-    approved: row && row.kind !== 'approve' ? ['登録しました', `${row.credential?.label || ''} を、${row.requester_name}から利用できます。この画面は閉じて構いません。`] : ['承認しました', `${row?.requester_name || ''}から、預けた認証情報を利用できるようになりました。この画面は閉じて構いません。`],
+    approved: row && row.kind !== 'approve' ? ['登録しました', `${row.result?.label || row.result?.path || ''} を、${row.requester_name}から利用できます。この画面は閉じて構いません。`] : ['承認しました', `${row?.requester_name || ''}から、あなたが預けているものを利用できるようになりました。この画面は閉じて構いません。`],
     denied: row && row.kind !== 'approve' ? ['登録しませんでした', 'この依頼による変更はありません。'] : ['承認しませんでした', 'このアクセスキーは使えません。'],
     cancelled: ['依頼は取り消されました', '必要な場合は、AIに新しい依頼を作ってもらってください。'],
     revoked: ['アクセスキーは失効しています', 'この依頼元のキーは利用できません。'],
-    reconnect_required: ['登録し直しが必要です', '管理画面から認証情報を登録し直してください。'],
+    reconnect_required: ['接続し直しが必要です', '管理画面から接続し直してください。'],
   };
   if (!row || row.status !== 'pending') {
     const [title, description] = row ? finished[row.status] || ['依頼を確認できません', '依頼のリンクを開き直してください。'] : ['依頼を確認できません', requestError];
-    // A registration ends here, so what Foundation verified about the new credential is shown here too.
-    const registered = row?.status === 'approved' && row.kind === 'connect' ? state.credentials.find(credential => credential.id === row.credential?.id) : null;
-    app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(row?.status === 'approved' ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p>${registered ? keyFacts(registered) : ''}<a class="button secondary" href="/">認証情報を管理</a></section>`);
+    app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(row?.status === 'approved' ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p><a class="button secondary" href="/">預けているものを見る</a></section>`);
     return;
   }
   const expiry = `<p class="request-expiry">この依頼は ${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで有効です。</p>`;
   if (row.kind === 'approve') { renderApproval(row, shell, expiry); return; }
   if (row.kind === 'store') { renderStore(row, shell, expiry); return; }
   const adapter = row.adapter, name = serviceName(adapter);
-  const same = state.credentials.filter(credential => credential.adapter === adapter.id);
-  const unavailable = `<p class="form-error" role="status">現在${esc(name)}を登録できません。</p>`;
+  const unavailable = `<p class="form-error" role="status">現在${esc(name)}に接続できません。</p>`;
   const body = !adapter.available ? unavailable : adapter.register === 'login' ? expoLoginMarkup(row)
-    : `${same.filter(credential => credential.status === 'reconnect_required' && adapter.can_reconnect).map(credential => `<button class="button secondary full request-connect" type="button" data-action="request-connect" data-id="${esc(credential.id)}">${esc(credentialLabel(credential))} を登録し直す</button>`).join('')}
-      <button class="button primary full request-connect" type="button" data-action="request-connect">${esc(adapter.label)} ${icon('arrow')}</button>
+    : `<button class="button primary full request-connect" type="button" data-action="request-connect">${esc(adapter.label)} ${icon('arrow')}</button>
       ${adapter.failure_note && ['failed', 'scope', 'retry', 'changed'].includes(resultCode) ? `<p class="permission-note">${esc(adapter.failure_note.text)}<a href="${esc(adapter.failure_note.href)}" target="_blank" rel="noopener noreferrer">${esc(adapter.failure_note.link)} ↗</a></p>` : ''}`;
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(adapter.label)}</h1></div></header>
     <dl class="approval-facts">${row.purpose ? `<div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}<div><dt>届く範囲</dt><dd>${esc(adapter.access.name)}</dd></div></dl>
-    ${guidanceBlock(row.guidance)}${!row.guidance && adapter.instructions ? `<p class="permission-note">${esc(adapter.instructions)}</p>` : ''}
+    ${guidanceBlock(row.guidance)}
     <div class="register-body">${body}</div>
-    <button class="text-button full" type="button" data-action="deny-request">登録しない</button>${expiry}</section>`);
+    <button class="text-button full" type="button" data-action="deny-request">接続しない</button>${expiry}</section>`);
   const container = app.querySelector('.register-body');
   if (adapter.available && adapter.register === 'login') bindExpoLogin(container, row);
 }
@@ -254,7 +233,7 @@ function renderStore(row, shell, expiry) {
 // Approving a key: only who is asking, what the key will reach, and the code.
 function renderApproval(row, shell, expiry) {
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">新しいアクセスキー</p><h1>このアクセスキーを承認しますか？</h1></div></header>
-    <dl class="approval-facts"><div><dt>依頼元</dt><dd>${esc(row.requester_name)}</dd></div><div><dt>使えるもの</dt><dd>${state.credentials.length ? `預けた認証情報すべて<span class="muted block">${state.credentials.map(credential => esc(credential.service) + ' · ' + esc(credential.name)).join('<br>')}</span>` : '今後預ける認証情報すべて'}</dd></div></dl>
+    <dl class="approval-facts"><div><dt>依頼元</dt><dd>${esc(row.requester_name)}</dd></div><div><dt>使えるもの</dt><dd>${state.entries.length ? `あなたが預けているものすべて<span class="muted block">${state.entries.map(entry => esc(entry.path)).join('<br>')}</span>` : '今後あなたが預けるものすべて'}</dd></div></dl>
     <form id="access-request-form">${codeField()}
     <p class="form-error" role="alert"></p>
     <button class="button primary full" type="submit" disabled>承認する ${icon('arrow')}</button><button class="text-button full" type="button" data-action="deny-request">承認しない</button></form>${expiry}</section>`);
@@ -288,27 +267,16 @@ function bindForm(handler, container = dialog) {
     catch (error) { if (form.isConnected) { form.querySelector('.form-error').textContent = error.message; button.disabled = false; } }
   });
 }
-const serviceNames = () => [...new Set([...state.credentials.map(item => item.service), ...state.adapters.filter(item => item.service).map(item => item.service.name)])].sort((a, b) => a.localeCompare(b, 'ja', { sensitivity: 'base' }));
-const serviceField = (value = '') => `<label for="credential-service">サービス</label><input id="credential-service" name="service" list="service-names" required maxlength="40" autocomplete="off" value="${esc(value)}" placeholder="GitHub など"><datalist id="service-names">${serviceNames().map(name => `<option value="${esc(name)}"></option>`).join('')}</datalist><p class="permission-note">同じサービス名の認証情報が、ひとつの枠にまとまります。あとから変えられます。</p>`;
-// Registering: the name may be left empty and is then taken from what was verified. Editing: the name stays set.
-function credentialFields(credential, editing = false) {
-  return `<label for="credential-name">表示名${editing ? '' : ' <span class="optional">任意</span>'}</label><input id="credential-name" name="name" ${editing ? 'required' : 'placeholder="空欄なら確かめた内容から付けます"'} maxlength="80" autocomplete="off" value="${esc(credential?.name || '')}">`;
-}
-// The dashboard's add button belongs to a service; with several adapters the owner picks how to register first.
-function chooseAdapter(serviceName) {
-  const options = state.adapters.filter(adapter => adapter.service?.name === serviceName && adapter.available);
-  if (options.length === 1) { connect(null, options[0].id); return; }
-  openDialog(`<h2 id="dialog-title">${esc(serviceName)}を登録</h2><p>登録の方法を選んでください。</p>${options.map(adapter => `<button class="button secondary full setup-link" data-action="add-adapter" data-adapter="${esc(adapter.id)}"><span>${esc(adapter.access.name)}</span></button>`).join('')}`);
-}
-function connect(credential, adapterId = credential?.adapter) {
+// Starting an acquisition Foundation performs itself. There is nothing to fill in: the service decides who it is.
+function connect(adapterId, prefix) {
   const adapter = state.adapters.find(item => item.id === adapterId);
   if (!adapter?.available) return;
   const name = serviceName(adapter);
-  if (adapter.register === 'login') { openDialog(`<h2 id="dialog-title">${esc(name)}を登録</h2>${expoLoginMarkup(null)}`); bindExpoLogin(dialog, null); return; }
-  openDialog(`<h2 id="dialog-title">${esc(name)}を${credential ? '登録し直す' : '登録'}</h2><p>${credential ? esc(credentialLabel(credential)) : esc(adapter.intro)}</p><form>${credentialFields(credential)}
-    <p class="permission-note">${esc(adapter.access.name)}。${esc(adapter.access.restrictions)} ${credential ? '' : '登録すると、承認済みのアクセスキーから使えるようになります。'}${adapter.can_revoke ? '' : `キーの停止は${esc(name)}で行います。`}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(adapter.label)} ${icon('arrow')}</button></form>`);
-  bindForm(async (form) => {
-    const result = await api(`/api/adapters/${adapter.id}/connect`, { method: 'POST', data: { name: form.get('name'), ...(credential ? { credentialId: credential.id } : {}) } });
+  if (adapter.register === 'login') { openDialog(`<h2 id="dialog-title">${esc(name)}に接続</h2>${expoLoginMarkup(null)}`); bindExpoLogin(dialog, null); return; }
+  openDialog(`<h2 id="dialog-title">${esc(name)}に${prefix ? '接続し直す' : '接続'}</h2><p>${esc(adapter.intro)}</p><form>
+    <p class="permission-note">${esc(adapter.access.name)}。${esc(adapter.access.restrictions)} ${prefix ? '' : '接続すると、承認済みのアクセスキーから使えるようになります。'}${adapter.can_revoke ? '' : `停止は${esc(name)}で行います。`}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(adapter.label)} ${icon('arrow')}</button></form>`);
+  bindForm(async () => {
+    const result = await api(`/api/adapters/${adapter.id}/connect`, { method: 'POST', data: prefix ? { prefix } : {} });
     location.assign(result.url);
   });
 }
@@ -355,7 +323,7 @@ function bindExpoLogin(container, request) {
         button.textContent = '確認して登録'; form.elements.otp.focus();
       } else {
         password = ''; username = ''; clearTimeout(deadline);
-        selected = result.credential_id; closeDialog(); await refresh();
+        closeDialog(); await refresh();
         if (!request) toast('Expoの認証情報を登録しました。');
       }
     } catch (error) {
@@ -366,12 +334,23 @@ function bindExpoLogin(container, request) {
     } finally { if (active && !signal.aborted) { busy = false; button.disabled = false; } }
   });
 }
-function editCredential(credential) {
-  openDialog(`<h2 id="dialog-title">認証情報を編集</h2><form>${credentialFields(credential, true)}${serviceField(credential.service)}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
-  bindForm(async (form) => { await api(`/api/credentials/${credential.id}`, { method: 'PATCH', data: { name: form.get('name'), service: form.get('service') } }); closeDialog(); await refresh(); toast('保存しました。'); });
+// Ending a connection. What it kept goes with it, and the owner decides whether the service is told.
+function disconnect(connection) {
+  const revoke = connection.can_revoke
+    ? `<label class="check"><input type="checkbox" name="revoke" checked> ${esc(connection.service?.name || '')}側の許可も取り消す</label>`
+    : `<p class="permission-note">${esc(connection.service?.name || '')}側のキーは残ります。不要なら${esc(connection.service?.name || '')}で削除してください。</p>`;
+  openDialog(`<h2 id="dialog-title">${esc(connection.label)} の接続を解除しますか？</h2><form>
+    <p>Foundationがここに保管している${esc(connection.entries.length)}件を削除し、AIは使えなくなります。</p>
+    <p class="permission-note">${esc(revocationNote)}</p>${revoke}<p class="form-error" role="alert"></p>
+    <div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">接続を解除</button></div></form>`);
+  bindForm(async (form) => {
+    const result = await api('/api/acquisitions/' + encodeURIComponent(connection.prefix), { method: 'DELETE', data: { revoke: form.get('revoke') === 'on' } });
+    closeDialog(); await refresh();
+    toast(result.service_revoked === false ? '解除しました。接続先の許可は取り消せませんでした。' : '解除しました。');
+  });
 }
 function editAgent() {
-  openDialog(`<h2 id="dialog-title">アクセスキーを追加</h2><p>AIの実行環境に置くキーを発行します。承認済みのキーと同じく、預けた認証情報をすべて使えます。</p><form><label for="agent-name">アクセスキーの名前</label><input id="agent-name" name="name" placeholder="dev-us など" required maxlength="80" autocomplete="off"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">アクセスキーを発行</button></form>`);
+  openDialog(`<h2 id="dialog-title">アクセスキーを追加</h2><p>AIの実行環境に置くキーを発行します。承認済みのキーと同じく、あなたが預けているものをすべて使えます。</p><form><label for="agent-name">アクセスキーの名前</label><input id="agent-name" name="name" placeholder="dev-us など" required maxlength="80" autocomplete="off"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">アクセスキーを発行</button></form>`);
   bindForm(async (form) => {
     const result = await api('/api/agents', { method: 'POST', data: { name: form.get('name') } });
     await refresh(); if (!state) return;
@@ -417,8 +396,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'logout') { clearPrivateInput(); target.disabled = true; await api('/api/session', { method: 'DELETE' }); await showLogin(); }
     if (action === 'request-connect') {
       target.disabled = true;
-      const credential = state.credentials.find(item => item.id === id);
-      const result = await api(`/api/adapters/${accessRequest.adapter.id}/connect`, { method: 'POST', data: { accessRequestId: requestId, ...(credential ? { credentialId: credential.id } : {}) } });
+      const result = await api(`/api/adapters/${accessRequest.adapter.id}/connect`, { method: 'POST', data: { accessRequestId: requestId } });
       location.assign(result.url);
     }
     if (action === 'deny-request') {
@@ -427,12 +405,9 @@ document.addEventListener('click', async (event) => {
       await api(`/api/access-requests/${requestId}/deny`, { method: 'POST', data: {} });
       await refresh();
     }
-    if (action === 'add-credential') chooseAdapter(target.dataset.service);
-    if (action === 'add-adapter') connect(null, target.dataset.adapter);
-    if (action === 'select-credential') { selected = id; render(); }
-    if (action === 'reconnect') connect(state.credentials.find((a) => a.id === id));
-    if (action === 'edit-credential') editCredential(state.credentials.find((a) => a.id === id));
-    if (action === 'remove-credential') removeCredential(state.credentials.find((a) => a.id === id));
+    if (action === 'add-adapter') connect(target.dataset.adapter);
+    if (action === 'reconnect') connect(target.dataset.adapter, target.dataset.prefix);
+    if (action === 'disconnect') disconnect(state.acquisitions.find(item => item.prefix === target.dataset.prefix));
     if (action === 'drop-entry') {
       const path = target.dataset.path;
       confirmRemoval(path + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/api/entries/' + encodeURIComponent(path), { method: 'DELETE', data: {} }));

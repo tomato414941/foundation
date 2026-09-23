@@ -1,16 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GmailClient, METADATA_SCOPE, READONLY_SCOPE } from '../src/services/gmail.mjs';
-import { json, FakeGmail, KEY, USER_A } from './helpers.mjs';
+import { json, FakeGmail, KEY, USER_A, acquired } from './helpers.mjs';
 import { Store } from '../src/store.mjs';
+import { gmailReadonly, gmailMetadata } from '../src/adapters.mjs';
 
 function setup(t, mode = 'readonly') {
   const store = new Store(':memory:', KEY), gmail = new FakeGmail();
   t.after(() => store.close());
   const scopes = [mode === 'metadata' ? METADATA_SCOPE : READONLY_SCOPE];
   const credentials = { access_token: 'google-access-personal-' + mode, refresh_token: 'refresh-personal-' + mode, scopes, expires_at: Date.now() - 1 };
-  const id = store.register(USER_A, { adapter: 'gmail.' + mode, service: 'Gmail', name: '個人用', subject: 'personal@example.test' }, credentials);
-  return { store, gmail, account: () => store.credential(USER_A, id), credentials };
+  const held = acquired(store, [gmailReadonly(gmail), gmailMetadata(gmail)], 'gmail.' + mode, { subject: 'personal@example.test', secret: credentials });
+  return { store: held.client(), gmail, account: held.row, credentials, state: () => store.acquisitionState(held.row()) };
 }
 
 test('Google exchange and refresh keep tokens server-side and preserve actual read scopes', async (t) => {

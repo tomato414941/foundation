@@ -50,10 +50,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
 
-    # Both panels say so when the key has kept nothing.
+    # Nothing kept yet, and the page says so.
     page.goto(args.base, wait_until='networkidle')
-    expect(page.locator('#kept-title')).to_have_text('AIが預けたもの')
-    expect(page.get_by_text('AIが預けたものはありません。', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='預けているもの', exact=True)).to_be_visible()
+    expect(page.get_by_text('まだ何も預かっていません。', exact=False)).to_be_visible()
     review(page)
 
     # The key keeps two things, with no request and no approval: one handed to a command, one only read back.
@@ -61,12 +61,13 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     cli('put', 'release/expo-v3', '--type', 'application/json', stdin=json.dumps({'step': 'レビュー待ち'}))
     page.reload(wait_until='networkidle')
 
-    kept = page.locator('[aria-labelledby="kept-title"]')
-    expect(kept.get_by_role('heading', name='github/token', exact=True)).to_be_visible()
-    expect(kept.get_by_text('GH_TOKEN として渡す', exact=True)).to_be_visible()
-    expect(kept.get_by_role('heading', name='release/expo-v3', exact=True)).to_be_visible()
-    expect(kept.get_by_text('渡さない', exact=True)).to_be_visible()
-    expect(kept.get_by_text('dev-us のAI', exact=False).first).to_be_visible()
+    github = page.locator('[aria-labelledby="github-title"]')
+    release = page.locator('[aria-labelledby="release-title"]')
+    expect(github.get_by_role('heading', name='github/token', exact=True)).to_be_visible()
+    expect(github.get_by_text('GH_TOKEN として渡す', exact=True)).to_be_visible()
+    expect(release.get_by_role('heading', name='release/expo-v3', exact=True)).to_be_visible()
+    expect(release.get_by_text('渡さない', exact=True)).to_be_visible()
+    expect(github.get_by_text('dev-us のAI', exact=False).first).to_be_visible()
     assert SECRET not in page.locator('body').inner_text(), 'what is kept is never on the page itself'
 
     review(page)
@@ -85,16 +86,16 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # Removing one takes it away from the key too.
-    kept.get_by_role('button', name='削除', exact=True).last.click()
+    release.get_by_role('button', name='削除', exact=True).click()
     expect(dialog.get_by_role('heading', name='release/expo-v3 を削除しますか？', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
     assert [row['path'] for row in cli('list')['entries']] == ['github/token']
 
-    kept.get_by_role('button', name='削除', exact=True).click()
+    github.get_by_role('button', name='削除', exact=True).click()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(page.get_by_text('AIが預けたものはありません。', exact=True)).to_be_visible()
+    expect(page.get_by_text('まだ何も預かっていません。', exact=False)).to_be_visible()
     assert cli('list')['entries'] == []
     review(page)
     assert not errors, errors

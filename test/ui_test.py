@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 from pathlib import Path
+import json
 from urllib.parse import urlparse, parse_qs, urlencode
 from playwright.sync_api import sync_playwright, expect
 
@@ -87,7 +88,7 @@ with sync_playwright() as p:
     page.bring_to_front()
     page.evaluate('window.dispatchEvent(new Event("focus"))')
     expect(page.get_by_role("heading", name="預けているもの", exact=True)).to_be_visible()
-    expect(page.get_by_role("button", name="Gmailを登録", exact=True)).to_be_enabled()
+    expect(page.get_by_role("button", name="Googleで接続", exact=True).first).to_be_enabled()
     expect(page.get_by_role("button", name="アクセスキーを追加", exact=True)).to_be_enabled()
     assert page.evaluate("localStorage.length === 0 && sessionStorage.length === 0")
     assert "fdn_session" not in page.evaluate("document.cookie")
@@ -105,15 +106,14 @@ with sync_playwright() as p:
     page.route("https://accounts.google.com/o/oauth2/v2/auth?*", google_consent)
     dialog = page.get_by_role("dialog")
 
-    def connect(name, code, metadata=False):
+    # Each read range is its own connection; the owner starts the one they want.
+    def connect(code, metadata=False):
         authorization["code"] = code
-        page.get_by_role("button", name="Gmailを登録", exact=True).click()
+        row = page.locator(".agent-row").filter(has_text="件名・差出人などの読み取り" if metadata else "メールの読み取り")
+        row.get_by_role("button", name="Googleで接続", exact=True).click()
         expect(dialog).to_be_visible()
-        # Gmail has one adapter per read range; the owner picks one first.
-        dialog.get_by_role("button", name="件名・差出人などの読み取り" if metadata else "メールの読み取り", exact=True).click()
-        dialog.get_by_label("表示名 任意", exact=True).fill(name)
         check_display(page)
-        if name == "個人用":
+        if not metadata:
             page.screenshot(path=str(shots / "connect.png"), full_page=True)
         dialog.get_by_role("button", name="Googleで接続", exact=False).click()
         expect(page.get_by_role("heading", name="預けているもの", exact=True)).to_be_visible()
@@ -121,15 +121,15 @@ with sync_playwright() as p:
         page.wait_for_load_state("networkidle")
         assert "code=" not in page.url and "state=" not in page.url
 
-    connect("個人用", "personal-readonly")
-    connect("仕事用", "work-metadata", True)
-    # Credentials of one service are listed in the order registered, beside the one shown.
-    expect(page.locator(".credential-item strong")).to_have_text(["個人用", "仕事用"])
-    expect(page.locator(".credential-heading h3")).to_have_text("個人用")
-    page.locator(".credential-item").filter(has_text="仕事用").click()
-    expect(page.locator('.credential-facts')).to_contain_text("件名・差出人などの読み取り")
-    expect(page.locator(".credential-heading .credential-meta")).to_contain_text("管理画面から")
-    page.locator(".credential-item").filter(has_text="個人用").click()
+    connect("personal-readonly")
+    connect("work-metadata", True)
+    # Both sit under one group, named by the paths they were kept at.
+    gmail = page.locator('[aria-labelledby="gmail-title"]')
+    expect(gmail.locator(".agent-name h3")).to_have_text(
+        ["personal@example.test", "work@example.test",
+         "gmail/personal-example-test/gmail-account-email", "gmail/personal-example-test/google-oauth-access-token", "gmail/personal-example-test/google-oauth-expires-at",
+         "gmail/work-example-test/gmail-account-email", "gmail/work-example-test/google-oauth-access-token", "gmail/work-example-test/google-oauth-expires-at"])
+    expect(gmail.get_by_text("件名・差出人などの読み取り", exact=True)).to_be_visible()
 
     def create_runtime(name):
         page.get_by_role("button", name="アクセスキーを追加", exact=True).click()
@@ -146,12 +146,13 @@ with sync_playwright() as p:
     caller = p.request.new_context(base_url=args.base)
     def runtime(path, token, method="GET"):
         return caller.fetch(path, method=method, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data="{}" if method == "POST" else None)
-    credentials = runtime("/v1/credentials", token_a).json()["credentials"]
-    assert len(credentials) == 2, "an issued key uses every registered credential"
-    credential_id = credentials[0]["id"]
-    issued = runtime("/v1/credentials/" + credential_id + "/deliver", token_a, "POST")
+    def deliver(paths, token):
+        return caller.fetch("/v1/deliver", method="POST", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data=json.dumps({"paths": paths}))
+    connections = runtime("/v1/acquisitions", token_a).json()["acquisitions"]
+    assert len(connections) == 2, "an issued key uses everything its owner keeps"
+    paths = [entry["path"] for entry in connections[0]["entries"]]
+    issued = deliver(paths, token_a)
     assert issued.status == 200 and issued.json()["delivery"]["environment"]["GOOGLE_OAUTH_ACCESS_TOKEN"].startswith("google-access-")
-    assert runtime("/v1/credentials/" + credential_id + "/messages", token_a).status == 404
     assert "google-access-" not in page.content()
     page.reload()
     page.wait_for_load_state("networkidle")
@@ -159,31 +160,16 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "desktop.png"), full_page=True)
 
     row = page.locator(".agent-row").filter(has_text="dev-us")
-    assert runtime("/v1/credentials/" + credential_id + "/deliver", token_b, "POST").status == 200
+    assert deliver(paths, token_b).status == 200
 
     for width in [1280, 800, 768, 601, 600, 390, 320]:
         page.set_viewport_size({"width": width, "height": 950})
         check_display(page)
     page.set_viewport_size({"width": 390, "height": 1000})
     page.screenshot(path=str(shots / "mobile.png"), full_page=True)
-    page.locator(".credential-item").filter(has_text="個人用").click()
-    page.locator(".credential-pane").get_by_role("button", name="編集", exact=True).click()
-    dialog.get_by_label("表示名", exact=True).fill('<img src=x onerror="window.xss=1">' + "長い名前" * 10)
-    dialog.get_by_role("button", name="保存", exact=True).click()
-    expect(dialog).not_to_be_visible()
-    assert page.locator(".credential-workspace img").count() == 0
-    assert page.evaluate("window.xss === undefined")
-    for width in [320, 601, 1280]:
-        page.set_viewport_size({"width": width, "height": 950})
-        check_display(page)
-    page.locator(".credential-pane").get_by_role("button", name="編集", exact=True).click()
-    dialog.get_by_label("表示名", exact=True).fill("個人用")
-    dialog.get_by_role("button", name="保存", exact=True).click()
-    expect(dialog).not_to_be_visible()
-
     # Cancellation returns a useful message without disclosing provider errors.
     authorization["deny"] = True
-    page.get_by_role("button", name="登録し直す", exact=True).click()
+    gmail.get_by_role("button", name="接続し直す", exact=True).first.click()
     dialog.get_by_role("button", name="Googleで接続", exact=False).click()
     expect(page.get_by_text("登録をキャンセルしました。", exact=True)).to_be_visible()
     authorization["deny"] = False
@@ -195,21 +181,20 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "revoke-mobile.png"), full_page=True)
     dialog.get_by_role("button", name="失効させる", exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert runtime("/v1/credentials", token_a).status == 401
-    assert runtime("/v1/credentials", token_b).status == 200
-    page.locator(".credential-item").filter(has_text="個人用").click()
-    page.get_by_role("button", name="登録を解除", exact=True).click()
+    assert runtime("/v1/acquisitions", token_a).status == 401
+    assert runtime("/v1/acquisitions", token_b).status == 200
+    gmail.get_by_role("button", name="接続を解除", exact=True).first.click()
     check_display(page)
     page.screenshot(path=str(shots / "disconnect-mobile.png"), full_page=True)
-    dialog.get_by_role("button", name="登録を解除", exact=True).click()
+    dialog.get_by_role("button", name="接続を解除", exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(page.locator(".credential-pane")).to_have_count(1)
-    expect(page.locator(".credential-heading h3")).to_have_text("仕事用")
-    assert runtime("/v1/credentials/" + credential_id + "/deliver", token_b, "POST").status == 403
+    expect(gmail.locator(".agent-name h3")).to_have_text(
+        ["work@example.test", "gmail/work-example-test/gmail-account-email", "gmail/work-example-test/google-oauth-access-token", "gmail/work-example-test/google-oauth-expires-at"])
+    assert deliver(paths, token_b).status == 404, "what it kept went with it"
     page.get_by_role("button", name="ログアウト", exact=True).click()
     expect(page.get_by_role("heading", name="ログイン", exact=True)).to_be_visible()
     assert not errors, errors
-    print("Browser checks passed: email-link signup/login, invalid links, reload, email change, cross-tab login, two OAuth connections, scope selection, runtime credentials, revoke, disconnect, XSS, mobile and copy.")
+    print("Browser checks passed: email-link signup/login, invalid links, reload, email change, cross-tab login, two connections, what each keeps, delivery, revoke, disconnect, mobile and copy.")
     print("Screenshots:", str(shots))
     caller.dispose()
     context.close()

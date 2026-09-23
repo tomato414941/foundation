@@ -8,8 +8,8 @@ import { Adapters } from './adapters.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { AccessRequests } from './access-requests.mjs';
 import { Files, FILE_MAX } from './files.mjs';
-import { Records } from './records.mjs';
-import { Entries, ENTRY_MAX } from './entries.mjs';
+import { Acquisitions } from './acquisitions.mjs';
+import { Entries, ENTRY_MAX, entryPath } from './entries.mjs';
 
 const PUBLIC = new URL('../web/', import.meta.url);
 const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
@@ -86,8 +86,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
     return forwarded.at(-1) || socket;
   };
   const adapters = new Adapters(adapterList);
-  const records = new Records(store, adapters);
   const entries = new Entries(store, adapters.owned);
+  const acquisitions = new Acquisitions(store, adapters);
   const requests = new AccessRequests(store, adapters);
   const files = new Files(store, fileBackend);
   const logins = new EmailLogins({ now: loginClock });
@@ -143,44 +143,31 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   function requireOrigin(req, origin) {
     if (req.headers.origin !== origin) fail(403, 'origin_denied', 'この操作はFoundationの画面から行ってください。');
   }
-  function credentialFor(ownerId, id) {
-    const credential = store.credential(ownerId, id);
-    if (!credential) fail(404, 'not_found', '認証情報が見つかりません。');
-    return credential;
-  }
-  function stillCurrent(credential) {
-    const current = credentialFor(credential.owner_id, credential.id);
-    if (current.status !== 'connected' || current.generation !== credential.generation) fail(409, 'connection_changed', '認証情報の状態が変わりました。');
-  }
-  // A credential is named by what was verified about it, unless the owner names it.
-  const credentialName = (record, subject, given) => given || String(record.facts.label || subject).slice(0, 80);
-  // Everything acquisition produced, in the shape storage holds and delivery reads.
-  const store_ = (adapterId, result, previous, rest) => {
-    const record = records.build(adapterId, result.secret, { subject: result.subject });
-    return { record, details: { adapter: adapterId, subject: result.subject, names: records.names(record), ...rest, name: credentialName(record, result.subject, rest.name) } };
+  // What a key sees of an acquisition: what it keeps and where, never what it holds.
+  const runtimeAcquisition = row => {
+    const adapter = adapters.get(row.adapter);
+    return { prefix: row.prefix, adapter: row.adapter, service: adapter.service, label: row.label, status: row.status,
+      access: adapter.access, api: adapter.service?.api || { base_url: '', documentation_url: '' },
+      entries: store.entries(row.owner_id, row.prefix).map(entry => ({ path: entry.path, env: entry.env, filename: entry.filename, session: entry.session })) };
   };
-  const givenName = value => value === undefined || value === '' ? '' : nameValue(value, '表示名');
+  function acquisitionFor(ownerId, prefix) {
+    const row = store.acquisition(ownerId, prefix);
+    if (!row) fail(404, 'not_found', '接続が見つかりません。');
+    return row;
+  }
   // Runs a service exchange and commits it atomically, checking that the same person is still here.
   async function verifyConnection(req, session, user, operation, commit) {
     const result = await operation();
     if (req.aborted || req.socket.destroyed || localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
     return store.transaction(() => commit(result));
   }
-  // What the owner sees of a credential: the row, what its adapter verified about it, and how it is delivered.
-  function ownerView(credential) {
-    const record = store.secret(credentialFor(credential.owner_id, credential.id));
-    const { owner_id: _owner, generation: _generation, secret: _secret, ...row } = credential;
-    const access = credential.adapter ? adapters.get(credential.adapter).access : KEPT_ACCESS;
-    return { ...row, ...record.facts, expires_at: record.expires_at, expiry_known: record.expiry_known, credential_type: record.credential_type,
-      access, variables: credential.names };
-  }
-  // What a runtime sees: the same, and where to ask for delivery. Never the secret.
-  function runtimeView(credential) {
-    const adapter = credential.adapter ? adapters.get(credential.adapter) : null;
-    const record = store.secret(credentialFor(credential.owner_id, credential.id));
-    return { ...ownerView(credential), api: (adapter ? adapters.service(adapter.id, record.renewal?.details) : null)?.api || { base_url: '', documentation_url: '' },
-      delivery: { method: 'POST', endpoint: '/v1/credentials/' + credential.id + '/deliver',
-        revocation: adapter && adapter.canRevoke !== false ? 'Stops future delivery; tokens already delivered may remain valid until they expire or the service revokes them.' : 'Stops future delivery only. Keys already delivered remain usable until the service expires or deletes them. No artificial short expiry is applied.' } };
+  // What the owner sees of an acquisition: what it is, whose account, and what it keeps under its prefix.
+  function acquisitionView(row) {
+    const adapter = adapters.get(row.adapter), state = store.acquisitionState(row);
+    const { owner_id: _owner, state: _state, ...rest } = row;
+    return { ...rest, ...state.facts, expires_at: state.expires_at, access: adapter.access, service: adapter.service,
+      entries: store.entries(row.owner_id, row.prefix).map(entry => entry.path),
+      can_reconnect: adapter.canReconnect !== false, can_revoke: adapter.canRevoke !== false, available: adapter.client.enabled };
   }
   const server = createServer(async (req, res) => {
     const send = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
@@ -257,18 +244,17 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           if (!code || code.length > 8192) fail(400, 'invalid_state', '接続をやり直してください。');
           let previous;
           if (flow.previous) {
-            previous = credentialFor(user.id, flow.previous.id);
+            previous = acquisitionFor(user.id, flow.previous.prefix);
             if (previous.generation !== flow.previous.generation || previous.status === 'disconnecting') fail(409, 'connection_changed', '接続状態が変わりました。');
           }
           if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true);
           await verifyConnection(req, session, user,
-            () => adapter.client.exchange({ ...flow, code, range: adapter.range }, previous ? { subject: previous.subject, secret: store.secret(previous).renewal } : undefined),
+            () => adapter.client.exchange({ ...flow, code, range: adapter.range }, previous ? { subject: previous.subject, secret: store.acquisitionState(previous).renewal } : undefined),
             result => {
               if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true);
-              const held = store_(adapter.id, result, previous, { service: flow.service || adapter.service.name, name: flow.name, kept_by: flow.requestedBy });
-              const id = store.register(user.id, held.details, held.record, previous);
-              if (flow.accessRequestId) requests.registered(flow.accessRequestId, user.id, id);
-              return id;
+              const saved = acquisitions.save(user.id, adapter.id, result, { keptBy: flow.requestedBy, previous });
+              if (flow.accessRequestId) requests.registered(flow.accessRequestId, user.id, saved.prefix);
+              return saved.prefix;
             });
           if (flow.accessRequestId) requests.record(flow.accessRequestId, 'connected', { adapter: adapter.id });
           return redirect(connectionLocation('connected'));
@@ -339,7 +325,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       if (path.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(method)) requireOrigin(req, origin);
         const { user, session } = await principal(req);
-        if (path === '/api/state' && method === 'GET') return send(200, { user, credentials: store.credentials(user.id).map(ownerView), agents: store.agents(user.id), entries: entries.list(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
+        if (path === '/api/state' && method === 'GET') return send(200, { user, entries: entries.list(user.id), acquisitions: store.acquisitions(user.id).map(acquisitionView), agents: store.agents(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
         // What a key kept is the owner's: they read it, rename the group it sits in, and remove it.
         const ownEntry = path.match(/^\/api\/entries\/(.+)$/);
         if (ownEntry) {
@@ -386,8 +372,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             return send(200, { request: requests.summary(result, origin, { code: false }) });
           }
         }
-        // Registering a credential through one adapter. How the owner hands it over is the adapter's:
-        // pasted values checked against its schema, a login relayed once, or an OAuth round trip.
+        // Starting an acquisition Foundation performs itself: an OAuth round trip, or a login relayed once.
         const connectRoute = path.match(/^\/api\/adapters\/([a-z][a-z0-9.-]{0,63})\/connect$/);
         if (connectRoute && method === 'POST') {
           const adapter = adapters.get(connectRoute[1]);
@@ -397,11 +382,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const accessRequest = input.accessRequestId === undefined ? null : requests.forUser(input.accessRequestId, user.id, true);
           progressRequestId = accessRequest?.id || null;
           if (accessRequest) requests.record(accessRequest.id, 'connect_started', { adapter: adapter.id });
-          if (accessRequest && !accessRequest.adapter) fail(409, 'approval_only', 'この依頼はアクセスキーの承認だけです。認証情報の登録には使えません。');
+          if (accessRequest && !accessRequest.adapter) fail(409, 'approval_only', 'この依頼はこの接続方法のものではありません。');
           if (accessRequest && adapter.id !== accessRequest.adapter) fail(400, 'scope_mismatch', '依頼された接続方法で登録してください。');
-          // Who asked for it, as they were called then. A registration from the dashboard was asked by no one.
-          const given = givenName(input.name), requestedBy = accessRequest?.requester_name ?? '';
-          const chosenService = input.service === undefined || input.service === '' ? null : serviceValue(input.service);
+          // Who asked for it, as they were called then. One started from the dashboard was asked by no one.
+          const requestedBy = accessRequest?.requester_name ?? '';
           if (adapter.register === 'login') {
             let result, committed = false;
             try {
@@ -409,10 +393,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
               const saved = await verifyConnection(req, session, user, async () => { result = await adapter.client.login(input); return result; }, () => {
                 if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
                 if (result.challenge) return { challenge: result.challenge };
-                const held = store_(adapter.id, result, undefined, { service: chosenService || adapter.service.name, name: given, kept_by: requestedBy });
-                const id = store.register(user.id, held.details, held.record);
-                const done = accessRequest ? requests.registered(accessRequest.id, user.id, id) : null;
-                return { connected: true, credential_id: id, ...(done ? { request: requests.summary(done, origin, { code: false }) } : {}) };
+                const saved = acquisitions.save(user.id, adapter.id, result, { keptBy: requestedBy });
+                const done = accessRequest ? requests.registered(accessRequest.id, user.id, saved.prefix) : null;
+                return { connected: true, prefix: saved.prefix, ...(done ? { request: requests.summary(done, origin, { code: false }) } : {}) };
               });
               if (result.challenge) return send(202, saved);
               committed = true;
@@ -424,7 +407,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
               if (result?.secret && !committed) await adapter.client.revoke(result.secret).catch(() => {});
             }
           }
-          const previous = input.credentialId ? credentialFor(user.id, input.credentialId) : undefined;
+          const previous = input.prefix ? acquisitionFor(user.id, entryPath(input.prefix)) : undefined;
           if (previous && previous.adapter !== adapter.id) fail(400, 'invalid_adapter', '接続方法が一致しません。');
           if (previous && adapter.canReconnect === false) fail(400, 'new_connection_required', '新しく登録してください。');
           if (previous?.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
@@ -432,36 +415,30 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const redirectUri = origin + '/oauth/' + adapter.id + '/callback';
           if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
           if (accessRequest) requests.claim(accessRequest.id, user.id);
-          const flow = { adapter: adapter.id, name: given, service: chosenService, requestedBy, verifier, redirectUri, accessRequestId: accessRequest?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
+          const flow = { adapter: adapter.id, requestedBy, verifier, redirectUri, accessRequestId: accessRequest?.id, previous: previous ? { prefix: previous.prefix, generation: previous.generation } : null };
           const state = store.addFlow(session.id, flow);
           return send(200, { url: adapter.client.authorize({ state, verifier, redirectUri, range: adapter.range, email: previous?.subject }) });
         }
-        const credentialRoute = path.match(/^\/api\/credentials\/([a-f0-9-]{36})$/);
-        if (credentialRoute) {
-          const credential = credentialFor(user.id, credentialRoute[1]);
-          if (method === 'PATCH') {
-            const input = await body(req);
-            store.updateCredential(user.id, credential.id, nameValue(input.name, '表示名'), serviceValue(input.service ?? credential.service));
-            return send(200, { ok: true });
-          }
-          if (method === 'DELETE') {
-            const input = await body(req);
-            if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
-            const adapter = credential.adapter ? adapters.get(credential.adapter) : null, canRevoke = adapter ? (adapter.client.canRevoke?.(store.secret(credential).renewal) ?? adapter.canRevoke !== false) : false;
-            if (disconnects.has(credential.id)) fail(409, 'disconnect_in_progress', '登録を解除しています。');
-            disconnects.add(credential.id);
-            try {
-              // Deleting it here always succeeds; asking the service to revoke is an attempt whose outcome is reported.
-              const previous = store.disconnect(user.id, credential.id);
-              let revoked = null;
-              if (input.revoke && canRevoke) {
-                try { await adapter.client.revoke(store.secret(previous).renewal); revoked = true; }
-                catch { revoked = false; }
-              }
-              store.removeCredential(user.id, credential.id);
-              return send(200, { ok: true, service_revoked: revoked });
-            } finally { disconnects.delete(credential.id); }
-          }
+        const acquisitionRoute = path.match(/^\/api\/acquisitions\/(.+)$/);
+        if (acquisitionRoute && method === 'DELETE') {
+          const acquisition = acquisitionFor(user.id, entryPath(decodeURIComponent(acquisitionRoute[1])));
+          const input = await body(req);
+          if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
+          const adapter = adapters.get(acquisition.adapter);
+          const canRevoke = adapter.client.canRevoke?.(store.acquisitionState(acquisition).renewal) ?? adapter.canRevoke !== false;
+          if (disconnects.has(acquisition.id)) fail(409, 'disconnect_in_progress', '登録を解除しています。');
+          disconnects.add(acquisition.id);
+          try {
+            // Removing it here always succeeds; asking the service to revoke is an attempt whose outcome is reported.
+            const previous = store.disconnect(user.id, acquisition.prefix);
+            let revoked = null;
+            if (input.revoke && canRevoke) {
+              try { await adapter.client.revoke(store.acquisitionState(previous).renewal); revoked = true; }
+              catch { revoked = false; }
+            }
+            store.removeAcquisition(user.id, acquisition.prefix);
+            return send(200, { ok: true, service_revoked: revoked });
+          } finally { disconnects.delete(acquisition.id); }
         }
         if (path === '/api/agents' && method === 'POST') {
           const input = await body(req);
@@ -483,7 +460,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       if (path.startsWith('/v1/')) {
         const agent = actor(req);
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
-        if (path === '/v1/credentials' && method === 'GET') return send(200, { credentials: store.credentials(agent.owner_id).filter(credential => credential.adapter && credential.status !== 'disconnecting').map(runtimeView) });
+        if (path === '/v1/acquisitions' && method === 'GET') return send(200, { acquisitions: store.acquisitions(agent.owner_id).filter(row => row.status !== 'disconnecting').map(runtimeAcquisition) });
         if (path === '/v1/me' && method === 'GET') return send(200, { agent: store.agentDetails(agent) });
         if (path === '/v1/me' && method === 'PATCH') {
           const input = await body(req);
@@ -520,8 +497,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           if (method === 'PUT') {
             rateLimit('entries:' + agent.id, 120);
             const content = await raw(req, ENTRY_MAX);
+            const ifVersion = url.searchParams.has('if_version') ? Number(url.searchParams.get('if_version')) : undefined;
+            if (ifVersion !== undefined && !Number.isInteger(ifVersion)) fail(400, 'invalid_version', '版は整数で指定してください。');
             return send(200, { entry: entries.put(agent.owner_id, { path: target, content, type: req.headers['content-type'],
-              env: url.searchParams.get('env'), filename: url.searchParams.get('filename'), secret: url.searchParams.get('secret') === 'true', keptBy: agent.name }) });
+              env: url.searchParams.get('env'), filename: url.searchParams.get('filename'), secret: url.searchParams.get('secret') === 'true', keptBy: agent.name }, ifVersion) });
           }
           if (method === 'GET') {
             const { row, content } = entries.read(agent.owner_id, target);
@@ -534,35 +513,27 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             return send(200, { ok: true });
           }
         }
-        // What a command receives: the bytes, under the names they were kept with.
+        // What a command receives: the bytes, under the names they were kept with. Anything an acquisition
+        // keeps current is brought up to date first; after that, delivery reads storage and nothing else.
         if (path === '/v1/deliver' && method === 'POST') {
           const input = await body(req);
           rateLimit('issue:' + agent.id, 30);
-          store.recordIssuance(agent, null);
-          return send(200, { delivery: entries.deliver(agent.owner_id, input.paths) });
-        }
-        // Delivery reads storage and nothing else. When an adapter stands behind the credential it is given a
-        // chance first to check or refresh it, which writes a new record; what is handed over is that record.
-        const route = path.match(/^\/v1\/credentials\/([a-f0-9-]{36})\/deliver$/);
-        if (route && method === 'POST') {
-          await body(req);
-          store.requireAccess(agent, route[1]);
-          let credential = credentialFor(agent.owner_id, route[1]);
-          rateLimit('issue:' + agent.id, 30);
-          if (credential.adapter) {
-            const adapter = adapters.get(credential.adapter);
-            await adapter.client.token(records.clientStore(adapter.id), credential, false);
-            actor(req);
-            store.requireAccess(agent, credential.id);
-            stillCurrent(credential);
-            credential = credentialFor(agent.owner_id, credential.id);
+          const paths = Array.isArray(input.paths) ? input.paths : [];
+          for (const path of paths) store.requireAccess(agent, entryPath(path));
+          const pending = new Map();
+          for (const path of paths) {
+            const acquisition = store.acquisitionFor(agent.owner_id, entryPath(path));
+            if (acquisition && acquisition.status === 'connected') pending.set(acquisition.prefix, acquisition);
           }
-          const record = store.secret(credential);
-          if (record.expires_at !== null && !(Number.isFinite(record.expires_at) && record.expires_at > Date.now())) fail(502, 'service_response', '認証情報の有効期限を確認できませんでした。');
-          store.recordIssuance(agent, record.expires_at);
-          return send(200, { credential: { id: credential.id, adapter: credential.adapter || null, service: credential.service, name: credential.name, label: record.facts.label || credential.name },
-            expires_at: record.expires_at, expires_in: record.expires_at === null ? null : Math.max(0, Math.floor((record.expires_at - Date.now()) / 1000)),
-            delivery: records.delivery(record), ...(record.facts.key_info ? { key_info: record.facts.key_info } : {}) });
+          for (const acquisition of pending.values()) await acquisitions.refresh(acquisition);
+          actor(req);
+          for (const path of paths) store.requireAccess(agent, entryPath(path));
+          const expiry = [...pending.values()].map(acquisition => store.acquisitionState(store.acquisition(agent.owner_id, acquisition.prefix)).expires_at).filter(value => value !== null);
+          for (const value of expiry) if (!(Number.isFinite(value) && value > Date.now())) fail(502, 'service_response', '有効期限を確認できませんでした。');
+          const expires_at = expiry.length ? Math.min(...expiry) : null;
+          store.recordIssuance(agent, expires_at);
+          return send(200, { delivery: entries.deliver(agent.owner_id, paths), expires_at,
+            expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
         }
       }
       fail(404, 'not_found', '指定された操作が見つかりません。');

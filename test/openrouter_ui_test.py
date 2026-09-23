@@ -69,26 +69,24 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.route('https://openrouter.ai/auth?*', consent)
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
     expect(page.get_by_text('登録をキャンセルしました。', exact=True)).to_be_visible()
-    assert cli('credentials')['credentials'] == []
+    assert cli('list')['entries'] == []
     authorization['deny'] = False
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
-    expect(page.get_by_text('期限の指定なし', exact=True)).to_be_visible()
-    expect(page.get_by_text('$0.00 · リセットなし', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
         if width != 320:
             page.screenshot(path=str(shots / ('approval-desktop.png' if width == 1280 else 'approval-mobile.png')), full_page=True)
-    account = cli('credentials')['credentials'][0]
-    assert account['variables'] == ['OPENROUTER_API_KEY']
-    command = subprocess.run(['node', 'src/runtime.mjs', 'exec', account['id'], '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
+    kept = cli('list')['entries']
+    assert [entry['env'] for entry in kept] == ['OPENROUTER_API_KEY']
+    command = subprocess.run(['node', 'src/runtime.mjs', 'exec', kept[0]['path'], '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
     page.goto(args.base, wait_until='networkidle')
     section = page.locator('[aria-labelledby="openrouter-title"]')
     assert 'Gmail' not in section.inner_text() and 'メール' not in section.inner_text()
-    expect(section.get_by_role('button', name='登録し直す', exact=True)).to_have_count(0)
+    expect(section.get_by_role('button', name='接続し直す', exact=True)).to_have_count(0)
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
@@ -102,28 +100,24 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     review(page)
     dialog.get_by_role('button', name='失効させる', exact=True).click()
     expect(dialog).not_to_be_visible()
-    cli('credentials', success=False)
+    cli('list', success=False)
 
-    section.get_by_role('button', name='登録を解除', exact=True).click()
-    expect(dialog.get_by_text('すでにAIに渡した値と、OpenRouter側のキーは残ります。', exact=False)).to_be_visible()
-    expect(dialog.get_by_role('link', name='OpenRouterでキーを確認・削除する', exact=False)).to_have_attribute('href', account['management_url'])
+    section.get_by_role('button', name='接続を解除', exact=True).click()
+    expect(dialog.get_by_text('OpenRouter側のキーは残ります。', exact=False)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'disconnect-mobile.png'), full_page=True)
-    dialog.get_by_role('button', name='登録を解除', exact=True).click()
+    dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(section.get_by_text('未登録', exact=True)).to_be_visible()
+    expect(page.locator('[aria-labelledby="openrouter-title"]')).to_have_count(0)
 
-    # Root management uses the same adapter-driven flow, with no Gmail-only copy.
-    page.get_by_role('button', name='OpenRouterを登録', exact=True).click()
-    expect(dialog.get_by_label('表示名 任意', exact=True)).to_have_value('')
+    # Starting one from the dashboard uses the same flow, and asks for nothing the service decides.
+    page.get_by_role('button', name='OpenRouterで接続', exact=True).first.click()
     review(page)
     authorization['code'] = 'second'
-    dialog.get_by_label('表示名 任意', exact=True).fill('<img src=x onerror="window.xss=1">')
     dialog.get_by_role('button', name='OpenRouterで接続', exact=True).click()
     expect(page.get_by_text('認証情報を登録しました。', exact=True)).to_be_visible()
-    assert section.locator('img').count() == 0 and page.evaluate('window.xss === undefined')
     review(page)
     assert not errors, errors
     context.close()
     browser.close()
-    print('OpenRouter browser flow passed: login, PKCE return/cancellation, explicit approval, budget/expiry/cost copy, CLI resume, native credential injection, runtime revocation, manual key deletion notice, root connection, mobile, XSS. No paid API calls.')
+    print('OpenRouter browser flow passed: login, PKCE return/cancellation, explicit approval, CLI resume, delivery into a command, runtime revocation, manual key deletion notice, starting one from the dashboard, mobile. No paid API calls.')

@@ -13,25 +13,25 @@ const execute = (args, env) => new Promise((resolve, reject) => {
   child.once('error', reject); child.once('exit', (code) => resolve({ code, out, err }));
 });
 
-test('Runtime discovers native Gmail and injects credentials only into selected process', async (t) => {
+test('The runtime hands what is kept to the selected process only', async (t) => {
   const f = await fixture(t), account = await f.credential(), runtime = await f.agent();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-runtime-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'runtime-key'); await writeFile(keyPath, runtime.token, { mode: 0o600 });
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
-  const listed = await execute(['credentials'], env);
+  const listed = await execute(['connections'], env);
   assert.equal(listed.code, 0, listed.err);
-  assert.equal(JSON.parse(listed.out).credentials[0].id, account.id);
+  assert.equal(JSON.parse(listed.out).acquisitions[0].prefix, account.prefix);
   assert.doesNotMatch(listed.out, /google-access|refresh_token/);
-  const run = await execute(['exec', account.id, '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal-readonly"||process.env.GMAIL_ACCOUNT_EMAIL!=="personal@example.test"||process.env.FOUNDATION_RUNTIME_KEY_FILE) process.exit(2);console.log("runtime-ready")'], env);
+  const run = await execute(['exec', account.prefix + '/google-oauth-access-token', account.prefix + '/gmail-account-email', '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal-readonly"||process.env.GMAIL_ACCOUNT_EMAIL!=="personal@example.test"||process.env.FOUNDATION_RUNTIME_KEY_FILE) process.exit(2);console.log("runtime-ready")'], env);
   assert.equal(run.code, 0, run.err);
   assert.equal(run.out.trim(), 'runtime-ready');
   assert.doesNotMatch(run.err, /google-access|refresh_token/);
   await f.request('/api/agents/' + runtime.id, { method: 'DELETE' });
-  const revoked = await execute(['exec', account.id, '--', process.execPath, '-e', 'console.log("must-not-run")'], env);
+  const revoked = await execute(['exec', account.prefix + '/google-oauth-access-token', account.prefix + '/gmail-account-email', '--', process.execPath, '-e', 'console.log("must-not-run")'], env);
   assert.equal(revoked.code, 1);
   assert.doesNotMatch(revoked.out, /must-not-run/);
   await chmod(keyPath, 0o644);
-  const unsafe = await execute(['credentials'], env);
+  const unsafe = await execute(['connections'], env);
   assert.equal(unsafe.code, 1);
   assert.match(unsafe.err, /private/);
 });
@@ -44,7 +44,7 @@ test('CLI bootstraps and resumes approval without printing or manually copying a
   assert.equal(adapters.code, 0, adapters.err);
   assert.equal(JSON.parse(adapters.out).adapters[0].id, 'gmail.readonly');
   await assert.rejects(stat(keyPath), { code: 'ENOENT' });
-  const missing = await execute(['credentials'], env);
+  const missing = await execute(['connections'], env);
   assert.equal(missing.code, 1);
   assert.match(missing.err, /connect/);
   const connected = await execute(['connect', '--name', 'dev-us のAI'], env);
@@ -53,13 +53,13 @@ test('CLI bootstraps and resumes approval without printing or manually copying a
   assert.equal(row.status, 'pending'); assert.equal(row.kind, 'approve');
   assert.equal((await stat(keyPath)).mode & 0o777, 0o600);
   assert.ok(!connected.out.includes(secret));
-  const pending = await execute(['credentials'], env);
+  const pending = await execute(['connections'], env);
   assert.equal(pending.code, 1); assert.match(pending.err, /not_approved/);
   const approval = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code } });
   assert.equal(approval.status, 200, approval.text);
-  assert.equal((await execute(['credentials'], env)).code, 0);
-  assert.equal(JSON.parse((await execute(['credentials'], env)).out).credentials[0].id, account.id);
-  const run = await execute(['exec', account.id, '--', process.execPath, '-e', 'if(process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("connected")'], env);
+  assert.equal((await execute(['connections'], env)).code, 0);
+  assert.equal(JSON.parse((await execute(['connections'], env)).out).acquisitions[0].prefix, account.prefix);
+  const run = await execute(['exec', account.prefix + '/google-oauth-access-token', account.prefix + '/gmail-account-email', '--', process.execPath, '-e', 'if(process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("connected")'], env);
   assert.equal(run.code, 0, run.err);
   assert.equal(run.out.trim(), 'connected');
   assert.equal((await readFile(keyPath, 'utf8')).trim(), secret);
@@ -70,7 +70,7 @@ test('CLI bootstraps and resumes approval without printing or manually copying a
   assert.equal(JSON.parse(next.out).request.confirmation_code, undefined);
   const cancelled = await execute(['cancel'], env);
   assert.equal(JSON.parse(cancelled.out).request.status, 'cancelled');
-  assert.equal((await execute(['credentials'], env)).code, 0, 'cancelling a registration request does not revoke the key');
+  assert.equal((await execute(['connections'], env)).code, 0, 'cancelling a registration request does not revoke the key');
 });
 
 test('CLI never overwrites or follows an existing insecure key file', async t => {
@@ -89,24 +89,24 @@ test('CLI never overwrites or follows an existing insecure key file', async t =>
   assert.equal(await readFile(existing, 'utf8'), 'do-not-overwrite');
 });
 
-test('credentials answers 401 until approval, then lists what the owner registered', async t => {
+test('connections answers 401 until approval, then lists what Foundation keeps current', async t => {
   const f = await fixture(t), account = await f.credential();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-poll-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'runtime-key') };
   const connected = await execute(['connect'], env), row = JSON.parse(connected.out).request;
-  const before = await execute(['credentials'], env);
+  const before = await execute(['connections'], env);
   assert.equal(before.code, 1); assert.match(before.err, /not_approved/);
   const raw = await execute(['request'], env);
   assert.equal(raw.code, 0, raw.err); assert.equal(JSON.parse(raw.out).request.id, row.id); assert.deepEqual(JSON.parse(raw.out).request.events, []);
   await f.request('/connect/' + row.id, { anonymous: true });
   assert.equal(JSON.parse((await execute(['request'], env)).out).request.events[0].event, 'page_opened');
   await f.request('/api/access-requests/' + row.id + '/deny', { method: 'POST', data: {} });
-  const denied = await execute(['credentials'], env);
+  const denied = await execute(['connections'], env);
   assert.equal(denied.code, 1); assert.match(denied.err, /not_approved/, 'denial is indistinguishable from waiting');
   const again = JSON.parse((await execute(['connect'], env)).out).request;
   await f.request('/api/access-requests/' + again.id + '/approve', { method: 'POST', data: { confirmationCode: again.confirmation_code } });
-  const after = await execute(['credentials'], env);
-  assert.equal(after.code, 0, after.err); assert.equal(JSON.parse(after.out).credentials[0].id, account.id);
+  const after = await execute(['connections'], env);
+  assert.equal(after.code, 0, after.err); assert.equal(JSON.parse(after.out).acquisitions[0].prefix, account.prefix);
   assert.doesNotMatch(connected.out + before.err + after.out, /fdn_|google-access|refresh_token/);
 });
 
@@ -114,7 +114,7 @@ test('--help prints the agent procedure, and when a server is reachable, which a
   const f = await fixture(t);
   const offline = await execute(['--help'], { FOUNDATION_URL: '' });
   assert.equal(offline.code, 0, offline.err);
-  assert.match(offline.out, /Run `foundation adapters` for the available adapters/);
+  assert.match(offline.out, /Run `foundation adapters` for what this server can obtain itself/);
   assert.match(offline.out, /give the owner the verification_uri and the confirmation_code/);
   assert.doesNotMatch(offline.out, /foundation connect --adapter gmail/);
   const online = await execute(['--help'], { FOUNDATION_URL: f.base });
@@ -173,5 +173,5 @@ test('FOUNDATION_AGENT gives each AI its own key file and default name; whoami a
   assert.equal(other.code, 1); assert.match(other.err, /not_approved/);
   const left = await execute(['leave'], { ...base, FOUNDATION_AGENT: 'claude' });
   assert.equal(left.code, 0, left.err); assert.match(left.out, /revoked/);
-  assert.equal((await execute(['credentials'], { ...base, FOUNDATION_AGENT: 'claude' })).code, 1);
+  assert.equal((await execute(['connections'], { ...base, FOUNDATION_AGENT: 'claude' })).code, 1);
 });

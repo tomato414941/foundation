@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { createApp } from '../src/app.mjs';
 import { fail } from '../src/errors.mjs';
 import { GmailClient, METADATA_SCOPE, READONLY_SCOPE } from '../src/services/gmail.mjs';
-import { gmailReadonly, gmailMetadata } from '../src/adapters.mjs';
+import { Adapters, gmailReadonly, gmailMetadata } from '../src/adapters.mjs';
+import { Acquisitions } from '../src/acquisitions.mjs';
 
 export const KEY = Buffer.alloc(32, 7);
 export const USER_A = '10000000-0000-4000-8000-000000000001';
@@ -57,6 +58,14 @@ export class FakeGmail extends GmailClient {
     throw new Error('Unexpected provider request');
   }
 }
+// A store with one acquisition already in it, for testing a service's client on its own. The client is
+// handed the same narrow view the server gives it: its own shape in, entries out.
+export function acquired(store, adapters, adapterId, { subject, secret, prefix = 'test/account' }) {
+  const acquisitions = new Acquisitions(store, new Adapters(adapters));
+  acquisitions.save(USER_A, adapterId, { subject, secret }, { keptBy: 'test' });
+  const row = () => store.acquisition(USER_A, store.acquisitions(USER_A)[0].prefix);
+  return { acquisitions, row, client: () => acquisitions.clientStore(row()) };
+}
 export async function fixture(t, options = {}) {
   const { gmail = new FakeGmail(), adapters = [gmailReadonly(gmail), gmailMetadata(gmail)], ...rest } = options, auth = options.auth || new FakeAuth();
   const app = createApp({ encryptionKey: KEY, ...rest, auth, adapters });
@@ -84,8 +93,8 @@ export async function fixture(t, options = {}) {
     return response;
   }
   // Gmail's read range is its adapter: gmail.readonly or gmail.metadata.
-  async function start({ name = '個人用', range = 'readonly', credentialId } = {}) {
-    const result = await request('/api/adapters/gmail.' + range + '/connect', { method: 'POST', data: { name, credentialId } });
+  async function start({ range = 'readonly', prefix } = {}) {
+    const result = await request('/api/adapters/gmail.' + range + '/connect', { method: 'POST', data: { prefix } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
@@ -93,11 +102,17 @@ export async function fixture(t, options = {}) {
   async function callback(url, code = 'personal-readonly', extra = {}) {
     return request(new URL(url.searchParams.get('redirect_uri')).pathname + '?state=' + url.searchParams.get('state') + '&code=' + code, extra);
   }
+  // Connects one Gmail account and returns the acquisition, which owns the entries under its prefix.
   async function credential(code = 'personal', range = 'readonly') {
-    const url = await start({ name: code, range });
+    const url = await start({ range });
     const response = await callback(url, code + '-' + range);
     assert.equal(response.headers.get('location'), '/?connection=connected&adapter=gmail.' + range, response.text);
-    return (await request('/api/state')).json.credentials.find((item) => item.subject === code + '@example.test');
+    return (await request('/api/state')).json.acquisitions.find((item) => item.subject === code + '@example.test');
+  }
+  // Everything one acquisition keeps, handed over as a command would receive it.
+  async function deliver(acquisition, options = {}) {
+    const paths = (await request('/api/state')).json.entries.filter(entry => entry.path.startsWith(acquisition.prefix + '/')).map(entry => entry.path);
+    return request('/v1/deliver', { method: 'POST', data: { paths }, ...options });
   }
   // Makes a runtime key known to the owner: the key asks to be approved and the owner types its code.
   async function approveKey(token, name = 'dev-us') {
@@ -112,12 +127,12 @@ export async function fixture(t, options = {}) {
     assert.equal(result.status, 201, result.text);
     return result.json.agent;
   }
-  // Ages a credential past its expiry, in the record storage holds and in the shape its adapter reads back.
-  function expire(credentialId, owner = USER_A) {
-    const credential = app.store.credential(owner, credentialId);
-    const record = app.store.secret(credential), expires_at = Date.now() - 1;
-    app.store.saveSecret(credential, { ...record, expires_at, renewal: { ...record.renewal, expires_at } });
+  // Ages an acquisition past its expiry, in what the store holds and in the shape its adapter reads back.
+  function expire(prefix, owner = USER_A) {
+    const acquisition = app.store.acquisition(owner, prefix);
+    const state = app.store.acquisitionState(acquisition), expires_at = Date.now() - 1;
+    app.store.saveState(acquisition, { ...state, expires_at, renewal: { ...state.renewal, expires_at } });
   }
   if (options.login !== false) await login();
-  return { app, auth, gmail, base, request, login, start, callback, credential, agent, approveKey, expire, cookie: () => cookie };
+  return { app, auth, gmail, base, request, login, start, callback, credential, deliver, agent, approveKey, expire, cookie: () => cookie };
 }
