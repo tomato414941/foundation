@@ -88,7 +88,7 @@ with sync_playwright() as p:
     page.bring_to_front()
     page.evaluate('window.dispatchEvent(new Event("focus"))')
     expect(page.get_by_role("heading", name="預けているもの", exact=True)).to_be_visible()
-    expect(page.get_by_role("button", name="Googleで接続", exact=True).first).to_be_enabled()
+    expect(page.get_by_role("button", name="メールの読み取り", exact=True)).to_be_enabled()
     expect(page.get_by_role("button", name="アクセスキーを追加", exact=True)).to_be_enabled()
     assert page.evaluate("localStorage.length === 0 && sessionStorage.length === 0")
     assert "fdn_session" not in page.evaluate("document.cookie")
@@ -109,13 +109,12 @@ with sync_playwright() as p:
     # Each read range is its own connection; the owner starts the one they want.
     def connect(code, metadata=False):
         authorization["code"] = code
-        row = page.locator(".agent-row").filter(has_text="件名・差出人などの読み取り" if metadata else "メールの読み取り")
-        row.get_by_role("button", name="Googleで接続", exact=True).click()
+        page.locator(".agent-row").filter(has_text="Gmail").get_by_role("button", name="件名・差出人などの読み取り" if metadata else "メールの読み取り", exact=True).click()
         expect(dialog).to_be_visible()
         check_display(page)
         if not metadata:
             page.screenshot(path=str(shots / "connect.png"), full_page=True)
-        dialog.get_by_role("button", name="Googleで接続", exact=False).click()
+        dialog.locator("button[type=submit]").click()
         expect(page.get_by_role("heading", name="預けているもの", exact=True)).to_be_visible()
         expect(page.get_by_text("認証情報を登録しました。", exact=True)).to_be_visible()
         page.wait_for_load_state("networkidle")
@@ -125,11 +124,12 @@ with sync_playwright() as p:
     connect("work-metadata", True)
     # Both sit under one group, named by the paths they were kept at.
     gmail = page.locator('[aria-labelledby="gmail-title"]')
-    expect(gmail.locator(".agent-name h3")).to_have_text(
-        ["personal@example.test", "work@example.test",
-         "gmail/personal-example-test/gmail-account-email", "gmail/personal-example-test/google-oauth-access-token", "gmail/personal-example-test/google-oauth-expires-at",
-         "gmail/work-example-test/gmail-account-email", "gmail/work-example-test/google-oauth-access-token", "gmail/work-example-test/google-oauth-expires-at"])
+    expect(gmail.locator(".agent-name h3")).to_have_text(["personal@example.test", "work@example.test"])
     expect(gmail.get_by_text("件名・差出人などの読み取り", exact=True)).to_be_visible()
+    # What a connection keeps is its own business; the owner opens it only to look.
+    expect(gmail.get_by_text("google-oauth-access-token", exact=True).first).to_be_hidden()
+    gmail.get_by_text("3件の中身", exact=True).first.click()
+    expect(gmail.get_by_text("google-oauth-access-token", exact=True).first).to_be_visible()
 
     def create_runtime(name):
         page.get_by_role("button", name="アクセスキーを追加", exact=True).click()
@@ -170,7 +170,7 @@ with sync_playwright() as p:
     # Cancellation returns a useful message without disclosing provider errors.
     authorization["deny"] = True
     gmail.get_by_role("button", name="接続し直す", exact=True).first.click()
-    dialog.get_by_role("button", name="Googleで接続", exact=False).click()
+    dialog.locator("button[type=submit]").click()
     expect(page.get_by_text("登録をキャンセルしました。", exact=True)).to_be_visible()
     authorization["deny"] = False
 
@@ -188,8 +188,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "disconnect-mobile.png"), full_page=True)
     dialog.get_by_role("button", name="接続を解除", exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(gmail.locator(".agent-name h3")).to_have_text(
-        ["work@example.test", "gmail/work-example-test/gmail-account-email", "gmail/work-example-test/google-oauth-access-token", "gmail/work-example-test/google-oauth-expires-at"])
+    expect(gmail.locator(".agent-name h3")).to_have_text(["work@example.test"])
     assert deliver(paths, token_b).status == 404, "what it kept went with it"
     page.get_by_role("button", name="ログアウト", exact=True).click()
     expect(page.get_by_role("heading", name="ログイン", exact=True)).to_be_visible()

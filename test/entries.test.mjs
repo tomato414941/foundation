@@ -174,50 +174,53 @@ test('The owner reads and removes anything kept, including what the key may not 
   assert.deepEqual((await f.request('/v1/entries', { token, anonymous: true })).json.entries, []);
 });
 
-test('The CLI keeps bytes, hands them to a command, reads them back and drops them', async t => {
+test('The runtime hands what is kept to a command, as bytes and as a file, and nothing else', async t => {
   const { f, token } = await keyed(t);
   const dir = await mkdtemp(join(tmpdir(), 'foundation-entries-cli-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'runtime-key');
   await writeFile(keyPath, token, { mode: 0o600 });
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
 
-  const kept = await run(['put', 'github/token', '--env', 'GH_TOKEN', '--secret', '--type', 'text/plain'], env, secret);
-  assert.equal(kept.code, 0, kept.err);
-  assert.equal(JSON.parse(kept.out.toString()).entry.env, 'GH_TOKEN');
-  assert.doesNotMatch(kept.out.toString(), new RegExp(secret), 'the bytes are never printed');
+  await put(f, token, 'github/token', secret, { env: 'GH_TOKEN', secret: 'true' });
+  const pem = '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN\n-----END PRIVATE KEY-----\n';
+  await put(f, token, 'apple/key', pem, { env: 'APPLE_KEY_PATH', filename: 'AuthKey.p8', secret: 'true' }, 'application/octet-stream');
 
-  const pem = Buffer.from('-----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN\n-----END PRIVATE KEY-----\n');
-  await writeFile(join(dir, 'key.p8'), pem);
-  const file = await run(['put', 'apple/key', '--file', 'AuthKey.p8', '--env', 'APPLE_KEY_PATH', '--secret', '--from', join(dir, 'key.p8')], env);
-  assert.equal(file.code, 0, file.err);
-
-  const script = `const fs=require('fs');if(process.env.GH_TOKEN!==${JSON.stringify(secret)})process.exit(2);if(fs.readFileSync(process.env.APPLE_KEY_PATH,'utf8')!==${JSON.stringify(pem.toString())})process.exit(3);if(!process.env.APPLE_KEY_PATH.endsWith('AuthKey.p8'))process.exit(4);console.log('ready')`;
+  const script = `const fs=require('fs');if(process.env.GH_TOKEN!==${JSON.stringify(secret)})process.exit(2);if(fs.readFileSync(process.env.APPLE_KEY_PATH,'utf8')!==${JSON.stringify(pem)})process.exit(3);if(!process.env.APPLE_KEY_PATH.endsWith('AuthKey.p8'))process.exit(4);if(process.env.FOUNDATION_PATHS!=='github/token,apple/key')process.exit(5);console.log('ready')`;
   const used = await run(['exec', 'github/token', 'apple/key', '--', process.execPath, '-e', script], env);
   assert.equal(used.code, 0, used.err);
   assert.equal(used.out.toString().trim(), 'ready');
+  assert.doesNotMatch(used.out.toString() + used.err, new RegExp(secret));
 
-  const listed = await run(['list', 'github'], env);
-  assert.deepEqual(JSON.parse(listed.out.toString()).entries.map(row => row.path), ['github/token']);
+  // The file it wrote exists only while the command runs.
+  const where = await run(['exec', 'apple/key', '--', process.execPath, '-e', 'console.log(process.env.APPLE_KEY_PATH)'], env);
+  assert.equal(where.code, 0, where.err);
+  const { access } = await import('node:fs/promises');
+  await assert.rejects(access(where.out.toString().trim()));
 
-  await run(['put', 'release/expo-v3', '--type', 'application/json'], env, '{"step":"awaiting"}');
-  const got = await run(['get', 'release/expo-v3'], env);
-  assert.equal(got.out.toString(), '{"step":"awaiting"}');
-  const saved = await run(['get', 'release/expo-v3', '--out', join(dir, 'state.json')], env);
-  assert.equal(saved.code, 0, saved.err);
-  assert.equal(await readFile(join(dir, 'state.json'), 'utf8'), '{"step":"awaiting"}');
-
-  const readSecret = await run(['get', 'github/token'], env);
-  assert.equal(readSecret.code, 1);
-  assert.match(readSecret.err, /write_only/);
-
-  assert.equal((await run(['drop', 'release/expo-v3'], env)).code, 0);
-  assert.deepEqual(JSON.parse((await run(['list'], env)).out.toString()).entries.map(row => row.path), ['apple/key', 'github/token']);
+  // Nothing else is a command: everything the agent can do for itself is left to it.
+  const refused = await run(['list'], env);
+  assert.equal(refused.code, 1);
+  assert.match(refused.err, /connect .* exec/);
 });
 
-test('Storage needs an approved key, and the guide tells an agent it is there', async t => {
+test('Storage needs an approved key, and the guide describes the API an agent calls itself', async t => {
   const f = await fixture(t), token = key();
   assert.equal((await f.request('/v1/entries', { token, anonymous: true })).status, 401);
-  const guide = await run(['--help'], {});
-  assert.match(guide.out.toString(), /foundation put <path> \[--env NAME\]/);
-  assert.match(guide.out.toString(), /foundation exec <path>/);
+  const guide = (await run(['--help'], {})).out.toString();
+  assert.match(guide, /PUT \/v1\/entries\/<path>/);
+  assert.match(guide, /POST \/v1\/deliver/);
+  assert.match(guide, /Nothing here needs a shell/);
+  assert.match(guide, /foundation exec <path>/, 'and the one thing that does need one');
+});
+
+test('An agent that cannot make a secret of its own is issued one, once', async t => {
+  const f = await fixture(t);
+  const asked = await f.request('/v1/access-requests', { method: 'POST', anonymous: true, data: { name: 'an agent with no randomness' } });
+  assert.equal(asked.status, 201, asked.text);
+  assert.match(asked.json.key, /^fdn_[A-Za-z0-9_-]{43}$/);
+  // It is the key: approving the request approves it, and it works from then on.
+  await f.request('/api/access-requests/' + asked.json.request.id + '/approve', { method: 'POST', data: { confirmationCode: asked.json.request.confirmation_code } });
+  assert.equal((await f.request('/v1/me', { token: asked.json.key, anonymous: true })).status, 200);
+  const again = await f.request('/v1/access-requests/current', { token: asked.json.key, anonymous: true });
+  assert.equal(again.json.request.key, undefined, 'never handed out a second time');
 });

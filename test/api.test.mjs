@@ -161,3 +161,13 @@ test('Disconnecting removes what it kept even when the service refuses to revoke
   assert.deepEqual(state.json.entries, [], 'what it kept goes with it');
   assert.deepEqual((await f.request('/v1/acquisitions', { token: agent.token })).json.acquisitions, []);
 });
+
+test('Where the owners are named, nobody else can make themselves one', async t => {
+  const f = await fixture(t, { owners: ['Owner@Example.test'], login: false });
+  const refused = await f.request('/api/auth/link', { method: 'POST', data: { email: 'stranger@example.test' } });
+  assert.equal(refused.status, 403);
+  assert.equal(refused.json.error.code, 'not_invited');
+  assert.equal(f.auth.links.size, 0, 'no link is sent to an address that may not be here');
+  await f.login();
+  assert.equal((await f.request('/api/state')).json.user.email, 'owner@example.test', 'the named owner logs in as before');
+});

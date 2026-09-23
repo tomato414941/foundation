@@ -29,6 +29,7 @@ export function configuration(env = process.env) {
   return {
     dataDir, database, port, bind, encryptionKey, kms, trustedProxies: (env.FOUNDATION_TRUSTED_PROXIES || '').split(',').map(value => value.trim()).filter(Boolean),
     publicOrigin: env.FOUNDATION_PUBLIC_ORIGIN || undefined,
+    owners: (env.FOUNDATION_OWNERS || '').split(',').map(value => value.trim()).filter(Boolean),
     supabase: { url: env.FOUNDATION_SUPABASE_URL || '', key: env.FOUNDATION_SUPABASE_PUBLISHABLE_KEY || '', emailEnabled: env.FOUNDATION_EMAIL_LOGIN_ENABLED === 'true' },
     google: { clientId: env.FOUNDATION_GOOGLE_CLIENT_ID || '', clientSecret: env.FOUNDATION_GOOGLE_CLIENT_SECRET || '' },
     github: { clientId: env.FOUNDATION_GITHUB_CLIENT_ID || '', clientSecret: env.FOUNDATION_GITHUB_CLIENT_SECRET || '' },

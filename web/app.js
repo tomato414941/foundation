@@ -130,29 +130,48 @@ function groups() {
   for (const connection of state.acquisitions || []) group(connection.prefix.split('/')[0]).connections.push(connection);
   return [...found.values()].sort(byName);
 }
-function connectionRow(connection) {
+// What an acquisition keeps is its own business: the owner sees the connection, and opens it only if they
+// want the values themselves. Listing them beside everything else would be showing them the machinery.
+function connectionRow(connection, entries) {
   const warning = connection.status !== 'connected';
+  const until = connection.expiry_known === false ? ' · 有効期限は不明です' : connection.expires_at ? ' · ' + esc(new Date(connection.expires_at).toLocaleString('ja-JP')) + 'まで' : '';
   return `<article class="agent-row"><div class="agent-name"><h3>${esc(connection.label)}</h3><p>${esc(connection.service?.name || '')}の接続 · <span class="${warning ? 'warning-text' : ''}">${esc(statusName(connection.status))}</span></p></div>
-    <div class="agent-permissions"><span class="muted">${esc(connection.access?.name || '')}</span><span class="muted block">Foundationが${esc(connection.entries.length)}件を保管し、更新します${connection.expiry_known === false ? ' · 有効期限は不明です' : connection.expires_at ? ' · ' + esc(new Date(connection.expires_at).toLocaleString('ja-JP')) + 'まで' : ''}</span></div>
+    <div class="agent-permissions"><span class="muted">${esc(connection.access?.name || '')}</span><span class="muted block">Foundationが保管し、更新します${until}</span>
+      <details class="kept-under"><summary>${esc(entries.length)}件の中身</summary><dl>${entries.map(entry => `<div><dt>${esc(entry.path.slice(connection.prefix.length + 1))}</dt><dd>${esc(handedOver(entry))} <button class="text-button" data-action="show-entry" data-path="${esc(entry.path)}">中身を見る</button></dd></div>`).join('')}</dl></details></div>
     <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-prefix="${esc(connection.prefix)}" data-adapter="${esc(connection.adapter)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-prefix="${esc(connection.prefix)}">接続を解除</button></div></article>`;
 }
+// The heading is the path without the group it already sits under, so a name is never read twice.
+const within = path => path.slice(path.indexOf('/') + 1);
 function entryRow(entry, owned) {
-  return `<article class="agent-row"><div class="agent-name"><h3>${esc(entry.path)}</h3><p>${esc(entry.media_type)} · ${esc(kiloBytes(entry.size))}</p></div>
+  return `<article class="agent-row"><div class="agent-name"><h3>${esc(within(entry.path))}</h3><p>${esc(entry.media_type)} · ${esc(kiloBytes(entry.size))}</p></div>
     <div class="agent-permissions"><span class="muted">${esc(handedOver(entry))}</span><span class="muted block">${esc(putBy(entry))} · ${esc(keptWhen(entry.updated_at))}</span></div>
-    <div class="agent-actions"><a class="text-button" href="/api/entries/${encodeURIComponent(entry.path)}" download>中身を見る</a>${owned ? '' : `<button class="text-button danger" data-action="drop-entry" data-path="${esc(entry.path)}">削除</button>`}</div></article>`;
+    <div class="agent-actions"><button class="text-button" data-action="show-entry" data-path="${esc(entry.path)}">中身を見る</button>${owned ? '' : `<button class="text-button danger" data-action="drop-entry" data-path="${esc(entry.path)}">削除</button>`}</div></article>`;
 }
 function groupSection(group) {
   const id = groupId(group.name);
-  const owned = path => group.connections.some(connection => path === connection.prefix || path.startsWith(connection.prefix + '/'));
-  return `<section class="resource-section" aria-labelledby="${id}-title"><div class="section-heading"><div class="section-label"><span class="service-icon">${icon(group.connections[0]?.service?.icon || 'note')}</span><div><h2 id="${id}-title">${esc(group.name)}</h2><p>${esc(group.entries.length)}件</p></div></div></div>
-    <div class="agent-list">${group.connections.map(connectionRow).join('')}${group.entries.map(entry => entryRow(entry, owned(entry.path))).join('')}</div></section>`;
+  const under = connection => group.entries.filter(entry => entry.path === connection.prefix || entry.path.startsWith(connection.prefix + '/'));
+  const owned = new Set(group.connections.flatMap(connection => under(connection).map(entry => entry.path)));
+  const loose = group.entries.filter(entry => !owned.has(entry.path));
+  const count = group.connections.length + loose.length;
+  return `<section class="resource-section" aria-labelledby="${id}-title"><div class="section-heading"><div class="section-label"><span class="service-icon">${icon(group.connections[0]?.service?.icon || 'note')}</span><div><h2 id="${id}-title">${esc(group.name)}</h2><p>${esc(count)}件</p></div></div></div>
+    <div class="agent-list">${group.connections.map(connection => connectionRow(connection, under(connection))).join('')}${loose.map(entry => entryRow(entry, false)).join('')}</div></section>`;
 }
-// The acquisitions this server can perform itself. Everything else arrives through the store.
+// The acquisitions this server can perform itself. One row per service; where a service offers more than one
+// range, the owner chooses between them here rather than meeting the same service twice.
 function connectSection() {
   const available = state.adapters.filter(adapter => adapter.available);
   if (!available.length) return '';
+  const services = new Map();
+  for (const adapter of available) {
+    const name = adapter.service?.name || adapter.label;
+    if (!services.has(name)) services.set(name, { name, icon: adapter.service?.icon || 'key', adapters: [] });
+    services.get(name).adapters.push(adapter);
+  }
+  const row = service => `<article class="agent-row"><div class="agent-name"><h3>${esc(service.name)}</h3><p>${esc(service.adapters.map(adapter => adapter.kind || adapter.access.name).join(' / '))}</p></div>
+    <div class="agent-permissions"><span class="muted">${esc(service.adapters[0].intro)}</span></div>
+    <div class="agent-actions">${service.adapters.map(adapter => `<button class="button secondary" data-action="add-adapter" data-adapter="${esc(adapter.id)}">${icon('plus')} ${esc(service.adapters.length > 1 ? adapter.kind || adapter.access.name : adapter.label)}</button>`).join('')}</div></article>`;
   return `<section class="resource-section" aria-labelledby="connect-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('lock')}</span><div><h2 id="connect-title">接続を追加</h2><p>Foundationが自分で受け取り、更新し続けられるもの</p></div></div></div>
-    <div class="agent-list">${available.map(adapter => `<article class="agent-row"><div class="agent-name"><h3>${esc(adapter.service?.name || adapter.label)}</h3><p>${esc(adapter.kind || adapter.access.name)}</p></div><div class="agent-permissions"><span class="muted">${esc(adapter.access.name)}</span></div><div class="agent-actions"><button class="button secondary" data-action="add-adapter" data-adapter="${esc(adapter.id)}">${icon('plus')} ${esc(adapter.label)}</button></div></article>`).join('')}</div></section>`;
+    <div class="agent-list">${[...services.values()].map(row).join('')}</div></section>`;
 }
 function render() {
   if (!state) return;
@@ -408,6 +427,16 @@ document.addEventListener('click', async (event) => {
     if (action === 'add-adapter') connect(target.dataset.adapter);
     if (action === 'reconnect') connect(target.dataset.adapter, target.dataset.prefix);
     if (action === 'disconnect') disconnect(state.acquisitions.find(item => item.prefix === target.dataset.prefix));
+    if (action === 'show-entry') {
+      const path = target.dataset.path, entry = state.entries.find(item => item.path === path);
+      const readable = /^text\/|^application\/json/.test(entry.media_type);
+      const response = await fetch('/api/entries/' + encodeURIComponent(path), { credentials: 'same-origin', cache: 'no-store' });
+      if (!response.ok) throw new Error('中身を取得できませんでした。');
+      const body = readable
+        ? `<pre class="kept-document">${esc(await response.text())}</pre>`
+        : `<p>この形式は画面で表示できません。</p><a class="button secondary full" href="/api/entries/${encodeURIComponent(path)}" download>ファイルとして保存</a>`;
+      openDialog(`<h2 id="dialog-title">${esc(path)}</h2><p>${esc(putBy(entry))} が ${esc(keptWhen(entry.updated_at))} に保管しました。</p>${body}`);
+    }
     if (action === 'drop-entry') {
       const path = target.dataset.path;
       confirmRemoval(path + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/api/entries/' + encodeURIComponent(path), { method: 'DELETE', data: {} }));

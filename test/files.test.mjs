@@ -86,25 +86,15 @@ test('Presigned URLs match the signature AWS documents for its example request',
   assert.equal(new URL(url).searchParams.get('X-Amz-Signature'), 'aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404');
 });
 
-test('The CLI shares a file, lists what is shared and issues the link again', async t => {
+test('A key publishes a file behind a time-limited URL, lists what it published, and asks for the URL again', async t => {
   const { f, agent } = await withKey(t);
-  const dir = await mkdtemp(join(tmpdir(), 'foundation-files-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
-  const keyPath = join(dir, 'runtime-key'), file = join(dir, 'stack.yaml');
-  await writeFile(keyPath, agent.token, { mode: 0o600 }); await writeFile(file, 'Resources: {}\n');
-  const run = args => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['src/runtime.mjs', ...args], { env: { ...process.env, FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath } });
-    let out = '', err = '';
-    child.stdout.on('data', part => { out += part; }); child.stderr.on('data', part => { err += part; });
-    child.once('error', reject); child.once('exit', code => resolve({ code, out, err }));
-  });
-  const placed = await run(['share', file, '--minutes', '120']);
-  assert.equal(placed.code, 0, placed.err);
-  const result = JSON.parse(placed.out);
-  assert.equal(result.file.content_type, 'text/plain; charset=utf-8');
-  assert.match(result.url, /X-Amz-Expires=7200$/);
-  const listed = await run(['shared']);
-  assert.equal(JSON.parse(listed.out).files[0].id, result.file.id);
-  const linked = await run(['link', result.file.id, '--minutes', '5']);
-  assert.equal(linked.code, 0, linked.err);
-  assert.match(JSON.parse(linked.out).url, /X-Amz-Expires=300$/);
+  const placed = await f.request('/v1/files?' + new URLSearchParams({ name: 'stack.yaml', minutes: '120' }), { method: 'POST', token: agent.token, anonymous: true, raw: 'Resources: {}\n', type: 'text/plain; charset=utf-8' });
+  assert.equal(placed.status, 201, placed.text);
+  assert.equal(placed.json.file.content_type, 'text/plain; charset=utf-8');
+  assert.match(placed.json.url, /X-Amz-Expires=7200$/);
+  const listed = await f.request('/v1/files', { token: agent.token, anonymous: true });
+  assert.equal(listed.json.files[0].id, placed.json.file.id);
+  const again = await f.request('/v1/files/' + placed.json.file.id + '/link', { method: 'POST', token: agent.token, anonymous: true, data: { minutes: 5 } });
+  assert.equal(again.status, 200, again.text);
+  assert.match(again.json.url, /X-Amz-Expires=300$/);
 });
