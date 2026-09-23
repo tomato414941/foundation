@@ -39,7 +39,7 @@ export class AccessRequests {
   //             how it should be handed over, and writes the instructions; Foundation knows nothing else
   // The runtime writes the purpose and guidance; Foundation only frames them as the AI's words, and chooses
   // nothing about the service involved. The runtime decides how long the link stays open (at most a day).
-  create(token, { adapter, store, purpose = '', details, guidance = '', validMinutes = 30 }) {
+  create(token, { adapter, store, purpose = '', guidance = '', validMinutes = 30 }) {
     if (!Number.isInteger(validMinutes) || validMinutes < 1 || validMinutes * 60_000 > MAX_REQUEST_TTL) fail(400, 'invalid_validity', '有効期間は1〜1440分で指定してください。');
     if (typeof guidance !== 'string' || guidance.length > 2000 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(guidance)) fail(400, 'invalid_guidance', '案内は2000文字以内で入力してください。');
     guidance = guidance.replace(/\r\n?/g, '\n').trim();
