@@ -327,7 +327,22 @@ function bindObjects() {
 }
 const siteLink = value => { try { const url = new URL(value); return `<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer"><strong>${esc(url.host)}</strong>${esc(url.pathname === '/' ? '' : url.pathname)} ↗</a>`; } catch { return esc(value); } };
 // Guidance the requesting AI wrote for its owner. Framed as the AI's words; line breaks kept, nothing else interpreted.
-const guidanceBlock = (text) => text ? `<section class="ai-guidance"><h3>依頼元のAIからの案内</h3>${text.split(/\n{2,}/).map(part => `<p>${esc(part).replace(/\n/g, '<br>')}</p>`).join('')}</section>` : '';
+// What the requesting AI wrote for the owner to follow. Lines that start with a number are steps; anything else stays a paragraph.
+function guidanceBlock(text) {
+  const blocks = [];
+  for (const line of (text || '').split('\n')) {
+    const step = line.match(/^\s*\d+\s*[.)．、]\s*(.*)$/), last = blocks.at(-1);
+    if (step) { if (last?.type === 'steps') last.items.push(step[1]); else blocks.push({ type: 'steps', items: [step[1]] }); }
+    else if (!line.trim()) blocks.push({ type: 'gap' });
+    else if (last?.type === 'steps') last.items[last.items.length - 1] += '\n' + line.trim();
+    else if (last?.type === 'text') last.text += '\n' + line;
+    else blocks.push({ type: 'text', text: line });
+  }
+  const lines = value => esc(value).replace(/\n/g, '<br>');
+  const body = blocks.map(block => block.type === 'steps' ? `<ol class="guidance-steps">${block.items.map(item => `<li>${lines(item)}</li>`).join('')}</ol>`
+    : block.type === 'text' ? `<p>${lines(block.text)}</p>` : '').join('');
+  return body ? `<section class="ai-guidance"><h3>依頼元のAIからの案内</h3>${body}</section>` : '';
+}
 const codeComplete = form => /^[0-9a-fA-F]{8}$/.test((form.elements.confirmationCode?.value || '').replace(/[^0-9a-zA-Z]/g, ''));
 function codeField(enabled = true) {
   return `<label for="confirmation-code">確認コード</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="0000-0000" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">AIとの会話に表示されたコードを入力してください。心当たりのない依頼は承認しないでください。</p>`;

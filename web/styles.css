@@ -121,10 +121,14 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .approval-facts { margin: 26px 0; }
 .approval-facts > div { display: grid; grid-template-columns: 94px minmax(0, 1fr); gap: 12px; margin-top: 12px; }
 #confirmation-code { font: 600 20px/1.4 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
-.ai-guidance { margin: 18px 0 0; padding: 14px 16px; border-left: 3px solid #a8c4b1; background: var(--soft); border-radius: 0 8px 8px 0; }
-.ai-guidance h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin-bottom: 8px; }
-.ai-guidance p { font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
-.ai-guidance p + p { margin-top: 8px; }
+.ai-guidance { margin: 18px 0 20px; }
+.ai-guidance h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin-bottom: 10px; }
+.ai-guidance p, .guidance-steps li { font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
+.ai-guidance p + p, .ai-guidance p + .guidance-steps, .guidance-steps + p { margin-top: 10px; }
+.guidance-steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+.guidance-steps li { counter-increment: step; position: relative; padding-left: 36px; }
+.guidance-steps li + li { margin-top: 12px; }
+.guidance-steps li::before { content: counter(step); position: absolute; left: 0; top: 1px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--selected); color: var(--accent); font-size: 14px; font-weight: 600; line-height: 1; }
 .register-body { margin-top: 18px; }
 .setup-links { margin: 14px 0 18px; }
 .declared-field + .declared-field { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
