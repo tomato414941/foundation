@@ -96,7 +96,7 @@ test('A denied request is indistinguishable from waiting, and asking again still
 
 test('--help describes the API, and when a server is reachable, what it can obtain itself', async t => {
   const f = await fixture(t);
-  const offline = await execute(['--help'], { FOUNDATION_URL: '' });
+  const offline = await execute(['--help'], { FOUNDATION_URL: '', XDG_CONFIG_HOME: join(tmpdir(), 'foundation-no-config') });
   assert.equal(offline.code, 0, offline.err);
   assert.match(offline.out, /GET \/v1\/adapters lists what this server can obtain itself/);
   assert.match(offline.out, /Nothing here needs a shell/);
