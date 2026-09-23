@@ -23,11 +23,6 @@ export class Records {
       credential_type: secret.credential_type ?? adapter.credentialType ?? 'oauth2_access_token',
       scopes: secret.scopes, verification: secret.verification });
   }
-  // What a value a key kept itself becomes. No adapter stands behind it, so there is nothing to refresh,
-  // nothing to check, and nothing to revoke: the names it was given are the names it is delivered under.
-  keep(values) {
-    return held({ environment: values, facts: {}, renewal: null, expires_at: null, expiry_known: false, credential_type: 'api_key' });
-  }
   names(record) { return names(record); }
   delivery(record) { return delivery(record); }
   record(credential) { return this.store.secret(credential); }

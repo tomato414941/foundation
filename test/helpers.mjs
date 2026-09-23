@@ -64,8 +64,10 @@ export async function fixture(t, options = {}) {
   t.after(() => app.close());
   const base = 'http://127.0.0.1:' + app.server.address().port;
   let cookie;
-  async function request(path, { method = 'GET', data, token, anonymous = false, headers = {} } = {}) {
-    const response = await fetch(base + path, { method, redirect: 'manual', headers: { ...(!anonymous && cookie ? { cookie } : {}), ...(method !== 'GET' ? { origin: options.publicOrigin || base } : {}), ...(data !== undefined ? { 'content-type': 'application/json' } : {}), ...(token ? { authorization: 'Bearer ' + token } : {}), ...headers }, ...(data !== undefined ? { body: JSON.stringify(data) } : {}) });
+  // `data` is sent as JSON; `raw` is sent as given, with `type` as its content type.
+  async function request(path, { method = 'GET', data, raw, type = 'application/octet-stream', token, anonymous = false, headers = {} } = {}) {
+    const body = raw !== undefined ? raw : data !== undefined ? JSON.stringify(data) : undefined;
+    const response = await fetch(base + path, { method, redirect: 'manual', headers: { ...(!anonymous && cookie ? { cookie } : {}), ...(method !== 'GET' ? { origin: options.publicOrigin || base } : {}), ...(body !== undefined ? { 'content-type': raw !== undefined ? type : 'application/json' } : {}), ...(token ? { authorization: 'Bearer ' + token } : {}), ...headers }, ...(body !== undefined ? { body } : {}) });
     const text = await response.text();
     let json; try { json = JSON.parse(text); } catch {}
     return { status: response.status, json, text, headers: response.headers };

@@ -11,7 +11,7 @@ import { AccessRequests } from './access-requests.mjs';
 import { verificationResult } from './verification.mjs';
 import { Files, FILE_MAX } from './files.mjs';
 import { Records } from './records.mjs';
-import { serviceName, keptValues, documentPath, documentBody, VALUE_BODY_MAX, DOCUMENT_BODY_MAX } from './kept.mjs';
+import { Entries, ENTRY_MAX } from './entries.mjs';
 
 const PUBLIC = new URL('../web/', import.meta.url);
 const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
@@ -47,14 +47,15 @@ async function body(req, max = MAX_BODY) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) fail(400, 'invalid_json', '送信内容を確認してください。');
   return result;
 }
-// A file as sent, bytes untouched.
+// Bytes as they were sent, untouched.
 async function raw(req, max) {
-  if (Number(req.headers['content-length']) > max) fail(413, 'file_too_large', 'ファイルは5MBまでです。');
+  const tooLarge = () => fail(413, 'too_large', `送信できるのは${Math.floor(max / (1024 * 1024))}MBまでです。`);
+  if (Number(req.headers['content-length']) > max) tooLarge();
   const chunks = [];
   let length = 0;
   for await (const chunk of req) {
     length += chunk.length;
-    if (length > max) fail(413, 'file_too_large', 'ファイルは5MBまでです。');
+    if (length > max) tooLarge();
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
@@ -88,6 +89,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   };
   const adapters = new Adapters(adapterList);
   const records = new Records(store, adapters);
+  const entries = new Entries(store, adapters.owned);
   const requests = new AccessRequests(store, adapters);
   const files = new Files(store, fileBackend);
   const logins = new EmailLogins({ now: loginClock });
@@ -148,13 +150,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
     if (!credential) fail(404, 'not_found', '認証情報が見つかりません。');
     return credential;
   }
-  // A value a key kept itself: no adapter, so the routes for keeping values refuse anything else.
-  function keptOnly(ownerId, id) {
-    const credential = credentialFor(ownerId, id);
-    if (credential.adapter) fail(404, 'not_found', '保管された値が見つかりません。');
-    return credential;
-  }
-  const keptView = credential => ({ id: credential.id, service: credential.service, names: credential.names, kept_by: credential.kept_by, created_at: credential.created_at, updated_at: credential.updated_at });
   function stillCurrent(credential) {
     const current = credentialFor(credential.owner_id, credential.id);
     if (current.status !== 'connected' || current.generation !== credential.generation) fail(409, 'connection_changed', '認証情報の状態が変わりました。');
@@ -349,35 +344,19 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       if (path.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(method)) requireOrigin(req, origin);
         const { user, session } = await principal(req);
-        if (path === '/api/state' && method === 'GET') return send(200, { user, credentials: store.credentials(user.id).filter(row => row.adapter).map(ownerView), agents: store.agents(user.id), values: store.credentials(user.id).filter(row => !row.adapter).map(keptView), documents: store.documents(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
+        if (path === '/api/state' && method === 'GET') return send(200, { user, credentials: store.credentials(user.id).map(ownerView), agents: store.agents(user.id), entries: entries.list(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
         // What a key kept is the owner's: they read it, rename the group it sits in, and remove it.
-        const keptRoute = path.match(/^\/api\/values\/([a-f0-9-]{36})$/);
-        if (keptRoute) {
-          if (method === 'GET') return send(200, { values: store.secret(keptOnly(user.id, keptRoute[1])).environment });
-          if (method === 'PATCH') {
-            const input = await body(req);
-            const credential = keptOnly(user.id, keptRoute[1]);
-            store.updateCredential(user.id, credential.id, serviceValue(input.service), serviceValue(input.service));
-            return send(200, { ok: true });
-          }
-          if (method === 'DELETE') {
-            await body(req);
-            keptOnly(user.id, keptRoute[1]);
-            store.removeCredential(user.id, keptRoute[1]);
-            return send(200, { ok: true });
-          }
-        }
-        const keptDocumentRoute = path.match(/^\/api\/documents\/([^/]+)\/([^/]+)$/);
-        if (keptDocumentRoute) {
-          const { collection, name } = documentPath(decodeURIComponent(keptDocumentRoute[1]), decodeURIComponent(keptDocumentRoute[2]));
+        const ownEntry = path.match(/^\/api\/entries\/(.+)$/);
+        if (ownEntry) {
           if (method === 'GET') {
-            const document = store.document(user.id, collection, name);
-            if (!document) fail(404, 'not_found', '記録が見つかりません。');
-            return send(200, { document: { collection, name, body: document.body, kept_by: document.kept_by, updated_at: document.updated_at } });
+            const row = entries.entry(user.id, decodeURIComponent(ownEntry[1]));
+            const content = store.entryContent(row);
+            res.writeHead(200, { 'content-type': row.media_type, 'content-length': content.length, 'content-disposition': `attachment; filename="${row.path.split('/').pop()}"` });
+            return res.end(content);
           }
           if (method === 'DELETE') {
             await body(req);
-            if (!store.removeDocument(user.id, collection, name)) fail(404, 'not_found', '記録が見つかりません。');
+            entries.remove(user.id, decodeURIComponent(ownEntry[1]));
             return send(200, { ok: true });
           }
         }
@@ -537,53 +516,35 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           rateLimit('files:' + agent.id, 20);
           return send(200, await files.link(agent, fileRoute[1], input.minutes));
         }
-        // Storage on its own: a key keeps values under names a command will read, with no adapter and no
-        // approval behind them. They land in the same place as everything else the owner keeps.
-        if (path === '/v1/vault' && method === 'GET') return send(200, { values: store.credentials(agent.owner_id).filter(row => !row.adapter).map(keptView) });
-        if (path === '/v1/vault' && method === 'POST') {
-          const input = await body(req, VALUE_BODY_MAX);
-          rateLimit('vault:' + agent.id, 60);
-          const values = keptValues(input.values, adapters.owned);
-          const id = store.register(agent.owner_id, { service: serviceName(input.service), name: serviceName(input.service), names: Object.keys(values), kept_by: agent.name }, records.keep(values));
-          return send(201, { value: keptView(credentialFor(agent.owner_id, id)) });
-        }
-        const valueRoute = path.match(/^\/v1\/vault\/([a-f0-9-]{36})$/);
-        if (valueRoute && method === 'PUT') {
-          const input = await body(req, VALUE_BODY_MAX);
-          rateLimit('vault:' + agent.id, 60);
-          const credential = keptOnly(agent.owner_id, valueRoute[1]);
-          const values = keptValues(input.values, adapters.owned);
-          store.saveSecret(credential, records.keep(values), Object.keys(values));
-          return send(200, { value: keptView(credentialFor(agent.owner_id, credential.id)) });
-        }
-        if (valueRoute && method === 'DELETE') {
-          await body(req);
-          keptOnly(agent.owner_id, valueRoute[1]);
-          store.removeCredential(agent.owner_id, valueRoute[1]);
-          return send(200, { ok: true });
-        }
-        // Documents: the same storage, for what the key reads back whole rather than hands to a command.
-        if (path === '/v1/documents' && method === 'GET') return send(200, { documents: store.documents(agent.owner_id, url.searchParams.get('collection') ?? undefined) });
-        const documentRoute = path.match(/^\/v1\/documents\/([^/]+)\/([^/]+)$/);
-        if (documentRoute) {
-          const { collection, name } = documentPath(decodeURIComponent(documentRoute[1]), decodeURIComponent(documentRoute[2]));
-          if (method === 'GET') {
-            const document = store.document(agent.owner_id, collection, name);
-            if (!document) fail(404, 'not_found', '記録が見つかりません。');
-            const { body: content, owner_id: _owner, ...row } = document;
-            return send(200, { document: { ...row, body: content } });
-          }
+        // Storage: bytes at a path the key chose, with no adapter, no request and no approval behind them.
+        // Foundation never reads them; what it was told at writing time is all it knows.
+        if (path === '/v1/entries' && method === 'GET') return send(200, { entries: entries.list(agent.owner_id, url.searchParams.get('prefix') ?? undefined) });
+        const entryRoute = path.match(/^\/v1\/entries\/(.+)$/);
+        if (entryRoute) {
+          const target = decodeURIComponent(entryRoute[1]);
           if (method === 'PUT') {
-            const input = await body(req, DOCUMENT_BODY_MAX);
-            rateLimit('documents:' + agent.id, 120);
-            store.writeDocument(agent.owner_id, { collection, name, body: documentBody(input.body), keptBy: agent.name });
-            return send(200, { document: store.documents(agent.owner_id, collection).find(row => row.name === name) });
+            rateLimit('entries:' + agent.id, 120);
+            const content = await raw(req, ENTRY_MAX);
+            return send(200, { entry: entries.put(agent.owner_id, { path: target, content, type: req.headers['content-type'],
+              env: url.searchParams.get('env'), filename: url.searchParams.get('filename'), secret: url.searchParams.get('secret') === 'true', keptBy: agent.name }) });
+          }
+          if (method === 'GET') {
+            const { row, content } = entries.read(agent.owner_id, target);
+            res.writeHead(200, { 'content-type': row.media_type, 'content-length': content.length });
+            return res.end(content);
           }
           if (method === 'DELETE') {
             await body(req);
-            if (!store.removeDocument(agent.owner_id, collection, name)) fail(404, 'not_found', '記録が見つかりません。');
+            entries.remove(agent.owner_id, target);
             return send(200, { ok: true });
           }
+        }
+        // What a command receives: the bytes, under the names they were kept with.
+        if (path === '/v1/deliver' && method === 'POST') {
+          const input = await body(req);
+          rateLimit('issue:' + agent.id, 30);
+          store.recordIssuance(agent, null);
+          return send(200, { delivery: entries.deliver(agent.owner_id, input.paths) });
         }
         // Delivery reads storage and nothing else. When an adapter stands behind the credential it is given a
         // chance first to check or refresh it, which writes a new record; what is handed over is that record.

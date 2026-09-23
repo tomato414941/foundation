@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Vault } from './crypto.mjs';
 import { fail } from './errors.mjs';
+import { ENTRY_COUNT_MAX, ENTRY_TOTAL_MAX } from './entries.mjs';
 
 export const digest = (value) => createHash('sha256').update(value).digest('hex');
 const now = () => new Date().toISOString();
@@ -22,8 +23,9 @@ const SCHEMA_VERSION = 1;
 // agents: access keys the owner approved; each may use every credential of its owner.
 // access_requests: one request from a runtime, as it asked and as it went. adapter is empty when the request only asks
 //   for the key to be approved.
-// documents: what a key wrote down and can read back whole: the state of something it is in the middle of,
-//   or anything else it needs to survive the conversation. One document per collection and name.
+// entries: everything kept, whatever it is. Bytes at a path, sealed; media_type is what the writer said
+//   they are and is never checked; env and filename are how a command receives them; readable is 0 when
+//   they may only be delivered. Nothing here interprets the content.
 // files: what a key placed in the file space. The bytes live in the backend under the id; a row is never changed.
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -50,12 +52,13 @@ const SCHEMA = `
     size INTEGER NOT NULL, sha256 TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
   );
   CREATE INDEX files_owner ON files(owner_id, created_at);
-  CREATE TABLE documents (
-    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, collection TEXT NOT NULL, name TEXT NOT NULL,
-    body TEXT NOT NULL, size INTEGER NOT NULL, kept_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-    UNIQUE(owner_id, collection, name)
+  CREATE TABLE entries (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, path TEXT NOT NULL, media_type TEXT NOT NULL,
+    size INTEGER NOT NULL, env TEXT, filename TEXT, readable INTEGER NOT NULL,
+    content TEXT NOT NULL, kept_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    UNIQUE(owner_id, path)
   );
-  CREATE INDEX documents_owner ON documents(owner_id, collection, name);
+  CREATE INDEX entries_owner ON entries(owner_id, path);
   PRAGMA user_version = ${SCHEMA_VERSION};
 `;
 
@@ -147,31 +150,35 @@ export class Store {
     });
   }
   removeCredential(ownerId, id) { return this.db.prepare('DELETE FROM credentials WHERE owner_id=? AND id=?').run(ownerId, id).changes > 0; }
-  // Documents: the same storage, for what is read back whole rather than handed to a command.
-  documents(ownerId, collection) {
-    const where = collection === undefined ? '' : ' AND collection=?', args = collection === undefined ? [ownerId] : [ownerId, collection];
-    return this.db.prepare(`SELECT id, collection, name, size, kept_by, created_at, updated_at FROM documents WHERE owner_id=?${where} ORDER BY collection, name`).all(...args);
+  // Storage: bytes at a path. Listing never opens one; only reading and delivering do.
+  entries(ownerId, prefix) {
+    const columns = 'path, media_type, size, env, filename, readable, kept_by, created_at, updated_at';
+    return prefix === undefined
+      ? this.db.prepare(`SELECT ${columns} FROM entries WHERE owner_id=? ORDER BY path`).all(ownerId)
+      : this.db.prepare(`SELECT ${columns} FROM entries WHERE owner_id=? AND (path=? OR path LIKE ?) ORDER BY path`).all(ownerId, prefix, prefix.replaceAll('%', '\\%').replaceAll('_', '\\_') + '/%');
   }
-  document(ownerId, collection, name) {
-    const row = this.db.prepare('SELECT * FROM documents WHERE owner_id=? AND collection=? AND name=?').get(ownerId, collection, name);
-    return row ? { ...row, body: this.vault.open(row.body, `document:${ownerId}:${row.id}`) } : undefined;
-  }
-  writeDocument(ownerId, { collection, name, body, keptBy }) {
+  entry(ownerId, path) { return this.db.prepare('SELECT * FROM entries WHERE owner_id=? AND path=?').get(ownerId, path); }
+  entryContent(row) { return this.vault.openBytes(row.content, `entry:${row.owner_id}:${row.id}`); }
+  usage(ownerId) { return this.db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(size),0) AS bytes FROM entries WHERE owner_id=?').get(ownerId); }
+  writeEntry(ownerId, entry) {
     return this.transaction(() => {
-      const stamp = now(), existing = this.db.prepare('SELECT id FROM documents WHERE owner_id=? AND collection=? AND name=?').get(ownerId, collection, name);
-      const size = Buffer.byteLength(JSON.stringify(body));
+      const stamp = now(), existing = this.entry(ownerId, entry.path);
+      const { count, bytes } = this.usage(ownerId);
+      if (!existing && count >= ENTRY_COUNT_MAX) fail(409, 'entry_limit', `保管できるのは${ENTRY_COUNT_MAX}件までです。使わないものを消してください。`);
+      if (bytes - (existing?.size ?? 0) + entry.content.length > ENTRY_TOTAL_MAX) fail(409, 'storage_full', '保管できる合計は20MBまでです。使わないものを消してください。');
+      const id = existing?.id ?? randomUUID();
+      const sealed = this.vault.sealBytes(entry.content, `entry:${ownerId}:${id}`);
       if (existing) {
-        this.db.prepare('UPDATE documents SET body=?, size=?, kept_by=?, updated_at=? WHERE id=?').run(this.vault.seal(body, `document:${ownerId}:${existing.id}`), size, keptBy, stamp, existing.id);
-        return existing.id;
+        this.db.prepare('UPDATE entries SET media_type=?, size=?, env=?, filename=?, readable=?, content=?, kept_by=?, updated_at=? WHERE id=?')
+          .run(entry.media_type, entry.content.length, entry.env, entry.filename, entry.readable, sealed, entry.kept_by, stamp, id);
+      } else {
+        this.db.prepare('INSERT INTO entries (id,owner_id,path,media_type,size,env,filename,readable,content,kept_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+          .run(id, ownerId, entry.path, entry.media_type, entry.content.length, entry.env, entry.filename, entry.readable, sealed, entry.kept_by, stamp, stamp);
       }
-      if (this.documents(ownerId).length >= 500) fail(409, 'document_limit', '保管できる記録は500件までです。');
-      const id = randomUUID();
-      this.db.prepare('INSERT INTO documents (id,owner_id,collection,name,body,size,kept_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)')
-        .run(id, ownerId, collection, name, this.vault.seal(body, `document:${ownerId}:${id}`), size, keptBy, stamp, stamp);
-      return id;
+      return this.entries(ownerId, entry.path)[0];
     });
   }
-  removeDocument(ownerId, collection, name) { return this.db.prepare('DELETE FROM documents WHERE owner_id=? AND collection=? AND name=?').run(ownerId, collection, name).changes > 0; }
+  removeEntry(ownerId, path) { return this.db.prepare('DELETE FROM entries WHERE owner_id=? AND path=?').run(ownerId, path).changes > 0; }
   agents(ownerId) {
     return this.db.prepare('SELECT id,name,created_at,last_used_at,issued_until,issued_nonexpiring FROM agents WHERE owner_id=? ORDER BY created_at,id').all(ownerId);
   }

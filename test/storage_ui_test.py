@@ -27,11 +27,11 @@ def review(page):
         assert phrase not in text, phrase
 
 
-with tempfile.TemporaryDirectory(prefix='foundation-kept-ui-') as key_dir, sync_playwright() as p:
+with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sync_playwright() as p:
     env = {**os.environ, 'FOUNDATION_URL': args.base, 'FOUNDATION_RUNTIME_KEY_FILE': key_dir + '/runtime-key'}
 
     def cli(*command, stdin=None):
-        result = subprocess.run(['node', 'src/runtime.mjs', *command], env=env, capture_output=True, text=True, timeout=15, input=stdin)
+        result = subprocess.run(['node', 'src/runtime.mjs', *command], env=env, capture_output=True, text=True, timeout=15, input=stdin or '')
         assert result.returncode == 0, result.stderr
         assert SECRET not in result.stdout + result.stderr
         return json.loads(result.stdout)
@@ -52,38 +52,30 @@ with tempfile.TemporaryDirectory(prefix='foundation-kept-ui-') as key_dir, sync_
 
     # Both panels say so when the key has kept nothing.
     page.goto(args.base, wait_until='networkidle')
-    expect(page.locator('#kept-title')).to_have_text('AIが預けた値')
-    expect(page.locator('#documents-title')).to_have_text('AIの記録')
-    expect(page.get_by_text('AIが預けた値はありません。', exact=True)).to_be_visible()
+    expect(page.locator('#kept-title')).to_have_text('AIが預けたもの')
+    expect(page.get_by_text('AIが預けたものはありません。', exact=True)).to_be_visible()
     review(page)
 
-    # The key keeps a value and writes a document, with no request and no approval.
-    cli('keep', '--service', 'GitHub', '--value', 'GH_TOKEN=' + SECRET)
-    cli('write', 'release/expo-v3', stdin=json.dumps({'step': 'レビュー待ち', 'pull_request': 42}))
+    # The key keeps two things, with no request and no approval: one handed to a command, one only read back.
+    cli('put', 'github/token', '--env', 'GH_TOKEN', '--secret', '--type', 'text/plain', stdin=SECRET)
+    cli('put', 'release/expo-v3', '--type', 'application/json', stdin=json.dumps({'step': 'レビュー待ち'}))
     page.reload(wait_until='networkidle')
 
     kept = page.locator('[aria-labelledby="kept-title"]')
-    expect(kept.get_by_role('heading', name='GitHub', exact=True)).to_be_visible()
-    expect(kept.get_by_text('GH_TOKEN', exact=True)).to_be_visible()
-    expect(kept.get_by_text('dev-us のAI', exact=False)).to_be_visible()
-    assert SECRET not in page.locator('body').inner_text(), 'the value itself is not on the page until asked for'
+    expect(kept.get_by_role('heading', name='github/token', exact=True)).to_be_visible()
+    expect(kept.get_by_text('GH_TOKEN として渡す', exact=True)).to_be_visible()
+    expect(kept.get_by_role('heading', name='release/expo-v3', exact=True)).to_be_visible()
+    expect(kept.get_by_text('渡さない', exact=True)).to_be_visible()
+    expect(kept.get_by_text('dev-us のAI', exact=False).first).to_be_visible()
+    assert SECRET not in page.locator('body').inner_text(), 'what is kept is never on the page itself'
 
-    documents = page.locator('[aria-labelledby="documents-title"]')
-    expect(documents.get_by_role('heading', name='release / expo-v3', exact=True)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'kept-desktop.png'), full_page=True)
 
-    # The owner looks inside each.
-    kept.get_by_role('button', name='中身を見る', exact=True).click()
+    # The owner can fetch anything they keep, including what the key itself may not read back.
+    opened = page.request.get(args.base + '/api/entries/github%2Ftoken')
+    assert opened.status == 200 and opened.text() == SECRET
     dialog = page.get_by_role('dialog')
-    expect(dialog.get_by_text(SECRET, exact=True)).to_be_visible()
-    review(page)
-    dialog.get_by_role('button', name='閉じる', exact=True).click()
-
-    documents.get_by_role('button', name='中身を見る', exact=True).click()
-    expect(dialog.get_by_text('レビュー待ち', exact=False)).to_be_visible()
-    review(page)
-    dialog.get_by_role('button', name='閉じる', exact=True).click()
 
     for width in [390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
@@ -93,19 +85,19 @@ with tempfile.TemporaryDirectory(prefix='foundation-kept-ui-') as key_dir, sync_
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # Removing one takes it away from the key too.
-    documents.get_by_role('button', name='削除', exact=True).click()
-    expect(dialog.get_by_role('heading', name='release / expo-v3 を削除しますか？', exact=True)).to_be_visible()
+    kept.get_by_role('button', name='削除', exact=True).last.click()
+    expect(dialog.get_by_role('heading', name='release/expo-v3 を削除しますか？', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(page.get_by_text('AIの記録はありません。', exact=True)).to_be_visible()
-    assert cli('documents')['documents'] == []
+    assert [row['path'] for row in cli('list')['entries']] == ['github/token']
 
     kept.get_by_role('button', name='削除', exact=True).click()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert cli('values')['values'] == []
+    expect(page.get_by_text('AIが預けたものはありません。', exact=True)).to_be_visible()
+    assert cli('list')['entries'] == []
     review(page)
     assert not errors, errors
     context.close()
     browser.close()
-    print('Kept storage screens passed: both panels, what a key kept with no request, looking inside, and removal reaching the key.')
+    print('Storage screen passed: what a key kept with no request, how each is handed over, fetching it as the owner, and removal reaching the key.')
