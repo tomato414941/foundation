@@ -12,7 +12,7 @@ const parse = row => ({ ...row, readable: row.readable === 1 });
 export const ACQUISITION_LIMIT = 50;
 const entryBinding = row => `entry:${row.owner_id}:${row.id}`;
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 // entries: everything Foundation keeps, whatever it is. Bytes at a path, sealed and bound to this owner and
 //   this row. media_type is what the writer said they are and is never checked. env, filename and session are
 //   how a command receives them, settled when they were written. readable is 0 when they may only be delivered.
@@ -20,6 +20,22 @@ const SCHEMA_VERSION = 1;
 // acquisitions: the entries under `prefix` are obtained and kept current by Foundation itself, through one
 //   adapter, for one subject at that service. state holds what the adapter needs to refresh them, sealed.
 //   Every other entry has no row here and is simply what was put there.
+// Steps from one shape to the next. A database is only ever one version behind at a time, and each step
+// adds what the next version expects; nothing that already holds data is rewritten.
+const STEPS = {
+  2: `
+    CREATE TABLE products (
+      id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL, last_used_at TEXT
+    );
+    CREATE TABLE rooms (
+      id TEXT PRIMARY KEY, product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      external_id TEXT NOT NULL, created_at TEXT NOT NULL,
+      UNIQUE(product_id, external_id)
+    );
+  `,
+};
+
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE agents (
@@ -47,6 +63,15 @@ const SCHEMA = `
     kept_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     UNIQUE(owner_id, prefix), UNIQUE(owner_id, adapter, subject)
   );
+  CREATE TABLE products (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL, last_used_at TEXT
+  );
+  CREATE TABLE rooms (
+    id TEXT PRIMARY KEY, product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    external_id TEXT NOT NULL, created_at TEXT NOT NULL,
+    UNIQUE(product_id, external_id)
+  );
   CREATE INDEX acquisitions_owner ON acquisitions(owner_id, prefix);
   CREATE INDEX entries_owner ON entries(owner_id, path);
   PRAGMA user_version = ${SCHEMA_VERSION};
@@ -64,11 +89,16 @@ export class Store {
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
     const empty = !this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'metadata'").get();
     // Only two files are acceptable: one this version made, and one that is new. Anything else is left untouched.
+    const behind = !empty && version >= 1 && version < SCHEMA_VERSION && [...Array(SCHEMA_VERSION - version)].every((_, step) => STEPS[version + step + 1]);
     const mine = version === SCHEMA_VERSION && !empty, fresh = version === 0 && empty;
-    if (!mine && !fresh) { this.db.close(); throw new Error('This database was not created by this version of Foundation. Start from a new database file.'); }
+    if (!mine && !fresh && !behind) { this.db.close(); throw new Error('This database was not created by this version of Foundation. Start from a new database file.'); }
     try {
       this.transaction(() => {
         if (fresh) this.db.exec(SCHEMA);
+        if (behind) {
+          for (let next = version + 1; next <= SCHEMA_VERSION; next++) this.db.exec(STEPS[next]);
+          this.db.exec('PRAGMA user_version = ' + SCHEMA_VERSION);
+        }
         const check = this.db.prepare("SELECT value FROM metadata WHERE name='key_check'").get();
         if (check) this.vault.open(check.value, 'key_check');
         else this.db.prepare('INSERT INTO metadata VALUES (?, ?)').run('key_check', this.vault.seal(true, 'key_check'));
@@ -190,6 +220,38 @@ export class Store {
       this.removeUnder(ownerId, prefix);
       return this.db.prepare('DELETE FROM acquisitions WHERE owner_id=? AND prefix=?').run(ownerId, prefix).changes > 0;
     });
+  }
+  // A product that embeds Foundation: it holds rooms on behalf of its own users, and is billed for them.
+  // Its own key never reaches a room's contents; it can only make rooms and see what they use.
+  addProduct(ownerId, name) {
+    if (this.products(ownerId).length >= 20) fail(409, 'product_limit', '登録できる製品は20件までです。');
+    const id = randomUUID(), token = `fdnp_${randomBytes(32).toString('base64url')}`;
+    this.db.prepare('INSERT INTO products (id,owner_id,name,token_hash,created_at) VALUES (?,?,?,?,?)').run(id, ownerId, name, digest(token), now());
+    return { ...this.products(ownerId).find(product => product.id === id), token };
+  }
+  products(ownerId) {
+    return this.db.prepare('SELECT id,name,created_at,last_used_at FROM products WHERE owner_id=? ORDER BY created_at,id').all(ownerId);
+  }
+  removeProduct(ownerId, id) {
+    return this.db.prepare('DELETE FROM products WHERE owner_id=? AND id=?').run(ownerId, id).changes > 0;
+  }
+  product(token) {
+    if (typeof token !== 'string' || !/^fdnp_[A-Za-z0-9_-]{43}$/.test(token)) return;
+    const row = this.db.prepare('SELECT * FROM products WHERE token_hash=?').get(digest(token));
+    if (row) this.db.prepare('UPDATE products SET last_used_at=? WHERE id=?').run(now(), row.id);
+    return row;
+  }
+  // One room per user of that product. The room id is what everything else already calls owner_id.
+  room(productId, externalId) {
+    const found = this.db.prepare('SELECT * FROM rooms WHERE product_id=? AND external_id=?').get(productId, externalId);
+    if (found) return found;
+    if (this.rooms(productId).length >= 10_000) fail(409, 'room_limit', '作成できる部屋の上限に達しました。');
+    const id = randomUUID();
+    this.db.prepare('INSERT INTO rooms (id,product_id,external_id,created_at) VALUES (?,?,?,?)').run(id, productId, externalId, now());
+    return this.db.prepare('SELECT * FROM rooms WHERE id=?').get(id);
+  }
+  rooms(productId) {
+    return this.db.prepare('SELECT id,external_id,created_at FROM rooms WHERE product_id=? ORDER BY created_at,id').all(productId);
   }
   agents(ownerId) {
     return this.db.prepare('SELECT id,name,created_at,last_used_at,issued_until,issued_nonexpiring FROM agents WHERE owner_id=? ORDER BY created_at,id').all(ownerId);
