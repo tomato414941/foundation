@@ -12,7 +12,7 @@ const parse = row => ({ ...row, readable: row.readable === 1 });
 export const ACQUISITION_LIMIT = 50;
 const entryBinding = row => `entry:${row.owner_id}:${row.id}`;
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 // secrets: what the agent may not read, kept so that a command can be given it. Bytes at a path, sealed and bound to this owner and
 //   this row. media_type is what the writer said they are and is never checked. env, filename and session are
 //   how a command receives them, settled when they were written. readable is 0 when they may only be delivered.
@@ -25,6 +25,11 @@ const SCHEMA_VERSION = 3;
 const STEPS = {
   // Named for what it is: a value the agent may not read, kept so a command can be given it. The sealing
   // binding still says `entry:` because it is part of the ciphertext of every row already written.
+  // The name a command receives something under belongs to the command, so it is said at delivery.
+  4: `
+    ALTER TABLE secrets DROP COLUMN env;
+    ALTER TABLE secrets DROP COLUMN filename;
+  `,
   3: `
     ALTER TABLE entries RENAME TO secrets;
   `,
@@ -57,7 +62,7 @@ const SCHEMA = `
   CREATE INDEX access_requests_token ON access_requests(token_hash, created_at);
   CREATE TABLE secrets (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, path TEXT NOT NULL, media_type TEXT NOT NULL,
-    size INTEGER NOT NULL, env TEXT, filename TEXT, session TEXT, readable INTEGER NOT NULL,
+    size INTEGER NOT NULL, session TEXT, readable INTEGER NOT NULL,
     content TEXT NOT NULL, kept_by TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     UNIQUE(owner_id, path)
@@ -126,7 +131,7 @@ export class Store {
   }
   // Storage. Listing never opens anything; only reading and delivering do.
   secrets(ownerId, prefix) {
-    const columns = 'path, media_type, size, env, filename, session, readable, kept_by, version, created_at, updated_at';
+    const columns = 'path, media_type, size, session, readable, kept_by, version, created_at, updated_at';
     return (prefix === undefined
       ? this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? ORDER BY path`).all(ownerId)
       : this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? AND (path=? OR path LIKE ?) ORDER BY path`).all(ownerId, prefix, prefix.replaceAll('%', '\\%').replaceAll('_', '\\_') + '/%')).map(parse);
@@ -149,24 +154,23 @@ export class Store {
       const id = existing?.id ?? randomUUID();
       const sealed = this.vault.sealBytes(entry.content, `entry:${ownerId}:${id}`);
       if (existing) {
-        this.db.prepare('UPDATE secrets SET media_type=?, size=?, env=?, filename=?, session=?, readable=?, content=?, kept_by=?, version=version+1, updated_at=? WHERE id=?')
-          .run(entry.media_type, entry.content.length, entry.env, entry.filename, entry.session ?? null, entry.readable, sealed, entry.kept_by, stamp, id);
+        this.db.prepare('UPDATE secrets SET media_type=?, size=?, session=?, readable=?, content=?, kept_by=?, version=version+1, updated_at=? WHERE id=?')
+          .run(entry.media_type, entry.content.length, entry.session ?? null, entry.readable, sealed, entry.kept_by, stamp, id);
       } else {
-        this.db.prepare('INSERT INTO secrets (id,owner_id,path,media_type,size,env,filename,session,readable,content,kept_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
-          .run(id, ownerId, entry.path, entry.media_type, entry.content.length, entry.env, entry.filename, entry.session ?? null, entry.readable, sealed, entry.kept_by, stamp, stamp);
+        this.db.prepare('INSERT INTO secrets (id,owner_id,path,media_type,size,session,readable,content,kept_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+          .run(id, ownerId, entry.path, entry.media_type, entry.content.length, entry.session ?? null, entry.readable, sealed, entry.kept_by, stamp, stamp);
       }
       return this.secrets(ownerId, entry.path)[0];
     });
   }
   // The name and the way it is handed over are the owner's to change; the bytes are not touched, and the
   // seal is bound to the row rather than the path, so moving one does not make it unreadable.
-  renameSecret(ownerId, path, { path: to, env, filename, session }) {
+  renameSecret(ownerId, path, { path: to }) {
     return this.transaction(() => {
       const row = this.secret(ownerId, path);
       if (!row) return undefined;
       if (to !== path && this.secret(ownerId, to)) fail(409, 'path_taken', 'その名前はすでに使われています。');
-      this.db.prepare('UPDATE secrets SET path=?, env=?, filename=?, session=?, version=version+1, updated_at=? WHERE id=?')
-        .run(to, env, filename, session ?? null, now(), row.id);
+      this.db.prepare('UPDATE secrets SET path=?, version=version+1, updated_at=? WHERE id=?').run(to, now(), row.id);
       return this.secrets(ownerId, to)[0];
     });
   }

@@ -67,7 +67,16 @@ async function main() {
     return;
   }
   const separatorAt = args.indexOf('--'), command = separatorAt >= 0 ? args.slice(separatorAt + 1) : [];
-  const paths = action === 'exec' && separatorAt > 0 ? args.slice(0, separatorAt) : [];
+  // Each thing to hand over is a path, optionally under the name the command expects it as:
+  //   exec aws/access-key-id -- …                     the name comes from the path
+  //   exec GH_TOKEN=github/token -- …                  the command decides what to call it
+  //   exec KEY_PATH=apple/key:AuthKey.p8 -- …          it arrives as a file, and the name holds its path
+  const paths = action === 'exec' && separatorAt > 0 ? args.slice(0, separatorAt).map(value => {
+    const at = value.indexOf('='), named = at > 0 ? value.slice(at + 1) : value;
+    const colon = named.lastIndexOf(':');
+    const path = colon > 0 ? named.slice(0, colon) : named, filename = colon > 0 ? named.slice(colon + 1) : undefined;
+    return { path, ...(at > 0 ? { as: value.slice(0, at) } : {}), ...(filename ? { filename } : {}) };
+  }) : [];
   const named = action === 'connect' ? args.indexOf('--name') : -1;
   let call;
   if (action === 'connect') {
@@ -83,8 +92,8 @@ async function main() {
     const content = parsed.values.from !== undefined ? await readFile(parsed.values.from) : parsed.values.json !== undefined ? Buffer.from(parsed.values.json) : method === 'GET' ? undefined : Buffer.from('{}');
     call = { method, target: parsed.positionals[1], body: content,
       type: parsed.values.type || (parsed.values.from !== undefined ? 'application/octet-stream' : 'application/json') };
-  } else if (!(action === 'exec' && paths.length && new Set(paths).size === paths.length && command.length)) {
-    throw new Error('Usage: connect [--name <name>] | exec <path> [<path> ...] -- <command> [args...] | api <method> </path> [--json <body>] [--from <file>]');
+  } else if (!(action === 'exec' && paths.length && new Set(paths.map(item => item.path)).size === paths.length && command.length)) {
+    throw new Error('Usage: connect [--name <name>] | exec [<NAME>=]<path> [...] -- <command> [args...] | api <method> </path> [--json <body>] [--from <file>]');
   }
   const url = new URL(process.env.FOUNDATION_URL || '');
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('FOUNDATION_URL must be an HTTPS origin (HTTP is allowed only on localhost).');
@@ -128,7 +137,7 @@ async function main() {
   for (const file of delivery.files) {
     if (typeof file.env !== 'string' || typeof file.filename !== 'string' || typeof file.content !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(file.filename) || file.filename.startsWith('.')) throw new Error('Foundation described an invalid file.');
   }
-  environment.FOUNDATION_PATHS = paths.join(',');
+  environment.FOUNDATION_PATHS = paths.map(item => item.path).join(',');
   // Files exist in a private directory for exactly as long as the command runs.
   let secretDir;
   if (delivery.files.length) {

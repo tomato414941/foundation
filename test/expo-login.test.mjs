@@ -52,7 +52,7 @@ test('Logging in through a registration request completes it and delivers a type
   const result = await f.loginExpo(input); assert.equal(result.status, 200, result.text); safeResponse(result);
   assert.equal(result.json.request.status, 'approved');
   const listed = await f.request('/v1/secrets', { token }); safeResponse(listed);
-  assert.deepEqual(listed.json.secrets.map(entry => [entry.env, entry.session]), [[null, 'expo']], 'the session reaches the command as Expo login state, not a variable');
+  assert.deepEqual(listed.json.secrets.map(entry => entry.session), ['expo'], 'the session reaches the command as Expo login state, not a variable');
   const issued = await credential(f, result.json.prefix, token);
   assert.equal(issued.status, 200, issued.text);
   assert.deepEqual(issued.json.delivery.environment, {}); assert.equal(issued.json.expires_at, null);

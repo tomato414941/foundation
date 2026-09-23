@@ -105,7 +105,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_text('personal@example.test', exact=False)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'request-approved.png'), full_page=True)
-    kept = [entry['path'] for entry in cli('api', 'GET', '/v1/secrets')['secrets'] if entry['env'] == 'GOOGLE_OAUTH_ACCESS_TOKEN']
+    kept = [entry['path'] for entry in cli('api', 'GET', '/v1/secrets')['secrets'] if entry['path'].endswith('google-oauth-access-token')]
     command = subprocess.run(['node', 'src/runtime.mjs', 'exec', kept[0], '--', 'node', '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 

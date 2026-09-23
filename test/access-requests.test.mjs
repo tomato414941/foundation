@@ -45,7 +45,7 @@ test('A new key asks only to be approved: no access before approval, the same pr
   assert.doesNotMatch(approved.text, /fdn_|google-access|refresh_token|token_hash/);
   const listed = await usable(f, token);
   assert.deepEqual(listed.json.acquisitions.map(a => a.prefix), [saved.prefix]);
-  assert.deepEqual(listed.json.acquisitions[0].secrets.map(entry => entry.env).sort(), ['GMAIL_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_ACCESS_TOKEN', 'GOOGLE_OAUTH_EXPIRES_AT']);
+  assert.deepEqual(listed.json.acquisitions[0].secrets.map(entry => entry.path.split('/').pop()).sort(), ['gmail-account-email', 'google-oauth-access-token', 'google-oauth-expires-at']);
   const delivered = await f.deliver(saved, { token, anonymous: true });
   assert.equal(delivered.status, 200);
   assert.equal(delivered.json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal-readonly');
@@ -225,7 +225,7 @@ test('A second adapter uses the same request and delivery APIs without any Gmail
   const delivered = await f.request('/v1/deliver', { method: 'POST', token, data: { paths: f.app.store.secrets(USER_A, saved.prefix).map(entry => entry.path) } });
   assert.deepEqual(delivered.json.delivery.environment, { NOTES_TOKEN: 'notes-access' });
   const listed = (await f.request('/v1/acquisitions', { token })).json.acquisitions[0];
-  assert.deepEqual(listed.secrets.map(entry => entry.env), ['NOTES_TOKEN']); assert.equal(listed.api.documentation_url, 'https://notes.example.test/docs');
+  assert.deepEqual(listed.secrets.map(entry => entry.path.split('/').pop()), ['notes-token']); assert.equal(listed.api.documentation_url, 'https://notes.example.test/docs');
 });
 
 test('The approval page never receives the confirmation code; entry is normalized and locked after repeated mistakes', async t => {

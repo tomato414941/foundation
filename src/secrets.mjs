@@ -38,8 +38,13 @@ export function mediaType(value = 'application/octet-stream') {
   return value;
 }
 
-// How the bytes reach a command, declared when they are written. Delivery never consults anything else,
-// so everything it needs is decided here, once.
+// The name a command receives something under belongs to the command, not to what is kept: `aws` reads
+// AWS_ACCESS_KEY_ID whatever Foundation calls the value. So the caller names it at delivery, and when it
+// says nothing the last segment of the path is used, which is where the name came from in the first place.
+export function variableFor(path) {
+  const leaf = path.split('/').pop().replace(/[^A-Za-z0-9]+/g, '_').toUpperCase();
+  return /^[A-Z][A-Z0-9_]*$/.test(leaf) ? leaf : null;
+}
 export function delivery({ env, filename, reserved = new Set() }) {
   if (env === undefined || env === null || env === '') {
     if (filename) fail(400, 'invalid_delivery', 'ファイルとして渡すには、パスを受け取る変数名も指定してください。');
@@ -62,14 +67,12 @@ export function deliverable(content, { env, filename }) {
 }
 
 export class Secrets {
-  constructor(store, reserved = new Set()) { this.store = store; this.reserved = reserved; }
+  constructor(store) { this.store = store; }
   list(ownerId, prefix) { return this.store.secrets(ownerId, prefix === undefined ? undefined : String(prefix)); }
   // Writing the same path again replaces what is there, including how it is delivered.
-  put(ownerId, { path, content, type, env, filename, secret, keptBy }, ifVersion) {
-    const declared = delivery({ env, filename, reserved: this.reserved });
+  put(ownerId, { path, content, type, secret, keptBy }, ifVersion) {
     if (content.length > SECRET_MAX) fail(413, 'secret_too_large', '1件あたり1MBまでです。');
-    deliverable(content, declared);
-    return this.store.writeSecret(ownerId, { path: secretPath(path), content, media_type: mediaType(type), ...declared, session: null, readable: secret ? 0 : 1, kept_by: keptBy }, ifVersion);
+    return this.store.writeSecret(ownerId, { path: secretPath(path), content, media_type: mediaType(type), session: null, readable: secret ? 0 : 1, kept_by: keptBy }, ifVersion);
   }
   at(ownerId, path) {
     const row = this.store.secret(ownerId, secretPath(path));
@@ -82,11 +85,9 @@ export class Secrets {
     return { row, content: this.store.secretContent(row) };
   }
   // What it is called and how it reaches a command, changed without the value being handed back.
-  rename(ownerId, path, { path: to, env, filename }) {
-    const row = this.at(ownerId, path);
-    const declared = delivery({ env, filename, reserved: this.reserved });
-    if (row.session && (declared.env || declared.filename)) fail(409, 'invalid_delivery', 'ログイン状態として渡すものには変数名を付けられません。');
-    const moved = this.store.renameSecret(ownerId, path, { path: secretPath(to ?? path), ...declared, session: row.session });
+  rename(ownerId, path, { path: to }) {
+    this.at(ownerId, path);
+    const moved = this.store.renameSecret(ownerId, path, { path: secretPath(to ?? path) });
     if (!moved) fail(404, 'not_found', '保管されたものが見つかりません。');
     return moved;
   }
@@ -94,12 +95,15 @@ export class Secrets {
     if (!this.store.removeSecret(ownerId, secretPath(path))) fail(404, 'not_found', '保管されたものが見つかりません。');
   }
   // What a command receives. Foundation reads only what it was told at writing time.
-  deliver(ownerId, paths) {
-    if (!Array.isArray(paths) || paths.length < 1 || paths.length > 16) fail(400, 'invalid_paths', '渡すものを1〜16件で指定してください。');
+  // Each thing asked for is named by the caller, or by its own path when the caller says nothing.
+  deliver(ownerId, asked) {
+    const wanted = (Array.isArray(asked) ? asked : []).map(item => typeof item === 'string' ? { path: item } : item);
+    if (!wanted.length || wanted.length > 16) fail(400, 'invalid_paths', '渡すものを1〜16件で指定してください。');
     const environment = {}, files = [], taken = new Map();
     let session = null;
-    for (const path of paths) {
-      const row = this.at(ownerId, path);
+    for (const item of wanted) {
+      if (!item || typeof item !== 'object' || typeof item.path !== 'string') fail(400, 'invalid_paths', '渡すものはパス、または {path, as} で指定してください。');
+      const row = this.at(ownerId, item.path);
       const content = this.store.secretContent(row);
       // A session is handed to the command as a tool's own login state. It takes no variable name.
       if (row.session) {
@@ -107,11 +111,18 @@ export class Secrets {
         session = { kind: row.session, value: JSON.parse(content.toString('utf8')) };
         continue;
       }
-      if (!row.env) fail(409, 'not_delivered', `${row.path} は渡す先が決まっていません。変数名を決めて保管し直してください。`);
-      if (taken.has(row.env)) fail(409, 'name_conflict', `${taken.get(row.env)} と ${row.path} が同じ変数名 ${row.env} を使います。どちらかにしてください。`);
-      taken.set(row.env, row.path);
-      if (row.filename) files.push({ env: row.env, filename: row.filename, content: content.toString('base64'), encoding: 'base64' });
-      else environment[row.env] = content.toString('utf8');
+      const name = item.as ?? variableFor(row.path);
+      if (!name) fail(400, 'no_variable', `${row.path} から変数名を導けません。渡すときに as で指定してください。`);
+      if (!validEnvName(name)) fail(400, 'invalid_env', '変数名は英大文字・数字・下線で指定してください。');
+      if (taken.has(name)) fail(409, 'name_conflict', `${taken.get(name)} と ${row.path} が同じ変数名 ${name} を使います。どちらかを as で変えてください。`);
+      taken.set(name, row.path);
+      if (item.filename !== undefined && item.filename !== null && item.filename !== '') {
+        if (typeof item.filename !== 'string' || !SEGMENT.test(item.filename) || item.filename.startsWith('.')) fail(400, 'invalid_filename', 'ファイル名は英数字で始まり、64文字までです。');
+        files.push({ env: name, filename: item.filename, content: content.toString('base64'), encoding: 'base64' });
+      } else {
+        deliverable(content, { env: name, filename: null });
+        environment[name] = content.toString('utf8');
+      }
     }
     return { environment, files, ...(session?.kind === 'expo' ? { expo_session: session.value } : {}) };
   }
@@ -119,9 +130,8 @@ export class Secrets {
 
 // What an AI asks its owner to put into storage. Foundation holds no knowledge of the service involved:
 // the AI says where it goes, how it should be handed over, and writes the instructions the owner follows.
-export function declaration(input, reserved = new Set()) {
+export function declaration(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'invalid_declaration', '保管するものの申告が必要です。');
-  const declared = delivery({ env: input.env, filename: input.filename, reserved });
   let site;
   if (input.site !== undefined && input.site !== '') {
     try { site = new URL(input.site); } catch { fail(400, 'invalid_site', '作成ページはhttpsのURLで指定してください。'); }
@@ -129,5 +139,5 @@ export function declaration(input, reserved = new Set()) {
   }
   if (typeof input.label !== 'string' || !input.label.trim() || input.label.trim().length > 60 || /[\x00-\x1f\x7f<>]/.test(input.label)) fail(400, 'invalid_label', '何を入れてもらうかを1〜60文字で指定してください。');
   if (input.multiline !== undefined && typeof input.multiline !== 'boolean') fail(400, 'invalid_declaration', '複数行かどうかは true か false で指定してください。');
-  return { path: secretPath(input.path), ...declared, secret: input.secret !== false, label: input.label.trim(), site: site?.href ?? '', multiline: input.multiline === true, type: mediaType(input.type) };
+  return { path: secretPath(input.path), secret: input.secret !== false, label: input.label.trim(), site: site?.href ?? '', multiline: input.multiline === true, type: mediaType(input.type ?? 'text/plain') };
 }

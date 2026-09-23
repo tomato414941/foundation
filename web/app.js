@@ -204,10 +204,12 @@ async function refresh() {
 // Everything the owner keeps is one list, grouped by the first segment of its path. A row says where it sits,
 // what the writer said it is, how it reaches a command, and who put it there. Foundation read none of it.
 const keptWhen = value => new Date(value).toLocaleString('ja-JP');
-const handedOver = entry => entry.session ? 'ログイン状態として渡す' : entry.filename ? `ファイル ${entry.filename} として渡す (${entry.env})` : entry.env ? `${entry.env} として渡す` : '渡さない';
+// The name a command receives it under is chosen when it is handed over; the path is where it comes from by default.
+const handedOver = entry => entry.session ? 'ログイン状態として渡す' : variableFor(entry.path) ? `${variableFor(entry.path)} として渡す` : '名前を指定して渡す';
 const kiloBytes = size => size < 1024 ? size + ' バイト' : size < 1024 * 1024 ? Math.round(size / 1024) + ' KB'
   : size < 1024 * 1024 * 1024 ? Math.round(size / (1024 * 1024)) + ' MB' : (size / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 const putBy = entry => entry.kept_by || 'あなた';
+const variableFor = path => { const leaf = path.split('/').pop().replace(/[^A-Za-z0-9]+/g, '_').toUpperCase(); return /^[A-Z][A-Z0-9_]*$/.test(leaf) ? leaf : null; };
 const groupId = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'g-' + [...name].map(char => char.codePointAt(0).toString(36)).join('');
 const statusName = status => ({ connected: '利用できます', reconnect_required: '接続し直しが必要です', disconnecting: '解除しています' }[status] || '確認が必要です');
 // Each group holds the secrets whose path starts with its name, and any connection that keeps some of them current.
@@ -237,7 +239,7 @@ const within = path => path.slice(path.indexOf('/') + 1);
 function secretRow(entry, owned) {
   return `<article class="agent-row"><div class="agent-name"><h3>${esc(within(entry.path))}</h3><p>${esc(entry.media_type)} · ${esc(kiloBytes(entry.size))}</p></div>
     <div class="agent-permissions"><span class="muted">${esc(handedOver(entry))}</span><span class="muted block">${esc(putBy(entry))} · ${esc(keptWhen(entry.updated_at))}</span></div>
-    <div class="agent-actions"><button class="text-button" data-action="show-secret" data-path="${esc(entry.path)}">中身を見る</button>${owned ? '' : `<button class="text-button" data-action="edit-secret" data-path="${esc(entry.path)}">名前と渡し方</button><button class="text-button danger" data-action="drop-secret" data-path="${esc(entry.path)}">削除</button>`}</div></article>`;
+    <div class="agent-actions"><button class="text-button" data-action="show-secret" data-path="${esc(entry.path)}">中身を見る</button>${owned ? '' : `<button class="text-button" data-action="edit-secret" data-path="${esc(entry.path)}">名前を変える</button><button class="text-button danger" data-action="drop-secret" data-path="${esc(entry.path)}">削除</button>`}</div></article>`;
 }
 function groupSection(group) {
   const id = groupId(group.name);
@@ -373,7 +375,7 @@ function renderRequest() {
 // Foundation shows only where it will go and how it will be handed over.
 function renderStore(row, shell, expiry) {
   const asked = row.store;
-  const handedOver = asked.filename ? `AIが動かすコマンドの中だけに ${asked.filename} というファイルとして現れます（場所は ${asked.env} が指します）` : asked.env ? `AIが動かすコマンドの中だけに ${asked.env} として現れます` : 'コマンドには渡されません';
+  const handedOver = variableFor(asked.path) ? `AIが動かすコマンドの中だけに ${variableFor(asked.path)} として現れます` : 'AIが名前を指定して、コマンドの中だけで使います';
   const field = asked.multiline
     ? `<textarea id="stored-value" name="content" rows="6" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>`
     : `<input id="stored-value" name="content" type="password" required maxlength="16384" autocomplete="off" spellcheck="false">`;
@@ -550,15 +552,12 @@ function removeAgent(agent) {
 // The name and the way it reaches a command, changed without the value ever being handed back.
 function editSecret(entry) {
   if (!entry) return;
-  openDialog(`<h2 id="dialog-title">名前と渡し方</h2><p>中身はそのままです。AIがこれを指すときの名前と、コマンドの中での現れ方を変えられます。</p>
+  openDialog(`<h2 id="dialog-title">名前を変える</h2><p>中身はそのままです。AIがこれを指すときの名前を変えられます。</p>
     <form><label for="secret-path">名前</label><input id="secret-path" name="path" required maxlength="200" value="${esc(entry.path)}" autocomplete="off" spellcheck="false">
-    <label for="secret-env">コマンドの中での名前</label><input id="secret-env" name="env" maxlength="64" value="${esc(entry.env || '')}" placeholder="渡さないなら空のまま" autocomplete="off" spellcheck="false">
-    <label for="secret-filename">ファイルとして渡すときのファイル名</label><input id="secret-filename" name="filename" maxlength="64" value="${esc(entry.filename || '')}" placeholder="ファイルにしないなら空のまま" autocomplete="off" spellcheck="false">
-    <p class="permission-note">AIがすでにこの名前を使っている場合、変えると動かなくなることがあります。</p>
+    <p class="permission-note">AIがすでにこの名前を使っている場合、変えると動かなくなることがあります。コマンドの中での名前も、既定ではこの名前から作られます。</p>
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">変更する</button></form>`);
   bindForm(async (form) => {
-    await api('/api/secrets/' + encodeURIComponent(entry.path), { method: 'PATCH', data: {
-      path: form.get('path').trim(), env: form.get('env').trim() || null, filename: form.get('filename').trim() || null } });
+    await api('/api/secrets/' + encodeURIComponent(entry.path), { method: 'PATCH', data: { path: form.get('path').trim() } });
     closeDialog(); await refresh(); toast('変更しました。');
   });
 }
