@@ -22,69 +22,7 @@ const SCHEMA_VERSION = 10;
 //   Every other entry has no row here and is simply what was put there.
 // Steps from one shape to the next. A database is only ever one version behind at a time, and each step
 // adds what the next version expects; nothing that already holds data is rewritten.
-const STEPS = {
-  // What a row here is: a key, the secret a caller holds and what its owner decided about it. A key not yet
-  // approved asks through a request of its own; asking for approval was never a request for something to keep.
-  // Approvals still open are dropped with the columns only they used: each lasts a day at most, and asking again works.
-  10: `
-    ALTER TABLE agents RENAME TO keys;
-    CREATE TABLE key_requests (
-      id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, name TEXT NOT NULL, confirmation_code TEXT NOT NULL,
-      confirmation_attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, owner_id TEXT, key_id TEXT,
-      status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
-    );
-    CREATE INDEX key_requests_token ON key_requests(token_hash, created_at);
-    DELETE FROM access_requests WHERE adapter IS NULL AND details = '[]';
-    ALTER TABLE access_requests DROP COLUMN confirmation_code;
-    ALTER TABLE access_requests DROP COLUMN confirmation_attempts;
-    ALTER TABLE access_requests RENAME COLUMN agent_id TO key_id;
-  `,
-  // Holding stores on behalf of another product's users was built before that relationship was decided.
-  9: `
-    DROP TABLE rooms;
-    DROP TABLE products;
-  `,
-  // Named for what it is: a value the agent may not read, kept so a command can be given it. The sealing
-  // binding still says `entry:` because it is part of the ciphertext of every row already written.
-  // One service's login state had a column of its own. What a tool wants is a file in a place it knows;
-  // which tool, and where, is the agent's to know, not Foundation's.
-  8: `
-    ALTER TABLE secrets DROP COLUMN session;
-  `,
-  // Optimistic concurrency was built for a second writer that has not arrived.
-  7: `
-    ALTER TABLE secrets DROP COLUMN version;
-  `,
-  // Who put it there was recorded for the owner's benefit, but only the request flow ever set it, so in
-  // practice it said the same thing about everything. Knowing it properly means recording every path.
-  6: `
-    ALTER TABLE secrets DROP COLUMN kept_by;
-  `,
-  // What the writer said the bytes were was never checked, and the one thing it decided -- whether the
-  // owner's screen tries to show them -- is decided better by looking at the bytes.
-  5: `
-    ALTER TABLE secrets DROP COLUMN media_type;
-  `,
-  // The name a command receives something under belongs to the command, so it is said at delivery.
-  4: `
-    ALTER TABLE secrets DROP COLUMN env;
-    ALTER TABLE secrets DROP COLUMN filename;
-  `,
-  3: `
-    ALTER TABLE entries RENAME TO secrets;
-  `,
-  2: `
-    CREATE TABLE products (
-      id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
-      created_at TEXT NOT NULL, last_used_at TEXT
-    );
-    CREATE TABLE rooms (
-      id TEXT PRIMARY KEY, product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-      external_id TEXT NOT NULL, created_at TEXT NOT NULL,
-      UNIQUE(product_id, external_id)
-    );
-  `,
-};
+const STEPS = {};
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);

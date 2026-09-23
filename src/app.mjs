@@ -339,7 +339,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const input = await body(req);
           const purpose = purposeValue(input.purpose);
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
-          const row = requests.create(token, { purpose, adapter: input.adapter, store: input.store, details: input.details, guidance: input.guidance ?? '', validMinutes: input.valid_minutes ?? 30 });
+          const row = requests.create(token, { purpose, adapter: input.adapter, store: input.store, guidance: input.guidance ?? '', validMinutes: input.valid_minutes ?? 30 });
           return send(201, { request: requests.summary(row, origin) });
         }
         if (path.endsWith('/current') && method === 'GET') return send(200, { request: { ...requests.runtimeView(token), verification_uri: origin + '/connect/' + requests.current(token).id } });
@@ -431,8 +431,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           // Several things asked for together are kept together: all of them, or none.
           const asked = requests.details(row);
           const input = await body(req, SECRET_MAX * asked.length);
-          const given = input.contents && typeof input.contents === 'object' && !Array.isArray(input.contents) ? input.contents
-            : typeof input.content === 'string' ? { [asked[0].path]: input.content } : null;
+          const given = input.contents && typeof input.contents === 'object' && !Array.isArray(input.contents) ? input.contents : null;
           if (!given || asked.some(one => typeof given[one.path] !== 'string' || given[one.path] === '')) fail(400, 'invalid_values', '入力内容を確認してください。');
           progressRequestId = row.id;
           return store.transaction(() => {

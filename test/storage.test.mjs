@@ -70,25 +70,3 @@ test('A new database is created in the current shape; a database of any other sh
   }
 });
 
-test('A database one version behind is carried to the current shape and keeps what it holds', async (t) => {
-  const dir = await directory(t), path = join(dir, 'state.sqlite');
-  const created = new Store(path, KEY);
-  const kept = created.addKey(USER_A, 'runtime');
-  const current = created.db.prepare('PRAGMA user_version').get().user_version;
-  created.close();
-  // The shape the previous version left: keys were agents, and a request carried a confirmation code.
-  const older = new DatabaseSync(path);
-  older.exec(`DROP TABLE key_requests;
-    ALTER TABLE keys RENAME TO agents;
-    ALTER TABLE access_requests RENAME COLUMN key_id TO agent_id;
-    ALTER TABLE access_requests ADD COLUMN confirmation_code TEXT NOT NULL DEFAULT '';
-    ALTER TABLE access_requests ADD COLUMN confirmation_attempts INTEGER NOT NULL DEFAULT 0;
-    PRAGMA user_version = ${current - 1};`);
-  older.prepare("INSERT INTO access_requests (id,token_hash,requester_name,adapter,purpose,details,guidance,owner_id,agent_id,created_at,expires_at) VALUES ('asked','h','runtime',NULL,'','[{\"path\":\"npm/token\"}]','',?,?,?,?)")
-    .run(USER_A, kept.id, Date.now(), Date.now() + 60_000);
-  older.close();
-  const carried = new Store(path, KEY); t.after(() => carried.close());
-  assert.equal(carried.db.prepare('PRAGMA user_version').get().user_version, current);
-  assert.deepEqual(carried.keys(USER_A).map(row => row.name), ['runtime']);
-  assert.equal(carried.db.prepare("SELECT key_id FROM access_requests WHERE id='asked'").get().key_id, kept.id);
-});
