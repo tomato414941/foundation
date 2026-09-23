@@ -15,6 +15,19 @@ const loginMessages = {
 };
 let loginNotice = loginMessages[new URL(location.href).searchParams.get('login')] || '';
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+// The space Foundation lends: whole files, kept in the cloud rather than in Foundation itself.
+function spaceSection() {
+  const space = state.space;
+  if (!space || !space.available) return '';
+  const used = space.usage ? `${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}・${space.usage.count} / ${space.usage.count_max} 件` : '';
+  const rows = space.objects.length
+    ? space.objects.map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(item.key)}</h3><p>${esc(kiloBytes(item.size))}・${esc(keptWhen(item.updated_at))}</p></div>
+      <div class="agent-actions"><a class="text-button" href="/api/objects/${encodeURIComponent(item.key)}" download>取り出す</a><button class="text-button" data-action="link-object" data-key="${esc(item.key)}">リンクを作る</button><button class="text-button danger" data-action="drop-object" data-key="${esc(item.key)}">削除</button></div></article>`).join('')
+    : '<div class="access-empty"><p>まだ何も置かれていません。AIに頼むか、ここから追加できます。</p></div>';
+  return `<section class="resource-section" aria-labelledby="space-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('cloud')}</span><div><h2 id="space-title">ファイルの置き場</h2><p>${esc(used)}</p></div></div>
+    <label class="button secondary" for="space-upload">${icon('plus')} ファイルを追加</label><input id="space-upload" type="file" hidden></div>
+    <div class="agent-list">${rows}</div></section>`;
+}
 // The service an acquisition reaches.
 const serviceName = adapter => adapter.service?.name || adapter.label;
 const icon = (name) => {
@@ -102,19 +115,22 @@ async function showLogin({ email = '', message = loginNotice } = {}) {
 window.addEventListener('focus', () => { if (document.querySelector('#email-sent')) void refresh().catch(() => {}); });
 async function refresh() {
   const current = ++revision, result = await api('/api/state');
+  let space = null;
+  try { space = await api('/api/objects'); } catch { space = null; }
   if (requestId && current === revision) {
     try { accessRequest = (await api('/api/access-requests/' + requestId)).request; requestError = ''; }
     catch (error) { accessRequest = null; requestError = error.message; }
   }
   if (current !== revision) return;
-  state = result;
+  state = { ...result, space };
   render();
 }
 // Everything the owner keeps is one list, grouped by the first segment of its path. A row says where it sits,
 // what the writer said it is, how it reaches a command, and who put it there. Foundation read none of it.
 const keptWhen = value => new Date(value).toLocaleString('ja-JP');
 const handedOver = entry => entry.session ? 'ログイン状態として渡す' : entry.filename ? `ファイル ${entry.filename} として渡す (${entry.env})` : entry.env ? `${entry.env} として渡す` : '渡さない';
-const kiloBytes = size => size < 1024 ? size + ' バイト' : Math.round(size / 1024) + ' KB';
+const kiloBytes = size => size < 1024 ? size + ' バイト' : size < 1024 * 1024 ? Math.round(size / 1024) + ' KB'
+  : size < 1024 * 1024 * 1024 ? Math.round(size / (1024 * 1024)) + ' MB' : (size / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 const putBy = entry => entry.kept_by || 'あなた';
 const groupId = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'g-' + [...name].map(char => char.codePointAt(0).toString(36)).join('');
 const statusName = status => ({ connected: '利用できます', reconnect_required: '接続し直しが必要です', disconnecting: '解除しています' }[status] || '確認が必要です');
@@ -180,9 +196,24 @@ function render() {
   const kept = groups();
   app.innerHTML = `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main><header class="page-heading"><h1>預けているもの</h1><p>いつでも<a href="/api/export" download>まとめて取り出せます</a>。鍵の中身もそのまま含まれるので、保存先にご注意ください。</p></header>
     ${kept.length ? kept.map(groupSection).join('') : '<section class="resource-section"><div class="access-empty"><p>まだ何も預かっていません。AIが依頼を作ると、ここに並びます。</p></div></section>'}
+    ${spaceSection()}
     ${connectSection()}
     <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">AIのアクセスキー</h2></div></div><button class="button secondary" data-action="add-agent">${icon('plus')} アクセスキーを追加</button></div>
     ${state.agents.length ? `<div class="agent-list">${state.agents.map((agent) => `<article class="agent-row"><div class="agent-name"><h3>${esc(agent.name)}</h3><p>${agent.last_used_at ? '最終利用 ' + esc(new Date(agent.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(agent.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-agent" data-id="${esc(agent.id)}">名前を変更</button><button class="text-button danger" data-action="remove-agent" data-id="${esc(agent.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section></main></div>`;
+  const upload = document.querySelector('#space-upload');
+  if (upload) upload.addEventListener('change', async () => {
+    const file = upload.files?.[0];
+    if (!file) return;
+    upload.disabled = true;
+    try {
+      const response = await fetch('/api/objects/' + encodeURIComponent(file.name), { method: 'PUT', credentials: 'same-origin',
+        headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
+      toast(file.name + ' を追加しました。');
+      await refresh();
+    } catch (error) { toast(error.message); upload.disabled = false; }
+  });
 }
 const siteLink = value => { try { const url = new URL(value); return `<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer"><strong>${esc(url.host)}</strong>${esc(url.pathname === '/' ? '' : url.pathname)} ↗</a>`; } catch { return esc(value); } };
 // Guidance the requesting AI wrote for its owner. Framed as the AI's words; line breaks kept, nothing else interpreted.
@@ -440,6 +471,21 @@ document.addEventListener('click', async (event) => {
     if (action === 'drop-entry') {
       const path = target.dataset.path;
       confirmRemoval(path + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/api/entries/' + encodeURIComponent(path), { method: 'DELETE', data: {} }));
+    }
+    if (action === 'drop-object') {
+      const key = target.dataset.key;
+      confirmRemoval(key + ' を削除しますか？', '置き場から消えます。元には戻せません。', () => api('/api/objects/' + encodeURIComponent(key), { method: 'DELETE', data: {} }));
+    }
+    if (action === 'link-object') {
+      const key = target.dataset.key;
+      target.disabled = true;
+      try {
+        const result = await api('/api/objects/' + encodeURIComponent(key) + '/link', { method: 'POST', data: { minutes: 60 } });
+        openDialog(`<h2 id="dialog-title">リンクができました</h2><p>${esc(key)} を、このリンクを知っている人なら誰でも取り出せます。1時間で切れます。</p>
+          <label for="object-link">リンク</label><input id="object-link" readonly value="${esc(result.url)}"><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">閉じる</button></div>`);
+        document.querySelector('#object-link')?.select();
+      } catch (error) { toast(error.message); }
+      finally { target.disabled = false; }
     }
     if (action === 'add-agent') editAgent();
     if (action === 'remove-agent') removeAgent(state.agents.find((a) => a.id === id));
