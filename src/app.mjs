@@ -343,6 +343,20 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         const { user, session } = await principal(req);
         if (path === '/api/state' && method === 'GET') return send(200, { user, entries: entries.list(user.id), acquisitions: store.acquisitions(user.id).map(acquisitionView), agents: store.agents(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
         // What a key kept is the owner's: they read it, rename the group it sits in, and remove it.
+        // Everything, in one file, for the owner alone. Lending someone a place to keep things means they
+        // can take them away again; without this the promise is words. Keys are included in full, because
+        // a copy that leaves the secrets behind is not a copy.
+        if (path === '/api/export' && method === 'GET') {
+          const kept = entries.list(user.id).map(row => {
+            const full = entries.entry(user.id, row.path);
+            return { ...row, content: store.entryContent(full).toString('base64'), encoding: 'base64' };
+          });
+          const value = { exported_at: new Date().toISOString(), owner: user.email, origin,
+            entries: kept, acquisitions: store.acquisitions(user.id).map(acquisitionView), agents: store.agents(user.id) };
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
+            'content-disposition': `attachment; filename="foundation-${new Date().toISOString().slice(0, 10)}.json"` });
+          return res.end(JSON.stringify(value, null, 2));
+        }
         const ownEntry = path.match(/^\/api\/entries\/(.+)$/);
         if (ownEntry) {
           if (method === 'GET') {
