@@ -59,10 +59,9 @@ async function main() {
   const agentName = (process.env.FOUNDATION_AGENT || '').trim();
   if (agentName && !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/.test(agentName)) throw new Error('FOUNDATION_AGENT must be 1-40 characters of letters, digits, space, dot, underscore or hyphen.');
   const separatorAt = args.indexOf('--'), command = separatorAt >= 0 ? args.slice(separatorAt + 1) : [];
-  // exec takes what should reach the command: a registered credential by its id, or something kept, by its path.
-  const targets = action === 'exec' && separatorAt > 0 ? args.slice(0, separatorAt) : [];
-  const credentialIds = targets.filter(target => /^[a-f0-9-]{36}$/.test(target));
-  const entryPaths = targets.filter(target => !/^[a-f0-9-]{36}$/.test(target));
+  // exec takes the paths of whatever should reach the command. Everything kept is named the same way,
+  // whether a key put it there or Foundation obtained and keeps it current.
+  const entryPaths = action === 'exec' && separatorAt > 0 ? args.slice(0, separatorAt) : [];
   if (action === '--help' || action === 'help' || action === 'guide' || !action) {
     let adapters;
     if (process.env.FOUNDATION_URL) {
@@ -111,11 +110,12 @@ async function main() {
   }
   // Storage: bytes at a path. How they reach a command is declared here, once, and never again.
   else if (action === 'put') {
-    const parsed = parseArgs({ args, options: { env: { type: 'string' }, file: { type: 'string' }, type: { type: 'string' }, from: { type: 'string' }, secret: { type: 'boolean' } }, strict: true, allowPositionals: true });
-    if (parsed.positionals.length !== 1) throw new Error('Usage: put <path> [--env NAME] [--file NAME] [--secret] [--type <media-type>] [--from <file>]   (bytes on stdin unless --from)');
+    const parsed = parseArgs({ args, options: { env: { type: 'string' }, file: { type: 'string' }, type: { type: 'string' }, from: { type: 'string' }, secret: { type: 'boolean' }, 'if-version': { type: 'string' } }, strict: true, allowPositionals: true });
+    if (parsed.positionals.length !== 1) throw new Error('Usage: put <path> [--env NAME] [--file NAME] [--secret] [--type <media-type>] [--from <file>] [--if-version <n>]   (bytes on stdin unless --from)');
+    if (parsed.values['if-version'] !== undefined && !/^\d{1,9}$/.test(parsed.values['if-version'])) throw new Error('--if-version takes the version you last saw, as foundation list reports it.');
     const content = parsed.values.from ? await readFile(parsed.values.from) : await readStdin();
     if (content.length > 1024 * 1024) throw new Error('put takes at most 1 MB. Larger files belong in the sharing space (share).');
-    options = { path: parsed.positionals[0], content, query: { ...(parsed.values.env ? { env: parsed.values.env } : {}), ...(parsed.values.file ? { filename: parsed.values.file } : {}), ...(parsed.values.secret ? { secret: 'true' } : {}) },
+    options = { path: parsed.positionals[0], content, query: { ...(parsed.values.env ? { env: parsed.values.env } : {}), ...(parsed.values.file ? { filename: parsed.values.file } : {}), ...(parsed.values.secret ? { secret: 'true' } : {}), ...(parsed.values['if-version'] === undefined ? {} : { if_version: parsed.values['if-version'] }) },
       type: parsed.values.type || (parsed.values.from ? TYPES[extname(parsed.values.from).toLowerCase()] : null) || 'application/octet-stream' };
   }
   else if (action === 'get' || action === 'drop') {
@@ -128,7 +128,7 @@ async function main() {
     if (parsed.positionals.length > 1) throw new Error('Usage: list [<path prefix>]');
     options = { prefix: parsed.positionals[0] };
   }
-  else if (!(['adapters', 'credentials', 'shared', 'cancel', 'whoami', 'leave', 'request'].includes(action) && !args.length) && !(action === 'exec' && targets.length && new Set(targets).size === targets.length && command.length)) throw new Error('Invalid command. Use --help.');
+  else if (!(['adapters', 'connections', 'shared', 'cancel', 'whoami', 'leave', 'request'].includes(action) && !args.length) && !(action === 'exec' && entryPaths.length && new Set(entryPaths).size === entryPaths.length && command.length)) throw new Error('Invalid command. Use --help.');
   const url = new URL(process.env.FOUNDATION_URL || '');
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('FOUNDATION_URL must be an HTTPS origin (HTTP is allowed only on localhost).');
   // Without --adapter, connect asks for this key to be approved. With it, an approved key asks for a registration.
@@ -137,7 +137,7 @@ async function main() {
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
   const token = action === 'adapters' ? null : await runtimeKey(keyPath, action === 'connect', !process.env.FOUNDATION_RUNTIME_KEY_FILE);
   const entryUrl = () => '/v1/entries/' + options.path.split('/').map(encodeURIComponent).join('/');
-  const path = action === 'adapters' ? '/v1/adapters' : action === 'credentials' ? '/v1/credentials'
+  const path = action === 'adapters' ? '/v1/adapters' : action === 'connections' ? '/v1/acquisitions'
     : action === 'shared' ? '/v1/files' : action === 'link' ? '/v1/files/' + encodeURIComponent(options.id) + '/link'
     : action === 'share' ? '/v1/files?' + new URLSearchParams({ name: options.name, ...(options.minutes === undefined ? {} : { minutes: String(options.minutes) }) })
     : action === 'list' ? '/v1/entries' + (options.prefix ? '?' + new URLSearchParams({ prefix: options.prefix }) : '')
@@ -166,14 +166,8 @@ async function main() {
     console.log(JSON.stringify(data, null, 2));
     return;
   }
-  // Everything the command is to receive, gathered before it starts: kept things in one call, credentials one each.
-  const issued = [];
-  if (entryPaths.length) issued.push({ label: 'kept', ...(await send('/v1/deliver', { payload: JSON.stringify({ paths: entryPaths }) })) });
-  for (const id of credentialIds) {
-    const result = await send('/v1/credentials/' + id + '/deliver', { payload: '{}' });
-    issued.push({ label: (result.credential?.adapter || result.credential?.service) + ':' + id, credentialId: id, ...result });
-  }
-  // What each credential sets is the server's to say; the runtime applies it and refuses collisions.
+  const issued = [{ label: 'kept', ...(await send('/v1/deliver', { payload: JSON.stringify({ paths: entryPaths }) })) }];
+  // What each of them sets is the server's to say; the runtime applies it and refuses collisions.
   const environment = { ...process.env };
   delete environment.FOUNDATION_RUNTIME_KEY_FILE;
   const owned = new Map(), files = [];
@@ -187,15 +181,14 @@ async function main() {
   for (const item of issued) {
     const { label, delivery } = item;
     if (!delivery || typeof delivery.environment !== 'object' || !Array.isArray(delivery.files)) throw new Error('Foundation returned an invalid delivery.');
-    if (delivery.expo_session) { if (issued.length > 1) throw new Error('An Expo login session cannot be combined with anything else.'); expoSession = delivery.expo_session; }
+    if (delivery.expo_session) { if (entryPaths.length > 1) throw new Error('An Expo login session cannot be combined with anything else.'); expoSession = delivery.expo_session; }
     for (const [name, value] of Object.entries(delivery.environment)) assign(name, value, label);
     for (const file of delivery.files) {
       if (typeof file.env !== 'string' || typeof file.filename !== 'string' || typeof file.content !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(file.filename) || file.filename.startsWith('.')) throw new Error('Foundation described an invalid file for ' + label + '.');
       files.push({ ...file, label });
     }
   }
-  const usedIds = issued.map(item => item.credentialId).filter(Boolean);
-  if (usedIds.length) environment.FOUNDATION_CREDENTIAL_IDS = usedIds.join(',');
+  environment.FOUNDATION_PATHS = entryPaths.join(',');
   // Secret files live in a private directory for exactly as long as the command runs.
   let secretDir;
   if (files.length) {

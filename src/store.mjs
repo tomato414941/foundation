@@ -8,33 +8,23 @@ import { ENTRY_COUNT_MAX, ENTRY_TOTAL_MAX } from './entries.mjs';
 
 export const digest = (value) => createHash('sha256').update(value).digest('hex');
 const now = () => new Date().toISOString();
-const publicColumns = 'id, owner_id, adapter, subject, service, name, names, kept_by, status, generation, created_at, updated_at';
-const binding = credential => `credential:${credential.owner_id}:${credential.id}`;
-const parse = row => ({ ...row, names: JSON.parse(row.names) });
-export const CREDENTIAL_LIMIT = 100;
+const parse = row => ({ ...row, readable: row.readable === 1 });
+export const ACQUISITION_LIMIT = 50;
+const entryBinding = row => `entry:${row.owner_id}:${row.id}`;
 
 const SCHEMA_VERSION = 1;
-// credentials: one thing being kept, whatever put it there. secret holds the values it delivers, sealed and
-//   bound to this owner and this row; names lists those values in the clear, so listing never opens one.
-//   adapter and subject name the acquisition behind it, and are empty when nothing acquired it: a value a key
-//   kept itself sits in the same table and is delivered the same way. Only refreshing and revoking tell them apart.
-//   service is the owner's name for the group it sits in; kept_by is the key that put it there, as it was named
-//   then, and is empty when the owner did it from the dashboard.
-// agents: access keys the owner approved; each may use every credential of its owner.
-// access_requests: one request from a runtime, as it asked and as it went. adapter is empty when the request only asks
-//   for the key to be approved.
-// entries: everything kept, whatever it is. Bytes at a path, sealed; media_type is what the writer said
-//   they are and is never checked; env and filename are how a command receives them; readable is 0 when
-//   they may only be delivered. Nothing here interprets the content.
-// files: what a key placed in the file space. The bytes live in the backend under the id; a row is never changed.
+// entries: everything Foundation keeps, whatever it is. Bytes at a path, sealed and bound to this owner and
+//   this row. media_type is what the writer said they are and is never checked. env, filename and session are
+//   how a command receives them, settled when they were written. readable is 0 when they may only be delivered.
+//   version rises on every write, so a writer can refuse to overwrite what it has not seen.
+// acquisitions: the entries under `prefix` are obtained and kept current by Foundation itself, through one
+//   adapter, for one subject at that service. state holds what the adapter needs to refresh them, sealed.
+//   Every other entry has no row here and is simply what was put there.
+// agents: access keys the owner approved; each may use everything its owner keeps.
+// access_requests: one request from a runtime, as it asked and as it went.
+// files: what a key published in the sharing space. The bytes live in the backend under the id; a row is never changed.
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
-  CREATE TABLE credentials (
-    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, adapter TEXT NOT NULL, subject TEXT NOT NULL, service TEXT NOT NULL,
-    name TEXT NOT NULL, names TEXT NOT NULL, kept_by TEXT NOT NULL, status TEXT NOT NULL, secret TEXT NOT NULL,
-    generation INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-    UNIQUE(owner_id, adapter, subject)
-  );
   CREATE TABLE agents (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
     last_used_at TEXT, issued_until INTEGER, issued_nonexpiring INTEGER NOT NULL DEFAULT 0
@@ -54,10 +44,18 @@ const SCHEMA = `
   CREATE INDEX files_owner ON files(owner_id, created_at);
   CREATE TABLE entries (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, path TEXT NOT NULL, media_type TEXT NOT NULL,
-    size INTEGER NOT NULL, env TEXT, filename TEXT, readable INTEGER NOT NULL,
-    content TEXT NOT NULL, kept_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    size INTEGER NOT NULL, env TEXT, filename TEXT, session TEXT, readable INTEGER NOT NULL,
+    content TEXT NOT NULL, kept_by TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     UNIQUE(owner_id, path)
   );
+  CREATE TABLE acquisitions (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, prefix TEXT NOT NULL, adapter TEXT NOT NULL, subject TEXT NOT NULL,
+    label TEXT NOT NULL, state TEXT NOT NULL, status TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 1,
+    kept_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    UNIQUE(owner_id, prefix), UNIQUE(owner_id, adapter, subject)
+  );
+  CREATE INDEX acquisitions_owner ON acquisitions(owner_id, prefix);
   CREATE INDEX entries_owner ON entries(owner_id, path);
   PRAGMA user_version = ${SCHEMA_VERSION};
 `;
@@ -100,85 +98,108 @@ export class Store {
     this.db.prepare('DELETE FROM access_requests WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM files WHERE expires_at<=?').run(Date.now());
   }
-  credentials(ownerId) { return this.db.prepare(`SELECT ${publicColumns} FROM credentials WHERE owner_id=? ORDER BY created_at, id`).all(ownerId).map(parse); }
-  credential(ownerId, id) {
-    const row = this.db.prepare('SELECT * FROM credentials WHERE owner_id=? AND id=?').get(ownerId, id);
+  // Storage. Listing never opens anything; only reading and delivering do.
+  entries(ownerId, prefix) {
+    const columns = 'path, media_type, size, env, filename, session, readable, kept_by, version, created_at, updated_at';
+    return (prefix === undefined
+      ? this.db.prepare(`SELECT ${columns} FROM entries WHERE owner_id=? ORDER BY path`).all(ownerId)
+      : this.db.prepare(`SELECT ${columns} FROM entries WHERE owner_id=? AND (path=? OR path LIKE ?) ORDER BY path`).all(ownerId, prefix, prefix.replaceAll('%', '\\%').replaceAll('_', '\\_') + '/%')).map(parse);
+  }
+  entry(ownerId, path) {
+    const row = this.db.prepare('SELECT * FROM entries WHERE owner_id=? AND path=?').get(ownerId, path);
     return row ? parse(row) : undefined;
   }
-  secret(credential) { return this.vault.open(credential.secret, binding(credential)); }
-  // Stores a new credential, or replaces the secret of `previous` when the same subject is registered again.
-  // `details.adapter` and `details.subject` are empty for a value nothing acquired; `names` is what it delivers.
-  register(ownerId, details, secret, previous) {
-    return this.transaction(() => {
-      const stamp = now(), names = JSON.stringify(details.names ?? []);
-      if (previous) {
-        const current = this.credential(ownerId, previous.id);
-        if (!current || current.generation !== previous.generation || current.status === 'disconnecting') fail(409, 'connection_changed', '認証情報の状態が変わりました。もう一度お試しください。');
-        if (current.subject !== details.subject) fail(409, 'account_changed', '登録し直すには同じアカウントを選んでください。');
-        this.db.prepare("UPDATE credentials SET name=?, names=?, secret=?, status='connected', generation=generation+1, updated_at=? WHERE id=?").run(details.name, names, this.vault.seal(secret, binding(current)), stamp, current.id);
-        return current.id;
-      }
-      if (this.credentials(ownerId).length >= CREDENTIAL_LIMIT) fail(409, 'credential_limit', `預けられるのは${CREDENTIAL_LIMIT}件までです。使わないものを解除してください。`);
-      if (details.adapter && this.db.prepare('SELECT 1 FROM credentials WHERE owner_id=? AND adapter=? AND subject=?').get(ownerId, details.adapter, details.subject)) fail(409, 'already_connected', 'この認証情報は登録済みです。');
-      const id = randomUUID();
-      this.db.prepare('INSERT INTO credentials (id,owner_id,adapter,subject,service,name,names,kept_by,status,secret,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-        .run(id, ownerId, details.adapter ?? '', details.subject ?? randomUUID(), details.service, details.name, names, details.kept_by ?? '', 'connected', this.vault.seal(secret, binding({ owner_id: ownerId, id })), stamp, stamp);
-      return id;
-    });
-  }
-  updateCredential(ownerId, id, name, service) {
-    if (!this.credential(ownerId, id)) fail(404, 'not_found', '認証情報が見つかりません。');
-    this.db.prepare('UPDATE credentials SET name=?, service=?, updated_at=? WHERE owner_id=? AND id=?').run(name, service, now(), ownerId, id);
-  }
-  // Replaces what a credential delivers, keeping everything the owner named. Used when acquisition refreshes
-  // it, and when a key replaces a value it keeps itself.
-  saveSecret(credential, secret, names) {
-    const result = names === undefined
-      ? this.db.prepare("UPDATE credentials SET secret=?, updated_at=? WHERE owner_id=? AND id=? AND generation=? AND status='connected'").run(this.vault.seal(secret, binding(credential)), now(), credential.owner_id, credential.id, credential.generation)
-      : this.db.prepare("UPDATE credentials SET secret=?, names=?, updated_at=? WHERE owner_id=? AND id=? AND generation=? AND status='connected'").run(this.vault.seal(secret, binding(credential)), JSON.stringify(names), now(), credential.owner_id, credential.id, credential.generation);
-    if (!result.changes) fail(409, 'connection_changed', 'この認証情報は変更または解除されています。');
-  }
-  reconnectRequired(credential) {
-    this.db.prepare("UPDATE credentials SET status='reconnect_required', generation=generation+1, updated_at=? WHERE id=? AND owner_id=? AND generation=? AND status='connected'").run(now(), credential.id, credential.owner_id, credential.generation);
-  }
-  disconnect(ownerId, id) {
-    return this.transaction(() => {
-      const credential = this.credential(ownerId, id);
-      if (!credential) fail(404, 'not_found', '認証情報が見つかりません。');
-      this.db.prepare("UPDATE credentials SET status='disconnecting', generation=generation+1, updated_at=? WHERE owner_id=? AND id=?").run(now(), ownerId, id);
-      return credential;
-    });
-  }
-  removeCredential(ownerId, id) { return this.db.prepare('DELETE FROM credentials WHERE owner_id=? AND id=?').run(ownerId, id).changes > 0; }
-  // Storage: bytes at a path. Listing never opens one; only reading and delivering do.
-  entries(ownerId, prefix) {
-    const columns = 'path, media_type, size, env, filename, readable, kept_by, created_at, updated_at';
-    return prefix === undefined
-      ? this.db.prepare(`SELECT ${columns} FROM entries WHERE owner_id=? ORDER BY path`).all(ownerId)
-      : this.db.prepare(`SELECT ${columns} FROM entries WHERE owner_id=? AND (path=? OR path LIKE ?) ORDER BY path`).all(ownerId, prefix, prefix.replaceAll('%', '\\%').replaceAll('_', '\\_') + '/%');
-  }
-  entry(ownerId, path) { return this.db.prepare('SELECT * FROM entries WHERE owner_id=? AND path=?').get(ownerId, path); }
-  entryContent(row) { return this.vault.openBytes(row.content, `entry:${row.owner_id}:${row.id}`); }
+  entryContent(row) { return this.vault.openBytes(row.content, entryBinding(row)); }
   usage(ownerId) { return this.db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(size),0) AS bytes FROM entries WHERE owner_id=?').get(ownerId); }
-  writeEntry(ownerId, entry) {
+  // Writing the same path again replaces it. `ifVersion` refuses to, unless it is still the version the
+  // writer last saw, so two things working at once fail instead of quietly losing one another's work.
+  writeEntry(ownerId, entry, ifVersion) {
     return this.transaction(() => {
       const stamp = now(), existing = this.entry(ownerId, entry.path);
+      if (ifVersion !== undefined && (existing?.version ?? 0) !== ifVersion) fail(409, 'version_conflict', `${entry.path} は他から変更されています。読み直してからやり直してください。`);
       const { count, bytes } = this.usage(ownerId);
       if (!existing && count >= ENTRY_COUNT_MAX) fail(409, 'entry_limit', `保管できるのは${ENTRY_COUNT_MAX}件までです。使わないものを消してください。`);
       if (bytes - (existing?.size ?? 0) + entry.content.length > ENTRY_TOTAL_MAX) fail(409, 'storage_full', '保管できる合計は20MBまでです。使わないものを消してください。');
       const id = existing?.id ?? randomUUID();
       const sealed = this.vault.sealBytes(entry.content, `entry:${ownerId}:${id}`);
       if (existing) {
-        this.db.prepare('UPDATE entries SET media_type=?, size=?, env=?, filename=?, readable=?, content=?, kept_by=?, updated_at=? WHERE id=?')
-          .run(entry.media_type, entry.content.length, entry.env, entry.filename, entry.readable, sealed, entry.kept_by, stamp, id);
+        this.db.prepare('UPDATE entries SET media_type=?, size=?, env=?, filename=?, session=?, readable=?, content=?, kept_by=?, version=version+1, updated_at=? WHERE id=?')
+          .run(entry.media_type, entry.content.length, entry.env, entry.filename, entry.session ?? null, entry.readable, sealed, entry.kept_by, stamp, id);
       } else {
-        this.db.prepare('INSERT INTO entries (id,owner_id,path,media_type,size,env,filename,readable,content,kept_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-          .run(id, ownerId, entry.path, entry.media_type, entry.content.length, entry.env, entry.filename, entry.readable, sealed, entry.kept_by, stamp, stamp);
+        this.db.prepare('INSERT INTO entries (id,owner_id,path,media_type,size,env,filename,session,readable,content,kept_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          .run(id, ownerId, entry.path, entry.media_type, entry.content.length, entry.env, entry.filename, entry.session ?? null, entry.readable, sealed, entry.kept_by, stamp, stamp);
       }
       return this.entries(ownerId, entry.path)[0];
     });
   }
   removeEntry(ownerId, path) { return this.db.prepare('DELETE FROM entries WHERE owner_id=? AND path=?').run(ownerId, path).changes > 0; }
+  removeUnder(ownerId, prefix) {
+    return this.db.prepare('DELETE FROM entries WHERE owner_id=? AND (path=? OR path LIKE ?)').run(ownerId, prefix, prefix.replaceAll('%', '\\%').replaceAll('_', '\\_') + '/%').changes;
+  }
+  // An acquisition owns the entries under its prefix: it wrote them and it keeps them current.
+  acquisitions(ownerId) { return this.db.prepare('SELECT * FROM acquisitions WHERE owner_id=? ORDER BY prefix').all(ownerId); }
+  acquisition(ownerId, prefix) { return this.db.prepare('SELECT * FROM acquisitions WHERE owner_id=? AND prefix=?').get(ownerId, prefix); }
+  // Which acquisition, if any, keeps this path current.
+  acquisitionFor(ownerId, path) {
+    return this.db.prepare('SELECT * FROM acquisitions WHERE owner_id=? AND (?=prefix OR ? LIKE prefix || ?) ORDER BY length(prefix) DESC LIMIT 1').get(ownerId, path, path, '/%');
+  }
+  acquisitionState(row) { return this.vault.open(row.state, `acquisition:${row.owner_id}:${row.id}`); }
+  // Records an acquisition and everything it produced, together: the entries under its prefix are exactly
+  // what it last obtained, and nothing it no longer produces is left behind.
+  saveAcquisition(ownerId, { prefix, adapter, subject, label, state, keptBy }, entries, previous) {
+    return this.transaction(() => {
+      const stamp = now();
+      const existing = previous ? this.acquisition(ownerId, previous.prefix) : this.acquisition(ownerId, prefix);
+      if (previous) {
+        if (!existing || existing.generation !== previous.generation) fail(409, 'connection_changed', '状態が変わりました。もう一度お試しください。');
+        if (existing.subject !== subject) fail(409, 'account_changed', '登録し直すには同じアカウントを選んでください。');
+      } else if (existing) {
+        fail(409, 'already_connected', 'この保管先はすでに使われています。');
+      }
+      if (!previous && this.db.prepare('SELECT 1 FROM acquisitions WHERE owner_id=? AND adapter=? AND subject=?').get(ownerId, adapter, subject)) fail(409, 'already_connected', 'この認証情報は登録済みです。');
+      if (!previous && this.acquisitions(ownerId).length >= ACQUISITION_LIMIT) fail(409, 'acquisition_limit', `登録できる接続は${ACQUISITION_LIMIT}件までです。`);
+      const id = existing?.id ?? randomUUID();
+      const sealed = this.vault.seal(state, `acquisition:${ownerId}:${id}`);
+      if (existing) this.db.prepare("UPDATE acquisitions SET adapter=?, subject=?, label=?, state=?, status='connected', generation=generation+1, updated_at=? WHERE id=?").run(adapter, subject, label, sealed, stamp, id);
+      else this.db.prepare("INSERT INTO acquisitions (id,owner_id,prefix,adapter,subject,label,state,status,kept_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,'connected',?,?,?)").run(id, ownerId, prefix, adapter, subject, label, sealed, keptBy ?? '', stamp, stamp);
+      this.replaceUnder(ownerId, prefix, entries, keptBy ?? '');
+      return this.acquisition(ownerId, prefix);
+    });
+  }
+  // The entries an acquisition produced this time, and only those.
+  replaceUnder(ownerId, prefix, entries, keptBy) {
+    return this.transaction(() => {
+      const wanted = new Set(entries.map(entry => entry.path));
+      for (const row of this.entries(ownerId, prefix)) if (!wanted.has(row.path)) this.removeEntry(ownerId, row.path);
+      for (const entry of entries) this.writeEntry(ownerId, { ...entry, kept_by: keptBy });
+    });
+  }
+  // A refresh that produced nothing new still says when it happened; one that failed marks the acquisition.
+  saveState(acquisition, state, entries) {
+    return this.transaction(() => {
+      const current = this.acquisition(acquisition.owner_id, acquisition.prefix);
+      if (!current || current.generation !== acquisition.generation || current.status !== 'connected') fail(409, 'connection_changed', 'この接続は変更または解除されています。');
+      this.db.prepare('UPDATE acquisitions SET state=?, updated_at=? WHERE id=?').run(this.vault.seal(state, `acquisition:${acquisition.owner_id}:${acquisition.id}`), now(), acquisition.id);
+      if (entries) this.replaceUnder(acquisition.owner_id, acquisition.prefix, entries, acquisition.kept_by);
+    });
+  }
+  reconnectRequired(acquisition) {
+    this.db.prepare("UPDATE acquisitions SET status='reconnect_required', generation=generation+1, updated_at=? WHERE id=? AND owner_id=? AND generation=? AND status='connected'").run(now(), acquisition.id, acquisition.owner_id, acquisition.generation);
+  }
+  disconnect(ownerId, prefix) {
+    return this.transaction(() => {
+      const acquisition = this.acquisition(ownerId, prefix);
+      if (!acquisition) fail(404, 'not_found', '接続が見つかりません。');
+      this.db.prepare("UPDATE acquisitions SET status='disconnecting', generation=generation+1, updated_at=? WHERE id=?").run(now(), acquisition.id);
+      return acquisition;
+    });
+  }
+  removeAcquisition(ownerId, prefix) {
+    return this.transaction(() => {
+      this.removeUnder(ownerId, prefix);
+      return this.db.prepare('DELETE FROM acquisitions WHERE owner_id=? AND prefix=?').run(ownerId, prefix).changes > 0;
+    });
+  }
   agents(ownerId) {
     return this.db.prepare('SELECT id,name,created_at,last_used_at,issued_until,issued_nonexpiring FROM agents WHERE owner_id=? ORDER BY created_at,id').all(ownerId);
   }
@@ -200,9 +221,12 @@ export class Store {
     if (typeof token !== 'string' || !/^fdn_[A-Za-z0-9_-]{43}$/.test(token)) return;
     return this.db.prepare('SELECT id,owner_id,name FROM agents WHERE token_hash=?').get(digest(token));
   }
-  // Possession of an approved key is the whole authorization: the key still exists, and the credential is its owner's.
-  requireAccess(agent, credentialId) {
-    if (!this.db.prepare('SELECT 1 FROM agents a JOIN credentials c ON c.owner_id=a.owner_id WHERE a.id=? AND a.owner_id=? AND c.id=? AND c.status!=?').get(agent.id, agent.owner_id, credentialId, 'disconnecting')) fail(403, 'access_denied', 'この認証情報は利用できません。');
+  // Possession of an approved key is the whole authorization: the key still exists, and what it asks for is
+  // its owner's. An acquisition being disconnected stops delivering before its entries are gone.
+  requireAccess(agent, path) {
+    if (agent.owner_id !== this.db.prepare('SELECT owner_id FROM agents WHERE id=?').get(agent.id)?.owner_id) fail(403, 'access_denied', 'これは利用できません。');
+    if (!this.entry(agent.owner_id, path)) fail(404, 'not_found', '保管されたものが見つかりません。');
+    if (this.acquisitionFor(agent.owner_id, path)?.status === 'disconnecting') fail(403, 'access_denied', 'これは利用できません。');
   }
   recordIssuance(agent, until) { this.db.prepare('UPDATE agents SET last_used_at=?, issued_until=MAX(COALESCE(issued_until,0),?), issued_nonexpiring=MAX(issued_nonexpiring,?) WHERE id=?').run(now(), until ?? 0, until === null ? 1 : 0, agent.id); }
   createSession(value) {

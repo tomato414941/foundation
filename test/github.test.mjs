@@ -13,8 +13,8 @@ async function githubFixture(t, github = new FakeGitHub()) {
     return new URL(result.json.url);
   }
   const back = (url, code) => f.request(new URL(url.searchParams.get('redirect_uri')).pathname + '?state=' + url.searchParams.get('state') + '&code=' + code);
-  const credentials = async () => (await f.request('/api/state')).json.credentials.filter(item => item.adapter === 'github.oauth');
-  return { ...f, github, start, back, credentials };
+  const connections = async () => (await f.request('/api/state')).json.acquisitions.filter(item => item.adapter === 'github.oauth');
+  return { ...f, github, start, back, connections };
 }
 
 test('GitHub authorization asks for the repository scopes with state and PKCE', async t => {
@@ -31,13 +31,13 @@ test('A connected GitHub account is named by its login and delivered to an appro
   const f = await githubFixture(t);
   const done = await f.back(await f.start(), 'octo');
   assert.match(done.headers.get('location'), /connection=connected/);
-  const [credential] = await f.credentials();
-  assert.equal(credential.name, 'octo');
-  assert.equal(credential.service, 'GitHub');
-  assert.deepEqual(credential.variables, ['GH_TOKEN', 'GITHUB_TOKEN']);
+  const [connection] = await f.connections();
+  assert.equal(connection.label, 'octo');
+  assert.equal(connection.prefix, 'github/octo');
+  assert.deepEqual(connection.entries, ['github/octo/gh-token', 'github/octo/github-token']);
   assert.doesNotMatch(JSON.stringify(await f.request('/api/state')), /gho_/);
   const agent = await f.agent();
-  const delivered = await f.request('/v1/credentials/' + credential.id + '/deliver', { method: 'POST', token: agent.token, anonymous: true, data: {} });
+  const delivered = await f.request('/v1/deliver', { method: 'POST', token: agent.token, anonymous: true, data: { paths: ['github/octo/gh-token', 'github/octo/github-token'] } });
   assert.equal(delivered.status, 200, delivered.text);
   assert.deepEqual(delivered.json.delivery.environment, { GH_TOKEN: 'gho_octo', GITHUB_TOKEN: 'gho_octo' });
 });
@@ -47,38 +47,39 @@ test('A grant without repository access is refused and nothing is registered', a
   f.github.scopes = 'read:org';
   const done = await f.back(await f.start(), 'octo');
   assert.match(done.headers.get('location'), /connection=scope/);
-  assert.deepEqual(await f.credentials(), []);
+  assert.deepEqual(await f.connections(), []);
 });
 
 test('A token revoked at GitHub stops delivery and asks the owner to register again', async t => {
   const f = await githubFixture(t);
   await f.back(await f.start(), 'octo');
-  const [credential] = await f.credentials(), agent = await f.agent();
+  const agent = await f.agent();
   f.github.revoked.add('gho_octo');
-  const refused = await f.request('/v1/credentials/' + credential.id + '/deliver', { method: 'POST', token: agent.token, anonymous: true, data: {} });
+  const refused = await f.request('/v1/deliver', { method: 'POST', token: agent.token, anonymous: true, data: { paths: ['github/octo/gh-token', 'github/octo/github-token'] } });
   assert.equal(refused.status, 409);
-  assert.equal((await f.credentials())[0].status, 'reconnect_required');
+  assert.equal((await f.connections())[0].status, 'reconnect_required');
 });
 
 test('Registering again must use the same GitHub account', async t => {
   const f = await githubFixture(t);
   await f.back(await f.start(), 'octo');
-  const [credential] = await f.credentials();
-  const other = await f.back(await f.start({ credentialId: credential.id }), 'other');
+  const [connection] = await f.connections();
+  const other = await f.back(await f.start({ prefix: connection.prefix }), 'other');
   assert.match(other.headers.get('location'), /connection=wrong_account/);
-  const same = await f.back(await f.start({ credentialId: credential.id }), 'octo');
+  const same = await f.back(await f.start({ prefix: connection.prefix }), 'octo');
   assert.match(same.headers.get('location'), /connection=connected/);
-  assert.equal((await f.credentials()).length, 1);
+  assert.equal((await f.connections()).length, 1);
 });
 
 test('Disconnecting revokes the grant at GitHub', async t => {
   const f = await githubFixture(t);
   await f.back(await f.start(), 'octo');
-  const [credential] = await f.credentials();
-  const removed = await f.request('/api/credentials/' + credential.id, { method: 'DELETE', data: { revoke: true } });
+  const [connection] = await f.connections();
+  const removed = await f.request('/api/acquisitions/' + encodeURIComponent(connection.prefix), { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.status, 200, removed.text);
   assert.ok(f.github.revoked.has('gho_octo'));
-  assert.deepEqual(await f.credentials(), []);
+  assert.deepEqual(await f.connections(), []);
+  assert.deepEqual((await f.request('/api/state')).json.entries, [], 'what it kept goes with it');
 });
 
 test('Without a client ID and secret GitHub is offered as unavailable', async t => {

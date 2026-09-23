@@ -65,11 +65,11 @@ export class Entries {
   constructor(store, reserved = new Set()) { this.store = store; this.reserved = reserved; }
   list(ownerId, prefix) { return this.store.entries(ownerId, prefix === undefined ? undefined : String(prefix)); }
   // Writing the same path again replaces what is there, including how it is delivered.
-  put(ownerId, { path, content, type, env, filename, secret, keptBy }) {
+  put(ownerId, { path, content, type, env, filename, secret, keptBy }, ifVersion) {
     const declared = delivery({ env, filename, reserved: this.reserved });
     if (content.length > ENTRY_MAX) fail(413, 'entry_too_large', '1件あたり1MBまでです。');
     deliverable(content, declared);
-    return this.store.writeEntry(ownerId, { path: entryPath(path), content, media_type: mediaType(type), ...declared, readable: secret ? 0 : 1, kept_by: keptBy });
+    return this.store.writeEntry(ownerId, { path: entryPath(path), content, media_type: mediaType(type), ...declared, session: null, readable: secret ? 0 : 1, kept_by: keptBy }, ifVersion);
   }
   entry(ownerId, path) {
     const row = this.store.entry(ownerId, entryPath(path));
@@ -88,16 +88,23 @@ export class Entries {
   deliver(ownerId, paths) {
     if (!Array.isArray(paths) || paths.length < 1 || paths.length > 16) fail(400, 'invalid_paths', '渡すものを1〜16件で指定してください。');
     const environment = {}, files = [], taken = new Map();
+    let session = null;
     for (const path of paths) {
       const row = this.entry(ownerId, path);
+      const content = this.store.entryContent(row);
+      // A session is handed to the command as a tool's own login state. It takes no variable name.
+      if (row.session) {
+        if (session) fail(409, 'name_conflict', 'ログインセッションは1つだけ渡せます。');
+        session = { kind: row.session, value: JSON.parse(content.toString('utf8')) };
+        continue;
+      }
       if (!row.env) fail(409, 'not_delivered', `${row.path} は渡す先が決まっていません。変数名を決めて保管し直してください。`);
       if (taken.has(row.env)) fail(409, 'name_conflict', `${taken.get(row.env)} と ${row.path} が同じ変数名 ${row.env} を使います。どちらかにしてください。`);
       taken.set(row.env, row.path);
-      const content = this.store.entryContent(row);
       if (row.filename) files.push({ env: row.env, filename: row.filename, content: content.toString('base64'), encoding: 'base64' });
       else environment[row.env] = content.toString('utf8');
     }
-    return { environment, files };
+    return { environment, files, ...(session?.kind === 'expo' ? { expo_session: session.value } : {}) };
   }
 }
 
