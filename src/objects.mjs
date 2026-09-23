@@ -15,13 +15,17 @@ export const OBJECT_COUNT_MAX = 1000;
 // What one owner may keep in the space Foundation lends. Lending means paying for it, so there is a ceiling.
 export const OBJECT_TOTAL_MAX = 1024 * 1024 * 1024;
 export const LINK_MINUTES = 60, MAX_LINK_MINUTES = 7 * 1440;
-const KEY = /^(?!\/)(?!.*\/\/)(?!.*\/$)[A-Za-z0-9][A-Za-z0-9._\/-]{0,199}$/;
+// S3 takes any UTF-8 key, and an owner's file is as likely to be called 見積書.pdf as invoice.pdf.
+// What is refused is only what makes a key ambiguous or unsafe to put in a path: control characters,
+// a backslash, a leading or trailing slash, an empty or dot-only segment.
+const UNSAFE = /[\u0000-\u001f\u007f\\]/;
 const TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*(; ?charset=[A-Za-z0-9_-]+)?$/i;
 
 export function objectKey(value) {
-  if (typeof value !== 'string' || !KEY.test(value) || value.split('/').length > 10) {
-    fail(400, 'invalid_key', '名前は英数字で始まり、/ で区切って200文字までです。');
-  }
+  const segments = typeof value === 'string' ? value.split('/') : [];
+  const wrong = typeof value !== 'string' || !value || value.length > 200 || UNSAFE.test(value)
+    || segments.length > 10 || segments.some(segment => !segment || segment === '.' || segment === '..');
+  if (wrong) fail(400, 'invalid_key', '名前は200文字までで、/ で区切ります。制御文字と ¥ は使えません。');
   return value;
 }
 
