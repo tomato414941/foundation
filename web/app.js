@@ -371,14 +371,12 @@ function renderStore(row, shell, expiry) {
   const asked = Array.isArray(row.store) ? row.store : [row.store];
   const title = asked.length === 1 ? `${esc(asked[0].label)}を預ける` : `${asked.length}件を預ける`;
   const site = asked.find(one => one.site)?.site;
-  const handedOver = one => variableFor(one.path) ? `AIが動かすコマンドの中だけに ${variableFor(one.path)} として現れます` : 'AIが名前を指定して、コマンドの中だけで使います';
   const field = (one, at) => one.multiline
     ? `<textarea id="stored-${at}" name="${esc(one.path)}" rows="6" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>`
     : `<input id="stored-${at}" name="${esc(one.path)}" type="${one.secret ? 'password' : 'text'}" required maxlength="16384" autocomplete="off" spellcheck="false">`;
   const secretly = asked.some(one => one.secret), openly = asked.some(one => !one.secret);
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${title}</h1></div></header>
     <dl class="approval-facts">${row.purpose ? `<div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}</dl>
-    <details class="approval-detail"><summary>Foundationでの扱い</summary><dl class="approval-facts">${asked.map(one => `<div><dt><code>${esc(one.path)}</code></dt><dd>${esc(handedOver(one))}</dd></div>`).join('')}</dl></details>
     ${guidanceBlock(row.guidance)}
     ${site ? `<a class="button secondary full setup-link" href="${esc(site)}" target="_blank" rel="noopener noreferrer"><span>${esc(new URL(site).host)} を開く ↗</span></a>` : ''}
     <form id="store-request-form">${asked.map((one, at) => `<label for="stored-${at}">${esc(one.label)}</label>${field(one, at)}`).join('')}

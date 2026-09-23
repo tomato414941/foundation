@@ -63,11 +63,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     expect(page.get_by_role('heading', name='CloudflareのAPIトークンを預ける', exact=True)).to_be_visible()
     expect(page.get_by_text('dev-us のAIの依頼', exact=True)).to_be_visible()
     expect(page.get_by_text('DNSレコードの確認に使います。', exact=True)).to_be_visible()
-    # What Foundation calls it and how it reaches a command are folded away: they do not help the owner decide.
-    expect(page.get_by_text('cloudflare/cloudflare-api-token', exact=True)).to_be_hidden()
-    page.get_by_role('group').get_by_text('Foundationでの扱い', exact=True).click()
-    expect(page.get_by_text('cloudflare/cloudflare-api-token', exact=True)).to_be_visible()
-    expect(page.get_by_text('AIが動かすコマンドの中だけに CLOUDFLARE_API_TOKEN として現れます', exact=True)).to_be_visible()
     expect(page.get_by_text('APIトークンを作成 を押し', exact=False)).to_be_visible()
     expect(page.get_by_role('link', name='dash.cloudflare.com を開く ↗', exact=True)).to_have_attribute('target', '_blank')
     value = page.get_by_label('CloudflareのAPIトークン', exact=True)
