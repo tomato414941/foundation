@@ -63,6 +63,7 @@ test('A request goes out with what is kept in its headers and body, and comes ba
   assert.equal(received[0].headers.authorization, 'Bearer ' + TOKEN);
   assert.equal(received[0].body, '{"token":"' + TOKEN + '"}');
   assert.equal(received[0].path, '/echo?q=1');
+  assert.equal(received[0].headers['user-agent'], 'Foundation', 'many services refuse a request that does not say what sent it');
   assert.equal(answer.json.response.status, 200);
   assert.equal(answer.json.response.body_encoding, 'utf8');
   const echoed = JSON.parse(answer.json.response.body);

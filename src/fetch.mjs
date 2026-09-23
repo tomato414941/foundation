@@ -118,7 +118,7 @@ export async function send(prepared, values, { resolve = host => lookup(host, { 
   const secrets = [...values.values()];
   return new Promise((resolveAnswer, reject) => {
     const outgoing = httpsRequest({ host: address.address, family: address.family, port: 443, servername: host, method: prepared.method,
-      path: prepared.url.pathname + prepared.url.search, headers: { ...headers, host: prepared.url.host, 'accept-encoding': 'identity', ...(body ? { 'content-length': body.length } : {}) },
+      path: prepared.url.pathname + prepared.url.search, headers: { 'user-agent': 'Foundation', ...headers, host: prepared.url.host, 'accept-encoding': 'identity', ...(body ? { 'content-length': body.length } : {}) },
       ...(ca ? { ca } : {}), agent: createConnection ? Object.assign(new Agent({ keepAlive: false }), { createConnection }) : false, timeout: TIMEOUT }, incoming => {
       const chunks = []; let length = 0;
       incoming.on('data', chunk => {
