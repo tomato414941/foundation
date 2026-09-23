@@ -51,11 +51,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
 
     # The AI asks for something Foundation knows nothing about: it names the path, the variable and the steps.
-    asked = cli('api', 'POST', '/v1/access-requests', '--json', json.dumps({
+    asked = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
         'store': {'path': 'cloudflare/cloudflare-api-token', 'label': 'CloudflareのAPIトークン',
                   'site': 'https://dash.cloudflare.com/profile/api-tokens'},
         'purpose': 'DNSレコードの確認に使います。',
-        'guidance': 'APIトークンを作成 を押し、テンプレートから「Edit zone DNS」を選びます。\n対象のゾーンを選んで作成し、表示されたトークンを貼ってください。'}))['request']
+        'steps': ['APIトークンを作成 を押し、テンプレートから「Edit zone DNS」を選びます。', '対象のゾーンを選んで作成し、表示されたトークンを貼ってください。']}))['request']
     assert asked['kind'] == 'store'
     assert 'confirmation_code' not in asked
 

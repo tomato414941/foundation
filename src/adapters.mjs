@@ -4,14 +4,14 @@ import { OPENROUTER_API, OPENROUTER_DOCS } from './services/openrouter.mjs';
 import { GITHUB_API, GITHUB_DOCS, GITHUB_SETTINGS } from './services/github.mjs';
 
 // An adapter is an acquisition Foundation performs itself, because nobody else can: an OAuth exchange
-// that needs the operator's client secret, or a login relayed once to reach a session. It decides how
+// that needs the operator's client secret. It decides how
 // the credential is obtained, how it is kept current, and the names a command receives it under.
 //
 // Everything a person can simply go and fetch for themselves has no adapter. There the owner is asked
 // to put the value into storage, following instructions the requesting AI wrote, and Foundation holds
 // no knowledge of that service at all.
 //
-//   register  'oauth' or 'login'
+//   register  'oauth'
 //   client    how it is obtained, checked with the service and kept fresh
 //   variables the environment variables it is delivered as; deliver() may set no others
 //   deliver   what the command receives, built from what the client returned

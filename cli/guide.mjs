@@ -5,7 +5,7 @@
 // thing HTTP cannot do, and it is described last.
 //
 // This text is read by the agent, not by the owner, so it is English; everything the owner reads
-// (purposes, guidance, the dashboard) stays in the owner's language.
+// (purposes, steps, the dashboard) stays in the owner's language.
 function adapterLines(adapters) {
   if (!adapters) return ['     GET /v1/adapters lists what this server can obtain itself.'];
   const lines = [];
@@ -62,7 +62,7 @@ export function guide(adapters) {
     '1. Put it there yourself. Anything you obtained or wrote: PUT /v1/secrets/<path>, above.',
     '',
     '2. ASKING THE OWNER, for what only they can fetch -- an API token, a key, a certificate they must go and create.',
-    '   POST /v1/access-requests  {"store": {...}, "purpose": "...", "guidance": "...", "valid_minutes": 30}',
+    '   POST /v1/requests  {"store": {...}, "purpose": "...", "steps": ["...", "..."], "valid_minutes": 30}',
     '     store.path      where it will be kept, beside everything else',
     '     store.label     what they are being asked for, in their language. It titles the screen and names the field.',
 
@@ -70,22 +70,24 @@ export function guide(adapters) {
     '     store.secret    false lets you read it back afterwards; the default is that you cannot',
     '     store.multiline true for something like a PEM',
     '     purpose         one concrete sentence the owner can judge, in their language',
-    '     guidance        the steps they follow (up to 2000 characters). Foundation holds no instructions for anyone else\'s',
+    '     steps           what they do, one string per step (up to 20, 500 characters each, no line breaks). Foundation',
+    '                     holds no instructions for anyone else\'s',
     '                     site: look up what to click now, and write it yourself.',
     '   Give the owner the verification_uri (there is no code). When they finish, it is simply kept.',
     '   Ask for what the owner already holds. Never take it through the conversation and put it there yourself.',
     '',
     '3. HAVING FOUNDATION OBTAIN IT, for the few services where nobody else can: an OAuth exchange that needs the',
-    '   operator\'s own client secret, or a login relayed once. Foundation then keeps it current and can revoke it.',
+    '   operator\'s own client secret. Foundation then keeps it current and can revoke it.',
     ...adapterLines(adapters),
-    '   POST /v1/access-requests  {"adapter": "<id>", "purpose": "...", "valid_minutes": 30}   Give the owner the verification_uri.',
+    '   POST /v1/requests  {"adapter": "<id>", "purpose": "...", "valid_minutes": 30}   Give the owner the verification_uri.',
     '   GET /v1/acquisitions   what is connected and the paths each one keeps. Use those paths like any other.',
     '   Wait by retrying GET /v1/secrets every few seconds. Do not hammer it.', '',
     'WHEN IT DOES NOT WORK',
-    '   GET /v1/access-requests/current   your own request, and what happened at its page (events).',
+    '   GET /v1/requests/<id>   one of your requests, and what happened at its page (events).',
+    '   GET /v1/requests?status=pending   your requests. Several may be open at once (up to 10).',
     '   events is the raw record, in order: page_opened / page_viewed / connect_started / connect_failed (with a code and',
-    '   Foundation\'s own message) / connected / stored / approved / denied / cancelled. What was typed is never recorded.',
-    '   DELETE /v1/access-requests/current   cancels it. One pending request at a time; cancel before making a different one.',
+    '   Foundation\'s own message) / connected / stored / denied / cancelled. What was typed is never recorded.',
+    '   DELETE /v1/requests/<id>   cancels it. status is pending / done / denied / cancelled / revoked / reconnect_required.',
     '   Why a registration failed: invalid_values (wrong shape) / invalid_credential (the adapter would not take it) /',
     '   reconnect_required (the service rejected it) / already_connected. A key approval shows its own events at',
     '   GET /v1/keys/current: confirmation_required (a wrong code) / confirmation_locked (5 tries).', '',

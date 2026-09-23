@@ -67,14 +67,14 @@ test('API key is delivered only to an approved key; revocation metadata never pr
   const f = await openrouterFixture(t), token = 'fdn_' + randomBytes(32).toString('base64url');
   assert.equal((await f.request('/v1/acquisitions', { token, anonymous: true })).status, 401, 'nothing before the key is approved');
   await f.approveKey(token);
-  const created = await f.request('/v1/access-requests', { method: 'POST', token, data: { adapter: 'openrouter.oauth', purpose: 'キー情報を確認。モデルは実行しない。' } });
+  const created = await f.request('/v1/requests', { method: 'POST', token, data: { adapter: 'openrouter.oauth', purpose: 'キー情報を確認。モデルは実行しない。' } });
   const row = created.json.request;
   assert.equal(row.adapter.can_revoke, false);
   assert.match(row.adapter.access.restrictions, /読み取り専用のキーではありません/);
-  const callback = await f.callbackOpenRouter(await f.startOpenRouter({ accessRequestId: row.id }));
-  assert.equal(callback.headers.get('location'), '/connect/' + row.id + '?connection=connected');
+  const callback = await f.callbackOpenRouter(await f.startOpenRouter({ requestId: row.id }));
+  assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?connection=connected');
   const account = (await f.request('/api/state')).json.acquisitions[0];
-  assert.equal((await f.request('/api/access-requests/' + row.id)).json.request.status, 'approved', 'the request is complete');
+  assert.equal((await f.request('/api/requests/' + row.id)).json.request.status, 'done', 'the request is complete');
   const listed = await f.request('/v1/secrets', { token });
   assert.deepEqual(listed.json.secrets.map(entry => entry.path.split('/').pop()), ['openrouter-api-key']);
   assert.doesNotMatch(listed.text, /sk-or-v1-/);

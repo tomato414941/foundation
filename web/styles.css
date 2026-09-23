@@ -123,8 +123,7 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 #confirmation-code { font: 600 20px/1.4 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
 .ai-guidance { margin: 18px 0 20px; }
 .ai-guidance h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin-bottom: 10px; }
-.ai-guidance p, .guidance-steps li { font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
-.ai-guidance p + p, .ai-guidance p + .guidance-steps, .guidance-steps + p { margin-top: 10px; }
+.guidance-steps li { font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
 .guidance-steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
 .guidance-steps li { counter-increment: step; position: relative; padding-left: 36px; }
 .guidance-steps li + li { margin-top: 12px; }

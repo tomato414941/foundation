@@ -5,11 +5,11 @@ import { fixture, FakeGmail, USER_A, USER_B } from './helpers.mjs';
 import { gmailReadonly, gmailMetadata } from '../src/adapters.mjs';
 
 const key = () => 'fdn_' + randomBytes(32).toString('base64url');
-// A key not yet approved asks to be approved (/v1/keys); an approved key asks for a registration (/v1/access-requests).
+// A key not yet approved asks to be approved (/v1/keys); an approved key asks for a registration (/v1/requests).
 const asking = { name: 'dev-us のAI' };
 const registration = { adapter: 'gmail.readonly', purpose: '届いたメールの確認' };
 async function create(f, token = key(), overrides = {}, base = asking) {
-  const response = await f.request(base === asking ? '/v1/keys' : '/v1/access-requests', { method: 'POST', anonymous: true, token, data: { ...base, ...overrides } });
+  const response = await f.request(base === asking ? '/v1/keys' : '/v1/requests', { method: 'POST', anonymous: true, token, data: { ...base, ...overrides } });
   assert.equal(response.status, 201, response.text);
   return { token, row: response.json.request };
 }
@@ -21,7 +21,7 @@ async function register(f, overrides = {}, agent = null) {
 const approve = (f, row, overrides = {}) => f.request('/api/key-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code, ...overrides } });
 const usable = (f, token) => f.request('/v1/acquisitions', { token, anonymous: true });
 const cancel = (f, token) => f.request('/v1/keys/current', { method: 'DELETE', token, anonymous: true, data: {} });
-const rowStatus = (f, id) => f.app.store.db.prepare('SELECT status FROM access_requests WHERE id=? UNION ALL SELECT status FROM key_requests WHERE id=?').get(id, id)?.status;
+const rowStatus = (f, id) => f.app.store.db.prepare('SELECT status FROM requests WHERE id=? UNION ALL SELECT status FROM key_requests WHERE id=?').get(id, id)?.status;
 
 test('A new key asks only to be approved: no access before approval, the same private key after it', async t => {
   const f = await fixture(t, { login: false });
@@ -56,28 +56,28 @@ test('A new key asks only to be approved: no access before approval, the same pr
 
 test('A key not yet approved cannot ask for a registration, an approval request registers nothing, and an approved key names an adapter', async t => {
   const f = await fixture(t);
-  const refused = await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: key(), data: { ...asking, ...registration } });
+  const refused = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key(), data: { ...asking, ...registration } });
   assert.equal(refused.status, 409); assert.equal(refused.json.error.code, 'approval_required');
   const { row } = await create(f);
-  const attempt = await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { name: 'Gmail', accessRequestId: row.id } });
+  const attempt = await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { name: 'Gmail', requestId: row.id } });
   assert.equal(attempt.status, 410);
   assert.equal(f.app.store.acquisitions(USER_A).length, 0);
   const approved = await f.issueKey();
-  const bare = await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: approved.token, data: { purpose: '何もない' } });
+  const bare = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: approved.token, data: { purpose: '何もない' } });
   assert.equal(bare.status, 400); assert.equal(bare.json.error.code, 'nothing_requested');
   const again = await f.request('/v1/keys', { method: 'POST', anonymous: true, token: approved.token, data: asking });
   assert.equal(again.status, 409); assert.equal(again.json.error.code, 'already_approved');
 });
 
-test('Request creation is idempotent and cannot silently change what a shared URL asks for', async t => {
+test('Request creation is idempotent, and asking for something else makes a new request rather than changing a shared one', async t => {
   const f = await fixture(t), { token, row } = await create(f);
   assert.equal((await create(f, token)).row.id, row.id);
   assert.equal((await f.request('/v1/keys', { method: 'POST', token, data: { name: 'someone else' } })).status, 409);
   const first = await register(f);
   assert.equal((await create(f, first.token, {}, registration)).row.id, first.row.id);
-  const changed = await f.request('/v1/access-requests', { method: 'POST', token: first.token, data: { ...registration, adapter: 'gmail.metadata' } });
-  assert.equal(changed.status, 409);
-  assert.equal(f.app.store.db.prepare('SELECT adapter FROM access_requests WHERE id=?').get(first.row.id).adapter, 'gmail.readonly');
+  const changed = await f.request('/v1/requests', { method: 'POST', token: first.token, data: { ...registration, adapter: 'gmail.metadata' } });
+  assert.equal(changed.status, 201); assert.notEqual(changed.json.request.id, first.row.id);
+  assert.equal(f.app.store.db.prepare('SELECT adapter FROM requests WHERE id=?').get(first.row.id).adapter, 'gmail.readonly');
 });
 
 test('Email login returns to the exact request page and rejects open redirects', async t => {
@@ -101,7 +101,7 @@ test('Approval requires the confirmation code; a registration keeps to the reque
   assert.equal((await approve(f, row, { confirmationCode: '' })).status, 400);
   const asked = await register(f, { adapter: 'gmail.metadata' });
   assert.equal(asked.row.kind, 'connect'); assert.equal(asked.row.confirmation_code, undefined);
-  const escalation = await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { name: 'Gmail', accessRequestId: asked.row.id } });
+  const escalation = await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { name: 'Gmail', requestId: asked.row.id } });
   assert.equal(escalation.status, 400); assert.equal(escalation.json.error.code, 'scope_mismatch');
   assert.equal((await approve(f, asked.row)).status, 410, 'a registration request is not approved with a code');
 });
@@ -113,17 +113,17 @@ test('A registration request stays with its owner, completes by registering, and
   assert.equal(row.key_name, 'dev-us');
   const ownerCookie = 'fdn_session=' + f.app.store.createSession(f.auth.value());
   await f.login('other@example.test');
-  assert.equal((await f.request('/api/access-requests/' + row.id)).status, 404);
-  const flow = new URL((await f.request('/api/adapters/gmail.metadata/connect', { method: 'POST', headers: { cookie: ownerCookie }, data: { name: 'Gmail', accessRequestId: row.id } })).json.url);
+  assert.equal((await f.request('/api/requests/' + row.id)).status, 404);
+  const flow = new URL((await f.request('/api/adapters/gmail.metadata/connect', { method: 'POST', headers: { cookie: ownerCookie }, data: { name: 'Gmail', requestId: row.id } })).json.url);
   await f.callback(flow, 'second-metadata', { headers: { cookie: ownerCookie } });
-  const done = (await f.request('/api/access-requests/' + row.id, { headers: { cookie: ownerCookie } })).json.request;
-  assert.equal(done.status, 'approved'); assert.equal(done.result.label, 'second@example.test');
+  const done = (await f.request('/api/requests/' + row.id, { headers: { cookie: ownerCookie } })).json.request;
+  assert.equal(done.status, 'done'); assert.equal(done.result.label, 'second@example.test');
   assert.equal((await usable(f, runtime.token)).json.acquisitions.length, 2);
   const next = await create(f, runtime.token, {}, registration);
   f.app.store.removeKey(USER_A, runtime.id);
   assert.equal((await usable(f, runtime.token)).status, 401);
-  assert.equal((await f.request('/api/access-requests/' + next.row.id, { headers: { cookie: ownerCookie } })).json.request.status, 'revoked');
-  const blocked = await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', headers: { cookie: ownerCookie }, data: { name: 'Gmail', accessRequestId: next.row.id } });
+  assert.equal((await f.request('/api/requests/' + next.row.id, { headers: { cookie: ownerCookie } })).json.request.status, 'revoked');
+  const blocked = await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', headers: { cookie: ownerCookie }, data: { name: 'Gmail', requestId: next.row.id } });
   assert.equal(blocked.status, 409);
   assert.equal(f.app.store.keys(USER_A).length, 0);
   assert.equal(f.app.store.keys(USER_B).length, 0);
@@ -145,20 +145,20 @@ for (const end of ['deny', 'cancel', 'expire']) test(`A ${end} registration requ
   let entered, release;
   const started = new Promise(resolve => { entered = resolve; });
   f.gmail.exchangeHandler = () => { entered(); return new Promise(resolve => { release = resolve; }); };
-  const start = await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { name: 'new', accessRequestId: row.id } });
+  const start = await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { name: 'new', requestId: row.id } });
   const callback = f.callback(new URL(start.json.url), 'new-readonly');
   await started;
-  if (end === 'deny') assert.equal((await f.request('/api/access-requests/' + row.id + '/deny', { method: 'POST', data: {} })).status, 200);
-  if (end === 'cancel') assert.equal((await f.request('/v1/access-requests/current', { method: 'DELETE', token, data: {} })).status, 200);
-  if (end === 'expire') f.app.store.db.prepare('UPDATE access_requests SET expires_at=0 WHERE id=?').run(row.id);
+  if (end === 'deny') assert.equal((await f.request('/api/requests/' + row.id + '/deny', { method: 'POST', data: {} })).status, 200);
+  if (end === 'cancel') assert.equal((await f.request('/v1/requests/' + row.id, { method: 'DELETE', token, data: {} })).status, 200);
+  if (end === 'expire') f.app.store.db.prepare('UPDATE requests SET expires_at=0 WHERE id=?').run(row.id);
   release();
   const result = await callback;
-  assert.equal(result.headers.get('location'), '/connect/' + row.id + '?connection=failed');
+  assert.equal(result.headers.get('location'), '/requests/' + row.id + '?connection=failed');
   assert.equal(f.app.store.acquisitions(USER_A).length, 1);
   if (end === 'expire') {
     assert.equal(rowStatus(f, row.id), 'pending');
     f.app.store.sweep();
-    assert.equal(f.app.store.db.prepare('SELECT count(*) n FROM access_requests').get().n, 0);
+    assert.equal(f.app.store.db.prepare('SELECT count(*) n FROM requests').get().n, 0);
   } else assert.equal(rowStatus(f, row.id), end === 'deny' ? 'denied' : 'cancelled');
 });
 
@@ -169,7 +169,7 @@ test('Cross-site creation, invalid names and cross-origin approval are rejected'
   }
   assert.equal((await f.request('/v1/keys', { method: 'POST', token, data: { name: '' } })).status, 400);
   const agent = await f.issueKey();
-  assert.equal((await f.request('/v1/access-requests', { method: 'POST', token: agent.token, data: { ...registration, adapter: 'unknown' } })).status, 400);
+  assert.equal((await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { ...registration, adapter: 'unknown' } })).status, 400);
   const { row } = await create(f, token);
   const response = await f.request('/api/key-requests/' + row.id + '/approve', { method: 'POST', headers: { origin: 'https://evil.test' }, data: { confirmationCode: row.confirmation_code } });
   assert.equal(response.status, 403);
@@ -190,9 +190,9 @@ test('What a key sees reflects a connection needing attention, one removed, and 
 test('Unavailable services cannot register through a request; expired request records are deleted without revoking the key', async t => {
   const f = await fixture(t), saved = await f.credential(), { token, row } = await register(f);
   f.gmail.enabled = false;
-  assert.equal((await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { name: 'Gmail', accessRequestId: row.id } })).status, 503);
+  assert.equal((await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { name: 'Gmail', requestId: row.id } })).status, 503);
   f.gmail.enabled = true;
-  f.app.store.db.prepare('UPDATE access_requests SET expires_at=0 WHERE id=?').run(row.id);
+  f.app.store.db.prepare('UPDATE requests SET expires_at=0 WHERE id=?').run(row.id);
   f.app.store.sweep();
   assert.equal(rowStatus(f, row.id), undefined);
   assert.equal((await usable(f, token)).json.acquisitions[0].prefix, saved.prefix);
@@ -217,10 +217,10 @@ test('A second adapter uses the same request and delivery APIs without any Gmail
   const { row, token } = await register(f, { adapter: 'notes.oauth' });
   assert.equal(row.adapter.label, 'Notesで接続');
   assert.equal(row.adapter.service.name, 'Notes');
-  const start = await f.request('/api/adapters/notes.oauth/connect', { method: 'POST', data: { name: 'Notes', accessRequestId: row.id } });
+  const start = await f.request('/api/adapters/notes.oauth/connect', { method: 'POST', data: { name: 'Notes', requestId: row.id } });
   assert.equal(start.status, 200, start.text);
   const callback = await f.request('/oauth/notes.oauth/callback?state=' + new URL(start.json.url).searchParams.get('state') + '&code=notes-code');
-  assert.equal(callback.headers.get('location'), '/connect/' + row.id + '?connection=connected');
+  assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?connection=connected');
   const saved = f.app.store.acquisitions(USER_A)[0];
   assert.equal(saved.adapter, 'notes.oauth'); assert.equal(saved.prefix.split('/')[0], 'notes');
   const delivered = await f.request('/v1/deliver', { method: 'POST', token, data: { paths: f.app.store.secrets(USER_A, saved.prefix).map(entry => entry.path) } });
@@ -268,7 +268,7 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
   assert.doesNotMatch(me.text, /token_hash|fdn_/);
   // A later request from the same key is shown under the registered name, whatever the runtime calls itself.
   const next = await create(f, token, { name: 'dev-us の Claude Code' }, registration);
-  const page = (await f.request('/api/access-requests/' + next.row.id)).json.request;
+  const page = (await f.request('/api/requests/' + next.row.id)).json.request;
   assert.equal(page.requester_name, 'dev-us の claude'); assert.equal(page.key_name, 'dev-us の claude');
   const agentId = me.json.key.id;
   assert.equal((await f.request('/api/keys/' + agentId, { method: 'PATCH', data: { name: '' } })).status, 400);
@@ -289,7 +289,6 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
 test('A runtime can read its own request raw: what it asked for, and what happened at its page, never an input', async t => {
   const f = await fixture(t, { login: false }), { token, row } = await create(f);
   const approval = async () => (await f.request('/v1/keys/current', { token, anonymous: true })).json.request;
-  const view = async () => (await f.request('/v1/access-requests/current', { token, anonymous: true })).json.request;
   assert.deepEqual((await approval()).events, []);
   assert.equal((await approval()).confirmation_code, row.confirmation_code, 'the runtime created the request and already knows the code');
   assert.equal((await f.request('/keys/' + row.id, { anonymous: true })).status, 200);
@@ -302,23 +301,24 @@ test('A runtime can read its own request raw: what it asked for, and what happen
   assert.equal(events[2].code, 'confirmation_required');
   // The same key, now approved, asks for a registration; its events are the registration's own.
   const asked = await create(f, token, {}, registration);
-  await f.request('/api/access-requests/' + asked.row.id);
-  const start = await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { name: 'Gmail', accessRequestId: asked.row.id } });
+  const view = async (id = asked.row.id, as = token) => (await f.request('/v1/requests/' + id, { token: as, anonymous: true })).json.request;
+  await f.request('/api/requests/' + asked.row.id);
+  const start = await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { name: 'Gmail', requestId: asked.row.id } });
   await f.callback(new URL(start.json.url), 'headers-metadata');
-  const again = await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { name: 'Gmail', accessRequestId: asked.row.id } });
+  const again = await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { name: 'Gmail', requestId: asked.row.id } });
   await f.callback(new URL(again.json.url), 'personal-readonly');
   events = (await view()).events;
   assert.deepEqual(events.map(item => item.event), ['page_viewed', 'connect_started', 'connect_failed', 'connect_started', 'connected']);
   assert.equal(events[2].code, 'scope_mismatch'); assert.match(events[2].message, /読み取り範囲/); assert.equal(events[2].adapter, 'gmail.readonly');
   assert.ok(events.every(item => Number.isFinite(item.at)));
   assert.doesNotMatch(JSON.stringify(events), /headers-metadata|personal-readonly|google-access|refresh_token|fdn_|ZZZZ/);
-  assert.equal((await view()).status, 'approved');
+  assert.equal((await view()).status, 'done');
   // Another key never sees this request; a cancelled request records it.
-  assert.equal((await f.request('/v1/access-requests/current', { token: key(), anonymous: true })).status, 410);
+  const other = await f.issueKey('other');
+  assert.equal((await f.request('/v1/requests/' + asked.row.id, { token: other.token, anonymous: true })).status, 404);
   const next = await create(f, token, { adapter: 'gmail.metadata' }, registration);
-  assert.equal((await f.request('/v1/access-requests/current', { method: 'DELETE', token, anonymous: true, data: {} })).status, 200);
-  assert.deepEqual((await view()).events.map(item => item.event), ['cancelled']);
-  assert.equal((await view()).id, next.row.id);
+  assert.equal((await f.request('/v1/requests/' + next.row.id, { method: 'DELETE', token, anonymous: true, data: {} })).status, 200);
+  assert.deepEqual((await view(next.row.id)).events.map(item => item.event), ['cancelled']);
 });
 
 test('The runtime chooses how long the link stays open, within a day', async t => {
@@ -331,14 +331,34 @@ test('The runtime chooses how long the link stays open, within a day', async t =
   for (const bad of [0, 1441, 1.5, '120']) assert.equal((await f.request('/v1/keys', { method: 'POST', anonymous: true, token: key(), data: { ...asking, valid_minutes: bad } })).json.error.code, 'invalid_validity', String(bad));
 });
 
-test('The runtime writes the guidance its owner reads when registering; Foundation frames it and bounds it', async t => {
-  const f = await fixture(t), agent = await f.issueKey();
-  const guidance = '1. 定義ファイルをダウンロード\n2. スタック名は foundation-admin\n\n出力の値を貼る';
-  const created = await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: agent.token, data: { ...registration, guidance: guidance + '\r\n' } });
+test('The runtime writes the steps its owner follows as a list; Foundation keeps them as written and bounds them', async t => {
+  const f = await fixture(t), issued = await f.issueKey();
+  const steps = ['定義ファイルをダウンロードします', 'スタック名は foundation-admin にします', '出力の値を貼ります'];
+  const created = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: issued.token, data: { ...registration, steps: steps.map(step => ' ' + step + ' ') } });
   assert.equal(created.status, 201, created.text);
-  assert.equal(created.json.request.guidance, guidance);
-  assert.equal((await f.request('/api/access-requests/' + created.json.request.id)).json.request.guidance, guidance);
-  assert.equal((await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: agent.token, data: { ...registration, guidance: 'different' } })).status, 409, 'different guidance is a different request');
-  assert.equal((await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: key(), data: { ...registration, guidance: 'x'.repeat(2001) } })).json.error.code, 'invalid_guidance');
-  assert.equal((await f.request('/v1/access-requests', { method: 'POST', anonymous: true, token: key(), data: { ...registration, guidance: 'bad\u0007' } })).json.error.code, 'invalid_guidance');
+  assert.deepEqual(created.json.request.steps, steps);
+  assert.deepEqual((await f.request('/api/requests/' + created.json.request.id)).json.request.steps, steps);
+  for (const bad of ['1. 一つの文字列', ['改行\nあり'], ['x'.repeat(501)], [''], Array(21).fill('多すぎる'), [42]]) {
+    const refused = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: issued.token, data: { ...registration, steps: bad } });
+    assert.equal(refused.json.error.code, 'invalid_steps', JSON.stringify(bad).slice(0, 40));
+  }
+});
+
+test('A key may have several requests open at once, each at its own address, and lists its own', async t => {
+  const f = await fixture(t), issued = await f.issueKey(), other = await f.issueKey('other');
+  const asks = [];
+  for (const adapter of ['gmail.readonly', 'gmail.metadata']) {
+    const made = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { adapter, purpose: adapter } });
+    assert.equal(made.status, 201, made.text); asks.push(made.json.request);
+  }
+  assert.notEqual(asks[0].id, asks[1].id);
+  assert.equal(asks[1].verification_uri, f.base + '/requests/' + asks[1].id);
+  const again = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { adapter: 'gmail.readonly', purpose: 'gmail.readonly' } });
+  assert.equal(again.json.request.id, asks[0].id, 'asking again for the same thing is the same request');
+  assert.deepEqual((await f.request('/v1/requests?status=pending', { token: issued.token })).json.requests.map(row => row.id), asks.map(row => row.id));
+  assert.deepEqual((await f.request('/v1/requests', { token: other.token })).json.requests, []);
+  for (let n = 2; n < 10; n++) assert.equal((await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { adapter: 'gmail.readonly', purpose: 'more ' + n } })).status, 201);
+  const full = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { adapter: 'gmail.readonly', purpose: 'one too many' } });
+  assert.equal(full.status, 409); assert.equal(full.json.error.code, 'too_many_pending');
+  assert.equal((await f.request('/v1/requests?status=nope', { token: issued.token })).json.error.code, 'invalid_status');
 });

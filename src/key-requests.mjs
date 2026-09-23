@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { digest } from './store.mjs';
 import { fail } from './errors.mjs';
-import { MAX_REQUEST_TTL, REQUEST_ID, RUNTIME_KEY, CODE_ATTEMPTS } from './access-requests.mjs';
+import { MAX_REQUEST_TTL, REQUEST_ID, RUNTIME_KEY, CODE_ATTEMPTS } from './requests.mjs';
 
 const normalizeCode = value => typeof value === 'string' ? value.toUpperCase().replace(/[^0-9A-F]/g, '') : '';
 

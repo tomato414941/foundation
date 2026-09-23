@@ -12,7 +12,7 @@ const parse = row => ({ ...row, readable: row.readable === 1 });
 export const ACQUISITION_LIMIT = 50;
 const entryBinding = row => `entry:${row.owner_id}:${row.id}`;
 
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 // secrets: what the agent may not read, kept so that a command can be given it. Bytes at a path, sealed and bound to this owner and
 //   this row. Nothing here says what the
 //   how a command receives them, settled when they were written. readable is 0 when they may only be delivered.
@@ -22,7 +22,19 @@ const SCHEMA_VERSION = 10;
 //   Every other entry has no row here and is simply what was put there.
 // Steps from one shape to the next. A database is only ever one version behind at a time, and each step
 // adds what the next version expects; nothing that already holds data is rewritten.
-const STEPS = {};
+const STEPS = {
+  // A key may have several requests open at once, each with its own address, and writes the owner's steps as a
+  // list. Requests still open are dropped rather than carried: each lasts a day at most, and asking again works.
+  11: `
+    DROP TABLE access_requests;
+    CREATE TABLE requests (
+      id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, key_id TEXT NOT NULL, owner_id TEXT NOT NULL, requester_name TEXT NOT NULL,
+      adapter TEXT, purpose TEXT NOT NULL, details TEXT NOT NULL, steps TEXT NOT NULL, progress TEXT, credential_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX requests_token ON requests(token_hash, created_at);
+  `,
+};
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -38,12 +50,12 @@ const SCHEMA = `
     status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
   );
   CREATE INDEX key_requests_token ON key_requests(token_hash, created_at);
-  CREATE TABLE access_requests (
-    id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, requester_name TEXT NOT NULL, adapter TEXT,
-    purpose TEXT NOT NULL, details TEXT NOT NULL, guidance TEXT NOT NULL,
-    progress TEXT, owner_id TEXT, key_id TEXT, credential_id TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+  CREATE TABLE requests (
+    id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, key_id TEXT NOT NULL, owner_id TEXT NOT NULL, requester_name TEXT NOT NULL,
+    adapter TEXT, purpose TEXT NOT NULL, details TEXT NOT NULL, steps TEXT NOT NULL, progress TEXT, credential_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
   );
-  CREATE INDEX access_requests_token ON access_requests(token_hash, created_at);
+  CREATE INDEX requests_token ON requests(token_hash, created_at);
   CREATE TABLE secrets (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, path TEXT NOT NULL,
     size INTEGER NOT NULL, readable INTEGER NOT NULL,
@@ -102,7 +114,7 @@ export class Store {
   sweep() {
     this.db.prepare('DELETE FROM oauth_flows WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(Date.now());
-    this.db.prepare('DELETE FROM access_requests WHERE expires_at<=?').run(Date.now());
+    this.db.prepare('DELETE FROM requests WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM key_requests WHERE expires_at<=?').run(Date.now());
   }
   // Storage. Listing never opens anything; only reading and delivering do.
