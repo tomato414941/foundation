@@ -49,3 +49,32 @@ test('says so when a path gives no usable name', async (t) => {
   assert.equal(refused.status, 400);
   assert.equal(refused.json.error.code, 'no_variable');
 });
+
+test('asks for several things at once, and keeps them together or not at all', async (t) => {
+  const f = await fixture(t);
+  await f.approveKey(KEY);
+  const asked = await f.request('/v1/access-requests', { method: 'POST', token: KEY, anonymous: true, data: {
+    store: [
+      { path: 'apple/auth-key', label: '.p8 の中身', multiline: true, type: 'text/plain' },
+      { path: 'apple/key-id', label: 'Key ID', secret: false },
+      { path: 'apple/issuer-id', label: 'Issuer ID', secret: false },
+    ],
+    purpose: 'ビルドの提出に使います。' } });
+  assert.equal(asked.status, 201, asked.text);
+  assert.equal(asked.json.request.kind, 'store');
+  assert.deepEqual(asked.json.request.store.map(one => one.path), ['apple/auth-key', 'apple/key-id', 'apple/issuer-id']);
+
+  // One missing value keeps none of them.
+  const partial = await f.request('/api/access-requests/' + asked.json.request.id + '/store',
+    { method: 'POST', data: { contents: { 'apple/auth-key': 'KEY', 'apple/key-id': 'ABC123' } } });
+  assert.equal(partial.status, 400);
+  assert.deepEqual((await f.request('/v1/secrets', { token: KEY, anonymous: true })).json.secrets, []);
+
+  const stored = await f.request('/api/access-requests/' + asked.json.request.id + '/store',
+    { method: 'POST', data: { contents: { 'apple/auth-key': 'KEY', 'apple/key-id': 'ABC123', 'apple/issuer-id': 'UUID' } } });
+  assert.equal(stored.status, 200, stored.text);
+  const kept = await f.request('/v1/secrets', { token: KEY, anonymous: true });
+  assert.deepEqual(kept.json.secrets.map(one => one.path), ['apple/auth-key', 'apple/issuer-id', 'apple/key-id']);
+  assert.equal(kept.json.secrets.find(one => one.path === 'apple/key-id').readable, true, 'an identifier is not a secret');
+  assert.equal(kept.json.secrets.find(one => one.path === 'apple/auth-key').readable, false);
+});

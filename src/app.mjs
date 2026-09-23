@@ -424,14 +424,19 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         if (storeRoute && method === 'POST') {
           const row = requests.forUser(storeRoute[1], user.id, true);
           if (requests.kindOf(row) !== 'store') fail(409, 'wrong_kind', 'この依頼は保管の依頼ではありません。');
+          // Several things asked for together are kept together: all of them, or none.
           const asked = requests.details(row);
-          const input = await body(req, SECRET_MAX);
-          if (typeof input.content !== 'string' || input.content === '') fail(400, 'invalid_values', '入力内容を確認してください。');
+          const input = await body(req, SECRET_MAX * asked.length);
+          const given = input.contents && typeof input.contents === 'object' && !Array.isArray(input.contents) ? input.contents
+            : typeof input.content === 'string' ? { [asked[0].path]: input.content } : null;
+          if (!given || asked.some(one => typeof given[one.path] !== 'string' || given[one.path] === '')) fail(400, 'invalid_values', '入力内容を確認してください。');
           progressRequestId = row.id;
           return store.transaction(() => {
             requests.forUser(row.id, user.id, true);
-            secrets.put(user.id, { path: asked.path, content: Buffer.from(input.content, 'utf8'), type: asked.type, secret: asked.secret, keptBy: row.requester_name });
-            requests.registered(row.id, user.id, asked.path);
+            for (const one of asked) {
+              secrets.put(user.id, { path: one.path, content: Buffer.from(given[one.path], 'utf8'), type: one.type, secret: one.secret, keptBy: row.requester_name });
+            }
+            requests.registered(row.id, user.id, asked.map(one => one.path).join(', '));
             requests.record(row.id, 'stored');
             return send(200, { stored: true, path: asked.path });
           });

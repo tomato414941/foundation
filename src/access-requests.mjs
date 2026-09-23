@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { digest } from './store.mjs';
 import { fail } from './errors.mjs';
-import { declaration } from './secrets.mjs';
+import { declarations } from './secrets.mjs';
 
 export const REQUEST_TTL = 30 * 60_000, MAX_REQUEST_TTL = 24 * 60 * 60_000;
 export const REQUEST_ID = /^[A-Za-z0-9_-]{43}$/;
@@ -13,7 +13,7 @@ const normalizeCode = value => typeof value === 'string' ? value.toUpperCase().r
 // independently generated runtime key is stored, even before user approval.
 export class AccessRequests {
   constructor(store, adapters) { this.store = store; this.db = store.db; this.adapters = adapters; }
-  kindOf(row) { return row.adapter ? 'connect' : row.details !== '{}' ? 'store' : 'approve'; }
+  kindOf(row) { return row.adapter ? 'connect' : row.details !== '[]' ? 'store' : 'approve'; }
   key(token) {
     if (typeof token !== 'string' || !RUNTIME_KEY.test(token)) fail(401, 'invalid_token', 'アクセスキーの形式が無効です。');
     return digest(token);
@@ -56,7 +56,7 @@ export class AccessRequests {
     if (agent && !asks) fail(409, 'already_approved', 'このアクセスキーは承認済みです。依頼するときは接続方法 (--adapter) か、保管するものの申告を指定してください。');
     if (adapter !== undefined && store !== undefined) fail(400, 'invalid_request', '接続方法と保管の申告は同時に指定できません。');
     const kind = adapter ?? null;
-    const encoded = JSON.stringify(store !== undefined ? declaration(store, this.adapters.owned) : {});
+    const encoded = JSON.stringify(store !== undefined ? declarations(store) : []);
     if (adapter !== undefined) this.adapters.get(adapter);
     // One open request per key at a time. A request left open by an earlier approval of the key, since revoked, does not count.
     const previous = this.db.prepare("SELECT * FROM access_requests WHERE token_hash=? AND status='pending' AND expires_at>? AND COALESCE(agent_id, '')=? ORDER BY created_at DESC LIMIT 1").get(hash, Date.now(), agent?.id || '');
