@@ -69,3 +69,20 @@ test('A new database is created in the current shape; a database of any other sh
     after.close();
   }
 });
+
+test('A database one version behind is carried to the current shape and keeps what it holds', async (t) => {
+  const dir = await directory(t), path = join(dir, 'state.sqlite');
+  const created = new Store(path, KEY);
+  created.addAgent(USER_A, 'runtime');
+  const current = created.db.prepare('PRAGMA user_version').get().user_version;
+  created.close();
+  // The shape the previous version left: it still had the tables the current step removes.
+  const older = new DatabaseSync(path);
+  older.exec(`CREATE TABLE products (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_used_at TEXT);
+    CREATE TABLE rooms (id TEXT PRIMARY KEY, product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE, external_id TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(product_id, external_id));
+    PRAGMA user_version = ${current - 1};`);
+  older.close();
+  const carried = new Store(path, KEY); t.after(() => carried.close());
+  assert.equal(carried.db.prepare('PRAGMA user_version').get().user_version, current);
+  assert.deepEqual(carried.agents(USER_A).map(row => row.name), ['runtime']);
+});
