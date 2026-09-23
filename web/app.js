@@ -1,9 +1,9 @@
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
 let state = null, toastTimer, loginTimer, revision = 0;
-// A request page is either what an approved key asks for (/connect/…) or a new key asking to be approved (/keys/…).
+// A request page is either what an approved key asks for (/requests/…) or a new key asking to be approved (/keys/…).
 const keyRequest = /^\/keys\//.test(location.pathname);
-const requestId = location.pathname.match(/^\/(?:connect|keys)\/([A-Za-z0-9_-]{43})$/)?.[1];
-const requestApi = requestId && (keyRequest ? '/api/key-requests/' : '/api/access-requests/') + requestId;
+const requestId = location.pathname.match(/^\/(?:requests|keys)\/([A-Za-z0-9_-]{43})$/)?.[1];
+const requestApi = requestId && (keyRequest ? '/api/key-requests/' : '/api/requests/') + requestId;
 const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : 'home';
 const pagePath = requestId ? location.pathname : page === 'objects' ? '/objects' : page === 'secrets' ? '/secrets' : '/';
 let accessRequest = null, requestError = '';
@@ -331,22 +331,8 @@ function bindObjects() {
 }
 const siteLink = value => { try { const url = new URL(value); return `<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer"><strong>${esc(url.host)}</strong>${esc(url.pathname === '/' ? '' : url.pathname)} ↗</a>`; } catch { return esc(value); } };
 // Guidance the requesting AI wrote for its owner. Framed as the AI's words; line breaks kept, nothing else interpreted.
-// What the requesting AI wrote for the owner to follow. Lines that start with a number are steps; anything else stays a paragraph.
-function guidanceBlock(text) {
-  const blocks = [];
-  for (const line of (text || '').split('\n')) {
-    const step = line.match(/^\s*\d+\s*[.)．、]\s*(.*)$/), last = blocks.at(-1);
-    if (step) { if (last?.type === 'steps') last.items.push(step[1]); else blocks.push({ type: 'steps', items: [step[1]] }); }
-    else if (!line.trim()) blocks.push({ type: 'gap' });
-    else if (last?.type === 'steps') last.items[last.items.length - 1] += '\n' + line.trim();
-    else if (last?.type === 'text') last.text += '\n' + line;
-    else blocks.push({ type: 'text', text: line });
-  }
-  const lines = value => esc(value).replace(/\n/g, '<br>');
-  const body = blocks.map(block => block.type === 'steps' ? `<ol class="guidance-steps">${block.items.map(item => `<li>${lines(item)}</li>`).join('')}</ol>`
-    : block.type === 'text' ? `<p>${lines(block.text)}</p>` : '').join('');
-  return body ? `<section class="ai-guidance"><h3>依頼元のAIからの案内</h3>${body}</section>` : '';
-}
+// The steps the requesting AI wrote for the owner to follow, shown as the numbered list they are.
+const stepsBlock = steps => steps?.length ? `<section class="ai-guidance"><h3>依頼元のAIからの案内</h3><ol class="guidance-steps">${steps.map(step => `<li>${esc(step)}</li>`).join('')}</ol></section>` : '';
 const codeComplete = form => /^[0-9a-fA-F]{8}$/.test((form.elements.confirmationCode?.value || '').replace(/[^0-9a-zA-Z]/g, ''));
 function codeField(enabled = true) {
   return `<label for="confirmation-code">確認コード</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="0000-0000" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">AIとの会話に表示されたコードを入力してください。心当たりのない依頼は承認しないでください。</p>`;
@@ -359,7 +345,8 @@ function renderRequest() {
   const row = accessRequest;
   const shell = (content) => `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main class="approval-main">${content}</main></div>`;
   const finished = {
-    approved: row && row.kind !== 'approve' ? ['登録しました', `${row.result?.label || row.result?.path || ''} を、${row.requester_name}から利用できます。この画面は閉じて構いません。`] : ['承認しました', `${row?.requester_name || ''}から、あなたが預けているものを利用できるようになりました。この画面は閉じて構いません。`],
+    done: ['登録しました', `${row?.result?.label || row?.result?.paths?.join('、') || ''} を、${row?.requester_name || ''}から利用できます。この画面は閉じて構いません。`],
+    approved: ['承認しました', `${row?.requester_name || ''}から、あなたが預けているものを利用できるようになりました。この画面は閉じて構いません。`],
     denied: row && row.kind !== 'approve' ? ['登録しませんでした', 'この依頼による変更はありません。'] : ['承認しませんでした', 'このアクセスキーは使えません。'],
     cancelled: ['依頼は取り消されました', '必要な場合は、AIに新しい依頼を作ってもらってください。'],
     revoked: ['アクセスキーは失効しています', 'この依頼元のキーは利用できません。'],
@@ -367,7 +354,7 @@ function renderRequest() {
   };
   if (!row || row.status !== 'pending') {
     const [title, description] = row ? finished[row.status] || ['依頼を確認できません', '依頼のリンクを開き直してください。'] : ['依頼を確認できません', requestError];
-    app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(row?.status === 'approved' ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p><a class="button secondary" href="/">預けているものを見る</a></section>`);
+    app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(['approved', 'done'].includes(row?.status) ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p><a class="button secondary" href="/">預けているものを見る</a></section>`);
     return;
   }
   const expiry = `<p class="request-expiry">この依頼は ${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで有効です。</p>`;
@@ -380,7 +367,7 @@ function renderRequest() {
       ${adapter.failure_note && ['failed', 'scope', 'retry', 'changed'].includes(resultCode) ? `<p class="permission-note">${esc(adapter.failure_note.text)}<a href="${esc(adapter.failure_note.href)}" target="_blank" rel="noopener noreferrer">${esc(adapter.failure_note.link)} ↗</a></p>` : ''}`;
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(adapter.label)}</h1></div></header>
     <dl class="approval-facts">${row.purpose ? `<div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}<div><dt>届く範囲</dt><dd>${esc(adapter.access.name)}</dd></div></dl>
-    ${guidanceBlock(row.guidance)}
+    ${stepsBlock(row.steps)}
     <div class="register-body">${body}</div>
     <button class="text-button full" type="button" data-action="deny-request">接続しない</button>${expiry}</section>`);
 }
@@ -396,7 +383,7 @@ function renderStore(row, shell, expiry) {
   const secretly = asked.some(one => one.secret), openly = asked.some(one => !one.secret);
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${title}</h1></div></header>
     <dl class="approval-facts">${row.purpose ? `<div><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}</dl>
-    ${guidanceBlock(row.guidance)}
+    ${stepsBlock(row.steps)}
     ${site ? `<a class="button secondary full setup-link" href="${esc(site)}" target="_blank" rel="noopener noreferrer"><span>${esc(new URL(site).host)} を開く ↗</span></a>` : ''}
     <form id="store-request-form">${asked.map((one, at) => `<label for="stored-${at}">${esc(one.label)}</label>${field(one, at)}`).join('')}
     <p class="permission-note">Foundationは中身を確認しません。${secretly ? '登録後、AIは' + (openly ? '伏せた欄の値を' : 'この値を') + '読み出せません（渡すことだけができます）。' : '登録後、AIはこの値を読み出せます。'}</p>
@@ -405,7 +392,7 @@ function renderStore(row, shell, expiry) {
     <button class="text-button full" type="button" data-action="deny-request">登録しない</button>${expiry}</section>`);
   bindForm(async (data) => {
     const contents = Object.fromEntries(asked.map(one => [one.path, String(data.get(one.path) ?? '')]));
-    try { await api(`/api/access-requests/${row.id}/store`, { method: 'POST', data: { contents } }); }
+    try { await api(`/api/requests/${row.id}/store`, { method: 'POST', data: { contents } }); }
     catch (error) { if ([401, 404].includes(error.status)) await refresh(); throw error; }
     await refresh(); toast('登録しました。');
   }, app);
@@ -548,7 +535,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'logout') { target.disabled = true; await api('/api/session', { method: 'DELETE' }); await showLogin(); }
     if (action === 'request-connect') {
       target.disabled = true;
-      const result = await api(`/api/adapters/${accessRequest.adapter.id}/connect`, { method: 'POST', data: { accessRequestId: requestId } });
+      const result = await api(`/api/adapters/${accessRequest.adapter.id}/connect`, { method: 'POST', data: { requestId } });
       location.assign(result.url);
     }
     if (action === 'deny-request') {

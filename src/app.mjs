@@ -7,7 +7,7 @@ import { Store } from './store.mjs';
 import { fail, HttpError, nameValue } from './errors.mjs';
 import { Adapters } from './adapters.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
-import { AccessRequests } from './access-requests.mjs';
+import { Requests } from './requests.mjs';
 import { KeyRequests } from './key-requests.mjs';
 import { Acquisitions } from './acquisitions.mjs';
 import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX, secretPath } from './secrets.mjs';
@@ -25,12 +25,12 @@ const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/se
 const MAX_BODY = 12_000;
 const SESSION_AGE = 14 * 86400;
 const LOGIN_CALLBACK = '/auth/callback';
-const CONNECT_PAGE = /^\/connect\/[A-Za-z0-9_-]{43}$/, KEY_PAGE = /^\/keys\/[A-Za-z0-9_-]{43}$/;
+const REQUEST_PAGE = /^\/requests\/[A-Za-z0-9_-]{43}$/, KEY_PAGE = /^\/keys\/[A-Za-z0-9_-]{43}$/;
 // A value a key kept itself passed through no adapter, so Foundation has nothing to say about what it reaches.
 const KEPT_ACCESS = Object.freeze({ name: '中身は確認していません', description: 'AIが自分で預けた値です。Foundationは何の値かも、何ができるかも確認していません。', restrictions: '心当たりのないものは削除してください。' });
 
 function returnPath(value = '/') {
-  if (!PAGES.includes(value) && (typeof value !== 'string' || !(CONNECT_PAGE.test(value) || KEY_PAGE.test(value)))) fail(400, 'invalid_return', '接続リンクを開き直してください。');
+  if (!PAGES.includes(value) && (typeof value !== 'string' || !(REQUEST_PAGE.test(value) || KEY_PAGE.test(value)))) fail(400, 'invalid_return', '接続リンクを開き直してください。');
   return value;
 }
 
@@ -95,7 +95,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   const secrets = new Secrets(store);
   const objects = new Objects(spaceBackend);
   const acquisitions = new Acquisitions(store, adapters);
-  const requests = new AccessRequests(store, adapters), keyRequests = new KeyRequests(store);
+  const requests = new Requests(store, adapters), keyRequests = new KeyRequests(store);
   const logins = new EmailLogins({ now: loginClock });
   const refreshing = new Map(), limits = new Map(), disconnects = new Set();
   const timer = setInterval(() => {
@@ -194,8 +194,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       const setNamedCookie = (name, value, age) => res.appendHeader('Set-Cookie', `${name}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${age}${external ? '; Secure' : ''}`);
       const setCookie = (value, age) => setNamedCookie('fdn_session', value, age);
       const loginToken = readCookie(req, 'fdn_login');
-      if ((STATIC.has(path) || CONNECT_PAGE.test(path) || KEY_PAGE.test(path)) && method === 'GET') {
-        if (CONNECT_PAGE.test(path)) requests.record(path.slice('/connect/'.length), 'page_opened');
+      if ((STATIC.has(path) || REQUEST_PAGE.test(path) || KEY_PAGE.test(path)) && method === 'GET') {
+        if (REQUEST_PAGE.test(path)) requests.record(path.slice('/requests/'.length), 'page_opened');
         if (KEY_PAGE.test(path)) keyRequests.record(path.slice('/keys/'.length), 'page_opened');
         const [filename, type] = STATIC.get(STATIC.has(path) ? path : '/');
         res.writeHead(200, { 'content-type': type });
@@ -236,10 +236,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           if (!flow) fail(400, 'invalid_state', '接続をやり直してください。');
           if (flow.adapter !== oauthCallback[1]) fail(400, 'invalid_state', '接続をやり直してください。');
           const adapter = adapters.get(flow.adapter);
-          if (flow.accessRequestId) {
-            destination = '/connect/' + flow.accessRequestId;
-            requests.forUser(flow.accessRequestId, user.id, true);
-            progressRequestId = flow.accessRequestId;
+          if (flow.requestId) {
+            destination = '/requests/' + flow.requestId;
+            requests.forUser(flow.requestId, user.id, true);
+            progressRequestId = flow.requestId;
           }
           if (url.searchParams.has('error')) {
             fail(400, 'authorization_denied', '接続先での認証は許可されませんでした。');
@@ -251,16 +251,16 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             previous = acquisitionFor(user.id, flow.previous.prefix);
             if (previous.generation !== flow.previous.generation || previous.status === 'disconnecting') fail(409, 'connection_changed', '接続状態が変わりました。');
           }
-          if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true);
+          if (flow.requestId) requests.forUser(flow.requestId, user.id, true);
           await verifyConnection(req, session, user,
             () => adapter.client.exchange({ ...flow, code, range: adapter.range }, previous ? { subject: previous.subject, secret: store.acquisitionState(previous).renewal } : undefined),
             result => {
-              if (flow.accessRequestId) requests.forUser(flow.accessRequestId, user.id, true);
+              if (flow.requestId) requests.forUser(flow.requestId, user.id, true);
               const saved = acquisitions.save(user.id, adapter.id, result, { keptBy: flow.requestedBy, previous });
-              if (flow.accessRequestId) requests.registered(flow.accessRequestId, user.id, saved.prefix);
+              if (flow.requestId) requests.done(flow.requestId, user.id, saved.prefix);
               return saved.prefix;
             });
-          if (flow.accessRequestId) requests.record(flow.accessRequestId, 'connected', { adapter: adapter.id });
+          if (flow.requestId) requests.record(flow.requestId, 'connected', { adapter: adapter.id });
           return redirect(connectionLocation('connected'));
         } catch (error) {
           if (progressRequestId && error instanceof HttpError) requests.record(progressRequestId, 'connect_failed', { adapter: oauthCallback[1], code: error.code, message: error.message });
@@ -331,22 +331,29 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
-      // What an approved key asks its owner for: something to keep, or a connection Foundation makes itself.
-      if (path === '/v1/access-requests' || path === '/v1/access-requests/current') {
+      // What an approved key asks its owner for: something to keep, or a connection Foundation makes itself. A key
+      // reads each of its own requests raw (what it asked, and what happened at its page), and may cancel one.
+      const requestRoute = path.match(/^\/v1\/requests(?:\/([A-Za-z0-9_-]{43}))?$/);
+      if (requestRoute) {
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
         const token = bearer(req);
         rateLimit('request-poll:' + requests.key(token), 30);
-        if (path === '/v1/access-requests' && method === 'POST') {
+        const id = requestRoute[1];
+        if (!id && method === 'POST') {
           const input = await body(req);
-          const purpose = purposeValue(input.purpose);
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
-          const row = requests.create(token, { purpose, adapter: input.adapter, store: input.store, guidance: input.guidance ?? '', validMinutes: input.valid_minutes ?? 30 });
+          const row = requests.create(token, { purpose: purposeValue(input.purpose), adapter: input.adapter, store: input.store, steps: input.steps ?? [], validMinutes: input.valid_minutes ?? 30 });
           return send(201, { request: requests.summary(row, origin) });
         }
-        if (path.endsWith('/current') && method === 'GET') return send(200, { request: { ...requests.runtimeView(token), verification_uri: origin + '/connect/' + requests.current(token).id } });
-        if (path.endsWith('/current') && method === 'DELETE') {
+        if (!id && method === 'GET') {
+          const status = url.searchParams.get('status');
+          if (status !== null && !['pending', 'done', 'denied', 'cancelled'].includes(status)) fail(400, 'invalid_status', 'status は pending / done / denied / cancelled のいずれかです。');
+          return send(200, { requests: requests.list(token, status).map(row => requests.summary(row, origin)) });
+        }
+        if (id && method === 'GET') return send(200, { request: requests.summary(requests.forKey(token, id), origin, { events: true }) });
+        if (id && method === 'DELETE') {
           await body(req);
-          const cancelled = requests.cancel(token); requests.record(cancelled.id, 'cancelled');
+          const cancelled = requests.cancel(token, id); requests.record(cancelled.id, 'cancelled');
           return send(200, { request: requests.summary(cancelled, origin) });
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
@@ -425,7 +432,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         }
         // The owner fulfils a storage request: what they typed becomes the entry the key asked for, exactly
         // where and how the key declared it. Foundation adds nothing and checks nothing about the content.
-        const storeRoute = path.match(/^\/api\/access-requests\/([A-Za-z0-9_-]{43})\/store$/);
+        const storeRoute = path.match(/^\/api\/requests\/([A-Za-z0-9_-]{43})\/store$/);
         if (storeRoute && method === 'POST') {
           const row = requests.forUser(storeRoute[1], user.id, true);
           if (requests.kindOf(row) !== 'store') fail(409, 'wrong_kind', 'この依頼は保管の依頼ではありません。');
@@ -440,16 +447,16 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             for (const one of asked) {
               secrets.put(user.id, { path: one.path, content: Buffer.from(given[one.path], 'utf8'), secret: one.secret });
             }
-            requests.registered(row.id, user.id, asked.map(one => one.path).join(', '));
+            requests.done(row.id, user.id, asked.map(one => one.path).join(', '));
             requests.record(row.id, 'stored');
-            return send(200, { stored: true, path: asked.path });
+            return send(200, { stored: true, paths: asked.map(one => one.path) });
           });
         }
-        const requestRoute = path.match(/^\/api\/access-requests\/([A-Za-z0-9_-]{43})(\/deny)?$/);
-        if (requestRoute) {
-          const row = requests.forUser(requestRoute[1], user.id);
-          if (!requestRoute[2] && method === 'GET') { requests.record(row.id, 'page_viewed'); return send(200, { request: requests.summary(row, origin) }); }
-          if (method === 'POST' && requestRoute[2]) {
+        const ownerRequest = path.match(/^\/api\/requests\/([A-Za-z0-9_-]{43})(\/deny)?$/);
+        if (ownerRequest) {
+          const row = requests.forUser(ownerRequest[1], user.id);
+          if (!ownerRequest[2] && method === 'GET') { requests.record(row.id, 'page_viewed'); return send(200, { request: requests.summary(row, origin) }); }
+          if (method === 'POST' && ownerRequest[2]) {
             await body(req);
             if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
             progressRequestId = row.id;
@@ -478,36 +485,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         if (connectRoute && method === 'POST') {
           const adapter = adapters.get(connectRoute[1]);
           adapter.client.check();
-          rateLimit((adapter.register === 'login' ? 'login:' : 'connect:') + user.id, 10, adapter.register === 'login' ? 600_000 : 60_000);
+          rateLimit('connect:' + user.id, 10, 60_000);
           const input = await body(req);
-          const accessRequest = input.accessRequestId === undefined ? null : requests.forUser(input.accessRequestId, user.id, true);
-          progressRequestId = accessRequest?.id || null;
-          if (accessRequest) requests.record(accessRequest.id, 'connect_started', { adapter: adapter.id });
-          if (accessRequest && !accessRequest.adapter) fail(409, 'approval_only', 'この依頼はこの接続方法のものではありません。');
-          if (accessRequest && adapter.id !== accessRequest.adapter) fail(400, 'scope_mismatch', '依頼された接続方法で登録してください。');
+          const request = input.requestId === undefined ? null : requests.forUser(input.requestId, user.id, true);
+          progressRequestId = request?.id || null;
+          if (request) requests.record(request.id, 'connect_started', { adapter: adapter.id });
+          if (request && !request.adapter) fail(409, 'approval_only', 'この依頼はこの接続方法のものではありません。');
+          if (request && adapter.id !== request.adapter) fail(400, 'scope_mismatch', '依頼された接続方法で登録してください。');
           // Who asked for it, as they were called then. One started from the dashboard was asked by no one.
-          const requestedBy = accessRequest?.requester_name ?? '';
-          if (adapter.register === 'login') {
-            let result, committed = false;
-            try {
-              if (accessRequest) requests.claim(accessRequest.id, user.id);
-              const saved = await verifyConnection(req, session, user, async () => { result = await adapter.client.login(input); return result; }, () => {
-                if (accessRequest) requests.forUser(accessRequest.id, user.id, true);
-                if (result.challenge) return { challenge: result.challenge };
-                const saved = acquisitions.save(user.id, adapter.id, result, { keptBy: requestedBy });
-                const done = accessRequest ? requests.registered(accessRequest.id, user.id, saved.prefix) : null;
-                return { connected: true, prefix: saved.prefix, ...(done ? { request: requests.summary(done, origin, { code: false }) } : {}) };
-              });
-              if (result.challenge) return send(202, saved);
-              committed = true;
-              if (accessRequest) requests.record(accessRequest.id, 'connected', { adapter: adapter.id });
-              return send(200, saved);
-            } finally {
-              input.password = ''; input.otp = '';
-              // A session the service created must not outlive a registration that did not complete. Never log service errors.
-              if (result?.secret && !committed) await adapter.client.revoke(result.secret).catch(() => {});
-            }
-          }
+          const requestedBy = request?.requester_name ?? '';
           const previous = input.prefix ? acquisitionFor(user.id, secretPath(input.prefix)) : undefined;
           if (previous && previous.adapter !== adapter.id) fail(400, 'invalid_adapter', '接続方法が一致しません。');
           if (previous && adapter.canReconnect === false) fail(400, 'new_connection_required', '新しく登録してください。');
@@ -515,8 +501,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const verifier = randomBytes(32).toString('base64url');
           const redirectUri = origin + '/oauth/' + adapter.id + '/callback';
           if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
-          if (accessRequest) requests.claim(accessRequest.id, user.id);
-          const flow = { adapter: adapter.id, requestedBy, verifier, redirectUri, accessRequestId: accessRequest?.id, previous: previous ? { prefix: previous.prefix, generation: previous.generation } : null };
+          const flow = { adapter: adapter.id, requestedBy, verifier, redirectUri, requestId: request?.id, previous: previous ? { prefix: previous.prefix, generation: previous.generation } : null };
           const state = store.addFlow(session.id, flow);
           return send(200, { url: adapter.client.authorize({ state, verifier, redirectUri, range: adapter.range, email: previous?.subject }) });
         }
