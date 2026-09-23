@@ -232,3 +232,14 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 .verification-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-weight: 600; }
 .verification-label small { color: var(--muted); font-weight: 400; }
 .verification-result li p { color: var(--muted); margin: 5px 0 0; }
+
+/* Browsing the lent space: where you are, what narrows the list, and a folder you can step into. */
+.page-nav { display: flex; gap: 4px; margin-left: 12px; }
+.page-nav a { min-height: 44px; display: inline-flex; align-items: center; padding: 0 12px; border-radius: 8px; font-size: 15px; font-weight: 500; color: var(--muted, #62716a); text-decoration: none; }
+.page-nav a[aria-current="page"] { background: #eef2ec; color: inherit; }
+.crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin: 4px 0 12px; font-size: 15px; }
+.crumbs span { color: var(--muted, #62716a); }
+.crumbs .text-button { min-height: 36px; padding: 4px 2px; }
+.link-button { border: 0; background: none; padding: 0; font: inherit; color: inherit; text-align: left; text-decoration: underline; text-underline-offset: 4px; }
+.filter-field { width: 100%; margin: 0 0 12px; min-height: 44px; font-size: 16px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

@@ -1,7 +1,8 @@
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
 let state = null, toastTimer, loginTimer, revision = 0;
 const requestId = location.pathname.match(/^\/connect\/([A-Za-z0-9_-]{43})$/)?.[1];
-const pagePath = requestId ? '/connect/' + requestId : '/';
+const page = location.pathname === '/objects' ? 'objects' : 'home';
+const pagePath = requestId ? '/connect/' + requestId : page === 'objects' ? '/objects' : '/';
 let accessRequest = null, requestError = '';
 let disposePrivateInput = () => {};
 function clearPrivateInput() { const dispose = disposePrivateInput; disposePrivateInput = () => {}; dispose(); }
@@ -15,19 +16,52 @@ const loginMessages = {
 };
 let loginNotice = loginMessages[new URL(location.href).searchParams.get('login')] || '';
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
-// The space Foundation lends: whole files, kept in the cloud rather than in Foundation itself.
+// The space Foundation lends, laid out the way an object browser is: the keys only look like paths, so
+// the levels here are worked out from the keys themselves rather than fetched one folder at a time.
+let objectPrefix = '', objectFilter = '', objectLimit = 100;
+function levelOf(objects) {
+  const folders = new Map(), files = [];
+  for (const item of objects) {
+    if (!item.key.startsWith(objectPrefix)) continue;
+    const rest = item.key.slice(objectPrefix.length);
+    const cut = rest.indexOf('/');
+    if (cut < 0) { files.push({ ...item, name: rest }); continue; }
+    const name = rest.slice(0, cut + 1), found = folders.get(name) || { name, count: 0, bytes: 0, updated_at: 0 };
+    found.count++; found.bytes += item.size; found.updated_at = Math.max(found.updated_at, item.updated_at);
+    folders.set(name, found);
+  }
+  return { folders: [...folders.values()].sort((a, b) => a.name.localeCompare(b.name)), files: files.sort((a, b) => b.updated_at - a.updated_at) };
+}
+function crumbs() {
+  const parts = objectPrefix.split('/').filter(Boolean);
+  const links = ['<button class="text-button" data-action="go-prefix" data-prefix="">すべて</button>'];
+  let walked = '';
+  for (const part of parts) {
+    walked += part + '/';
+    links.push(`<button class="text-button" data-action="go-prefix" data-prefix="${esc(walked)}">${esc(part)}</button>`);
+  }
+  return `<nav class="crumbs" aria-label="現在の場所">${links.join('<span aria-hidden="true">/</span>')}</nav>`;
+}
 function spaceSection() {
   const space = state.space;
   if (!space || !space.available) return '';
   const used = space.usage ? `${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}・${space.usage.count} / ${space.usage.count_max} 件` : '';
-  const rows = space.objects.length
-    ? space.objects.map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(item.key)}</h3><p>${esc(kiloBytes(item.size))}・${esc(keptWhen(item.updated_at))}</p></div>
-      <div class="agent-actions"><a class="text-button" href="/api/objects/${encodeURIComponent(item.key)}" download>取り出す</a><button class="text-button" data-action="link-object" data-key="${esc(item.key)}">リンクを作る</button><button class="text-button danger" data-action="drop-object" data-key="${esc(item.key)}">削除</button></div></article>`).join('')
-    : '<div class="access-empty"><p>まだ何も置かれていません。AIに頼むか、ここから追加できます。</p></div>';
-  return `<section class="resource-section" aria-labelledby="space-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('cloud')}</span><div><h2 id="space-title">ファイルの置き場</h2><p>${esc(used)}</p></div></div>
+  const needle = objectFilter.trim().toLowerCase();
+  const all = needle ? space.objects.filter(item => item.key.toLowerCase().includes(needle)) : space.objects;
+  const { folders, files } = needle ? { folders: [], files: all.map(item => ({ ...item, name: item.key })).sort((a, b) => b.updated_at - a.updated_at) } : levelOf(all);
+  const shownFiles = files.slice(0, objectLimit);
+  const folderRows = folders.map(item => `<article class="agent-row"><div class="agent-name"><h3><button class="link-button" data-action="go-prefix" data-prefix="${esc(objectPrefix + item.name)}">${esc(item.name)}</button></h3><p>${item.count} 件・${esc(kiloBytes(item.bytes))}</p></div></article>`).join('');
+  const fileRows = shownFiles.map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${esc(kiloBytes(item.size))}・${esc(keptWhen(item.updated_at))}</p></div>
+    <div class="agent-actions"><a class="text-button" href="/api/objects/${encodeURIComponent(item.key)}" download>取り出す</a><button class="text-button" data-action="link-object" data-key="${esc(item.key)}">リンクを作る</button><button class="text-button danger" data-action="drop-object" data-key="${esc(item.key)}">削除</button></div></article>`).join('');
+  const body = space.objects.length === 0 ? '<div class="access-empty"><p>まだ何も置かれていません。AIに頼むか、ここから追加できます。</p></div>'
+    : folders.length + files.length === 0 ? `<div class="access-empty"><p>${needle ? `「${esc(objectFilter)}」に当てはまるものはありません。` : 'ここには何もありません。'}</p></div>`
+    : `<div class="agent-list">${folderRows}${fileRows}</div>${files.length > shownFiles.length ? `<button class="button secondary full" data-action="more-objects">残り${files.length - shownFiles.length}件を表示</button>` : ''}`;
+  const search = space.objects.length > 8 ? `<label class="visually-hidden" for="object-filter">名前で絞り込む</label><input id="object-filter" class="filter-field" type="search" placeholder="名前で絞り込む" value="${esc(objectFilter)}" autocomplete="off">` : '';
+  return `<section class="resource-section" aria-labelledby="space-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('cloud')}</span><div><h2 id="space-title">置いてあるもの</h2><p>${esc(used)}</p></div></div>
     <label class="button secondary" for="space-upload">${icon('plus')} ファイルを追加</label><input id="space-upload" type="file" hidden></div>
-    <div class="agent-list">${rows}</div></section>`;
+    ${crumbs()}${search}${body}</section>`;
 }
+
 // The service an acquisition reaches.
 const serviceName = adapter => adapter.service?.name || adapter.label;
 const icon = (name) => {
@@ -47,6 +81,8 @@ const icon = (name) => {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
 const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true">F</span>Foundation</a>';
+const nav = `<nav class="page-nav">${[['/', 'home', '預けているもの'], ['/objects', 'objects', 'オブジェクト']]
+  .map(([href, name, label]) => `<a href="${href}"${name === page ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
 function toast(text) {
   clearTimeout(toastTimer); notice.textContent = text; notice.hidden = false;
@@ -116,7 +152,7 @@ window.addEventListener('focus', () => { if (document.querySelector('#email-sent
 async function refresh() {
   const current = ++revision, result = await api('/api/state');
   let space = null;
-  try { space = await api('/api/objects'); } catch { space = null; }
+  if (page === 'objects') { try { space = await api('/api/objects'); } catch { space = null; } }
   if (requestId && current === revision) {
     try { accessRequest = (await api('/api/access-requests/' + requestId)).request; requestError = ''; }
     catch (error) { accessRequest = null; requestError = error.message; }
@@ -193,20 +229,42 @@ function render() {
   if (!state) return;
   clearPrivateInput();
   if (requestId) { renderRequest(); return; }
+  const shell = inner => `<div class="workspace"><header class="topbar">${brand}${nav}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main>${inner}</main></div>`;
+  if (page === 'objects') {
+    app.innerHTML = shell(`<header class="page-heading"><h1>オブジェクト</h1><p>キーひとつにつき、まるごと一つ。クラウドの契約は要りません。</p></header>${spaceSection()}`);
+    bindObjects();
+    return;
+  }
   const kept = groups();
-  app.innerHTML = `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main><header class="page-heading"><h1>預けているもの</h1><p>いつでも<a href="/api/export" download>まとめて取り出せます</a>。鍵の中身もそのまま含まれるので、保存先にご注意ください。</p></header>
+  app.innerHTML = shell(`<header class="page-heading"><h1>預けているもの</h1><p>いつでも<a href="/api/export" download>まとめて取り出せます</a>。鍵の中身もそのまま含まれるので、保存先にご注意ください。</p></header>
     ${kept.length ? kept.map(groupSection).join('') : '<section class="resource-section"><div class="access-empty"><p>まだ何も預かっていません。AIが依頼を作ると、ここに並びます。</p></div></section>'}
-    ${spaceSection()}
     ${connectSection()}
     <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">AIのアクセスキー</h2></div></div><button class="button secondary" data-action="add-agent">${icon('plus')} アクセスキーを追加</button></div>
-    ${state.agents.length ? `<div class="agent-list">${state.agents.map((agent) => `<article class="agent-row"><div class="agent-name"><h3>${esc(agent.name)}</h3><p>${agent.last_used_at ? '最終利用 ' + esc(new Date(agent.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(agent.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-agent" data-id="${esc(agent.id)}">名前を変更</button><button class="text-button danger" data-action="remove-agent" data-id="${esc(agent.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section></main></div>`;
+    ${state.agents.length ? `<div class="agent-list">${state.agents.map((agent) => `<article class="agent-row"><div class="agent-name"><h3>${esc(agent.name)}</h3><p>${agent.last_used_at ? '最終利用 ' + esc(new Date(agent.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(agent.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-agent" data-id="${esc(agent.id)}">名前を変更</button><button class="text-button danger" data-action="remove-agent" data-id="${esc(agent.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section>`);
+}
+function bindObjects() {
+  const filter = document.querySelector('#object-filter');
+  if (filter) {
+    filter.addEventListener('input', () => {
+      objectFilter = filter.value; objectLimit = 50;
+      const at = filter.selectionStart;
+      render();
+      const again = document.querySelector('#object-filter');
+      if (again) { again.focus(); again.setSelectionRange(at, at); }
+    });
+  }
   const upload = document.querySelector('#space-upload');
   if (upload) upload.addEventListener('change', async () => {
     const file = upload.files?.[0];
     if (!file) return;
+    if ((state.space?.objects || []).some(item => item.key === objectPrefix + file.name)) {
+      const go = await new Promise(resolve => confirmRemoval(file.name + ' を置き換えますか？', '同じ名前のものが置かれています。前のものは戻せません。', async () => resolve(true), () => resolve(false)));
+      if (!go) { upload.value = ''; return; }
+    }
     upload.disabled = true;
     try {
-      const response = await fetch('/api/objects/' + encodeURIComponent(file.name), { method: 'PUT', credentials: 'same-origin',
+      const key = objectPrefix + file.name;
+      const response = await fetch('/api/objects/' + encodeURIComponent(key), { method: 'PUT', credentials: 'same-origin',
         headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
@@ -487,6 +545,8 @@ document.addEventListener('click', async (event) => {
       } catch (error) { toast(error.message); }
       finally { target.disabled = false; }
     }
+    if (action === 'go-prefix') { objectPrefix = target.dataset.prefix; objectFilter = ''; objectLimit = 100; render(); }
+    if (action === 'more-objects') { objectLimit += 100; render(); }
     if (action === 'add-agent') editAgent();
     if (action === 'remove-agent') removeAgent(state.agents.find((a) => a.id === id));
     if (action === 'rename-agent') renameAgent(state.agents.find((a) => a.id === id));
