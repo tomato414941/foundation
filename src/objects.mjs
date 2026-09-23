@@ -12,6 +12,8 @@ import { presignAws, serverCredentials, signAws } from './aws-sigv4.mjs';
 // Nothing about it is kept in the database. The bucket is the record: what is listed is what is there.
 export const OBJECT_MAX = 25 * 1024 * 1024;
 export const OBJECT_COUNT_MAX = 1000;
+// What one owner may keep in the space Foundation lends. Lending means paying for it, so there is a ceiling.
+export const OBJECT_TOTAL_MAX = 1024 * 1024 * 1024;
 export const LINK_MINUTES = 60, MAX_LINK_MINUTES = 7 * 1440;
 const KEY = /^(?!\/)(?!.*\/\/)(?!.*\/$)[A-Za-z0-9][A-Za-z0-9._\/-]{0,199}$/;
 const TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*(; ?charset=[A-Za-z0-9_-]+)?$/i;
@@ -93,12 +95,22 @@ export class Objects {
     if (cursor !== undefined && (typeof cursor !== 'string' || cursor.length > 2048)) fail(400, 'invalid_cursor', '続きの指定を確認してください。');
     return this.space.list(this.room(ownerId), under, cursor);
   }
+  // What this owner is using. The bucket is the record, so it is counted rather than remembered.
+  async usage(ownerId) {
+    this.check();
+    const { objects } = await this.space.list(this.room(ownerId), '', undefined);
+    return { count: objects.length, bytes: objects.reduce((total, item) => total + item.size, 0),
+      count_max: OBJECT_COUNT_MAX, bytes_max: OBJECT_TOTAL_MAX, objects };
+  }
   async put(ownerId, key, content, type) {
     this.check();
     if (!Buffer.isBuffer(content) || content.length > OBJECT_MAX) fail(413, 'object_too_large', '1件あたり25MBまでです。');
     if (typeof type !== 'string' || type.length > 100 || !TYPE.test(type)) fail(400, 'invalid_type', '種類 (Content-Type) を確認してください。');
     const { objects } = await this.space.list(this.room(ownerId), '', undefined);
-    if (objects.length >= OBJECT_COUNT_MAX && !objects.some(item => item.key === key)) fail(409, 'object_limit', '置けるのは1000件までです。');
+    const existing = objects.find(item => item.key === key);
+    if (objects.length >= OBJECT_COUNT_MAX && !existing) fail(409, 'object_limit', '置けるのは1000件までです。');
+    const bytes = objects.reduce((total, item) => total + item.size, 0) - (existing?.size ?? 0);
+    if (bytes + content.length > OBJECT_TOTAL_MAX) fail(409, 'space_full', '置き場の合計が上限に達しました。使わないものを消してください。');
     await this.space.put(this.room(ownerId), objectKey(key), content, type);
     return { key, size: content.length, content_type: type };
   }
