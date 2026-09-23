@@ -1,8 +1,11 @@
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
 let state = null, toastTimer, loginTimer, revision = 0;
-const requestId = location.pathname.match(/^\/connect\/([A-Za-z0-9_-]{43})$/)?.[1];
+// A request page is either what an approved key asks for (/connect/…) or a new key asking to be approved (/keys/…).
+const keyRequest = /^\/keys\//.test(location.pathname);
+const requestId = location.pathname.match(/^\/(?:connect|keys)\/([A-Za-z0-9_-]{43})$/)?.[1];
+const requestApi = requestId && (keyRequest ? '/api/key-requests/' : '/api/access-requests/') + requestId;
 const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : 'home';
-const pagePath = requestId ? '/connect/' + requestId : page === 'objects' ? '/objects' : page === 'secrets' ? '/secrets' : '/';
+const pagePath = requestId ? location.pathname : page === 'objects' ? '/objects' : page === 'secrets' ? '/secrets' : '/';
 let accessRequest = null, requestError = '';
 const loginMessages = {
   expired: 'メールを送信したブラウザでリンクを開いてください。期限が切れた場合は、もう一度メールを送信してください。',
@@ -191,7 +194,10 @@ async function refresh() {
   let space = null;
   if (page !== 'secrets') { try { space = await api('/api/objects'); } catch { space = null; } }
   if (requestId && current === revision) {
-    try { accessRequest = (await api('/api/access-requests/' + requestId)).request; requestError = ''; }
+    try {
+      const found = (await api(requestApi)).request;
+      accessRequest = keyRequest ? { ...found, kind: 'approve', requester_name: found.name } : found; requestError = '';
+    }
     catch (error) { accessRequest = null; requestError = error.message; }
   }
   if (current !== revision) return;
@@ -283,8 +289,8 @@ function render() {
         ${card('/secrets', 'シークレット', `${kept.length} 件・${kiloBytes(bytes)}`)}
         ${card('/objects', 'オブジェクト', space?.available ? `${space.usage.count} 件・${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}` : '使えません')}
       </div>
-      <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">AIのアクセスキー</h2></div></div><button class="button secondary" data-action="add-agent">${icon('plus')} アクセスキーを追加</button></div>
-      ${state.agents.length ? `<div class="agent-list">${state.agents.map(agent => `<article class="agent-row"><div class="agent-name"><h3>${esc(agent.name)}</h3><p>${agent.last_used_at ? '最終利用 ' + esc(new Date(agent.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(agent.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-agent" data-id="${esc(agent.id)}">名前を変更</button><button class="text-button danger" data-action="remove-agent" data-id="${esc(agent.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section>
+      <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">アクセスキー</h2></div></div><button class="button secondary" data-action="add-key">${icon('plus')} アクセスキーを追加</button></div>
+      ${state.keys.length ? `<div class="agent-list">${state.keys.map(key => `<article class="agent-row"><div class="agent-name"><h3>${esc(key.name)}</h3><p>${key.last_used_at ? '最終利用 ' + esc(new Date(key.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(key.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-key" data-id="${esc(key.id)}">名前を変更</button><button class="text-button danger" data-action="remove-key" data-id="${esc(key.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section>
       <p class="home-export"><a href="/api/export" download>まとめて取り出す</a></p>`);
     return;
   }
@@ -422,7 +428,7 @@ function renderApproval(row, shell, expiry) {
     submit.disabled = true;
     const errorElement = form.querySelector('[role="alert"]'); errorElement.textContent = '';
     try {
-      await api(`/api/access-requests/${requestId}/approve`, { method: 'POST', data: { confirmationCode: form.elements.confirmationCode.value } });
+      await api(`${requestApi}/approve`, { method: 'POST', data: { confirmationCode: form.elements.confirmationCode.value } });
       await refresh();
     } catch (error) { if (form.isConnected) { errorElement.textContent = error.message; submit.disabled = false; } }
   });
@@ -469,12 +475,12 @@ function disconnect(connection) {
     toast(result.service_revoked === false ? '解除しました。接続先の許可は取り消せませんでした。' : '解除しました。');
   });
 }
-function editAgent() {
+function addKey() {
   openDialog(`<h2 id="dialog-title">アクセスキーを追加</h2><p>AIの実行環境に置くキーを発行します。承認済みのキーと同じく、あなたが預けているものをすべて使えます。</p><form><label for="agent-name">アクセスキーの名前</label><input id="agent-name" name="name" placeholder="dev-us など" required maxlength="80" autocomplete="off"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">アクセスキーを発行</button></form>`);
   bindForm(async (form) => {
-    const result = await api('/api/agents', { method: 'POST', data: { name: form.get('name') } });
+    const result = await api('/api/keys', { method: 'POST', data: { name: form.get('name') } });
     await refresh(); if (!state) return;
-    openDialog(`<h2 id="dialog-title">${esc(result.agent.name)} のアクセスキー</h2><p>キーは一度だけ表示します。AIを動かす環境の秘密情報として保管してください。</p><label for="agent-token">アクセスキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.agent.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button><label for="api-url">接続先</label><input id="api-url" readonly value="${esc(location.origin)}/v1"><p class="permission-note">キーを会話や共有ファイルに貼り付けないでください。</p><button class="button primary full" data-action="close-dialog">閉じる</button>`);
+    openDialog(`<h2 id="dialog-title">${esc(result.key.name)} のアクセスキー</h2><p>キーは一度だけ表示します。AIを動かす環境の秘密情報として保管してください。</p><label for="agent-token">アクセスキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.key.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button><label for="api-url">接続先</label><input id="api-url" readonly value="${esc(location.origin)}/v1"><p class="permission-note">キーを会話や共有ファイルに貼り付けないでください。</p><button class="button primary full" data-action="close-dialog">閉じる</button>`);
   });
 }
 function removeCredential(credential) {
@@ -494,14 +500,14 @@ function removeCredential(credential) {
     toast(result.service_revoked === false ? `登録を解除しました。${name}側の許可は取り消せませんでした。${name}の画面で取り消してください。` : '登録を解除しました。');
   });
 }
-function renameAgent(agent) {
-  openDialog(`<h2 id="dialog-title">アクセスキーの名前を変更</h2><form><label for="agent-name">名前</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off" value="${esc(agent.name)}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
-  bindForm(async (form) => { await api(`/api/agents/${agent.id}`, { method: 'PATCH', data: { name: form.get('name') } }); closeDialog(); await refresh(); toast('名前を変更しました。'); });
+function renameKey(key) {
+  openDialog(`<h2 id="dialog-title">アクセスキーの名前を変更</h2><form><label for="agent-name">名前</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off" value="${esc(key.name)}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
+  bindForm(async (form) => { await api(`/api/keys/${key.id}`, { method: 'PATCH', data: { name: form.get('name') } }); closeDialog(); await refresh(); toast('名前を変更しました。'); });
 }
-function removeAgent(agent) {
-  const expiry = agent.issued_nonexpiring ? '<p class="permission-note">このアクセスキーには、有効期限が未指定または不明の認証情報を渡しています。完全に無効にするには、認証情報の登録解除も必要です。</p>' : agent.issued_until > Date.now() ? `<p class="permission-note">受け渡し済みの認証情報の最長有効期限：${esc(new Date(agent.issued_until).toLocaleString('ja-JP'))}</p>` : '';
-  openDialog(`<h2 id="dialog-title">アクセスキーを失効させますか？</h2><p>${esc(agent.name)}</p><form><p>このアクセスキーでは認証情報を取得できなくなります。${revocationNote}</p>${expiry}<p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">失効させる</button></div></form>`);
-  bindForm(async () => { await api(`/api/agents/${agent.id}`, { method: 'DELETE' }); closeDialog(); await refresh(); toast('アクセスキーを失効させました。'); });
+function removeKey(key) {
+  const expiry = key.issued_nonexpiring ? '<p class="permission-note">このアクセスキーには、有効期限が未指定または不明の認証情報を渡しています。完全に無効にするには、認証情報の登録解除も必要です。</p>' : key.issued_until > Date.now() ? `<p class="permission-note">受け渡し済みの認証情報の最長有効期限：${esc(new Date(key.issued_until).toLocaleString('ja-JP'))}</p>` : '';
+  openDialog(`<h2 id="dialog-title">アクセスキーを失効させますか？</h2><p>${esc(key.name)}</p><form><p>このアクセスキーでは認証情報を取得できなくなります。${revocationNote}</p>${expiry}<p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">失効させる</button></div></form>`);
+  bindForm(async () => { await api(`/api/keys/${key.id}`, { method: 'DELETE' }); closeDialog(); await refresh(); toast('アクセスキーを失効させました。'); });
 }
 // One confirmation, for removing something a key kept. Nothing here can be undone, and nothing reaches the service.
 // The name and the way it reaches a command, changed without the value ever being handed back.
@@ -549,7 +555,7 @@ document.addEventListener('click', async (event) => {
     }
     if (action === 'deny-request') {
       target.disabled = true;
-      await api(`/api/access-requests/${requestId}/deny`, { method: 'POST', data: {} });
+      await api(`${requestApi}/deny`, { method: 'POST', data: {} });
       await refresh();
     }
     if (action === 'add-adapter') connect(target.dataset.adapter);
@@ -613,9 +619,9 @@ document.addEventListener('click', async (event) => {
     }
     if (action === 'add-secret') addSecret();
     if (action === 'edit-secret') editSecret((state.secrets || []).find(item => item.path === target.dataset.path));
-    if (action === 'add-agent') editAgent();
-    if (action === 'remove-agent') removeAgent(state.agents.find((a) => a.id === id));
-    if (action === 'rename-agent') renameAgent(state.agents.find((a) => a.id === id));
+    if (action === 'add-key') addKey();
+    if (action === 'remove-key') removeKey(state.keys.find((key) => key.id === id));
+    if (action === 'rename-key') renameKey(state.keys.find((key) => key.id === id));
     if (action === 'copy-token') {
       const token = document.querySelector('#agent-token');
       try { await navigator.clipboard.writeText(token.value); toast('キーをコピーしました。'); }

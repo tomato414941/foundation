@@ -50,7 +50,7 @@ test('OAuth state is browser-bound and expires; cancel and forged callbacks cann
 
 test('What Foundation obtained is kept like anything else, under a path, and an approved key uses it the same way', async (t) => {
   const f = await fixture(t), a = await f.credential(), b = await f.credential('work', 'metadata');
-  const agent = await f.agent();
+  const agent = await f.issueKey();
   assert.equal(a.prefix, 'gmail/personal-example-test');
   assert.equal(b.prefix, 'gmail/work-example-test');
 
@@ -81,17 +81,17 @@ test('What Foundation obtained is kept like anything else, under a path, and an 
 });
 
 test('Owners cannot see, disconnect or reach each other\'s connections', async (t) => {
-  const f = await fixture(t), first = await f.credential(), runtime = await f.agent();
+  const f = await fixture(t), first = await f.credential(), runtime = await f.issueKey();
   await f.login('second@example.test');
   const state = await f.request('/api/state');
   assert.deepEqual(state.json.acquisitions, []);
   assert.deepEqual(state.json.secrets, []);
-  assert.deepEqual(state.json.agents, []);
+  assert.deepEqual(state.json.keys, []);
   assert.equal((await f.request('/api/acquisitions/' + encodeURIComponent(first.prefix), { method: 'DELETE', data: { revoke: true } })).status, 404);
-  const intruder = (await f.request('/api/agents', { method: 'POST', data: { name: 'intruder' } })).json.agent;
+  const intruder = (await f.request('/api/keys', { method: 'POST', data: { name: 'intruder' } })).json.key;
   assert.deepEqual((await f.request('/v1/acquisitions', { token: intruder.token })).json.acquisitions, []);
   assert.equal((await f.request('/v1/deliver', { method: 'POST', data: { paths: [first.prefix + '/access-token'] }, token: intruder.token })).status, 404);
-  await f.request('/api/agents/' + runtime.id, { method: 'DELETE' });
+  await f.request('/api/keys/' + runtime.id, { method: 'DELETE' });
   assert.equal((await f.request('/v1/acquisitions', { token: runtime.token })).json.acquisitions.length, 1, 'the owner keeps it when one key is revoked');
   const second = await f.credential();
   assert.equal(second.prefix, first.prefix);
@@ -99,7 +99,7 @@ test('Owners cannot see, disconnect or reach each other\'s connections', async (
 });
 
 test('Connecting again pins the Google account and stays within the same adapter', async (t) => {
-  const f = await fixture(t), a = await f.credential('personal', 'metadata'), agent = await f.agent();
+  const f = await fixture(t), a = await f.credential('personal', 'metadata'), agent = await f.issueKey();
   assert.equal((await f.request('/api/adapters/gmail.readonly/connect', { method: 'POST', data: { prefix: a.prefix } })).json.error.code, 'invalid_adapter');
   let flow = await f.start({ range: 'metadata', prefix: a.prefix });
   assert.equal(flow.searchParams.get('login_hint'), 'personal@example.test');
@@ -112,7 +112,7 @@ test('Connecting again pins the Google account and stays within the same adapter
 });
 
 test('The same account connected twice does not become two of them', async (t) => {
-  const f = await fixture(t), a = await f.credential(), agent = await f.agent();
+  const f = await fixture(t), a = await f.credential(), agent = await f.issueKey();
   const flow = await f.start();
   assert.equal((await f.callback(flow, 'personal-readonly')).headers.get('location'), '/?connection=already_connected&adapter=gmail.readonly');
   assert.equal((await f.request('/api/state')).json.acquisitions[0].prefix, a.prefix);
@@ -120,13 +120,13 @@ test('The same account connected twice does not become two of them', async (t) =
 });
 
 for (const change of ['agent', 'account']) test('In-flight token withheld after ' + change, async (t) => {
-  const f = await fixture(t), a = await f.credential(), runtime = await f.agent(); f.expire(a.prefix);
+  const f = await fixture(t), a = await f.credential(), runtime = await f.issueKey(); f.expire(a.prefix);
   let began, finish;
   const started = new Promise((resolve) => { began = resolve; });
   f.gmail.refreshHandler = () => { began(); return new Promise((resolve) => { finish = resolve; }); };
   const pending = f.deliver(a, { token: runtime.token });
   await started;
-  if (change === 'agent') await f.request('/api/agents/' + runtime.id, { method: 'DELETE' });
+  if (change === 'agent') await f.request('/api/keys/' + runtime.id, { method: 'DELETE' });
   if (change === 'account') await f.request('/api/acquisitions/' + encodeURIComponent(a.prefix), { method: 'DELETE', data: { revoke: false } });
   finish();
   const result = await pending;
@@ -135,7 +135,7 @@ for (const change of ['agent', 'account']) test('In-flight token withheld after 
 });
 
 test('Refreshing is coalesced, and an invalid grant asks the owner to connect again', async (t) => {
-  const f = await fixture(t), a = await f.credential(), agent = await f.agent(); f.expire(a.prefix);
+  const f = await fixture(t), a = await f.credential(), agent = await f.issueKey(); f.expire(a.prefix);
   let calls = 0, finish;
   f.gmail.refreshHandler = () => { calls++; return new Promise((resolve) => { finish = resolve; }); };
   const one = f.deliver(a, { token: agent.token }), two = f.deliver(a, { token: agent.token });
@@ -151,7 +151,7 @@ test('Refreshing is coalesced, and an invalid grant asks the owner to connect ag
 });
 
 test('Disconnecting removes what it kept even when the service refuses to revoke, and says so', async (t) => {
-  const f = await fixture(t), a = await f.credential(), agent = await f.agent();
+  const f = await fixture(t), a = await f.credential(), agent = await f.issueKey();
   f.gmail.revokeHandler = () => new Response('{}', { status: 503 });
   const removed = await f.request('/api/acquisitions/' + encodeURIComponent(a.prefix), { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.status, 200);

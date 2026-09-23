@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
 
     # 1. A new key asks only to be approved. The owner types the code; nothing is registered here.
     request = cli('connect', '--name', 'dev-us のAI')['request']
-    assert request['kind'] == 'approve' and request['confirmation_code']
+    assert '/keys/' in request['verification_uri'] and request['confirmation_code']
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 1050})
     page = context.new_page()

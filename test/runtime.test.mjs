@@ -18,7 +18,7 @@ const execute = (args, env) => new Promise((resolve, reject) => {
 const paths = account => [account.prefix + '/google-oauth-access-token', account.prefix + '/gmail-account-email'];
 
 test('The runtime hands what is kept to the selected process only', async (t) => {
-  const f = await fixture(t), account = await f.credential(), runtime = await f.agent();
+  const f = await fixture(t), account = await f.credential(), runtime = await f.issueKey();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-runtime-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'runtime-key'); await writeFile(keyPath, runtime.token, { mode: 0o600 });
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
@@ -26,7 +26,7 @@ test('The runtime hands what is kept to the selected process only', async (t) =>
   assert.equal(run.code, 0, run.err);
   assert.equal(run.out.trim(), 'runtime-ready');
   assert.doesNotMatch(run.out + run.err, /google-access|refresh_token|fdn_/);
-  await f.request('/api/agents/' + runtime.id, { method: 'DELETE' });
+  await f.request('/api/keys/' + runtime.id, { method: 'DELETE' });
   const revoked = await execute(['exec', ...paths(account), '--', process.execPath, '-e', 'console.log("must-not-run")'], env);
   assert.equal(revoked.code, 1);
   assert.doesNotMatch(revoked.out, /must-not-run/);
@@ -48,14 +48,14 @@ test('connect makes the key as a private file, never printing it, and the same k
   const connected = await execute(['connect', '--name', 'dev-us のAI'], env);
   assert.equal(connected.code, 0, connected.err);
   const row = JSON.parse(connected.out.slice(0, connected.out.indexOf('\n\nKey file'))).request, secret = (await readFile(keyPath, 'utf8')).trim();
-  assert.equal(row.status, 'pending'); assert.equal(row.kind, 'approve');
+  assert.equal(row.status, 'pending'); assert.match(row.verification_uri, /\/keys\//);
   assert.equal((await stat(keyPath)).mode & 0o777, 0o600);
   assert.ok(!connected.out.includes(secret), 'the key stays in the file');
   assert.match(connected.out, new RegExp(keyPath), 'and the agent is told where it is, for its own HTTP calls');
 
   const before = await execute(['exec', ...paths(account), '--', process.execPath, '-e', '0'], env);
   assert.equal(before.code, 1); assert.match(before.err, /not_approved/);
-  const approval = await f.request('/api/access-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code } });
+  const approval = await f.request('/api/key-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code } });
   assert.equal(approval.status, 200, approval.text);
   const run = await execute(['exec', ...paths(account), '--', process.execPath, '-e', 'if(process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("connected")'], env);
   assert.equal(run.code, 0, run.err);
@@ -85,11 +85,11 @@ test('A denied request is indistinguishable from waiting, and asking again still
   const dir = await mkdtemp(join(tmpdir(), 'foundation-denied-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'runtime-key'), env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
   const row = JSON.parse((await execute(['connect'], env)).out.split('\n\nKey file')[0]).request;
-  await f.request('/api/access-requests/' + row.id + '/deny', { method: 'POST', data: {} });
+  await f.request('/api/key-requests/' + row.id + '/deny', { method: 'POST', data: {} });
   const denied = await execute(['exec', ...paths(account), '--', process.execPath, '-e', '0'], env);
   assert.equal(denied.code, 1); assert.match(denied.err, /not_approved/, 'denial is indistinguishable from waiting');
   const again = JSON.parse((await execute(['connect'], env)).out.split('\n\nKey file')[0]).request;
-  await f.request('/api/access-requests/' + again.id + '/approve', { method: 'POST', data: { confirmationCode: again.confirmation_code } });
+  await f.request('/api/key-requests/' + again.id + '/approve', { method: 'POST', data: { confirmationCode: again.confirmation_code } });
   const after = await execute(['exec', ...paths(account), '--', process.execPath, '-e', 'console.log("ready")'], env);
   assert.equal(after.code, 0, after.err); assert.equal(after.out.trim(), 'ready');
 });
@@ -141,7 +141,7 @@ test('connect on a key already approved only remembers the server', async t => {
   const f = await fixture(t);
   const dir = await mkdtemp(join(tmpdir(), 'foundation-reconnect-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const env = { HOME: join(dir, 'home'), XDG_CONFIG_HOME: join(dir, 'config'), FOUNDATION_URL: '', FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'key') };
-  await writeFile(env.FOUNDATION_RUNTIME_KEY_FILE, (await f.agent()).token, { mode: 0o600 });
+  await writeFile(env.FOUNDATION_RUNTIME_KEY_FILE, (await f.issueKey()).token, { mode: 0o600 });
   const again = await execute(['connect', f.base], env);
   assert.equal(again.code, 0, again.err);
   assert.match(again.out, /Already approved/);
@@ -159,13 +159,13 @@ test('FOUNDATION_AGENT gives each agent its own key file and default name', asyn
   assert.equal(second.code, 0, second.err);
   const rows = [first, second].map(result => JSON.parse(result.out.split('\n\nKey file')[0]).request);
   assert.notEqual(rows[0].id, rows[1].id);
-  assert.match(rows[0].requester_name, / の claude$/); assert.match(rows[1].requester_name, / の codex$/);
+  assert.match(rows[0].name, / の claude$/); assert.match(rows[1].name, / の codex$/);
   const { readdir } = await import('node:fs/promises');
   const keys = (await readdir(join(home, '.local', 'state', 'foundation'))).sort();
   assert.equal(keys.length, 2); assert.ok(keys.some(name => name.endsWith('-claude.key')) && keys.some(name => name.endsWith('-codex.key')));
   const bad = await execute(['connect'], { ...base, FOUNDATION_AGENT: '../x' });
   assert.equal(bad.code, 1); assert.match(bad.err, /FOUNDATION_AGENT/);
-  await f.request('/api/access-requests/' + rows[0].id + '/approve', { method: 'POST', data: { confirmationCode: rows[0].confirmation_code } });
+  await f.request('/api/key-requests/' + rows[0].id + '/approve', { method: 'POST', data: { confirmationCode: rows[0].confirmation_code } });
   const approved = await execute(['exec', ...paths(account), '--', process.execPath, '-e', 'console.log("ready")'], { ...base, FOUNDATION_AGENT: 'claude' });
   assert.equal(approved.code, 0, approved.err);
   const other = await execute(['exec', ...paths(account), '--', process.execPath, '-e', '0'], { ...base, FOUNDATION_AGENT: 'codex' });

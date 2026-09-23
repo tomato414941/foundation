@@ -116,16 +116,17 @@ export async function fixture(t, options = {}) {
   }
   // Makes a runtime key known to the owner: the key asks to be approved and the owner types its code.
   async function approveKey(token, name = 'dev-us') {
-    const asked = await request('/v1/access-requests', { method: 'POST', anonymous: true, token, data: { name } });
+    const asked = await request('/v1/keys', { method: 'POST', anonymous: true, token, data: { name } });
     assert.equal(asked.status, 201, asked.text);
-    const done = await request('/api/access-requests/' + asked.json.request.id + '/approve', { method: 'POST', data: { confirmationCode: asked.json.request.confirmation_code } });
+    const done = await request('/api/key-requests/' + asked.json.request.id + '/approve', { method: 'POST', data: { confirmationCode: asked.json.request.confirmation_code } });
     assert.equal(done.status, 200, done.text);
     return asked.json.request;
   }
-  async function agent(name = 'dev-us') {
-    const result = await request('/api/agents', { method: 'POST', data: { name } });
+  // A key the owner issues from the dashboard.
+  async function issueKey(name = 'dev-us') {
+    const result = await request('/api/keys', { method: 'POST', data: { name } });
     assert.equal(result.status, 201, result.text);
-    return result.json.agent;
+    return result.json.key;
   }
   // Ages an acquisition past its expiry, in what the store holds and in the shape its adapter reads back.
   function expire(prefix, owner = USER_A) {
@@ -134,5 +135,5 @@ export async function fixture(t, options = {}) {
     app.store.saveState(acquisition, { ...state, expires_at, renewal: { ...state.renewal, expires_at } });
   }
   if (options.login !== false) await login();
-  return { app, auth, gmail, base, request, login, start, callback, credential, deliver, agent, approveKey, expire, cookie: () => cookie };
+  return { app, auth, gmail, base, request, login, start, callback, credential, deliver, issueKey, approveKey, expire, cookie: () => cookie };
 }
