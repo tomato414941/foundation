@@ -20,11 +20,6 @@ const SCHEMA_VERSION = 1;
 // acquisitions: the entries under `prefix` are obtained and kept current by Foundation itself, through one
 //   adapter, for one subject at that service. state holds what the adapter needs to refresh them, sealed.
 //   Every other entry has no row here and is simply what was put there.
-// files: what a key published behind a time-limited URL. There so that an owner with no cloud account of
-//   their own still has a way to hand something to a thing that can only take a URL. The bytes live in the
-//   backend under the id; a row is never changed.
-// agents: access keys the owner approved; each may use everything its owner keeps.
-// access_requests: one request from a runtime, as it asked and as it went.
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE agents (
@@ -54,11 +49,6 @@ const SCHEMA = `
   );
   CREATE INDEX acquisitions_owner ON acquisitions(owner_id, prefix);
   CREATE INDEX entries_owner ON entries(owner_id, path);
-  CREATE TABLE files (
-    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, agent_id TEXT NOT NULL, name TEXT NOT NULL, content_type TEXT NOT NULL,
-    size INTEGER NOT NULL, sha256 TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
-  );
-  CREATE INDEX files_owner ON files(owner_id, created_at);
   PRAGMA user_version = ${SCHEMA_VERSION};
 `;
 
@@ -98,7 +88,6 @@ export class Store {
     this.db.prepare('DELETE FROM oauth_flows WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM access_requests WHERE expires_at<=?').run(Date.now());
-    this.db.prepare('DELETE FROM files WHERE expires_at<=?').run(Date.now());
   }
   // Storage. Listing never opens anything; only reading and delivering do.
   entries(ownerId, prefix) {

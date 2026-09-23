@@ -34,7 +34,6 @@ export function configuration(env = process.env) {
     google: { clientId: env.FOUNDATION_GOOGLE_CLIENT_ID || '', clientSecret: env.FOUNDATION_GOOGLE_CLIENT_SECRET || '' },
     github: { clientId: env.FOUNDATION_GITHUB_CLIENT_ID || '', clientSecret: env.FOUNDATION_GITHUB_CLIENT_SECRET || '' },
     expo: { sessionLogin: env.FOUNDATION_EXPO_SESSION_LOGIN === 'true' },
-    files: { bucket: env.FOUNDATION_FILES_BUCKET || '', region: env.FOUNDATION_FILES_REGION || 'ap-northeast-1' },
     objects: { bucket: env.FOUNDATION_OBJECTS_BUCKET || '', region: env.FOUNDATION_OBJECTS_REGION || env.FOUNDATION_AWS_REGION || 'ap-northeast-1' },
   };
 }
