@@ -1,10 +1,12 @@
-import { open, mkdir, stat, mkdtemp, writeFile, chmod, readFile } from 'node:fs/promises';
+#!/usr/bin/env node
+import { open, mkdir, stat, mkdtemp, writeFile, chmod, readFile, rename } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { rmSync, constants } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { homedir, hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { validEnvName } from './env-name.mjs';
 import { guide } from './guide.mjs';
 
@@ -12,7 +14,7 @@ import { guide } from './guide.mjs';
 //
 // Everything Foundation offers is plain HTTP, and an agent with the key can call it directly; a command
 // wrapper around those calls would only narrow what the agent is allowed to think of. Two things are left:
-//   connect  make the key. It has to exist as a private file before anything can be asked, and whoever
+//   connect  say which server, and make the key. It has to exist as a private file before anything can be asked, and whoever
 //            makes it must not print it.
 //   exec     hand what is kept to a command without it passing through the agent. If the agent fetched the
 //            values itself they would be in its context, which is the one thing this is here to prevent.
@@ -49,15 +51,38 @@ async function runtimeKey(path, create, privateDirectory) {
   } finally { await handle?.close(); }
 }
 
+const VERSION = createRequire(import.meta.url)('./package.json').version;
+// Which server this machine talks to is a setting, not part of the program: `connect <url>` writes it here,
+// and FOUNDATION_URL, when set, wins for that one run.
+const configPath = () => join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'foundation', 'config.json');
+async function savedUrl() {
+  try { return JSON.parse(await readFile(configPath(), 'utf8')).url || ''; }
+  catch (error) { if (error.code === 'ENOENT') return ''; throw new Error('Cannot read ' + configPath() + ': ' + error.message); }
+}
+async function saveUrl(origin) {
+  const path = configPath();
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeFile(path + '.tmp', JSON.stringify({ url: origin }, null, 2) + '\n', { mode: 0o600 });
+  await rename(path + '.tmp', path);
+}
+function serverUrl(value) {
+  let url;
+  try { url = new URL(value); } catch { throw new Error('No Foundation server yet. Run: foundation connect <url>'); }
+  if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('The Foundation URL must be an HTTPS origin (HTTP is allowed only on localhost).');
+  return url;
+}
+
 async function main() {
   const [action, ...args] = process.argv.slice(2);
   const agentName = (process.env.FOUNDATION_AGENT || '').trim();
   if (agentName && !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/.test(agentName)) throw new Error('FOUNDATION_AGENT must be 1-40 characters of letters, digits, space, dot, underscore or hyphen.');
+  if (action === '--version' || action === 'version') { console.log(VERSION); return; }
+  const configured = process.env.FOUNDATION_URL || await savedUrl();
   if (action === '--help' || action === 'help' || action === 'guide' || !action) {
     let adapters;
-    if (process.env.FOUNDATION_URL) {
+    if (configured) {
       try {
-        const response = await fetch(new URL('/v1/adapters', process.env.FOUNDATION_URL), { redirect: 'error', signal: AbortSignal.timeout(5_000) });
+        const response = await fetch(new URL('/v1/adapters', configured), { redirect: 'error', signal: AbortSignal.timeout(5_000) });
         const catalog = await response.json();
         if (response.ok && Array.isArray(catalog.adapters)) adapters = catalog.adapters;
       } catch {}
@@ -76,10 +101,12 @@ async function main() {
     const path = colon > 0 ? named.slice(0, colon) : named, filename = colon > 0 ? named.slice(colon + 1) : undefined;
     return { path, ...(at > 0 ? { as: value.slice(0, at) } : {}), ...(filename ? { filename } : {}) };
   }) : [];
-  const named = action === 'connect' ? args.indexOf('--name') : -1;
-  let call;
+  let call, connectTo, name;
   if (action === 'connect') {
-    if (args.length && (named !== 0 || args.length !== 2)) throw new Error('Usage: connect [--name <name>]');
+    const parsed = parseArgs({ args, options: { name: { type: 'string' } }, strict: true, allowPositionals: true });
+    if (parsed.positionals.length > 1) throw new Error('Usage: connect [<url>] [--name <name>]');
+    connectTo = parsed.positionals[0];
+    name = parsed.values.name;
   } else if (action === 'api') {
     const parsed = parseArgs({ args, options: { json: { type: 'string' }, from: { type: 'string' }, type: { type: 'string' } }, strict: true, allowPositionals: true });
     if (parsed.positionals.length !== 2 || !/^(GET|POST|PUT|DELETE|PATCH)$/.test(parsed.positionals[0]) || !parsed.positionals[1].startsWith('/')) {
@@ -92,17 +119,16 @@ async function main() {
     call = { method, target: parsed.positionals[1], body: content,
       type: parsed.values.type || (parsed.values.from !== undefined ? 'application/octet-stream' : 'application/json') };
   } else if (!(action === 'exec' && paths.length && new Set(paths.map(item => (item.as ?? '') + ':' + item.path)).size === paths.length && command.length)) {
-    throw new Error('Usage: connect [--name <name>] | exec [<NAME>=]<path> [...] -- <command> [args...] | api <method> </path> [--json <body>] [--from <file>]');
+    throw new Error('Usage: connect [<url>] [--name <name>] | exec [<NAME>=]<path> [...] -- <command> [args...] | api <method> </path> [--json <body>] [--from <file>]');
   }
-  const url = new URL(process.env.FOUNDATION_URL || '');
-  if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('FOUNDATION_URL must be an HTTPS origin (HTTP is allowed only on localhost).');
+  const url = serverUrl(connectTo ?? configured);
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
   const token = await runtimeKey(keyPath, action === 'connect', !process.env.FOUNDATION_RUNTIME_KEY_FILE);
-  async function send(target, payload) {
+  async function send(target, payload, accept) {
     const response = await fetch(url.origin + target, { method: 'POST', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
       body: JSON.stringify(payload), redirect: 'error', signal: AbortSignal.timeout(30_000) });
     const data = await response.json();
-    if (!response.ok) throw new Error('Foundation request failed (' + response.status + ', ' + (data.error?.code || 'unknown') + '). ' + (data.error?.message || 'Check the connection and runtime permission.'));
+    if (!response.ok && !accept?.(data)) throw new Error('Foundation request failed (' + response.status + ', ' + (data.error?.code || 'unknown') + '). ' + (data.error?.message || 'Check the connection and runtime permission.'));
     return data;
   }
   // One request, with the key attached and the answer printed as it came. Nothing here knows the endpoints.
@@ -116,10 +142,12 @@ async function main() {
     return;
   }
   // Asking the owner to approve this key. The key itself is never printed: it stays in the file.
+  // A key the owner already approved has nothing to ask; connecting again only changes which server is remembered.
   if (action === 'connect') {
-    const name = named === 0 ? args[1] : hostname() + ' の ' + (agentName || 'AI');
-    console.log(JSON.stringify(await send('/v1/access-requests', { name }), null, 2));
-    console.log('\nKey file: ' + keyPath + '\nEverything else is HTTP: Authorization: Bearer <the contents of that file>');
+    const answer = await send('/v1/access-requests', { name: name ?? hostname() + ' の ' + (agentName || 'AI') }, data => data.error?.code === 'already_approved');
+    if (connectTo !== undefined) await saveUrl(url.origin);
+    console.log(answer.error ? 'Already approved on ' + url.origin + '.' : JSON.stringify(answer, null, 2));
+    console.log('\nKey file: ' + keyPath + '\nServer: ' + url.origin + (connectTo !== undefined ? ' (saved to ' + configPath() + ')' : '') + '\nEverything else is HTTP: Authorization: Bearer <the contents of that file>');
     return;
   }
   const { delivery } = await send('/v1/deliver', { paths });
@@ -156,4 +184,4 @@ async function main() {
     process.exitCode = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (value, signal) => resolve(value ?? (signal ? 1 : 0))); });
   } finally { cleanup(); }
 }
-main().catch((error) => { console.error(error instanceof TypeError ? 'Unable to connect. Check Foundation URL and network access.' : error.message); process.exitCode = 1; });
+main().catch((error) => { console.error(error instanceof TypeError ? 'Unable to connect. Check the Foundation URL and network access.' : error.message); process.exitCode = 1; });

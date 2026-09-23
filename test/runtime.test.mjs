@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { fixture } from './helpers.mjs';
 
 const execute = (args, env) => new Promise((resolve, reject) => {
-  const child = spawn(process.execPath, ['src/runtime.mjs', ...args], { env: { ...process.env, ...env } });
+  const child = spawn(process.execPath, ['cli/runtime.mjs', ...args], { env: { ...process.env, ...env } });
   let out = '', err = '';
   child.stdout.on('data', (part) => { out += part; }); child.stderr.on('data', (part) => { err += part; });
   child.once('error', reject); child.once('exit', (code) => resolve({ code, out, err }));
@@ -104,33 +104,49 @@ test('--help describes the API, and when a server is reachable, what it can obta
   const online = await execute(['--help'], { FOUNDATION_URL: f.base });
   assert.equal(online.code, 0, online.err);
   assert.match(online.out, /gmail.readonly  Gmail \/ メールの読み取り  keeps: GOOGLE_OAUTH_ACCESS_TOKEN/);
-  assert.doesNotMatch(online.out, /expo\./, 'only what this server offers');
 });
 
-test('The server distributes its own CLI: install.sh bakes in the origin and the installed command runs against it', async t => {
+test('The CLI installs from its npm package, and connect <url> remembers the server for every later command', async t => {
   const f = await fixture(t);
-  const script = await f.request('/cli/install.sh', { anonymous: true });
-  assert.equal(script.status, 200);
-  assert.match(script.text, new RegExp("ORIGIN='" + f.base + "'"));
-  assert.match(script.text, /Node\.js 24/);
-  assert.doesNotMatch(script.text, /__ORIGIN__|__FILES__/);
-  const file = await f.request('/cli/runtime.mjs', { anonymous: true });
-  assert.equal(file.status, 200);
-  assert.equal(file.text, await readFile('src/runtime.mjs', 'utf8'));
-  for (const bad of ['/cli/app.mjs', '/cli/../src/store.mjs', '/cli/store.mjs', '/cli/', '/cli/install.sh/']) assert.equal((await f.request(bad, { anonymous: true })).status, 404, bad);
   const dir = await mkdtemp(join(tmpdir(), 'foundation-install-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
-  await writeFile(join(dir, 'install.sh'), script.text);
-  const run = (command, args, env) => new Promise((resolve) => {
-    const child = spawn(command, args, { env: { ...process.env, ...env } });
+  const run = (command, args, env = {}) => new Promise((resolve) => {
+    const child = spawn(command, args, { env: { ...process.env, npm_config_cache: join(dir, 'npm-cache'), npm_config_update_notifier: 'false', ...env } });
     let out = '', err = ''; child.stdout.on('data', part => { out += part; }); child.stderr.on('data', part => { err += part; });
     child.once('exit', code => resolve({ code, out, err }));
   });
-  const install = await run('sh', [join(dir, 'install.sh')], { FOUNDATION_CLI_DIR: join(dir, 'cli'), FOUNDATION_BIN_DIR: join(dir, 'bin') });
+  const packed = await run('npm', ['pack', '--pack-destination', dir, './cli']);
+  assert.equal(packed.code, 0, packed.err);
+  const install = await run('npm', ['install', '--global', '--offline', '--prefix', join(dir, 'global'), join(dir, packed.out.trim().split('\n').at(-1))]);
   assert.equal(install.code, 0, install.err);
-  assert.match(install.out, /Installed/);
-  const installed = await run(join(dir, 'bin', 'foundation'), ['--help'], { FOUNDATION_URL: f.base });
-  assert.equal(installed.code, 0, installed.err);
-  assert.match(installed.out, /gmail.readonly/);
+  const foundation = join(dir, 'global', 'bin', 'foundation');
+  const env = { HOME: join(dir, 'home'), XDG_CONFIG_HOME: join(dir, 'config'), FOUNDATION_URL: '', FOUNDATION_RUNTIME_KEY_FILE: '' };
+  const version = await run(foundation, ['--version'], env);
+  assert.equal(version.out.trim(), JSON.parse(await readFile('cli/package.json', 'utf8')).version);
+  const unset = await run(foundation, ['api', 'GET', '/v1/me'], env);
+  assert.equal(unset.code, 1);
+  assert.match(unset.err, /foundation connect <url>/);
+  const connected = await run(foundation, ['connect', f.base], env);
+  assert.equal(connected.code, 0, connected.err);
+  assert.match(connected.out, /confirmation_code/);
+  assert.deepEqual(JSON.parse(await readFile(join(dir, 'config', 'foundation', 'config.json'), 'utf8')), { url: f.base });
+  const help = await run(foundation, ['--help'], env);
+  assert.match(help.out, /gmail.readonly/);
+  const waiting = await run(foundation, ['api', 'GET', '/v1/me'], env);
+  assert.match(waiting.out, /not_approved/);
+  const moved = await run(foundation, ['--help'], { ...env, FOUNDATION_URL: 'http://127.0.0.1:9' });
+  assert.doesNotMatch(moved.out, /gmail.readonly/, 'FOUNDATION_URL wins over the remembered server');
+});
+
+test('connect on a key already approved only remembers the server', async t => {
+  const f = await fixture(t);
+  const dir = await mkdtemp(join(tmpdir(), 'foundation-reconnect-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const env = { HOME: join(dir, 'home'), XDG_CONFIG_HOME: join(dir, 'config'), FOUNDATION_URL: '', FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'key') };
+  await writeFile(env.FOUNDATION_RUNTIME_KEY_FILE, (await f.agent()).token, { mode: 0o600 });
+  const again = await execute(['connect', f.base], env);
+  assert.equal(again.code, 0, again.err);
+  assert.match(again.out, /Already approved/);
+  const me = await execute(['api', 'GET', '/v1/me'], env);
+  assert.equal(me.code, 0, me.out + me.err);
 });
 
 test('FOUNDATION_AGENT gives each agent its own key file and default name', async t => {

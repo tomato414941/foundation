@@ -4,9 +4,6 @@ const requestId = location.pathname.match(/^\/connect\/([A-Za-z0-9_-]{43})$/)?.[
 const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : 'home';
 const pagePath = requestId ? '/connect/' + requestId : page === 'objects' ? '/objects' : page === 'secrets' ? '/secrets' : '/';
 let accessRequest = null, requestError = '';
-let disposePrivateInput = () => {};
-function clearPrivateInput() { const dispose = disposePrivateInput; disposePrivateInput = () => {}; dispose(); }
-window.addEventListener('pagehide', clearPrivateInput);
 const loginMessages = {
   expired: 'メールを送信したブラウザでリンクを開いてください。期限が切れた場合は、もう一度メールを送信してください。',
   invalid: 'リンクが無効か、有効期限が切れています。最新のメールのリンクを開いてください。',
@@ -268,7 +265,6 @@ function connectSection() {
 }
 function render() {
   if (!state) return;
-  clearPrivateInput();
   if (requestId) { renderRequest(); return; }
   const shell = inner => `<div class="workspace"><header class="topbar">${brand}${nav}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main>${inner}</main></div>`;
   if (page === 'objects') {
@@ -360,7 +356,7 @@ function renderRequest() {
   if (row.kind === 'store') { renderStore(row, shell, expiry); return; }
   const adapter = row.adapter, name = serviceName(adapter);
   const unavailable = `<p class="form-error" role="status">現在${esc(name)}に接続できません。</p>`;
-  const body = !adapter.available ? unavailable : adapter.register === 'login' ? expoLoginMarkup(row)
+  const body = !adapter.available ? unavailable
     : `<button class="button primary full request-connect" type="button" data-action="request-connect">${esc(adapter.label)} ${icon('arrow')}</button>
       ${adapter.failure_note && ['failed', 'scope', 'retry', 'changed'].includes(resultCode) ? `<p class="permission-note">${esc(adapter.failure_note.text)}<a href="${esc(adapter.failure_note.href)}" target="_blank" rel="noopener noreferrer">${esc(adapter.failure_note.link)} ↗</a></p>` : ''}`;
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(adapter.label)}</h1></div></header>
@@ -368,8 +364,6 @@ function renderRequest() {
     ${guidanceBlock(row.guidance)}
     <div class="register-body">${body}</div>
     <button class="text-button full" type="button" data-action="deny-request">接続しない</button>${expiry}</section>`);
-  const container = app.querySelector('.register-body');
-  if (adapter.available && adapter.register === 'login') bindExpoLogin(container, row);
 }
 // The owner puts something into storage for a key. Everything specific to the service is the AI's words;
 // Foundation shows only where it will go and how it will be handed over.
@@ -421,11 +415,10 @@ function renderApproval(row, shell, expiry) {
   });
 }
 function openDialog(content) {
-  clearPrivateInput();
   dialog.innerHTML = `<button class="dialog-close icon-button" data-action="close-dialog" aria-label="閉じる">${icon('close')}</button>${content}`;
   if (!dialog.open) dialog.showModal();
 }
-function closeDialog() { clearPrivateInput(); if (dialog.open) dialog.close(); dialog.innerHTML = ''; }
+function closeDialog() { if (dialog.open) dialog.close(); dialog.innerHTML = ''; }
 dialog.addEventListener('cancel', (event) => { event.preventDefault(); closeDialog(); });
 function bindForm(handler, container = dialog) {
   container.querySelector('form').addEventListener('submit', async (event) => {
@@ -441,66 +434,11 @@ function connect(adapterId, prefix) {
   const adapter = state.adapters.find(item => item.id === adapterId);
   if (!adapter?.available) return;
   const name = serviceName(adapter);
-  if (adapter.register === 'login') { openDialog(`<h2 id="dialog-title">${esc(name)}に接続</h2>${expoLoginMarkup(null)}`); bindExpoLogin(dialog, null); return; }
   openDialog(`<h2 id="dialog-title">${esc(name)}に${prefix ? '接続し直す' : '接続'}</h2><p>${esc(adapter.intro)}</p><form>
     <p class="permission-note">${esc(adapter.access.name)}。${esc(adapter.access.restrictions)} ${prefix ? '' : '接続すると、承認済みのアクセスキーから使えるようになります。'}${adapter.can_revoke ? '' : `停止は${esc(name)}で行います。`}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(adapter.label)} ${icon('arrow')}</button></form>`);
   bindForm(async () => {
     const result = await api(`/api/adapters/${adapter.id}/connect`, { method: 'POST', data: prefix ? { prefix } : {} });
     location.assign(result.url);
-  });
-}
-function expoLoginMarkup(request) {
-  return `<form class="expo-login-form" autocomplete="off"><div class="expo-password-fields"><label for="expo-username">Expoのメールアドレスまたはユーザー名</label><input id="expo-username" name="username" required maxlength="254" autocomplete="off" autocapitalize="none" spellcheck="false"><label for="expo-password">パスワード</label><input id="expo-password" name="password" type="password" required maxlength="1024" autocomplete="off"></div>
-    <div class="expo-otp-fields" hidden><label for="expo-otp">認証コード</label><input id="expo-otp" name="otp" maxlength="64" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" disabled><p class="expo-otp-help permission-note"></p><button type="button" class="text-button expo-reset">ログイン情報を入力し直す</button></div>
-    <p class="permission-note auth-privacy">入力内容はFoundationを経由してExpoへ送信します。パスワード・認証コードは保存しません。</p>
-    <p class="permission-note auth-permission">${request ? esc(request.adapter.access.description) : 'Expoのログイン状態を保存します。承認済みのアクセスキーから使えるようになります。'}</p><p class="form-error" role="alert"></p>
-    <button class="button primary full" type="submit" ${request && !request.adapter.available ? 'disabled' : ''}>ログインして登録 ${icon('arrow')}</button></form>`;
-}
-function bindExpoLogin(container, request) {
-  clearPrivateInput();
-  const form = container.querySelector('.expo-login-form'), button = form.querySelector('[type="submit"]'), errorElement = form.querySelector('[role="alert"]');
-  const passwordFields = form.querySelector('.expo-password-fields'), otpFields = form.querySelector('.expo-otp-fields');
-  let password = '', username = '', active = true, busy = false, deadline, controller;
-  function reset() {
-    password = ''; username = ''; clearTimeout(deadline); controller?.abort(); busy = false;
-    form.reset();
-    passwordFields.hidden = false; otpFields.hidden = true;
-    form.elements.password.disabled = false; form.elements.username.disabled = false; form.elements.otp.disabled = true; form.elements.otp.required = false;
-    button.disabled = Boolean(request && !request.adapter.available); button.textContent = 'ログインして登録';
-  }
-  disposePrivateInput = () => { active = false; reset(); };
-  form.querySelector('.expo-reset').addEventListener('click', () => { reset(); errorElement.textContent = ''; form.elements.username.focus(); });
-  form.addEventListener('submit', async event => {
-    event.preventDefault();
-    if (busy || !active || (request && !request.adapter.available) || !form.reportValidity()) return;
-    const initial = !password;
-    if (initial) {
-      username = form.elements.username.value.trim(); password = form.elements.password.value; form.elements.password.value = '';
-      deadline = setTimeout(() => { if (active) { reset(); errorElement.textContent = '時間が経過しました。ログイン情報を入力し直してください。'; } }, Math.max(1, Math.min(300_000, (request?.expires_at || Infinity) - Date.now())));
-    }
-    const otp = initial ? undefined : form.elements.otp.value.trim(); form.elements.otp.value = '';
-    busy = true; button.disabled = true; button.textContent = '確認中…'; errorElement.textContent = ''; controller = new AbortController();
-    const signal = controller.signal;
-    try {
-      const result = await api('/api/adapters/expo.login/connect', { method: 'POST', signal, data: { username, password, ...(otp === undefined ? {} : { otp }), ...(request ? { accessRequestId: request.id } : {}) } });
-      if (!active || signal.aborted) return;
-      if (result.challenge) {
-        passwordFields.hidden = true; otpFields.hidden = false;
-        form.elements.password.disabled = true; form.elements.username.disabled = true; form.elements.otp.disabled = false; form.elements.otp.required = true;
-        form.querySelector('.expo-otp-help').textContent = result.challenge.delivery === 'sms' ? 'Expoから届いたSMSのコード、またはバックアップコードを入力してください。' : '認証アプリのコード、またはバックアップコードを入力してください。';
-        if (!initial) errorElement.textContent = '認証コードを確認してください。';
-        button.textContent = '確認して登録'; form.elements.otp.focus();
-      } else {
-        password = ''; username = ''; clearTimeout(deadline);
-        closeDialog(); await refresh();
-        if (!request) toast('Expoの認証情報を登録しました。');
-      }
-    } catch (error) {
-      if (!active || signal.aborted) return;
-      if (initial || error.code !== 'expo_login_failed') reset();
-      else button.textContent = '確認して登録';
-      errorElement.textContent = error.message;
-    } finally { if (active && !signal.aborted) { busy = false; button.disabled = false; } }
   });
 }
 // Ending a connection. What it kept goes with it, and the owner decides whether the service is told.
@@ -590,14 +528,13 @@ document.addEventListener('click', async (event) => {
   const { action, id } = target.dataset;
   try {
     if (action === 'close-dialog') closeDialog();
-    if (action === 'logout') { clearPrivateInput(); target.disabled = true; await api('/api/session', { method: 'DELETE' }); await showLogin(); }
+    if (action === 'logout') { target.disabled = true; await api('/api/session', { method: 'DELETE' }); await showLogin(); }
     if (action === 'request-connect') {
       target.disabled = true;
       const result = await api(`/api/adapters/${accessRequest.adapter.id}/connect`, { method: 'POST', data: { accessRequestId: requestId } });
       location.assign(result.url);
     }
     if (action === 'deny-request') {
-      clearPrivateInput();
       target.disabled = true;
       await api(`/api/access-requests/${requestId}/deny`, { method: 'POST', data: {} });
       await refresh();

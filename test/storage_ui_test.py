@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     env = {**os.environ, 'FOUNDATION_URL': args.base, 'FOUNDATION_RUNTIME_KEY_FILE': key_dir + '/runtime-key'}
 
     def cli(*command, stdin=None):
-        result = subprocess.run(['node', 'src/runtime.mjs', *command], env=env, capture_output=True, text=True, timeout=15, input=stdin or '')
+        result = subprocess.run(['node', 'cli/runtime.mjs', *command], env=env, capture_output=True, text=True, timeout=15, input=stdin or '')
         assert result.returncode == 0, result.stderr
         assert SECRET not in result.stdout + result.stderr
         return json.loads(result.stdout.split('\n\nKey file')[0])

@@ -167,10 +167,6 @@ legend { padding: 0; margin-top: 0; }
 .choice small { display: block; font-size: 14px; color: var(--muted); margin-top: 3px; }
 .revoke-choice { margin-top: 18px; }
 .permission-note { font-size: 14px; color: var(--muted); margin: 14px 0; }
-.expo-login-form label { margin-top: 14px; }
-.expo-login-form .auth-permission { padding: 10px 12px; margin: 12px 0; background: var(--soft); border-left: 3px solid #a8c4b1; }
-.expo-login-form .auth-privacy { margin: 12px 0; }
-.expo-login-form .form-error:empty { margin-top: 10px; }
 dialog { width: min(520px, calc(100% - 32px)); max-height: calc(100dvh - 40px); border: 1px solid var(--line); border-radius: 12px; padding: 30px; box-shadow: 0 20px 80px #152d302e; color: var(--ink); }
 dialog::backdrop { background: #122a2252; }
 dialog h2 { padding-right: 32px; font-size: 22px; margin-bottom: 9px; }

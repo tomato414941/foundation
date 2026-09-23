@@ -10,7 +10,7 @@ import { FakeOpenRouter, openrouterFixture } from './openrouter-helper.mjs';
 import { json, USER_A } from './helpers.mjs';
 
 const execute = (args, env) => new Promise((resolve, reject) => {
-  const child = spawn(process.execPath, ['src/runtime.mjs', ...args], { env: { ...process.env, ...env } });
+  const child = spawn(process.execPath, ['cli/runtime.mjs', ...args], { env: { ...process.env, ...env } });
   let out = '', err = '';
   child.stdout.on('data', part => out += part); child.stderr.on('data', part => err += part);
   child.once('error', reject); child.once('exit', code => resolve({ code, out, err }));
