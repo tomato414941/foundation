@@ -49,12 +49,37 @@ async function resolveNewKey() {
   throw new Error('The current database has no key this process can use.');
 }
 
+// What the adapters that no longer exist used to hand a command. Foundation does not obtain any of these
+// any more, so the value itself becomes an ordinary entry, delivered under the same name as before.
+const RETIRED = { 'expo.token': 'EXPO_TOKEN', 'supabase.access-token': 'SUPABASE_ACCESS_TOKEN', 'cloudflare.api-token': 'CLOUDFLARE_API_TOKEN' };
+const slug = value => String(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'value';
+
+// A retired adapter's secret as { variable: value }: one pasted value, or the several a generic one held.
+function values(adapter, secret) {
+  if (adapter === 'generic') return secret.values && typeof secret.values === 'object' ? secret.values : null;
+  const name = RETIRED[adapter];
+  return name && typeof secret.access_token === 'string' ? { [name]: secret.access_token } : null;
+}
+
 const report = [];
 for (const row of old.prepare('SELECT * FROM credentials ORDER BY created_at').all()) {
   let secret;
   try { secret = oldVault.open(row.secret, `credential:${row.owner_id}:${row.id}`); }
   catch (error) { report.push([row.adapter, row.subject, 'unreadable: ' + error.message]); continue; }
-  if (!adapters.ids().includes(row.adapter)) { report.push([row.adapter, row.subject, 'no such adapter any more']); continue; }
+  if (!adapters.ids().includes(row.adapter)) {
+    const held = values(row.adapter, secret);
+    if (!held) { report.push([row.adapter, row.subject, 'nothing recognisable to keep']); continue; }
+    const prefix = slug(row.adapter === 'generic' ? String(row.subject).split(':')[0] : row.adapter.split('.')[0]);
+    const paths = Object.entries(held).map(([name, value]) => [prefix + '/' + slug(name), name, String(value)]);
+    if (!commit) { report.push([row.adapter, row.subject, 'would keep as ' + paths.map(([path]) => path).join(', ')]); continue; }
+    try {
+      for (const [path, name, value] of paths) {
+        store.writeEntry(row.owner_id, { path, content: Buffer.from(value, 'utf8'), media_type: 'text/plain', env: name, filename: null, session: null, readable: 0, kept_by: row.requested_by || '' });
+      }
+      report.push([row.adapter, row.subject, 'kept as ' + paths.map(([path]) => path).join(', ')]);
+    } catch (error) { report.push([row.adapter, row.subject, 'failed: ' + error.message]); }
+    continue;
+  }
   if (row.status !== 'connected') { report.push([row.adapter, row.subject, 'not connected (' + row.status + ')']); continue; }
   if (!commit) { report.push([row.adapter, row.subject, 'would move']); continue; }
   try {
