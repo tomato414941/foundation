@@ -5,9 +5,9 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { OpenRouterClient, OPENROUTER_API } from '../src/services/openrouter.mjs';
-import { FakeOpenRouter, openrouterFixture } from './openrouter-helper.mjs';
-import { json, USER_A } from './helpers.mjs';
+import { OpenRouterClient, OPENROUTER_API } from './client.mjs';
+import { FakeOpenRouter, openrouterFixture } from './fixture.mjs';
+import { json, USER_A } from '../../../test/helpers.mjs';
 
 const execute = (args, env) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, ['cli/runtime.mjs', ...args], { env: { ...process.env, ...env } });
@@ -148,12 +148,29 @@ test('OpenRouter in-flight key is withheld after the key is revoked', async t =>
 });
 
 for (const [name, change] of [
-  ['management key', { is_management_key: true }], ['legacy management key', { is_provisioning_key: true }],
+  ['invalid management flag', { is_management_key: 'false' }], ['invalid provisioning flag', { is_provisioning_key: 'false' }],
   ['invalid expiry', { expires_at: 'not-a-date' }], ['expired key', { expires_at: '2000-01-01T00:00:00Z' }],
   ['invalid limit', { limit: 'unlimited' }], ['negative limit', { limit: -1 }], ['unknown limit reset', { limit_reset: 'surprise' }],
-]) test('OpenRouter rejects ' + name, async () => {
+]) test('OpenRouterの不正な認証応答を拒否する: ' + name, async () => {
   const client = new FakeOpenRouter(); Object.assign(client.info, change);
   await assert.rejects(client.exchange({ code: 'personal', verifier: 'secret-verifier' }));
+});
+
+test('OpenRouterの管理権限の有無と未確認を区別してAIへ返す', async t => {
+  const f = await openrouterFixture(t), agent = await f.issueKey();
+  f.openrouter.info.is_management_key = true;
+  const account = await f.openrouterAccount();
+  let result = await credential(f, account, agent.token);
+  assert.equal(result.status, 200, result.text);
+  assert.equal(result.json.facts.key_info.is_management_key, true);
+  assert.equal(result.json.delivery.environment.OPENROUTER_API_KEY, f.openrouter.key());
+  delete f.openrouter.info.is_management_key;
+  f.openrouter.info.is_provisioning_key = true;
+  result = await credential(f, account, agent.token);
+  assert.equal(result.status, 200, result.text);
+  assert.equal(result.json.facts.key_info.is_management_key, null);
+  assert.equal(result.json.facts.key_info.is_provisioning_key, true);
+  assert.doesNotMatch(JSON.stringify(result.json.facts), /sk-or-v1-/);
 });
 
 test('OpenRouter accepts explicit unlimited and zero budgets without changing them', async () => {

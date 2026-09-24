@@ -1,5 +1,5 @@
-import { GitHubClient, GITHUB_SCOPES } from '../src/services/github.mjs';
-import { json } from './helpers.mjs';
+import { GitHubClient, GITHUB_SCOPES } from './client.mjs';
+import { json } from '../../../test/helpers.mjs';
 
 // Answers as GitHub would for a few accounts; every other outbound request is refused.
 export class FakeGitHub extends GitHubClient {

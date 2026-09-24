@@ -1,10 +1,13 @@
 import { createApp } from '../src/app.mjs';
 import { FakeAuth, FakeGmail, KEY } from './helpers.mjs';
 import { createHash } from 'node:crypto';
-import { FakeOpenRouter } from './openrouter-helper.mjs';
-import { gmailReadonly, gmailMetadata, openrouterOauth, githubOauth, gcpOauth } from '../src/adapters.mjs';
-import { FakeGitHub } from './github-helper.mjs';
-import { FakeGcp } from './gcp-helper.mjs';
+import { FakeOpenRouter } from '../src/connectors/openrouter/fixture.mjs';
+import { gmailReadonly, gmailMetadata } from '../src/connectors/gmail/index.mjs';
+import { openrouterOauth } from '../src/connectors/openrouter/index.mjs';
+import { githubOauth } from '../src/connectors/github/index.mjs';
+import { gcpOauth } from '../src/connectors/gcp/index.mjs';
+import { FakeGitHub } from '../src/connectors/github/fixture.mjs';
+import { FakeGcp } from '../src/connectors/gcp/fixture.mjs';
 
 // A bucket that lives in memory, so the lent space can be seen and used in the browser tests.
 const bucket = new Map();
@@ -31,11 +34,11 @@ const auth = new FakeAuth(), gmail = new FakeGmail();
 auth.codeFactory = email => createHash('sha256').update(email).digest('hex');
 if (process.env.FOUNDATION_TEST_EMPTY_CONFIG === '1') { auth.enabled = false; gmail.enabled = false; }
 const gmailOnly = () => [gmailReadonly(gmail), gmailMetadata(gmail)];
-const adapters = process.env.FOUNDATION_TEST_GCP === '1' ? [gcpOauth(new FakeGcp()), ...gmailOnly()]
+const connectors = process.env.FOUNDATION_TEST_GCP === '1' ? [gcpOauth(new FakeGcp()), ...gmailOnly()]
   : process.env.FOUNDATION_TEST_GITHUB === '1' ? [githubOauth(new FakeGitHub()), ...gmailOnly()]
   : process.env.FOUNDATION_TEST_OPENROUTER === '1' ? [openrouterOauth(new FakeOpenRouter()), ...gmailOnly()]
   : undefined;
-const app = createApp({ encryptionKey: KEY, auth, space, adapters: adapters || [gmailReadonly(gmail), gmailMetadata(gmail)] });
+const app = createApp({ encryptionKey: KEY, auth, space, connectors: connectors || [gmailReadonly(gmail), gmailMetadata(gmail)] });
 const port = Number(process.env.FOUNDATION_TEST_PORT || 3418);
 app.server.listen(port, '127.0.0.1', () => console.log('Test fixture: http://127.0.0.1:' + port));
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, async () => { await app.close(); process.exit(0); });

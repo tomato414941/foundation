@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { OpenRouterClient } from '../src/services/openrouter.mjs';
-import { openrouterOauth, gmailReadonly, gmailMetadata } from '../src/adapters.mjs';
-import { FakeGmail, fixture, json } from './helpers.mjs';
+import { OpenRouterClient } from './client.mjs';
+import { openrouterOauth } from './index.mjs';
+import { gmailReadonly, gmailMetadata } from '../gmail/index.mjs';
+import { FakeGmail, fixture, json } from '../../../test/helpers.mjs';
 
 export class FakeOpenRouter extends OpenRouterClient {
   constructor() {
@@ -26,7 +27,7 @@ export class FakeOpenRouter extends OpenRouterClient {
 
 export async function openrouterFixture(t, options = {}) {
   const openrouter = options.openrouter || new FakeOpenRouter(), gmail = new FakeGmail();
-  const f = await fixture(t, { gmail, adapters: [openrouterOauth(openrouter), gmailReadonly(gmail), gmailMetadata(gmail)], ...options });
+  const f = await fixture(t, { gmail, connectors: [openrouterOauth(openrouter), gmailReadonly(gmail), gmailMetadata(gmail)], ...options });
   async function start(extra = {}) {
     const result = await f.request('/v1/connections', { method: 'POST', data: { connector: 'openrouter.oauth', ...extra } });
     if (result.status !== 200) throw new Error(result.text);

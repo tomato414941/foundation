@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GitHubClient } from '../src/services/github.mjs';
-import { FakeGitHub } from './github-helper.mjs';
-import { githubOauth, gmailReadonly, gmailMetadata } from '../src/adapters.mjs';
-import { FakeGmail, fixture } from './helpers.mjs';
+import { GitHubClient } from './client.mjs';
+import { FakeGitHub } from './fixture.mjs';
+import { githubOauth } from './index.mjs';
+import { gmailReadonly, gmailMetadata } from '../gmail/index.mjs';
+import { FakeGmail, fixture } from '../../../test/helpers.mjs';
 
 async function githubFixture(t, github = new FakeGitHub()) {
-  const gmail = new FakeGmail(), f = await fixture(t, { gmail, adapters: [githubOauth(github), gmailReadonly(gmail), gmailMetadata(gmail)] });
+  const gmail = new FakeGmail(), f = await fixture(t, { gmail, connectors: [githubOauth(github), gmailReadonly(gmail), gmailMetadata(gmail)] });
   async function start(extra = {}) {
     const result = await f.request('/v1/connections', { method: 'POST', data: { connector: 'github.oauth', name: '', ...extra } });
     assert.equal(result.status, 200, result.text);
@@ -42,12 +43,17 @@ test('A connected GitHub account is named by its login and delivered to an appro
   assert.deepEqual(delivered.json.delivery.environment, { GH_TOKEN: 'gho_octo', GITHUB_TOKEN: 'gho_octo' });
 });
 
-test('A grant without repository access is refused and nothing is registered', async t => {
+test('不足・追加されたGitHub権限を認証情報とともにAIに返す', async t => {
   const f = await githubFixture(t);
-  f.github.scopes = 'read:org';
+  f.github.scopes = 'read:org, admin:org';
   const done = await f.back(await f.start(), 'octo');
-  assert.match(done.headers.get('location'), /connection=scope/);
-  assert.deepEqual(await f.connections(), []);
+  assert.match(done.headers.get('location'), /connection=connected/);
+  const agent = await f.issueKey(), [connection] = await f.connections();
+  const result = await f.deliver(connection, { token: agent.token });
+  assert.equal(result.status, 200, result.text);
+  assert.deepEqual(result.json.facts.missing_scopes, ['gist', 'repo', 'workflow']);
+  assert.deepEqual(result.json.facts.additional_scopes, ['admin:org']);
+  assert.equal(result.json.delivery.environment.GH_TOKEN, 'gho_octo');
 });
 
 test('A token revoked at GitHub stops delivery and asks the owner to register again', async t => {
@@ -83,7 +89,7 @@ test('Disconnecting revokes the grant at GitHub', async t => {
 });
 
 test('Without a client ID and secret GitHub is offered as unavailable', async t => {
-  const gmail = new FakeGmail(), f = await fixture(t, { gmail, adapters: [githubOauth(new GitHubClient()), gmailReadonly(gmail), gmailMetadata(gmail)] });
+  const gmail = new FakeGmail(), f = await fixture(t, { gmail, connectors: [githubOauth(new GitHubClient()), gmailReadonly(gmail), gmailMetadata(gmail)] });
   const adapter = (await f.request('/v1/state')).json.connectors.find(item => item.id === 'github.oauth');
   assert.equal(adapter.available, false);
   assert.equal((await f.request('/v1/connections', { method: 'POST', data: { connector: 'github.oauth' } })).status, 503);

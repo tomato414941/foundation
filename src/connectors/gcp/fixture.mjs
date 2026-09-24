@@ -1,5 +1,5 @@
-import { GcpClient, GCP_SCOPES } from '../src/services/gcp.mjs';
-import { json } from './helpers.mjs';
+import { GcpClient, GCP_SCOPES } from './client.mjs';
+import { json } from '../../../test/helpers.mjs';
 
 export class FakeGcp extends GcpClient {
   constructor() {

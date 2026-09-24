@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     assert request['kind'] == 'connect' and 'confirmation_code' not in request
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
-    expect(page.get_by_text('メールの読み取り', exact=True)).to_be_visible()
+    expect(page.locator('.approval-facts')).to_contain_text('メールの読み取り')
     expect(page.get_by_label('確認コード', exact=True)).to_have_count(0)
     review(page)
     page.screenshot(path=str(shots / 'request-before-connection.png'), full_page=True)
@@ -138,7 +138,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
     request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'connector': 'gmail.metadata', 'purpose': '件名を確認する'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_text('件名・差出人などの読み取り', exact=True)).to_be_visible()
+    expect(page.locator('.approval-facts')).to_contain_text('件名・差出人などの読み取り')
     page.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
     expect(page.get_by_text('headers@example.test', exact=False)).to_be_visible()
