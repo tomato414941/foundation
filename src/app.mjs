@@ -160,7 +160,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   // Connection identity, provider details and available outputs; never private renewal state.
   const runtimeAcquisition = row => {
     const adapter = adapters.get(row.adapter);
-    return { id: row.id, adapter: row.adapter, service: adapter.service, label: row.label, status: row.status,
+    const facts = store.acquisitionState(row).facts;
+    return { id: row.id, adapter: row.adapter, service: adapter.service, label: facts.label || row.label, status: row.status, facts,
       access: adapter.access, api: adapter.service?.api || { base_url: '', documentation_url: '' },
       outputs: adapter.variables };
   };
@@ -182,6 +183,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
     const { owner_id: _owner, state: _state, ...rest } = row;
     return { ...rest, ...state.facts, expires_at: state.expires_at, access: adapter.access, service: adapter.service,
       outputs: adapter.variables,
+      ...(adapter.revocationNote ? { revocation_note: adapter.revocationNote } : {}),
       can_reconnect: adapter.canReconnect !== false, can_revoke: adapter.canRevoke !== false, available: adapter.client.enabled };
   }
   const server = createServer(async (req, res) => {
@@ -774,7 +776,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const output = saved ? { saved } : { delivery: deliveredOutputs(result.values) };
           store.recordIssuance(caller, expires_at);
           store.recordInvocation(caller.owner_id, { key: caller, fn: 'connection.credentials', target: connection.label, status: 'ok', detail: saved ? '保管: ' + saved.map(item => item.name).join(', ') : '渡した' });
-          return send(200, { ...output, expires_at,
+          return send(200, { ...output, facts: result.state.facts, expires_at,
             expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
         }
         // The existing fetch endpoint invokes the same built-in operation as its catalog entry.

@@ -2,6 +2,7 @@ import { fail } from './errors.mjs';
 import { GMAIL_API, GMAIL_DOCS } from './services/gmail.mjs';
 import { OPENROUTER_API, OPENROUTER_DOCS } from './services/openrouter.mjs';
 import { GITHUB_API, GITHUB_DOCS, GITHUB_SETTINGS } from './services/github.mjs';
+import { GCP_API, GCP_DOCS } from './services/gcp.mjs';
 
 // An adapter performs a built-in OAuth flow and describes its credential outputs.
 // Renewal state belongs to that connection. Output identifiers do not reserve saved names.
@@ -18,6 +19,7 @@ const service = (name, icon, management_url, api) => Object.freeze({ name, icon,
 const GMAIL = service('Gmail', 'mail', 'https://myaccount.google.com/connections', { base_url: GMAIL_API, documentation_url: GMAIL_DOCS });
 const OPENROUTER = service('OpenRouter', 'network', 'https://openrouter.ai/keys', { base_url: OPENROUTER_API, documentation_url: OPENROUTER_DOCS });
 const GITHUB = service('GitHub', 'code', GITHUB_SETTINGS, { base_url: GITHUB_API, documentation_url: GITHUB_DOCS });
+const GCP = service('Google Cloud', 'cloud', 'https://myaccount.google.com/connections', { base_url: GCP_API, documentation_url: GCP_DOCS });
 
 const GMAIL_VARIABLES = ['GOOGLE_OAUTH_ACCESS_TOKEN', 'GMAIL_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT'];
 const gmailDelivery = (secret, credential) => ({ environment: { GOOGLE_OAUTH_ACCESS_TOKEN: secret.access_token, GMAIL_ACCOUNT_EMAIL: credential.subject, GOOGLE_OAUTH_EXPIRES_AT: String(secret.expires_at) } });
@@ -62,6 +64,18 @@ export function githubOauth(client) {
   };
 }
 
+export function gcpOauth(client) {
+  return {
+    id: 'gcp.oauth', service: GCP, label: 'Googleで接続', register: 'oauth', client,
+    intro: 'Googleアカウントでログインし、Google Cloudへのアクセスを許可します。',
+    access: { name: 'Google Cloudの操作', description: '許可した範囲とアカウントのIAM権限に従い、リソースの作成・変更・削除を行えます。', restrictions: '特定のプロジェクトには限定されません。操作により料金が発生する場合があります。' },
+    revocationNote: 'Google側の許可を取り消すと、同じアカウントの他のGoogle接続も使えなくなる場合があります。',
+    ai: 'Use CLOUDSDK_AUTH_ACCESS_TOKEN with gcloud or as a Bearer token with the relevant Google Cloud API. Inspect facts.scopes, missing_scopes and additional_scopes in the connection list or credential function result; differences are reported, not blocked. IAM is not checked. Choose --project explicitly: it is not an access restriction. Invoke connection.credentials again before token expiry; saved copies do not refresh.',
+    variables: ['CLOUDSDK_AUTH_ACCESS_TOKEN', 'GOOGLE_CLOUD_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT'],
+    deliver: secret => ({ environment: { CLOUDSDK_AUTH_ACCESS_TOKEN: secret.access_token, GOOGLE_CLOUD_ACCOUNT_EMAIL: secret.identity.email, GOOGLE_OAUTH_EXPIRES_AT: String(secret.expires_at) } }),
+  };
+}
+
 
 export class Adapters {
   constructor(adapters) {
@@ -81,6 +95,7 @@ export class Adapters {
     return { id, service: adapter.service, label: adapter.label, register: adapter.register, available: adapter.client.enabled,
       intro: adapter.intro || '', access: adapter.access, variables: adapter.variables,
       ...(adapter.ai ? { ai: adapter.ai } : {}), ...(adapter.kind ? { kind: adapter.kind } : {}), ...(adapter.failureNote ? { failure_note: adapter.failureNote } : {}),
+      ...(adapter.revocationNote ? { revocation_note: adapter.revocationNote } : {}),
       can_reconnect: adapter.canReconnect !== false, can_revoke: adapter.canRevoke !== false, credential_type: adapter.credentialType || 'oauth2_access_token' };
   }
 }

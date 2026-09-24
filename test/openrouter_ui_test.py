@@ -116,6 +116,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     expect(page.get_by_role('heading', name='model key', exact=True)).to_be_visible()
 
     # Starting one from the dashboard uses the same flow, and asks for nothing the service decides.
+    page.goto(args.base + '/connections', wait_until='networkidle')
     page.get_by_role('button', name='OpenRouterで接続', exact=True).first.click()
     review(page)
     authorization['code'] = 'second'

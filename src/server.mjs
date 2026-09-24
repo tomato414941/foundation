@@ -3,7 +3,8 @@ import { createApp } from './app.mjs';
 import { GmailClient } from './services/gmail.mjs';
 import { OpenRouterClient } from './services/openrouter.mjs';
 import { GitHubClient } from './services/github.mjs';
-import { gmailReadonly, gmailMetadata, openrouterOauth, githubOauth } from './adapters.mjs';
+import { GcpClient } from './services/gcp.mjs';
+import { gmailReadonly, gmailMetadata, openrouterOauth, githubOauth, gcpOauth } from './adapters.mjs';
 import { SupabaseAuth } from './auth.mjs';
 import { Kms, resolveEncryptionKey } from './kms.mjs';
 import { S3Space } from './objects.mjs';
@@ -14,7 +15,8 @@ const encryptionKey = await resolveEncryptionKey({ database: config.database, en
 const auth = new SupabaseAuth(config.supabase);
 const gmail = new GmailClient(config.google);
 const github = new GitHubClient(config.github);
-const adapters = [githubOauth(github), openrouterOauth(new OpenRouterClient()), gmailReadonly(gmail), gmailMetadata(gmail)];
+const gcp = new GcpClient(config.gcp);
+const adapters = [githubOauth(github), openrouterOauth(new OpenRouterClient()), gcpOauth(gcp), gmailReadonly(gmail), gmailMetadata(gmail)];
 const app = createApp({ database: config.database, encryptionKey, space: new S3Space(config.objects), publicOrigin: config.publicOrigin, owners: config.owners, trustedProxies: config.trustedProxies, auth, adapters });
 app.server.listen(config.port, config.bind, () => {
   console.log(`Foundation: http://${config.bind}:${config.port}`);
@@ -22,6 +24,7 @@ app.server.listen(config.port, config.bind, () => {
   if (config.publicOrigin) console.log(`Private preview: ${config.publicOrigin}`);
   console.log(`Supabase Auth: ${auth.enabled ? 'configured' : 'not configured'}; Gmail OAuth: ${gmail.enabled ? 'configured' : 'not configured'}; GitHub OAuth: ${github.enabled ? 'configured' : 'not configured'}`);
   console.log(`Email login: ${auth.emailEnabled ? 'enabled' : 'disabled'}; Object space: ${config.objects.bucket || 'not configured'}`);
+  console.log(`Google Cloud OAuth: ${gcp.enabled ? 'configured' : 'not configured'}`);
   console.log(`Owners: ${config.owners.length ? config.owners.join(', ') : 'anyone who can log in'}`);
 });
 let closing = false;

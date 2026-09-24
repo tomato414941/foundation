@@ -2,8 +2,9 @@ import { createApp } from '../src/app.mjs';
 import { FakeAuth, FakeGmail, KEY } from './helpers.mjs';
 import { createHash } from 'node:crypto';
 import { FakeOpenRouter } from './openrouter-helper.mjs';
-import { gmailReadonly, gmailMetadata, openrouterOauth, githubOauth } from '../src/adapters.mjs';
+import { gmailReadonly, gmailMetadata, openrouterOauth, githubOauth, gcpOauth } from '../src/adapters.mjs';
 import { FakeGitHub } from './github-helper.mjs';
+import { FakeGcp } from './gcp-helper.mjs';
 
 // A bucket that lives in memory, so the lent space can be seen and used in the browser tests.
 const bucket = new Map();
@@ -30,7 +31,8 @@ const auth = new FakeAuth(), gmail = new FakeGmail();
 auth.codeFactory = email => createHash('sha256').update(email).digest('hex');
 if (process.env.FOUNDATION_TEST_EMPTY_CONFIG === '1') { auth.enabled = false; gmail.enabled = false; }
 const gmailOnly = () => [gmailReadonly(gmail), gmailMetadata(gmail)];
-const adapters = process.env.FOUNDATION_TEST_GITHUB === '1' ? [githubOauth(new FakeGitHub()), ...gmailOnly()]
+const adapters = process.env.FOUNDATION_TEST_GCP === '1' ? [gcpOauth(new FakeGcp()), ...gmailOnly()]
+  : process.env.FOUNDATION_TEST_GITHUB === '1' ? [githubOauth(new FakeGitHub()), ...gmailOnly()]
   : process.env.FOUNDATION_TEST_OPENROUTER === '1' ? [openrouterOauth(new FakeOpenRouter()), ...gmailOnly()]
   : undefined;
 const app = createApp({ encryptionKey: KEY, auth, space, adapters: adapters || [gmailReadonly(gmail), gmailMetadata(gmail)] });
