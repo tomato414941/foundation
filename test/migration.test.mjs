@@ -79,7 +79,7 @@ async function legacy(t) {
 
 test('Schema 11 migrates encrypted values and pending state without changing their identities or contents', async t => {
   const old = await legacy(t), store = new Store(old.path, KEY); t.after(() => store.close());
-  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 12);
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 13);
   for (const entry of old.entries) {
     const row = store.secret(entry.owner, entry.name);
     assert.equal(row.id, entry.id); assert.equal(row.content, entry.sealed);

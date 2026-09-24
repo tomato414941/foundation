@@ -9,6 +9,7 @@ import { Adapters } from './adapters.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { Requests } from './requests.mjs';
 import { KeyRequests } from './key-requests.mjs';
+import { Integrations } from './integrations.mjs';
 import { Acquisitions } from './acquisitions.mjs';
 import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX, secretName } from './secrets.mjs';
 import { Objects, S3Space, OBJECT_MAX } from './objects.mjs';
@@ -96,7 +97,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   const secrets = new Secrets(store);
   const objects = new Objects(spaceBackend);
   const acquisitions = new Acquisitions(store, adapters);
-  const requests = new Requests(store, adapters), keyRequests = new KeyRequests(store);
+  const requests = new Requests(store, adapters), keyRequests = new KeyRequests(store), integrations = new Integrations(store);
+  // A request made by an account another product holds is opened on that product's page, which knows who its user is.
+  requests.returnUrlFor = ownerId => integrations.returnUrlFor(ownerId);
   const logins = new EmailLogins({ now: loginClock });
   const refreshing = new Map(), limits = new Map(), disconnects = new Set();
   const timer = setInterval(() => {
@@ -362,7 +365,19 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       }
       if (path.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(method)) requireOrigin(req, origin);
-        const { user, session } = await principal(req);
+        // A product's user arrives with a single-use link to one request. Spending it leaves a short session,
+        // scoped by cookie path and by the server to that request's own routes, and to nothing else.
+        if (path === '/api/request-links' && method === 'POST') {
+          const input = await body(req);
+          rateLimit('link:' + clientAddress(req), 20, 600_000);
+          const claimed = integrations.claim(input.request_id, input.link);
+          requests.record(claimed.request_id, 'link_opened');
+          res.appendHeader('Set-Cookie', `fdn_link=${claimed.session}; HttpOnly; SameSite=Strict; Path=/api/requests/${claimed.request_id}; Max-Age=1800${external ? '; Secure' : ''}`);
+          return send(200, { ok: true });
+        }
+        const linkedRoute = path.match(/^\/api\/requests\/([A-Za-z0-9_-]{43})(\/store|\/deny)?$/);
+        const link = linkedRoute ? integrations.linked(readCookie(req, 'fdn_link'), linkedRoute[1]) : undefined;
+        const { user, session } = link ? { user: { id: link.owner_id, email: null, linked: true }, session: null } : await principal(req);
         if (path === '/api/state' && method === 'GET') return send(200, { user, secrets: secrets.list(user.id), acquisitions: store.acquisitions(user.id).map(acquisitionView), keys: store.keys(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
         // What a key kept is the owner's: they read it, rename the group it sits in, and remove it.
         // The same space the keys use, from the owner's own screen: what is there, and putting, taking
@@ -461,7 +476,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           if (!ownerRequest[2] && method === 'GET') { requests.record(row.id, 'page_viewed'); return send(200, { request: requests.summary(row, origin) }); }
           if (method === 'POST' && ownerRequest[2]) {
             await body(req);
-            if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
+            if (!user.linked && localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
             progressRequestId = row.id;
             const result = requests.deny(row.id, user.id);
             requests.record(row.id, 'denied');
@@ -533,6 +548,14 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const input = await body(req);
           return send(201, { key: store.addKey(user.id, nameValue(input.name)) });
         }
+        // Another product that holds accounts for its own users. Its credential is shown once, here.
+        if (path === '/api/integrations' && method === 'GET') return send(200, { integrations: integrations.list(user.id) });
+        if (path === '/api/integrations' && method === 'POST') {
+          const input = await body(req);
+          return send(201, { integration: integrations.register(user.id, { name: nameValue(input.name, '連携'), returnUrl: input.return_url }) });
+        }
+        const integrationRoute = path.match(/^\/api\/integrations\/([a-f0-9-]{36})$/);
+        if (integrationRoute && method === 'DELETE') { await body(req); integrations.remove(user.id, integrationRoute[1]); return send(200, { ok: true }); }
         const keyRoute = path.match(/^\/api\/keys\/([a-f0-9-]{36})$/);
         if (keyRoute) {
           if (method === 'DELETE') {
@@ -568,6 +591,54 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         });
         if (answer.body === null) { res.writeHead(answer.status); return res.end(); }
         return send(answer.status, answer.body);
+      }
+      // What a product calls, with its own credential. It reaches no account's contents.
+      if (path.startsWith('/v1/integration/')) {
+        if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
+        const integration = integrations.authenticate(bearer(req));
+        if (!integration) fail(401, 'not_an_integration', 'この連携キーは無効です。');
+        rateLimit('integration:' + integration.id, 300);
+        const accountRoute = path.match(/^\/v1\/integration\/accounts\/([^/]+)(?:\/(keys|usage)(?:\/([a-f0-9-]{36}))?)?$/);
+        if (accountRoute) {
+          const externalId = decodeURIComponent(accountRoute[1]), part = accountRoute[2], keyId = accountRoute[3];
+          if (!part && method === 'PUT') { await body(req); return send(200, { account: integrations.view(integrations.ensure(integration, externalId)) }); }
+          if (!part && method === 'GET') return send(200, { account: integrations.view(integrations.account(integration, externalId)) });
+          if (!part && method === 'DELETE') {
+            await body(req);
+            const removed = integrations.deleteAccount(integration, externalId);
+            if (objects.enabled) {
+              let cursor;
+              do { const page = await objects.list(removed.id, '', cursor); for (const item of page.objects) await objects.remove(removed.id, item.key); cursor = page.cursor; } while (cursor);
+            }
+            return send(200, { ok: true });
+          }
+          const account = integrations.account(integration, externalId);
+          // A key for the account, one per place the product runs its user's agent. Replacing one revokes the old.
+          if (part === 'keys' && !keyId && method === 'POST') {
+            const input = await body(req);
+            if (input.replaces !== undefined && !store.keys(account.id).some(item => item.id === input.replaces)) fail(404, 'not_found', '置き換えるキーが見つかりません。');
+            return store.transaction(() => {
+              if (input.replaces !== undefined) store.removeKey(account.id, input.replaces);
+              return send(201, { key: store.addKey(account.id, nameValue(input.name ?? integration.name, 'キー')) });
+            });
+          }
+          if (part === 'keys' && keyId && method === 'DELETE') {
+            await body(req);
+            if (!store.keys(account.id).some(item => item.id === keyId)) fail(404, 'not_found', 'キーが見つかりません。');
+            store.removeKey(account.id, keyId);
+            return send(200, { ok: true });
+          }
+          if (part === 'usage' && method === 'GET') {
+            const space = objects.enabled ? await objects.usage(account.id) : null;
+            return send(200, { usage: { secrets: store.usage(account.id), objects: space ? { count: space.count, bytes: space.bytes } : null } });
+          }
+        }
+        if (path === '/v1/integration/links' && method === 'POST') {
+          const input = await body(req);
+          const made = integrations.link(integration, requests.get(input.request_id));
+          return send(201, { url: origin + '/requests/' + input.request_id + '#link=' + made.token, expires_at: made.expires_at });
+        }
+        fail(404, 'not_found', '指定された操作が見つかりません。');
       }
       if (path.startsWith('/v1/')) {
         const caller = actor(req);
