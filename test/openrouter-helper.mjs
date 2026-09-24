@@ -28,7 +28,7 @@ export async function openrouterFixture(t, options = {}) {
   const openrouter = options.openrouter || new FakeOpenRouter(), gmail = new FakeGmail();
   const f = await fixture(t, { gmail, adapters: [openrouterOauth(openrouter), gmailReadonly(gmail), gmailMetadata(gmail)], ...options });
   async function start(extra = {}) {
-    const result = await f.request('/api/adapters/openrouter.oauth/connect', { method: 'POST', data: { ...extra } });
+    const result = await f.request('/v1/connections', { method: 'POST', data: { connector: 'openrouter.oauth', ...extra } });
     if (result.status !== 200) throw new Error(result.text);
     return new URL(result.json.url);
   }
@@ -40,8 +40,8 @@ export async function openrouterFixture(t, options = {}) {
   async function account(code = 'personal') {
     const result = await callback(await start(), code);
     if (!result.headers.get('location')?.includes('connection=connected')) throw new Error(result.headers.get('location'));
-    const state = (await f.request('/api/state')).json;
-    return state.acquisitions.filter(item => item.adapter === 'openrouter.oauth').at(-1);
+    const state = (await f.request('/v1/state')).json;
+    return state.connections.filter(item => item.connector === 'openrouter.oauth').at(-1);
   }
   const deliver = (connection, options) => f.request('/v1/functions/connection.credentials', { method: 'POST', data: { connection_id: connection.id }, ...options });
   return { ...f, openrouter, startOpenRouter: start, callbackOpenRouter: callback, openrouterAccount: account, deliver };

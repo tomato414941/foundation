@@ -50,9 +50,9 @@ async function setup(t) {
   const api = await service(t);
   const f = await fixture(t, { outbound: api.outbound });
   const key = await f.issueKey();
-  const put = await f.request('/v1/secrets/api/token?secret=true', { method: 'PUT', token: key.token, raw: TOKEN, type: 'text/plain' });
+  const put = await f.request('/v1/secrets?name=api/token&secret=true', { method: 'PUT', token: key.token, raw: TOKEN, type: 'text/plain' });
   assert.equal(put.status, 200, put.text);
-  const call = request => f.request('/v1/fetch', { method: 'POST', token: key.token, data: request });
+  const call = request => f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: request });
   return { ...api, f, key, call };
 }
 
@@ -74,7 +74,7 @@ test('A request goes out with what is kept in its headers and body, and comes ba
   assert.doesNotMatch(answer.text, new RegExp(TOKEN));
   assert.doesNotMatch(answer.text, new RegExp(Buffer.from(TOKEN).toString('base64').slice(0, 20)));
   // The owner sees that it happened, and where to; never what went in or came back.
-  const record = (await f.request('/api/state')).json.invocations;
+  const record = (await f.request('/v1/state')).json.invocations;
   assert.equal(record.length, 1);
   assert.equal(record[0].function, 'http.request'); assert.equal(record[0].target, 'POST api.example.test'); assert.equal(record[0].status, 'ok');
   assert.match(record[0].detail, /HTTP 200/);
@@ -115,13 +115,13 @@ test('What goes out is checked: the key may use each path, headers are its own, 
   for (const name of ['host', 'Content-Length', 'accept-encoding', 'proxy-authorization', 'x-forwarded-for']) {
     assert.equal((await call({ url: 'https://api.example.test/', headers: { [name]: 'x' } })).json.error.code, 'invalid_headers', name);
   }
-  await f.request('/v1/secrets/api/multiline?secret=true', { method: 'PUT', token: key.token, raw: 'line1\nline2', type: 'text/plain' });
+  await f.request('/v1/secrets?name=api/multiline&secret=true', { method: 'PUT', token: key.token, raw: 'line1\nline2', type: 'text/plain' });
   assert.equal((await call({ url: 'https://api.example.test/', headers: { authorization: '{{foundation:api/multiline}}' } })).json.error.code, 'invalid_headers');
-  await f.request('/v1/secrets/api/binary?secret=true', { method: 'PUT', token: key.token, raw: Buffer.from([0xff, 0xfe, 0x00]), type: 'application/octet-stream' });
+  await f.request('/v1/secrets?name=api/binary&secret=true', { method: 'PUT', token: key.token, raw: Buffer.from([0xff, 0xfe, 0x00]), type: 'application/octet-stream' });
   assert.equal((await call({ url: 'https://api.example.test/', method: 'POST', body: '{{foundation:api/binary}}' })).json.error.code, 'not_text');
   assert.equal((await call({ url: 'https://api.example.test/', method: 'GET', body: 'x' })).json.error.code, 'invalid_body');
   assert.equal(received.length, 0, 'nothing refused ever went out');
-  await f.request('/api/keys/' + key.id, { method: 'DELETE' });
+  await f.request('/v1/keys/' + key.id, { method: 'DELETE' });
   assert.equal((await call({ url: 'https://api.example.test/', headers: { authorization: '{{foundation:api/token}}' } })).status, 401);
 });
 
@@ -148,10 +148,10 @@ test('Foundation itself is not reachable under another name that points at its o
   api.addresses.set('alias.example.test', [{ address: '198.35.26.96', family: 4 }]);
   const f = await fixture(t, { outbound: api.outbound, publicOrigin: 'https://foundation.example.test' });
   const key = await f.issueKey();
-  const refused = await f.request('/v1/fetch', { method: 'POST', token: key.token, data: { url: 'https://alias.example.test/v1/me' } });
+  const refused = await f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://alias.example.test/v1/keys/current' } });
   assert.equal(refused.status, 400); assert.equal(refused.json.error.code, 'invalid_destination');
   assert.equal(api.received.length, 0);
-  const allowed = await f.request('/v1/fetch', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/echo' } });
+  const allowed = await f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/echo' } });
   assert.equal(allowed.json.response.status, 200, allowed.text);
 });
 
@@ -171,7 +171,7 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
   assert.deepEqual(saved.json.saved.map(row => row.name), [outputName]);
   assert.equal(saved.json.response.status, 200);
   assert.equal(saved.json.response.body, undefined);
-  const body = await f.request('/api/secrets?name=' + encodeURIComponent(outputName));
+  const body = await f.request('/v1/secrets?name=' + encodeURIComponent(outputName));
   assert.equal(JSON.parse(body.text).authorization, 'Bearer [redacted]');
   assert.equal(f.gmail.calls.length, calls, 'using a saved value does not process any connection');
   assert.equal((await f.request('/v1/secrets?name=' + encodeURIComponent(outputName), { token: key.token })).status, 403);

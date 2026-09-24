@@ -48,7 +48,7 @@ test('keeps an object for an owner who has no bucket of their own', async (t) =>
 test('gives each owner their own room in the bucket', async (t) => {
   const f = await space(t);
   await f.request('/v1/objects/notes/today.txt', { method: 'PUT', token: KEY, raw: Buffer.from('mine'), type: 'text/plain' });
-  const owner = (await f.request('/api/state')).json.user.id;
+  const owner = (await f.request('/v1/state')).json.user.id;
   assert.deepEqual(f.bucket.calls, [['put', 'owners/' + owner + '/notes/today.txt']]);
 });
 
@@ -143,7 +143,7 @@ test('signs a listing the way S3 asks for it', async (t) => {
 test('says what an owner is using and what they may use', async (t) => {
   const f = await space(t);
   await f.request('/v1/objects/a.txt', { method: 'PUT', token: KEY, raw: Buffer.from('12345'), type: 'text/plain' });
-  await f.request('/v1/secrets/notes/plan', { method: 'PUT', token: KEY, raw: 'abc', type: 'text/plain' });
+  await f.request('/v1/secrets?name=notes/plan', { method: 'PUT', token: KEY, raw: 'abc', type: 'text/plain' });
   const usage = await f.request('/v1/usage', { token: KEY });
   assert.equal(usage.status, 200, usage.text);
   assert.equal(usage.json.objects.count, 1);
@@ -157,7 +157,7 @@ test('says what an owner is using and what they may use', async (t) => {
 test('refuses to keep more than the space lends', async (t) => {
   const f = await space(t);
   f.bucket.objects.set('owners/x/big', { body: Buffer.alloc(0), contentType: 'text/plain', updated_at: Date.now() });
-  const owner = (await f.request('/api/state')).json.user.id;
+  const owner = (await f.request('/v1/state')).json.user.id;
   f.bucket.objects.delete('owners/x/big');
   f.bucket.objects.set(`owners/${owner}/big`, { body: { length: 1024 * 1024 * 1024 }, contentType: 'text/plain', updated_at: Date.now() });
   const refused = await f.request('/v1/objects/more.txt', { method: 'PUT', token: KEY, raw: Buffer.from('x'), type: 'text/plain' });

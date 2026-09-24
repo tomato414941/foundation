@@ -4,7 +4,7 @@ import { fixture, USER_A, json } from './helpers.mjs';
 import { SECRET_COUNT_MAX } from '../src/secrets.mjs';
 
 const route = name => '/v1/secrets?name=' + encodeURIComponent(name);
-const own = name => '/api/secrets?name=' + encodeURIComponent(name);
+const own = name => '/v1/secrets?name=' + encodeURIComponent(name);
 const invoke = (f, token, connection, save) => f.request('/v1/functions/connection.credentials', {
   method: 'POST', token, data: { connection_id: connection.id, ...(save === undefined ? {} : { save }) },
 });
@@ -66,7 +66,7 @@ test('Explicit credential outputs can be saved, renamed and delivered without li
   assert.equal((await f.request(route(snapshot), { token })).status, 403);
   f.expire(personal.id);
   const calls = f.gmail.calls.length;
-  const delivered = await f.request('/v1/deliver', { method: 'POST', token, data: { names: [{ name: snapshot, as: 'CHOSEN_TOKEN' }] } });
+  const delivered = await f.request('/v1/deliveries', { method: 'POST', token, data: { names: [{ name: snapshot, as: 'CHOSEN_TOKEN' }] } });
   assert.deepEqual(delivered.json.delivery.environment, { CHOSEN_TOKEN: 'google-access-personal-readonly' });
   assert.equal(delivered.json.expires_at, null);
   assert.equal((await f.request(own(snapshot))).text, 'google-access-personal-readonly');
@@ -77,7 +77,7 @@ test('Explicit credential outputs can be saved, renamed and delivered without li
   assert.ok(f.gmail.calls.length > calls, 'the explicit function renews an expired credential');
   assert.equal(f.app.store.secret(USER_A, 'a/aa/aaa').content, oldCiphertext);
   assert.equal((await f.request(route(unrelated), { token })).text, 'unrelated value');
-  const removed = await f.request('/api/acquisitions/' + personal.id, { method: 'DELETE', data: { revoke: false } });
+  const removed = await f.request('/v1/connections/' + personal.id, { method: 'DELETE', data: { revoke: false } });
   assert.equal(removed.status, 200);
   assert.equal((await f.request(own('a/aa/aaa'))).text, 'google-access-personal-readonly');
   assert.equal((await invoke(f, token, work)).json.delivery.environment.GMAIL_ACCOUNT_EMAIL, 'work@example.test');
@@ -115,8 +115,8 @@ for (const change of ['key', 'connection', 'reconnect']) test('An in-flight cred
   f.gmail.refreshHandler = () => { began(); return new Promise(resolve => release = resolve); };
   const pending = invoke(f, key.token, connection, { GOOGLE_OAUTH_ACCESS_TOKEN: 'result' });
   await started;
-  if (change === 'key') await f.request('/api/keys/' + key.id, { method: 'DELETE' });
-  if (change === 'connection') await f.request('/api/acquisitions/' + connection.id, { method: 'DELETE', data: { revoke: false } });
+  if (change === 'key') await f.request('/v1/keys/' + key.id, { method: 'DELETE' });
+  if (change === 'connection') await f.request('/v1/connections/' + connection.id, { method: 'DELETE', data: { revoke: false } });
   if (change === 'reconnect') await f.callback(await f.start({ connection_id: connection.id }));
   release();
   const result = await pending;
@@ -130,7 +130,7 @@ test('A storage request preserves comma and punctuation names in its completion 
   const names = ['one, two', '{{value}}', '__proto__'];
   const asked = await f.request('/v1/requests', { method: 'POST', token, data: { store: names.map(name => ({ name, label: name })), purpose: '値の保存' } });
   assert.equal(asked.status, 201, asked.text);
-  const complete = await f.request('/api/requests/' + asked.json.request.id + '/store', { method: 'POST', data: { entries: names.map(name => ({ name, content: 'value-' + name })) } });
+  const complete = await f.request('/v1/requests/' + asked.json.request.id + '/done', { method: 'POST', data: { entries: names.map(name => ({ name, content: 'value-' + name })) } });
   assert.equal(complete.status, 200, complete.text);
   const done = await f.request('/v1/requests/' + asked.json.request.id, { token });
   assert.deepEqual(done.json.request.result.names, names);

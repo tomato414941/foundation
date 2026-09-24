@@ -5,8 +5,8 @@ import { fixture, USER_B } from './helpers.mjs';
 
 const challengeCookie = response => response.headers.getSetCookie().find(value => value.startsWith('fdn_login=')).split(';')[0];
 const sessionCookie = response => response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
-const send = (f, email = 'new@example.test', cookie) => f.request('/api/auth/link', { method: 'POST', data: { email }, headers: cookie ? { cookie } : {} });
-const callback = (f, cookie, code = f.auth.links.get('new@example.test')?.code) => f.request('/auth/callback?code=' + encodeURIComponent(code || ''), { headers: { ...(cookie ? { cookie } : {}), 'sec-fetch-site': 'cross-site' } });
+const send = (f, email = 'new@example.test', cookie) => f.request('/v1/login', { method: 'POST', data: { email }, headers: cookie ? { cookie } : {} });
+const callback = (f, cookie, code = f.auth.links.get('new@example.test')?.code) => f.request('/login/callback?code=' + encodeURIComponent(code || ''), { headers: { ...(cookie ? { cookie } : {}), 'sec-fetch-site': 'cross-site' } });
 const location = response => response.headers.get('location');
 
 test('Browser challenges hide PKCE state and expire without retaining authentication data', () => {
@@ -67,12 +67,12 @@ test('Default email-link signup/login uses secure HttpOnly cookies and a fixed c
   assert.doesNotMatch(sent.text, /verifier|access_token|refresh_token/);
   const cookie = challengeCookie(sent), link = f.auth.links.get('new@example.test');
   assert.equal(new URL(link.url).origin, 'https://foundation.example.test');
-  assert.equal(new URL(link.url).pathname, '/auth/callback');
-  const config = await f.request('/api/auth/config', { headers: { cookie } });
+  assert.equal(new URL(link.url).pathname, '/login/callback');
+  const config = await f.request('/v1/login', { headers: { cookie } });
   assert.equal(config.json.method, 'email_link');
   assert.equal('code_length' in config.json, false);
   assert.deepEqual(config.json.pending, sent.json.pending);
-  assert.equal((await f.request('/api/auth/config')).json.pending, null);
+  assert.equal((await f.request('/v1/login')).json.pending, null);
   assert.equal(location(await callback(f, undefined, link.code)), '/?login=expired');
   const result = await callback(f, cookie, link.code);
   assert.equal(result.status, 303);
@@ -80,7 +80,7 @@ test('Default email-link signup/login uses secure HttpOnly cookies and a fixed c
   assert.doesNotMatch(result.text, /access_token|refresh_token|verifier/);
   assert.match(result.headers.get('referrer-policy'), /no-referrer/);
   assert.match(result.headers.getSetCookie().find(value => value.startsWith('fdn_login=')), /Max-Age=0/);
-  const state = await f.request('/api/state', { headers: { cookie: sessionCookie(result) } });
+  const state = await f.request('/v1/state', { headers: { cookie: sessionCookie(result) } });
   assert.equal(state.status, 200);
   assert.equal(state.json.user.id, USER_B);
   assert.equal(state.json.user.email, 'new@example.test');
@@ -91,10 +91,10 @@ test('Password/code login and malformed or ambiguous callback URLs cannot authen
   const f = await fixture(t, { login: false });
   const cookie = challengeCookie(await send(f));
   for (const data of [{ code: '123456' }, { email: 'new@example.test', password: 'obsolete' }, { access_token: 'forged', refresh_token: 'forged' }]) {
-    assert.equal((await f.request('/api/session', { method: 'POST', data, headers: { cookie } })).status, 401);
+    assert.equal((await f.request('/v1/session', { method: 'POST', data, headers: { cookie } })).status, 401);
   }
   for (const suffix of ['', '?code=123456', '?error=access_denied&error_description=secret-value', '?code=valid-looking-code-000&code=duplicate']) {
-    const result = await f.request('/auth/callback' + suffix, { headers: { cookie } });
+    const result = await f.request('/login/callback' + suffix, { headers: { cookie } });
     assert.equal(location(result), '/?login=invalid');
     assert.doesNotMatch(result.text, /secret-value/);
   }
@@ -141,7 +141,7 @@ test('Expired and cancelled challenges cannot create sessions', async (t) => {
   now += LOGIN_TTL;
   assert.equal(location(await callback(f, expired)), '/?login=expired');
   const cancelled = challengeCookie(await send(f));
-  const result = await f.request('/api/auth/link', { method: 'DELETE', headers: { cookie: cancelled } });
+  const result = await f.request('/v1/login', { method: 'DELETE', headers: { cookie: cancelled } });
   assert.equal(result.status, 200);
   assert.match(result.headers.get('set-cookie'), /fdn_login=;.*Max-Age=0/);
   assert.equal(location(await callback(f, cancelled)), '/?login=expired');
@@ -149,11 +149,11 @@ test('Expired and cancelled challenges cannot create sessions', async (t) => {
 
 test('Cross-origin send/cancellation are denied while the provider callback is accepted', async (t) => {
   const f = await fixture(t, { login: false });
-  const denied = await f.request('/api/auth/link', { method: 'POST', data: { email: 'new@example.test' }, headers: { origin: 'https://evil.example' } });
+  const denied = await f.request('/v1/login', { method: 'POST', data: { email: 'new@example.test' }, headers: { origin: 'https://evil.example' } });
   assert.equal(denied.status, 403);
   assert.equal(f.auth.links.size, 0);
   const cookie = challengeCookie(await send(f));
-  assert.equal((await f.request('/api/auth/link', { method: 'DELETE', headers: { cookie, origin: 'https://evil.example' } })).status, 403);
+  assert.equal((await f.request('/v1/login', { method: 'DELETE', headers: { cookie, origin: 'https://evil.example' } })).status, 403);
   assert.equal(location(await callback(f, cookie)), '/');
 });
 
@@ -178,8 +178,8 @@ for (const action of ['cancel', 'resend', 'logout', 'expire']) test(`In-flight v
   const pending = callback(f, cookie, code);
   await started;
   assert.equal(location(await callback(f, cookie, code)), '/?login=busy');
-  if (action === 'cancel') await f.request('/api/auth/link', { method: 'DELETE', headers: { cookie } });
-  if (action === 'logout') await f.request('/api/session', { method: 'DELETE', headers: { cookie } });
+  if (action === 'cancel') await f.request('/v1/login', { method: 'DELETE', headers: { cookie } });
+  if (action === 'logout') await f.request('/v1/session', { method: 'DELETE', headers: { cookie } });
   if (action === 'resend') { now += 60_001; assert.equal((await send(f, 'new@example.test', cookie)).status, 202); }
   if (action === 'expire') now += LOGIN_TTL;
   finish();
@@ -187,7 +187,7 @@ for (const action of ['cancel', 'resend', 'logout', 'expire']) test(`In-flight v
   assert.equal(location(result), '/?login=expired');
   assert.equal(result.headers.get('set-cookie'), null);
   assert.equal(revoked, 1);
-  assert.equal((await f.request('/api/state')).status, 401);
+  assert.equal((await f.request('/v1/state')).status, 401);
 });
 
 test('A provider response for a different email cannot authenticate the browser', async (t) => {

@@ -36,7 +36,7 @@ with sync_playwright() as p:
     owner.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     owner.get_by_role('button', name='ログインメールを送信', exact=True).click()
     expect(owner.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    owner.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
+    owner.goto(args.base + '/login/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
     owner.set_viewport_size({'width': 1280, 'height': 1000})
     # The registration lives on its own page, reached through the account, not the home.
     owner.get_by_role('link', name='アカウント', exact=True).click()
@@ -61,11 +61,11 @@ with sync_playwright() as p:
     owner.screenshot(path=str(shots / 'integrations.png'), full_page=True)
 
     # The product makes its user's account and key; the user's AI asks for something to keep.
-    call('/v1/integration/accounts/user-1', product, 'PUT', {})
-    key = call('/v1/integration/accounts/user-1/keys', product, 'POST', {'name': 'ai-simplicity'})['key']['token']
+    call('/v1/accounts/user-1', product, 'PUT', {})
+    key = call('/v1/accounts/user-1/keys', product, 'POST', {'name': 'ai-simplicity'})['key']['token']
     asked = call('/v1/requests', key, 'POST', {'store': {'name': 'npm-token', 'label': 'npm のアクセストークン', 'site': 'https://www.npmjs.com/'},
                                              'purpose': 'パッケージの公開に使います。', 'steps': ['npmjs.com でアクセストークンを作ります。', '表示されたトークンをここに貼ります。']})['request']
-    link = call('/v1/integration/links', product, 'POST', {'request_id': asked['id']})['url']
+    link = call('/v1/request-links', product, 'POST', {'request_id': asked['id']})['url']
 
     # The user, who has never signed up for Foundation, opens the link the product handed them.
     context = browser.new_context(viewport={'width': 1280, 'height': 1000})
@@ -89,7 +89,7 @@ with sync_playwright() as p:
     review(page)
     page.screenshot(path=str(shots / 'link-done.png'), full_page=True)
     assert call('/v1/requests/' + asked['id'], key)['request']['result']['names'] == ['npm-api-token']
-    delivered = call('/v1/deliver', key, 'POST', {'names': [{'name': 'npm-api-token', 'as': 'NPM_TOKEN'}]})
+    delivered = call('/v1/deliveries', key, 'POST', {'names': [{'name': 'npm-api-token', 'as': 'NPM_TOKEN'}]})
     assert delivered['delivery']['environment']['NPM_TOKEN'] == SECRET
 
     # The same link opened again reaches nothing.

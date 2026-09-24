@@ -17,7 +17,7 @@ test('Official Supabase SDK sends a signup-capable default magic link and exchan
     return json(new URL(url).pathname.endsWith('/otp') ? {} : String(url).endsWith('/user') ? user : session);
   });
   const storage = new Map();
-  const redirectUri = 'https://foundation.example.test/auth/callback';
+  const redirectUri = 'https://foundation.example.test/login/callback';
   await auth.sendLink(user.email, redirectUri, storage);
   assert.equal(new URL(calls[0].url).pathname, '/auth/v1/otp');
   assert.equal(new URL(calls[0].url).searchParams.get('redirect_to'), redirectUri);
@@ -51,7 +51,7 @@ test('Logout explicitly revokes only this Supabase session, never all devices', 
 test('Supabase errors and forged credentials never become local login identities', async () => {
   const auth = setup(async () => json({ code: 'invalid_credentials', msg: 'secret-token-in-upstream-error' }, 400));
   await assert.rejects(auth.exchangeLink('invalid-auth-code', new Map()), (error) => error.status === 401 && !error.message.includes('secret-token'));
-  await assert.rejects(auth.sendLink('test@example.test', 'https://foundation.example.test/auth/callback', new Map()), (error) => error.status === 503 && !error.message.includes('secret-token'));
+  await assert.rejects(auth.sendLink('test@example.test', 'https://foundation.example.test/login/callback', new Map()), (error) => error.status === 503 && !error.message.includes('secret-token'));
   const forged = setup(async () => json({ ...user, is_anonymous: true }));
   await assert.rejects(forged.user('forged'), { status: 401 });
 });
@@ -59,7 +59,7 @@ test('Supabase errors and forged credentials never become local login identities
 test('Missing or privileged configuration fails closed, not back to owner key', async () => {
   const absent = new SupabaseAuth();
   assert.equal(absent.enabled, false);
-  await assert.rejects(absent.sendLink('a@example.test', 'https://foundation.example.test/auth/callback', new Map()), { status: 503 });
+  await assert.rejects(absent.sendLink('a@example.test', 'https://foundation.example.test/login/callback', new Map()), { status: 503 });
   await assert.rejects(absent.exchangeLink('test-auth-code', new Map()), { status: 503 });
   assert.throws(() => new SupabaseAuth({ url: 'https://app.supabase.co' }));
   assert.throws(() => new SupabaseAuth({ url: 'https://app.supabase.co', key: 'sb_secret_test' }));
@@ -73,7 +73,7 @@ test('Email delivery must be enabled separately and cannot send while unavailabl
   const auth = new SupabaseAuth({ url: 'https://example.supabase.co', key: 'sb_publishable_test_only', emailEnabled: false, fetcher: async () => { requests++; return json(user); } });
   assert.equal(auth.enabled, true);
   assert.equal(auth.emailEnabled, false);
-  await assert.rejects(auth.sendLink(user.email, 'https://foundation.example.test/auth/callback', new Map()), { status: 503, code: 'email_unavailable' });
+  await assert.rejects(auth.sendLink(user.email, 'https://foundation.example.test/login/callback', new Map()), { status: 503, code: 'email_unavailable' });
   assert.equal(requests, 0);
   assert.deepEqual(await auth.user('existing-session'), { id: USER_A, email: user.email });
 });

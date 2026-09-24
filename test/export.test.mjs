@@ -7,10 +7,10 @@ const KEY = 'fdn_' + 'e'.repeat(43);
 test('hands the owner everything they have, secrets included', async (t) => {
   const f = await fixture(t);
   await f.approveKey(KEY);
-  await f.request('/v1/secrets/notes/plan?secret=false', { method: 'PUT', token: KEY, raw: 'read me', type: 'text/plain' });
-  await f.request('/v1/secrets/keys/token?secret=true', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
+  await f.request('/v1/secrets?name=notes/plan&secret=false', { method: 'PUT', token: KEY, raw: 'read me', type: 'text/plain' });
+  await f.request('/v1/secrets?name=keys/token&secret=true', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
 
-  const exported = await f.request('/api/export');
+  const exported = await f.request('/v1/export');
   assert.equal(exported.status, 200, exported.text);
   assert.match(exported.headers.get('content-disposition'), /attachment; filename="foundation-\d{4}-\d{2}-\d{2}\.json"/);
   const value = exported.json;
@@ -27,14 +27,14 @@ test('hands the owner everything they have, secrets included', async (t) => {
 test('keeps the export to the owner\'s own session', async (t) => {
   const f = await fixture(t);
   await f.approveKey(KEY);
-  await f.request('/v1/secrets/keys/token?secret=true', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
+  await f.request('/v1/secrets?name=keys/token&secret=true', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
 
-  const asAKey = await f.request('/api/export', { token: KEY, anonymous: true });
-  assert.equal(asAKey.status, 401);
+  const asAKey = await f.request('/v1/export', { token: KEY, anonymous: true });
+  assert.equal(asAKey.status, 403);
   assert.ok(!asAKey.text.includes('sh-secret-value'));
 
   await f.login('other@example.test');
-  const asAnother = await f.request('/api/export');
+  const asAnother = await f.request('/v1/export');
   assert.equal(asAnother.status, 200);
   assert.deepEqual(asAnother.json.secrets, []);
 });

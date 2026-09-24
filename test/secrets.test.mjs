@@ -38,11 +38,11 @@ test('Stored names and caller-selected environment variables are independent', a
   assert.doesNotMatch(listed.text, new RegExp(secret), 'listing tells what is kept, never the bytes');
 
   // Written as a secret, so the key that wrote it cannot read it back.
-  const refused = await f.request('/v1/secrets/github/gh-token', { token, anonymous: true });
+  const refused = await f.request('/v1/secrets?name=github/gh-token', { token, anonymous: true });
   assert.equal(refused.status, 403);
   assert.equal(refused.json.error.code, 'write_only');
 
-  const delivered = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'github/gh-token', as: 'GH_TOKEN' }] } });
+  const delivered = await f.request('/v1/deliveries', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'github/gh-token', as: 'GH_TOKEN' }] } });
   assert.deepEqual(delivered.json.delivery, { environment: { GH_TOKEN: secret }, files: [] });
 });
 
@@ -50,14 +50,14 @@ test('Bytes with no delivery are kept and read back as they were written', async
   const { f, token } = await keyed(t);
   const state = JSON.stringify({ step: 'レビュー待ち', pull_request: 42 });
   assert.equal((await put(f, token, 'release/2026-09-23', state, {}, 'application/json')).status, 200);
-  const read = await f.request('/v1/secrets/release/2026-09-23', { token, anonymous: true });
+  const read = await f.request('/v1/secrets?name=release/2026-09-23', { token, anonymous: true });
   assert.equal(read.status, 200);
   assert.equal(read.text, state);
   // Delivery needs an explicit destination variable regardless of the saved name.
-  const asked = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: ['release/2026-09-23'] } });
+  const asked = await f.request('/v1/deliveries', { method: 'POST', token, anonymous: true, data: { names: ['release/2026-09-23'] } });
   assert.equal(asked.status, 400);
   assert.equal(asked.json.error.code, 'no_variable');
-  const named = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'release/2026-09-23', as: 'RELEASE_STATE' }] } });
+  const named = await f.request('/v1/deliveries', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'release/2026-09-23', as: 'RELEASE_STATE' }] } });
   assert.deepEqual(named.json.delivery.environment, { RELEASE_STATE: state });
 });
 
@@ -66,10 +66,10 @@ test('Bytes that cannot be an environment variable can still be delivered as a f
   const pem = '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN\n-----END PRIVATE KEY-----\n';
   const stored = await put(f, token, 'apple/key', pem, { secret: 'true' });
   assert.equal(stored.status, 200, stored.text);
-  const refused = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'apple/key', as: 'APPLE_KEY' }] } });
+  const refused = await f.request('/v1/deliveries', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'apple/key', as: 'APPLE_KEY' }] } });
   assert.equal(refused.status, 400);
   assert.equal(refused.json.error.code, 'invalid_value');
-  const delivered = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true,
+  const delivered = await f.request('/v1/deliveries', { method: 'POST', token, anonymous: true,
     data: { names: [{ name: 'apple/key', as: 'EXPO_ASC_API_KEY_PATH', filename: 'AuthKey.p8' }] } });
   assert.deepEqual(delivered.json.delivery.environment, {});
   assert.deepEqual(delivered.json.delivery.files, [{ env: 'EXPO_ASC_API_KEY_PATH', filename: 'AuthKey.p8', content: Buffer.from(pem).toString('base64'), encoding: 'base64' }]);
@@ -84,10 +84,10 @@ test('Stored names accept literal text, while delivery destinations are validate
   assert.equal((await put(f, token, '-leading/segment', 'x')).status, 200);
   assert.equal((await put(f, token, 'a/b/c/d/e/f/g/h/i', 'x')).status, 200);
   assert.equal((await put(f, token, 'a/b', 'x')).status, 200);
-  const handing = async as => (await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'a/b', as }] } })).json.error?.code;
+  const handing = async as => (await f.request('/v1/deliveries', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'a/b', as }] } })).json.error?.code;
   assert.equal(await handing('lower'), 'invalid_env');
   assert.equal(await handing('PATH'), 'invalid_env');
-  const badFile = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'a/b', as: 'A_KEY', filename: '../escape' }] } });
+  const badFile = await f.request('/v1/deliveries', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'a/b', as: 'A_KEY', filename: '../escape' }] } });
   assert.equal(badFile.json.error.code, 'invalid_filename');
   // Anything at all may be kept, as long as Foundation is not asked to make it a variable.
   assert.equal((await put(f, token, 'raw/bytes', '\u0000\u0001 binary �', {}, 'application/octet-stream')).status, 200);
@@ -98,19 +98,19 @@ test('Writing the same name again replaces what is there', async t => {
   await put(f, token, 'github/gh-token', 'first', { secret: 'true' });
   await put(f, token, 'github/gh-token', 'second');
   assert.equal((await f.request('/v1/secrets', { token, anonymous: true })).json.secrets.length, 1);
-  const delivered = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'github/gh-token', as: 'GH_TOKEN' }] } });
+  const delivered = await f.request('/v1/deliveries', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'github/gh-token', as: 'GH_TOKEN' }] } });
   assert.deepEqual(delivered.json.delivery.environment, { GH_TOKEN: 'second' });
-  assert.equal((await f.request('/v1/secrets/github/gh-token', { token, anonymous: true })).text, 'second', 'no longer a secret either');
+  assert.equal((await f.request('/v1/secrets?name=github/gh-token', { token, anonymous: true })).text, 'second', 'no longer a secret either');
 });
 
 test('Delivering several at once refuses two that want the same variable', async t => {
   const { f, token } = await keyed(t);
   await put(f, token, 'work/gh-token', 'one');
   await put(f, token, 'personal/gh-token', 'two');
-  const clash = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'work/gh-token', as: 'GH_TOKEN' }, { name: 'personal/gh-token', as: 'GH_TOKEN' }] } });
+  const clash = await f.request('/v1/deliveries', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'work/gh-token', as: 'GH_TOKEN' }, { name: 'personal/gh-token', as: 'GH_TOKEN' }] } });
   assert.equal(clash.status, 409);
   assert.equal(clash.json.error.code, 'name_conflict');
-  const apart = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true,
+  const apart = await f.request('/v1/deliveries', { method: 'POST', token, anonymous: true,
     data: { names: [{ name: 'work/gh-token', as: 'GH_TOKEN' }, { name: 'personal/gh-token', as: 'PERSONAL_GH_TOKEN' }] } });
   assert.deepEqual(apart.json.delivery.environment, { GH_TOKEN: 'one', PERSONAL_GH_TOKEN: 'two' }, 'saying a different name is enough');
 });
@@ -125,12 +125,12 @@ test('Listing narrows by a literal name prefix, and each owner reaches only thei
   const other = key();
   await f.approveKey(other, 'other-machine');
   assert.deepEqual((await f.request('/v1/secrets', { token: other, anonymous: true })).json.secrets, []);
-  assert.equal((await f.request('/v1/secrets/github/token', { token: other, anonymous: true })).status, 404);
+  assert.equal((await f.request('/v1/secrets?name=github/token', { token: other, anonymous: true })).status, 404);
   assert.equal(f.app.store.secrets(USER_B).length, 0);
 
-  const dropped = await f.request('/v1/secrets/github/token', { method: 'DELETE', token, anonymous: true, data: {} });
+  const dropped = await f.request('/v1/secrets?name=github/token', { method: 'DELETE', token, anonymous: true, data: {} });
   assert.equal(dropped.status, 200);
-  assert.equal((await f.request('/v1/secrets/github/token', { token, anonymous: true })).status, 404);
+  assert.equal((await f.request('/v1/secrets?name=github/token', { token, anonymous: true })).status, 404);
 });
 
 test('What is kept is bounded, so one owner cannot fill the disk', async t => {
@@ -139,23 +139,23 @@ test('What is kept is bounded, so one owner cannot fill the disk', async t => {
   assert.equal(big.status, 413);
   assert.equal(big.json.error.code, 'too_large');
   assert.equal((await put(f, token, 'long/value', 'a'.repeat(20_000))).status, 200);
-  const asVariable = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'long/value', as: 'VALUE' }] } });
+  const asVariable = await f.request('/v1/deliveries', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'long/value', as: 'VALUE' }] } });
   assert.equal(asVariable.status, 413);
   assert.equal(asVariable.json.error.code, 'value_too_large');
-  const asFile = await f.request('/v1/deliver', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'long/value', as: 'LONG_VALUE', filename: 'value.txt' }] } });
+  const asFile = await f.request('/v1/deliveries', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'long/value', as: 'LONG_VALUE', filename: 'value.txt' }] } });
   assert.equal(asFile.status, 200, 'the same bytes are fine when they become a file');
 });
 
 test('The owner reads and removes anything kept, including what the key may not read back', async t => {
   const { f, token } = await keyed(t);
   await put(f, token, 'github/token', secret, { env: 'GH_TOKEN', secret: 'true' });
-  const state = await f.request('/api/state');
+  const state = await f.request('/v1/state');
   assert.deepEqual(state.json.secrets.map(row => row.name), ['github/token']);
   assert.doesNotMatch(state.text, new RegExp(secret));
-  const read = await f.request('/api/secrets/github%2Ftoken');
+  const read = await f.request('/v1/secrets?name=github%2Ftoken');
   assert.equal(read.status, 200);
   assert.equal(read.text, secret, 'the owner sees what they are keeping');
-  assert.equal((await f.request('/api/secrets/github%2Ftoken', { method: 'DELETE', data: {} })).status, 200);
+  assert.equal((await f.request('/v1/secrets?name=github%2Ftoken', { method: 'DELETE', data: {} })).status, 200);
   assert.deepEqual((await f.request('/v1/secrets', { token, anonymous: true })).json.secrets, []);
 });
 
@@ -163,7 +163,7 @@ test('The owner edits the value they opened while preserving its name and read p
   const { f, token } = await keyed(t);
   for (const privateValue of [true, false]) {
     const name = privateValue ? 'private value' : 'readable value';
-    const path = '/api/secrets?' + new URLSearchParams({ name });
+    const path = '/v1/secrets?' + new URLSearchParams({ name });
     await put(f, token, name, 'original', { secret: String(privateValue) });
     const opened = await f.request(path);
     const etag = opened.headers.get('etag');
@@ -185,7 +185,7 @@ test('The owner edits the value they opened while preserving its name and read p
 
 test('A stale editor preserves a newer value and its permissions', async t => {
   const { f, token } = await keyed(t);
-  const path = '/api/secrets?name=shared';
+  const path = '/v1/secrets?name=shared';
   await put(f, token, 'shared', 'original', { secret: 'true' });
   const opened = await f.request(path);
   await put(f, token, 'shared', 'newer value');
@@ -193,19 +193,19 @@ test('A stale editor preserves a newer value and its permissions', async t => {
   assert.equal(saved.status, 412, saved.text);
   assert.equal(saved.json.error.code, 'secret_changed');
   assert.equal((await f.request(path)).text, 'newer value');
-  assert.equal((await f.request('/api/state')).json.secrets[0].readable, true);
+  assert.equal((await f.request('/v1/state')).json.secrets[0].readable, true);
 });
 
 test('A stale editor respects renames, deletion, recreation, and owner boundaries', async t => {
   const { f, token } = await keyed(t);
-  const path = '/api/secrets?name=original';
+  const path = '/v1/secrets?name=original';
   await put(f, token, 'original', 'first');
   const etag = (await f.request(path)).headers.get('etag');
   const save = () => f.request(path, { method: 'PUT', raw: 'draft', headers: { 'if-match': etag } });
   await f.request(path, { method: 'PATCH', data: { name: 'renamed' } });
   assert.equal((await save()).status, 412);
-  assert.deepEqual((await f.request('/api/state')).json.secrets.map(row => row.name), ['renamed']);
-  await f.request('/api/secrets?name=renamed', { method: 'PATCH', data: { name: 'original' } });
+  assert.deepEqual((await f.request('/v1/state')).json.secrets.map(row => row.name), ['renamed']);
+  await f.request('/v1/secrets?name=renamed', { method: 'PATCH', data: { name: 'original' } });
   await f.request(path, { method: 'DELETE', data: {} });
   assert.equal((await save()).status, 412);
   await put(f, token, 'original', 'recreated');
@@ -215,7 +215,7 @@ test('A stale editor respects renames, deletion, recreation, and owner boundarie
   await f.login('other@example.test');
   assert.equal((await f.request(path)).status, 404);
   assert.equal((await f.request(path, { method: 'PUT', raw: 'other owner', headers: { 'if-match': current } })).status, 412);
-  assert.deepEqual((await f.request('/api/state')).json.secrets, []);
+  assert.deepEqual((await f.request('/v1/state')).json.secrets, []);
 });
 
 test('The runtime hands what is kept to a command, as bytes and as a file, and nothing else', async t => {
@@ -275,8 +275,8 @@ test('An agent that cannot make a secret of its own is issued one, once', async 
   assert.equal(asked.status, 201, asked.text);
   assert.match(asked.json.key, /^fdn_[A-Za-z0-9_-]{43}$/);
   // It is the key: approving the request approves it, and it works from then on.
-  await f.request('/api/key-requests/' + asked.json.request.id + '/approve', { method: 'POST', data: { confirmationCode: asked.json.request.confirmation_code } });
-  assert.equal((await f.request('/v1/me', { token: asked.json.key, anonymous: true })).status, 200);
+  await f.request('/v1/key-requests/' + asked.json.request.id + '/approve', { method: 'POST', data: { confirmation_code: asked.json.request.confirmation_code } });
+  assert.equal((await f.request('/v1/keys/current', { token: asked.json.key, anonymous: true })).status, 200);
   const again = await f.request('/v1/keys/current', { token: asked.json.key, anonymous: true });
   assert.equal(again.json.request.key, undefined, 'never handed out a second time');
 });

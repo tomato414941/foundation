@@ -101,7 +101,7 @@ export class KeyRequests {
   summary(row, origin, { code = true } = {}) {
     let status = row.status;
     if (status === 'approved' && !this.db.prepare('SELECT 1 FROM keys WHERE id=? AND owner_id=? AND token_hash=?').get(row.key_id, row.owner_id, row.token_hash)) status = 'revoked';
-    return { id: row.id, name: row.name, ...(code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/keys/' + row.id,
+    return { id: row.id, name: row.name, ...(code ? { confirmation_code: row.confirmation_code } : {}), verification_uri: origin + '/key-requests/' + row.id,
       status, created_at: row.created_at, expires_at: row.expires_at, ...(status === 'approved' ? { key_id: row.key_id } : {}) };
   }
 }
