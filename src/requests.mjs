@@ -87,22 +87,24 @@ export class Requests {
     this.db.prepare('UPDATE requests SET progress=? WHERE id=?').run(JSON.stringify([...this.eventsOf(row), entry].slice(-40)), row.id);
   }
   eventsOf(row) { return row.progress ? JSON.parse(row.progress) : []; }
+  // Whoever else needs to hear that a request finished (a product holding the account) is told here.
+  changed(row) { this.onChange?.(row); return row; }
   // A request is done when what it asked for exists.
   done(id, ownerId, where) {
     const row = this.forUser(id, ownerId, true);
     this.db.prepare("UPDATE requests SET credential_id=?, status='done' WHERE id=?").run(where, row.id);
-    return this.get(id);
+    return this.changed(this.get(id));
   }
   deny(id, ownerId) {
     const row = this.forUser(id, ownerId, true);
     this.db.prepare("UPDATE requests SET status='denied' WHERE id=?").run(row.id);
-    return this.get(id);
+    return this.changed(this.get(id));
   }
   cancel(token, id) {
     const row = this.forKey(token, id);
     if (row.status !== 'pending') fail(409, 'request_finished', 'この依頼はすでに処理されています。');
     this.db.prepare("UPDATE requests SET status='cancelled' WHERE id=?").run(row.id);
-    return this.get(row.id);
+    return this.changed(this.get(row.id));
   }
   summary(row, origin, { events = false } = {}) {
     const kind = this.kindOf(row), key = this.keyOf(row);

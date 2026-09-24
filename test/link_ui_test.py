@@ -36,9 +36,22 @@ with sync_playwright() as p:
     owner.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     owner.get_by_role('button', name='ログインメールを送信', exact=True).click()
     owner.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
-    made = owner.request.post(args.base + '/api/integrations', headers={'origin': args.base},
-                              data={'name': 'ai-simplicity', 'return_url': 'https://simplicity.example.test/foundation'}).json()
-    product = made['integration']['token']
+    owner.set_viewport_size({'width': 1280, 'height': 1000})
+    owner.get_by_role('button', name='連携を追加').click()
+    dialog = owner.get_by_role('dialog')
+    dialog.get_by_label('名前', exact=True).fill('ai-simplicity')
+    dialog.get_by_label('戻り先のURL', exact=True).fill('https://simplicity.example.test/foundation')
+    dialog.get_by_label('リンクが使えないときの戻り先（省略可）', exact=True).fill('https://simplicity.example.test/foundation/again')
+    dialog.get_by_role('button', name='連携キーを発行').click()
+    expect(dialog.get_by_role('heading', name='ai-simplicity の連携キー', exact=True)).to_be_visible()
+    product = dialog.get_by_label('連携キー', exact=True).input_value()
+    assert product.startswith('fdni_')
+    dialog.locator('button.primary', has_text='閉じる').click()
+    section = owner.locator('[aria-labelledby="integration-title"]')
+    expect(section.get_by_role('heading', name='ai-simplicity', exact=True)).to_be_visible()
+    expect(section.get_by_text('simplicity.example.test · 利用者 0 人', exact=True)).to_be_visible()
+    review(owner)
+    owner.screenshot(path=str(shots / 'integrations.png'), full_page=True)
 
     # The product makes its user's account and key; the user's AI asks for something to keep.
     call('/v1/integration/accounts/user-1', product, 'PUT', {})
@@ -63,6 +76,8 @@ with sync_playwright() as p:
     page.get_by_role('button', name='登録する').click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
     expect(page.get_by_role('link', name='預けているものを見る')).to_have_count(0)
+    returned = page.get_by_role('link', name='ai-simplicityに戻る').get_attribute('href')
+    assert returned == 'https://simplicity.example.test/foundation?foundation_request=' + asked['id'] + '&foundation_status=done', returned
     review(page)
     page.screenshot(path=str(shots / 'link-done.png'), full_page=True)
     delivered = call('/v1/deliver', key, 'POST', {'names': [{'name': 'npm-token', 'as': 'NPM_TOKEN'}]})
@@ -73,6 +88,7 @@ with sync_playwright() as p:
     again.goto(link, wait_until='networkidle')
     expect(again.get_by_role('heading', name='npm のアクセストークンを預ける', exact=True)).to_have_count(0)
     expect(again.get_by_role('button', name='ログアウト')).to_have_count(0)
+    assert again.get_by_role('link', name='ai-simplicityに戻る').get_attribute('href') == 'https://simplicity.example.test/foundation/again?foundation_request=' + asked['id']
     review(again)
     again.screenshot(path=str(shots / 'link-spent.png'), full_page=True)
     assert not errors, errors

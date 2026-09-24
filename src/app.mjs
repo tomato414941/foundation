@@ -100,6 +100,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   const requests = new Requests(store, adapters), keyRequests = new KeyRequests(store), integrations = new Integrations(store);
   // A request made by an account another product holds is opened on that product's page, which knows who its user is.
   requests.returnUrlFor = ownerId => integrations.returnUrlFor(ownerId);
+  const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
+  requests.onChange = row => void integrations.notify(row.owner_id, 'request.' + row.status, { request: requests.summary(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() });
   const logins = new EmailLogins({ now: loginClock });
   const refreshing = new Map(), limits = new Map(), disconnects = new Set();
   const timer = setInterval(() => {
@@ -367,6 +369,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         if (!['GET', 'HEAD'].includes(method)) requireOrigin(req, origin);
         // A product's user arrives with a single-use link to one request. Spending it leaves a short session,
         // scoped by cookie path and by the server to that request's own routes, and to nothing else.
+        // Where the page may send a product's user back: that product's own pages for this request, and nothing else.
+        const backRoute = path.match(/^\/api\/request-links\/([A-Za-z0-9_-]{43})$/);
+        if (backRoute && method === 'GET') {
+          const back = integrations.backFor(requests.get(backRoute[1]));
+          if (!back) fail(404, 'not_found', '戻り先はありません。');
+          return send(200, { back });
+        }
         if (path === '/api/request-links' && method === 'POST') {
           const input = await body(req);
           rateLimit('link:' + clientAddress(req), 20, 600_000);
@@ -378,7 +387,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         const linkedRoute = path.match(/^\/api\/requests\/([A-Za-z0-9_-]{43})(\/store|\/deny)?$/);
         const link = linkedRoute ? integrations.linked(readCookie(req, 'fdn_link'), linkedRoute[1]) : undefined;
         const { user, session } = link ? { user: { id: link.owner_id, email: null, linked: true }, session: null } : await principal(req);
-        if (path === '/api/state' && method === 'GET') return send(200, { user, secrets: secrets.list(user.id), acquisitions: store.acquisitions(user.id).map(acquisitionView), keys: store.keys(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
+        if (path === '/api/state' && method === 'GET') return send(200, { user, secrets: secrets.list(user.id), acquisitions: store.acquisitions(user.id).map(acquisitionView), keys: store.keys(user.id), integrations: integrations.list(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
         // What a key kept is the owner's: they read it, rename the group it sits in, and remove it.
         // The same space the keys use, from the owner's own screen: what is there, and putting, taking
         // and removing one thing. The owner is the one paying for it, so they must be able to clear it.
@@ -552,7 +561,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         if (path === '/api/integrations' && method === 'GET') return send(200, { integrations: integrations.list(user.id) });
         if (path === '/api/integrations' && method === 'POST') {
           const input = await body(req);
-          return send(201, { integration: integrations.register(user.id, { name: nameValue(input.name, '連携'), returnUrl: input.return_url }) });
+          return send(201, { integration: integrations.register(user.id, { name: nameValue(input.name, '連携'), returnUrl: input.return_url, refreshUrl: input.refresh_url || undefined, webhookUrl: input.webhook_url || undefined }) });
         }
         const integrationRoute = path.match(/^\/api\/integrations\/([a-f0-9-]{36})$/);
         if (integrationRoute && method === 'DELETE') { await body(req); integrations.remove(user.id, integrationRoute[1]); return send(200, { ok: true }); }

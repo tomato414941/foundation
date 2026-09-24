@@ -1,6 +1,7 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { digest } from './store.mjs';
 import { fail } from './errors.mjs';
+import { prepare as prepareFetch, send as sendFetch } from './fetch.mjs';
 
 // Another product (ai-simplicity, say) holding a Foundation account for each of its own users, so that they never
 // sign up here. The product's credential reaches no account's contents: it makes accounts, issues and revokes
@@ -23,14 +24,19 @@ export function returnUrl(value) {
 export class Integrations {
   constructor(store) { this.store = store; this.db = store.db; }
   // The owner registers a product; its credential is shown once.
-  register(ownerId, { name, returnUrl: target }) {
+  // As with Stripe: where the product's page is (return), where to send its user when a link cannot be used
+  // (refresh, the same page unless given), and where it hears that a request finished (webhook, signed).
+  register(ownerId, { name, returnUrl: target, refreshUrl, webhookUrl }) {
     if (this.list(ownerId).length >= 10) fail(409, 'integration_limit', '登録できる連携は10件までです。');
-    const id = randomUUID(), secret = token('fdni_');
-    this.db.prepare('INSERT INTO integrations (id,owner_id,name,token_hash,return_url,created_at) VALUES (?,?,?,?,?,?)').run(id, ownerId, name, digest(secret), returnUrl(target), now());
-    return { ...this.list(ownerId).find(row => row.id === id), token: secret };
+    const back = returnUrl(target), refresh = refreshUrl ? returnUrl(refreshUrl) : back;
+    if (webhookUrl) prepareFetch({ url: webhookUrl, method: 'POST' });
+    const id = randomUUID(), secret = token('fdni_'), signing = webhookUrl ? token('whsec_') : null;
+    this.db.prepare('INSERT INTO integrations (id,owner_id,name,token_hash,return_url,refresh_url,webhook_url,webhook_secret,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(id, ownerId, name, digest(secret), back, refresh, webhookUrl || null, signing && this.store.vault.seal(signing, 'integration:' + id), now());
+    return { ...this.list(ownerId).find(row => row.id === id), token: secret, ...(signing ? { webhook_secret: signing } : {}) };
   }
   list(ownerId) {
-    return this.db.prepare('SELECT i.id,i.name,i.return_url,i.created_at,i.last_used_at,(SELECT count(*) FROM accounts a WHERE a.integration_id=i.id) AS accounts FROM integrations i WHERE owner_id=? ORDER BY created_at,id').all(ownerId);
+    return this.db.prepare('SELECT i.id,i.name,i.return_url,i.refresh_url,i.webhook_url,i.created_at,i.last_used_at,(SELECT count(*) FROM accounts a WHERE a.integration_id=i.id) AS accounts FROM integrations i WHERE owner_id=? ORDER BY created_at,id').all(ownerId);
   }
   // Removing a product stops its credential. The accounts it made stay with the people they belong to.
   remove(ownerId, id) {
@@ -65,6 +71,36 @@ export class Integrations {
   // Where a request made by one of these accounts is opened: the product's own page, which knows who its user is.
   returnUrlFor(ownerId) {
     return this.db.prepare('SELECT i.return_url FROM accounts a JOIN integrations i ON i.id=a.integration_id WHERE a.id=?').get(ownerId)?.return_url;
+  }
+  integrationOf(ownerId) {
+    return this.db.prepare('SELECT i.*, a.external_id FROM accounts a JOIN integrations i ON i.id=a.integration_id WHERE a.id=?').get(ownerId);
+  }
+  // Where the page sends someone back: after the request is finished (return), or when the link was no good (refresh).
+  // Both name the request, so the product knows which one; neither says anything else.
+  backFor(request) {
+    const found = this.integrationOf(request.owner_id);
+    if (!found) return;
+    const withRequest = (url, extra = {}) => { const next = new URL(url); next.searchParams.set('foundation_request', request.id); for (const [k, v] of Object.entries(extra)) next.searchParams.set(k, v); return next.href; };
+    return { name: found.name, return_url: withRequest(found.return_url, { foundation_status: request.status }), refresh_url: withRequest(found.refresh_url || found.return_url) };
+  }
+  // A signed event to the product's webhook, Stripe style: Foundation-Signature: t=<seconds>,v1=<HMAC-SHA256 of "t.body">.
+  // Sent from here like any other outbound request (public HTTPS only), retried a few times, never blocking the caller.
+  sign(secret, body, at = Math.floor(Date.now() / 1000)) {
+    return `t=${at},v1=${createHmac('sha256', secret).update(at + '.' + body).digest('hex')}`;
+  }
+  notify(ownerId, type, payload, outbound = {}) {
+    const found = this.integrationOf(ownerId);
+    if (!found?.webhook_url || !found.webhook_secret) return;
+    const secret = this.store.vault.open(found.webhook_secret, 'integration:' + found.id);
+    const body = JSON.stringify({ id: 'evt_' + randomBytes(16).toString('hex'), type, created: Math.floor(Date.now() / 1000), account: found.external_id, data: payload });
+    const attempt = async (left, wait) => {
+      try {
+        const answer = await sendFetch(prepareFetch({ url: found.webhook_url, method: 'POST', headers: { 'content-type': 'application/json', 'foundation-signature': this.sign(secret, body) }, body }, outbound.ownHosts || []), new Map(), outbound);
+        if (answer.status >= 200 && answer.status < 300) return;
+      } catch {}
+      if (left > 0) setTimeout(() => void attempt(left - 1, wait * 6), wait).unref?.();
+    };
+    return attempt(3, outbound.retryDelay ?? 5_000);
   }
   // Everything the account holds goes with it. What sits in the object space is the caller's to clear.
   deleteAccount(integration, externalId) {
