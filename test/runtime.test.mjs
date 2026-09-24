@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, writeFile, readFile, stat, rm, chmod, symlink } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, readdir, stat, rm, chmod, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fixture } from './helpers.mjs';
+import { fail } from '../src/errors.mjs';
 
 const execute = (args, env) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, ['cli/runtime.mjs', ...args], { env: { ...process.env, ...env } });
@@ -22,6 +23,160 @@ async function storedInputs(f) {
   }
   return ['GOOGLE_OAUTH_ACCESS_TOKEN=first input', 'GMAIL_ACCOUNT_EMAIL=second=入力:1'];
 }
+
+async function outputFixture(t) {
+  const f = await fixture(t), runtime = await f.issueKey();
+  const dir = await mkdtemp(join(tmpdir(), 'foundation-output-test-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const keyPath = join(dir, 'runtime-key');
+  await writeFile(keyPath, runtime.token, { mode: 0o600 });
+  return { ...f, runtime, dir, env: { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath, XDG_RUNTIME_DIR: dir } };
+}
+const outputSpec = { name: 'login config', as: 'AUTH_FILE', filename: 'auth.json' };
+
+test('コマンドが作った非公開ファイルを名前どおりに保存し、後のコマンドへ渡す', async t => {
+  const f = await outputFixture(t);
+  const output = { ...outputSpec, name: '  a/aa=入力 &?#+ % ..  ' }, content = Buffer.from([0, 1, 2, 255, 10, 13, 42]);
+  const run = await execute(['exec', '--output', JSON.stringify(output), '--', process.execPath, '-e', `
+    const fs = require('node:fs'), path = require('node:path'), target = process.env.AUTH_FILE;
+    if ((fs.statSync(target).mode & 0o777) !== 0o600 || (fs.statSync(path.dirname(target)).mode & 0o777) !== 0o700) process.exit(2);
+    if (process.env.FOUNDATION_RUNTIME_KEY_FILE || process.env.FOUNDATION_NAMES !== '[]') process.exit(3);
+    fs.writeFileSync(target, Buffer.from('${content.toString('base64')}', 'base64'));
+    console.log(target);
+  `], f.env);
+  assert.equal(run.code, 0, run.err);
+  assert.match(run.err, /Saved output as/);
+  await assert.rejects(stat(dirname(run.out.trim())), { code: 'ENOENT' });
+  const direct = await f.request('/v1/secrets?name=' + encodeURIComponent(output.name), { token: f.runtime.token });
+  assert.equal(direct.status, 403); assert.equal(direct.json.error.code, 'write_only');
+  const owner = await fetch(f.base + '/api/secrets?name=' + encodeURIComponent(output.name), { headers: { cookie: f.cookie() } });
+  assert.equal(owner.status, 200);
+  assert.deepEqual(Buffer.from(await owner.arrayBuffer()), content);
+  const used = await execute(['exec', '--inputs', JSON.stringify([output]), '--', process.execPath, '-e', `
+    const fs = require('node:fs');
+    if (!fs.readFileSync(process.env.AUTH_FILE).equals(Buffer.from('${content.toString('base64')}', 'base64'))) process.exit(2);
+    console.log(process.env.AUTH_FILE);
+  `], f.env);
+  assert.equal(used.code, 0, used.err);
+  await assert.rejects(stat(dirname(used.out.trim())), { code: 'ENOENT' });
+  assert.ok(!(run.out + run.err + used.out + used.err).includes(content.toString('base64')));
+});
+
+test('入力ファイルと出力ファイルを別々に渡し、成功した出力で指定した値を置き換える', async t => {
+  const f = await outputFixture(t);
+  await f.request('/api/secrets?name=login%20config', { method: 'PUT', raw: 'previous-secret' });
+  const input = { name: outputSpec.name, as: 'INPUT_FILE', filename: outputSpec.filename };
+  const run = await execute(['exec', '--inputs', JSON.stringify([input]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
+    const fs = require('node:fs');
+    if (process.env.INPUT_FILE === process.env.AUTH_FILE || fs.readFileSync(process.env.INPUT_FILE, 'utf8') !== 'previous-secret') process.exit(2);
+    fs.writeFileSync(process.env.AUTH_FILE, 'replacement-secret');
+    console.log(JSON.stringify([process.env.INPUT_FILE, process.env.AUTH_FILE]));
+  `], f.env);
+  assert.equal(run.code, 0, run.err);
+  for (const path of JSON.parse(run.out)) await assert.rejects(stat(dirname(path)), { code: 'ENOENT' });
+  const saved = await f.request('/api/secrets?name=login%20config');
+  assert.equal(saved.text, 'replacement-secret');
+  assert.doesNotMatch(run.out + run.err, /previous-secret|replacement-secret/);
+});
+
+test('出力指定とFoundationの承認を確認してからコマンドを実行する', async t => {
+  const f = await outputFixture(t);
+  for (const output of [null, [], { ...outputSpec, name: '' }, { ...outputSpec, name: 'a\nb' }, { ...outputSpec, name: '\ud800' },
+    { ...outputSpec, name: 'a'.repeat(201) }, { ...outputSpec, as: 'PATH' }, { ...outputSpec, filename: '../auth' }, { ...outputSpec, secret: false }]) {
+    const run = await execute(['exec', '--output', JSON.stringify(output), '--', process.execPath, '-e', 'console.log("must-not-run")'], f.env);
+    assert.equal(run.code, 1, JSON.stringify(output)); assert.equal(run.out, '');
+  }
+  const collision = await execute(['exec', 'AUTH_FILE=anything', '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', 'console.log("must-not-run")'], f.env);
+  assert.equal(collision.code, 1); assert.match(collision.err, /different environment variable/); assert.equal(collision.out, '');
+  await f.request('/api/keys/' + f.runtime.id, { method: 'DELETE' });
+  const revoked = await execute(['exec', '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', 'console.log("must-not-run")'], f.env);
+  assert.equal(revoked.code, 1); assert.match(revoked.err, /not_approved/); assert.equal(revoked.out, '');
+});
+
+test('コマンドが失敗すると一時ファイルを片づけて既存の保存値を維持する', async t => {
+  const f = await outputFixture(t);
+  await f.request('/api/secrets?name=login%20config', { method: 'PUT', raw: 'previous-secret' });
+  const input = { name: outputSpec.name, as: 'INPUT_FILE', filename: 'input' };
+  const run = await execute(['exec', '--inputs', JSON.stringify([input]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
+    require('node:fs').writeFileSync(process.env.AUTH_FILE, 'partial-secret');
+    console.log(JSON.stringify([process.env.INPUT_FILE, process.env.AUTH_FILE]));
+    process.exit(7);
+  `], f.env);
+  assert.equal(run.code, 7);
+  for (const path of JSON.parse(run.out)) await assert.rejects(stat(dirname(path)), { code: 'ENOENT' });
+  assert.equal((await f.request('/api/secrets?name=login%20config')).text, 'previous-secret');
+  assert.doesNotMatch(run.out + run.err, /partial-secret|previous-secret/);
+});
+
+test('空・過大・公開・リンク・特殊ファイルの出力を安全に拒否する', async t => {
+  const f = await outputFixture(t), outside = join(f.dir, 'outside');
+  await writeFile(outside, 'outside-secret', { mode: 0o600 });
+  const cases = [
+    ['', /1 byte to 1MB/],
+    ['fs.writeFileSync(p, Buffer.alloc(1024 * 1024 + 1))', /1 byte to 1MB/],
+    ['fs.writeFileSync(p, "public-secret"); fs.chmodSync(p, 0o644)', /private regular file/],
+    ['fs.writeFileSync(p, "public-secret"); fs.chmodSync(require("node:path").dirname(p), 0o755)', /directory must stay private/],
+    ['fs.unlinkSync(p)', /did not create/],
+    [`fs.unlinkSync(p); fs.symlinkSync(${JSON.stringify(outside)}, p)`, /symbolic link/],
+    [`fs.unlinkSync(p); fs.linkSync(${JSON.stringify(outside)}, p)`, /private regular file/],
+    ['fs.unlinkSync(p); fs.mkdirSync(p)', /private regular file/],
+    ['fs.unlinkSync(p); require("node:child_process").execFileSync("mkfifo", [p])', /private regular file/],
+  ];
+  for (const [script, expected] of cases) {
+    const run = await execute(['exec', '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `const fs = require('node:fs'), p = process.env.AUTH_FILE; console.log(p); ${script}`], f.env);
+    assert.equal(run.code, 1, run.err); assert.match(run.err, expected);
+    await assert.rejects(stat(dirname(run.out.trim())), { code: 'ENOENT' });
+    assert.equal((await f.request('/api/secrets?name=login%20config')).status, 404);
+    assert.doesNotMatch(run.out + run.err, /outside-secret|public-secret/);
+  }
+  assert.equal(await readFile(outside, 'utf8'), 'outside-secret');
+});
+
+test('保存に失敗したときだけ復旧用の非公開出力を残し、入力は片づける', async t => {
+  const f = await outputFixture(t);
+  await f.request('/api/secrets?name=input', { method: 'PUT', raw: 'input-secret' });
+  const put = f.app.store.writeSecret;
+  f.app.store.writeSecret = () => fail(503, 'storage_unavailable', 'generated-secret');
+  const run = await execute(['exec', '--inputs', JSON.stringify([{ name: 'input', as: 'INPUT_FILE', filename: 'input' }]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
+    require('node:fs').writeFileSync(process.env.AUTH_FILE, 'generated-secret');
+    require('node:fs').writeFileSync(require('node:path').join(require('node:path').dirname(process.env.AUTH_FILE), 'unneeded-cache'), 'cache');
+    console.log(JSON.stringify([process.env.INPUT_FILE, process.env.AUTH_FILE]));
+  `], f.env);
+  f.app.store.writeSecret = put;
+  assert.equal(run.code, 1); assert.match(run.err, /retained for recovery/);
+  const [inputPath, outputPath] = JSON.parse(run.out);
+  assert.ok(run.err.includes(outputPath));
+  await assert.rejects(stat(dirname(inputPath)), { code: 'ENOENT' });
+  assert.equal((await stat(dirname(outputPath))).mode & 0o777, 0o700);
+  assert.equal((await stat(outputPath)).mode & 0o777, 0o600);
+  assert.deepEqual(await readdir(dirname(outputPath)), [outputSpec.filename]);
+  assert.equal(await readFile(outputPath, 'utf8'), 'generated-secret');
+  assert.equal((await f.request('/api/secrets?name=login%20config')).status, 404);
+  const retried = await execute(['api', 'PUT', '/v1/secrets?name=login%20config&secret=true', '--from', outputPath], f.env);
+  assert.equal(retried.code, 0, retried.err);
+  assert.equal((await f.request('/api/secrets?name=login%20config')).text, 'generated-secret');
+  assert.doesNotMatch(run.out + run.err + retried.out + retried.err, /generated-secret|input-secret/);
+});
+
+test('中断を子プロセスに伝えて一時ファイルを片づけ、途中の出力を保存しない', async t => {
+  const f = await outputFixture(t);
+  const child = spawn(process.execPath, ['cli/runtime.mjs', 'exec', '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
+    process.on('SIGTERM', () => { console.error('interrupted'); process.exit(0); });
+    require('node:fs').writeFileSync(process.env.AUTH_FILE, 'partial-secret');
+    console.log(process.env.AUTH_FILE);
+    setInterval(() => {}, 1000);
+  `], { env: { ...process.env, ...f.env } });
+  t.after(() => child.kill('SIGKILL'));
+  let out = '', err = '';
+  const done = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+  child.stderr.on('data', part => { err += part; });
+  await new Promise(resolve => child.stdout.on('data', part => { out += part; if (out.includes('\n')) resolve(); }));
+  child.kill('SIGTERM');
+  assert.equal(await done, 1);
+  assert.match(err, /interrupted/);
+  await assert.rejects(stat(dirname(out.trim())), { code: 'ENOENT' });
+  assert.equal((await f.request('/api/secrets?name=login%20config')).status, 404);
+});
 
 test('The runtime hands what is kept to the selected process only', async (t) => {
   const f = await fixture(t), inputs = await storedInputs(f), runtime = await f.issueKey();
@@ -148,6 +303,18 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   const delivered = await run(foundation, ['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal-readonly"||process.env.GMAIL_ACCOUNT_EMAIL!=="personal@example.test")process.exit(2);console.log("package-ready")'], env);
   assert.equal(delivered.code, 0, delivered.err);
   assert.equal(delivered.out.trim(), 'package-ready');
+  const output = { name: 'installed login', as: 'NPM_CONFIG_USERCONFIG', filename: 'npmrc' };
+  const saved = await run(foundation, ['exec', '--output', JSON.stringify(output), '--', process.execPath, '-e', `
+    const fs = require('node:fs'), cp = require('node:child_process');
+    const config = cp.execFileSync('npm', ['config', 'get', 'userconfig'], { encoding: 'utf8' }).trim();
+    if (config !== process.env.NPM_CONFIG_USERCONFIG) process.exit(2);
+    fs.writeFileSync(config, '//registry.npmjs.org/:_authToken=fake-install-token\\n');
+    console.log('output-ready');
+  `], env);
+  assert.equal(saved.code, 0, saved.err);
+  assert.equal(saved.out.trim(), 'output-ready');
+  assert.equal((await f.request('/api/secrets?name=installed%20login')).text, '//registry.npmjs.org/:_authToken=fake-install-token\n');
+  assert.doesNotMatch(saved.out + saved.err, /fake-install-token/);
   const moved = await run(foundation, ['--help'], { ...env, FOUNDATION_URL: 'http://127.0.0.1:9' });
   assert.doesNotMatch(moved.out, /gmail.readonly/, 'FOUNDATION_URL wins over the remembered server');
 });
