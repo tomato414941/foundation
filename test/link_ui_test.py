@@ -1,0 +1,80 @@
+import argparse
+import hashlib
+import json
+import urllib.request
+from pathlib import Path
+from playwright.sync_api import sync_playwright, expect
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--base', required=True)
+parser.add_argument('--screenshots', required=True)
+args = parser.parse_args()
+shots = Path(args.screenshots)
+shots.mkdir(parents=True, exist_ok=True)
+SECRET = 'npm_link-ui-fixture-value'
+
+
+def call(path, token, method='GET', data=None):
+    request = urllib.request.Request(args.base + path, method=method, data=None if data is None else json.dumps(data).encode(),
+                                     headers={'authorization': 'Bearer ' + token, **({'content-type': 'application/json'} if data is not None else {})})
+    with urllib.request.urlopen(request) as response:
+        return json.loads(response.read())
+
+
+def review(page):
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'horizontal overflow'
+    text = page.locator('body').inner_text()
+    for phrase in ['実装', '開発者', '設計意図', 'fdn_', 'fdni_', SECRET]:
+        assert phrase not in text, phrase
+
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    # The owner of Foundation registers the product once.
+    owner = browser.new_context().new_page()
+    owner.goto(args.base + '/', wait_until='networkidle')
+    owner.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
+    owner.get_by_role('button', name='ログインメールを送信', exact=True).click()
+    owner.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
+    made = owner.request.post(args.base + '/api/integrations', headers={'origin': args.base},
+                              data={'name': 'ai-simplicity', 'return_url': 'https://simplicity.example.test/foundation'}).json()
+    product = made['integration']['token']
+
+    # The product makes its user's account and key; the user's AI asks for something to keep.
+    call('/v1/integration/accounts/user-1', product, 'PUT', {})
+    key = call('/v1/integration/accounts/user-1/keys', product, 'POST', {'name': 'ai-simplicity'})['key']['token']
+    asked = call('/v1/requests', key, 'POST', {'store': {'name': 'npm-token', 'label': 'npm のアクセストークン', 'site': 'https://www.npmjs.com/'},
+                                             'purpose': 'パッケージの公開に使います。', 'steps': ['npmjs.com でアクセストークンを作ります。', '表示されたトークンをここに貼ります。']})['request']
+    link = call('/v1/integration/links', product, 'POST', {'request_id': asked['id']})['url']
+
+    # The user, who has never signed up for Foundation, opens the link the product handed them.
+    context = browser.new_context(viewport={'width': 1280, 'height': 1000})
+    page = context.new_page()
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.goto(link, wait_until='networkidle')
+    expect(page.get_by_role('heading', name='npm のアクセストークンを預ける', exact=True)).to_be_visible()
+    assert '#' not in page.url, 'the link is taken out of the address bar once spent'
+    expect(page.get_by_role('button', name='ログアウト')).to_have_count(0)
+    expect(page.get_by_text('パッケージの公開に使います。', exact=True)).to_be_visible()
+    review(page)
+    page.screenshot(path=str(shots / 'link-request.png'), full_page=True)
+    page.get_by_label('npm のアクセストークン', exact=True).fill(SECRET)
+    page.get_by_role('button', name='登録する').click()
+    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    expect(page.get_by_role('link', name='預けているものを見る')).to_have_count(0)
+    review(page)
+    page.screenshot(path=str(shots / 'link-done.png'), full_page=True)
+    delivered = call('/v1/deliver', key, 'POST', {'names': [{'name': 'npm-token', 'as': 'NPM_TOKEN'}]})
+    assert delivered['delivery']['environment']['NPM_TOKEN'] == SECRET
+
+    # The same link opened again reaches nothing.
+    again = browser.new_context().new_page()
+    again.goto(link, wait_until='networkidle')
+    expect(again.get_by_role('heading', name='npm のアクセストークンを預ける', exact=True)).to_have_count(0)
+    expect(again.get_by_role('button', name='ログアウト')).to_have_count(0)
+    review(again)
+    again.screenshot(path=str(shots / 'link-spent.png'), full_page=True)
+    assert not errors, errors
+    browser.close()
+print('Link flow passed: a product registered once, its user opened a single-use link with no Foundation login, kept one value for their own key, and the spent link reached nothing.')

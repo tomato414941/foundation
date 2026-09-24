@@ -40,6 +40,11 @@ export class Requests {
     if (row.token_hash !== this.key(token)) fail(404, 'not_found', '依頼が見つかりません。');
     return row;
   }
+  // Where the owner opens it: here, or on the page of the product that holds the account for its user.
+  verificationUri(row, origin) {
+    const back = this.returnUrlFor?.(row.owner_id);
+    return back ? back + (back.includes('?') ? '&' : '?') + 'foundation_request=' + row.id : origin + '/requests/' + row.id;
+  }
   keyOf(row) { return this.db.prepare('SELECT name FROM keys WHERE id=? AND owner_id=? AND token_hash=?').get(row.key_id, row.owner_id, row.token_hash); }
   create(token, { adapter, store, purpose = '', steps = [], validMinutes = 30 }) {
     if (!Number.isInteger(validMinutes) || validMinutes < 1 || validMinutes * 60_000 > MAX_REQUEST_TTL) fail(400, 'invalid_validity', '有効期間は1〜1440分で指定してください。');
@@ -111,7 +116,7 @@ export class Requests {
     return { id: row.id, kind, ...(row.adapter ? { adapter: this.adapters.describe(row.adapter) } : {}),
       ...(kind === 'store' ? { store: this.details(row) } : {}),
       requester_name: row.requester_name, purpose: row.purpose, steps: JSON.parse(row.steps), ...(key ? { key_name: key.name } : {}),
-      verification_uri: origin + '/requests/' + row.id,
+      verification_uri: this.verificationUri(row, origin),
       status, created_at: row.created_at, expires_at: row.expires_at,
       ...(status === 'done' ? { result: kind === 'store' ? { names: JSON.parse(row.credential_id) } : result ? { connection_id: result.id, label: result.label } : {} } : {}),
       ...(events ? { events: this.eventsOf(row) } : {}) };

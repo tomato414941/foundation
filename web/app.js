@@ -4,6 +4,10 @@ let state = null, toastTimer, loginTimer, revision = 0;
 const keyRequest = /^\/keys\//.test(location.pathname);
 const requestId = location.pathname.match(/^\/(?:requests|keys)\/([A-Za-z0-9_-]{43})$/)?.[1];
 const requestApi = requestId && (keyRequest ? '/api/key-requests/' : '/api/requests/') + requestId;
+// Opened through another product's single-use link: there is no Foundation login, only that one request.
+const linkToken = requestId && !keyRequest ? new URLSearchParams(location.hash.slice(1)).get('link') : null;
+let linked = false;
+try { linked = Boolean(requestId) && sessionStorage.getItem('linked:' + requestId) === '1'; } catch {}
 const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : 'home';
 const pagePath = requestId ? location.pathname : page === 'objects' ? '/objects' : page === 'secrets' ? '/secrets' : '/';
 let accessRequest = null, requestError = '';
@@ -135,7 +139,7 @@ async function api(path, { method = 'GET', data, signal } = {}) {
   const result = await response.json();
   if (!response.ok) {
     const error = new Error(result.error?.message || '処理を完了できませんでした。'); error.status = response.status; error.code = result.error?.code;
-    if (response.status === 401 && path !== '/api/session' && path !== '/api/auth/link') await showLogin();
+    if (response.status === 401 && !linked && path !== '/api/session' && path !== '/api/auth/link') await showLogin();
     throw error;
   }
   return result;
@@ -190,6 +194,13 @@ async function showLogin({ email = '', message = loginNotice } = {}) {
 }
 window.addEventListener('focus', () => { if (document.querySelector('#email-sent')) void refresh().catch(() => {}); });
 async function refresh() {
+  if (linked) {
+    try { accessRequest = (await api(requestApi)).request; requestError = ''; }
+    catch (error) { accessRequest = null; requestError = error.status === 401 ? 'このリンクはもう使えません。元の画面から開き直してください。' : error.message; }
+    state = { user: { email: '' }, secrets: [], keys: [], acquisitions: [], adapters: [], space: null };
+    render();
+    return;
+  }
   const current = ++revision, result = await api('/api/state');
   let space = null;
   if (page !== 'secrets') { try { space = await api('/api/objects'); } catch { space = null; } }
@@ -312,7 +323,7 @@ function codeField(enabled = true) {
 //   store     an approved key: the owner puts something into storage, following the AI's instructions.
 function renderRequest() {
   const row = accessRequest;
-  const shell = (content) => `<div class="workspace"><header class="topbar">${brand}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main class="approval-main">${content}</main></div>`;
+  const shell = (content) => `<div class="workspace"><header class="topbar">${brand}${linked ? '' : `<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div>`}</header><main class="approval-main">${content}</main></div>`;
   const finished = {
     done: ['登録しました', `${row?.result?.label || row?.result?.names?.join('、') || ''} を、${row?.requester_name || ''}から利用できます。この画面は閉じて構いません。`],
     approved: ['承認しました', `${row?.requester_name || ''}から、あなたが預けているものを利用できるようになりました。この画面は閉じて構いません。`],
@@ -323,7 +334,7 @@ function renderRequest() {
   };
   if (!row || row.status !== 'pending') {
     const [title, description] = row ? finished[row.status] || ['依頼を確認できません', '依頼のリンクを開き直してください。'] : ['依頼を確認できません', requestError];
-    app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(['approved', 'done'].includes(row?.status) ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p><a class="button secondary" href="/">預けているものを見る</a></section>`);
+    app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(['approved', 'done'].includes(row?.status) ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p>${linked ? '' : '<a class="button secondary" href="/">預けているものを見る</a>'}</section>`);
     return;
   }
   const expiry = `<p class="request-expiry">この依頼は ${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで有効です。</p>`;
@@ -584,6 +595,13 @@ document.addEventListener('click', async (event) => {
 });
 const resultCode = new URL(location.href).searchParams.get('connection');
 window.addEventListener('pageshow', event => { if (event.persisted) void refresh().catch(() => {}); });
+if (linkToken) {
+  try {
+    await api('/api/request-links', { method: 'POST', data: { request_id: requestId, link: linkToken } });
+    linked = true;
+    try { sessionStorage.setItem('linked:' + requestId, '1'); } catch {}
+  } catch (error) { if (!linked) { linked = true; requestError = error.message; } }
+}
 if (location.search || location.hash) history.replaceState(null, '', pagePath);
 try { await refresh(); } catch (error) { if (error.status !== 401) { await showLogin(); toast(error.message); } }
 // What came back from an OAuth round trip, in words that hold for any service.

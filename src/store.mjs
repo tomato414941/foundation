@@ -12,10 +12,25 @@ const parse = row => ({ ...row, readable: row.readable === 1 });
 export const ACQUISITION_LIMIT = 50;
 const entryBinding = row => `entry:${row.owner_id}:${row.id}`;
 
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 // Names are opaque identifiers. Connection state is stored independently of ordinary values.
 // Both kinds retain their original authenticated-encryption bindings across migrations.
 const STEPS = {
+  // Another product may hold an account for each of its own users, with no login of its own: the product
+  // vouches for who the user is, and hands them to one request at a time through a single-use link.
+  13: `
+  CREATE TABLE integrations (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+    return_url TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT
+  );
+  CREATE TABLE accounts (
+    id TEXT PRIMARY KEY, integration_id TEXT NOT NULL, external_id TEXT NOT NULL, created_at TEXT NOT NULL,
+    UNIQUE(integration_id, external_id)
+  );
+  CREATE TABLE request_links (
+    token_hash TEXT PRIMARY KEY, request_id TEXT NOT NULL, owner_id TEXT NOT NULL, kind TEXT NOT NULL, expires_at INTEGER NOT NULL
+  );
+  `,
   12: migrateNames,
   // A key may have several requests open at once, each with its own address, and writes the owner's steps as a
   // list. Requests still open are dropped rather than carried: each lasts a day at most, and asking again works.
@@ -101,6 +116,17 @@ const SCHEMA = `
     UNIQUE(owner_id, adapter, subject)
   );
   CREATE INDEX acquisitions_owner ON acquisitions(owner_id, id);
+  CREATE TABLE integrations (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+    return_url TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT
+  );
+  CREATE TABLE accounts (
+    id TEXT PRIMARY KEY, integration_id TEXT NOT NULL, external_id TEXT NOT NULL, created_at TEXT NOT NULL,
+    UNIQUE(integration_id, external_id)
+  );
+  CREATE TABLE request_links (
+    token_hash TEXT PRIMARY KEY, request_id TEXT NOT NULL, owner_id TEXT NOT NULL, kind TEXT NOT NULL, expires_at INTEGER NOT NULL
+  );
   CREATE INDEX secrets_owner ON secrets(owner_id, name);
   PRAGMA user_version = ${SCHEMA_VERSION};
 `;
@@ -147,6 +173,7 @@ export class Store {
   }
   sweep() {
     this.db.prepare('DELETE FROM oauth_flows WHERE expires_at<=?').run(Date.now());
+    this.db.prepare('DELETE FROM request_links WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM requests WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM key_requests WHERE expires_at<=?').run(Date.now());
