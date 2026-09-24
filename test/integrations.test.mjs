@@ -102,6 +102,9 @@ test('A link is made only for the product\'s own accounts\' open store requests,
   const ownKey = await f.issueKey();
   const outside = await ask(ownKey);
   assert.equal((await call('/links', { method: 'POST', data: { request_id: outside.id } })).status, 404, 'not for an owner the product does not hold');
+  const theirs = await ask(key);
+  assert.equal((await call('/links', { method: 'POST', data: { request_id: theirs.id, external_id: 'user-2' } })).status, 404, 'not for another of its users');
+  assert.equal((await call('/links', { method: 'POST', data: { request_id: theirs.id, external_id: 'user-1' } })).status, 201);
   const request = await ask(key);
   const made = await call('/links', { method: 'POST', data: { request_id: request.id } });
   const link = new URLSearchParams(new URL(made.json.url).hash.slice(1)).get('link');
