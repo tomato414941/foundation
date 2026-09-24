@@ -211,6 +211,9 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 #notice { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); max-width: min(640px, calc(100% - 32px)); width: max-content; padding: 14px 20px; background: #203c2e; color: #fff; border-radius: 9px; box-shadow: 0 8px 35px #0002; z-index: 20; font-size: 14px; overflow-wrap: anywhere; }
 @media (max-width: 800px) {
   .workspace { padding: 0 24px 48px; }
+  .topbar { flex-wrap: wrap; row-gap: 0; padding-bottom: 8px; }
+  .page-nav { order: 3; flex-basis: 100%; margin-left: -12px; flex-wrap: wrap; gap: 0; }
+  .user-menu { margin-left: auto; }
   .user-menu a { max-width: 220px; }
   .section-heading { padding: 12px 18px; gap: 10px; flex-wrap: wrap; }
   .credential-workspace { grid-template-columns: 220px minmax(0, 1fr); }
@@ -223,6 +226,8 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
   .topbar { min-height: 76px; gap: 10px; align-items: center; flex-wrap: wrap; padding: 16px 0; }
   .brand { font-size: 19px; gap: 8px; }
   .brand-mark { width: 28px; height: 28px; font-size: 21px; }
+  .page-nav { margin-left: -10px; }
+  .page-nav a { padding: 0 10px; }
   .user-menu { width: 100%; justify-content: space-between; gap: 12px; }
   .user-menu a { max-width: calc(100% - 95px); }
   .page-heading { padding: 18px 0 12px; }
@@ -270,7 +275,7 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 /* Browsing the lent space, laid out like an object browser: a path you are standing in, a toolbar that
    acts on what is selected, and a table you can sort. */
 .page-nav { display: flex; gap: 4px; margin-left: 12px; }
-.page-nav a { min-height: 44px; display: inline-flex; align-items: center; padding: 0 12px; border-radius: 8px; font-size: 15px; font-weight: 500; color: var(--muted, #62716a); text-decoration: none; }
+.page-nav a { min-height: 44px; display: inline-flex; align-items: center; white-space: nowrap; padding: 0 12px; border-radius: 8px; font-size: 15px; font-weight: 500; color: var(--muted, #62716a); text-decoration: none; }
 .page-nav a[aria-current="page"] { background: #eef2ec; color: inherit; }
 .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin: 0 0 8px; font-size: 15px; }
 .crumbs span { color: var(--muted, #62716a); }

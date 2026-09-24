@@ -10,7 +10,7 @@ let linked = false, back = null;
 // Back to the product: its return page with how the request ended, or its refresh page when the link was no good.
 const backTo = row => { if (!row) return back.refresh_url; const url = new URL(back.return_url); url.searchParams.set('foundation_status', row.status); return url.href; };
 try { linked = Boolean(requestId) && sessionStorage.getItem('linked:' + requestId) === '1'; } catch {}
-const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : location.pathname === '/functions' ? 'functions' : location.pathname === '/developers' ? 'developers' : location.pathname === '/account' ? 'account' : 'home';
+const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : location.pathname === '/functions' ? 'functions' : location.pathname === '/developers' ? 'developers' : location.pathname === '/account' ? 'account' : location.pathname === '/connections' ? 'connections' : location.pathname === '/keys' ? 'keys' : 'home';
 const pagePath = requestId ? location.pathname : page === 'home' ? '/' : '/' + page;
 let accessRequest = null, requestError = '';
 const loginMessages = {
@@ -132,7 +132,7 @@ const icon = (name) => {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
 const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true">F</span>Foundation</a>';
-const nav = `<nav class="page-nav">${[['/', 'home', 'ホーム'], ['/secrets', 'secrets', 'シークレット'], ['/objects', 'objects', 'オブジェクト'], ['/functions', 'functions', 'ファンクション']]
+const nav = `<nav class="page-nav">${[['/secrets', 'secrets', 'シークレット'], ['/connections', 'connections', '接続'], ['/objects', 'objects', 'オブジェクト'], ['/keys', 'keys', 'アクセスキー'], ['/functions', 'functions', 'ファンクション']]
   .map(([href, name, label]) => `<a href="${href}"${name === page ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
 function toast(text) {
@@ -211,7 +211,7 @@ async function refresh() {
   }
   const current = ++revision, result = await api('/api/state');
   let space = null;
-  if (page !== 'secrets') { try { space = await api('/api/objects'); } catch { space = null; } }
+  if (page === 'home' || page === 'objects') { try { space = await api('/api/objects'); } catch { space = null; } }
   if (requestId && current === revision) {
     try {
       const found = (await api(requestApi)).request;
@@ -295,23 +295,38 @@ function render() {
     return;
   }
   if (page === 'home') {
-    const space = state.space, kept = state.secrets || [];
+    // A look over everything, and the way to each page. Nothing is managed here.
+    const space = state.space, kept = state.secrets || [], connections = state.acquisitions || [], keys = state.keys || [], runs = state.invocations || [];
     const card = (href, title, line) => `<a class="home-card" href="${href}"><h2>${title}</h2><p>${esc(line)}</p></a>`;
+    const lastUsed = keys.map(key => key.last_used_at).filter(Boolean).sort().at(-1);
     app.innerHTML = shell(`<header class="page-heading"><h1>Foundation</h1></header>
       <div class="home-cards">
-        ${card('/secrets', 'シークレット', `保存値 ${kept.length} 件・接続 ${(state.acquisitions || []).length} 件`)}
+        ${card('/secrets', 'シークレット', `保存値 ${kept.length} 件`)}
+        ${card('/connections', '接続', connections.length ? `${connections.length} 件・${connections.map(item => item.label).join('、')}` : 'ありません')}
         ${card('/objects', 'オブジェクト', space?.available ? `${space.usage.count} 件・${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}` : '使えません')}
-      </div>
-      <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">アクセスキー</h2></div></div><button class="button secondary" data-action="add-key">${icon('plus')} アクセスキーを追加</button></div>
+        ${card('/keys', 'アクセスキー', keys.length ? `承認済み ${keys.length} 件${lastUsed ? '・最終利用 ' + new Date(lastUsed).toLocaleString('ja-JP') : ''}` : 'ありません')}
+        ${card('/functions', 'ファンクション', runs.length ? `実行 ${runs.length} 回・最終 ${new Date(runs[0].at).toLocaleString('ja-JP')}` : 'まだ実行されていません')}
+      </div>`);
+    return;
+  }
+  if (page === 'keys') {
+    // Those approved to work on this person's behalf: what each is called, and when it last did.
+    app.innerHTML = shell(`<header class="page-heading"><h1>アクセスキー</h1><p>あなたの代わりに働く AI やスクリプトに渡したキーです。</p></header>
+      <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">承認したキー</h2></div></div><button class="button secondary" data-action="add-key">${icon('plus')} アクセスキーを追加</button></div>
       ${state.keys.length ? `<div class="agent-list">${state.keys.map(key => `<article class="agent-row"><div class="agent-name"><h3>${esc(key.name)}</h3><p>${key.last_used_at ? '最終利用 ' + esc(new Date(key.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(key.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-key" data-id="${esc(key.id)}">名前を変更</button><button class="text-button danger" data-action="remove-key" data-id="${esc(key.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section>`);
     return;
   }
-  const kept = state.secrets || [], connections = state.acquisitions || [];
+  if (page === 'connections') {
+    const connections = state.acquisitions || [];
+    app.innerHTML = shell(`<header class="page-heading"><h1>接続</h1><p>つないだサービスの認証情報は、承認済みのアクセスキーから使えます。</p></header>
+    ${connections.length ? `<section class="resource-section" aria-labelledby="connections-title"><div class="section-heading"><h2 id="connections-title">つないだサービス</h2></div><div class="agent-list">${connections.map(connectionRow).join('')}</div></section>` : ''}
+    ${connectSection()}`);
+    return;
+  }
+  const kept = state.secrets || [];
   app.innerHTML = shell(`<header class="page-heading page-heading-actions"><div><h1>シークレット</h1></div>
     <button class="button secondary" data-action="add-secret">${icon('plus')} 追加</button></header>
-    <section class="resource-section" aria-label="保存した値">${kept.length ? `<div class="agent-list">${kept.map(secretRow).join('')}</div>` : '<div class="access-empty"><p>保存した値はありません。</p></div>'}</section>
-    ${connections.length ? `<section class="resource-section" aria-labelledby="connections-title"><div class="section-heading"><h2 id="connections-title">接続</h2></div><div class="agent-list">${connections.map(connectionRow).join('')}</div></section>` : ''}
-    ${connectSection()}`);
+    <section class="resource-section" aria-label="保存した値">${kept.length ? `<div class="agent-list">${kept.map(secretRow).join('')}</div>` : '<div class="access-empty"><p>保存した値はありません。</p></div>'}</section>`);
   app.querySelectorAll('.secret-row').forEach((row, at) => bindSecretValue(kept[at], row));
 }
 function bindObjects() {

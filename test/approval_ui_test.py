@@ -113,7 +113,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
 
     # 3. Revoking the key stops it; its open registration link says so.
     pending = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'adapter': 'gmail.metadata', 'purpose': '件名を確認する'}))['request']
-    page.goto(args.base, wait_until='networkidle')
+    page.goto(args.base + '/keys', wait_until='networkidle')
     runtime = page.locator('.agent-row').filter(has_text='dev-us のAI')
     runtime.get_by_role('button', name='失効', exact=True).click()
     page.get_by_role('dialog').get_by_role('button', name='失効させる', exact=True).click()
