@@ -123,6 +123,11 @@ const icon = (name) => {
     note: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>',
     folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
     network: '<circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="2"/><circle cx="18" cy="19" r="2"/><path d="m9 11 7-5m-7 7 7 5"/>',
+    edit: '<path d="m15 5 4 4M4 20l5-1L20 8a2.8 2.8 0 0 0-4-4L5 15Z"/>',
+    eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+    'eye-off': '<path d="m3 3 18 18M10.6 5.1A12 12 0 0 1 12 5c6.5 0 10 7 10 7a19 19 0 0 1-3 3.9M6.1 6.1A22 22 0 0 0 2 12s3.5 7 10 7a12 12 0 0 0 5.9-1.9M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
+    copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3"/>',
+    download: '<path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/>',
   };
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
@@ -231,9 +236,9 @@ function connectionRow(connection) {
     <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}" data-adapter="${esc(connection.adapter)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
 }
 function secretRow(entry) {
-  return `<article class="agent-row" aria-label="${esc(entry.name)}"><div class="agent-name"><h3>${esc(entry.name)}</h3><p>${esc(kiloBytes(entry.size))}</p></div>
+  return `<article class="agent-row secret-row" aria-label="${esc(entry.name)}"><div class="agent-name"><div class="secret-title"><h3><button class="secret-open" data-action="show-secret" data-name="${esc(entry.name)}" aria-haspopup="dialog">${esc(entry.name)}</button></h3><button class="icon-button" data-action="edit-secret" data-name="${esc(entry.name)}" aria-label="名前を編集" title="名前を編集">${icon('edit')}</button></div><p>${esc(kiloBytes(entry.size))}</p></div>
     <div class="agent-permissions"><span class="muted">${esc(keptWhen(entry.updated_at))}</span></div>
-    <div class="agent-actions"><button class="text-button" data-action="show-secret" data-name="${esc(entry.name)}">中身を見る</button><button class="text-button" data-action="edit-secret" data-name="${esc(entry.name)}">名前を変える</button><button class="text-button danger" data-action="drop-secret" data-name="${esc(entry.name)}">削除</button></div></article>`;
+    <div class="agent-actions"><button class="text-button danger" data-action="drop-secret" data-name="${esc(entry.name)}">削除</button></div></article>`;
 }
 function connectSection() {
   const available = state.adapters.filter(adapter => adapter.available);
@@ -418,7 +423,11 @@ function openDialog(content) {
   dialog.innerHTML = `<button class="dialog-close icon-button" data-action="close-dialog" aria-label="閉じる">${icon('close')}</button>${content}`;
   if (!dialog.open) dialog.showModal();
 }
-function closeDialog() { if (dialog.open) dialog.close(); dialog.innerHTML = ''; }
+function closeDialog() {
+  if (dialog.getAttribute('aria-busy') === 'true') return;
+  if (dialog.open) dialog.close();
+  dialog.innerHTML = ''; dialog.classList.remove('secret-dialog');
+}
 dialog.addEventListener('cancel', (event) => { event.preventDefault(); closeDialog(); });
 function bindForm(handler, container = dialog) {
   container.querySelector('form').addEventListener('submit', async (event) => {
@@ -534,7 +543,7 @@ function editSecret(entry, trigger) {
   if (previous?.disabled) return;
   previous?.click();
   const row = trigger.closest('.agent-row'), heading = row.querySelector('h3');
-  const actions = [...row.querySelectorAll('.agent-actions button')];
+  const actions = [...row.querySelectorAll('button')];
   const form = document.createElement('form');
   form.className = 'secret-name-editor'; form.setAttribute('aria-label', '名前の変更');
   form.innerHTML = `<div class="secret-name-field"><input name="name" aria-label="名前" required maxlength="200" value="${esc(entry.name)}" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -575,6 +584,93 @@ function editSecret(entry, trigger) {
   });
   input.focus(); input.select();
 }
+async function showSecret(entry) {
+  if (!entry) return;
+  const path = '/api/secrets?name=' + encodeURIComponent(entry.name), controller = new AbortController();
+  let value = null, text = null, etag = null, revealed = false;
+  openDialog(`<h2 id="dialog-title">${esc(entry.name)}</h2><p class="secret-meta">${esc(kiloBytes(entry.size))} · ${esc(keptWhen(entry.updated_at))}</p><section class="secret-value-panel" aria-label="値"><p role="status">読み込み中…</p></section>`);
+  dialog.classList.add('secret-dialog');
+  const panel = dialog.querySelector('.secret-value-panel');
+  dialog.addEventListener('close', () => {
+    controller.abort(); value = null; text = null;
+    if (!dialog.open) [...app.querySelectorAll('[data-action="show-secret"]')].find(button => button.dataset.name === entry.name)?.focus();
+  }, { once: true });
+  const control = (action, label, glyph) => `<button type="button" class="icon-button" data-value-action="${action}" aria-label="${label}" title="${label}">${icon(glyph)}</button>`;
+  const decode = bytes => {
+    try {
+      const decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+      return /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(decoded) ? null : decoded;
+    } catch { return null; }
+  };
+  const show = (focus) => {
+    const binary = text === null;
+    panel.innerHTML = `<div class="secret-value-toolbar"><h3>値</h3><div class="secret-value-actions">${binary
+      ? `<a class="icon-button" href="${path}" download aria-label="ダウンロード" title="ダウンロード">${icon('download')}</a>`
+      : control('reveal', revealed ? '値を隠す' : '値を表示', revealed ? 'eye-off' : 'eye') + control('copy', 'コピー', 'copy')}${control('edit', '値を編集', 'edit')}</div></div>
+      ${binary ? `<div class="secret-file">${icon('note')}<span>バイナリデータ<span class="muted block">${esc(kiloBytes(value.length))}</span></span></div>`
+      : `<pre class="kept-document" aria-label="${revealed ? '値' : '値（非表示）'}">${revealed ? esc(text) : '••••••••'}</pre>`}<p class="form-error" role="alert"></p>`;
+    panel.querySelector('[data-value-action="reveal"]')?.addEventListener('click', () => { revealed = !revealed; show('reveal'); });
+    panel.querySelector('[data-value-action="copy"]')?.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(text); toast('コピーしました。'); }
+      catch { if (panel.isConnected) panel.querySelector('[role="alert"]').textContent = 'コピーできませんでした。'; }
+    });
+    panel.querySelector('[data-value-action="edit"]').addEventListener('click', edit);
+    if (focus) panel.querySelector(`[data-value-action="${focus}"]`)?.focus();
+  };
+  const edit = () => {
+    const binary = text === null;
+    panel.innerHTML = `<div class="secret-value-toolbar"><h3>値</h3></div><form aria-label="値の編集">${binary
+      ? '<input type="file" name="file" aria-label="ファイル" required>'
+      : '<textarea name="value" aria-label="値" rows="6" required autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>'}
+      <p class="form-error" role="alert"></p><div class="dialog-actions"><button class="button secondary" type="button">キャンセル</button><button class="button primary" type="submit">保存</button></div></form>`;
+    const form = panel.querySelector('form'), input = form.querySelector('textarea, input'), cancel = form.querySelector('[type="button"]'), save = form.querySelector('[type="submit"]'), error = form.querySelector('[role="alert"]');
+    if (!binary) input.value = text;
+    const initial = input.value;
+    let saving = false;
+    cancel.addEventListener('click', () => { if (!saving) show('edit'); });
+    form.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); if (!saving) show('edit'); }
+    });
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (saving) return;
+      if (!binary && input.value === initial) { show('edit'); return; }
+      const file = binary ? input.files[0] : null;
+      if (binary && !file) return;
+      const content = binary ? file : new TextEncoder().encode(input.value);
+      if ((binary ? file.size : content.length) > 1024 * 1024) { error.textContent = '1件あたり1MBまでです。'; return; }
+      saving = true; error.textContent = ''; save.disabled = true; cancel.disabled = true; input.disabled = true;
+      dialog.setAttribute('aria-busy', 'true'); dialog.querySelector('.dialog-close').disabled = true;
+      try {
+        if (!etag) throw new Error('開き直してから保存してください。');
+        const bytes = binary ? new Uint8Array(await file.arrayBuffer()) : content;
+        const response = await fetch(path, { method: 'PUT', credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
+          headers: { 'content-type': 'application/octet-stream', 'if-match': etag }, body: bytes });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error?.message || '保存できませんでした。');
+        value = bytes;
+        text = decode(value); etag = response.headers.get('etag'); revealed = false; entry = result.secret;
+        state.secrets = state.secrets.map(item => item.name === entry.name ? entry : item); render();
+        dialog.querySelector('.secret-meta').textContent = kiloBytes(entry.size) + ' · ' + keptWhen(entry.updated_at);
+        show('edit'); toast('保存しました。');
+      } catch (failure) { if (form.isConnected) error.textContent = failure.message; }
+      finally {
+        saving = false; save.disabled = false; cancel.disabled = false; input.disabled = false;
+        dialog.removeAttribute('aria-busy'); dialog.querySelector('.dialog-close').disabled = false;
+      }
+    });
+    input.focus();
+  };
+  try {
+    const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+    if (!response.ok) throw new Error('値を取得できませんでした。');
+    value = new Uint8Array(await response.arrayBuffer());
+    if (!panel.isConnected) return;
+    text = decode(value); etag = response.headers.get('etag'); show();
+  } catch (error) {
+    if (panel.isConnected) panel.innerHTML = `<p class="form-error" role="alert">${esc(error.message)}</p>`;
+  }
+}
 function confirmRemoval(title, body, run) {
   openDialog(`<h2 id="dialog-title">${esc(title)}</h2><form><p>${esc(body)}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">削除する</button></div></form>`);
   bindForm(async () => { await run(); closeDialog(); await refresh(); toast('削除しました。'); });
@@ -598,21 +694,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'add-adapter') connect(target.dataset.adapter);
     if (action === 'reconnect') connect(target.dataset.adapter, target.dataset.id);
     if (action === 'disconnect') disconnect(state.acquisitions.find(item => item.id === target.dataset.id));
-    if (action === 'show-secret') {
-      const name = target.dataset.name, entry = state.secrets.find(item => item.name === name);
-
-      const response = await fetch('/api/secrets?name=' + encodeURIComponent(name), { credentials: 'same-origin', cache: 'no-store' });
-      if (!response.ok) throw new Error('中身を取得できませんでした。');
-      // What the bytes are is decided by looking at them: anything that is not plain text is offered as a file.
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      const text = new TextDecoder('utf-8', { fatal: true });
-      let shown = null;
-      try { const value = text.decode(bytes); if (!/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)) shown = value; } catch {}
-      const body = shown !== null
-        ? `<pre class="kept-document">${esc(shown)}</pre>`
-        : `<p>この形式は画面で表示できません。</p><a class="button secondary full" href="/api/secrets?name=${encodeURIComponent(name)}" download>ファイルとして保存</a>`;
-      openDialog(`<h2 id="dialog-title">${esc(name)}</h2><p>${esc(keptWhen(entry.updated_at))}</p>${body}`);
-    }
+    if (action === 'show-secret') await showSecret(state.secrets.find(item => item.name === target.dataset.name));
     if (action === 'drop-secret') {
       const name = target.dataset.name;
       confirmRemoval(name + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/api/secrets?name=' + encodeURIComponent(name), { method: 'DELETE', data: {} }));

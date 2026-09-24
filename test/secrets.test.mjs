@@ -159,6 +159,65 @@ test('The owner reads and removes anything kept, including what the key may not 
   assert.deepEqual((await f.request('/v1/secrets', { token, anonymous: true })).json.secrets, []);
 });
 
+test('The owner edits the value they opened while preserving its name and read permission', async t => {
+  const { f, token } = await keyed(t);
+  for (const privateValue of [true, false]) {
+    const name = privateValue ? 'private value' : 'readable value';
+    const path = '/api/secrets?' + new URLSearchParams({ name });
+    await put(f, token, name, 'original', { secret: String(privateValue) });
+    const opened = await f.request(path);
+    const etag = opened.headers.get('etag');
+    assert.ok(etag);
+    assert.equal((await f.request(path)).headers.get('etag'), etag);
+    const value = '  {\n  "token": "new value"\n}\n';
+    const saved = await f.request(path, { method: 'PUT', raw: value, headers: { 'if-match': etag } });
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal(saved.json.secret.name, name);
+    assert.equal(saved.json.secret.readable, !privateValue);
+    assert.notEqual(saved.headers.get('etag'), etag);
+    const updated = await f.request(path);
+    assert.equal(updated.text, value);
+    assert.equal(updated.headers.get('etag'), saved.headers.get('etag'));
+    const keyRead = await f.request('/v1/secrets?' + new URLSearchParams({ name }), { token, anonymous: true });
+    assert.equal(keyRead.status, privateValue ? 403 : 200);
+  }
+});
+
+test('A stale editor preserves a newer value and its permissions', async t => {
+  const { f, token } = await keyed(t);
+  const path = '/api/secrets?name=shared';
+  await put(f, token, 'shared', 'original', { secret: 'true' });
+  const opened = await f.request(path);
+  await put(f, token, 'shared', 'newer value');
+  const saved = await f.request(path, { method: 'PUT', raw: 'stale draft', headers: { 'if-match': opened.headers.get('etag') } });
+  assert.equal(saved.status, 412, saved.text);
+  assert.equal(saved.json.error.code, 'secret_changed');
+  assert.equal((await f.request(path)).text, 'newer value');
+  assert.equal((await f.request('/api/state')).json.secrets[0].readable, true);
+});
+
+test('A stale editor respects renames, deletion, recreation, and owner boundaries', async t => {
+  const { f, token } = await keyed(t);
+  const path = '/api/secrets?name=original';
+  await put(f, token, 'original', 'first');
+  const etag = (await f.request(path)).headers.get('etag');
+  const save = () => f.request(path, { method: 'PUT', raw: 'draft', headers: { 'if-match': etag } });
+  await f.request(path, { method: 'PATCH', data: { name: 'renamed' } });
+  assert.equal((await save()).status, 412);
+  assert.deepEqual((await f.request('/api/state')).json.secrets.map(row => row.name), ['renamed']);
+  await f.request('/api/secrets?name=renamed', { method: 'PATCH', data: { name: 'original' } });
+  await f.request(path, { method: 'DELETE', data: {} });
+  assert.equal((await save()).status, 412);
+  await put(f, token, 'original', 'recreated');
+  assert.equal((await save()).status, 412);
+  assert.equal((await f.request(path)).text, 'recreated');
+  const current = (await f.request(path)).headers.get('etag');
+  await f.login('other@example.test');
+  assert.equal((await f.request(path)).status, 404);
+  assert.equal((await f.request(path, { method: 'PUT', raw: 'other owner', headers: { 'if-match': current } })).status, 412);
+  assert.deepEqual((await f.request('/api/state')).json.secrets, []);
+});
+
 test('The runtime hands what is kept to a command, as bytes and as a file, and nothing else', async t => {
   const { f, token } = await keyed(t);
   const dir = await mkdtemp(join(tmpdir(), 'foundation-entries-cli-')); t.after(() => rm(dir, { recursive: true, force: true }));

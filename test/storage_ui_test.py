@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     approval = cli('connect', '--name', 'dev-us のAI')['request']
     key = open(key_dir + '/runtime-key').read().strip()
     browser = p.chromium.launch(headless=True)
-    context = browser.new_context(viewport={'width': 1280, 'height': 1000})
+    context = browser.new_context(viewport={'width': 1280, 'height': 1000}, permissions=['clipboard-read', 'clipboard-write'])
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -76,7 +76,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     expect(github.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
     expect(github.get_by_text(f'{len(SECRET)} バイト', exact=True)).to_be_visible()
     expect(release.get_by_role('heading', name='release/2026-09-23', exact=True)).to_be_visible()
-    expect(release.get_by_role('button', name='中身を見る', exact=True)).to_be_visible()
+    expect(release.get_by_role('button', name='release/2026-09-23', exact=True)).to_be_visible()
     assert SECRET not in page.locator('body').inner_text(), 'what is kept is never on the page itself'
 
     review(page)
@@ -95,7 +95,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # The name is edited in its own row, with the current name selected and adjacent save/cancel controls.
-    github.get_by_role('button', name='名前を変える', exact=True).click()
+    title_box = github.get_by_role('button', name='github/gh-token', exact=True).bounding_box()
+    pencil_box = github.get_by_role('button', name='名前を編集', exact=True).bounding_box()
+    assert 0 <= pencil_box['x'] - (title_box['x'] + title_box['width']) <= 8
+    github.get_by_role('button', name='名前を編集', exact=True).click()
     editor = github.get_by_role('form', name='名前の変更', exact=True)
     name_input = editor.get_by_label('名前', exact=True)
     expect(name_input).to_be_focused()
@@ -112,16 +115,16 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     name_input.fill('cancelled name')
     editor.get_by_role('button', name='キャンセル', exact=True).click()
     expect(github.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
-    expect(github.get_by_role('button', name='名前を変える', exact=True)).to_be_focused()
+    expect(github.get_by_role('button', name='名前を編集', exact=True)).to_be_focused()
 
-    github.get_by_role('button', name='名前を変える', exact=True).click()
+    github.get_by_role('button', name='名前を編集', exact=True).click()
     name_input.fill('another draft')
     name_input.press('Escape')
     expect(github.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
     assert [row['name'] for row in api('GET', '/v1/secrets')['secrets']] == ['github/gh-token', 'release/2026-09-23']
 
     # An occupied name stays editable; saving a corrected name preserves the stored bytes.
-    github.get_by_role('button', name='名前を変える', exact=True).click()
+    github.get_by_role('button', name='名前を編集', exact=True).click()
     name_input.fill('release/2026-09-23')
     editor.get_by_role('button', name='保存', exact=True).click()
     expect(editor.get_by_role('alert')).to_have_text('その名前はすでに使われています。')
@@ -131,14 +134,102 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     editor.get_by_role('button', name='保存', exact=True).click()
     renamed = page.get_by_role('article', name='github token', exact=True)
     expect(renamed.get_by_role('heading', name='github token', exact=True)).to_be_visible()
-    expect(renamed.get_by_role('button', name='名前を変える', exact=True)).to_be_focused()
+    expect(renamed.get_by_role('button', name='名前を編集', exact=True)).to_be_focused()
     kept = page.request.get(args.base + '/api/secrets?name=github%20token')
     assert kept.status == 200 and kept.text() == SECRET
-    renamed.get_by_role('button', name='名前を変える', exact=True).click()
+    renamed.get_by_role('button', name='名前を編集', exact=True).click()
     restored = renamed.get_by_label('名前', exact=True)
     restored.fill('github/gh-token')
     restored.press('Enter')
     expect(github.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
+    page.set_viewport_size({'width': 1280, 'height': 1000})
+
+    # Details start masked, reveal in place, and copy without switching to editing.
+    github.get_by_role('button', name='github/gh-token', exact=True).click()
+    expect(dialog.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
+    expect(dialog.locator('.kept-document')).to_have_text('••••••••')
+    for width in [1280, 390, 320]:
+        page.set_viewport_size({'width': width, 'height': 1000})
+        for label in ['値を表示', 'コピー', '値を編集']:
+            expect(dialog.get_by_role('button', name=label, exact=True)).to_be_visible()
+        review(page)
+        if width != 320:
+            page.screenshot(path=str(shots / ('value-desktop.png' if width == 1280 else 'value-mobile.png')), full_page=True)
+    dialog.get_by_role('button', name='値を表示', exact=True).click()
+    expect(dialog.locator('.kept-document')).to_have_text(SECRET)
+    dialog.get_by_role('button', name='値を隠す', exact=True).click()
+    expect(dialog.locator('.kept-document')).to_have_text('••••••••')
+    dialog.get_by_role('button', name='コピー', exact=True).click()
+    expect(page.get_by_role('status')).to_have_text('コピーしました。')
+    assert page.evaluate('navigator.clipboard.readText()') == SECRET
+    expect(dialog.locator('.kept-document')).to_have_text('••••••••')
+
+    # Editing and cancelling preserve the value; saving replaces only its bytes.
+    dialog.get_by_role('button', name='値を編集', exact=True).click()
+    value_input = dialog.get_by_role('textbox', name='値', exact=True)
+    expect(value_input).to_have_value(SECRET)
+    value_input.fill('cancel this draft')
+    dialog.get_by_role('button', name='キャンセル', exact=True).click()
+    assert page.request.get(args.base + '/api/secrets?name=github%2Fgh-token').text() == SECRET
+    dialog.get_by_role('button', name='値を編集', exact=True).click()
+    value_input.fill('escape this draft')
+    value_input.press('Escape')
+    expect(dialog.locator('.kept-document')).to_have_text('••••••••')
+    dialog.get_by_role('button', name='値を編集', exact=True).click()
+    updated = '  {\n  "token": "new-value",\n  "note": "<img src=x onerror=window.valueXss=1>"\n}\n'
+    value_input.fill(updated)
+    for width in [1280, 390, 320]:
+        page.set_viewport_size({'width': width, 'height': 1000})
+        review(page)
+        if width != 320:
+            page.screenshot(path=str(shots / ('edit-value-desktop.png' if width == 1280 else 'edit-value-mobile.png')), full_page=True)
+    # A failed save keeps the draft and lets the owner retry.
+    def unavailable(route):
+        if route.request.method == 'PUT':
+            route.fulfill(status=503, content_type='application/json', body=json.dumps({'error': {'message': '保存できませんでした。'}}))
+        else:
+            route.continue_()
+    page.route('**/api/secrets?*', unavailable)
+    dialog.get_by_role('button', name='保存', exact=True).click()
+    expect(dialog.get_by_role('alert')).to_have_text('保存できませんでした。')
+    expect(value_input).to_have_value(updated)
+    expect(dialog.get_by_role('button', name='保存', exact=True)).to_be_enabled()
+    page.unroute('**/api/secrets?*', unavailable)
+    dialog.get_by_role('button', name='保存', exact=True).click()
+    expect(dialog.locator('.kept-document')).to_have_text('••••••••')
+    assert page.request.get(args.base + '/api/secrets?name=github%2Fgh-token').text() == updated
+    assert next(row for row in api('GET', '/v1/secrets')['secrets'] if row['name'] == 'github/gh-token')['readable'] is False
+    dialog.get_by_role('button', name='値を表示', exact=True).click()
+    assert dialog.locator('.kept-document').text_content() == updated
+    assert page.evaluate('window.valueXss === undefined')
+    dialog.get_by_role('button', name='閉じる', exact=True).click()
+    expect(github.get_by_role('button', name='github/gh-token', exact=True)).to_be_focused()
+
+    # Another writer wins over a stale editor, which keeps the owner's draft for recovery.
+    github.get_by_role('button', name='github/gh-token', exact=True).click()
+    dialog.get_by_role('button', name='値を編集', exact=True).click()
+    value_input.fill('my pending value')
+    api('PUT', '/v1/secrets/github/gh-token?secret=true', b'newer value')
+    dialog.get_by_role('button', name='保存', exact=True).click()
+    expect(dialog.get_by_role('alert')).to_have_text('ほかの操作で変更されています。開き直して確認してください。')
+    expect(value_input).to_have_value('my pending value')
+    assert page.request.get(args.base + '/api/secrets?name=github%2Fgh-token').text() == 'newer value'
+    dialog.get_by_role('button', name='閉じる', exact=True).click()
+
+    # Readable text retains its access setting and unchanged CRLF/BOM bytes survive an edit/save.
+    unchanged = '\ufefffirst\r\nsecond\r\n'
+    api('PUT', '/v1/secrets/release/2026-09-23', unchanged.encode('utf-8'))
+    release.get_by_role('button', name='release/2026-09-23', exact=True).click()
+    dialog.get_by_role('button', name='値を編集', exact=True).click()
+    dialog.get_by_role('button', name='保存', exact=True).click()
+    expect(dialog.get_by_role('button', name='値を編集', exact=True)).to_be_visible()
+    assert page.request.get(args.base + '/api/secrets?name=release%2F2026-09-23').body() == unchanged.encode('utf-8')
+    dialog.get_by_role('button', name='値を編集', exact=True).click()
+    value_input.fill('updated readable value')
+    dialog.get_by_role('button', name='保存', exact=True).click()
+    expect(dialog.get_by_role('button', name='値を編集', exact=True)).to_be_visible()
+    assert next(row for row in api('GET', '/v1/secrets')['secrets'] if row['name'] == 'release/2026-09-23')['readable'] is True
+    dialog.get_by_role('button', name='閉じる', exact=True).click()
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # Removing one takes it away from the key too.
@@ -168,21 +259,40 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
         review(page)
-    page.get_by_role('button', name='名前を変える', exact=True).click()
+    page.get_by_role('button', name='名前を編集', exact=True).click()
     literal_editor = page.get_by_role('form', name='名前の変更', exact=True)
     expect(literal_editor.get_by_label('名前', exact=True)).to_have_value(literal)
     literal_editor.get_by_label('名前', exact=True).fill('..')
     literal_editor.get_by_role('button', name='保存', exact=True).click()
     expect(title).to_have_text('..')
-    page.get_by_role('button', name='中身を見る', exact=True).click()
+    page.get_by_role('button', name='..', exact=True).click()
+    dialog.get_by_role('button', name='値を表示', exact=True).click()
     expect(dialog.locator('.kept-document')).to_have_text(SECRET)
     dialog.get_by_role('button', name='閉じる', exact=True).click()
     page.get_by_role('button', name='削除', exact=True).click()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
     assert api('GET', '/v1/secrets')['secrets'] == []
+
+    # Binary values stay files: download exact bytes, then replace them with a selected file.
+    binary = b'\x00\xff\x01fixture'
+    api('PUT', '/v1/secrets/binary?secret=true', binary)
+    page.reload(wait_until='networkidle')
+    page.get_by_role('button', name='binary', exact=True).click()
+    expect(dialog.get_by_text('バイナリデータ', exact=False)).to_be_visible()
+    with page.expect_download() as download_info:
+        dialog.get_by_role('link', name='ダウンロード', exact=True).click()
+    assert Path(download_info.value.path()).read_bytes() == binary
+    dialog.get_by_role('button', name='値を編集', exact=True).click()
+    replaced = b'\x00\xfe\x01replacement'
+    dialog.get_by_label('ファイル', exact=True).set_input_files({'name': 'credential.bin', 'mimeType': 'application/octet-stream', 'buffer': replaced})
+    dialog.get_by_role('button', name='保存', exact=True).click()
+    expect(dialog.get_by_text('バイナリデータ', exact=False)).to_be_visible()
+    assert page.request.get(args.base + '/api/secrets?name=binary').body() == replaced
+    assert api('GET', '/v1/secrets')['secrets'][0]['readable'] is False
+    dialog.get_by_role('button', name='閉じる', exact=True).click()
     review(page)
     assert not errors, errors
     context.close()
     browser.close()
-    print('Storage screen passed: what a key kept with no request, its size, fetching it as the owner, and removal reaching the key.')
+    print('Storage screen passed: adjacent rename, masked details, reveal, copy, value editing, retries, concurrent changes, exact bytes, access settings, file replacement, and removal.')
