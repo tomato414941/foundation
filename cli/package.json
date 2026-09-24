@@ -19,5 +19,9 @@
     "url": "git+https://github.com/tomato414941/foundation.git",
     "directory": "cli"
   },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "license": "UNLICENSED"
 }
