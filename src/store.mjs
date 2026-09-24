@@ -12,10 +12,18 @@ const parse = row => ({ ...row, readable: row.readable === 1 });
 export const ACQUISITION_LIMIT = 50;
 const entryBinding = row => `entry:${row.owner_id}:${row.id}`;
 
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 15;
 // Names are opaque identifiers. Connection state is stored independently of ordinary values.
 // Both kinds retain their original authenticated-encryption bindings across migrations.
 const STEPS = {
+  // Each run of a built-in function is written down for the owner: which key, what, where to, and how it went.
+  15: `
+  CREATE TABLE invocations (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, key_id TEXT, key_name TEXT NOT NULL, function TEXT NOT NULL,
+    target TEXT NOT NULL, status TEXT NOT NULL, detail TEXT NOT NULL, at TEXT NOT NULL
+  );
+  CREATE INDEX invocations_owner ON invocations(owner_id, at);
+  `,
   // Where a product sends its user back when a link cannot be used, and where it hears that a request finished.
   14: `
     ALTER TABLE integrations ADD COLUMN refresh_url TEXT;
@@ -134,6 +142,11 @@ const SCHEMA = `
   CREATE TABLE request_links (
     token_hash TEXT PRIMARY KEY, request_id TEXT NOT NULL, owner_id TEXT NOT NULL, kind TEXT NOT NULL, expires_at INTEGER NOT NULL
   );
+  CREATE TABLE invocations (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, key_id TEXT, key_name TEXT NOT NULL, function TEXT NOT NULL,
+    target TEXT NOT NULL, status TEXT NOT NULL, detail TEXT NOT NULL, at TEXT NOT NULL
+  );
+  CREATE INDEX invocations_owner ON invocations(owner_id, at);
   CREATE INDEX secrets_owner ON secrets(owner_id, name);
   PRAGMA user_version = ${SCHEMA_VERSION};
 `;
@@ -271,6 +284,15 @@ export class Store {
   }
   removeAcquisition(ownerId, id) {
     return this.db.prepare('DELETE FROM acquisitions WHERE owner_id=? AND id=?').run(ownerId, id).changes > 0;
+  }
+  // What the owner sees of each function run: never inputs or outputs, only who, what, where and how it went.
+  recordInvocation(ownerId, { key, fn, target, status, detail = '' }) {
+    this.db.prepare('INSERT INTO invocations (id,owner_id,key_id,key_name,function,target,status,detail,at) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(randomUUID(), ownerId, key?.id ?? null, key?.name ?? '', fn, String(target).slice(0, 200), status, String(detail).slice(0, 200), now());
+    this.db.prepare('DELETE FROM invocations WHERE owner_id=? AND id NOT IN (SELECT id FROM invocations WHERE owner_id=? ORDER BY at DESC, rowid DESC LIMIT 500)').run(ownerId, ownerId);
+  }
+  invocations(ownerId, limit = 100) {
+    return this.db.prepare('SELECT id,key_id,key_name,function,target,status,detail,at FROM invocations WHERE owner_id=? ORDER BY at DESC, rowid DESC LIMIT ?').all(ownerId, limit);
   }
   keys(ownerId) {
     return this.db.prepare('SELECT id,name,created_at,last_used_at,issued_until,issued_nonexpiring FROM keys WHERE owner_id=? ORDER BY created_at,id').all(ownerId);

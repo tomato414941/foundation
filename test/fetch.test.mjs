@@ -57,7 +57,7 @@ async function setup(t) {
 }
 
 test('A request goes out with what is kept in its headers and body, and comes back without it', async t => {
-  const { received, call } = await setup(t);
+  const { received, call, f } = await setup(t);
   const answer = await call({ url: 'https://api.example.test/echo?q=1', method: 'POST',
     headers: { authorization: 'Bearer {{foundation:api/token}}', 'content-type': 'application/json' }, body: '{"token":"{{foundation:api/token}}"}' });
   assert.equal(answer.status, 200, answer.text);
@@ -73,6 +73,12 @@ test('A request goes out with what is kept in its headers and body, and comes ba
   assert.equal(answer.json.response.headers['x-echo'], 'Bearer [redacted]');
   assert.doesNotMatch(answer.text, new RegExp(TOKEN));
   assert.doesNotMatch(answer.text, new RegExp(Buffer.from(TOKEN).toString('base64').slice(0, 20)));
+  // The owner sees that it happened, and where to; never what went in or came back.
+  const record = (await f.request('/api/state')).json.invocations;
+  assert.equal(record.length, 1);
+  assert.equal(record[0].function, 'http.request'); assert.equal(record[0].target, 'POST api.example.test'); assert.equal(record[0].status, 'ok');
+  assert.match(record[0].detail, /HTTP 200/);
+  assert.doesNotMatch(JSON.stringify(record), new RegExp(TOKEN));
 });
 
 test('A redirect comes back as it is, with what is kept taken out, and is not followed', async t => {
