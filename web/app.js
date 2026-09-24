@@ -231,7 +231,7 @@ function connectionRow(connection) {
     <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}" data-adapter="${esc(connection.adapter)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
 }
 function secretRow(entry) {
-  return `<article class="agent-row"><div class="agent-name"><h3>${esc(entry.name)}</h3><p>${esc(kiloBytes(entry.size))}</p></div>
+  return `<article class="agent-row" aria-label="${esc(entry.name)}"><div class="agent-name"><h3>${esc(entry.name)}</h3><p>${esc(kiloBytes(entry.size))}</p></div>
     <div class="agent-permissions"><span class="muted">${esc(keptWhen(entry.updated_at))}</span></div>
     <div class="agent-actions"><button class="text-button" data-action="show-secret" data-name="${esc(entry.name)}">中身を見る</button><button class="text-button" data-action="edit-secret" data-name="${esc(entry.name)}">名前を変える</button><button class="text-button danger" data-action="drop-secret" data-name="${esc(entry.name)}">削除</button></div></article>`;
 }
@@ -528,16 +528,52 @@ function addSecret() {
     closeDialog(); await refresh(); toast(name + ' を追加しました。');
   });
 }
-function editSecret(entry) {
+function editSecret(entry, trigger) {
   if (!entry) return;
-  openDialog(`<h2 id="dialog-title">名前を変える</h2><p>中身はそのままです。AIがこれを指すときの名前を変えられます。</p>
-    <form><label for="secret-name">名前</label><input id="secret-name" name="name" required maxlength="200" value="${esc(entry.name)}" autocomplete="off" spellcheck="false">
-    <p class="permission-note">この名前を指定している操作では、新しい名前への変更が必要です。</p>
-    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">変更する</button></form>`);
-  bindForm(async (form) => {
-    await api('/api/secrets?name=' + encodeURIComponent(entry.name), { method: 'PATCH', data: { name: form.get('name') } });
-    closeDialog(); await refresh(); toast('変更しました。');
+  const previous = app.querySelector('.secret-name-editor button[type="button"]');
+  if (previous?.disabled) return;
+  previous?.click();
+  const row = trigger.closest('.agent-row'), heading = row.querySelector('h3');
+  const actions = [...row.querySelectorAll('.agent-actions button')];
+  const form = document.createElement('form');
+  form.className = 'secret-name-editor'; form.setAttribute('aria-label', '名前の変更');
+  form.innerHTML = `<div class="secret-name-field"><input name="name" aria-label="名前" required maxlength="200" value="${esc(entry.name)}" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <button class="icon-button save-name" type="submit" aria-label="保存" title="保存">${icon('check')}</button>
+    <button class="icon-button" type="button" aria-label="キャンセル" title="キャンセル">${icon('close')}</button></div><p class="form-error" role="alert"></p>`;
+  heading.hidden = true; heading.after(form); row.classList.add('renaming');
+  actions.forEach(button => { button.disabled = true; });
+  trigger.hidden = true;
+  const input = form.querySelector('input'), save = form.querySelector('[type="submit"]'), cancel = form.querySelector('[type="button"]'), error = form.querySelector('[role="alert"]');
+  let saving = false;
+  const close = () => {
+    if (saving) return;
+    form.remove(); heading.hidden = false; row.classList.remove('renaming');
+    actions.forEach(button => { button.disabled = false; });
+    trigger.hidden = false; trigger.focus();
+  };
+  cancel.addEventListener('click', close);
+  form.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); close(); }
   });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (saving) return;
+    const name = input.value;
+    if (name === entry.name) { close(); return; }
+    saving = true; save.disabled = true; cancel.disabled = true; input.readOnly = true;
+    form.setAttribute('aria-busy', 'true'); error.textContent = '';
+    try {
+      await api('/api/secrets?name=' + encodeURIComponent(entry.name), { method: 'PATCH', data: { name } });
+      await refresh();
+      [...app.querySelectorAll('[data-action="edit-secret"]')].find(button => button.dataset.name === name)?.focus();
+      toast('名前を変更しました。');
+    } catch (failure) { if (form.isConnected) { error.textContent = failure.message; input.focus(); } }
+    finally {
+      saving = false; save.disabled = false; cancel.disabled = false; input.readOnly = false;
+      form.removeAttribute('aria-busy');
+    }
+  });
+  input.focus(); input.select();
 }
 function confirmRemoval(title, body, run) {
   openDialog(`<h2 id="dialog-title">${esc(title)}</h2><form><p>${esc(body)}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">削除する</button></div></form>`);
@@ -619,7 +655,7 @@ document.addEventListener('click', async (event) => {
         async () => { for (const key of keys) await api('/api/objects/' + encodeURIComponent(key), { method: 'DELETE', data: {} }); objectChosen = new Set(); });
     }
     if (action === 'add-secret') addSecret();
-    if (action === 'edit-secret') editSecret((state.secrets || []).find(item => item.name === target.dataset.name));
+    if (action === 'edit-secret') editSecret((state.secrets || []).find(item => item.name === target.dataset.name), target);
     if (action === 'add-key') addKey();
     if (action === 'remove-key') removeKey(state.keys.find((key) => key.id === id));
     if (action === 'add-integration') addIntegration();

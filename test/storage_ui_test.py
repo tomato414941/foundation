@@ -54,6 +54,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     page.goto(approval['verification_uri'], wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='ログインメールを送信', exact=True).click()
+    expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     page.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
     page.get_by_label('確認コード', exact=True).fill(approval['confirmation_code'])
     page.get_by_role('button', name='承認する', exact=True).click()
@@ -70,8 +71,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     api('PUT', '/v1/secrets/release/2026-09-23', json.dumps({'step': 'レビュー待ち'}).encode(), {'content-type': 'application/json'})
     page.reload(wait_until='networkidle')
 
-    github = page.locator('[aria-label="保存した値"] .agent-row').filter(has=page.get_by_role('heading', name='github/gh-token', exact=True))
-    release = page.locator('[aria-label="保存した値"] .agent-row').filter(has=page.get_by_role('heading', name='release/2026-09-23', exact=True))
+    github = page.get_by_role('article', name='github/gh-token', exact=True)
+    release = page.get_by_role('article', name='release/2026-09-23', exact=True)
     expect(github.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
     expect(github.get_by_text(f'{len(SECRET)} バイト', exact=True)).to_be_visible()
     expect(release.get_by_role('heading', name='release/2026-09-23', exact=True)).to_be_visible()
@@ -91,6 +92,53 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
         review(page)
         if width == 390:
             page.screenshot(path=str(shots / 'kept-mobile.png'), full_page=True)
+    page.set_viewport_size({'width': 1280, 'height': 1000})
+
+    # The name is edited in its own row, with the current name selected and adjacent save/cancel controls.
+    github.get_by_role('button', name='名前を変える', exact=True).click()
+    editor = github.get_by_role('form', name='名前の変更', exact=True)
+    name_input = editor.get_by_label('名前', exact=True)
+    expect(name_input).to_be_focused()
+    expect(name_input).to_have_value('github/gh-token')
+    assert name_input.evaluate('(input) => input.selectionStart === 0 && input.selectionEnd === input.value.length')
+    for width in [1280, 390, 320]:
+        page.set_viewport_size({'width': width, 'height': 1000})
+        expect(editor.get_by_role('button', name='保存', exact=True)).to_be_visible()
+        expect(editor.get_by_role('button', name='キャンセル', exact=True)).to_be_visible()
+        expect(github.get_by_text(f'{len(SECRET)} バイト', exact=True)).to_be_visible()
+        review(page)
+        if width != 320:
+            page.screenshot(path=str(shots / ('rename-desktop.png' if width == 1280 else 'rename-mobile.png')), full_page=True)
+    name_input.fill('cancelled name')
+    editor.get_by_role('button', name='キャンセル', exact=True).click()
+    expect(github.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
+    expect(github.get_by_role('button', name='名前を変える', exact=True)).to_be_focused()
+
+    github.get_by_role('button', name='名前を変える', exact=True).click()
+    name_input.fill('another draft')
+    name_input.press('Escape')
+    expect(github.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
+    assert [row['name'] for row in api('GET', '/v1/secrets')['secrets']] == ['github/gh-token', 'release/2026-09-23']
+
+    # An occupied name stays editable; saving a corrected name preserves the stored bytes.
+    github.get_by_role('button', name='名前を変える', exact=True).click()
+    name_input.fill('release/2026-09-23')
+    editor.get_by_role('button', name='保存', exact=True).click()
+    expect(editor.get_by_role('alert')).to_have_text('その名前はすでに使われています。')
+    expect(name_input).to_have_value('release/2026-09-23')
+    expect(editor.get_by_role('button', name='保存', exact=True)).to_be_enabled()
+    name_input.fill('github token')
+    editor.get_by_role('button', name='保存', exact=True).click()
+    renamed = page.get_by_role('article', name='github token', exact=True)
+    expect(renamed.get_by_role('heading', name='github token', exact=True)).to_be_visible()
+    expect(renamed.get_by_role('button', name='名前を変える', exact=True)).to_be_focused()
+    kept = page.request.get(args.base + '/api/secrets?name=github%20token')
+    assert kept.status == 200 and kept.text() == SECRET
+    renamed.get_by_role('button', name='名前を変える', exact=True).click()
+    restored = renamed.get_by_label('名前', exact=True)
+    restored.fill('github/gh-token')
+    restored.press('Enter')
+    expect(github.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # Removing one takes it away from the key too.
@@ -121,9 +169,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
         page.set_viewport_size({'width': width, 'height': 1000})
         review(page)
     page.get_by_role('button', name='名前を変える', exact=True).click()
-    dialog.get_by_label('名前', exact=True).fill('..')
-    dialog.get_by_role('button', name='変更する', exact=True).click()
-    expect(dialog).not_to_be_visible()
+    literal_editor = page.get_by_role('form', name='名前の変更', exact=True)
+    expect(literal_editor.get_by_label('名前', exact=True)).to_have_value(literal)
+    literal_editor.get_by_label('名前', exact=True).fill('..')
+    literal_editor.get_by_role('button', name='保存', exact=True).click()
     expect(title).to_have_text('..')
     page.get_by_role('button', name='中身を見る', exact=True).click()
     expect(dialog.locator('.kept-document')).to_have_text(SECRET)
