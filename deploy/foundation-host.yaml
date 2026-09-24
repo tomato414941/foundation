@@ -1,5 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: "A host for Foundation - one small Arm instance in its own network, a KMS key that wraps the data key, a private bucket for backups, and an instance role limited to those (and to the file space, when given). Nothing listens publicly: the service is reached through Tailscale and administered through SSM, never SSH keys. The key and the backups outlive the stack."
+# The running host (stack foundation-host) was created from an earlier version of this template and then changed by hand:
+# Caddy was installed and 80/443 opened; Tailscale was dropped. This template describes the host as it now is, for the
+# next time one is created. Applying it to the running stack would replace the instance, and its database with it.
+Description: "A host for Foundation - one small Arm instance in its own network, a KMS key that wraps the data key, a private bucket for backups, and an instance role limited to those (and to the file space, when given). Caddy terminates TLS for the public host and hands requests to the service on localhost; only 80 and 443 are open. Administered through SSM, never SSH keys. The key and the backups outlive the stack."
 Parameters:
   AmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
@@ -17,6 +20,14 @@ Parameters:
     Type: String
     Default: ''
     Description: An existing bucket for the file space (empty for none). The host may create and read objects under files/ only.
+  PublicHost:
+    Type: String
+    Default: 54.249.17.233.sslip.io
+    Description: The host name the service is published under. Caddy obtains its certificate for this name, so it must resolve to the instance's address.
+  AcmeEmail:
+    Type: String
+    Default: tomato414941@gmail.com
+    Description: Where the certificate authority sends notices about the certificate.
 Conditions:
   HasFiles: !Not [!Equals [!Ref FilesBucket, '']]
 Resources:
@@ -62,7 +73,12 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Foundation host - no inbound traffic. Tailscale and SSM connect outward.
+      # The description above is what the running group was created with; changing it would replace the group.
+      # What is true now: only 80 and 443 are open, for Caddy. SSM connects outward; nothing else listens.
       VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
       Tags: [{ Key: Name, Value: foundation }]
   # Deleting the key would make every credential and every backup unreadable, so it is never deleted with the stack.
   DataKey:
@@ -156,9 +172,34 @@ Resources:
           systemctl enable --now dnf-automatic.timer
           curl -fsSL https://rpm.nodesource.com/setup_24.x | bash -
           dnf -y install nodejs
-          curl -fsSL https://pkgs.tailscale.com/stable/amazon-linux/2023/tailscale.repo -o /etc/yum.repos.d/tailscale.repo
-          dnf -y install tailscale
-          systemctl enable --now tailscaled
+          # Caddy: TLS for the public host, handed to the service on localhost. Installed from the official binary.
+          curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=arm64" -o /usr/local/bin/caddy && chmod 755 /usr/local/bin/caddy
+          useradd --system --home /var/lib/caddy --shell /sbin/nologin caddy || true
+          mkdir -p /etc/caddy /var/lib/caddy && chown caddy:caddy /var/lib/caddy
+          cat > /etc/caddy/Caddyfile <<CADDY
+          {
+          	email ${AcmeEmail}
+          }
+
+          ${PublicHost} {
+          	encode zstd gzip
+          	reverse_proxy 127.0.0.1:3417
+          }
+          CADDY
+          cat > /etc/systemd/system/caddy.service <<'UNIT'
+          [Unit]
+          Description=Caddy
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          User=caddy
+          Group=caddy
+          ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
+          AmbientCapabilities=CAP_NET_BIND_SERVICE
+          Restart=always
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
           useradd --system --home /opt/foundation --shell /sbin/nologin foundation || true
           mkdir -p /opt/foundation /var/lib/foundation /etc/foundation
           git clone --depth 1 ${Repository} /opt/foundation/app
@@ -171,6 +212,8 @@ Resources:
           echo "FOUNDATION_KMS_KEY_ID=${DataKey.Arn}" >> /etc/foundation/env
           echo "FOUNDATION_AWS_REGION=${AWS::Region}" >> /etc/foundation/env
           echo "FOUNDATION_BACKUP_BUCKET=${BackupBucket}" >> /etc/foundation/env
+          echo "FOUNDATION_PUBLIC_ORIGIN=https://${PublicHost}" >> /etc/foundation/env
+          echo "FOUNDATION_TRUSTED_PROXIES=127.0.0.1" >> /etc/foundation/env
           if [ -n "${FilesBucket}" ]; then echo "FOUNDATION_FILES_BUCKET=${FilesBucket}" >> /etc/foundation/env; echo "FOUNDATION_FILES_REGION=${AWS::Region}" >> /etc/foundation/env; fi
           chown -R foundation:foundation /opt/foundation /var/lib/foundation /etc/foundation
           chmod 700 /var/lib/foundation && chmod 600 /etc/foundation/env
@@ -223,7 +266,7 @@ Resources:
           WantedBy=timers.target
           UNIT
           systemctl daemon-reload
-          systemctl enable --now foundation-backup.timer
+          systemctl enable --now caddy foundation foundation-backup.timer
           echo "bootstrap complete"
   Address:
     Type: AWS::EC2::EIP
