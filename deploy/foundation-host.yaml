@@ -246,6 +246,9 @@ Resources:
           tmp=$(mktemp) && sqlite3 /var/lib/foundation/state.sqlite ".backup $tmp"
           aws s3 cp "$tmp" "s3://$FOUNDATION_BACKUP_BUCKET/state-$(date -u +%Y%m%dT%H%M%SZ).sqlite" --only-show-errors
           rm -f "$tmp"
+          # The host's configuration too, so a rebuilt host can be given the same settings. The bucket is private and
+          # encrypted with the same KMS key that seals the database.
+          aws s3 cp /etc/foundation/env "s3://$FOUNDATION_BACKUP_BUCKET/host-env" --only-show-errors
           SCRIPT
           chmod 755 /usr/local/bin/foundation-backup
           cat > /etc/systemd/system/foundation-backup.service <<'UNIT'
