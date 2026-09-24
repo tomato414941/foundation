@@ -27,7 +27,7 @@ export class Integrations {
   // As with Stripe: where the product's page is (return), where to send its user when a link cannot be used
   // (refresh, the same page unless given), and where it hears that a request finished (webhook, signed).
   register(ownerId, { name, returnUrl: target, refreshUrl, webhookUrl }) {
-    if (this.list(ownerId).length >= 10) fail(409, 'integration_limit', '登録できる製品は10件までです。');
+    if (this.list(ownerId).length >= 10) fail(409, 'integration_limit', '登録できるアプリは10件までです。');
     const back = returnUrl(target), refresh = refreshUrl ? returnUrl(refreshUrl) : back;
     if (webhookUrl) prepareFetch({ url: webhookUrl, method: 'POST' });
     const id = randomUUID(), secret = token('fdni_'), signing = webhookUrl ? token('whsec_') : null;
@@ -40,7 +40,7 @@ export class Integrations {
   }
   // Removing a product stops its credential. The accounts it made stay with the people they belong to.
   remove(ownerId, id) {
-    if (!this.db.prepare('DELETE FROM integrations WHERE owner_id=? AND id=?').run(ownerId, id).changes) fail(404, 'not_found', '製品の登録が見つかりません。');
+    if (!this.db.prepare('DELETE FROM integrations WHERE owner_id=? AND id=?').run(ownerId, id).changes) fail(404, 'not_found', 'アプリの登録が見つかりません。');
   }
   authenticate(value) {
     if (typeof value !== 'string' || !INTEGRATION_TOKEN.test(value)) return;
@@ -49,7 +49,7 @@ export class Integrations {
     return row;
   }
   externalId(value) {
-    if (typeof value !== 'string' || !EXTERNAL_ID.test(value)) fail(400, 'invalid_external_id', '製品側の利用者IDは英数字で始まる120文字までで指定してください。');
+    if (typeof value !== 'string' || !EXTERNAL_ID.test(value)) fail(400, 'invalid_external_id', 'アプリ側の利用者IDは英数字で始まる120文字までで指定してください。');
     return value;
   }
   // One account per user of the product. Asking again for the same user returns the same account.
