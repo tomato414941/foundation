@@ -97,9 +97,12 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # The name is edited in its own row, with the current name selected and adjacent save/cancel controls.
+    # Its controls sit right after it, in the same order as the value's: copy, then edit.
     title_box = github.get_by_role('heading', name='github/gh-token', exact=True).bounding_box()
+    copy_box = github.get_by_role('button', name='名前をコピー', exact=True).bounding_box()
     pencil_box = github.get_by_role('button', name='名前を編集', exact=True).bounding_box()
-    assert 0 <= pencil_box['x'] - (title_box['x'] + title_box['width']) <= 8
+    assert 0 <= copy_box['x'] - (title_box['x'] + title_box['width']) <= 8
+    assert 0 <= pencil_box['x'] - (copy_box['x'] + copy_box['width']) <= 8
     github.get_by_role('button', name='名前を編集', exact=True).click()
     editor = github.get_by_role('form', name='名前の変更', exact=True)
     name_input = editor.get_by_label('名前', exact=True)
@@ -171,6 +174,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     github.get_by_role('button', name='コピー', exact=True).click()
     expect(page.get_by_role('status')).to_have_text('コピーしました。')
     assert page.evaluate('navigator.clipboard.readText()') == SECRET
+    # The name copies too, for `foundation exec ENV=name`.
+    github.get_by_role('button', name='名前をコピー', exact=True).click()
+    assert page.evaluate('navigator.clipboard.readText()') == github.get_attribute('aria-label')
     expect(github.locator('.kept-document')).to_have_text('••••••••')
 
     # Editing and cancelling preserve the value; saving replaces only its bytes.
