@@ -18,6 +18,12 @@ SECRET = 'cf-ask-ui-fixture-token'
 
 def review(page):
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'horizontal overflow'
+    purpose = page.get_by_text('用途', exact=True)
+    if purpose.count():
+        label = purpose.bounding_box()
+        body = purpose.locator('..').locator('dd').bounding_box()
+        assert body['y'] >= label['y'] + label['height'] + 3, 'purpose text appears below its label with a gap'
+        assert abs(body['x'] - label['x']) < 1, 'purpose text aligns with its label'
     small = page.evaluate("""() => [...document.querySelectorAll('p, label, button, small, dt, dd, h1, h2, h3')]
       .filter(el => el.checkVisibility() && parseFloat(getComputedStyle(el).fontSize) < 14)
       .map(el => el.tagName + ': ' + el.textContent.slice(0, 30))""")
@@ -49,6 +55,23 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     page.get_by_label('確認コード', exact=True).fill(approval['confirmation_code'])
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
+
+    # A longer purpose reads vertically on desktop as well as narrow screens.
+    purpose = 'Foundationに預けた認証情報でnpmアカウントへの接続を確認します。パッケージの公開や変更は行いません。'
+    npm_request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
+        'store': {'name': 'npm token', 'label': 'npmアクセストークン', 'site': 'https://www.npmjs.com/'},
+        'purpose': purpose}))['request']
+    page.goto(npm_request['verification_uri'], wait_until='networkidle')
+    expect(page.get_by_role('heading', name='npmアクセストークンを預ける', exact=True)).to_be_visible()
+    expect(page.get_by_text(purpose, exact=True)).to_be_visible()
+    for width in [1280, 390, 320]:
+        page.set_viewport_size({'width': width, 'height': 1000})
+        review(page)
+        if width != 320:
+            page.screenshot(path=str(shots / ('purpose-desktop.png' if width == 1280 else 'purpose-mobile.png')), full_page=True)
+    page.get_by_role('button', name='登録しない', exact=True).click()
+    expect(page.get_by_role('heading', name='登録しませんでした', exact=True)).to_be_visible()
+    page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # The AI asks for something Foundation knows nothing about: it chooses the saved name and the steps.
     asked = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
