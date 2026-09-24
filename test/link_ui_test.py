@@ -35,6 +35,7 @@ with sync_playwright() as p:
     owner.goto(args.base + '/', wait_until='networkidle')
     owner.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     owner.get_by_role('button', name='ログインメールを送信', exact=True).click()
+    expect(owner.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     owner.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
     owner.set_viewport_size({'width': 1280, 'height': 1000})
     owner.get_by_role('button', name='連携を追加').click()
