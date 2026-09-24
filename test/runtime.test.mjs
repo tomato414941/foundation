@@ -139,6 +139,15 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   assert.match(help.out, /gmail.readonly/);
   const waiting = await run(foundation, ['api', 'GET', '/v1/me'], env);
   assert.match(waiting.out, /not_approved/);
+  const request = JSON.parse(connected.out.split('\n\nKey file')[0]).request;
+  const approved = await f.request('/api/key-requests/' + request.id + '/approve', { method: 'POST', data: { confirmationCode: request.confirmation_code } });
+  assert.equal(approved.status, 200, approved.text);
+  const me = await run(foundation, ['api', 'GET', '/v1/me'], env);
+  assert.equal(me.code, 0, me.out + me.err);
+  const inputs = await storedInputs(f);
+  const delivered = await run(foundation, ['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal-readonly"||process.env.GMAIL_ACCOUNT_EMAIL!=="personal@example.test")process.exit(2);console.log("package-ready")'], env);
+  assert.equal(delivered.code, 0, delivered.err);
+  assert.equal(delivered.out.trim(), 'package-ready');
   const moved = await run(foundation, ['--help'], { ...env, FOUNDATION_URL: 'http://127.0.0.1:9' });
   assert.doesNotMatch(moved.out, /gmail.readonly/, 'FOUNDATION_URL wins over the remembered server');
 });

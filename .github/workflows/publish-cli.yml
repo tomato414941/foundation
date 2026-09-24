@@ -1,0 +1,78 @@
+name: Publish Foundation CLI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundation-cli-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: startsWith(github.event.release.tag_name, 'cli-v') && !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Validate the release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          git merge-base --is-ancestor HEAD origin/main
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('cli/package.json', 'utf8'));
+          if (!/^cli-v\d+\.\d+\.\d+$/.test(process.env.RELEASE_TAG) || process.env.RELEASE_TAG !== 'cli-v' + pkg.version) {
+            throw new Error('The release tag must match the CLI package version.');
+          }
+          if (pkg.name !== '@tomato414941/foundation' || pkg.private === true) throw new Error('Unexpected CLI package.');
+          if (!pkg.license || pkg.license === 'UNLICENSED') throw new Error('Choose the CLI license before publishing.');
+          if (!readFileSync('cli/LICENSE', 'utf8').trim()) throw new Error('The CLI license text is required.');
+          NODE
+      - name: Install test dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Check and test
+        run: |
+          npm run check
+          npm test
+      - name: Pack and check the distributable
+        id: package
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { join, basename } from 'node:path';
+          const pkg = JSON.parse(readFileSync('cli/package.json', 'utf8'));
+          const [packed] = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', process.env.RUNNER_TEMP, './cli'], { encoding: 'utf8' }));
+          const allowed = new Set(['package.json', 'LICENSE', ...pkg.files]);
+          if (!packed.files.every(file => allowed.has(file.path))) throw new Error('The package contains files outside the CLI distribution.');
+          if (!packed.files.some(file => file.path === 'LICENSE')) throw new Error('The package must include its license.');
+          if (packed.filename !== basename(packed.filename)) throw new Error('Unexpected package filename.');
+          const tarball = join(process.env.RUNNER_TEMP, packed.filename);
+          const prefix = join(process.env.RUNNER_TEMP, 'foundation-cli-install');
+          execFileSync('npm', ['install', '--global', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', prefix, tarball], { stdio: 'inherit' });
+          const actual = execFileSync(join(prefix, 'bin', 'foundation'), ['--version'], { encoding: 'utf8' }).trim();
+          if (actual !== pkg.version) throw new Error('Installed package version mismatch.');
+          appendFileSync(process.env.GITHUB_OUTPUT, 'tarball=' + tarball + '\n');
+          console.log('Verified ' + packed.id + ' (' + packed.size + ' bytes).');
+          NODE
+      - name: Publish through npm trusted publishing
+        working-directory: cli
+        env:
+          CLI_TARBALL: ${{ steps.package.outputs.tarball }}
+        run: npm publish "$CLI_TARBALL" --access public --ignore-scripts --registry=https://registry.npmjs.org/
