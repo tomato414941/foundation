@@ -10,7 +10,7 @@ let linked = false, back = null;
 // Back to the product: its return page with how the request ended, or its refresh page when the link was no good.
 const backTo = row => { if (!row) return back.refresh_url; const url = new URL(back.return_url); url.searchParams.set('foundation_status', row.status); return url.href; };
 try { linked = Boolean(requestId) && sessionStorage.getItem('linked:' + requestId) === '1'; } catch {}
-const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : location.pathname === '/functions' ? 'functions' : location.pathname === '/developers' ? 'developers' : 'home';
+const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : location.pathname === '/functions' ? 'functions' : location.pathname === '/developers' ? 'developers' : location.pathname === '/account' ? 'account' : 'home';
 const pagePath = requestId ? location.pathname : page === 'home' ? '/' : '/' + page;
 let accessRequest = null, requestError = '';
 const loginMessages = {
@@ -259,7 +259,7 @@ function connectSection() {
 function render() {
   if (!state) return;
   if (requestId) { renderRequest(); return; }
-  const shell = inner => `<div class="workspace"><header class="topbar">${brand}${nav}<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div></header><main>${inner}</main></div>`;
+  const shell = inner => `<div class="workspace"><header class="topbar">${brand}${nav}<div class="user-menu"><a href="/account"${page === 'account' ? ' aria-current="page"' : ''}>${esc(state.user.email)}</a><button class="text-button" data-action="logout">ログアウト</button></div></header><main>${inner}</main></div>`;
   if (page === 'objects') {
     const usage = state.space?.usage;
     app.innerHTML = shell(`<header class="page-heading page-heading-actions"><div><h1>オブジェクト</h1>${usage ? `<p>${esc(kiloBytes(usage.bytes))} / ${esc(kiloBytes(usage.bytes_max))}・${usage.count} / ${usage.count_max} 件</p>` : ''}</div>
@@ -276,6 +276,14 @@ function render() {
       <div class="agent-list">${(state.functions || []).map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(known[item.id]?.[0] || item.id)}</h3><p><code>${esc(item.id)}</code></p></div><div class="agent-permissions"><span class="muted">${esc(known[item.id]?.[1] || item.description)}</span></div><div class="agent-actions"></div></article>`).join('')}</div></section>
       <section class="resource-section" aria-labelledby="invocations-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('check')}</span><div><h2 id="invocations-title">実行の記録</h2><p>入力や応答の中身は記録しません。</p></div></div></div>
       ${state.invocations?.length ? `<table class="record-table"><thead><tr><th>日時</th><th>依頼元</th><th>処理</th><th>送り先</th><th>結果</th></tr></thead><tbody>${state.invocations.map(row => `<tr><td>${esc(new Date(row.at).toLocaleString('ja-JP'))}</td><td>${esc(row.key_name)}</td><td>${esc(known[row.function]?.[0] || row.function)}</td><td>${esc(row.target)}</td><td><span class="${row.status === 'failed' ? 'warning-text' : ''}">${esc(status[row.status] || row.status)}</span>${row.detail ? `<span class="muted"> · ${esc(row.detail)}</span>` : ''}</td></tr>`).join('')}</tbody></table>` : '<div class="access-empty"><p>まだ実行されていません。</p></div>'}</section>`);
+    return;
+  }
+  if (page === 'account') {
+    // The account itself: who this is, and the few things done to it rather than in it.
+    app.innerHTML = shell(`<header class="page-heading"><h1>アカウント</h1><p>${esc(state.user.email)}</p></header>
+      <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">まとめて取り出す</h2><p>保存した値の中身、接続とアクセスキーの一覧を 1 つのファイルにします。オブジェクトは含みません。</p></div></div><a class="button secondary" href="/api/export" download>${icon('download')} ファイルを作る</a></div>
+      <div class="account-note"><p>ファイルには秘密の値がそのまま入ります。保管場所に気をつけ、不要になったら消してください。</p></div></section>
+      <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">製品を作る人向け</h2><p>あなたの製品の利用者が、Foundation に登録せずに使えるようにします。</p></div></div><a class="button secondary" href="/developers">製品の登録へ</a></div></section>`);
     return;
   }
   if (page === 'developers') {
@@ -295,8 +303,7 @@ function render() {
         ${card('/objects', 'オブジェクト', space?.available ? `${space.usage.count} 件・${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}` : '使えません')}
       </div>
       <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">アクセスキー</h2></div></div><button class="button secondary" data-action="add-key">${icon('plus')} アクセスキーを追加</button></div>
-      ${state.keys.length ? `<div class="agent-list">${state.keys.map(key => `<article class="agent-row"><div class="agent-name"><h3>${esc(key.name)}</h3><p>${key.last_used_at ? '最終利用 ' + esc(new Date(key.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(key.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-key" data-id="${esc(key.id)}">名前を変更</button><button class="text-button danger" data-action="remove-key" data-id="${esc(key.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section>
-      <p class="home-export"><a href="/api/export" download>まとめて取り出す</a><span aria-hidden="true"> · </span><a href="/developers">製品を作る人向け</a></p>`);
+      ${state.keys.length ? `<div class="agent-list">${state.keys.map(key => `<article class="agent-row"><div class="agent-name"><h3>${esc(key.name)}</h3><p>${key.last_used_at ? '最終利用 ' + esc(new Date(key.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(key.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-key" data-id="${esc(key.id)}">名前を変更</button><button class="text-button danger" data-action="remove-key" data-id="${esc(key.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section>`);
     return;
   }
   const kept = state.secrets || [], connections = state.acquisitions || [];
@@ -352,7 +359,7 @@ function codeField(enabled = true) {
 //   store     an approved key: the owner puts something into storage, following the AI's instructions.
 function renderRequest() {
   const row = accessRequest;
-  const shell = (content) => `<div class="workspace"><header class="topbar">${brand}${linked ? '' : `<div class="user-menu"><span>${esc(state.user.email)}</span><button class="text-button" data-action="logout">ログアウト</button></div>`}</header><main class="approval-main">${content}</main></div>`;
+  const shell = (content) => `<div class="workspace"><header class="topbar">${brand}${linked ? '' : `<div class="user-menu"><a href="/account"${page === 'account' ? ' aria-current="page"' : ''}>${esc(state.user.email)}</a><button class="text-button" data-action="logout">ログアウト</button></div>`}</header><main class="approval-main">${content}</main></div>`;
   const finished = {
     done: ['登録しました', `${row?.result?.label || row?.result?.names?.join('、') || ''} を、${row?.requester_name || ''}から利用できます。この画面は閉じて構いません。`],
     approved: ['承認しました', `${row?.requester_name || ''}から、あなたが預けているものを利用できるようになりました。この画面は閉じて構いません。`],

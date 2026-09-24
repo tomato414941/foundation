@@ -22,8 +22,8 @@ const VERSION = createRequire(import.meta.url)('../package.json').version;
 
 const PUBLIC = new URL('../web/', import.meta.url);
 // The owner's pages. Each is the same shell; the script decides what to show from the path.
-const PAGES = ['/', '/secrets', '/objects', '/functions', '/developers'];
-const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/secrets', ['index.html', 'text/html; charset=utf-8']], ['/objects', ['index.html', 'text/html; charset=utf-8']], ['/functions', ['index.html', 'text/html; charset=utf-8']], ['/developers', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
+const PAGES = ['/', '/secrets', '/objects', '/functions', '/developers', '/account'];
+const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/secrets', ['index.html', 'text/html; charset=utf-8']], ['/objects', ['index.html', 'text/html; charset=utf-8']], ['/functions', ['index.html', 'text/html; charset=utf-8']], ['/developers', ['index.html', 'text/html; charset=utf-8']], ['/account', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
 const MAX_BODY = 12_000;
 const SESSION_AGE = 14 * 86400;
 const LOGIN_CALLBACK = '/auth/callback';
