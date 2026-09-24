@@ -10,7 +10,7 @@ let linked = false, back = null;
 // Back to the product: its return page with how the request ended, or its refresh page when the link was no good.
 const backTo = row => { if (!row) return back.refresh_url; const url = new URL(back.return_url); url.searchParams.set('foundation_status', row.status); return url.href; };
 try { linked = Boolean(requestId) && sessionStorage.getItem('linked:' + requestId) === '1'; } catch {}
-const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : location.pathname === '/functions' ? 'functions' : 'home';
+const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : location.pathname === '/functions' ? 'functions' : location.pathname === '/developers' ? 'developers' : 'home';
 const pagePath = requestId ? location.pathname : page === 'home' ? '/' : '/' + page;
 let accessRequest = null, requestError = '';
 const loginMessages = {
@@ -277,6 +277,14 @@ function render() {
       ${state.invocations?.length ? `<table class="record-table"><thead><tr><th>日時</th><th>依頼元</th><th>処理</th><th>送り先</th><th>結果</th></tr></thead><tbody>${state.invocations.map(row => `<tr><td>${esc(new Date(row.at).toLocaleString('ja-JP'))}</td><td>${esc(row.key_name)}</td><td>${esc(known[row.function]?.[0] || row.function)}</td><td>${esc(row.target)}</td><td><span class="${row.status === 'failed' ? 'warning-text' : ''}">${esc(status[row.status] || row.status)}</span>${row.detail ? `<span class="muted"> · ${esc(row.detail)}</span>` : ''}</td></tr>`).join('')}</tbody></table>` : '<div class="access-empty"><p>まだ実行されていません。</p></div>'}</section>`);
     return;
   }
+  if (page === 'developers') {
+    // For the few who build a product on Foundation. Everyone else never comes here.
+    app.innerHTML = shell(`<header class="page-heading"><h1>製品</h1><p>あなたの製品の利用者が、Foundation に登録せずに使えるようにします。製品は利用者ごとのアカウントを作り、依頼を開いてもらい、終わったら戻します。製品から利用者の預けたものは読めません。</p></header>
+      <section class="resource-section" aria-labelledby="integration-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="integration-title">登録した製品</h2></div></div><button class="button secondary" data-action="add-integration">${icon('plus')} 製品を登録</button></div>
+      ${state.integrations?.length ? `<div class="agent-list">${state.integrations.map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${esc(new URL(item.return_url).host)} · 利用者 ${esc(String(item.accounts))} 人</p></div><div class="agent-permissions"><span class="muted">${item.last_used_at ? '最終利用 ' + esc(new Date(item.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</span>${item.webhook_url ? '<span class="muted block">完了を通知します</span>' : ''}</div><div class="agent-actions"><button class="text-button danger" data-action="remove-integration" data-id="${esc(item.id)}">削除</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>登録した製品はありません。</p></div>'}</section>
+`);
+    return;
+  }
   if (page === 'home') {
     const space = state.space, kept = state.secrets || [];
     const card = (href, title, line) => `<a class="home-card" href="${href}"><h2>${title}</h2><p>${esc(line)}</p></a>`;
@@ -287,9 +295,7 @@ function render() {
       </div>
       <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">アクセスキー</h2></div></div><button class="button secondary" data-action="add-key">${icon('plus')} アクセスキーを追加</button></div>
       ${state.keys.length ? `<div class="agent-list">${state.keys.map(key => `<article class="agent-row"><div class="agent-name"><h3>${esc(key.name)}</h3><p>${key.last_used_at ? '最終利用 ' + esc(new Date(key.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(key.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-key" data-id="${esc(key.id)}">名前を変更</button><button class="text-button danger" data-action="remove-key" data-id="${esc(key.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section>
-      <section class="resource-section" aria-labelledby="integration-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="integration-title">連携</h2><p>あなたの製品の利用者が、登録なしで使えるようにします。</p></div></div><button class="button secondary" data-action="add-integration">${icon('plus')} 連携を追加</button></div>
-      ${state.integrations?.length ? `<div class="agent-list">${state.integrations.map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${esc(new URL(item.return_url).host)} · 利用者 ${esc(String(item.accounts))} 人</p></div><div class="agent-permissions"><span class="muted">${item.last_used_at ? '最終利用 ' + esc(new Date(item.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</span>${item.webhook_url ? '<span class="muted block">完了を通知します</span>' : ''}</div><div class="agent-actions"><button class="text-button danger" data-action="remove-integration" data-id="${esc(item.id)}">削除</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>連携はありません。</p></div>'}</section>
-      <p class="home-export"><a href="/api/export" download>まとめて取り出す</a></p>`);
+      <p class="home-export"><a href="/api/export" download>まとめて取り出す</a><span aria-hidden="true"> · </span><a href="/developers">製品を作る人向け</a></p>`);
     return;
   }
   const kept = state.secrets || [], connections = state.acquisitions || [];
@@ -495,24 +501,24 @@ function renameKey(key) {
   bindForm(async (form) => { await api(`/api/keys/${key.id}`, { method: 'PATCH', data: { name: form.get('name') } }); closeDialog(); await refresh(); toast('名前を変更しました。'); });
 }
 function addIntegration() {
-  openDialog(`<h2 id="dialog-title">連携を追加</h2><p>あなたの製品が、利用者ごとのアカウントを作れるようになります。製品から利用者の預けたものは読めません。</p><form>
+  openDialog(`<h2 id="dialog-title">製品を登録</h2><p>製品が、利用者ごとのアカウントを作れるようになります。製品から利用者の預けたものは読めません。</p><form>
     <label for="integration-name">名前</label><input id="integration-name" name="name" placeholder="ai-simplicity など" required maxlength="80" autocomplete="off">
     <label for="integration-return">戻り先のURL</label><input id="integration-return" name="return_url" type="url" required placeholder="https://example.com/foundation" autocomplete="off">
     <p class="permission-note">依頼はこのページで開かれ、終わるとここに戻ります。</p>
     <label for="integration-refresh">リンクが使えないときの戻り先（省略可）</label><input id="integration-refresh" name="refresh_url" type="url" autocomplete="off">
     <label for="integration-webhook">完了の通知先（省略可）</label><input id="integration-webhook" name="webhook_url" type="url" autocomplete="off">
-    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">連携キーを発行</button></form>`);
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">製品キーを発行</button></form>`);
   bindForm(async (form) => {
     const result = (await api('/api/integrations', { method: 'POST', data: { name: form.get('name'), return_url: form.get('return_url'), refresh_url: form.get('refresh_url') || undefined, webhook_url: form.get('webhook_url') || undefined } })).integration;
     await refresh(); if (!state) return;
-    openDialog(`<h2 id="dialog-title">${esc(result.name)} の連携キー</h2><p>キーは一度だけ表示します。製品のサーバーの秘密情報として保管してください。</p><label for="agent-token">連携キー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button>
+    openDialog(`<h2 id="dialog-title">${esc(result.name)} の製品キー</h2><p>キーは一度だけ表示します。製品のサーバーの秘密情報として保管してください。</p><label for="agent-token">製品キー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button>
       ${result.webhook_secret ? `<label for="webhook-secret">通知の署名キー</label><textarea id="webhook-secret" rows="2" readonly spellcheck="false">${esc(result.webhook_secret)}</textarea><p class="permission-note">通知が本物かどうかを、この値で確かめます。</p>` : ''}
       <button class="button primary full" data-action="close-dialog">閉じる</button>`);
   });
 }
 function removeIntegration(item) {
-  openDialog(`<h2 id="dialog-title">連携を削除しますか？</h2><p>${esc(item.name)}</p><form><p>連携キーは使えなくなります。作られたアカウントと、発行済みのキーは利用者のもとに残ります。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">削除する</button></div></form>`);
-  bindForm(async () => { await api(`/api/integrations/${item.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('連携を削除しました。'); });
+  openDialog(`<h2 id="dialog-title">製品の登録を削除しますか？</h2><p>${esc(item.name)}</p><form><p>製品キーは使えなくなります。作られたアカウントと、発行済みのキーは利用者のもとに残ります。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">削除する</button></div></form>`);
+  bindForm(async () => { await api(`/api/integrations/${item.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('製品の登録を削除しました。'); });
 }
 function removeKey(key) {
   const expiry = key.issued_nonexpiring ? '<p class="permission-note">このアクセスキーには、有効期限が未指定または不明の認証情報を渡しています。完全に無効にするには、認証情報の登録解除も必要です。</p>' : key.issued_until > Date.now() ? `<p class="permission-note">受け渡し済みの認証情報の最長有効期限：${esc(new Date(key.issued_until).toLocaleString('ja-JP'))}</p>` : '';
