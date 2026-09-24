@@ -1,4 +1,4 @@
-// Printed by `foundation --help`, and the one page an agent reads before using any of this.
+// Printed by `foundation guide` (and served to MCP clients): the one page an agent reads before using any of this.
 //
 // What Foundation offers is an HTTP API, and that is what this describes. Not every agent can run a
 // command, so nothing here assumes a shell; where one exists there is a small program that adds the one

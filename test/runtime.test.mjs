@@ -255,14 +255,18 @@ test('A denied request is indistinguishable from waiting, and asking again still
   assert.equal(after.code, 0, after.err); assert.equal(after.out.trim(), 'ready');
 });
 
-test('--help describes the API, and when a server is reachable, what it can obtain itself', async t => {
+test('--help lists the commands; guide describes the API, and when a server is reachable, what it can obtain itself', async t => {
   const f = await fixture(t);
-  const offline = await execute(['--help'], { FOUNDATION_URL: '', XDG_CONFIG_HOME: join(tmpdir(), 'foundation-no-config') });
+  const help = await execute(['--help'], { FOUNDATION_URL: '' });
+  assert.equal(help.code, 0, help.err);
+  assert.match(help.out, /^Usage: foundation <command>/); assert.match(help.out, /\n  guide /); assert.match(help.out, /FOUNDATION_AGENT/);
+  assert.doesNotMatch(help.out, /\/v1\//, 'the API belongs to the guide');
+  const offline = await execute(['guide'], { FOUNDATION_URL: '', XDG_CONFIG_HOME: join(tmpdir(), 'foundation-no-config') });
   assert.equal(offline.code, 0, offline.err);
   assert.match(offline.out, /GET \/v1\/adapters lists what this server can obtain itself/);
   assert.match(offline.out, /Nothing here needs a shell/);
   assert.doesNotMatch(offline.out, /gmail/);
-  const online = await execute(['--help'], { FOUNDATION_URL: f.base });
+  const online = await execute(['guide'], { FOUNDATION_URL: f.base });
   assert.equal(online.code, 0, online.err);
   assert.match(online.out, /gmail.readonly  Gmail \/ メールの読み取り  outputs: GOOGLE_OAUTH_ACCESS_TOKEN/);
 });
@@ -290,7 +294,7 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   assert.equal(connected.code, 0, connected.err);
   assert.match(connected.out, /confirmation_code/);
   assert.deepEqual(JSON.parse(await readFile(join(dir, 'config', 'foundation', 'config.json'), 'utf8')), { url: f.base });
-  const help = await run(foundation, ['--help'], env);
+  const help = await run(foundation, ['guide'], env);
   assert.match(help.out, /gmail.readonly/);
   const waiting = await run(foundation, ['api', 'GET', '/v1/me'], env);
   assert.match(waiting.out, /not_approved/);
@@ -315,7 +319,7 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   assert.equal(saved.out.trim(), 'output-ready');
   assert.equal((await f.request('/api/secrets?name=installed%20login')).text, '//registry.npmjs.org/:_authToken=fake-install-token\n');
   assert.doesNotMatch(saved.out + saved.err, /fake-install-token/);
-  const moved = await run(foundation, ['--help'], { ...env, FOUNDATION_URL: 'http://127.0.0.1:9' });
+  const moved = await run(foundation, ['guide'], { ...env, FOUNDATION_URL: 'http://127.0.0.1:9' });
   assert.doesNotMatch(moved.out, /gmail.readonly/, 'FOUNDATION_URL wins over the remembered server');
 });
 
