@@ -236,7 +236,7 @@ function connectionRow(connection) {
     <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}" data-adapter="${esc(connection.adapter)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
 }
 function secretRow(entry) {
-  return `<article class="secret-row" aria-label="${esc(entry.name)}"><div class="secret-field"><span class="secret-field-label">名前</span><div class="agent-name secret-title"><h3>${esc(entry.name)}</h3><button class="icon-button" data-action="edit-secret" data-name="${esc(entry.name)}" aria-label="名前を編集" title="名前を編集">${icon('edit')}</button></div></div>
+  return `<article class="secret-row" aria-label="${esc(entry.name)}"><div class="secret-field"><span class="secret-field-label">名前</span><div class="agent-name secret-title"><h3>${esc(entry.name)}</h3><button class="icon-button" data-action="copy-name" data-name="${esc(entry.name)}" aria-label="名前をコピー" title="名前をコピー">${icon('copy')}</button><button class="icon-button" data-action="edit-secret" data-name="${esc(entry.name)}" aria-label="名前を編集" title="名前を編集">${icon('edit')}</button></div></div>
     <div class="secret-field"><span class="secret-field-label">値</span><section class="secret-value-panel" aria-label="値"></section></div>
     <footer class="secret-footer"><p class="secret-meta">${secretMeta(entry)}</p><button class="text-button danger" data-action="drop-secret" data-name="${esc(entry.name)}">削除</button></footer></article>`;
 }
@@ -775,6 +775,10 @@ document.addEventListener('click', async (event) => {
         async () => { for (const key of keys) await api('/api/objects/' + encodeURIComponent(key), { method: 'DELETE', data: {} }); objectChosen = new Set(); });
     }
     if (action === 'add-secret') addSecret();
+    if (action === 'copy-name') {
+      try { await navigator.clipboard.writeText(target.dataset.name); toast('コピーしました。'); }
+      catch { toast('コピーできませんでした。'); }
+    }
     if (action === 'edit-secret') editSecret((state.secrets || []).find(item => item.name === target.dataset.name), target);
     if (action === 'add-key') addKey();
     if (action === 'remove-key') removeKey(state.keys.find((key) => key.id === id));
