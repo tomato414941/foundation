@@ -97,6 +97,13 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .agent-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto; gap: 16px; align-items: center; padding: 10px 20px; border-top: 1px solid var(--line); }
 .agent-name h3 { white-space: pre-wrap; }
 .agent-name p { color: var(--muted); font-size: 14px; margin-top: 3px; }
+.agent-row.renaming { background: var(--soft); }
+.secret-name-field { display: grid; grid-template-columns: minmax(0, 1fr) 40px 40px; align-items: center; gap: 6px; }
+.secret-name-editor .save-name { background: var(--accent); color: var(--surface); }
+.secret-name-editor .save-name:hover:not(:disabled) { background: #173e2b; }
+.secret-name-editor .save-name:disabled { background: #edf0ed; color: #647167; }
+.secret-name-editor .form-error { margin: 6px 0 0; }
+.secret-name-editor .form-error:empty { margin: 0; }
 .agent-permissions ul { list-style: none; padding: 0; margin: 0; }
 /* What a connection keeps, opened only when the owner wants to look at the values themselves. */
 .kept-under { margin-top: 6px; font-size: 14px; }
