@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { Store } from './store.mjs';
+import { Store, digest } from './store.mjs';
 import { fail, HttpError, nameValue } from './errors.mjs';
 import { Adapters } from './adapters.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
@@ -30,6 +30,8 @@ const LOGIN_CALLBACK = '/auth/callback';
 const REQUEST_PAGE = /^\/requests\/[A-Za-z0-9_-]{43}$/, KEY_PAGE = /^\/keys\/[A-Za-z0-9_-]{43}$/;
 // A value a key kept itself passed through no adapter, so Foundation has nothing to say about what it reaches.
 const KEPT_ACCESS = Object.freeze({ name: '中身は確認していません', description: 'AIが自分で預けた値です。Foundationは何の値かも、何ができるかも確認していません。', restrictions: '心当たりのないものは削除してください。' });
+// A revision of the encrypted record, never a fingerprint of the plaintext value.
+const secretTag = row => '"' + digest(JSON.stringify([row.id, row.name, row.content, row.readable, row.updated_at])) + '"';
 
 function returnPath(value = '/') {
   if (!PAGES.includes(value) && (typeof value !== 'string' || !(REQUEST_PAGE.test(value) || KEY_PAGE.test(value)))) fail(400, 'invalid_return', '接続リンクを開き直してください。');
@@ -435,6 +437,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           if (method === 'GET') {
             const row = secrets.at(user.id, ownName);
             const content = store.secretContent(row);
+            res.setHeader('etag', secretTag(row));
             res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length, 'content-disposition': `attachment; filename="secret.bin"; filename*=UTF-8''${encodeURIComponent(row.name).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}` });
             return res.end(content);
           }
@@ -442,8 +445,18 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           if (method === 'PUT') {
             const content = await raw(req, SECRET_MAX);
             if (!content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
-            return send(200, { secret: secrets.put(user.id, { name: ownName, content,
-              secret: url.searchParams.get('secret') !== 'false' }) });
+            const saved = store.transaction(() => {
+              const match = req.headers['if-match'];
+              const current = match === undefined ? null : store.secret(user.id, secretName(ownName));
+              if (match !== undefined && (!current || match !== secretTag(current))) {
+                fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
+              }
+              const saved = secrets.put(user.id, { name: ownName, content,
+                secret: current ? !current.readable : url.searchParams.get('secret') !== 'false' });
+              res.setHeader('etag', secretTag(secrets.at(user.id, ownName)));
+              return saved;
+            });
+            return send(200, { secret: saved });
           }
           // Rename without returning or changing the stored value.
           if (method === 'PATCH') {
