@@ -112,8 +112,9 @@ export class Integrations {
     return account;
   }
   // A single-use link to one request of one of this product's accounts. It carries nothing but that request.
-  link(integration, request) {
-    if (!this.db.prepare('SELECT 1 FROM accounts WHERE id=? AND integration_id=?').get(request.owner_id, integration.id)) fail(404, 'not_found', '依頼が見つかりません。');
+  link(integration, request, externalId) {
+    const account = this.db.prepare('SELECT * FROM accounts WHERE id=? AND integration_id=?').get(request.owner_id, integration.id);
+    if (!account || (externalId !== undefined && account.external_id !== this.externalId(externalId))) fail(404, 'not_found', '依頼が見つかりません。');
     if (request.status !== 'pending') fail(409, 'request_finished', 'この依頼はすでに処理されています。');
     if (request.adapter) fail(409, 'link_unsupported', '接続の依頼はまだリンクで引き渡せません。');
     const secret = token('');

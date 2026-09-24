@@ -644,7 +644,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         }
         if (path === '/v1/integration/links' && method === 'POST') {
           const input = await body(req);
-          const made = integrations.link(integration, requests.get(input.request_id));
+          // Naming the user too (external_id) lets the product refuse a request that is not that user's.
+          const made = integrations.link(integration, requests.get(input.request_id), input.external_id);
           return send(201, { url: origin + '/requests/' + input.request_id + '#link=' + made.token, expires_at: made.expires_at });
         }
         fail(404, 'not_found', '指定された操作が見つかりません。');
