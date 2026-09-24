@@ -10,8 +10,8 @@ let linked = false, back = null;
 // Back to the product: its return page with how the request ended, or its refresh page when the link was no good.
 const backTo = row => { if (!row) return back.refresh_url; const url = new URL(back.return_url); url.searchParams.set('foundation_status', row.status); return url.href; };
 try { linked = Boolean(requestId) && sessionStorage.getItem('linked:' + requestId) === '1'; } catch {}
-const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : 'home';
-const pagePath = requestId ? location.pathname : page === 'objects' ? '/objects' : page === 'secrets' ? '/secrets' : '/';
+const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : location.pathname === '/functions' ? 'functions' : 'home';
+const pagePath = requestId ? location.pathname : page === 'home' ? '/' : '/' + page;
 let accessRequest = null, requestError = '';
 const loginMessages = {
   expired: 'メールを送信したブラウザでリンクを開いてください。期限が切れた場合は、もう一度メールを送信してください。',
@@ -127,7 +127,7 @@ const icon = (name) => {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
 const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true">F</span>Foundation</a>';
-const nav = `<nav class="page-nav">${[['/', 'home', 'ホーム'], ['/secrets', 'secrets', 'シークレット'], ['/objects', 'objects', 'オブジェクト']]
+const nav = `<nav class="page-nav">${[['/', 'home', 'ホーム'], ['/secrets', 'secrets', 'シークレット'], ['/objects', 'objects', 'オブジェクト'], ['/functions', 'functions', 'ファンクション']]
   .map(([href, name, label]) => `<a href="${href}"${name === page ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
 function toast(text) {
@@ -259,6 +259,17 @@ function render() {
     app.innerHTML = shell(`<header class="page-heading page-heading-actions"><div><h1>オブジェクト</h1>${usage ? `<p>${esc(kiloBytes(usage.bytes))} / ${esc(kiloBytes(usage.bytes_max))}・${usage.count} / ${usage.count_max} 件</p>` : ''}</div>
       <label class="button secondary" for="space-upload">${icon('plus')} 追加</label><input id="space-upload" type="file" hidden></header>${spaceSection()}`);
     bindObjects();
+    return;
+  }
+  if (page === 'functions') {
+    // What Foundation does on a key's behalf, and every time it did: who, what, where to, and how it went. Never the inputs or outputs.
+    const known = { 'http.request': ['HTTPS リクエスト', '預けた値を差し込んでリクエストを送り、応答を返します。値は依頼元に見せません。'], 'connection.credentials': ['接続の認証情報', '接続を確認・更新して、その認証情報を渡すか、名前を付けて保管します。'] };
+    const status = { ok: '完了', failed: '失敗' };
+    app.innerHTML = shell(`<header class="page-heading"><h1>ファンクション</h1><p>Foundation が依頼元の代わりに行う処理です。</p></header>
+      <section class="resource-section" aria-labelledby="functions-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="functions-title">処理</h2></div></div></div>
+      <div class="agent-list">${(state.functions || []).map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(known[item.id]?.[0] || item.id)}</h3><p><code>${esc(item.id)}</code></p></div><div class="agent-permissions"><span class="muted">${esc(known[item.id]?.[1] || item.description)}</span></div><div class="agent-actions"></div></article>`).join('')}</div></section>
+      <section class="resource-section" aria-labelledby="invocations-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('check')}</span><div><h2 id="invocations-title">実行の記録</h2><p>入力や応答の中身は記録しません。</p></div></div></div>
+      ${state.invocations?.length ? `<table class="record-table"><thead><tr><th>日時</th><th>依頼元</th><th>処理</th><th>送り先</th><th>結果</th></tr></thead><tbody>${state.invocations.map(row => `<tr><td>${esc(new Date(row.at).toLocaleString('ja-JP'))}</td><td>${esc(row.key_name)}</td><td>${esc(known[row.function]?.[0] || row.function)}</td><td>${esc(row.target)}</td><td><span class="${row.status === 'failed' ? 'warning-text' : ''}">${esc(status[row.status] || row.status)}</span>${row.detail ? `<span class="muted"> · ${esc(row.detail)}</span>` : ''}</td></tr>`).join('')}</tbody></table>` : '<div class="access-empty"><p>まだ実行されていません。</p></div>'}</section>`);
     return;
   }
   if (page === 'home') {

@@ -106,7 +106,7 @@ export class Integrations {
   deleteAccount(integration, externalId) {
     const account = this.account(integration, externalId);
     this.store.transaction(() => {
-      for (const table of ['secrets', 'keys', 'requests', 'acquisitions', 'request_links']) this.db.prepare(`DELETE FROM ${table} WHERE owner_id=?`).run(account.id);
+      for (const table of ['secrets', 'keys', 'requests', 'acquisitions', 'request_links', 'invocations']) this.db.prepare(`DELETE FROM ${table} WHERE owner_id=?`).run(account.id);
       this.db.prepare('DELETE FROM accounts WHERE id=?').run(account.id);
     });
     return account;

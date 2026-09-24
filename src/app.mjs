@@ -22,8 +22,8 @@ const VERSION = createRequire(import.meta.url)('../package.json').version;
 
 const PUBLIC = new URL('../web/', import.meta.url);
 // The owner's pages. Each is the same shell; the script decides what to show from the path.
-const PAGES = ['/', '/secrets', '/objects'];
-const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/secrets', ['index.html', 'text/html; charset=utf-8']], ['/objects', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
+const PAGES = ['/', '/secrets', '/objects', '/functions'];
+const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/secrets', ['index.html', 'text/html; charset=utf-8']], ['/objects', ['index.html', 'text/html; charset=utf-8']], ['/functions', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
 const MAX_BODY = 12_000;
 const SESSION_AGE = 14 * 86400;
 const LOGIN_CALLBACK = '/auth/callback';
@@ -387,7 +387,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         const linkedRoute = path.match(/^\/api\/requests\/([A-Za-z0-9_-]{43})(\/store|\/deny)?$/);
         const link = linkedRoute ? integrations.linked(readCookie(req, 'fdn_link'), linkedRoute[1]) : undefined;
         const { user, session } = link ? { user: { id: link.owner_id, email: null, linked: true }, session: null } : await principal(req);
-        if (path === '/api/state' && method === 'GET') return send(200, { user, secrets: secrets.list(user.id), acquisitions: store.acquisitions(user.id).map(acquisitionView), keys: store.keys(user.id), integrations: integrations.list(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
+        if (path === '/api/state' && method === 'GET') return send(200, { user, secrets: secrets.list(user.id), acquisitions: store.acquisitions(user.id).map(acquisitionView), keys: store.keys(user.id), integrations: integrations.list(user.id), functions: FUNCTIONS, invocations: store.invocations(user.id), adapters: adapters.ids().map(id => adapters.describe(id)) });
         // What a key kept is the owner's: they read it, rename the group it sits in, and remove it.
         // The same space the keys use, from the owner's own screen: what is there, and putting, taking
         // and removing one thing. The owner is the one paying for it, so they must be able to clear it.
@@ -742,7 +742,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           rateLimit('issue:' + caller.id, 30);
           const connection = acquisitionFor(caller.owner_id, input.connection_id);
           const outputs = outputNames(input.save, adapters.get(connection.adapter).variables);
-          const result = await acquisitions.obtain(connection);
+          let result;
+          try { result = await acquisitions.obtain(connection); }
+          catch (error) { store.recordInvocation(caller.owner_id, { key: caller, fn: 'connection.credentials', target: connection.label, status: 'failed', detail: error.code || 'error' }); throw error; }
           const expires_at = result.state.expires_at;
           if (expires_at !== null && !(Number.isFinite(expires_at) && expires_at > Date.now())) fail(502, 'service_response', '有効期限を確認できませんでした。');
           store.transaction(() => {
@@ -754,6 +756,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const saved = outputs ? saveOutputs(secrets, caller.owner_id, outputs, result.values) : null;
           const output = saved ? { saved } : { delivery: deliveredOutputs(result.values) };
           store.recordIssuance(caller, expires_at);
+          store.recordInvocation(caller.owner_id, { key: caller, fn: 'connection.credentials', target: connection.label, status: 'ok', detail: saved ? '保管: ' + saved.map(item => item.name).join(', ') : '渡した' });
           return send(200, { ...output, expires_at,
             expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
         }
@@ -773,8 +776,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             if (!Buffer.from(text, 'utf8').equals(content)) fail(400, 'not_text', '指定された入力は文字列ではないため、リクエストには入れられません。');
             return [slot, text];
           }));
-          const response = await sendFetch(prepared, values, { ...outbound, ownHosts });
+          let response;
+          try { response = await sendFetch(prepared, values, { ...outbound, ownHosts }); }
+          catch (error) { store.recordInvocation(caller.owner_id, { key: caller, fn: 'http.request', target: prepared.method + ' ' + prepared.url.hostname, status: 'failed', detail: error.code || 'error' }); throw error; }
           actor(req);
+          store.recordInvocation(caller.owner_id, { key: caller, fn: 'http.request', target: prepared.method + ' ' + prepared.url.hostname, status: 'ok', detail: 'HTTP ' + response.status + (names.length ? '、入力 ' + names.length + '件' : '') + (input.save === undefined ? '' : '、応答を保管') });
           const saved = outputs ? saveOutputs(secrets, caller.owner_id, outputs,
             new Map([['response', { content: Buffer.from(response.body, response.body_encoding === 'base64' ? 'base64' : 'utf8') }]])) : null;
           store.recordIssuance(caller, null);
