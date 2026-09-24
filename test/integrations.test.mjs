@@ -88,9 +88,10 @@ test('A request from such an account is opened on the product\'s page, and a sin
   assert.equal((await go('/api/requests/' + request.id)).json.request.id, request.id);
   assert.equal((await go('/api/state')).status, 401, 'the link reaches no other screen');
   assert.equal((await go('/api/requests/' + other.id)).status, 401);
-  const stored = await go('/api/requests/' + request.id + '/store', { method: 'POST', data: { contents: { 'npm-token': 'npm_value' } } });
+  const stored = await go('/api/requests/' + request.id + '/store', { method: 'POST', data: { entries: [{ name: 'npm-api-token', content: 'npm_value' }] } });
   assert.equal(stored.status, 200, stored.text);
-  const delivered = await f.request('/v1/deliver', { method: 'POST', anonymous: true, token: key.token, data: { names: [{ name: 'npm-token', as: 'NPM_TOKEN' }] } });
+  assert.deepEqual((await go('/api/requests/' + request.id)).json.request.result.names, ['npm-api-token']);
+  const delivered = await f.request('/v1/deliver', { method: 'POST', anonymous: true, token: key.token, data: { names: [{ name: 'npm-api-token', as: 'NPM_TOKEN' }] } });
   assert.equal(delivered.json.delivery.environment.NPM_TOKEN, 'npm_value');
   // Spent once; another visitor gets nowhere with it.
   assert.equal((await visitor()('/api/request-links', { method: 'POST', data: { request_id: request.id, link } })).status, 410);
@@ -180,7 +181,7 @@ test('As with Stripe, a product gives a return page, a refresh page and a signed
   const link = new URLSearchParams(new URL((await call('/links', { method: 'POST', data: { request_id: first.id } })).json.url).hash.slice(1)).get('link');
   const claimed = await fetch(f.base + '/api/request-links', { method: 'POST', headers: { 'content-type': 'application/json', origin: f.base }, body: JSON.stringify({ request_id: first.id, link }) });
   const cookie = claimed.headers.getSetCookie()[0].split(';')[0];
-  assert.equal((await f.request('/api/requests/' + first.id + '/store', { method: 'POST', anonymous: true, headers: { cookie }, data: { contents: { 'npm-token': 'value' } } })).status, 200);
+  assert.equal((await f.request('/api/requests/' + first.id + '/store', { method: 'POST', anonymous: true, headers: { cookie }, data: { entries: [{ name: 'npm-token', content: 'value' }] } })).status, 200);
   const second = await ask();
   await f.request('/v1/requests/' + second.id, { method: 'DELETE', anonymous: true, token: key.token, data: {} });
   await arrived(received, 2);

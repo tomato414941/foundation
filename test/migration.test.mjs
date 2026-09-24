@@ -111,13 +111,14 @@ test('Migrated pending requests and OAuth callbacks complete through the current
   assert.equal(pending.json.request.events[0].event, 'page_viewed');
   assert.deepEqual((await f.request('/v1/requests/' + old.requestIds.saved, { token: old.token })).json.request.result, { names: ['ordinary'] });
   assert.equal((await f.request('/v1/requests/' + old.requestIds.connected, { token: old.token })).json.request.result.connection_id, old.connectionId);
-  const complete = await f.request('/api/requests/' + old.requestIds.pending + '/store', { method: 'POST', headers, data: { contents: { ordinary: 'new ordinary value' } } });
+  const complete = await f.request('/api/requests/' + old.requestIds.pending + '/store', { method: 'POST', headers, data: { entries: [{ name: 'new ordinary', content: 'new ordinary value' }] } });
   assert.equal(complete.status, 200, complete.text);
+  assert.equal(f.app.store.secretContent(f.app.store.secret(USER_A, 'new ordinary')).toString(), 'new ordinary value');
   const callback = await f.request('/oauth/gmail.readonly/callback?state=' + old.flowState + '&code=personal-readonly', { headers });
   assert.equal(callback.headers.get('location'), '/requests/' + old.requestIds.connecting + '?connection=connected');
   assert.equal(f.app.store.acquisition(USER_A, old.connectionId).generation, 5);
   assert.equal((await f.request('/v1/requests/' + old.requestIds.connecting, { token: old.token })).json.request.result.connection_id, old.connectionId);
-  for (const entry of old.entries.filter(row => row.name !== 'ordinary')) assert.deepEqual(f.app.store.secretContent(f.app.store.secret(entry.owner, entry.name)), entry.content);
+  for (const entry of old.entries) assert.deepEqual(f.app.store.secretContent(f.app.store.secret(entry.owner, entry.name)), entry.content);
 });
 
 test('Wrong encryption key rolls the entire schema migration back; the original key still opens it', async t => {

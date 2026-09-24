@@ -74,7 +74,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     expect(page.get_by_role('heading', name='登録しませんでした', exact=True)).to_be_visible()
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
-    # The AI asks for something Foundation knows nothing about: it chooses the saved name and the steps.
+    # The AI suggests a name; the owner chooses the name used for storage.
     asked = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
         'store': {'name': 'cloudflare/cloudflare-api-token', 'label': 'CloudflareのAPIトークン',
                   'site': 'https://dash.cloudflare.com/profile/api-tokens'},
@@ -91,6 +91,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     expect(page.get_by_role('link', name='dash.cloudflare.com を開く ↗', exact=True)).to_have_attribute('target', '_blank')
     value = page.get_by_label('CloudflareのAPIトークン', exact=True)
     expect(value).to_have_attribute('type', 'password')
+    saved_name = page.get_by_label('保存名', exact=True)
+    expect(saved_name).to_have_value('cloudflare/cloudflare-api-token')
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
         review(page)
@@ -98,9 +100,26 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
             page.screenshot(path=str(shots / ('ask-desktop.png' if width == 1280 else 'ask-mobile.png')), full_page=True)
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
+    # Another value may be saved after the request page opens. The submitted name is checked again.
+    existing = page.request.put(args.base + '/api/secrets?name=cloudflare/cloudflare-api-token',
+                               headers={'content-type': 'text/plain', 'origin': args.base}, data='existing-value')
+    assert existing.status == 200
     value.fill(SECRET)
     page.get_by_role('button', name='登録する', exact=True).click()
+    expect(page.get_by_role('alert')).to_have_text('「cloudflare/cloudflare-api-token」はすでに使われています。別の保存名を入力してください。')
+    expect(saved_name).to_have_value('cloudflare/cloudflare-api-token')
+    expect(value).to_have_value(SECRET)
+    assert page.request.get(args.base + '/api/secrets?name=cloudflare/cloudflare-api-token').text() == 'existing-value'
+    for width in [1280, 390, 320]:
+        page.set_viewport_size({'width': width, 'height': 1000})
+        review(page)
+        if width != 320:
+            page.screenshot(path=str(shots / ('name-conflict-desktop.png' if width == 1280 else 'name-conflict-mobile.png')), full_page=True)
+    page.set_viewport_size({'width': 1280, 'height': 1000})
+    saved_name.fill('cloudflare-api-token')
+    page.get_by_role('button', name='登録する', exact=True).click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    assert cli('api', 'GET', '/v1/requests/' + asked['id'])['request']['result']['names'] == ['cloudflare-api-token']
     review(page)
 
     # The completion link takes the owner straight to the saved value on desktop and mobile.
@@ -113,24 +132,24 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
         page.get_by_role('link', name='シークレットへ', exact=True).click()
         expect(page).to_have_url(args.base + '/secrets')
         expect(page.get_by_role('heading', name='シークレット', exact=True)).to_be_visible()
-        expect(page.locator('[aria-label="保存した値"]').get_by_role('heading', name='cloudflare/cloudflare-api-token', exact=True)).to_be_visible()
+        expect(page.locator('[aria-label="保存した値"]').get_by_role('heading', name='cloudflare-api-token', exact=True)).to_be_visible()
         review(page)
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
-    # It is now kept where the AI asked, and the AI cannot read it back.
+    # The value is available to the AI under the name the owner chose.
     kept = cli('api', 'GET', '/v1/secrets')['secrets']
-    assert [row['name'] for row in kept] == ['cloudflare/cloudflare-api-token']
+    assert [row['name'] for row in kept] == ['cloudflare-api-token', 'cloudflare/cloudflare-api-token']
     assert kept[0]['readable'] is False
-    refused = subprocess.run(['node', 'cli/runtime.mjs', 'api', 'GET', '/v1/secrets/cloudflare/cloudflare-api-token'], env=env, capture_output=True, text=True, timeout=15)
+    refused = subprocess.run(['node', 'cli/runtime.mjs', 'api', 'GET', '/v1/secrets/cloudflare-api-token'], env=env, capture_output=True, text=True, timeout=15)
     assert refused.returncode == 1 and SECRET not in refused.stdout + refused.stderr
 
-    used = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'CLOUDFLARE_API_TOKEN=cloudflare/cloudflare-api-token', '--', 'node', '-e',
+    used = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'CLOUDFLARE_API_TOKEN=cloudflare-api-token', '--', 'node', '-e',
                            'if(process.env.CLOUDFLARE_API_TOKEN!==process.argv[1])process.exit(2);console.log("ready")', SECRET],
                           env=env, capture_output=True, text=True, timeout=15)
     assert used.returncode == 0 and used.stdout.strip() == 'ready', used.stderr
 
     page.goto(args.base + '/secrets', wait_until='networkidle')
-    expect(page.locator('[aria-label="保存した値"]').get_by_role('heading', name='cloudflare/cloudflare-api-token', exact=True)).to_be_visible()
+    expect(page.locator('[aria-label="保存した値"]').get_by_role('heading', name='cloudflare-api-token', exact=True)).to_be_visible()
     review(page)
 
     # Stored names are not DOM form-property names, either.
@@ -151,4 +170,4 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     assert not errors, errors
     context.close()
     browser.close()
-    print('Ask flow passed: a key declared where and how, the owner followed the AI\'s own instructions, and what was pasted is kept and delivered without Foundation knowing the service.')
+    print('Ask flow passed: the owner chooses the saved name, resolves a name conflict, and the AI receives the completed names.')

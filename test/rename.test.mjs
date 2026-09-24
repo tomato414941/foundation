@@ -66,12 +66,12 @@ test('asks for several things at once, and keeps them together or not at all', a
 
   // One missing value keeps none of them.
   const partial = await f.request('/api/requests/' + asked.json.request.id + '/store',
-    { method: 'POST', data: { contents: { 'apple/auth-key': 'KEY', 'apple/key-id': 'ABC123' } } });
+    { method: 'POST', data: { entries: [{ name: 'apple/auth-key', content: 'KEY' }, { name: 'apple/key-id', content: 'ABC123' }] } });
   assert.equal(partial.status, 400);
   assert.deepEqual((await f.request('/v1/secrets', { token: KEY, anonymous: true })).json.secrets, []);
 
   const stored = await f.request('/api/requests/' + asked.json.request.id + '/store',
-    { method: 'POST', data: { contents: { 'apple/auth-key': 'KEY', 'apple/key-id': 'ABC123', 'apple/issuer-id': 'UUID' } } });
+    { method: 'POST', data: { entries: [{ name: 'apple/auth-key', content: 'KEY' }, { name: 'apple/key-id', content: 'ABC123' }, { name: 'apple/issuer-id', content: 'UUID' }] } });
   assert.equal(stored.status, 200, stored.text);
   const kept = await f.request('/v1/secrets', { token: KEY, anonymous: true });
   assert.deepEqual(kept.json.secrets.map(one => one.name), ['apple/auth-key', 'apple/issuer-id', 'apple/key-id']);

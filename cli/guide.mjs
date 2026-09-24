@@ -58,7 +58,7 @@ export function guide(adapters) {
     '',
     '2. ASKING THE OWNER, for what only they can fetch -- an API token, a key, a certificate they must go and create.',
     '   POST /v1/requests  {"store": {...}, "purpose": "...", "steps": ["...", "..."], "valid_minutes": 30}',
-    '     store.name      the exact name to save under',
+    '     store.name      suggested name; result.names returns the names the owner chose',
     '     store.label     what they are being asked for, in their language. It titles the screen and names the field.',
 
     '     store.site      the page where they make it, offered as a link',
