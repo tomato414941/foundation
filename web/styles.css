@@ -121,6 +121,8 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .approval-card h1 { font-size: 25px; letter-spacing: -.035em; }
 .approval-facts { margin: 26px 0; }
 .approval-facts > div { display: grid; grid-template-columns: 94px minmax(0, 1fr); gap: 12px; margin-top: 12px; }
+.approval-facts > .approval-purpose { display: block; }
+.approval-facts > .approval-purpose > dt { margin-bottom: 6px; }
 #confirmation-code { font: 600 20px/1.4 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
 .ai-guidance { margin: 18px 0 20px; }
 .ai-guidance h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin-bottom: 10px; }
