@@ -126,3 +126,69 @@ test('Removing an account takes what it holds with it; removing the product stop
   assert.equal((await f.request('/v1/integration/accounts/user-2', { anonymous: true, token: product })).status, 401);
   assert.equal((await f.request('/v1/me', { anonymous: true, token: kept.key.token })).status, 200, 'the account and its key stay with the user');
 });
+
+// A product's webhook, played by a local HTTPS server with its own certificate, reached as a public host would be.
+async function hook(t) {
+  const { execFileSync } = await import('node:child_process');
+  const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+  const { createServer } = await import('node:https');
+  const { connect } = await import('node:tls');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'foundation-hook-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(dir, 'key'), '-out', join(dir, 'cert'), '-days', '1',
+    '-subj', '/CN=hook.example.test', '-addext', 'subjectAltName=DNS:hook.example.test'], { stdio: 'ignore' });
+  const cert = await readFile(join(dir, 'cert')), received = [];
+  const server = createServer({ key: await readFile(join(dir, 'key')), cert }, (req, res) => {
+    const chunks = []; req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => { received.push({ signature: req.headers['foundation-signature'], body: Buffer.concat(chunks).toString('utf8') }); res.writeHead(200); res.end('ok'); });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => server.close());
+  const outbound = { resolve: async host => { if (host !== 'hook.example.test') throw new Error('unknown'); return [{ address: '93.184.216.34', family: 4 }]; },
+    createConnection: options => connect({ host: '127.0.0.1', port: server.address().port, servername: options.servername, ca: cert }), ca: cert, retryDelay: 50 };
+  return { received, outbound };
+}
+const arrived = async (received, count) => { for (let i = 0; i < 100 && received.length < count; i++) await new Promise(resolve => setTimeout(resolve, 20)); return received; };
+
+test('As with Stripe, a product gives a return page, a refresh page and a signed webhook, and the secrets are shown once', async t => {
+  const { received, outbound } = await hook(t);
+  const f = await fixture(t, { outbound });
+  for (const bad of ['http://hook.example.test/x', 'https://127.0.0.1/x', 'https://hook.example.test:8443/x']) {
+    const refused = await f.request('/api/integrations', { method: 'POST', data: { name: 'x', return_url: 'https://simplicity.example.test/foundation', webhook_url: bad } });
+    assert.equal(refused.status, 400, bad);
+  }
+  const made = (await f.request('/api/integrations', { method: 'POST', data: { name: 'ai-simplicity', return_url: 'https://simplicity.example.test/foundation?from=foundation',
+    refresh_url: 'https://simplicity.example.test/foundation/again', webhook_url: 'https://hook.example.test/foundation' } })).json.integration;
+  assert.match(made.webhook_secret, /^whsec_/);
+  assert.doesNotMatch(JSON.stringify((await f.request('/api/state')).json.integrations), /whsec_|fdni_/);
+  const call = (path, options = {}) => f.request('/v1/integration' + path, { anonymous: true, token: made.token, ...options });
+  await call('/accounts/user-1', { method: 'PUT', data: {} });
+  const key = (await call('/accounts/user-1/keys', { method: 'POST', data: {} })).json.key;
+  const ask = async () => (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { store: { name: 'npm-token', label: 'npm' }, purpose: 'p', steps: [] } })).json.request;
+  const first = await ask();
+  const back = (await f.request('/api/request-links/' + first.id, { anonymous: true })).json.back;
+  assert.equal(back.name, 'ai-simplicity');
+  assert.equal(back.refresh_url, 'https://simplicity.example.test/foundation/again?foundation_request=' + first.id);
+  assert.equal(new URL(back.return_url).searchParams.get('from'), 'foundation', 'the product\'s own query is kept');
+  const own = await f.issueKey('own');
+  const unheld = (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: own.token, data: { store: { name: 'x', label: 'x' }, purpose: 'p' } })).json.request;
+  assert.equal((await f.request('/api/request-links/' + unheld.id, { anonymous: true })).status, 404, 'no way back for a request no product holds');
+  // Done and cancelled: each is told to the product, signed with the secret it was given.
+  const link = new URLSearchParams(new URL((await call('/links', { method: 'POST', data: { request_id: first.id } })).json.url).hash.slice(1)).get('link');
+  const claimed = await fetch(f.base + '/api/request-links', { method: 'POST', headers: { 'content-type': 'application/json', origin: f.base }, body: JSON.stringify({ request_id: first.id, link }) });
+  const cookie = claimed.headers.getSetCookie()[0].split(';')[0];
+  assert.equal((await f.request('/api/requests/' + first.id + '/store', { method: 'POST', anonymous: true, headers: { cookie }, data: { contents: { 'npm-token': 'value' } } })).status, 200);
+  const second = await ask();
+  await f.request('/v1/requests/' + second.id, { method: 'DELETE', anonymous: true, token: key.token, data: {} });
+  await arrived(received, 2);
+  const events = received.map(item => ({ ...item, event: JSON.parse(item.body) }));
+  assert.deepEqual(events.map(item => item.event.type).sort(), ['request.cancelled', 'request.done']);
+  const { createHmac } = await import('node:crypto');
+  for (const item of events) {
+    const [, at, signature] = item.signature.match(/^t=(\d+),v1=([0-9a-f]{64})$/);
+    assert.equal(signature, createHmac('sha256', made.webhook_secret).update(at + '.' + item.body).digest('hex'));
+    assert.equal(item.event.account, 'user-1');
+    assert.doesNotMatch(item.body, /value|fdn_/, 'what was kept never leaves in a notice');
+  }
+  assert.equal(events.find(item => item.event.type === 'request.done').event.data.request.id, first.id);
+});

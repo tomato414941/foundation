@@ -6,7 +6,9 @@ const requestId = location.pathname.match(/^\/(?:requests|keys)\/([A-Za-z0-9_-]{
 const requestApi = requestId && (keyRequest ? '/api/key-requests/' : '/api/requests/') + requestId;
 // Opened through another product's single-use link: there is no Foundation login, only that one request.
 const linkToken = requestId && !keyRequest ? new URLSearchParams(location.hash.slice(1)).get('link') : null;
-let linked = false;
+let linked = false, back = null;
+// Back to the product: its return page with how the request ended, or its refresh page when the link was no good.
+const backTo = row => { if (!row) return back.refresh_url; const url = new URL(back.return_url); url.searchParams.set('foundation_status', row.status); return url.href; };
 try { linked = Boolean(requestId) && sessionStorage.getItem('linked:' + requestId) === '1'; } catch {}
 const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : 'home';
 const pagePath = requestId ? location.pathname : page === 'objects' ? '/objects' : page === 'secrets' ? '/secrets' : '/';
@@ -195,6 +197,7 @@ async function showLogin({ email = '', message = loginNotice } = {}) {
 window.addEventListener('focus', () => { if (document.querySelector('#email-sent')) void refresh().catch(() => {}); });
 async function refresh() {
   if (linked) {
+    try { back = back || (await api('/api/request-links/' + requestId)).back; } catch {}
     try { accessRequest = (await api(requestApi)).request; requestError = ''; }
     catch (error) { accessRequest = null; requestError = error.status === 401 ? 'このリンクはもう使えません。元の画面から開き直してください。' : error.message; }
     state = { user: { email: '' }, secrets: [], keys: [], acquisitions: [], adapters: [], space: null };
@@ -268,6 +271,8 @@ function render() {
       </div>
       <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">アクセスキー</h2></div></div><button class="button secondary" data-action="add-key">${icon('plus')} アクセスキーを追加</button></div>
       ${state.keys.length ? `<div class="agent-list">${state.keys.map(key => `<article class="agent-row"><div class="agent-name"><h3>${esc(key.name)}</h3><p>${key.last_used_at ? '最終利用 ' + esc(new Date(key.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(key.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-key" data-id="${esc(key.id)}">名前を変更</button><button class="text-button danger" data-action="remove-key" data-id="${esc(key.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section>
+      <section class="resource-section" aria-labelledby="integration-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="integration-title">連携</h2><p>あなたの製品の利用者が、登録なしで使えるようにします。</p></div></div><button class="button secondary" data-action="add-integration">${icon('plus')} 連携を追加</button></div>
+      ${state.integrations?.length ? `<div class="agent-list">${state.integrations.map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${esc(new URL(item.return_url).host)} · 利用者 ${esc(String(item.accounts))} 人</p></div><div class="agent-permissions"><span class="muted">${item.last_used_at ? '最終利用 ' + esc(new Date(item.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</span>${item.webhook_url ? '<span class="muted block">完了を通知します</span>' : ''}</div><div class="agent-actions"><button class="text-button danger" data-action="remove-integration" data-id="${esc(item.id)}">削除</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>連携はありません。</p></div>'}</section>
       <p class="home-export"><a href="/api/export" download>まとめて取り出す</a></p>`);
     return;
   }
@@ -334,7 +339,8 @@ function renderRequest() {
   };
   if (!row || row.status !== 'pending') {
     const [title, description] = row ? finished[row.status] || ['依頼を確認できません', '依頼のリンクを開き直してください。'] : ['依頼を確認できません', requestError];
-    app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(['approved', 'done'].includes(row?.status) ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p>${linked ? '' : '<a class="button secondary" href="/">預けているものを見る</a>'}</section>`);
+    app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(['approved', 'done'].includes(row?.status) ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p>${!linked ? '<a class="button secondary" href="/">預けているものを見る</a>'
+      : back ? `<a class="button secondary" href="${esc(backTo(row))}">${esc(back.name)}に戻る</a>` : ''}</section>`);
     return;
   }
   const expiry = `<p class="request-expiry">この依頼は ${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで有効です。</p>`;
@@ -468,6 +474,26 @@ function renameKey(key) {
   openDialog(`<h2 id="dialog-title">アクセスキーの名前を変更</h2><form><label for="agent-name">名前</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off" value="${esc(key.name)}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
   bindForm(async (form) => { await api(`/api/keys/${key.id}`, { method: 'PATCH', data: { name: form.get('name') } }); closeDialog(); await refresh(); toast('名前を変更しました。'); });
 }
+function addIntegration() {
+  openDialog(`<h2 id="dialog-title">連携を追加</h2><p>あなたの製品が、利用者ごとのアカウントを作れるようになります。製品から利用者の預けたものは読めません。</p><form>
+    <label for="integration-name">名前</label><input id="integration-name" name="name" placeholder="ai-simplicity など" required maxlength="80" autocomplete="off">
+    <label for="integration-return">戻り先のURL</label><input id="integration-return" name="return_url" type="url" required placeholder="https://example.com/foundation" autocomplete="off">
+    <p class="permission-note">依頼はこのページで開かれ、終わるとここに戻ります。</p>
+    <label for="integration-refresh">リンクが使えないときの戻り先（省略可）</label><input id="integration-refresh" name="refresh_url" type="url" autocomplete="off">
+    <label for="integration-webhook">完了の通知先（省略可）</label><input id="integration-webhook" name="webhook_url" type="url" autocomplete="off">
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">連携キーを発行</button></form>`);
+  bindForm(async (form) => {
+    const result = (await api('/api/integrations', { method: 'POST', data: { name: form.get('name'), return_url: form.get('return_url'), refresh_url: form.get('refresh_url') || undefined, webhook_url: form.get('webhook_url') || undefined } })).integration;
+    await refresh(); if (!state) return;
+    openDialog(`<h2 id="dialog-title">${esc(result.name)} の連携キー</h2><p>キーは一度だけ表示します。製品のサーバーの秘密情報として保管してください。</p><label for="agent-token">連携キー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button>
+      ${result.webhook_secret ? `<label for="webhook-secret">通知の署名キー</label><textarea id="webhook-secret" rows="2" readonly spellcheck="false">${esc(result.webhook_secret)}</textarea><p class="permission-note">通知が本物かどうかを、この値で確かめます。</p>` : ''}
+      <button class="button primary full" data-action="close-dialog">閉じる</button>`);
+  });
+}
+function removeIntegration(item) {
+  openDialog(`<h2 id="dialog-title">連携を削除しますか？</h2><p>${esc(item.name)}</p><form><p>連携キーは使えなくなります。作られたアカウントと、発行済みのキーは利用者のもとに残ります。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">削除する</button></div></form>`);
+  bindForm(async () => { await api(`/api/integrations/${item.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('連携を削除しました。'); });
+}
 function removeKey(key) {
   const expiry = key.issued_nonexpiring ? '<p class="permission-note">このアクセスキーには、有効期限が未指定または不明の認証情報を渡しています。完全に無効にするには、認証情報の登録解除も必要です。</p>' : key.issued_until > Date.now() ? `<p class="permission-note">受け渡し済みの認証情報の最長有効期限：${esc(new Date(key.issued_until).toLocaleString('ja-JP'))}</p>` : '';
   openDialog(`<h2 id="dialog-title">アクセスキーを失効させますか？</h2><p>${esc(key.name)}</p><form><p>このアクセスキーでは認証情報を取得できなくなります。${revocationNote}</p>${expiry}<p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">失効させる</button></div></form>`);
@@ -585,6 +611,8 @@ document.addEventListener('click', async (event) => {
     if (action === 'edit-secret') editSecret((state.secrets || []).find(item => item.name === target.dataset.name));
     if (action === 'add-key') addKey();
     if (action === 'remove-key') removeKey(state.keys.find((key) => key.id === id));
+    if (action === 'add-integration') addIntegration();
+    if (action === 'remove-integration') removeIntegration(state.integrations.find((item) => item.id === id));
     if (action === 'rename-key') renameKey(state.keys.find((key) => key.id === id));
     if (action === 'copy-token') {
       const token = document.querySelector('#agent-token');

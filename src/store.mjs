@@ -12,10 +12,16 @@ const parse = row => ({ ...row, readable: row.readable === 1 });
 export const ACQUISITION_LIMIT = 50;
 const entryBinding = row => `entry:${row.owner_id}:${row.id}`;
 
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 // Names are opaque identifiers. Connection state is stored independently of ordinary values.
 // Both kinds retain their original authenticated-encryption bindings across migrations.
 const STEPS = {
+  // Where a product sends its user back when a link cannot be used, and where it hears that a request finished.
+  14: `
+    ALTER TABLE integrations ADD COLUMN refresh_url TEXT;
+    ALTER TABLE integrations ADD COLUMN webhook_url TEXT;
+    ALTER TABLE integrations ADD COLUMN webhook_secret TEXT;
+  `,
   // Another product may hold an account for each of its own users, with no login of its own: the product
   // vouches for who the user is, and hands them to one request at a time through a single-use link.
   13: `
@@ -118,7 +124,8 @@ const SCHEMA = `
   CREATE INDEX acquisitions_owner ON acquisitions(owner_id, id);
   CREATE TABLE integrations (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
-    return_url TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT
+    return_url TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT,
+    refresh_url TEXT, webhook_url TEXT, webhook_secret TEXT
   );
   CREATE TABLE accounts (
     id TEXT PRIMARY KEY, integration_id TEXT NOT NULL, external_id TEXT NOT NULL, created_at TEXT NOT NULL,
