@@ -99,13 +99,36 @@ async function outputBytes(path) {
   } finally { await handle?.close(); }
 }
 
+// --help is the usual thing: the commands and their options. The guide (what Foundation is and how to ask it
+// for things) is its own command, since it is the server's document, not this program's.
+const HELP = `Usage: foundation <command> [options]
+
+Commands:
+  connect [<url>] [--name <name>]      Make this machine's key and ask the owner to approve it.
+                                       With <url>, remember that Foundation server for later commands.
+  api <METHOD> </path> [--json <body>] [--from <file>] [--type <media-type>]
+                                       Send one request to the Foundation API with the key attached.
+  exec <ENV>=<name> [...] -- <command> [args...]
+                                       Run a command with saved values in its environment.
+  exec --inputs '<json>' -- <command>  The same, with files or structured inputs.
+  exec --output '<json>' -- <command>  Also save a file the command writes.
+  guide                                The API guide: what Foundation keeps, and how to ask it for things.
+  version                              Print the version.
+
+Environment:
+  FOUNDATION_URL               The server for this run (otherwise the one saved by connect).
+  FOUNDATION_AGENT             Your name, such as claude or codex; gives each agent its own key file.
+  FOUNDATION_RUNTIME_KEY_FILE  Where the key file is.
+`;
+
 async function main() {
   const [action, ...args] = process.argv.slice(2);
   const agentName = (process.env.FOUNDATION_AGENT || '').trim();
   if (agentName && !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/.test(agentName)) throw new Error('FOUNDATION_AGENT must be 1-40 characters of letters, digits, space, dot, underscore or hyphen.');
-  if (action === '--version' || action === 'version') { console.log(VERSION); return; }
+  if (action === '--version' || action === '-v' || action === 'version') { console.log(VERSION); return; }
   const configured = process.env.FOUNDATION_URL || await savedUrl();
-  if (action === '--help' || action === 'help' || action === 'guide' || !action) {
+  if (action === '--help' || action === '-h' || action === 'help' || !action) { console.log(HELP); return; }
+  if (action === 'guide') {
     let adapters;
     if (configured) {
       try {

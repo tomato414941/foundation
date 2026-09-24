@@ -203,7 +203,7 @@ test('The runtime hands what is kept to a command, as bytes and as a file, and n
 test('Storage needs an approved key, and the guide describes the API an agent calls itself', async t => {
   const f = await fixture(t), token = key();
   assert.equal((await f.request('/v1/secrets', { token, anonymous: true })).status, 401);
-  const guide = (await run(['--help'], {})).out.toString();
+  const guide = (await run(['guide'], {})).out.toString();
   assert.match(guide, /PUT \/v1\/secrets\?name=<name>/);
   assert.match(guide, /POST \/v1\/deliver/);
   assert.match(guide, /Nothing here needs a shell/);
