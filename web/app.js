@@ -350,7 +350,7 @@ function renderRequest() {
   };
   if (!row || row.status !== 'pending') {
     const [title, description] = row ? finished[row.status] || ['依頼を確認できません', '依頼のリンクを開き直してください。'] : ['依頼を確認できません', requestError];
-    app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(['approved', 'done'].includes(row?.status) ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p>${!linked ? '<a class="button secondary" href="/">預けているものを見る</a>'
+    app.innerHTML = shell(`<section class="approval-card approval-result"><span class="approval-symbol">${icon(['approved', 'done'].includes(row?.status) ? 'check' : 'lock')}</span><h1>${title}</h1><p>${esc(description)}</p>${!linked ? '<a class="button secondary" href="/secrets">シークレットへ</a>'
       : back ? `<a class="button secondary" href="${esc(backTo(row))}">${esc(back.name)}に戻る</a>` : ''}</section>`);
     return;
   }

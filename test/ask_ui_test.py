@@ -102,6 +102,20 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
     review(page)
 
+    # The completion link takes the owner straight to the saved value on desktop and mobile.
+    for width in [1280, 390]:
+        page.set_viewport_size({'width': width, 'height': 1000})
+        page.goto(asked['verification_uri'], wait_until='networkidle')
+        expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+        review(page)
+        page.screenshot(path=str(shots / ('completed-desktop.png' if width == 1280 else 'completed-mobile.png')), full_page=True)
+        page.get_by_role('link', name='シークレットへ', exact=True).click()
+        expect(page).to_have_url(args.base + '/secrets')
+        expect(page.get_by_role('heading', name='シークレット', exact=True)).to_be_visible()
+        expect(page.locator('[aria-label="保存した値"]').get_by_role('heading', name='cloudflare/cloudflare-api-token', exact=True)).to_be_visible()
+        review(page)
+    page.set_viewport_size({'width': 1280, 'height': 1000})
+
     # It is now kept where the AI asked, and the AI cannot read it back.
     kept = cli('api', 'GET', '/v1/secrets')['secrets']
     assert [row['name'] for row in kept] == ['cloudflare/cloudflare-api-token']
