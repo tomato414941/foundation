@@ -73,6 +73,7 @@ with sync_playwright() as p:
     expect(page.get_by_text('パッケージの公開に使います。', exact=True)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'link-request.png'), full_page=True)
+    page.get_by_label('保存名', exact=True).fill('npm-api-token')
     page.get_by_label('npm のアクセストークン', exact=True).fill(SECRET)
     page.get_by_role('button', name='登録する').click()
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
@@ -81,7 +82,8 @@ with sync_playwright() as p:
     assert returned == 'https://simplicity.example.test/foundation?foundation_request=' + asked['id'] + '&foundation_status=done', returned
     review(page)
     page.screenshot(path=str(shots / 'link-done.png'), full_page=True)
-    delivered = call('/v1/deliver', key, 'POST', {'names': [{'name': 'npm-token', 'as': 'NPM_TOKEN'}]})
+    assert call('/v1/requests/' + asked['id'], key)['request']['result']['names'] == ['npm-api-token']
+    delivered = call('/v1/deliver', key, 'POST', {'names': [{'name': 'npm-api-token', 'as': 'NPM_TOKEN'}]})
     assert delivered['delivery']['environment']['NPM_TOKEN'] == SECRET
 
     # The same link opened again reaches nothing.

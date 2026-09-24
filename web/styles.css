@@ -166,7 +166,7 @@ input:disabled { background: var(--soft); }
 input[readonly], textarea[readonly] { background: #f4f6f3; }
 textarea { resize: vertical; }
 ::placeholder { color: #66766b; opacity: 1; }
-.form-error { min-height: 0; color: var(--danger); font-size: 14px; margin: 12px 0; }
+.form-error { min-height: 0; color: var(--danger); font-size: 14px; margin: 12px 0; overflow-wrap: anywhere; }
 .form-error:empty { margin: 18px 0 0; }
 .optional { font-weight: 400; margin-left: 6px; }
 fieldset { padding: 0; margin: 20px 0 14px; border: 0; min-width: 0; }

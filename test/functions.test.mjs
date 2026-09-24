@@ -130,7 +130,7 @@ test('A storage request preserves comma and punctuation names in its completion 
   const names = ['one, two', '{{value}}', '__proto__'];
   const asked = await f.request('/v1/requests', { method: 'POST', token, data: { store: names.map(name => ({ name, label: name })), purpose: '値の保存' } });
   assert.equal(asked.status, 201, asked.text);
-  const complete = await f.request('/api/requests/' + asked.json.request.id + '/store', { method: 'POST', data: { contents: Object.fromEntries(names.map(name => [name, 'value-' + name])) } });
+  const complete = await f.request('/api/requests/' + asked.json.request.id + '/store', { method: 'POST', data: { entries: names.map(name => ({ name, content: 'value-' + name })) } });
   assert.equal(complete.status, 200, complete.text);
   const done = await f.request('/v1/requests/' + asked.json.request.id, { token });
   assert.deepEqual(done.json.request.result.names, names);

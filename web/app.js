@@ -381,14 +381,14 @@ function renderStore(row, shell, expiry) {
     <dl class="approval-facts">${row.purpose ? `<div class="approval-purpose"><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}</dl>
     ${stepsBlock(row.steps)}
     ${site ? `<a class="button secondary full setup-link" href="${esc(site)}" target="_blank" rel="noopener noreferrer"><span>${esc(new URL(site).host)} を開く ↗</span></a>` : ''}
-    <form id="store-request-form">${asked.map((one, at) => `<label for="stored-${at}">${esc(one.label)}</label>${field(one, at)}`).join('')}
+    <form id="store-request-form">${asked.map((one, at) => `<div class="declared-field"><label for="stored-name-${at}">保存名</label><input id="stored-name-${at}" name="name-${at}" value="${esc(one.name)}" aria-describedby="stored-label-${at}" required maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false"><label id="stored-label-${at}" for="stored-${at}">${esc(one.label)}</label>${field(one, at)}</div>`).join('')}
     <p class="permission-note">接続先での有効性や権限は確認しません。登録した値は、承認済みのAIが利用できます。</p>
     <p class="form-error" role="alert"></p>
     <button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>
     <button class="text-button full" type="button" data-action="deny-request">登録しない</button>${expiry}</section>`);
   bindForm(async (data) => {
-    const contents = Object.fromEntries(asked.map((one, at) => [one.name, String(data.get('value-' + at) ?? '')]));
-    try { await api(`/api/requests/${row.id}/store`, { method: 'POST', data: { contents } }); }
+    const entries = asked.map((_, at) => ({ name: String(data.get('name-' + at) ?? ''), content: String(data.get('value-' + at) ?? '') }));
+    try { await api(`/api/requests/${row.id}/store`, { method: 'POST', data: { entries } }); }
     catch (error) { if ([401, 404].includes(error.status)) await refresh(); throw error; }
     await refresh(); toast('登録しました。');
   }, app);

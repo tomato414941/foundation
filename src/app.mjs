@@ -457,8 +457,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
             return send(200, { ok: true });
           }
         }
-        // The owner fulfils a storage request: what they typed becomes the entry the key asked for, exactly
-        // where and how the key declared it. Foundation adds nothing and checks nothing about the content.
+        // The owner chooses each saved name. The requested read permissions still apply to its value.
         const storeRoute = path.match(/^\/api\/requests\/([A-Za-z0-9_-]{43})\/store$/);
         if (storeRoute && method === 'POST') {
           const row = requests.forUser(storeRoute[1], user.id, true);
@@ -466,17 +465,21 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           // Several things asked for together are kept together: all of them, or none.
           const asked = requests.details(row);
           const input = await body(req, SECRET_MAX * asked.length);
-          const given = input.contents && typeof input.contents === 'object' && !Array.isArray(input.contents) ? input.contents : null;
-          if (!given || asked.some(one => typeof given[one.name] !== 'string' || given[one.name] === '')) fail(400, 'invalid_values', '入力内容を確認してください。');
+          const entries = input.entries;
+          if (!Array.isArray(entries) || entries.length !== asked.length || entries.some(entry => !entry || typeof entry.content !== 'string' || entry.content === '')) fail(400, 'invalid_values', '入力内容を確認してください。');
+          const names = entries.map(entry => secretName(entry.name));
+          if (new Set(names).size !== names.length) fail(400, 'duplicate_names', '保存名が重複しています。別の名前を入力してください。');
           progressRequestId = row.id;
           return store.transaction(() => {
             requests.forUser(row.id, user.id, true);
-            for (const one of asked) {
-              secrets.put(user.id, { name: one.name, content: Buffer.from(given[one.name], 'utf8'), secret: one.secret });
+            const occupied = names.find(name => store.secret(user.id, name));
+            if (occupied !== undefined) fail(409, 'name_taken', `「${occupied}」はすでに使われています。別の保存名を入力してください。`);
+            for (const [at, one] of asked.entries()) {
+              secrets.put(user.id, { name: names[at], content: Buffer.from(entries[at].content, 'utf8'), secret: one.secret });
             }
-            requests.done(row.id, user.id, JSON.stringify(asked.map(one => one.name)));
+            requests.done(row.id, user.id, JSON.stringify(names));
             requests.record(row.id, 'stored');
-            return send(200, { stored: true, names: asked.map(one => one.name) });
+            return send(200, { stored: true, names });
           });
         }
         const ownerRequest = path.match(/^\/api\/requests\/([A-Za-z0-9_-]{43})(\/deny)?$/);
