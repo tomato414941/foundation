@@ -38,8 +38,10 @@ with sync_playwright() as p:
     expect(owner.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     owner.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
     owner.set_viewport_size({'width': 1280, 'height': 1000})
-    # The registration lives on its own page, reached from the foot of the home.
-    owner.get_by_role('link', name='製品を作る人向け', exact=True).click()
+    # The registration lives on its own page, reached through the account, not the home.
+    owner.get_by_role('link', name='owner@example.test', exact=True).click()
+    owner.wait_for_url('**/account')
+    owner.get_by_role('link', name='製品の登録へ', exact=True).click()
     owner.wait_for_url('**/developers')
     expect(owner.get_by_role('heading', name='製品', exact=True)).to_be_visible()
     owner.get_by_role('button', name='製品を登録').click()
