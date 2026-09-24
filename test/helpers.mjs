@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createApp } from '../src/app.mjs';
 import { fail } from '../src/errors.mjs';
-import { GmailClient, METADATA_SCOPE, READONLY_SCOPE } from '../src/services/gmail.mjs';
-import { Adapters, gmailReadonly, gmailMetadata } from '../src/adapters.mjs';
-import { Acquisitions } from '../src/acquisitions.mjs';
+import { FakeGmail } from '../src/connectors/gmail/fixture.mjs';
+export { FakeGmail } from '../src/connectors/gmail/fixture.mjs';
+import { Connectors } from '../src/connectors.mjs';
+import { gmailReadonly, gmailMetadata } from '../src/connectors/gmail/index.mjs';
+import { Connections } from '../src/connections.mjs';
 
 export const KEY = Buffer.alloc(32, 7);
 export const USER_A = '10000000-0000-4000-8000-000000000001';
@@ -31,51 +33,24 @@ export class FakeAuth {
   async refresh(token) { this.refreshes++; if (this.refreshHandler) await this.refreshHandler(); return this.value(token.slice('supabase-refresh-'.length)); }
   async logout() {}
 }
-export class FakeGmail extends GmailClient {
-  constructor() {
-    super({ clientId: 'test-google-client', clientSecret: 'test-google-secret' }, { fetcher: async (url, options) => this.fetch(url, options) });
-    this.calls = []; this.exchangeCount = 0;
-  }
-  async fetch(url, options) {
-    this.calls.push({ url: String(url), options });
-    if (String(url).endsWith('/revoke')) {
-      if (this.revokeHandler) return this.revokeHandler();
-      return new Response('', { status: 200 });
-    }
-    if (String(url).endsWith('/token')) {
-      const params = options.body, exchange = params.get('grant_type') === 'authorization_code';
-      const code = exchange ? params.get('code') : params.get('refresh_token').replace('refresh-', '');
-      if (exchange) { this.exchangeCount++; if (this.exchangeHandler) await this.exchangeHandler(); }
-      else if (this.refreshHandler) { const result = await this.refreshHandler(); if (result) return result; }
-      const mode = code.endsWith('-metadata') ? 'metadata' : 'readonly';
-      return json({ access_token: 'google-access-' + code, refresh_token: 'refresh-' + code, expires_in: 3600, scope: mode === 'metadata' ? METADATA_SCOPE : READONLY_SCOPE, token_type: 'Bearer' });
-    }
-    if (String(url).includes('/profile?')) {
-      const code = options.headers.authorization.replace('Bearer google-access-', '');
-      const email = code.replace(/-(readonly|metadata)$/, '') + '@example.test';
-      return json({ emailAddress: email });
-    }
-    throw new Error('Unexpected provider request');
-  }
-}
-// The processing layer owns private renewal state; service clients receive plain values.
-export function acquired(store, adapters, adapterId, { subject, secret }) {
-  const acquisitions = new Acquisitions(store, new Adapters(adapters));
-  const saved = acquisitions.save(USER_A, adapterId, { subject, secret }, { keptBy: 'test' });
+
+// Seed a stored credential, including already-expired fixture tokens.
+export function acquired(store, connectors, adapterId, { subject, secret }) {
+  const connections = new Connections(store, new Connectors(connectors));
+  const saved = store.saveAcquisition(USER_A, { adapter: adapterId, subject, label: subject, keptBy: 'test',
+    state: { private_state: secret, facts: {}, expires_at: secret.expires_at } });
   const row = () => store.acquisition(USER_A, saved.id);
   const state = () => store.acquisitionState(row());
-  const run = async () => {
-    const current = row(), result = await acquisitions.obtain(current);
-    store.saveState(current, result.state);
-    return result;
-  };
-  return { acquisitions, row, run, state };
+  const run = () => connections.obtain(row());
+  return { connections, row, run, state };
 }
 export async function fixture(t, options = {}) {
-  const { gmail = new FakeGmail(), adapters = [gmailReadonly(gmail), gmailMetadata(gmail)], ...rest } = options, auth = options.auth || new FakeAuth();
-  const app = createApp({ encryptionKey: KEY, ...rest, auth, adapters });
+  const { gmail = new FakeGmail(), connectors = [gmailReadonly(gmail), gmailMetadata(gmail)], ...rest } = options, auth = options.auth || new FakeAuth();
+  const app = createApp({ encryptionKey: KEY, ...rest, auth, connectors });
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
-  t.after(() => app.close());
+  let closed = false;
+  const close = async () => { if (!closed) { closed = true; await app.close(); } };
+  t.after(close);
   const base = 'http://127.0.0.1:' + app.server.address().port;
   let cookie;
   // `data` is sent as JSON; `raw` is sent as given, with `type` as its content type.
@@ -136,8 +111,8 @@ export async function fixture(t, options = {}) {
   function expire(id, owner = USER_A) {
     const acquisition = app.store.acquisition(owner, id);
     const state = app.store.acquisitionState(acquisition), expires_at = Date.now() - 1;
-    app.store.saveState(acquisition, { ...state, expires_at, renewal: { ...state.renewal, expires_at } });
+    app.store.saveState(acquisition, { ...state, expires_at, private_state: { ...(state.private_state ?? state.renewal), expires_at } });
   }
   if (options.login !== false) await login();
-  return { app, auth, gmail, base, request, login, start, callback, credential, deliver, issueKey, approveKey, expire, cookie: () => cookie };
+  return { app, auth, gmail, base, request, login, start, callback, credential, deliver, issueKey, approveKey, expire, close, cookie: () => cookie };
 }

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { fail } from '../errors.mjs';
+import { fail } from '../../errors.mjs';
 
 export const GITHUB_API = 'https://api.github.com';
 export const GITHUB_DOCS = 'https://docs.github.com/rest';
@@ -10,7 +10,7 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const invalidResponse = () => fail(502, 'service_response', 'GitHubからの応答を確認できませんでした。');
 
 // An OAuth App: the owner authorizes once and Foundation keeps a token that does not expire.
-// It reaches what the owner reaches, within the scopes above. Disconnecting revokes the grant at GitHub.
+// Actual scopes are reported by GitHub. Revocation is separate from local disconnection.
 export class GitHubClient {
   constructor({ clientId = '', clientSecret = '' } = {}, { fetcher = fetch } = {}) {
     if (Boolean(clientId) !== Boolean(clientSecret)) throw new Error('Both Foundation GitHub client ID and client secret are required');
@@ -61,23 +61,21 @@ export class GitHubClient {
     if (data.error) fail(400, 'invalid_state', '接続をやり直してください。');
     if (typeof data.access_token !== 'string' || !data.access_token || data.access_token.length > 512) invalidResponse();
     const identity = await this.inspect(data.access_token);
-    // The owner may not narrow an OAuth App's scopes, but an organization policy or a stale grant can leave one out.
-    if (!identity.scopes.includes('repo')) fail(409, 'scope_mismatch', 'GitHubでリポジトリへのアクセスが許可されませんでした。');
     const subject = 'user:' + identity.id;
     if (previous && previous.subject !== subject) fail(409, 'account_changed', '登録し直すには同じGitHubアカウントを選んでください。');
     return { subject, secret: this.secret(data.access_token, identity) };
   }
   // The token does not expire; each use asks GitHub whether it still works and for whom.
-  async token(existing, credential) {
+  async token(existing, { subject }) {
     this.check();
-    if (credential.status !== 'connected') fail(409, 'reconnect_required', 'GitHubの許可が取り消されたか、無効になっています。登録し直してください。');
     const identity = await this.inspect(existing.access_token);
-    if ('user:' + identity.id !== credential.subject) fail(409, 'account_changed', 'GitHubのアカウントが変わりました。登録を確認してください。');
-    const next = this.secret(existing.access_token, identity);
-    return next;
+    if ('user:' + identity.id !== subject) fail(409, 'account_changed', 'GitHubのアカウントが変わりました。登録を確認してください。');
+    return this.secret(existing.access_token, identity);
   }
   facts(secret) {
-    return { label: secret.details.login, credential_type: 'oauth2_access_token', expires_at: null, expiry_known: true, management_url: GITHUB_SETTINGS + '/' + this.clientId, scopes: secret.scopes };
+    return { label: secret.details.login, credential_type: 'oauth2_access_token', expires_at: null, expiry_known: true, management_url: GITHUB_SETTINGS + '/' + this.clientId, scopes: secret.scopes,
+      missing_scopes: GITHUB_SCOPES.filter(scope => !secret.scopes.includes(scope)),
+      additional_scopes: secret.scopes.filter(scope => !GITHUB_SCOPES.includes(scope)) };
   }
   // Deleting the grant revokes every token this app holds for the owner.
   async revoke(secret) {

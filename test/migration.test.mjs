@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store, digest } from '../src/store.mjs';
 import { Vault } from '../src/crypto.mjs';
-import { READONLY_SCOPE } from '../src/services/gmail.mjs';
+import { READONLY_SCOPE } from '../src/connectors/gmail/client.mjs';
 import { FakeAuth, fixture, KEY, USER_A, USER_B } from './helpers.mjs';
 
 // Schema 11, fixed independently of the current schema so the migration test cannot

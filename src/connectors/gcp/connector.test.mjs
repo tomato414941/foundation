@@ -5,14 +5,14 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { GcpClient, GCP_SCOPES, CLOUD_PLATFORM_SCOPE } from '../src/services/gcp.mjs';
-import { gcpOauth, gmailReadonly } from '../src/adapters.mjs';
-import { configuration } from '../src/config.mjs';
-import { FakeGcp } from './gcp-helper.mjs';
-import { FakeGmail, fixture, json, USER_A } from './helpers.mjs';
+import { GcpClient, GCP_SCOPES, CLOUD_PLATFORM_SCOPE } from './client.mjs';
+import { gcpOauth, configuration } from './index.mjs';
+import { gmailReadonly, configuration as gmailConfiguration } from '../gmail/index.mjs';
+import { FakeGcp } from './fixture.mjs';
+import { FakeGmail, fixture, json, USER_A } from '../../../test/helpers.mjs';
 
 async function gcpFixture(t, gcp = new FakeGcp()) {
-  const gmail = new FakeGmail(), f = await fixture(t, { gmail, adapters: [gcpOauth(gcp), gmailReadonly(gmail)] });
+  const gmail = new FakeGmail(), f = await fixture(t, { gmail, connectors: [gcpOauth(gcp), gmailReadonly(gmail)] });
   async function start(input = {}) {
     const result = await f.request('/v1/connections', { method: 'POST', data: { connector: 'gcp.oauth', ...input } });
     assert.equal(result.status, 200, result.text);
@@ -28,11 +28,9 @@ async function gcpFixture(t, gcp = new FakeGcp()) {
 }
 
 test('GCPの構成を読み込み、未設定なら接続を利用不可として返す', async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'foundation-gcp-config-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const config = configuration({ FOUNDATION_DATA_DIR: dir, FOUNDATION_GCP_CLIENT_ID: 'id', FOUNDATION_GCP_CLIENT_SECRET: 'secret' });
-  assert.deepEqual(config.gcp, { clientId: 'id', clientSecret: 'secret' });
-  assert.deepEqual(config.google, { clientId: '', clientSecret: '' });
+  const env = { FOUNDATION_GCP_CLIENT_ID: 'id', FOUNDATION_GCP_CLIENT_SECRET: 'secret' };
+  assert.deepEqual(configuration(env), { clientId: 'id', clientSecret: 'secret' });
+  assert.deepEqual(gmailConfiguration(env), { clientId: '', clientSecret: '' });
   for (const incomplete of [{ clientId: 'id' }, { clientSecret: 'secret' }]) assert.throws(() => new GcpClient(incomplete), /Both Foundation GCP/);
   const f = await gcpFixture(t, new GcpClient());
   const catalog = await f.request('/v1/connectors');
@@ -107,7 +105,7 @@ test('再接続は同じGoogle IDで行い、メールアドレスの変更を�
   const same = await f.connect('personal', { connection_id: a.id });
   assert.equal(same.id, a.id); assert.equal(same.label, 'renamed@example.test');
   const row = f.app.store.acquisition(USER_A, a.id);
-  assert.equal(f.app.store.acquisitionState(row).renewal.refresh_token, 'gcp-refresh-personal');
+  assert.equal(f.app.store.acquisitionState(row).private_state.refresh_token, 'gcp-refresh-personal');
 });
 
 test('権限の不足や追加をAIに返し、Googleが発行した認証情報を利用可能にする', async t => {
@@ -147,14 +145,14 @@ test('有効期限内のトークンを再利用し、更新時は同時要求�
   assert.equal(f.gcp.refreshes, 0);
   f.expire(a.id);
   f.gcp.refreshHandler = () => json({ access_token: 'gcp-access-personal-new', refresh_token: 'gcp-refresh-personal-rotated', expires_in: 3600 });
-  const row = f.app.store.acquisition(USER_A, a.id), existing = f.app.store.acquisitionState(row).renewal;
-  const [one, two] = await Promise.all([f.gcp.token(existing, row), f.gcp.token(existing, row)]);
-  assert.deepEqual(one, two); assert.equal(f.gcp.refreshes, 1);
+  const [one, two] = await Promise.all([f.deliver(a, { token: agent.token }), f.deliver(a, { token: agent.token })]);
+  assert.equal(one.status, 200, one.text); assert.equal(two.status, 200, two.text);
+  assert.deepEqual(one.json.delivery, two.json.delivery); assert.equal(f.gcp.refreshes, 1);
   const saved = await f.deliver(a, { token: agent.token });
   assert.equal(saved.status, 200);
   const current = f.app.store.acquisitionState(f.app.store.acquisition(USER_A, a.id));
-  assert.equal(current.renewal.refresh_token, 'gcp-refresh-personal-rotated');
-  assert.deepEqual(current.renewal.scopes, GCP_SCOPES);
+  assert.equal(current.private_state.refresh_token, 'gcp-refresh-personal-rotated');
+  assert.deepEqual(current.private_state.scopes, GCP_SCOPES);
 });
 
 test('アカウントが変わった更新は停止し、元の接続を再接続待ちにする', async t => {
@@ -164,7 +162,7 @@ test('アカウントが変わった更新は停止し、元の接続を再接�
   const result = await f.deliver(a, { token: agent.token });
   assert.equal(result.json.error.code, 'account_changed');
   assert.equal((await f.connections())[0].status, 'reconnect_required');
-  assert.equal(f.app.store.acquisitionState(f.app.store.acquisition(USER_A, a.id)).renewal.access_token, 'gcp-access-personal-0');
+  assert.equal(f.app.store.acquisitionState(f.app.store.acquisition(USER_A, a.id)).private_state.access_token, 'gcp-access-personal-0');
 });
 
 test('Googleの一時的な障害は再試行可能にし、失効した許可は再接続待ちにする', async t => {

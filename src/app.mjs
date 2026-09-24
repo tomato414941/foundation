@@ -5,12 +5,12 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { Store, digest } from './store.mjs';
 import { fail, HttpError, nameValue } from './errors.mjs';
-import { Adapters } from './adapters.mjs';
+import { Connectors } from './connectors.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { Requests } from './requests.mjs';
 import { KeyRequests } from './key-requests.mjs';
 import { Integrations } from './integrations.mjs';
-import { Acquisitions } from './acquisitions.mjs';
+import { Connections } from './connections.mjs';
 import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX, secretName } from './secrets.mjs';
 import { Objects, S3Space, OBJECT_MAX } from './objects.mjs';
 import { respond } from './mcp.mjs';
@@ -76,8 +76,8 @@ function purposeValue(value = '') {
   return value.trim();
 }
 
-export function createApp({ database = ':memory:', encryptionKey, auth, adapters: adapterList, space: spaceBackend = null, publicOrigin, owners: ownerList = [], loginClock, trustedProxies = [], outbound = {} }) {
-  if (!auth || !Array.isArray(adapterList)) throw new Error('Authentication and adapters are required');
+export function createApp({ database = ':memory:', encryptionKey, auth, connectors: connectorList, space: spaceBackend = null, publicOrigin, owners: ownerList = [], loginClock, trustedProxies = [], outbound = {} }) {
+  if (!auth || !Array.isArray(connectorList)) throw new Error('Authentication and connectors are required');
   let external;
   if (publicOrigin) {
     external = new URL(publicOrigin);
@@ -95,11 +95,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
     const forwarded = String(req.headers['x-forwarded-for'] || '').split(',').map(part => part.trim()).filter(Boolean);
     return forwarded.at(-1) || socket;
   };
-  const adapters = new Adapters(adapterList);
+  const connectors = new Connectors(connectorList);
   const secrets = new Secrets(store);
   const objects = new Objects(spaceBackend);
-  const acquisitions = new Acquisitions(store, adapters);
-  const requests = new Requests(store, adapters), keyRequests = new KeyRequests(store), integrations = new Integrations(store);
+  const connections = new Connections(store, connectors);
+  const requests = new Requests(store, connectors), keyRequests = new KeyRequests(store), integrations = new Integrations(store);
   // A request made by an account another product holds is opened on that product's page, which knows who its user is.
   requests.returnUrlFor = ownerId => integrations.returnUrlFor(ownerId);
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
@@ -159,7 +159,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   }
   // Connection identity, provider details and available outputs; never private renewal state.
   const runtimeAcquisition = row => {
-    const adapter = adapters.get(row.adapter);
+    const adapter = connectors.get(row.adapter);
     const facts = store.acquisitionState(row).facts;
     return { id: row.id, connector: row.adapter, service: adapter.service, label: facts.label || row.label, status: row.status, facts,
       access: adapter.access, api: adapter.service?.api || { base_url: '', documentation_url: '' },
@@ -179,12 +179,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
   }
   // Connection metadata and available outputs, independent of saved values.
   function acquisitionView(row) {
-    const adapter = adapters.get(row.adapter), state = store.acquisitionState(row);
+    const adapter = connectors.get(row.adapter), state = store.acquisitionState(row);
     const { owner_id: _owner, state: _state, adapter: connector, ...rest } = row;
     return { ...rest, connector, ...state.facts, expires_at: state.expires_at, access: adapter.access, service: adapter.service,
       outputs: adapter.variables,
       ...(adapter.revocationNote ? { revocation_note: adapter.revocationNote } : {}),
-      can_reconnect: adapter.canReconnect !== false, can_revoke: adapter.canRevoke !== false, available: adapter.client.enabled };
+      can_reconnect: adapter.canReconnect !== false, can_revoke: typeof adapter.revoke === 'function', available: adapter.available };
   }
   const server = createServer(async (req, res) => {
     const send = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
@@ -246,7 +246,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const flow = store.takeFlow(session.id, url.searchParams.get('state'));
           if (!flow) fail(400, 'invalid_state', '接続をやり直してください。');
           if (flow.adapter !== oauthCallback[1]) fail(400, 'invalid_state', '接続をやり直してください。');
-          const adapter = adapters.get(flow.adapter);
+          const adapter = connectors.get(flow.adapter);
           if (flow.requestId) {
             destination = '/requests/' + flow.requestId;
             requests.forUser(flow.requestId, user.id, true);
@@ -264,10 +264,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           }
           if (flow.requestId) requests.forUser(flow.requestId, user.id, true);
           await verifyConnection(req, session, user,
-            () => adapter.client.exchange({ ...flow, code, range: adapter.range }, previous ? { subject: previous.subject, secret: store.acquisitionState(previous).renewal } : undefined),
+            () => adapter.authorization.complete({ code, verifier: flow.verifier, redirectUri: flow.redirectUri }, connections.context(previous)),
             result => {
               if (flow.requestId) requests.forUser(flow.requestId, user.id, true);
-              const saved = acquisitions.save(user.id, adapter.id, result, { keptBy: flow.requestedBy, previous });
+              const saved = connections.save(user.id, adapter.id, result, { keptBy: flow.requestedBy, previous });
               if (flow.requestId) requests.done(flow.requestId, user.id, saved.id);
               return saved.id;
             });
@@ -283,7 +283,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       // One tree, three ways in. A bearer token, when sent, is what speaks: an access key, or an app's credential.
       // Without one the browser speaks, through its session cookie or a product's single-use link, and every
       // change it asks for must come from Foundation's own pages. Cookies are never read beside a token.
-      const token = bearer(req), browser = token === undefined;
+      const token = bearer(req), browser = req.headers.authorization === undefined;
+      if (!browser && !token) fail(401, 'invalid_token', 'Bearer形式のアクセスキーを指定してください。');
       if (browser && !['GET', 'HEAD'].includes(method) && !(path === '/v1/keys' && method === 'POST' && !cookieToken(req))) requireOrigin(req, origin);
       if (!browser && req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
       if (path === '/v1/login' && method === 'GET') return send(200, { available: auth.emailEnabled ?? auth.enabled, method: 'email_link', pending: logins.summary(loginToken) });
@@ -318,7 +319,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         return send(200, { ok: true, authLogout });
       }
       // The ways this server can connect a service itself. Public: a key not yet approved reads it too.
-      if (path === '/v1/connectors' && method === 'GET') return send(200, { connectors: adapters.ids().map(id => adapters.describe(id)) });
+      if (path === '/v1/connectors' && method === 'GET') return send(200, { connectors: connectors.ids().map(id => connectors.describe(id)) });
       // A key not yet approved asks its owner to accept it. It may arrive with no key at all: an agent that cannot
       // generate a secret of its own is issued one here, returned once and never again. While it waits, it may read
       // its own request raw (what it asked, and what happened at the page), or cancel it. Once approved, the same
@@ -458,7 +459,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         const authorization = req.headers.authorization;
         const answer = await respond(await body(req), req.headers, {
           serverInfo: { name: 'foundation', version: VERSION },
-          guide: () => guide(adapters.ids().map(id => adapters.describe(id))),
+          guide: () => guide(connectors.ids().map(id => connectors.describe(id))),
           call: async ({ method: verb, path: target, body: payload }) => {
             const response = await fetch(`http://127.0.0.1:${port}${target}`, {
               method: verb, redirect: 'error', signal: AbortSignal.timeout(20_000),
@@ -517,7 +518,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       }
       if (user.linked) fail(401, 'login_required', 'ログインしてください。');
       // The owner's screen, in one answer.
-      if (path === '/v1/state' && method === 'GET' && browser) return send(200, { user, secrets: secrets.list(ownerId), connections: store.acquisitions(ownerId).map(acquisitionView), keys: store.keys(ownerId), apps: integrations.list(ownerId), functions: FUNCTIONS, invocations: store.invocations(ownerId), connectors: adapters.ids().map(id => adapters.describe(id)) });
+      if (path === '/v1/state' && method === 'GET' && browser) return send(200, { user, secrets: secrets.list(ownerId), connections: store.acquisitions(ownerId).map(acquisitionView), keys: store.keys(ownerId), apps: integrations.list(ownerId), functions: FUNCTIONS, invocations: store.invocations(ownerId), connectors: connectors.ids().map(id => connectors.describe(id)) });
       // Everything, in one file, for the owner alone. Lending someone a place to keep things means they
       // can take them away again; without this the promise is words. Keys are included in full, because
       // a copy that leaves the secrets behind is not a copy.
@@ -581,8 +582,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       }
       if (path === '/v1/connections' && method === 'POST' && browser) {
         const input = await body(req);
-        const adapter = adapters.get(input.connector);
-        adapter.client.check();
+        const adapter = connectors.get(input.connector);
+        if (adapter.authorization.kind !== 'oauth') fail(400, 'unsupported_authorization', 'この接続方法には対応していません。');
         rateLimit('connect:' + ownerId, 10, 60_000);
         const request = input.request_id === undefined ? null : requests.forUser(input.request_id, ownerId, true);
         progressRequestId = request?.id || null;
@@ -600,15 +601,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
         const flow = { adapter: adapter.id, requestedBy, verifier, redirectUri, requestId: request?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
         const state = store.addFlow(session.id, flow);
-        return send(200, { url: adapter.client.authorize({ state, verifier, redirectUri, range: adapter.range, email: previous?.subject }) });
+        return send(200, { url: await adapter.authorization.begin({ state, verifier, redirectUri }, connections.context(previous)) });
       }
       const connectionRoute = path.match(/^\/v1\/connections\/(.+)$/);
       if (connectionRoute && browser && method === 'DELETE') {
         const acquisition = acquisitionFor(ownerId, decodeURIComponent(connectionRoute[1]));
         const input = await body(req);
         if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
-        const adapter = adapters.get(acquisition.adapter);
-        const canRevoke = adapter.client.canRevoke?.(store.acquisitionState(acquisition).renewal) ?? adapter.canRevoke !== false;
+        const adapter = connectors.get(acquisition.adapter);
+        const canRevoke = typeof adapter.revoke === 'function';
         if (disconnects.has(acquisition.id)) fail(409, 'disconnect_in_progress', '登録を解除しています。');
         disconnects.add(acquisition.id);
         try {
@@ -616,7 +617,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
           const previous = store.disconnect(ownerId, acquisition.id);
           let revoked = null;
           if (input.revoke && canRevoke) {
-            try { await adapter.client.revoke(store.acquisitionState(previous).renewal); revoked = true; }
+            try { await adapter.revoke(connections.context(previous).privateState); revoked = true; }
             catch { revoked = false; }
           }
           store.removeAcquisition(ownerId, acquisition.id);
@@ -715,18 +716,14 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         const input = await body(req);
         rateLimit('issue:' + caller.id, 30);
         const connection = acquisitionFor(caller.owner_id, input.connection_id);
-        const outputs = outputNames(input.save, adapters.get(connection.adapter).variables);
+        const outputs = outputNames(input.save, connectors.get(connection.adapter).variables);
         let result;
-        try { result = await acquisitions.obtain(connection); }
+        try { result = await connections.obtain(connection); }
         catch (error) { store.recordInvocation(caller.owner_id, { key: caller, fn: 'connection.credentials', target: connection.label, status: 'failed', detail: error.code || 'error' }); throw error; }
         const expires_at = result.state.expires_at;
         if (expires_at !== null && !(Number.isFinite(expires_at) && expires_at > Date.now())) fail(502, 'service_response', '有効期限を確認できませんでした。');
-        store.transaction(() => {
-          actor(req);
-          // A rotated refresh token must survive even if saving a caller-selected copy
-          // fails (for example, a storage quota). The private connection state is separate.
-          store.saveState(connection, result.state);
-        });
+        actor(req);
+        connections.current(connection);
         const saved = outputs ? saveOutputs(secrets, caller.owner_id, outputs, result.values) : null;
         const output = saved ? { saved } : { delivery: deliveredOutputs(result.values) };
         store.recordIssuance(caller, expires_at);

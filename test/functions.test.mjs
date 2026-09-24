@@ -103,7 +103,7 @@ test('Selected output names are validated before provider calls; a failed batch 
   assert.equal(kept.length, SECRET_COUNT_MAX - 1);
   assert.ok(kept.every(row => row.name.startsWith('kept-')));
   const updated = f.app.store.acquisitionState(f.app.store.acquisition(USER_A, connection.id));
-  assert.equal(updated.renewal.refresh_token, 'rotated-fixture-refresh-token', 'private renewal state survives a failed snapshot save');
+  assert.equal(updated.private_state.refresh_token, 'rotated-fixture-refresh-token', 'private renewal state survives a failed snapshot save');
   assert.ok(updated.expires_at > Date.now());
 });
 

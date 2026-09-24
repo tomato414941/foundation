@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { fail } from '../errors.mjs';
+import { fail } from '../../errors.mjs';
 
 export const OPENROUTER_API = 'https://openrouter.ai/api/v1';
 export const OPENROUTER_DOCS = 'https://openrouter.ai/docs/api/api-reference/overview';
@@ -41,8 +41,7 @@ export class OpenRouterClient {
     if (!validKey(key)) invalidResponse();
     const { data } = await this.request('/key', { headers: { authorization: 'Bearer ' + key } });
     if (!data || typeof data !== 'object' || Array.isArray(data)) invalidResponse();
-    // Never import an account-wide management key through this connector.
-    if (data.is_management_key !== false || data.is_provisioning_key === true) fail(409, 'scope_mismatch', '管理用ではなく、通常のAPIキーで接続してください。');
+    for (const field of ['is_management_key', 'is_provisioning_key']) if (data[field] !== undefined && typeof data[field] !== 'boolean') invalidResponse();
     for (const field of ['limit', 'limit_remaining']) if (data[field] !== null && (!Number.isFinite(data[field]) || (field === 'limit' && data[field] < 0))) invalidResponse();
     if (data.limit_reset !== null && !['daily', 'weekly', 'monthly'].includes(data.limit_reset)) invalidResponse();
     if (typeof data.include_byok_in_limit !== 'boolean') invalidResponse();
@@ -53,7 +52,8 @@ export class OpenRouterClient {
       if (expiresAt <= Date.now()) fail(409, 'reconnect_required', 'OpenRouterのキーは期限切れです。新しく接続してください。');
     }
     return { access_token: key, credential_type: 'api_key', expires_at: expiresAt, expiry_known: Object.hasOwn(data, 'expires_at'), scopes: [OPENROUTER_SCOPE],
-      details: { key_hash: hash(key), limit: data.limit, limit_remaining: data.limit_remaining, limit_reset: data.limit_reset, include_byok_in_limit: data.include_byok_in_limit, checked_at: Date.now() } };
+      details: { key_hash: hash(key), is_management_key: data.is_management_key ?? null, is_provisioning_key: data.is_provisioning_key ?? null,
+        limit: data.limit, limit_remaining: data.limit_remaining, limit_reset: data.limit_reset, include_byok_in_limit: data.include_byok_in_limit, checked_at: Date.now() } };
   }
   async exchange({ code, verifier }, previous) {
     this.check();
@@ -63,17 +63,17 @@ export class OpenRouterClient {
     // A connection identifies the authorized key, not an assumed email address.
     return { subject: 'key:' + secret.details.key_hash, secret };
   }
-  async token(existing, credential) {
+  async token(existing, { subject }) {
     this.check();
-    if (credential.status !== 'connected') fail(409, 'reconnect_required', 'OpenRouterのキーを確認するか、新しく登録してください。');
     const next = await this.inspect(existing.access_token);
-    if (credential.subject !== 'key:' + next.details.key_hash) invalidResponse();
+    if (subject !== 'key:' + next.details.key_hash) invalidResponse();
     return next;
   }
   facts(secret) {
     const detail = secret.details;
     return { label: 'キー ' + detail.key_hash.slice(0, 12), credential_type: 'api_key', expires_at: secret.expires_at, expiry_known: secret.expiry_known,
       management_url: 'https://openrouter.ai/keys/' + detail.key_hash,
-      key_info: { limit: detail.limit, limit_remaining: detail.limit_remaining, limit_reset: detail.limit_reset, include_byok_in_limit: detail.include_byok_in_limit, checked_at: detail.checked_at } };
+      key_info: { is_management_key: detail.is_management_key ?? null, is_provisioning_key: detail.is_provisioning_key ?? null,
+        limit: detail.limit, limit_remaining: detail.limit_remaining, limit_reset: detail.limit_reset, include_byok_in_limit: detail.include_byok_in_limit, checked_at: detail.checked_at } };
   }
 }

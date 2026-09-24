@@ -19,7 +19,7 @@ test('Gmail and Supabase secrets are encrypted; keys and cookies never persist i
   const contents = await readFile(database);
   for (const value of ['google-access-personal', 'refresh-personal', 'supabase-access-owner', 'supabase-refresh-owner', agent.token, cookie.slice(12)]) assert.ok(!contents.includes(Buffer.from(value)), value);
   const second = new Store(database, KEY); t.after(() => second.close());
-  assert.equal(second.acquisitionState(second.acquisition(USER_A, account.id)).renewal.refresh_token, 'refresh-personal-readonly');
+  assert.equal(second.acquisitionState(second.acquisition(USER_A, account.id)).private_state.refresh_token, 'refresh-personal-readonly');
   assert.ok(second.session(cookie.slice(12)));
   assert.equal(second.authenticate(agent.token).owner_id, USER_A);
   const tables = second.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((item) => item.name);

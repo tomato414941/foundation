@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { fixture, FakeGmail, USER_A, USER_B } from './helpers.mjs';
-import { gmailReadonly, gmailMetadata } from '../src/adapters.mjs';
+import { gmailReadonly, gmailMetadata } from '../src/connectors/gmail/index.mjs';
 
 const key = () => 'fdn_' + randomBytes(32).toString('base64url');
 // A key not yet approved asks to be approved (/v1/keys); an approved key asks for a registration (/v1/requests).
@@ -198,19 +198,22 @@ test('Unavailable services cannot register through a request; expired request re
   assert.equal((await usable(f, token)).json.connections[0].id, saved.id);
 });
 
-test('A second adapter uses the same request and delivery APIs without any Gmail-specific logic', async t => {
+test('独自の接続も共通の依頼・認証・受け渡し・解除の動線を利用する', async t => {
   const gmail = new FakeGmail();
   const notes = {
     id: 'notes.oauth', service: { name: 'Notes', icon: 'key', management_url: 'https://notes.example.test/keys', api: { base_url: 'https://notes.example.test/api', documentation_url: 'https://notes.example.test/docs' } },
-    label: 'Notesで接続', register: 'oauth',
+    label: 'Notesで接続', register: 'oauth', available: true,
     access: { name: 'ノートの読み取り', description: '保存済みノート', restrictions: '変更は許可しません。' },
-    variables: ['NOTES_TOKEN'], deliver: secret => ({ environment: { NOTES_TOKEN: secret.access_token } }),
-    client: { enabled: true, check() {}, authorize: ({ state, redirectUri }) => 'https://notes.example.test/auth?' + new URLSearchParams({ state, redirect_uri: redirectUri }),
-      async exchange() { return { subject: 'notes-user', secret: { access_token: 'notes-access', refresh_token: 'notes-refresh', expires_at: Date.now() + 3600_000, scopes: ['notes.read'] } }; },
-      async token(value) { return value; }, async revoke() {},
+    variables: ['NOTES_TOKEN'],
+    authorization: { kind: 'oauth', begin: ({ state, redirectUri }) => 'https://notes.example.test/auth?' + new URLSearchParams({ state, redirect_uri: redirectUri }),
+      async complete() { return { subject: 'notes-user', privateState: 'notes-private', facts: { scopes: ['notes.read'] }, expiresAt: null }; },
+    },
+    async obtain({ subject, privateState }) {
+      assert.equal(privateState, 'notes-private');
+      return { subject, privateState, facts: { scopes: ['notes.read'] }, expiresAt: null, credentials: { environment: { NOTES_TOKEN: 'notes-access' } } };
     },
   };
-  const f = await fixture(t, { gmail, adapters: [gmailReadonly(gmail), gmailMetadata(gmail), notes] });
+  const f = await fixture(t, { gmail, connectors: [gmailReadonly(gmail), gmailMetadata(gmail), notes] });
   const catalog = (await f.request('/v1/connectors', { anonymous: true })).json.connectors;
   assert.equal(catalog[2].access.name, 'ノートの読み取り'); assert.deepEqual(catalog[2].variables, ['NOTES_TOKEN']);
   assert.ok(!JSON.stringify(catalog).includes('client'));
@@ -286,7 +289,7 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
   assert.equal(f.app.store.acquisitions(USER_A).length, 1);
 });
 
-test('A runtime can read its own request raw: what it asked for, and what happened at its page, never an input', async t => {
+test('依頼元が認証失敗と再試行の経過を機密入力なしで確認する', async t => {
   const f = await fixture(t, { login: false }), { token, row } = await create(f);
   const approval = async () => (await f.request('/v1/keys/current', { token, anonymous: true })).json.request;
   assert.deepEqual((await approval()).events, []);
@@ -304,12 +307,13 @@ test('A runtime can read its own request raw: what it asked for, and what happen
   const view = async (id = asked.row.id, as = token) => (await f.request('/v1/requests/' + id, { token: as, anonymous: true })).json.request;
   await f.request('/v1/requests/' + asked.row.id);
   const start = await f.request('/v1/connections', { method: 'POST', data: { connector: 'gmail.readonly', request_id: asked.row.id } });
-  await f.callback(new URL(start.json.url), 'headers-metadata');
+  const authorization = new URL(start.json.url), callback = new URL(authorization.searchParams.get('redirect_uri'));
+  await f.request(callback.pathname + '?state=' + authorization.searchParams.get('state') + '&error=access_denied');
   const again = await f.request('/v1/connections', { method: 'POST', data: { connector: 'gmail.readonly', request_id: asked.row.id } });
   await f.callback(new URL(again.json.url), 'personal-readonly');
   events = (await view()).events;
   assert.deepEqual(events.map(item => item.event), ['page_viewed', 'connect_started', 'connect_failed', 'connect_started', 'connected']);
-  assert.equal(events[2].code, 'scope_mismatch'); assert.match(events[2].message, /読み取り範囲/); assert.equal(events[2].connector, 'gmail.readonly');
+  assert.equal(events[2].code, 'authorization_denied'); assert.match(events[2].message, /認証は許可されません/); assert.equal(events[2].connector, 'gmail.readonly');
   assert.ok(events.every(item => Number.isFinite(item.at)));
   assert.doesNotMatch(JSON.stringify(events), /headers-metadata|personal-readonly|google-access|refresh_token|fdn_|ZZZZ/);
   assert.equal((await view()).status, 'done');
