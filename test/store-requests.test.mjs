@@ -9,7 +9,7 @@ async function ask(f, token, names = ['suggested'], options = {}) {
   assert.equal(response.status, 201, response.text);
   return response.json.request;
 }
-const save = (f, row, entries) => f.request(`/api/requests/${row.id}/store`, { method: 'POST', data: { entries } });
+const save = (f, row, entries) => f.request(`/v1/requests/${row.id}/done`, { method: 'POST', data: { entries } });
 const entry = (name, content = 'fixture-private-value') => ({ name, content });
 
 test('利用者が選んだ名前で保存し、依頼元に実際の保存名を返す', async t => {
@@ -24,14 +24,14 @@ test('利用者が選んだ名前で保存し、依頼元に実際の保存名�
   const kept = f.app.store.secrets(USER_A);
   assert.deepEqual(kept.map(value => value.name), ['stripe-test-api-key']);
   assert.equal(kept[0].readable, false);
-  const delivered = await f.request('/v1/deliver', { method: 'POST', token,
+  const delivered = await f.request('/v1/deliveries', { method: 'POST', token,
     data: { names: [{ name: done.result.names[0], as: 'STRIPE_KEY' }] } });
   assert.equal(delivered.json.delivery.environment.STRIPE_KEY, 'fixture-private-value');
 });
 
 test('同じ名前を使う登録を全件保留し、既存の値を保ったまま別名で再試行する', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
-  await f.request('/api/secrets?name=existing', { method: 'PUT', raw: 'keep-this-value', type: 'text/plain' });
+  await f.request('/v1/secrets?name=existing', { method: 'PUT', raw: 'keep-this-value', type: 'text/plain' });
   const before = f.app.store.secrets(USER_A);
   const row = await ask(f, token, ['first', 'second'], { secret: false });
   const refused = await save(f, row, [entry('new-name'), entry('existing', 'replacement')]);
@@ -49,7 +49,7 @@ test('同じ名前を使う登録を全件保留し、既存の値を保った�
 test('依頼された名前をそのまま使う場合も同名の値を保護する', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
   const row = await ask(f, token, ['existing']);
-  await f.request('/api/secrets?name=existing', { method: 'PUT', raw: 'original', type: 'text/plain' });
+  await f.request('/v1/secrets?name=existing', { method: 'PUT', raw: 'original', type: 'text/plain' });
   const refused = await save(f, row, [entry('existing')]);
   assert.equal(refused.status, 409, refused.text);
   assert.equal(f.app.store.secretContent(f.app.store.secret(USER_A, 'existing')).toString(), 'original');

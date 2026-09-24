@@ -75,13 +75,13 @@ with sync_playwright() as p:
     page.get_by_role("button", name="ログインメールを送信", exact=True).click()
     expect(page.get_by_role("heading", name="メールを確認", exact=True)).to_be_visible()
     expect(page.get_by_text("new@example.test", exact=True)).to_be_visible()
-    page.goto(args.base + "/auth/callback?code=invalid-authorization-code", wait_until="networkidle")
+    page.goto(args.base + "/login/callback?code=invalid-authorization-code", wait_until="networkidle")
     expect(page.get_by_text("リンクが無効か、有効期限が切れています。最新のメールのリンクを開いてください。", exact=True)).to_be_visible()
     assert "code=" not in page.url
     # Simulate opening the email's link in another tab of the same browser.
     code = hashlib.sha256(b"new@example.test").hexdigest()
     link_page = context.new_page()
-    link_page.goto(args.base + "/auth/callback?code=" + code, wait_until="networkidle")
+    link_page.goto(args.base + "/login/callback?code=" + code, wait_until="networkidle")
     expect(link_page.get_by_role("heading", name="Foundation", exact=True)).to_be_visible()
     assert "code=" not in link_page.url and "#" not in link_page.url
     link_page.close()
@@ -153,7 +153,7 @@ with sync_playwright() as p:
         return caller.fetch(path, method=method, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data="{}" if method == "POST" else None)
     def deliver(connection_id, token):
         return caller.fetch("/v1/functions/connection.credentials", method="POST", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data=json.dumps({"connection_id": connection_id}))
-    connections = runtime("/v1/acquisitions", token_a).json()["acquisitions"]
+    connections = runtime("/v1/connections", token_a).json()["connections"]
     assert len(connections) == 2, "an issued key uses everything its owner keeps"
     connection_id = connections[0]["id"]
     issued = deliver(connection_id, token_a)
@@ -188,8 +188,8 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "revoke-mobile.png"), full_page=True)
     dialog.get_by_role("button", name="失効させる", exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert runtime("/v1/acquisitions", token_a).status == 401
-    assert runtime("/v1/acquisitions", token_b).status == 200
+    assert runtime("/v1/connections", token_a).status == 401
+    assert runtime("/v1/connections", token_b).status == 200
     page.goto(args.base + "/connections", wait_until="networkidle")
     gmail.get_by_role("button", name="接続を解除", exact=True).first.click()
     check_display(page)

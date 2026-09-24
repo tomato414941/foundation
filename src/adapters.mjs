@@ -83,7 +83,7 @@ export class Adapters {
   }
   get(id) {
     const adapter = typeof id === 'string' && this.adapters.get(id);
-    if (!adapter) fail(400, 'invalid_adapter', '対応している接続方法を指定してください。');
+    if (!adapter) fail(400, 'invalid_connector', '対応している接続方法を指定してください。');
     return adapter;
   }
   ids() { return [...this.adapters.keys()]; }

@@ -7,7 +7,7 @@
 // This text is read by the agent, not by the owner, so it is English; everything the owner reads
 // (purposes, steps, the dashboard) stays in the owner's language.
 function adapterLines(adapters) {
-  if (!adapters) return ['     GET /v1/adapters lists what this server can obtain itself.'];
+  if (!adapters) return ['     GET /v1/connectors lists what this server can obtain itself.'];
   const lines = [];
   for (const adapter of adapters.filter(item => item.available)) {
     lines.push('     ' + adapter.id + '  ' + (adapter.service?.name || '') + ' / ' + adapter.access.name + (adapter.variables.length ? '  outputs: ' + adapter.variables.join(', ') : ''));
@@ -31,9 +31,9 @@ export function guide(adapters) {
     '   and never print it. If you can write a private file, keep it there; otherwise keep it wherever your secrets go.',
     '   POST /v1/keys  {"name": "<what to call you>"}   with your key as the bearer.',
     '     Returns verification_uri and confirmation_code. Give the owner both; they open the URL and type the code.',
-    '     Until they do, every other call answers 401 not_approved. Retry GET /v1/me every few seconds. Do not hammer it.',
-    '     GET /v1/keys/current shows your request and what happened at its page; DELETE /v1/keys/current cancels it.',
-    '   GET /v1/me    who you are, once approved.    PATCH /v1/me {"name"}    DELETE /v1/me    revokes your own key.', '',
+    '     Until they do, every other call answers 401 not_approved. Retry GET /v1/keys/current every few seconds. Do not hammer it.',
+    '   GET /v1/keys/current    your request and what happened at its page; once approved, also who you are (key).',
+    '   PATCH /v1/keys/current {"name"}    DELETE /v1/keys/current    cancels the request, or revokes your approved key.', '',
     'WHAT IS KEPT',
     '   PUT /v1/secrets?name=<name>&secret=true    body: raw bytes, up to 1MB. The same exact name replaces that value.',
     '     secret=true blocks direct GET by an access key. The owner can read it; authorized delivery can still return it.',
@@ -42,11 +42,11 @@ export function guide(adapters) {
     '   GET /v1/secrets?prefix=<literal prefix>   optional case-sensitive text filtering, not a directory.',
     '   GET /v1/secrets?name=<name>               bytes, as written; 403 write_only for a secret.',
     '   DELETE /v1/secrets?name=<name>',
-    '   URL-encode names. Names are 1-200 characters without control characters; case, spaces, slashes and punctuation',
+    '   URL-encode the name. A name is any text, which is why it travels as a query and not as a path. Names are 1-200 characters without control characters; case, spaces, slashes and punctuation',
     '   remain literal. No normalization, hierarchy, service ownership or automatic renewal is inferred.',
     '   The owner can read, rename or delete any saved value. Stored copies survive OAuth disconnection.', '',
     'HANDING IT TO A COMMAND',
-    '   POST /v1/deliver  {"names": [{"name": "build token", "as": "GH_TOKEN"}]}',
+    '   POST /v1/deliveries  {"names": [{"name": "build token", "as": "GH_TOKEN"}]}',
     '     Each item is {name, as, filename?}. as is required: it names the environment variable, independently of name.',
     '     filename makes the bytes a temporary file instead; as holds its local path. Use this for binary or multiline data.',
     '     Up to 16 inputs. Variables and filenames must be distinct; reserved system variables are refused.',
@@ -74,9 +74,9 @@ export function guide(adapters) {
     '3. CONNECTING A SERVICE for later explicit credential processing. OAuth renewal state stays with the connection,',
     '   separate from ordinary saved values. Connecting does not create named values.',
     ...adapterLines(adapters),
-    '   POST /v1/requests  {"adapter": "<id>", "purpose": "...", "valid_minutes": 30}   Give the owner the verification_uri.',
+    '   POST /v1/requests  {"connector": "<id>", "purpose": "...", "valid_minutes": 30}   Give the owner the verification_uri.',
     '   Poll GET /v1/requests/<id> every few seconds until done; result.connection_id identifies the connection.',
-    '   GET /v1/acquisitions   connection IDs, labels, provider details and available output identifiers.', '',
+    '   GET /v1/connections   connection IDs, labels, provider details and available output identifiers.', '',
     'FUNCTIONS',
     '   GET /v1/functions   catalog of built-in operations and their invocation endpoints; no arbitrary-code runtime.',
     '   POST /v1/functions/connection.credentials',
@@ -92,7 +92,7 @@ export function guide(adapters) {
     '   events is the raw record, in order: page_opened / page_viewed / connect_started / connect_failed (with a code and',
     '   Foundation\'s own message) / connected / stored / denied / cancelled. What was typed is never recorded.',
     '   DELETE /v1/requests/<id>   cancels it. status is pending / done / denied / cancelled / revoked / reconnect_required.',
-    '   Why a registration failed: invalid_values (wrong shape) / invalid_credential (the adapter would not take it) /',
+    '   Why a registration failed: invalid_values (wrong shape) / invalid_credential (the connector would not take it) /',
     '   reconnect_required (the service rejected it) / already_connected. A key approval shows its own events at',
     '   GET /v1/keys/current: confirmation_required (a wrong code) / confirmation_locked (5 tries).', '',
     'A PLACE FOR FILES (object storage the owner did not have to sign up for)',
@@ -111,7 +111,7 @@ export function guide(adapters) {
     '     Returns {response: {status, headers, body, body_encoding}}. Common echoes of input secrets are redacted;',
     '     do not treat redaction as protection against arbitrary transformations by an untrusted destination.',
     '     Optional save: "<name>" stores the response body and returns only response status/headers and saved metadata.',
-    '     The existing POST /v1/fetch invokes the same operation. Redirects are returned, not followed.',
+    '     Redirects are returned, not followed.',
     '     HTTPS on 443, public hostnames only, never this server or private networks. 1MB each way, 20 seconds, 30/minute.',
     '     No workflow, schedule or implicit execution: the caller chooses each invocation and each saved output.', '',
     'THE SHELL (only if you can run commands)',
@@ -127,7 +127,7 @@ export function guide(adapters) {
     '     ENV=name treats everything after the first = literally. Use --inputs JSON for files or structured inputs.',
     '     Only the child process gets delivered values; files exist only while it runs. FOUNDATION_NAMES is a JSON array',
     '     of the exact saved names used. Prevent the child command from logging or echoing secrets.',
-    '     Use this instead of POST /v1/deliver whenever the point is to run something.',
+    '     Use this instead of POST /v1/deliveries whenever the point is to run something.',
     `   foundation exec --output '{"name":"login config","as":"AUTH_FILE","filename":"auth.json"}' -- <command>`,
     '     Creates one empty private file and sets as to its path. Tell the command to write its authentication result there.',
     '     After exit 0, saves the file bytes under the exact name with secret=true, then removes the temporary file.',

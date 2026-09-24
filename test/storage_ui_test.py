@@ -52,12 +52,12 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     errors = []
     value_reads = []
     page.on('pageerror', lambda error: errors.append(str(error)))
-    page.on('request', lambda request: value_reads.append(request.url) if request.method == 'GET' and '/api/secrets?' in request.url else None)
+    page.on('request', lambda request: value_reads.append(request.url) if request.method == 'GET' and '/v1/secrets?' in request.url else None)
     page.goto(approval['verification_uri'], wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='ログインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    page.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
+    page.goto(args.base + '/login/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
     page.get_by_label('確認コード', exact=True).fill(approval['confirmation_code'])
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
@@ -69,8 +69,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     review(page)
 
     # The key keeps two things, with no request and no approval: one handed to a command, one only read back.
-    api('PUT', '/v1/secrets/github/gh-token?secret=true', SECRET.encode(), {'content-type': 'text/plain'})
-    api('PUT', '/v1/secrets/release/2026-09-23', json.dumps({'step': 'レビュー待ち'}).encode(), {'content-type': 'application/json'})
+    api('PUT', '/v1/secrets?name=github/gh-token&secret=true', SECRET.encode(), {'content-type': 'text/plain'})
+    api('PUT', '/v1/secrets?name=release/2026-09-23', json.dumps({'step': 'レビュー待ち'}).encode(), {'content-type': 'application/json'})
     page.reload(wait_until='networkidle')
 
     github = page.get_by_role('article', name='github/gh-token', exact=True)
@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     page.screenshot(path=str(shots / 'kept-desktop.png'), full_page=True)
 
     # The owner can fetch anything they keep, including what the key itself may not read back.
-    opened = page.request.get(args.base + '/api/secrets/github%2Fgh-token')
+    opened = page.request.get(args.base + '/v1/secrets?name=github%2Fgh-token')
     assert opened.status == 200 and opened.text() == SECRET
     dialog = page.get_by_role('dialog')
 
@@ -140,7 +140,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     renamed = page.get_by_role('article', name='github token', exact=True)
     expect(renamed.get_by_role('heading', name='github token', exact=True)).to_be_visible()
     expect(renamed.get_by_role('button', name='名前を編集', exact=True)).to_be_focused()
-    kept = page.request.get(args.base + '/api/secrets?name=github%20token')
+    kept = page.request.get(args.base + '/v1/secrets?name=github%20token')
     assert kept.status == 200 and kept.text() == SECRET
     renamed.get_by_role('button', name='名前を編集', exact=True).click()
     restored = renamed.get_by_label('名前', exact=True)
@@ -185,7 +185,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     expect(value_input).to_have_value(SECRET)
     value_input.fill('cancel this draft')
     github.get_by_role('button', name='キャンセル', exact=True).click()
-    assert page.request.get(args.base + '/api/secrets?name=github%2Fgh-token').text() == SECRET
+    assert page.request.get(args.base + '/v1/secrets?name=github%2Fgh-token').text() == SECRET
     github.get_by_role('button', name='値を編集', exact=True).click()
     value_input.fill('escape this draft')
     value_input.press('Escape')
@@ -204,15 +204,15 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
             route.fulfill(status=503, content_type='application/json', body=json.dumps({'error': {'message': '保存できませんでした。'}}))
         else:
             route.continue_()
-    page.route('**/api/secrets?*', unavailable)
+    page.route('**/v1/secrets?*', unavailable)
     github.get_by_role('button', name='保存', exact=True).click()
     expect(github.get_by_role('alert')).to_have_text('保存できませんでした。')
     expect(value_input).to_have_value(updated)
     expect(github.get_by_role('button', name='保存', exact=True)).to_be_enabled()
-    page.unroute('**/api/secrets?*', unavailable)
+    page.unroute('**/v1/secrets?*', unavailable)
     github.get_by_role('button', name='保存', exact=True).click()
     expect(github.locator('.kept-document')).to_have_text('••••••••')
-    assert page.request.get(args.base + '/api/secrets?name=github%2Fgh-token').text() == updated
+    assert page.request.get(args.base + '/v1/secrets?name=github%2Fgh-token').text() == updated
     assert next(row for row in api('GET', '/v1/secrets')['secrets'] if row['name'] == 'github/gh-token')['readable'] is False
     github.get_by_role('button', name='値を表示', exact=True).click()
     expect(github.locator('.kept-document')).to_contain_text('new-value')
@@ -223,20 +223,20 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     # Another writer wins over a stale editor, which keeps the owner's draft for recovery.
     github.get_by_role('button', name='値を編集', exact=True).click()
     value_input.fill('my pending value')
-    api('PUT', '/v1/secrets/github/gh-token?secret=true', b'newer value')
+    api('PUT', '/v1/secrets?name=github/gh-token&secret=true', b'newer value')
     github.get_by_role('button', name='保存', exact=True).click()
     expect(github.get_by_role('alert')).to_have_text('ほかの操作で変更されています。開き直して確認してください。')
     expect(value_input).to_have_value('my pending value')
-    assert page.request.get(args.base + '/api/secrets?name=github%2Fgh-token').text() == 'newer value'
+    assert page.request.get(args.base + '/v1/secrets?name=github%2Fgh-token').text() == 'newer value'
     github.get_by_role('button', name='キャンセル', exact=True).click()
 
     # Readable text retains its access setting and unchanged CRLF/BOM bytes survive an edit/save.
     unchanged = '\ufefffirst\r\nsecond\r\n'
-    api('PUT', '/v1/secrets/release/2026-09-23', unchanged.encode('utf-8'))
+    api('PUT', '/v1/secrets?name=release/2026-09-23', unchanged.encode('utf-8'))
     release.get_by_role('button', name='値を編集', exact=True).click()
     release.get_by_role('button', name='保存', exact=True).click()
     expect(release.get_by_role('button', name='値を編集', exact=True)).to_be_visible()
-    assert page.request.get(args.base + '/api/secrets?name=release%2F2026-09-23').body() == unchanged.encode('utf-8')
+    assert page.request.get(args.base + '/v1/secrets?name=release%2F2026-09-23').body() == unchanged.encode('utf-8')
     release.get_by_role('button', name='値を編集', exact=True).click()
     release.get_by_role('textbox', name='値', exact=True).fill('updated readable value')
     release.get_by_role('button', name='保存', exact=True).click()
@@ -304,7 +304,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
 
     # Binary values stay files: download exact bytes, then replace them with a selected file.
     binary = b'\x00\xff\x01fixture'
-    api('PUT', '/v1/secrets/binary?secret=true', binary)
+    api('PUT', '/v1/secrets?name=binary&secret=true', binary)
     page.reload(wait_until='networkidle')
     binary_row = page.get_by_role('article', name='binary', exact=True)
     binary_row.get_by_role('button', name='値を表示', exact=True).click()
@@ -317,7 +317,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     binary_row.get_by_label('ファイル', exact=True).set_input_files({'name': 'credential.bin', 'mimeType': 'application/octet-stream', 'buffer': replaced})
     binary_row.get_by_role('button', name='保存', exact=True).click()
     expect(binary_row.get_by_text('ファイル', exact=True)).to_be_visible()
-    assert page.request.get(args.base + '/api/secrets?name=binary').body() == replaced
+    assert page.request.get(args.base + '/v1/secrets?name=binary').body() == replaced
     assert api('GET', '/v1/secrets')['secrets'][0]['readable'] is False
     review(page)
     assert not errors, errors

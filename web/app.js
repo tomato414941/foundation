@@ -1,9 +1,9 @@
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
 let state = null, toastTimer, loginTimer, revision = 0;
 // A request page is either what an approved key asks for (/requests/…) or a new key asking to be approved (/keys/…).
-const keyRequest = /^\/keys\//.test(location.pathname);
-const requestId = location.pathname.match(/^\/(?:requests|keys)\/([A-Za-z0-9_-]{43})$/)?.[1];
-const requestApi = requestId && (keyRequest ? '/api/key-requests/' : '/api/requests/') + requestId;
+const keyRequest = /^\/key-requests\//.test(location.pathname);
+const requestId = location.pathname.match(/^\/(?:requests|key-requests)\/([A-Za-z0-9_-]{43})$/)?.[1];
+const requestApi = requestId && (keyRequest ? '/v1/key-requests/' : '/v1/requests/') + requestId;
 // Opened through another product's single-use link: there is no Foundation login, only that one request.
 const linkToken = requestId && !keyRequest ? new URLSearchParams(location.hash.slice(1)).get('link') : null;
 let linked = false, back = null;
@@ -75,7 +75,7 @@ function spaceSection() {
       <td class="object-name"><span class="object-mark" aria-hidden="true">${icon('folder')}</span><button class="link-button" data-action="go-prefix" data-prefix="${esc(objectPrefix + item.name)}">${esc(item.name.slice(0, -1))}</button></td>
       <td>フォルダ</td><td>${esc(kiloBytes(item.bytes))}</td><td>${item.count} 件</td></tr>`).join('')
     + shown.map(item => `<tr><td><input type="checkbox" data-action="choose-object" data-key="${esc(item.key)}" ${objectChosen.has(item.key) ? 'checked' : ''} aria-label="${esc(item.name)} を選ぶ"></td>
-      <td class="object-name"><span class="object-mark" aria-hidden="true">${icon('note')}</span><a href="/api/objects/${encodeURIComponent(item.key)}" download>${esc(item.name)}</a></td>
+      <td class="object-name"><span class="object-mark" aria-hidden="true">${icon('note')}</span><a href="/v1/objects/${encodeURIComponent(item.key)}" download>${esc(item.name)}</a></td>
       <td>${esc(kindOf(item.name))}</td><td>${esc(kiloBytes(item.size))}</td><td>${esc(keptWhen(item.updated_at))}</td></tr>`).join('');
   const body = space.objects.length === 0 ? '<div class="access-empty"><p>まだ何も置かれていません。AIに頼むか、ここから追加できます。</p></div>'
     : here.length === 0 ? `<div class="access-empty"><p>${needle ? `「${esc(objectFilter)}」に当てはまるものはありません。` : 'ここには何もありません。'}</p></div>`
@@ -146,7 +146,7 @@ async function api(path, { method = 'GET', data, signal } = {}) {
   const result = await response.json();
   if (!response.ok) {
     const error = new Error(result.error?.message || '処理を完了できませんでした。'); error.status = response.status; error.code = result.error?.code;
-    if (response.status === 401 && !linked && path !== '/api/session' && path !== '/api/auth/link') await showLogin();
+    if (response.status === 401 && !linked && path !== '/v1/session' && path !== '/v1/login') await showLogin();
     throw error;
   }
   return result;
@@ -155,7 +155,7 @@ async function showLogin({ email = '', message = loginNotice } = {}) {
   clearInterval(loginTimer);
   const current = ++revision; state = null; closeDialog();
   let config = { available: false, pending: null };
-  try { config = await api('/api/auth/config'); } catch {}
+  try { config = await api('/v1/login'); } catch {}
   if (current !== revision) return;
   const pending = config.available ? config.pending : null;
   app.innerHTML = `<div class="workspace login-shell"><header class="topbar">${brand}</header><main class="login-main"><div class="login-symbol" aria-hidden="true">${icon('mail')}</div>${requestId ? '<p class="login-context">依頼の確認</p>' : ''}<h1>${pending ? 'メールを確認' : 'ログイン'}</h1>
@@ -182,7 +182,7 @@ async function showLogin({ email = '', message = loginNotice } = {}) {
     document.querySelector('#change-email').addEventListener('click', async () => {
       if (busy) return;
       setBusy(true);
-      try { await api('/api/auth/link', { method: 'DELETE' }); loginNotice = ''; await showLogin({ email: pending.email }); }
+      try { await api('/v1/login', { method: 'DELETE' }); loginNotice = ''; await showLogin({ email: pending.email }); }
       catch (error) { if (form.isConnected) { form.querySelector('.form-error').textContent = error.message; setBusy(false); } }
     });
   }
@@ -191,7 +191,7 @@ async function showLogin({ email = '', message = loginNotice } = {}) {
     if (busy || !config.available || (pending && Date.now() < pending.resend_at)) return;
     setBusy(true); loginNotice = ''; form.querySelector('.form-error').textContent = '';
     try {
-      await api('/api/auth/link', { method: 'POST', data: { email: pending?.email || form.elements.email.value.trim(), returnTo: pagePath } });
+      await api('/v1/login', { method: 'POST', data: { email: pending?.email || form.elements.email.value.trim(), return_to: pagePath } });
       await showLogin();
     } catch (error) {
       if (!form.isConnected) return;
@@ -200,18 +200,25 @@ async function showLogin({ email = '', message = loginNotice } = {}) {
   });
 }
 window.addEventListener('focus', () => { if (document.querySelector('#email-sent')) void refresh().catch(() => {}); });
+// The owner's objects: every page of the listing, and how much of the space they use.
+async function loadSpace() {
+  try {
+    const objects = [];
+    let cursor;
+    do { const page = await api('/v1/objects' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '')); objects.push(...page.objects); cursor = page.cursor; } while (cursor);
+    return { available: true, objects, usage: (await api('/v1/usage')).objects };
+  } catch { return null; }
+}
 async function refresh() {
   if (linked) {
-    try { back = back || (await api('/api/request-links/' + requestId)).back; } catch {}
+    try { back = back || (await api('/v1/request-links/' + requestId)).back; } catch {}
     try { accessRequest = (await api(requestApi)).request; requestError = ''; }
     catch (error) { accessRequest = null; requestError = error.status === 401 ? 'このリンクはもう使えません。元の画面から開き直してください。' : error.message; }
-    state = { user: { email: '' }, secrets: [], keys: [], acquisitions: [], adapters: [], space: null };
+    state = { user: { email: '' }, secrets: [], keys: [], connections: [], connectors: [], space: null };
     render();
     return;
   }
-  const current = ++revision, result = await api('/api/state');
-  let space = null;
-  if (page === 'home' || page === 'objects') { try { space = await api('/api/objects'); } catch { space = null; } }
+  const current = ++revision, [result, space] = await Promise.all([api('/v1/state'), (page === 'home' || page === 'objects') ? loadSpace() : null]);
   if (requestId && current === revision) {
     try {
       const found = (await api(requestApi)).request;
@@ -233,7 +240,7 @@ function connectionRow(connection) {
   const until = connection.expiry_known === false ? '有効期限は不明です' : connection.expires_at ? '認証情報の有効期限 ' + esc(new Date(connection.expires_at).toLocaleString('ja-JP')) : '';
   return `<article class="agent-row"><div class="agent-name"><h3>${esc(connection.label)}</h3><p>${esc(connection.service?.name || '')} · <span class="${warning ? 'warning-text' : ''}">${esc(statusName(connection.status))}</span></p></div>
     <div class="agent-permissions"><span class="muted">${esc(connection.access?.name || '')}</span><span class="muted block">${until}</span></div>
-    <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}" data-adapter="${esc(connection.adapter)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
+    <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}" data-adapter="${esc(connection.connector)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
 }
 function secretRow(entry) {
   return `<article class="secret-row" aria-label="${esc(entry.name)}"><div class="secret-field"><span class="secret-field-label">名前</span><div class="agent-name secret-title"><h3>${esc(entry.name)}</h3><button class="icon-button" data-action="copy-name" data-name="${esc(entry.name)}" aria-label="名前をコピー" title="名前をコピー">${icon('copy')}</button><button class="icon-button" data-action="edit-secret" data-name="${esc(entry.name)}" aria-label="名前を編集" title="名前を編集">${icon('edit')}</button></div></div>
@@ -242,7 +249,7 @@ function secretRow(entry) {
 }
 const secretMeta = entry => `<span>${esc(kiloBytes(entry.size))}</span><span>更新 ${esc(keptWhen(entry.updated_at))}</span>`;
 function connectSection() {
-  const available = state.adapters.filter(adapter => adapter.available);
+  const available = state.connectors.filter(adapter => adapter.available);
   if (!available.length) return '';
   const services = new Map();
   for (const adapter of available) {
@@ -281,7 +288,7 @@ function render() {
   if (page === 'account') {
     // The account itself: who this is, and the few things done to it rather than in it.
     app.innerHTML = shell(`<header class="page-heading"><h1>アカウント</h1><p>${esc(state.user.email)}</p></header>
-      <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">データのダウンロード</h2><p>シークレットの値、接続とアクセスキーの一覧が JSON ファイルで入ります。オブジェクトは入りません。</p></div></div><a class="button secondary" href="/api/export" download>${icon('download')} ダウンロード</a></div></section>
+      <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">データのダウンロード</h2><p>シークレットの値、接続とアクセスキーの一覧が JSON ファイルで入ります。オブジェクトは入りません。</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ダウンロード</a></div></section>
       <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">開発者</h2></div></div><a class="button secondary" href="/developers">アプリの登録</a></div></section>`);
     return;
   }
@@ -289,13 +296,13 @@ function render() {
     // For the few who build a product on Foundation. Everyone else never comes here.
     app.innerHTML = shell(`<header class="page-heading"><h1>アプリ</h1></header>
       <section class="resource-section" aria-labelledby="integration-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="integration-title">登録したアプリ</h2></div></div><button class="button secondary" data-action="add-integration">${icon('plus')} アプリを登録</button></div>
-      ${state.integrations?.length ? `<div class="agent-list">${state.integrations.map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${esc(new URL(item.return_url).host)} · 利用者 ${esc(String(item.accounts))} 人</p></div><div class="agent-permissions"><span class="muted">${item.last_used_at ? '最終利用 ' + esc(new Date(item.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</span>${item.webhook_url ? '<span class="muted block">完了を通知します</span>' : ''}</div><div class="agent-actions"><button class="text-button danger" data-action="remove-integration" data-id="${esc(item.id)}">削除</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>登録したアプリはありません。</p></div>'}</section>
+      ${state.apps?.length ? `<div class="agent-list">${state.apps.map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${esc(new URL(item.return_url).host)} · 利用者 ${esc(String(item.accounts))} 人</p></div><div class="agent-permissions"><span class="muted">${item.last_used_at ? '最終利用 ' + esc(new Date(item.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</span>${item.webhook_url ? '<span class="muted block">完了を通知します</span>' : ''}</div><div class="agent-actions"><button class="text-button danger" data-action="remove-integration" data-id="${esc(item.id)}">削除</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>登録したアプリはありません。</p></div>'}</section>
 `);
     return;
   }
   if (page === 'home') {
     // A look over everything, and the way to each page. Nothing is managed here.
-    const space = state.space, kept = state.secrets || [], connections = state.acquisitions || [], keys = state.keys || [], runs = state.invocations || [];
+    const space = state.space, kept = state.secrets || [], connections = state.connections || [], keys = state.keys || [], runs = state.invocations || [];
     const card = (href, title, line) => `<a class="home-card" href="${href}"><h2>${title}</h2><p>${esc(line)}</p></a>`;
     const lastUsed = keys.map(key => key.last_used_at).filter(Boolean).sort().at(-1);
     app.innerHTML = shell(`<header class="page-heading"><h1>Foundation</h1></header>
@@ -316,7 +323,7 @@ function render() {
     return;
   }
   if (page === 'connections') {
-    const connections = state.acquisitions || [];
+    const connections = state.connections || [];
     app.innerHTML = shell(`<header class="page-heading"><h1>接続</h1></header>
     ${connections.length ? `<section class="resource-section" aria-labelledby="connections-title"><div class="section-heading"><h2 id="connections-title">接続済み</h2></div><div class="agent-list">${connections.map(connectionRow).join('')}</div></section>` : ''}
     ${connectSection()}`);
@@ -350,7 +357,7 @@ function bindObjects() {
     upload.disabled = true;
     try {
       const key = objectPrefix + file.name;
-      const response = await fetch('/api/objects/' + encodeURIComponent(key), { method: 'PUT', credentials: 'same-origin',
+      const response = await fetch('/v1/objects/' + encodeURIComponent(key), { method: 'PUT', credentials: 'same-origin',
         headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
@@ -391,7 +398,7 @@ function renderRequest() {
   const expiry = `<p class="request-expiry">この依頼は ${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで有効です。</p>`;
   if (row.kind === 'approve') { renderApproval(row, shell, expiry); return; }
   if (row.kind === 'store') { renderStore(row, shell, expiry); return; }
-  const adapter = row.adapter, name = serviceName(adapter);
+  const adapter = row.connector, name = serviceName(adapter);
   const unavailable = `<p class="form-error" role="status">現在${esc(name)}に接続できません。</p>`;
   const body = !adapter.available ? unavailable
     : `<button class="button primary full request-connect" type="button" data-action="request-connect">${esc(adapter.label)} ${icon('arrow')}</button>
@@ -422,7 +429,7 @@ function renderStore(row, shell, expiry) {
     <button class="text-button full" type="button" data-action="deny-request">登録しない</button>${expiry}</section>`);
   bindForm(async (data) => {
     const entries = asked.map((_, at) => ({ name: String(data.get('name-' + at) ?? ''), content: String(data.get('value-' + at) ?? '') }));
-    try { await api(`/api/requests/${row.id}/store`, { method: 'POST', data: { entries } }); }
+    try { await api(`/v1/requests/${row.id}/done`, { method: 'POST', data: { entries } }); }
     catch (error) { if ([401, 404].includes(error.status)) await refresh(); throw error; }
     await refresh(); toast('登録しました。');
   }, app);
@@ -443,7 +450,7 @@ function renderApproval(row, shell, expiry) {
     submit.disabled = true;
     const errorElement = form.querySelector('[role="alert"]'); errorElement.textContent = '';
     try {
-      await api(`${requestApi}/approve`, { method: 'POST', data: { confirmationCode: form.elements.confirmationCode.value } });
+      await api(`${requestApi}/approve`, { method: 'POST', data: { confirmation_code: form.elements.confirmationCode.value } });
       await refresh();
     } catch (error) { if (form.isConnected) { errorElement.textContent = error.message; submit.disabled = false; } }
   });
@@ -468,13 +475,13 @@ function bindForm(handler, container = dialog) {
 }
 // Starting an acquisition Foundation performs itself. There is nothing to fill in: the service decides who it is.
 function connect(adapterId, connectionId) {
-  const adapter = state.adapters.find(item => item.id === adapterId);
+  const adapter = state.connectors.find(item => item.id === adapterId);
   if (!adapter?.available) return;
   const name = serviceName(adapter);
   openDialog(`<h2 id="dialog-title">${esc(name)}に${connectionId ? '接続し直す' : '接続'}</h2><p>${esc(adapter.intro)}</p><form>
     <p class="permission-note">${esc(adapter.access.name)}。${esc(adapter.access.restrictions)} ${connectionId ? '' : '接続すると、承認済みのアクセスキーから使えるようになります。'}${adapter.can_revoke ? '' : `停止は${esc(name)}で行います。`}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(adapter.label)} ${icon('arrow')}</button></form>`);
   bindForm(async () => {
-    const result = await api(`/api/adapters/${adapter.id}/connect`, { method: 'POST', data: connectionId ? { connection_id: connectionId } : {} });
+    const result = await api('/v1/connections', { method: 'POST', data: { connector: adapter.id, ...(connectionId ? { connection_id: connectionId } : {}) } });
     location.assign(result.url);
   });
 }
@@ -488,7 +495,7 @@ function disconnect(connection) {
     <p class="permission-note">${esc(revocationNote)}</p>${revoke}<p class="form-error" role="alert"></p>
     <div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">接続を解除</button></div></form>`);
   bindForm(async (form) => {
-    const result = await api('/api/acquisitions/' + encodeURIComponent(connection.id), { method: 'DELETE', data: { revoke: form.get('revoke') === 'on' } });
+    const result = await api('/v1/connections/' + encodeURIComponent(connection.id), { method: 'DELETE', data: { revoke: form.get('revoke') === 'on' } });
     closeDialog(); await refresh();
     toast(result.service_revoked === false ? '解除しました。接続先の許可は取り消せませんでした。' : '解除しました。');
   });
@@ -496,31 +503,14 @@ function disconnect(connection) {
 function addKey() {
   openDialog(`<h2 id="dialog-title">アクセスキーを追加</h2><p>AIの実行環境に置くキーを発行します。承認済みのキーと同じく、あなたが預けているものをすべて使えます。</p><form><label for="agent-name">アクセスキーの名前</label><input id="agent-name" name="name" placeholder="dev-us など" required maxlength="80" autocomplete="off"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">アクセスキーを発行</button></form>`);
   bindForm(async (form) => {
-    const result = await api('/api/keys', { method: 'POST', data: { name: form.get('name') } });
+    const result = await api('/v1/keys', { method: 'POST', data: { name: form.get('name') } });
     await refresh(); if (!state) return;
     openDialog(`<h2 id="dialog-title">${esc(result.key.name)} のアクセスキー</h2><p>キーは一度だけ表示します。AIを動かす環境の秘密情報として保管してください。</p><label for="agent-token">アクセスキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.key.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button><label for="api-url">接続先</label><input id="api-url" readonly value="${esc(location.origin)}/v1"><p class="permission-note">キーを会話や共有ファイルに貼り付けないでください。</p><button class="button primary full" data-action="close-dialog">閉じる</button>`);
   });
 }
-function removeCredential(credential) {
-  const adapter = adapterOf(credential), name = credential.service;
-  const manage = credential.management_url || adapter.service?.management_url;
-  // The same three sentences for every credential: what leaves Foundation, what stays elsewhere, and where to remove that.
-  const body = `<p>Foundationから削除します。承認済みのアクセスキーには渡らなくなります。</p>
-    <p>すでにAIに渡した値と、${esc(name)}側のキーは残ります。</p>
-    ${manage ? `<p><a href="${esc(manage)}" target="_blank" rel="noopener noreferrer">${esc(name)}でキーを確認・削除する ↗</a></p>` : ''}
-    ${adapter.can_revoke ? `<label class="choice revoke-choice"><input type="checkbox" name="revoke" checked><span><strong>${esc(name)}側の許可も取り消す</strong><small>取り消せなかった場合は、その旨をお知らせします。</small></span></label>` : ''}`;
-  openDialog(`<h2 id="dialog-title">${esc(name)}の認証情報を解除しますか？</h2><p>${esc(credentialLabel(credential))}</p><form>${body}<p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">登録を解除</button></div></form>`);
-  bindForm(async (form) => {
-    let result;
-    try { result = await api(`/api/credentials/${credential.id}`, { method: 'DELETE', data: { revoke: form.has('revoke') } }); }
-    catch (error) { await refresh(); throw error; }
-    closeDialog(); await refresh();
-    toast(result.service_revoked === false ? `登録を解除しました。${name}側の許可は取り消せませんでした。${name}の画面で取り消してください。` : '登録を解除しました。');
-  });
-}
 function renameKey(key) {
   openDialog(`<h2 id="dialog-title">アクセスキーの名前を変更</h2><form><label for="agent-name">名前</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off" value="${esc(key.name)}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
-  bindForm(async (form) => { await api(`/api/keys/${key.id}`, { method: 'PATCH', data: { name: form.get('name') } }); closeDialog(); await refresh(); toast('名前を変更しました。'); });
+  bindForm(async (form) => { await api(`/v1/keys/${key.id}`, { method: 'PATCH', data: { name: form.get('name') } }); closeDialog(); await refresh(); toast('名前を変更しました。'); });
 }
 function addIntegration() {
   openDialog(`<h2 id="dialog-title">アプリを登録</h2><form>
@@ -531,7 +521,7 @@ function addIntegration() {
     <label for="integration-webhook">完了の通知先（省略可）</label><input id="integration-webhook" name="webhook_url" type="url" autocomplete="off">
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">アプリキーを発行</button></form>`);
   bindForm(async (form) => {
-    const result = (await api('/api/integrations', { method: 'POST', data: { name: form.get('name'), return_url: form.get('return_url'), refresh_url: form.get('refresh_url') || undefined, webhook_url: form.get('webhook_url') || undefined } })).integration;
+    const result = (await api('/v1/apps', { method: 'POST', data: { name: form.get('name'), return_url: form.get('return_url'), refresh_url: form.get('refresh_url') || undefined, webhook_url: form.get('webhook_url') || undefined } })).app;
     await refresh(); if (!state) return;
     openDialog(`<h2 id="dialog-title">${esc(result.name)} のアプリキー</h2><p>キーは一度だけ表示します。</p><label for="agent-token">アプリキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button>
       ${result.webhook_secret ? `<label for="webhook-secret">通知の署名キー</label><textarea id="webhook-secret" rows="2" readonly spellcheck="false">${esc(result.webhook_secret)}</textarea><p class="permission-note">通知が本物かどうかを、この値で確かめます。</p>` : ''}
@@ -540,12 +530,12 @@ function addIntegration() {
 }
 function removeIntegration(item) {
   openDialog(`<h2 id="dialog-title">アプリの登録を削除しますか？</h2><p>${esc(item.name)}</p><form><p>アプリキーは使えなくなります。利用者のアカウントとアクセスキーは残ります。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">削除する</button></div></form>`);
-  bindForm(async () => { await api(`/api/integrations/${item.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('アプリの登録を削除しました。'); });
+  bindForm(async () => { await api(`/v1/apps/${item.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('アプリの登録を削除しました。'); });
 }
 function removeKey(key) {
   const expiry = key.issued_nonexpiring ? '<p class="permission-note">このアクセスキーには、有効期限が未指定または不明の認証情報を渡しています。完全に無効にするには、認証情報の登録解除も必要です。</p>' : key.issued_until > Date.now() ? `<p class="permission-note">受け渡し済みの認証情報の最長有効期限：${esc(new Date(key.issued_until).toLocaleString('ja-JP'))}</p>` : '';
   openDialog(`<h2 id="dialog-title">アクセスキーを失効させますか？</h2><p>${esc(key.name)}</p><form><p>このアクセスキーでは認証情報を取得できなくなります。${revocationNote}</p>${expiry}<p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">失効させる</button></div></form>`);
-  bindForm(async () => { await api(`/api/keys/${key.id}`, { method: 'DELETE' }); closeDialog(); await refresh(); toast('アクセスキーを失効させました。'); });
+  bindForm(async () => { await api(`/v1/keys/${key.id}`, { method: 'DELETE' }); closeDialog(); await refresh(); toast('アクセスキーを失効させました。'); });
 }
 // One confirmation, for removing something a key kept. Nothing here can be undone, and nothing reaches the service.
 // The name and the way it reaches a command, changed without the value ever being handed back.
@@ -558,7 +548,7 @@ function addSecret() {
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加</button></form>`);
   bindForm(async (form) => {
     const name = form.get('name'), open = form.get('readable') === 'on';
-    const response = await fetch('/api/secrets?name=' + encodeURIComponent(name) + (open ? '&secret=false' : ''),
+    const response = await fetch('/v1/secrets?name=' + encodeURIComponent(name) + (open ? '&secret=false' : ''),
       { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'text/plain' }, body: String(form.get('value')) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
@@ -597,7 +587,7 @@ function editSecret(entry, trigger) {
     saving = true; save.disabled = true; cancel.disabled = true; input.readOnly = true;
     form.setAttribute('aria-busy', 'true'); error.textContent = '';
     try {
-      const { secret: saved } = await api('/api/secrets?name=' + encodeURIComponent(entry.name), { method: 'PATCH', data: { name } });
+      const { secret: saved } = await api('/v1/secrets?name=' + encodeURIComponent(entry.name), { method: 'PATCH', data: { name } });
       state.secrets = state.secrets.map(item => item.name === entry.name ? saved : item);
       const template = document.createElement('template'); template.innerHTML = secretRow(saved);
       const next = template.content.firstElementChild;
@@ -613,7 +603,7 @@ function editSecret(entry, trigger) {
   input.focus(); input.select();
 }
 function bindSecretValue(entry, row) {
-  const path = '/api/secrets?name=' + encodeURIComponent(entry.name), panel = row.querySelector('.secret-value-panel');
+  const path = '/v1/secrets?name=' + encodeURIComponent(entry.name), panel = row.querySelector('.secret-value-panel');
   let value = null, text = null, etag = null, revealed = false, binary = false, busy = false;
   const lock = locked => row.querySelectorAll('[data-action]').forEach(button => { button.disabled = locked; });
   const clear = () => { value = null; text = null; etag = null; revealed = false; };
@@ -719,10 +709,10 @@ document.addEventListener('click', async (event) => {
   const { action, id } = target.dataset;
   try {
     if (action === 'close-dialog') closeDialog();
-    if (action === 'logout') { target.disabled = true; await api('/api/session', { method: 'DELETE' }); await showLogin(); }
+    if (action === 'logout') { target.disabled = true; await api('/v1/session', { method: 'DELETE', data: {} }); await showLogin(); }
     if (action === 'request-connect') {
       target.disabled = true;
-      const result = await api(`/api/adapters/${accessRequest.adapter.id}/connect`, { method: 'POST', data: { requestId } });
+      const result = await api('/v1/connections', { method: 'POST', data: { connector: accessRequest.connector.id, request_id: requestId } });
       location.assign(result.url);
     }
     if (action === 'deny-request') {
@@ -732,10 +722,10 @@ document.addEventListener('click', async (event) => {
     }
     if (action === 'add-adapter') connect(target.dataset.adapter);
     if (action === 'reconnect') connect(target.dataset.adapter, target.dataset.id);
-    if (action === 'disconnect') disconnect(state.acquisitions.find(item => item.id === target.dataset.id));
+    if (action === 'disconnect') disconnect(state.connections.find(item => item.id === target.dataset.id));
     if (action === 'drop-secret') {
       const name = target.dataset.name;
-      confirmRemoval(name + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/api/secrets?name=' + encodeURIComponent(name), { method: 'DELETE', data: {} }));
+      confirmRemoval(name + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/v1/secrets?name=' + encodeURIComponent(name), { method: 'DELETE', data: {} }));
     }
     if (action === 'go-prefix') { objectPrefix = target.dataset.prefix; objectFilter = ''; objectLimit = 100; objectChosen = new Set(); render(); }
     if (action === 'more-objects') { objectLimit += 100; render(); }
@@ -759,7 +749,7 @@ document.addEventListener('click', async (event) => {
       const key = chosenKeys()[0];
       target.disabled = true;
       try {
-        const result = await api('/api/objects/' + encodeURIComponent(key) + '/link', { method: 'POST', data: { minutes: 60 } });
+        const result = await api('/v1/objects/' + encodeURIComponent(key) + '/link', { method: 'POST', data: { minutes: 60 } });
         try { await navigator.clipboard.writeText(result.url); toast('URLをコピーしました。1時間で切れます。'); }
         catch {
           openDialog(`<h2 id="dialog-title">取り出し用のURL</h2><p>${esc(key)} を、このURLを知っている人なら誰でも取り出せます。1時間で切れます。</p>
@@ -772,7 +762,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'drop-chosen') {
       const keys = chosenKeys();
       confirmRemoval(keys.length === 1 ? keys[0] + ' を削除しますか？' : keys.length + '件を削除しますか？', '置き場から消えます。元には戻せません。',
-        async () => { for (const key of keys) await api('/api/objects/' + encodeURIComponent(key), { method: 'DELETE', data: {} }); objectChosen = new Set(); });
+        async () => { for (const key of keys) await api('/v1/objects/' + encodeURIComponent(key), { method: 'DELETE', data: {} }); objectChosen = new Set(); });
     }
     if (action === 'add-secret') addSecret();
     if (action === 'copy-name') {
@@ -783,7 +773,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'add-key') addKey();
     if (action === 'remove-key') removeKey(state.keys.find((key) => key.id === id));
     if (action === 'add-integration') addIntegration();
-    if (action === 'remove-integration') removeIntegration(state.integrations.find((item) => item.id === id));
+    if (action === 'remove-integration') removeIntegration(state.apps.find((item) => item.id === id));
     if (action === 'rename-key') renameKey(state.keys.find((key) => key.id === id));
     if (action === 'copy-token') {
       const token = document.querySelector('#agent-token');
@@ -796,7 +786,7 @@ const resultCode = new URL(location.href).searchParams.get('connection');
 window.addEventListener('pageshow', event => { if (event.persisted) void refresh().catch(() => {}); });
 if (linkToken) {
   try {
-    await api('/api/request-links', { method: 'POST', data: { request_id: requestId, link: linkToken } });
+    await api('/v1/request-links/claim', { method: 'POST', data: { request_id: requestId, link: linkToken } });
     linked = true;
     try { sessionStorage.setItem('linked:' + requestId, '1'); } catch {}
   } catch (error) { if (!linked) { linked = true; requestError = error.message; } }

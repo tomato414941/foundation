@@ -18,7 +18,7 @@ const execute = (args, env) => new Promise((resolve, reject) => {
 // Everything else it does over HTTP, with the key in that file.
 async function storedInputs(f) {
   for (const [name, value] of [['first input', 'google-access-personal-readonly'], ['second=入力:1', 'personal@example.test']]) {
-    const saved = await f.request('/api/secrets?name=' + encodeURIComponent(name), { method: 'PUT', raw: value });
+    const saved = await f.request('/v1/secrets?name=' + encodeURIComponent(name), { method: 'PUT', raw: value });
     assert.equal(saved.status, 200, saved.text);
   }
   return ['GOOGLE_OAUTH_ACCESS_TOKEN=first input', 'GMAIL_ACCOUNT_EMAIL=second=入力:1'];
@@ -49,7 +49,7 @@ test('コマンドが作った非公開ファイルを名前どおりに保存�
   await assert.rejects(stat(dirname(run.out.trim())), { code: 'ENOENT' });
   const direct = await f.request('/v1/secrets?name=' + encodeURIComponent(output.name), { token: f.runtime.token });
   assert.equal(direct.status, 403); assert.equal(direct.json.error.code, 'write_only');
-  const owner = await fetch(f.base + '/api/secrets?name=' + encodeURIComponent(output.name), { headers: { cookie: f.cookie() } });
+  const owner = await fetch(f.base + '/v1/secrets?name=' + encodeURIComponent(output.name), { headers: { cookie: f.cookie() } });
   assert.equal(owner.status, 200);
   assert.deepEqual(Buffer.from(await owner.arrayBuffer()), content);
   const used = await execute(['exec', '--inputs', JSON.stringify([output]), '--', process.execPath, '-e', `
@@ -64,7 +64,7 @@ test('コマンドが作った非公開ファイルを名前どおりに保存�
 
 test('入力ファイルと出力ファイルを別々に渡し、成功した出力で指定した値を置き換える', async t => {
   const f = await outputFixture(t);
-  await f.request('/api/secrets?name=login%20config', { method: 'PUT', raw: 'previous-secret' });
+  await f.request('/v1/secrets?name=login%20config', { method: 'PUT', raw: 'previous-secret' });
   const input = { name: outputSpec.name, as: 'INPUT_FILE', filename: outputSpec.filename };
   const run = await execute(['exec', '--inputs', JSON.stringify([input]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
     const fs = require('node:fs');
@@ -74,7 +74,7 @@ test('入力ファイルと出力ファイルを別々に渡し、成功した�
   `], f.env);
   assert.equal(run.code, 0, run.err);
   for (const path of JSON.parse(run.out)) await assert.rejects(stat(dirname(path)), { code: 'ENOENT' });
-  const saved = await f.request('/api/secrets?name=login%20config');
+  const saved = await f.request('/v1/secrets?name=login%20config');
   assert.equal(saved.text, 'replacement-secret');
   assert.doesNotMatch(run.out + run.err, /previous-secret|replacement-secret/);
 });
@@ -88,14 +88,14 @@ test('出力指定とFoundationの承認を確認してからコマンドを実�
   }
   const collision = await execute(['exec', 'AUTH_FILE=anything', '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', 'console.log("must-not-run")'], f.env);
   assert.equal(collision.code, 1); assert.match(collision.err, /different environment variable/); assert.equal(collision.out, '');
-  await f.request('/api/keys/' + f.runtime.id, { method: 'DELETE' });
+  await f.request('/v1/keys/' + f.runtime.id, { method: 'DELETE' });
   const revoked = await execute(['exec', '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', 'console.log("must-not-run")'], f.env);
   assert.equal(revoked.code, 1); assert.match(revoked.err, /not_approved/); assert.equal(revoked.out, '');
 });
 
 test('コマンドが失敗すると一時ファイルを片づけて既存の保存値を維持する', async t => {
   const f = await outputFixture(t);
-  await f.request('/api/secrets?name=login%20config', { method: 'PUT', raw: 'previous-secret' });
+  await f.request('/v1/secrets?name=login%20config', { method: 'PUT', raw: 'previous-secret' });
   const input = { name: outputSpec.name, as: 'INPUT_FILE', filename: 'input' };
   const run = await execute(['exec', '--inputs', JSON.stringify([input]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
     require('node:fs').writeFileSync(process.env.AUTH_FILE, 'partial-secret');
@@ -104,7 +104,7 @@ test('コマンドが失敗すると一時ファイルを片づけて既存の�
   `], f.env);
   assert.equal(run.code, 7);
   for (const path of JSON.parse(run.out)) await assert.rejects(stat(dirname(path)), { code: 'ENOENT' });
-  assert.equal((await f.request('/api/secrets?name=login%20config')).text, 'previous-secret');
+  assert.equal((await f.request('/v1/secrets?name=login%20config')).text, 'previous-secret');
   assert.doesNotMatch(run.out + run.err, /partial-secret|previous-secret/);
 });
 
@@ -126,7 +126,7 @@ test('空・過大・公開・リンク・特殊ファイルの出力を安全�
     const run = await execute(['exec', '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `const fs = require('node:fs'), p = process.env.AUTH_FILE; console.log(p); ${script}`], f.env);
     assert.equal(run.code, 1, run.err); assert.match(run.err, expected);
     await assert.rejects(stat(dirname(run.out.trim())), { code: 'ENOENT' });
-    assert.equal((await f.request('/api/secrets?name=login%20config')).status, 404);
+    assert.equal((await f.request('/v1/secrets?name=login%20config')).status, 404);
     assert.doesNotMatch(run.out + run.err, /outside-secret|public-secret/);
   }
   assert.equal(await readFile(outside, 'utf8'), 'outside-secret');
@@ -134,7 +134,7 @@ test('空・過大・公開・リンク・特殊ファイルの出力を安全�
 
 test('保存に失敗したときだけ復旧用の非公開出力を残し、入力は片づける', async t => {
   const f = await outputFixture(t);
-  await f.request('/api/secrets?name=input', { method: 'PUT', raw: 'input-secret' });
+  await f.request('/v1/secrets?name=input', { method: 'PUT', raw: 'input-secret' });
   const put = f.app.store.writeSecret;
   f.app.store.writeSecret = () => fail(503, 'storage_unavailable', 'generated-secret');
   const run = await execute(['exec', '--inputs', JSON.stringify([{ name: 'input', as: 'INPUT_FILE', filename: 'input' }]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
@@ -151,10 +151,10 @@ test('保存に失敗したときだけ復旧用の非公開出力を残し、�
   assert.equal((await stat(outputPath)).mode & 0o777, 0o600);
   assert.deepEqual(await readdir(dirname(outputPath)), [outputSpec.filename]);
   assert.equal(await readFile(outputPath, 'utf8'), 'generated-secret');
-  assert.equal((await f.request('/api/secrets?name=login%20config')).status, 404);
+  assert.equal((await f.request('/v1/secrets?name=login%20config')).status, 404);
   const retried = await execute(['api', 'PUT', '/v1/secrets?name=login%20config&secret=true', '--from', outputPath], f.env);
   assert.equal(retried.code, 0, retried.err);
-  assert.equal((await f.request('/api/secrets?name=login%20config')).text, 'generated-secret');
+  assert.equal((await f.request('/v1/secrets?name=login%20config')).text, 'generated-secret');
   assert.doesNotMatch(run.out + run.err + retried.out + retried.err, /generated-secret|input-secret/);
 });
 
@@ -175,7 +175,7 @@ test('中断を子プロセスに伝えて一時ファイルを片づけ、途�
   assert.equal(await done, 1);
   assert.match(err, /interrupted/);
   await assert.rejects(stat(dirname(out.trim())), { code: 'ENOENT' });
-  assert.equal((await f.request('/api/secrets?name=login%20config')).status, 404);
+  assert.equal((await f.request('/v1/secrets?name=login%20config')).status, 404);
 });
 
 test('The runtime hands what is kept to the selected process only', async (t) => {
@@ -187,7 +187,7 @@ test('The runtime hands what is kept to the selected process only', async (t) =>
   assert.equal(run.code, 0, run.err);
   assert.equal(run.out.trim(), 'runtime-ready');
   assert.doesNotMatch(run.out + run.err, /google-access|refresh_token|fdn_/);
-  await f.request('/api/keys/' + runtime.id, { method: 'DELETE' });
+  await f.request('/v1/keys/' + runtime.id, { method: 'DELETE' });
   const revoked = await execute(['exec', ...inputs, '--', process.execPath, '-e', 'console.log("must-not-run")'], env);
   assert.equal(revoked.code, 1);
   assert.doesNotMatch(revoked.out, /must-not-run/);
@@ -209,14 +209,14 @@ test('connect makes the key as a private file, never printing it, and the same k
   const connected = await execute(['connect', '--name', 'dev-us のAI'], env);
   assert.equal(connected.code, 0, connected.err);
   const row = JSON.parse(connected.out.slice(0, connected.out.indexOf('\n\nKey file'))).request, secret = (await readFile(keyPath, 'utf8')).trim();
-  assert.equal(row.status, 'pending'); assert.match(row.verification_uri, /\/keys\//);
+  assert.equal(row.status, 'pending'); assert.match(row.verification_uri, /\/key-requests\//);
   assert.equal((await stat(keyPath)).mode & 0o777, 0o600);
   assert.ok(!connected.out.includes(secret), 'the key stays in the file');
   assert.match(connected.out, new RegExp(keyPath), 'and the agent is told where it is, for its own HTTP calls');
 
   const before = await execute(['exec', ...inputs, '--', process.execPath, '-e', '0'], env);
   assert.equal(before.code, 1); assert.match(before.err, /not_approved/);
-  const approval = await f.request('/api/key-requests/' + row.id + '/approve', { method: 'POST', data: { confirmationCode: row.confirmation_code } });
+  const approval = await f.request('/v1/key-requests/' + row.id + '/approve', { method: 'POST', data: { confirmation_code: row.confirmation_code } });
   assert.equal(approval.status, 200, approval.text);
   const run = await execute(['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("connected")'], env);
   assert.equal(run.code, 0, run.err);
@@ -246,11 +246,11 @@ test('A denied request is indistinguishable from waiting, and asking again still
   const dir = await mkdtemp(join(tmpdir(), 'foundation-denied-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'runtime-key'), env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
   const row = JSON.parse((await execute(['connect'], env)).out.split('\n\nKey file')[0]).request;
-  await f.request('/api/key-requests/' + row.id + '/deny', { method: 'POST', data: {} });
+  await f.request('/v1/key-requests/' + row.id + '/deny', { method: 'POST', data: {} });
   const denied = await execute(['exec', ...inputs, '--', process.execPath, '-e', '0'], env);
   assert.equal(denied.code, 1); assert.match(denied.err, /not_approved/, 'denial is indistinguishable from waiting');
   const again = JSON.parse((await execute(['connect'], env)).out.split('\n\nKey file')[0]).request;
-  await f.request('/api/key-requests/' + again.id + '/approve', { method: 'POST', data: { confirmationCode: again.confirmation_code } });
+  await f.request('/v1/key-requests/' + again.id + '/approve', { method: 'POST', data: { confirmation_code: again.confirmation_code } });
   const after = await execute(['exec', ...inputs, '--', process.execPath, '-e', 'console.log("ready")'], env);
   assert.equal(after.code, 0, after.err); assert.equal(after.out.trim(), 'ready');
 });
@@ -263,7 +263,7 @@ test('--help lists the commands; guide describes the API, and when a server is r
   assert.doesNotMatch(help.out, /\/v1\//, 'the API belongs to the guide');
   const offline = await execute(['guide'], { FOUNDATION_URL: '', XDG_CONFIG_HOME: join(tmpdir(), 'foundation-no-config') });
   assert.equal(offline.code, 0, offline.err);
-  assert.match(offline.out, /GET \/v1\/adapters lists what this server can obtain itself/);
+  assert.match(offline.out, /GET \/v1\/connectors lists what this server can obtain itself/);
   assert.match(offline.out, /Nothing here needs a shell/);
   assert.doesNotMatch(offline.out, /gmail/);
   const online = await execute(['guide'], { FOUNDATION_URL: f.base });
@@ -287,7 +287,7 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   const env = { HOME: join(dir, 'home'), XDG_CONFIG_HOME: join(dir, 'config'), FOUNDATION_URL: '', FOUNDATION_RUNTIME_KEY_FILE: '' };
   const version = await run(foundation, ['--version'], env);
   assert.equal(version.out.trim(), JSON.parse(await readFile('cli/package.json', 'utf8')).version);
-  const unset = await run(foundation, ['api', 'GET', '/v1/me'], env);
+  const unset = await run(foundation, ['api', 'GET', '/v1/keys/current'], env);
   assert.equal(unset.code, 1);
   assert.match(unset.err, /foundation connect <url>/);
   const connected = await run(foundation, ['connect', f.base], env);
@@ -296,12 +296,12 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   assert.deepEqual(JSON.parse(await readFile(join(dir, 'config', 'foundation', 'config.json'), 'utf8')), { url: f.base });
   const help = await run(foundation, ['guide'], env);
   assert.match(help.out, /gmail.readonly/);
-  const waiting = await run(foundation, ['api', 'GET', '/v1/me'], env);
-  assert.match(waiting.out, /not_approved/);
+  const waiting = await run(foundation, ['api', 'GET', '/v1/keys/current'], env);
+  assert.match(waiting.out, /"status":"pending"/); assert.doesNotMatch(waiting.out, /"key"/);
   const request = JSON.parse(connected.out.split('\n\nKey file')[0]).request;
-  const approved = await f.request('/api/key-requests/' + request.id + '/approve', { method: 'POST', data: { confirmationCode: request.confirmation_code } });
+  const approved = await f.request('/v1/key-requests/' + request.id + '/approve', { method: 'POST', data: { confirmation_code: request.confirmation_code } });
   assert.equal(approved.status, 200, approved.text);
-  const me = await run(foundation, ['api', 'GET', '/v1/me'], env);
+  const me = await run(foundation, ['api', 'GET', '/v1/keys/current'], env);
   assert.equal(me.code, 0, me.out + me.err);
   const inputs = await storedInputs(f);
   const delivered = await run(foundation, ['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal-readonly"||process.env.GMAIL_ACCOUNT_EMAIL!=="personal@example.test")process.exit(2);console.log("package-ready")'], env);
@@ -317,7 +317,7 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   `], env);
   assert.equal(saved.code, 0, saved.err);
   assert.equal(saved.out.trim(), 'output-ready');
-  assert.equal((await f.request('/api/secrets?name=installed%20login')).text, '//registry.npmjs.org/:_authToken=fake-install-token\n');
+  assert.equal((await f.request('/v1/secrets?name=installed%20login')).text, '//registry.npmjs.org/:_authToken=fake-install-token\n');
   assert.doesNotMatch(saved.out + saved.err, /fake-install-token/);
   const moved = await run(foundation, ['guide'], { ...env, FOUNDATION_URL: 'http://127.0.0.1:9' });
   assert.doesNotMatch(moved.out, /gmail.readonly/, 'FOUNDATION_URL wins over the remembered server');
@@ -331,7 +331,7 @@ test('connect on a key already approved only remembers the server', async t => {
   const again = await execute(['connect', f.base], env);
   assert.equal(again.code, 0, again.err);
   assert.match(again.out, /Already approved/);
-  const me = await execute(['api', 'GET', '/v1/me'], env);
+  const me = await execute(['api', 'GET', '/v1/keys/current'], env);
   assert.equal(me.code, 0, me.out + me.err);
 });
 
@@ -351,7 +351,7 @@ test('FOUNDATION_AGENT gives each agent its own key file and default name', asyn
   assert.equal(keys.length, 2); assert.ok(keys.some(name => name.endsWith('-claude.key')) && keys.some(name => name.endsWith('-codex.key')));
   const bad = await execute(['connect'], { ...base, FOUNDATION_AGENT: '../x' });
   assert.equal(bad.code, 1); assert.match(bad.err, /FOUNDATION_AGENT/);
-  await f.request('/api/key-requests/' + rows[0].id + '/approve', { method: 'POST', data: { confirmationCode: rows[0].confirmation_code } });
+  await f.request('/v1/key-requests/' + rows[0].id + '/approve', { method: 'POST', data: { confirmation_code: rows[0].confirmation_code } });
   const approved = await execute(['exec', ...inputs, '--', process.execPath, '-e', 'console.log("ready")'], { ...base, FOUNDATION_AGENT: 'claude' });
   assert.equal(approved.code, 0, approved.err);
   const other = await execute(['exec', ...inputs, '--', process.execPath, '-e', '0'], { ...base, FOUNDATION_AGENT: 'codex' });

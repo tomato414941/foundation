@@ -52,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='ログインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    page.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
+    page.goto(args.base + '/login/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
     page.get_by_label('確認コード', exact=True).fill(approval['confirmation_code'])
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
@@ -101,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # Another value may be saved after the request page opens. The submitted name is checked again.
-    existing = page.request.put(args.base + '/api/secrets?name=cloudflare/cloudflare-api-token',
+    existing = page.request.put(args.base + '/v1/secrets?name=cloudflare/cloudflare-api-token',
                                headers={'content-type': 'text/plain', 'origin': args.base}, data='existing-value')
     assert existing.status == 200
     value.fill(SECRET)
@@ -109,7 +109,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     expect(page.get_by_role('alert')).to_have_text('「cloudflare/cloudflare-api-token」はすでに使われています。別の保存名を入力してください。')
     expect(saved_name).to_have_value('cloudflare/cloudflare-api-token')
     expect(value).to_have_value(SECRET)
-    assert page.request.get(args.base + '/api/secrets?name=cloudflare/cloudflare-api-token').text() == 'existing-value'
+    assert page.request.get(args.base + '/v1/secrets?name=cloudflare/cloudflare-api-token').text() == 'existing-value'
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
         review(page)
@@ -140,7 +140,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     kept = cli('api', 'GET', '/v1/secrets')['secrets']
     assert [row['name'] for row in kept] == ['cloudflare-api-token', 'cloudflare/cloudflare-api-token']
     assert kept[0]['readable'] is False
-    refused = subprocess.run(['node', 'cli/runtime.mjs', 'api', 'GET', '/v1/secrets/cloudflare-api-token'], env=env, capture_output=True, text=True, timeout=15)
+    refused = subprocess.run(['node', 'cli/runtime.mjs', 'api', 'GET', '/v1/secrets?name=cloudflare-api-token'], env=env, capture_output=True, text=True, timeout=15)
     assert refused.returncode == 1 and SECRET not in refused.stdout + refused.stderr
 
     used = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'CLOUDFLARE_API_TOKEN=cloudflare-api-token', '--', 'node', '-e',

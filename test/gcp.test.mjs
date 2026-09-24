@@ -14,7 +14,7 @@ import { FakeGmail, fixture, json, USER_A } from './helpers.mjs';
 async function gcpFixture(t, gcp = new FakeGcp()) {
   const gmail = new FakeGmail(), f = await fixture(t, { gmail, adapters: [gcpOauth(gcp), gmailReadonly(gmail)] });
   async function start(input = {}) {
-    const result = await f.request('/api/adapters/gcp.oauth/connect', { method: 'POST', data: input });
+    const result = await f.request('/v1/connections', { method: 'POST', data: { connector: 'gcp.oauth', ...input } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
@@ -23,7 +23,7 @@ async function gcpFixture(t, gcp = new FakeGcp()) {
     assert.match(done.headers.get('location'), /connection=connected/);
     return (await connections()).find(item => item.subject === (code === 'work' ? '1002' : '1001'));
   }
-  const connections = async () => (await f.request('/api/state')).json.acquisitions.filter(item => item.adapter === 'gcp.oauth');
+  const connections = async () => (await f.request('/v1/state')).json.connections.filter(item => item.connector === 'gcp.oauth');
   return { ...f, gcp, start, connect, connections };
 }
 
@@ -35,9 +35,9 @@ test('GCPの構成を読み込み、未設定なら接続を利用不可とし�
   assert.deepEqual(config.google, { clientId: '', clientSecret: '' });
   for (const incomplete of [{ clientId: 'id' }, { clientSecret: 'secret' }]) assert.throws(() => new GcpClient(incomplete), /Both Foundation GCP/);
   const f = await gcpFixture(t, new GcpClient());
-  const catalog = await f.request('/v1/adapters');
-  assert.equal(catalog.json.adapters.find(item => item.id === 'gcp.oauth').available, false);
-  assert.equal((await f.request('/api/adapters/gcp.oauth/connect', { method: 'POST', data: {} })).status, 503);
+  const catalog = await f.request('/v1/connectors');
+  assert.equal(catalog.json.connectors.find(item => item.id === 'gcp.oauth').available, false);
+  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { connector: 'gcp.oauth' } })).status, 503);
 });
 
 test('Google Cloudの同意をstate・PKCE・オフライン更新付きで要求する', async t => {
@@ -63,16 +63,16 @@ test('Google Cloudの同意をstate・PKCE・オフライン更新付きで要�
 
 test('AIの依頼を完了し、接続の確認結果と短期トークンを分けて渡す', async t => {
   const f = await gcpFixture(t), agent = await f.issueKey();
-  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { adapter: 'gcp.oauth', purpose: 'Google Cloudの設定を確認します。' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { connector: 'gcp.oauth', purpose: 'Google Cloudの設定を確認します。' } });
   assert.equal(asked.status, 201);
-  const a = await f.connect('personal', { requestId: asked.json.request.id });
+  const a = await f.connect('personal', { request_id: asked.json.request.id });
   const done = await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token });
   assert.equal(done.json.request.status, 'done');
   assert.equal(done.json.request.result.connection_id, a.id);
-  const catalog = await f.request('/v1/acquisitions', { token: agent.token });
-  assert.equal(catalog.json.acquisitions[0].label, 'personal@example.test');
-  assert.deepEqual(catalog.json.acquisitions[0].facts.scopes, GCP_SCOPES);
-  assert.equal(catalog.json.acquisitions[0].facts.iam_checked, false);
+  const catalog = await f.request('/v1/connections', { token: agent.token });
+  assert.equal(catalog.json.connections[0].label, 'personal@example.test');
+  assert.deepEqual(catalog.json.connections[0].facts.scopes, GCP_SCOPES);
+  assert.equal(catalog.json.connections[0].facts.iam_checked, false);
   assert.doesNotMatch(catalog.text, /gcp-access-|gcp-refresh-|test-gcp-secret/);
   const delivered = await f.deliver(a, { token: agent.token });
   assert.equal(delivered.status, 200, delivered.text);
@@ -80,7 +80,7 @@ test('AIの依頼を完了し、接続の確認結果と短期トークンを分
   assert.equal(delivered.json.delivery.environment.GOOGLE_CLOUD_ACCOUNT_EMAIL, 'personal@example.test');
   assert.ok(Number(delivered.json.delivery.environment.GOOGLE_OAUTH_EXPIRES_AT) > Date.now());
   assert.doesNotMatch(delivered.text, /gcp-refresh-|test-gcp-secret/);
-  assert.deepEqual((await f.request('/api/state')).json.secrets, []);
+  assert.deepEqual((await f.request('/v1/state')).json.secrets, []);
 });
 
 test('複数アカウントをGoogleの固定IDで識別し、別の所有者から分離する', async t => {
@@ -92,9 +92,9 @@ test('複数アカウントをGoogleの固定IDで識別し、別の所有者か
   assert.match(duplicate.headers.get('location'), /connection=already_connected/);
   await f.login('second@example.test');
   const stranger = await f.issueKey();
-  assert.deepEqual((await f.request('/v1/acquisitions', { token: stranger.token })).json.acquisitions, []);
+  assert.deepEqual((await f.request('/v1/connections', { token: stranger.token })).json.connections, []);
   assert.equal((await f.deliver(a, { token: stranger.token })).status, 404);
-  assert.equal((await f.request('/api/acquisitions/' + a.id, { method: 'DELETE', data: { revoke: false } })).status, 404);
+  assert.equal((await f.request('/v1/connections/' + a.id, { method: 'DELETE', data: { revoke: false } })).status, 404);
 });
 
 test('再接続は同じGoogle IDで行い、メールアドレスの変更を反映する', async t => {
@@ -125,7 +125,7 @@ test('権限の不足や追加をAIに返し、Googleが発行した認証情報
   assert.equal(refreshed.status, 200);
   assert.deepEqual(refreshed.json.facts.missing_scopes, []);
   assert.deepEqual(refreshed.json.facts.additional_scopes, []);
-  assert.deepEqual((await f.request('/v1/acquisitions', { token: agent.token })).json.acquisitions[0].facts.scopes, GCP_SCOPES);
+  assert.deepEqual((await f.request('/v1/connections', { token: agent.token })).json.connections[0].facts.scopes, GCP_SCOPES);
 });
 
 test('メール情報が非公開でもGoogle IDで接続し、不足する権限をAIに返す', async t => {
@@ -196,13 +196,13 @@ test('不正な認証応答を秘密値を含まないエラーで返す', async
 test('接続の解除ではGoogleへの取り消しを選べ、送信する秘密値はPOST本文に収める', async t => {
   const f = await gcpFixture(t), a = await f.connect(), b = await f.connect('work');
   assert.match(a.revocation_note, /他のGoogle接続/);
-  const removed = await f.request('/api/acquisitions/' + a.id, { method: 'DELETE', data: { revoke: true } });
+  const removed = await f.request('/v1/connections/' + a.id, { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.json.service_revoked, true);
   const revoke = f.gcp.calls.find(call => call.url.endsWith('/revoke'));
   assert.equal(revoke.url, 'https://oauth2.googleapis.com/revoke');
   assert.equal(revoke.options.method, 'POST');
   assert.equal(revoke.options.body.get('token'), 'gcp-refresh-personal');
-  assert.equal((await f.request('/api/acquisitions/' + b.id, { method: 'DELETE', data: { revoke: false } })).json.service_revoked, null);
+  assert.equal((await f.request('/v1/connections/' + b.id, { method: 'DELETE', data: { revoke: false } })).json.service_revoked, null);
   assert.equal(f.gcp.calls.filter(call => call.url.endsWith('/revoke')).length, 1);
   f.gcp.revokeHandler = () => json({ error: 'invalid_token' }, 400);
   await f.gcp.revoke({ refresh_token: 'already-gone' });

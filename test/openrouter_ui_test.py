@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
 
     def cli(*command, success=True):
         result = subprocess.run(['node', 'cli/runtime.mjs', *command], env=env, capture_output=True, text=True, timeout=15)
-        assert (result.returncode == 0) == success, result.stderr
+        assert (result.returncode == 0) == success, result.stderr + result.stdout
         assert 'sk-or-v1-' not in result.stdout + result.stderr and 'fdn_' not in result.stdout
         return json.loads(result.stdout.split('\n\nKey file')[0]) if success else None
 
@@ -44,12 +44,12 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='ログインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    page.goto(args.base + '/auth/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
+    page.goto(args.base + '/login/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
     # The key is approved first; the registration is a separate request with no code.
     page.get_by_label('確認コード', exact=True).fill(approval['confirmation_code'])
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'adapter': 'openrouter.oauth', 'purpose': '接続したキーの情報を確認。モデルは実行しません。'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'connector': 'openrouter.oauth', 'purpose': '接続したキーの情報を確認。モデルは実行しません。'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='OpenRouterで接続', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']

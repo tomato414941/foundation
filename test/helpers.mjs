@@ -87,7 +87,7 @@ export async function fixture(t, options = {}) {
     return { status: response.status, json, text, headers: response.headers };
   }
   async function login(email = 'owner@example.test') {
-    const sent = await request('/api/auth/link', { method: 'POST', data: { email } });
+    const sent = await request('/v1/login', { method: 'POST', data: { email } });
     assert.equal(sent.status, 202, sent.text);
     const challenge = sent.headers.getSetCookie().find(value => value.startsWith('fdn_login=')).split(';')[0];
     const url = new URL(auth.links.get(email).url);
@@ -99,7 +99,7 @@ export async function fixture(t, options = {}) {
   }
   // Gmail's read range is its adapter: gmail.readonly or gmail.metadata.
   async function start({ range = 'readonly', connection_id } = {}) {
-    const result = await request('/api/adapters/gmail.' + range + '/connect', { method: 'POST', data: { connection_id } });
+    const result = await request('/v1/connections', { method: 'POST', data: { connector: 'gmail.' + range, connection_id } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
@@ -111,8 +111,8 @@ export async function fixture(t, options = {}) {
   async function credential(code = 'personal', range = 'readonly') {
     const url = await start({ range });
     const response = await callback(url, code + '-' + range);
-    assert.equal(response.headers.get('location'), '/?connection=connected&adapter=gmail.' + range, response.text);
-    return (await request('/api/state')).json.acquisitions.find((item) => item.subject === code + '@example.test');
+    assert.equal(response.headers.get('location'), '/?connection=connected&connector=gmail.' + range, response.text);
+    return (await request('/v1/state')).json.connections.find((item) => item.subject === code + '@example.test');
   }
   // Explicit credential processing: storage reads never call this operation.
   async function deliver(acquisition, options = {}) {
@@ -122,13 +122,13 @@ export async function fixture(t, options = {}) {
   async function approveKey(token, name = 'dev-us') {
     const asked = await request('/v1/keys', { method: 'POST', anonymous: true, token, data: { name } });
     assert.equal(asked.status, 201, asked.text);
-    const done = await request('/api/key-requests/' + asked.json.request.id + '/approve', { method: 'POST', data: { confirmationCode: asked.json.request.confirmation_code } });
+    const done = await request('/v1/key-requests/' + asked.json.request.id + '/approve', { method: 'POST', data: { confirmation_code: asked.json.request.confirmation_code } });
     assert.equal(done.status, 200, done.text);
     return asked.json.request;
   }
   // A key the owner issues from the dashboard.
   async function issueKey(name = 'dev-us') {
-    const result = await request('/api/keys', { method: 'POST', data: { name } });
+    const result = await request('/v1/keys', { method: 'POST', data: { name } });
     assert.equal(result.status, 201, result.text);
     return result.json.key;
   }

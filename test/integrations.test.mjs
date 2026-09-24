@@ -6,10 +6,10 @@ import { fixture, USER_A } from './helpers.mjs';
 // hands a user to one request through a single-use link, and reads usage; it never reaches what an account holds.
 async function setup(t) {
   const f = await fixture(t);
-  const made = await f.request('/api/integrations', { method: 'POST', data: { name: 'ai-simplicity', return_url: 'https://simplicity.example.test/foundation' } });
+  const made = await f.request('/v1/apps', { method: 'POST', data: { name: 'ai-simplicity', return_url: 'https://simplicity.example.test/foundation' } });
   assert.equal(made.status, 201, made.text);
-  const product = made.json.integration.token;
-  const call = (path, options = {}) => f.request('/v1/integration' + path, { anonymous: true, token: product, ...options });
+  const product = made.json.app.token;
+  const call = (path, options = {}) => f.request('/v1' + path, { anonymous: true, token: product, ...options });
   const account = async external => {
     const ensured = await call('/accounts/' + external, { method: 'PUT', data: {} });
     assert.equal(ensured.status, 200, ensured.text);
@@ -44,9 +44,9 @@ test('A product makes one account per user, and each account keeps to itself', a
   assert.notEqual(first.account.id, second.account.id);
   assert.notEqual(first.account.id, USER_A);
   assert.equal((await call('/accounts/user-1', { method: 'PUT', data: {} })).json.account.id, first.account.id, 'the same user is the same account');
-  assert.equal((await f.request('/v1/secrets/npm-token?secret=true', { method: 'PUT', anonymous: true, token: first.key.token, raw: 'tok-1', type: 'text/plain' })).status, 200);
+  assert.equal((await f.request('/v1/secrets?name=npm-token&secret=true', { method: 'PUT', anonymous: true, token: first.key.token, raw: 'tok-1', type: 'text/plain' })).status, 200);
   assert.deepEqual((await f.request('/v1/secrets', { anonymous: true, token: second.key.token })).json.secrets, []);
-  assert.deepEqual((await f.request('/api/state')).json.secrets, [], 'nor are they the owner\'s who registered the product');
+  assert.deepEqual((await f.request('/v1/state')).json.secrets, [], 'nor are they the owner\'s who registered the product');
   // The product's own credential reaches no account's contents.
   assert.equal((await f.request('/v1/secrets', { anonymous: true, token: product })).status, 401);
   const usage = await call('/accounts/user-1/usage');
@@ -60,13 +60,13 @@ test('Replacing a key revokes the one it replaces, and a product revokes only it
   const { key } = await account('user-1');
   const next = await call('/accounts/user-1/keys', { method: 'POST', data: { name: 'conversation 2', replaces: key.id } });
   assert.equal(next.status, 201, next.text);
-  assert.equal((await f.request('/v1/me', { anonymous: true, token: key.token })).status, 401);
-  assert.equal((await f.request('/v1/me', { anonymous: true, token: next.json.key.token })).status, 200);
+  assert.equal((await f.request('/v1/keys/current', { anonymous: true, token: key.token })).status, 401);
+  assert.equal((await f.request('/v1/keys/current', { anonymous: true, token: next.json.key.token })).status, 200);
   const ownKey = await f.issueKey();
   assert.equal((await call('/accounts/user-1/keys/' + ownKey.id, { method: 'DELETE', data: {} })).status, 404);
-  assert.equal((await f.request('/v1/me', { anonymous: true, token: ownKey.token })).status, 200);
+  assert.equal((await f.request('/v1/keys/current', { anonymous: true, token: ownKey.token })).status, 200);
   assert.equal((await call('/accounts/user-1/keys/' + next.json.key.id, { method: 'DELETE', data: {} })).status, 200);
-  assert.equal((await f.request('/v1/me', { anonymous: true, token: next.json.key.token })).status, 401);
+  assert.equal((await f.request('/v1/keys/current', { anonymous: true, token: next.json.key.token })).status, 401);
 });
 
 test('A request from such an account is opened on the product\'s page, and a single-use link reaches that request alone', async t => {
@@ -74,27 +74,27 @@ test('A request from such an account is opened on the product\'s page, and a sin
   const { key } = await account('user-1');
   const request = await ask(key), other = await ask(await (async () => (await account('user-2')).key)());
   assert.equal(request.verification_uri, 'https://simplicity.example.test/foundation?foundation_request=' + request.id);
-  const made = await call('/links', { method: 'POST', data: { request_id: request.id } });
+  const made = await call('/request-links', { method: 'POST', data: { request_id: request.id } });
   assert.equal(made.status, 201, made.text);
   const url = new URL(made.json.url);
   assert.equal(url.pathname, '/requests/' + request.id);
   const link = new URLSearchParams(url.hash.slice(1)).get('link');
   assert.equal(url.search, '', 'the link travels in the fragment, never to a server log');
   const go = visitor();
-  assert.equal((await go('/api/requests/' + request.id)).status, 401, 'nothing before the link is spent');
-  const claimed = await go('/api/request-links', { method: 'POST', data: { request_id: request.id, link } });
+  assert.equal((await go('/v1/requests/' + request.id)).status, 401, 'nothing before the link is spent');
+  const claimed = await go('/v1/request-links/claim', { method: 'POST', data: { request_id: request.id, link } });
   assert.equal(claimed.status, 200, claimed.text);
-  assert.match(claimed.cookie, /HttpOnly/); assert.match(claimed.cookie, new RegExp('Path=/api/requests/' + request.id));
-  assert.equal((await go('/api/requests/' + request.id)).json.request.id, request.id);
-  assert.equal((await go('/api/state')).status, 401, 'the link reaches no other screen');
-  assert.equal((await go('/api/requests/' + other.id)).status, 401);
-  const stored = await go('/api/requests/' + request.id + '/store', { method: 'POST', data: { entries: [{ name: 'npm-api-token', content: 'npm_value' }] } });
+  assert.match(claimed.cookie, /HttpOnly/); assert.match(claimed.cookie, new RegExp('Path=/v1/requests/' + request.id));
+  assert.equal((await go('/v1/requests/' + request.id)).json.request.id, request.id);
+  assert.equal((await go('/v1/state')).status, 401, 'the link reaches no other screen');
+  assert.equal((await go('/v1/requests/' + other.id)).status, 401);
+  const stored = await go('/v1/requests/' + request.id + '/done', { method: 'POST', data: { entries: [{ name: 'npm-api-token', content: 'npm_value' }] } });
   assert.equal(stored.status, 200, stored.text);
-  assert.deepEqual((await go('/api/requests/' + request.id)).json.request.result.names, ['npm-api-token']);
-  const delivered = await f.request('/v1/deliver', { method: 'POST', anonymous: true, token: key.token, data: { names: [{ name: 'npm-api-token', as: 'NPM_TOKEN' }] } });
+  assert.deepEqual((await go('/v1/requests/' + request.id)).json.request.result.names, ['npm-api-token']);
+  const delivered = await f.request('/v1/deliveries', { method: 'POST', anonymous: true, token: key.token, data: { names: [{ name: 'npm-api-token', as: 'NPM_TOKEN' }] } });
   assert.equal(delivered.json.delivery.environment.NPM_TOKEN, 'npm_value');
   // Spent once; another visitor gets nowhere with it.
-  assert.equal((await visitor()('/api/request-links', { method: 'POST', data: { request_id: request.id, link } })).status, 410);
+  assert.equal((await visitor()('/v1/request-links/claim', { method: 'POST', data: { request_id: request.id, link } })).status, 410);
 });
 
 test('A link is made only for the product\'s own accounts\' open store requests, and expires', async t => {
@@ -102,33 +102,33 @@ test('A link is made only for the product\'s own accounts\' open store requests,
   const { key } = await account('user-1');
   const ownKey = await f.issueKey();
   const outside = await ask(ownKey);
-  assert.equal((await call('/links', { method: 'POST', data: { request_id: outside.id } })).status, 404, 'not for an owner the product does not hold');
+  assert.equal((await call('/request-links', { method: 'POST', data: { request_id: outside.id } })).status, 404, 'not for an owner the product does not hold');
   const theirs = await ask(key);
-  assert.equal((await call('/links', { method: 'POST', data: { request_id: theirs.id, external_id: 'user-2' } })).status, 404, 'not for another of its users');
-  assert.equal((await call('/links', { method: 'POST', data: { request_id: theirs.id, external_id: 'user-1' } })).status, 201);
+  assert.equal((await call('/request-links', { method: 'POST', data: { request_id: theirs.id, external_id: 'user-2' } })).status, 404, 'not for another of its users');
+  assert.equal((await call('/request-links', { method: 'POST', data: { request_id: theirs.id, external_id: 'user-1' } })).status, 201);
   const request = await ask(key);
-  const made = await call('/links', { method: 'POST', data: { request_id: request.id } });
+  const made = await call('/request-links', { method: 'POST', data: { request_id: request.id } });
   const link = new URLSearchParams(new URL(made.json.url).hash.slice(1)).get('link');
   f.app.store.db.prepare('UPDATE request_links SET expires_at=0').run();
-  assert.equal((await visitor()('/api/request-links', { method: 'POST', data: { request_id: request.id, link } })).status, 410);
-  const connect = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { adapter: 'gmail.readonly', purpose: '確認' } });
-  assert.equal((await call('/links', { method: 'POST', data: { request_id: connect.json.request.id } })).json.error.code, 'link_unsupported');
+  assert.equal((await visitor()('/v1/request-links/claim', { method: 'POST', data: { request_id: request.id, link } })).status, 410);
+  const connect = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { connector: 'gmail.readonly', purpose: '確認' } });
+  assert.equal((await call('/request-links', { method: 'POST', data: { request_id: connect.json.request.id } })).json.error.code, 'link_unsupported');
 });
 
 test('Removing an account takes what it holds with it; removing the product stops its credential but not its accounts', async t => {
   const { f, call, account, product } = await setup(t);
   const { key } = await account('user-1');
-  await f.request('/v1/secrets/npm-token?secret=true', { method: 'PUT', anonymous: true, token: key.token, raw: 'tok', type: 'text/plain' });
+  await f.request('/v1/secrets?name=npm-token&secret=true', { method: 'PUT', anonymous: true, token: key.token, raw: 'tok', type: 'text/plain' });
   const kept = await account('user-2');
   assert.equal((await call('/accounts/user-1', { method: 'DELETE', data: {} })).status, 200);
-  assert.equal((await f.request('/v1/me', { anonymous: true, token: key.token })).status, 401);
+  assert.equal((await f.request('/v1/keys/current', { anonymous: true, token: key.token })).status, 401);
   assert.equal((await call('/accounts/user-1/usage')).status, 404);
-  const listed = (await f.request('/api/integrations')).json.integrations;
+  const listed = (await f.request('/v1/apps')).json.apps;
   assert.equal(listed.length, 1); assert.equal(listed[0].accounts, 1);
   assert.doesNotMatch(JSON.stringify(listed), /fdni_/);
-  assert.equal((await f.request('/api/integrations/' + listed[0].id, { method: 'DELETE', data: {} })).status, 200);
-  assert.equal((await f.request('/v1/integration/accounts/user-2', { anonymous: true, token: product })).status, 401);
-  assert.equal((await f.request('/v1/me', { anonymous: true, token: kept.key.token })).status, 200, 'the account and its key stay with the user');
+  assert.equal((await f.request('/v1/apps/' + listed[0].id, { method: 'DELETE', data: {} })).status, 200);
+  assert.equal((await f.request('/v1/accounts/user-2', { anonymous: true, token: product })).status, 401);
+  assert.equal((await f.request('/v1/keys/current', { anonymous: true, token: kept.key.token })).status, 200, 'the account and its key stay with the user');
 });
 
 // A product's webhook, played by a local HTTPS server with its own certificate, reached as a public host would be.
@@ -158,30 +158,30 @@ test('As with Stripe, a product gives a return page, a refresh page and a signed
   const { received, outbound } = await hook(t);
   const f = await fixture(t, { outbound });
   for (const bad of ['http://hook.example.test/x', 'https://127.0.0.1/x', 'https://hook.example.test:8443/x']) {
-    const refused = await f.request('/api/integrations', { method: 'POST', data: { name: 'x', return_url: 'https://simplicity.example.test/foundation', webhook_url: bad } });
+    const refused = await f.request('/v1/apps', { method: 'POST', data: { name: 'x', return_url: 'https://simplicity.example.test/foundation', webhook_url: bad } });
     assert.equal(refused.status, 400, bad);
   }
-  const made = (await f.request('/api/integrations', { method: 'POST', data: { name: 'ai-simplicity', return_url: 'https://simplicity.example.test/foundation?from=foundation',
-    refresh_url: 'https://simplicity.example.test/foundation/again', webhook_url: 'https://hook.example.test/foundation' } })).json.integration;
+  const made = (await f.request('/v1/apps', { method: 'POST', data: { name: 'ai-simplicity', return_url: 'https://simplicity.example.test/foundation?from=foundation',
+    refresh_url: 'https://simplicity.example.test/foundation/again', webhook_url: 'https://hook.example.test/foundation' } })).json.app;
   assert.match(made.webhook_secret, /^whsec_/);
-  assert.doesNotMatch(JSON.stringify((await f.request('/api/state')).json.integrations), /whsec_|fdni_/);
-  const call = (path, options = {}) => f.request('/v1/integration' + path, { anonymous: true, token: made.token, ...options });
+  assert.doesNotMatch(JSON.stringify((await f.request('/v1/state')).json.apps), /whsec_|fdni_/);
+  const call = (path, options = {}) => f.request('/v1' + path, { anonymous: true, token: made.token, ...options });
   await call('/accounts/user-1', { method: 'PUT', data: {} });
   const key = (await call('/accounts/user-1/keys', { method: 'POST', data: {} })).json.key;
   const ask = async () => (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { store: { name: 'npm-token', label: 'npm' }, purpose: 'p', steps: [] } })).json.request;
   const first = await ask();
-  const back = (await f.request('/api/request-links/' + first.id, { anonymous: true })).json.back;
+  const back = (await f.request('/v1/request-links/' + first.id, { anonymous: true })).json.back;
   assert.equal(back.name, 'ai-simplicity');
   assert.equal(back.refresh_url, 'https://simplicity.example.test/foundation/again?foundation_request=' + first.id);
   assert.equal(new URL(back.return_url).searchParams.get('from'), 'foundation', 'the product\'s own query is kept');
   const own = await f.issueKey('own');
   const unheld = (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: own.token, data: { store: { name: 'x', label: 'x' }, purpose: 'p' } })).json.request;
-  assert.equal((await f.request('/api/request-links/' + unheld.id, { anonymous: true })).status, 404, 'no way back for a request no product holds');
+  assert.equal((await f.request('/v1/request-links/' + unheld.id, { anonymous: true })).status, 404, 'no way back for a request no product holds');
   // Done and cancelled: each is told to the product, signed with the secret it was given.
-  const link = new URLSearchParams(new URL((await call('/links', { method: 'POST', data: { request_id: first.id } })).json.url).hash.slice(1)).get('link');
-  const claimed = await fetch(f.base + '/api/request-links', { method: 'POST', headers: { 'content-type': 'application/json', origin: f.base }, body: JSON.stringify({ request_id: first.id, link }) });
+  const link = new URLSearchParams(new URL((await call('/request-links', { method: 'POST', data: { request_id: first.id } })).json.url).hash.slice(1)).get('link');
+  const claimed = await fetch(f.base + '/v1/request-links/claim', { method: 'POST', headers: { 'content-type': 'application/json', origin: f.base }, body: JSON.stringify({ request_id: first.id, link }) });
   const cookie = claimed.headers.getSetCookie()[0].split(';')[0];
-  assert.equal((await f.request('/api/requests/' + first.id + '/store', { method: 'POST', anonymous: true, headers: { cookie }, data: { entries: [{ name: 'npm-token', content: 'value' }] } })).status, 200);
+  assert.equal((await f.request('/v1/requests/' + first.id + '/done', { method: 'POST', anonymous: true, headers: { cookie }, data: { entries: [{ name: 'npm-token', content: 'value' }] } })).status, 200);
   const second = await ask();
   await f.request('/v1/requests/' + second.id, { method: 'DELETE', anonymous: true, token: key.token, data: {} });
   await arrived(received, 2);

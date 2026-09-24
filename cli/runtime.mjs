@@ -132,9 +132,9 @@ async function main() {
     let adapters;
     if (configured) {
       try {
-        const response = await fetch(new URL('/v1/adapters', configured), { redirect: 'error', signal: AbortSignal.timeout(5_000) });
+        const response = await fetch(new URL('/v1/connectors', configured), { redirect: 'error', signal: AbortSignal.timeout(5_000) });
         const catalog = await response.json();
-        if (response.ok && Array.isArray(catalog.adapters)) adapters = catalog.adapters;
+        if (response.ok && Array.isArray(catalog.connectors)) adapters = catalog.connectors;
       } catch {}
     }
     console.log(guide(adapters));
@@ -214,9 +214,10 @@ async function main() {
   }
   // Even output-only commands need an approved key before they start an external login.
   let delivery;
-  if (names.length) ({ delivery } = await send('/v1/deliver', { names }));
+  if (names.length) ({ delivery } = await send('/v1/deliveries', { names }));
   else {
-    await send('/v1/me', undefined, { method: 'GET' });
+    const current = await send('/v1/keys/current', undefined, { method: 'GET' });
+    if (!current.key) throw new Error('Foundation request failed (401, not_approved). This key is waiting for approval at ' + current.request?.verification_uri + '.');
     delivery = { environment: {}, files: [] };
   }
   if (!delivery || typeof delivery.environment !== 'object' || !Array.isArray(delivery.files)) throw new Error('Foundation returned an invalid delivery.');

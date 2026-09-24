@@ -56,7 +56,7 @@ export class Requests {
     const hash = this.key(token);
     const key = this.store.authenticate(token);
     if (!key) fail(409, 'approval_required', 'このアクセスキーはまだ承認されていません。先に POST /v1/keys (foundation connect) で承認を依頼してください。');
-    if (adapter === undefined && store === undefined) fail(400, 'nothing_requested', '接続方法 (adapter) か、保管するものの申告 (store) を指定してください。');
+    if (adapter === undefined && store === undefined) fail(400, 'nothing_requested', '接続方法 (connector) か、保管するものの申告 (store) を指定してください。');
     if (adapter !== undefined && store !== undefined) fail(400, 'invalid_request', '接続方法と保管の申告は同時に指定できません。');
     const kind = adapter ?? null;
     const encoded = JSON.stringify(store !== undefined ? declarations(store) : []);
@@ -82,7 +82,7 @@ export class Requests {
     let row;
     try { row = this.get(id); } catch { return; }
     const entry = { at: Date.now(), event: String(event).slice(0, 40) };
-    for (const name of ['adapter', 'code']) if (detail[name] != null) entry[name] = String(detail[name]).slice(0, 64);
+    for (const name of ['connector', 'code']) if (detail[name] != null) entry[name] = String(detail[name]).slice(0, 64);
     if (detail.message != null) entry.message = String(detail.message).slice(0, 300);
     this.db.prepare('UPDATE requests SET progress=? WHERE id=?').run(JSON.stringify([...this.eventsOf(row), entry].slice(-40)), row.id);
   }
@@ -115,7 +115,7 @@ export class Requests {
       if (result && result.status === 'disconnecting') result = null;
       else if (result && result.status !== 'connected') status = 'reconnect_required';
     }
-    return { id: row.id, kind, ...(row.adapter ? { adapter: this.adapters.describe(row.adapter) } : {}),
+    return { id: row.id, kind, ...(row.adapter ? { connector: this.adapters.describe(row.adapter) } : {}),
       ...(kind === 'store' ? { store: this.details(row) } : {}),
       requester_name: row.requester_name, purpose: row.purpose, steps: JSON.parse(row.steps), ...(key ? { key_name: key.name } : {}),
       verification_uri: this.verificationUri(row, origin),
