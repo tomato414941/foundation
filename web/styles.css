@@ -97,14 +97,17 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .agent-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto; gap: 16px; align-items: center; padding: 10px 20px; border-top: 1px solid var(--line); }
 .agent-name h3 { white-space: pre-wrap; }
 .agent-name p { color: var(--muted); font-size: 14px; margin-top: 3px; }
-.secret-row { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto; }
+.secret-row { padding: 16px 20px 8px; border-top: 1px solid var(--line); }
+.secret-field { display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: start; gap: 12px; }
+.secret-field + .secret-field { margin-top: 4px; }
+.secret-field-label { font-size: 14px; color: var(--muted); line-height: 44px; }
 .secret-title { display: flex; align-items: center; gap: 4px; }
-.secret-title h3 { min-width: 0; }
+.secret-title h3 { min-width: 0; white-space: pre-wrap; }
 .secret-title .secret-name-editor { flex: 1; min-width: 0; }
-.secret-open { min-width: 0; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--accent); font: inherit; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; }
-.secret-open:hover { text-decoration: underline; text-underline-offset: 4px; }
 .secret-title .icon-button { flex: 0 0 44px; height: 44px; color: var(--muted); }
-.agent-row.renaming { background: var(--soft); }
+.secret-row.renaming { background: var(--soft); }
+.secret-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 0 48px; }
+.secret-meta { display: flex; flex-wrap: wrap; gap: 0 16px; color: var(--muted); font-size: 14px; }
 .secret-name-field { display: grid; grid-template-columns: minmax(0, 1fr) 40px 40px; align-items: center; gap: 6px; }
 .secret-name-editor .save-name { background: var(--accent); color: var(--surface); }
 .secret-name-editor .save-name:hover:not(:disabled) { background: #173e2b; }
@@ -191,21 +194,17 @@ dialog { width: min(520px, calc(100% - 32px)); max-height: calc(100dvh - 40px); 
 dialog::backdrop { background: #122a2252; }
 dialog h2 { padding-right: 32px; font-size: 22px; margin-bottom: 9px; }
 dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; }
-dialog.secret-dialog { width: min(640px, calc(100% - 32px)); }
-.secret-dialog h2 { white-space: pre-wrap; overflow-wrap: anywhere; }
-.secret-meta { font-size: 14px; }
-.secret-value-panel { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-.secret-value-toolbar { display: flex; align-items: center; justify-content: space-between; min-height: 56px; padding: 6px 10px 6px 16px; background: var(--soft); }
-.secret-value-toolbar h3 { font-size: 14px; color: var(--muted); }
+.secret-value-panel { min-width: 0; }
+.secret-value-line { display: flex; align-items: flex-start; gap: 8px; }
 .secret-value-actions { display: flex; gap: 2px; }
 .secret-value-actions .icon-button { width: 44px; height: 44px; }
 .secret-value-actions .icon-button:hover { background: var(--selected); }
-.secret-value-panel .kept-document { margin: 0; padding: 18px 16px; border-radius: 0; background: var(--surface); max-height: 45vh; }
-.secret-value-panel > p, .secret-value-panel form { margin: 0; padding: 16px; }
-.secret-value-panel > .form-error:empty { padding: 0; }
+.secret-value-panel .kept-document { min-width: 0; margin: 0; padding: 10px 8px; max-height: 240px; }
+.secret-value-panel .secret-mask { padding: 0 4px; font: 16px/44px var(--sans); background: transparent; white-space: nowrap; }
+.secret-value-panel > .form-error:empty { margin: 0; }
+.secret-value-panel .dialog-actions { margin-top: 12px; }
 .secret-value-panel textarea { font: 400 16px/1.6 ui-monospace, monospace; min-height: 180px; max-height: 45vh; }
-.secret-file { display: flex; align-items: center; gap: 12px; padding: 18px 16px; }
-.secret-file svg { flex: 0 0 24px; }
+.secret-file { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 14px; }
 .dialog-close { position: absolute; top: 18px; right: 16px; }
 .dialog-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 20px; }
 #notice { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); max-width: min(640px, calc(100% - 32px)); width: max-content; padding: 14px 20px; background: #203c2e; color: #fff; border-radius: 9px; box-shadow: 0 8px 35px #0002; z-index: 20; font-size: 14px; overflow-wrap: anywhere; }
@@ -238,9 +237,9 @@ dialog.secret-dialog { width: min(640px, calc(100% - 32px)); }
   .agent-row { display: block; padding: 12px 16px; }
   .agent-permissions { margin-top: 12px; }
   .agent-actions { margin-top: 10px; gap: 18px; }
-  .secret-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 12px; }
-  .secret-row .agent-permissions { grid-column: 1; margin-top: 4px; }
-  .secret-row .agent-actions { grid-column: 2; grid-row: 1 / span 2; margin: 0; }
+  .secret-row { padding: 12px 16px 8px; }
+  .secret-field { grid-template-columns: 28px minmax(0, 1fr); gap: 8px; }
+  .secret-footer { margin-left: 36px; }
   .login-main { margin-top: 24px; padding: 26px 22px; }
   .approval-main { margin-top: 24px; }
   .approval-card { padding: 24px 20px; }
