@@ -22,8 +22,8 @@ const VERSION = createRequire(import.meta.url)('../package.json').version;
 
 const PUBLIC = new URL('../web/', import.meta.url);
 // The owner's pages. Each is the same shell; the script decides what to show from the path.
-const PAGES = ['/', '/secrets', '/objects', '/functions'];
-const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/secrets', ['index.html', 'text/html; charset=utf-8']], ['/objects', ['index.html', 'text/html; charset=utf-8']], ['/functions', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
+const PAGES = ['/', '/secrets', '/objects', '/functions', '/developers'];
+const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/secrets', ['index.html', 'text/html; charset=utf-8']], ['/objects', ['index.html', 'text/html; charset=utf-8']], ['/functions', ['index.html', 'text/html; charset=utf-8']], ['/developers', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
 const MAX_BODY = 12_000;
 const SESSION_AGE = 14 * 86400;
 const LOGIN_CALLBACK = '/auth/callback';
@@ -577,7 +577,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
         if (path === '/api/integrations' && method === 'GET') return send(200, { integrations: integrations.list(user.id) });
         if (path === '/api/integrations' && method === 'POST') {
           const input = await body(req);
-          return send(201, { integration: integrations.register(user.id, { name: nameValue(input.name, '連携'), returnUrl: input.return_url, refreshUrl: input.refresh_url || undefined, webhookUrl: input.webhook_url || undefined }) });
+          return send(201, { integration: integrations.register(user.id, { name: nameValue(input.name, '製品'), returnUrl: input.return_url, refreshUrl: input.refresh_url || undefined, webhookUrl: input.webhook_url || undefined }) });
         }
         const integrationRoute = path.match(/^\/api\/integrations\/([a-f0-9-]{36})$/);
         if (integrationRoute && method === 'DELETE') { await body(req); integrations.remove(user.id, integrationRoute[1]); return send(200, { ok: true }); }
@@ -621,7 +621,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, adapters
       if (path.startsWith('/v1/integration/')) {
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
         const integration = integrations.authenticate(bearer(req));
-        if (!integration) fail(401, 'not_an_integration', 'この連携キーは無効です。');
+        if (!integration) fail(401, 'not_an_integration', 'この製品キーは無効です。');
         rateLimit('integration:' + integration.id, 300);
         const accountRoute = path.match(/^\/v1\/integration\/accounts\/([^/]+)(?:\/(keys|usage)(?:\/([a-f0-9-]{36}))?)?$/);
         if (accountRoute) {
