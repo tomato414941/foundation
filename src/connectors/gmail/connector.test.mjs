@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GmailClient, METADATA_SCOPE, READONLY_SCOPE } from './client.mjs';
+import { GmailClient, METADATA_SCOPE, READONLY_SCOPE, SEND_SCOPE } from './client.mjs';
 import { json, FakeGmail, KEY, USER_A, acquired, fixture } from '../../../test/helpers.mjs';
 import { Store } from '../../store.mjs';
-import { gmailReadonly, gmailMetadata } from './index.mjs';
+import { gmailReadonly, gmailMetadata, gmailReadSend } from './index.mjs';
 
 function setup(t, mode = 'readonly') {
   const store = new Store(':memory:', KEY), gmail = new FakeGmail();
@@ -28,6 +28,54 @@ test('Google exchange and refresh keep tokens server-side and preserve actual re
   assert.equal(gmail.calls.length, calls);
   for (const call of gmail.calls) { assert.equal(call.options.redirect, 'error'); assert.ok(call.options.signal); }
   assert.ok(gmail.calls.every((call) => !call.url.includes('/messages')));
+});
+
+test('選んだ接続方法に対応するGmail権限をGoogleに要求する', () => {
+  const gmail = new FakeGmail();
+  for (const [connector, scopes] of [[gmailReadonly(gmail), [READONLY_SCOPE]], [gmailMetadata(gmail), [METADATA_SCOPE]], [gmailReadSend(gmail), [READONLY_SCOPE, SEND_SCOPE]]]) {
+    const url = new URL(connector.authorization.begin({ state: 'test-state', verifier: 'test-verifier', redirectUri: 'https://app.test/oauth/' + connector.id + '/callback' }));
+    assert.deepEqual(url.searchParams.get('scope').split(' '), scopes);
+    assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
+    assert.equal(url.searchParams.get('access_type'), 'offline');
+  }
+});
+
+test('読み取りと送信の依頼を完了し、同じアカウントの認証情報を更新して取得する', async t => {
+  const gmail = new FakeGmail(), f = await fixture(t, { gmail, connectors: [gmailReadonly(gmail), gmailReadSend(gmail)] });
+  const agent = await f.issueKey();
+  await f.credential('personal');
+  const request = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { kind: 'connect', input: { connector: 'gmail.read-send' }, purpose: '問い合わせに返信する' } });
+  assert.equal(request.status, 201, request.text);
+  const started = await f.request('/v1/connections', { method: 'POST', data: { connector: 'gmail.read-send', request_id: request.json.request.id } });
+  assert.equal(started.status, 200, started.text);
+  const done = await f.callback(new URL(started.json.url), 'personal-read-send');
+  assert.match(done.headers.get('location'), /connection=connected/);
+  const completed = await f.request('/v1/requests/' + request.json.request.id, { token: agent.token });
+  assert.equal(completed.json.request.status, 'done');
+  const connection = (await f.request('/v1/connections', { token: agent.token })).json.connections.find(item => item.id === completed.json.request.result.connection_id);
+  assert.deepEqual(connection.facts.scopes, [READONLY_SCOPE, SEND_SCOPE]);
+  assert.deepEqual(connection.facts.missing_scopes, []);
+  assert.deepEqual(connection.facts.additional_scopes, []);
+  f.expire(connection.id);
+  const delivered = await f.deliver(connection, { token: agent.token });
+  assert.equal(delivered.status, 200, delivered.text);
+  assert.equal(delivered.json.delivery.environment.GMAIL_ACCOUNT_EMAIL, 'personal@example.test');
+  assert.equal(delivered.json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal-read-send');
+  assert.deepEqual(delivered.json.facts.scopes, [READONLY_SCOPE, SEND_SCOPE]);
+  const refreshed = gmail.calls.find(call => call.options.body?.get('grant_type') === 'refresh_token');
+  assert.equal(refreshed.options.body.get('refresh_token'), 'refresh-personal-read-send');
+});
+
+test('送信を許可しなかった場合は接続結果と認証情報の取得結果に不足する権限を示す', async t => {
+  const gmail = new FakeGmail(), f = await fixture(t, { gmail, connectors: [gmailReadSend(gmail)] });
+  const agent = await f.issueKey();
+  const started = await f.start({ range: 'read-send' });
+  await f.callback(started, 'personal-readonly');
+  const connection = (await f.request('/v1/connections', { token: agent.token })).json.connections[0];
+  assert.deepEqual(connection.facts.missing_scopes, [SEND_SCOPE]);
+  const delivered = await f.deliver(connection, { token: agent.token });
+  assert.equal(delivered.status, 200, delivered.text);
+  assert.deepEqual(delivered.json.facts.missing_scopes, [SEND_SCOPE]);
 });
 
 for (const scope of ['https://mail.google.com/', 'https://www.googleapis.com/auth/gmail.modify', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/drive']) test('追加されたGoogle権限を確認結果として返す: ' + scope, async (t) => {
