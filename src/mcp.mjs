@@ -16,7 +16,7 @@ export const LATEST = '2026-07-28';
 export const SUPPORTED = [LATEST, '2025-11-25', '2025-06-18', '2025-03-26'];
 const STATELESS = new Set([LATEST]);
 const META = 'io.modelcontextprotocol/';
-const INSTRUCTIONS = 'Foundation keeps what an agent may not hold for itself: keys, permissions and state that outlive one conversation. Call foundation_guide first; it explains the API that foundation_api reaches.';
+const INSTRUCTIONS = 'This MCP interface provides access to the Foundation HTTP API. Call foundation_guide first; it describes the currently available operations and their requirements.';
 
 const TOOLS = [
   {
