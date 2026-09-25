@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fail } from './errors.mjs';
 import { presignAws, serverCredentials, signAws } from './aws-sigv4.mjs';
 
@@ -9,7 +9,9 @@ import { presignAws, serverCredentials, signAws } from './aws-sigv4.mjs';
 // bytes end up there or, later, in a bucket of the owner's own. What an agent calls does not change
 // when that moves; only where the space points does.
 //
-// Nothing about it is kept in the database. The bucket is the record: what is listed is what is there.
+// Each object is a holding: its name, size and type are a row, and its bytes sit in the space under the
+// holding's id. So an object has an id like everything held, a line can be drawn onto it, and moving the
+// bytes elsewhere later changes nothing an owner or agent sees.
 export const OBJECT_MAX = 25 * 1024 * 1024;
 export const OBJECT_COUNT_MAX = 1000;
 // What one owner may keep in the space Foundation lends. Lending means paying for it, so there is a ceiling.
@@ -84,45 +86,84 @@ export class S3Space {
 }
 
 // The owner-facing space. Every call names a key; where the bytes live is the space's business.
+const ROOM = 'holdings/';
+const COLUMNS = 'id,holder_id,name AS key,size,type AS content_type,created_at,updated_at';
 export class Objects {
-  constructor(space) { this.space = space; }
+  constructor(space, store) { this.space = space; this.store = store; this.db = store?.db; }
   get enabled() { return Boolean(this.space?.enabled); }
   check() { if (!this.enabled) fail(503, 'space_unavailable', '置き場は現在使えません。'); }
-  room(ownerId) { return 'owners/' + ownerId + '/'; }
   minutes(value = LINK_MINUTES) {
     if (!Number.isInteger(value) || value < 1 || value > MAX_LINK_MINUTES) fail(400, 'invalid_minutes', 'リンクの有効期間は1〜10080分で指定してください。');
     return value;
+  }
+  find(ownerId, key) { return this.db.prepare(`SELECT ${COLUMNS} FROM holdings WHERE kind='object' AND holder_id=? AND name=?`).get(ownerId, objectKey(key)); }
+  byId(id) { return typeof id === 'string' ? this.db.prepare(`SELECT ${COLUMNS} FROM holdings WHERE kind='object' AND id=?`).get(id) : undefined; }
+  at(ownerId, key) {
+    const row = this.find(ownerId, key);
+    if (!row) fail(404, 'not_found', 'その名前のものは置かれていません。');
+    return row;
   }
   async list(ownerId, under = '', cursor) {
     this.check();
     if (typeof under !== 'string' || under.length > 200 || under.includes('..')) fail(400, 'invalid_prefix', '絞り込みの指定を確認してください。');
     if (cursor !== undefined && (typeof cursor !== 'string' || cursor.length > 2048)) fail(400, 'invalid_cursor', '続きの指定を確認してください。');
-    return this.space.list(this.room(ownerId), under, cursor);
+    const rows = this.db.prepare(`SELECT ${COLUMNS} FROM holdings WHERE kind='object' AND holder_id=? AND substr(name,1,length(?))=? COLLATE BINARY ORDER BY name`).all(ownerId, under, under);
+    return { objects: rows.map(row => ({ id: row.id, key: row.key, size: row.size, content_type: row.content_type, updated_at: Date.parse(row.updated_at) })), cursor: null };
   }
-  // What this owner is using. The bucket is the record, so it is counted rather than remembered.
+  // What this owner is using.
   async usage(ownerId) {
     this.check();
-    const { objects } = await this.space.list(this.room(ownerId), '', undefined);
+    const { objects } = await this.list(ownerId);
     return { count: objects.length, bytes: objects.reduce((total, item) => total + item.size, 0),
       count_max: OBJECT_COUNT_MAX, bytes_max: OBJECT_TOTAL_MAX, objects };
   }
   async put(ownerId, key, content, type) {
     this.check();
+    objectKey(key);
     if (!Buffer.isBuffer(content) || content.length > OBJECT_MAX) fail(413, 'object_too_large', '1件あたり25MBまでです。');
     if (typeof type !== 'string' || type.length > 100 || !TYPE.test(type)) fail(400, 'invalid_type', '種類 (Content-Type) を確認してください。');
-    const { objects } = await this.space.list(this.room(ownerId), '', undefined);
+    const { objects } = await this.list(ownerId);
     const existing = objects.find(item => item.key === key);
     if (objects.length >= OBJECT_COUNT_MAX && !existing) fail(409, 'object_limit', '置けるのは1000件までです。');
     const bytes = objects.reduce((total, item) => total + item.size, 0) - (existing?.size ?? 0);
     if (bytes + content.length > OBJECT_TOTAL_MAX) fail(409, 'space_full', '置き場の合計が上限に達しました。使わないものを消してください。');
-    await this.space.put(this.room(ownerId), objectKey(key), content, type);
-    return { key, size: content.length, content_type: type };
+    const id = existing?.id ?? randomUUID();
+    await this.space.put(ROOM, id, content, type);
+    const stamp = new Date().toISOString();
+    if (existing) this.db.prepare('UPDATE holdings SET size=?,type=?,updated_at=? WHERE id=?').run(content.length, type, stamp, id);
+    else this.db.prepare("INSERT INTO holdings (id,holder_id,kind,name,size,type,created_at,updated_at) VALUES (?,?,'object',?,?,?,?,?)").run(id, ownerId, key, content.length, type, stamp, stamp);
+    return { id, key, size: content.length, content_type: type };
   }
-  async get(ownerId, key) { this.check(); return this.space.get(this.room(ownerId), objectKey(key)); }
-  async remove(ownerId, key) { this.check(); await this.space.remove(this.room(ownerId), objectKey(key)); }
+  // Writing by id: the same thing, whoever writes it.
+  async write(row, content, type) {
+    this.check();
+    if (!Buffer.isBuffer(content) || content.length > OBJECT_MAX) fail(413, 'object_too_large', '1件あたり25MBまでです。');
+    if (typeof type !== 'string' || type.length > 100 || !TYPE.test(type)) fail(400, 'invalid_type', '種類 (Content-Type) を確認してください。');
+    const { bytes } = await this.usage(row.holder_id);
+    if (bytes - row.size + content.length > OBJECT_TOTAL_MAX) fail(409, 'space_full', '置き場の合計が上限に達しました。使わないものを消してください。');
+    await this.space.put(ROOM, row.id, content, type);
+    this.db.prepare('UPDATE holdings SET size=?,type=?,updated_at=? WHERE id=?').run(content.length, type, new Date().toISOString(), row.id);
+    return { id: row.id, key: row.key, size: content.length, content_type: type };
+  }
+  async get(ownerId, key) { this.check(); return this.read(this.at(ownerId, key)); }
+  async read(row) {
+    this.check();
+    const found = await this.space.get(ROOM, row.id);
+    return { content: found.content, contentType: row.content_type || found.contentType };
+  }
+  async remove(ownerId, key) {
+    this.check();
+    const row = this.find(ownerId, key);
+    if (!row) return;
+    await this.space.remove(ROOM, row.id);
+    this.store.transaction(() => {
+      this.db.prepare('DELETE FROM holdings WHERE id=?').run(row.id);
+      this.db.prepare("DELETE FROM relations WHERE object_type='holding' AND object_id=?").run(row.id);
+    });
+  }
   async link(ownerId, key, minutes) {
     this.check();
-    const seconds = this.minutes(minutes) * 60;
-    return { key: objectKey(key), url: await this.space.link(this.room(ownerId), objectKey(key), seconds), url_expires_at: Date.now() + seconds * 1000 };
+    const row = this.at(ownerId, key), seconds = this.minutes(minutes) * 60;
+    return { id: row.id, key: row.key, url: await this.space.link(ROOM, row.id, seconds), url_expires_at: Date.now() + seconds * 1000 };
   }
 }

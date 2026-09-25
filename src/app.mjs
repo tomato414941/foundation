@@ -105,11 +105,17 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
   };
   const connectors = new Connectors(connectorList);
   const secrets = new Secrets(store);
-  const objects = new Objects(spaceBackend);
+  const objects = new Objects(spaceBackend, store);
   const connections = new Connections(store, connectors);
   const principals = new Principals(store), sessions = new Sessions(store), flows = new OAuthFlows(store);
   const requests = new Requests(store), settings = new Settings(store, principals), records = new Records(store);
   const authorization = new Authorization(principals);
+  // One held thing, of whatever kind, by its id.
+  const holding = id => {
+    const row = typeof id === 'string' ? store.db.prepare('SELECT id,holder_id,kind,name,size,type,readable,created_at,updated_at FROM holdings WHERE id=?').get(id) : undefined;
+    if (!row) fail(404, 'not_found', '保管されたものが見つかりません。');
+    return { ...row, readable: row.readable === 1 };
+  };
   const functions = new Functions({ connections, secrets, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
   const viewRequest = (row, origin, options) => requestView({ requests, connectors, principals, settings }, row, origin, options);
@@ -538,23 +544,70 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const input = await inputBody();
         const subjectId = input.subject === undefined ? subject.id : principalId(input.subject);
         if (typeof input.relation !== 'string' || typeof input.object_type !== 'string' || typeof input.object_id !== 'string') fail(400, 'invalid_relation', '関係の指定を確認してください。');
-        if (subjectId !== subject.id && !principals.has(subject.id, 'owner', 'principal', subjectId)) fail(403, 'forbidden', 'この操作は許可されていません。');
-        // Ownership comes from making or approving, never from a line drawn here; onto a held thing one draws viewer or editor.
-        if (input.object_type === 'principal' ? input.relation !== 'actor' : !['viewer', 'editor'].includes(input.relation)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
-        if (input.object_type === 'principal') permit('relate', 'principal', input.object_id);
-        else {
-          if (input.object_type === 'secret' && !secrets.find(holderId, input.object_id)) fail(404, 'not_found', '保管されたものが見つかりません。');
-          permit('rename', input.object_type, input.object_id, holderId);
-        }
+        // Ownership comes from making or approving, never from a line drawn here. Onto a held thing the holder draws
+        // viewer or editor, to anyone; between principals one draws actor, for oneself or for what one owns.
+        if (input.object_type === 'principal') {
+          if (input.relation !== 'actor') fail(400, 'invalid_relation', '関係の種類を確認してください。');
+          if (subjectId !== subject.id && !principals.has(subject.id, 'owner', 'principal', subjectId)) fail(403, 'forbidden', 'この操作は許可されていません。');
+          permit('relate', 'principal', input.object_id);
+        } else if (input.object_type === 'holding') {
+          if (!['viewer', 'editor'].includes(input.relation)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
+          const held = holding(input.object_id);
+          permit('share', held.kind, held.id, held.holder_id);
+          principals.at(subjectId);
+        } else fail(400, 'invalid_relation', '関係の種類を確認してください。');
         if (method === 'POST') {
-          principals.relate(subjectId, input.relation, input.object_type, input.object_id, { scope: input.scope === undefined ? undefined : String(input.scope), holder: holderId });
-          records.write(subject.id, 'relation.added', input.object_type, input.object_id, { subject: subjectId, relation: input.relation, holder: holderId });
+          principals.relate(subjectId, input.relation, input.object_type, input.object_id, { scope: input.scope === undefined ? undefined : String(input.scope) });
+          records.write(subject.id, 'relation.added', input.object_type, input.object_id, { subject: subjectId, relation: input.relation });
           return send(201, { ok: true });
         }
         if (method === 'DELETE') {
-          principals.unrelate(subjectId, input.relation, input.object_type, input.object_id, holderId);
-          records.write(subject.id, 'relation.removed', input.object_type, input.object_id, { subject: subjectId, relation: input.relation, holder: holderId });
+          principals.unrelate(subjectId, input.relation, input.object_type, input.object_id);
+          records.write(subject.id, 'relation.removed', input.object_type, input.object_id, { subject: subjectId, relation: input.relation });
           return send(200, { ok: true });
+        }
+        fail(405, 'method_not_allowed', 'この操作は利用できません。');
+      }
+      // Held things by id: the same thing whoever holds it, reached along the lines drawn onto it.
+      if (path === '/v1/holdings' && method === 'GET') { permit('list', 'holding', undefined, subject.id); return send(200, { holdings: principals.shownTo(subject.id) }); }
+      const holdingRoute = path.match(/^\/v1\/holdings\/([a-f0-9-]{36})(\/content)?$/);
+      if (holdingRoute) {
+        const held = holding(holdingRoute[1]);
+        if (!holdingRoute[2] && method === 'GET') {
+          permit('read', held.kind, held.id, held.holder_id);
+          return send(200, { holding: { ...held, ...(held.holder_id === subject.id ? { lines: principals.linesOnto(held.id) } : {}) } });
+        }
+        if (holdingRoute[2] && method === 'GET') {
+          permit('read', held.kind, held.id, held.holder_id);
+          if (held.kind === 'secret') {
+            const row = secrets.byId(held.id);
+            if (held.holder_id !== subject.id && !row.readable) fail(403, 'write_only', 'この値の直接読み出しは許可されていません。');
+            const content = secrets.content(row);
+            res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length });
+            return res.end(content);
+          }
+          if (held.kind === 'object') {
+            const found = await objects.read(objects.byId(held.id));
+            still();
+            res.writeHead(200, { 'content-type': found.contentType, 'content-length': found.content.length });
+            return res.end(found.content);
+          }
+          fail(405, 'method_not_allowed', 'この操作は利用できません。');
+        }
+        if (holdingRoute[2] && method === 'PUT') {
+          permit('write', held.kind, held.id, held.holder_id);
+          if (held.kind === 'secret') {
+            const content = await inputBytes(SECRET_MAX);
+            if (!content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
+            return send(200, { secret: secrets.write(secrets.byId(held.id), content) });
+          }
+          if (held.kind === 'object') {
+            const content = await inputBytes(OBJECT_MAX);
+            const saved = await objects.write(objects.byId(held.id), content, req.headers['content-type'] || 'application/octet-stream');
+            still();
+            return send(200, saved);
+          }
+          fail(405, 'method_not_allowed', 'この操作は利用できません。');
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
@@ -661,36 +714,36 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const key = decodeURIComponent(objectRoute[1]);
         if (objectRoute[2]) {
           if (method !== 'POST') fail(405, 'method_not_allowed', 'この操作は利用できません。');
-          permit('link', 'object', key);
+          permit('link', 'object', objects.find(holderId, key)?.id);
           const input = await inputBody();
           const link = await objects.link(holderId, key, input.minutes);
           still();
           return send(200, link);
         }
         if (method === 'PUT') {
-          permit('write', 'object', key);
+          permit('write', 'object', objects.find(holderId, key)?.id);
           const content = await inputBytes(OBJECT_MAX);
           const saved = await objects.put(holderId, key, content, req.headers['content-type'] || 'application/octet-stream');
           still();
           return send(200, saved);
         }
         if (method === 'GET') {
-          permit('read', 'object', key);
+          permit('read', 'object', objects.find(holderId, key)?.id);
           const found = await objects.get(holderId, key);
           still();
           res.writeHead(200, { 'content-type': found.contentType, 'content-length': found.content.length,
             'content-disposition': `attachment; filename="object.bin"; filename*=UTF-8''${encodeURIComponent(key.split('/').pop()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}` });
           return res.end(found.content);
         }
-        if (method === 'DELETE') { permit('remove', 'object', key); await inputBody(); await objects.remove(holderId, key); still(); return send(200, { ok: true }); }
+        if (method === 'DELETE') { permit('remove', 'object', objects.find(holderId, key)?.id); await inputBody(); await objects.remove(holderId, key); still(); return send(200, { ok: true }); }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
       // What is kept, by name. A name is any text, so it travels as ?name=: a path would fold "." and ".." away.
       if (path === '/v1/secrets' && method === 'GET' && !url.searchParams.has('name')) { permit('list', 'secret'); return send(200, { secrets: secrets.list(holderId, url.searchParams.get('prefix') ?? undefined) }); }
       if (path === '/v1/secrets' && url.searchParams.has('name')) {
-        const target = url.searchParams.get('name');
+        const target = url.searchParams.get('name'), held = secrets.find(holderId, target)?.id;
         if (method === 'GET') {
-          permit('read', 'secret', target);
+          permit('read', 'secret', held);
           // The holder reads anything of theirs; anyone else reads only what was left readable.
           const { row, content } = subject.id === holderId ? (() => { const row = secrets.at(holderId, target); return { row, content: secrets.content(row) }; })() : secrets.read(holderId, target);
           res.setHeader('etag', secretTag(row));
@@ -698,7 +751,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           return res.end(content);
         }
         if (method === 'PUT') {
-          permit('write', 'secret', target);
+          permit('write', 'secret', held);
           limit('secrets', 120);
           const content = await inputBytes(SECRET_MAX);
           if (!content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
@@ -716,12 +769,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         }
         // Rename without returning or changing the stored value.
         if (method === 'PATCH') {
-          permit('rename', 'secret', target);
+          permit('rename', 'secret', held);
           const input = await inputBody();
           return send(200, { secret: secrets.rename(holderId, target, { name: input.name }) });
         }
         if (method === 'DELETE') {
-          permit('remove', 'secret', target);
+          permit('remove', 'secret', held);
           await inputBody();
           secrets.remove(holderId, target);
           return send(200, { ok: true });

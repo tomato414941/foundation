@@ -29,8 +29,9 @@ test('Stored names and caller-selected environment variables are independent', a
   const { f, token } = await keyed(t);
   const kept = await put(f, token, 'github/gh-token', secret, { secret: 'true' });
   assert.equal(kept.status, 200, kept.text);
-  assert.deepEqual({ ...kept.json.secret, created_at: 0, updated_at: 0 },
-    { name: 'github/gh-token', size: secret.length, readable: false, created_at: 0, updated_at: 0 });
+  assert.match(kept.json.secret.id, /^[0-9a-f-]{36}$/, 'a held thing has an id of its own');
+  assert.deepEqual({ ...kept.json.secret, id: undefined, created_at: 0, updated_at: 0 },
+    { id: undefined, name: 'github/gh-token', size: secret.length, readable: false, created_at: 0, updated_at: 0 });
   assert.doesNotMatch(kept.text, new RegExp(secret), 'writing never echoes the bytes back');
 
   const listed = await f.request('/v1/secrets', { token, anonymous: true });
@@ -283,10 +284,10 @@ test('An agent that cannot make a secret of its own is issued one, once', async 
 
 test('閲覧を許された相手は、その保有者の値だけを読み、別の保有者が同じ名前で持つ値は読めない', async t => {
   const f = await fixture(t);
-  await f.request('/v1/secrets?name=shared&secret=false', { method: 'PUT', raw: 'a-value' });
+  const kept = await f.request('/v1/secrets?name=shared&secret=false', { method: 'PUT', raw: 'a-value' });
   const made = await f.request('/v1/principals', { method: 'POST', data: { name: 'reader', credential: 'key' } });
   assert.equal(made.status, 201, made.text);
-  const granted = await f.request('/v1/relations', { method: 'POST', data: { subject: made.json.principal.id, relation: 'viewer', object_type: 'secret', object_id: 'shared' } });
+  const granted = await f.request('/v1/relations', { method: 'POST', data: { subject: made.json.principal.id, relation: 'viewer', object_type: 'holding', object_id: kept.json.secret.id } });
   assert.equal(granted.status, 201, granted.text);
   await f.login('other@example.test');
   await f.request('/v1/secrets?name=shared&secret=false', { method: 'PUT', raw: 'b-value' });
@@ -298,10 +299,10 @@ test('閲覧を許された相手は、その保有者の値だけを読み、�
 
 test('編集を許された相手はその値を書き換え、値を消すと線は消え、名前を変えると線はついていく', async t => {
   const f = await fixture(t);
-  await f.request('/v1/secrets?name=doc&secret=false', { method: 'PUT', raw: 'v1' });
+  const kept = await f.request('/v1/secrets?name=doc&secret=false', { method: 'PUT', raw: 'v1' });
   const made = await f.request('/v1/principals', { method: 'POST', data: { name: 'editor', credential: 'key' } });
   const token = made.json.token, id = made.json.principal.id;
-  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: id, relation: 'editor', object_type: 'secret', object_id: 'doc' } })).status, 201);
+  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: id, relation: 'editor', object_type: 'holding', object_id: kept.json.secret.id } })).status, 201);
   const written = await f.request('/v1/secrets?name=doc&as=' + USER_A, { method: 'PUT', raw: 'v2', token, anonymous: true });
   assert.equal(written.status, 200, written.text);
   assert.equal((await f.request('/v1/secrets?name=doc')).text, 'v2');

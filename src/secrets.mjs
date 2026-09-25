@@ -42,18 +42,23 @@ export function deliverable(content, { env, filename }) {
 export class Secrets {
   constructor(store) { this.store = store; this.db = store.db; this.vault = store.vault; }
   list(ownerId, prefix) {
-    const columns = 'name,size,readable,created_at,updated_at';
+    const columns = 'id,name,size,readable,created_at,updated_at';
     return (prefix === undefined
-      ? this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? ORDER BY name`).all(ownerId)
-      : this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? AND substr(name,1,length(?))=? COLLATE BINARY ORDER BY name`).all(ownerId, String(prefix), String(prefix)))
+      ? this.db.prepare(`SELECT ${columns} FROM holdings WHERE holder_id=? AND kind='secret' ORDER BY name`).all(ownerId)
+      : this.db.prepare(`SELECT ${columns} FROM holdings WHERE holder_id=? AND kind='secret' AND substr(name,1,length(?))=? COLLATE BINARY ORDER BY name`).all(ownerId, String(prefix), String(prefix)))
       .map(row => ({ ...row, readable: row.readable === 1 }));
   }
   find(ownerId, name) {
-    const row = this.db.prepare('SELECT * FROM secrets WHERE owner_id=? AND name=?').get(ownerId, secretName(name));
+    const row = this.db.prepare("SELECT id,holder_id AS owner_id,name,size,readable,content,created_at,updated_at FROM holdings WHERE holder_id=? AND kind='secret' AND name=?").get(ownerId, secretName(name));
+    return row ? { ...row, readable: row.readable === 1 } : undefined;
+  }
+  // The thing itself, by its id, whoever holds it.
+  byId(id) {
+    const row = typeof id === 'string' ? this.db.prepare("SELECT id,holder_id AS owner_id,name,size,readable,content,created_at,updated_at FROM holdings WHERE id=? AND kind='secret'").get(id) : undefined;
     return row ? { ...row, readable: row.readable === 1 } : undefined;
   }
   content(row) { return this.vault.openBytes(row.content, `entry:${row.owner_id}:${row.id}`); }
-  usage(ownerId) { return this.db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(size),0) AS bytes FROM secrets WHERE owner_id=?').get(ownerId); }
+  usage(ownerId) { return this.db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(size),0) AS bytes FROM holdings WHERE holder_id=? AND kind='secret'").get(ownerId); }
   // Writing the same name again replaces what is there, including its read permission.
   put(ownerId, { name, content, secret }) {
     if (content.length > SECRET_MAX) fail(413, 'secret_too_large', '1件あたり1MBまでです。');
@@ -63,9 +68,19 @@ export class Secrets {
       if (!existing && count >= SECRET_COUNT_MAX) fail(409, 'secret_limit', `保管できるのは${SECRET_COUNT_MAX}件までです。使わないものを消してください。`);
       if (bytes - (existing?.size ?? 0) + content.length > SECRET_TOTAL_MAX) fail(409, 'storage_full', '保管できる合計は20MBまでです。使わないものを消してください。');
       const id = existing?.id ?? randomUUID(), sealed = this.vault.sealBytes(content, `entry:${ownerId}:${id}`);
-      if (existing) this.db.prepare('UPDATE secrets SET size=?,readable=?,content=?,updated_at=? WHERE id=?').run(content.length, secret ? 0 : 1, sealed, stamp, id);
-      else this.db.prepare('INSERT INTO secrets (id,owner_id,name,size,readable,content,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id, ownerId, name, content.length, secret ? 0 : 1, sealed, stamp, stamp);
+      if (existing) this.db.prepare('UPDATE holdings SET size=?,readable=?,content=?,updated_at=? WHERE id=?').run(content.length, secret ? 0 : 1, sealed, stamp, id);
+      else this.db.prepare("INSERT INTO holdings (id,holder_id,kind,name,size,readable,content,created_at,updated_at) VALUES (?,?,'secret',?,?,?,?,?,?)").run(id, ownerId, name, content.length, secret ? 0 : 1, sealed, stamp, stamp);
       return this.list(ownerId, name)[0];
+    });
+  }
+  // Writing by id: the same thing, whoever writes it, keeps its name and its read permission.
+  write(row, content) {
+    if (content.length > SECRET_MAX) fail(413, 'secret_too_large', '1件あたり1MBまでです。');
+    return this.store.transaction(() => {
+      const { bytes } = this.usage(row.owner_id);
+      if (bytes - row.size + content.length > SECRET_TOTAL_MAX) fail(409, 'storage_full', '保管できる合計は20MBまでです。使わないものを消してください。');
+      this.db.prepare('UPDATE holdings SET size=?,content=?,updated_at=? WHERE id=?').run(content.length, this.vault.sealBytes(content, `entry:${row.owner_id}:${row.id}`), new Date().toISOString(), row.id);
+      return this.list(row.owner_id, row.name)[0];
     });
   }
   at(ownerId, name) {
@@ -78,23 +93,22 @@ export class Secrets {
     if (!row.readable) fail(403, 'write_only', 'この値の直接読み出しは許可されていません。');
     return { row, content: this.content(row) };
   }
-  // Rename without exposing or modifying content.
+  // Rename without exposing or modifying content. Lines onto the thing point at its id, so they need no care.
   rename(ownerId, name, { name: to }) {
     const target = secretName(to ?? name);
     return this.store.transaction(() => {
       const row = this.at(ownerId, name);
       if (target !== name && this.find(ownerId, target)) fail(409, 'name_taken', 'その名前はすでに使われています。');
-      this.db.prepare('UPDATE secrets SET name=?,updated_at=? WHERE id=?').run(target, new Date().toISOString(), row.id);
-      // Lines drawn onto the thing follow it to its new name.
-      this.db.prepare("UPDATE relations SET object_id=? WHERE object_type='secret' AND holder_id=? AND object_id=?").run(target, ownerId, row.name);
+      this.db.prepare('UPDATE holdings SET name=?,updated_at=? WHERE id=?').run(target, new Date().toISOString(), row.id);
       return this.list(ownerId, target)[0];
     });
   }
-  // Removing the thing removes the lines onto it: a later thing by the same name starts with none.
+  // Removing the thing removes the lines onto it: a later thing by the same name is another thing.
   remove(ownerId, name) {
     this.store.transaction(() => {
-      if (!this.db.prepare('DELETE FROM secrets WHERE owner_id=? AND name=?').run(ownerId, secretName(name)).changes) fail(404, 'not_found', '保管されたものが見つかりません。');
-      this.db.prepare("DELETE FROM relations WHERE object_type='secret' AND holder_id=? AND object_id=?").run(ownerId, secretName(name));
+      const row = this.at(ownerId, name);
+      this.db.prepare('DELETE FROM holdings WHERE id=?').run(row.id);
+      this.db.prepare("DELETE FROM relations WHERE object_type='holding' AND object_id=?").run(row.id);
     });
   }
   // Each input and delivery destination is explicit.

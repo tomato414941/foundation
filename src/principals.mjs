@@ -8,7 +8,7 @@ import { fail } from './errors.mjs';
 export const KEY = /^fdn_[A-Za-z0-9_-]{43}$/;
 export const LINK = /^[A-Za-z0-9_-]{43}$/;
 export const RELATIONS = ['owner', 'actor', 'viewer', 'editor'];
-export const OBJECT_TYPES = ['principal', 'secret', 'object', 'connection'];
+export const OBJECT_TYPES = ['principal', 'holding'];
 const OWNED_MAX = 100_000, KEYS_MAX = 50;
 const now = () => new Date().toISOString();
 
@@ -49,34 +49,40 @@ export class Principals {
   // the object space is the caller's to clear.
   remove(id) {
     return this.store.transaction(() => {
-      for (const table of ['secrets', 'connections', 'sessions']) this.db.prepare(`DELETE FROM ${table} WHERE owner_id=?`).run(id);
-      this.db.prepare('DELETE FROM relations WHERE (object_type=? AND object_id=?) OR holder_id=?').run('principal', id, id);
+      this.db.prepare('DELETE FROM sessions WHERE owner_id=?').run(id);
+      this.db.prepare("DELETE FROM relations WHERE object_type='holding' AND object_id IN (SELECT id FROM holdings WHERE holder_id=?)").run(id);
+      this.db.prepare('DELETE FROM holdings WHERE holder_id=?').run(id);
+      this.db.prepare('DELETE FROM relations WHERE object_type=? AND object_id=?').run('principal', id);
       return this.db.prepare('DELETE FROM principals WHERE id=?').run(id).changes > 0;
     });
   }
 
-  // Lines between principals, and from principals to what is held. A held thing is named within its holder,
-  // so the holder is part of what the line points at: the same name held by someone else is another thing.
-  relate(subjectId, relation, objectType, objectId, { alias, scope, holder } = {}) {
+  // Lines between principals, and from principals onto what is held. A held thing is pointed at by its id.
+  relate(subjectId, relation, objectType, objectId, { alias, scope } = {}) {
     if (!RELATIONS.includes(relation) || !OBJECT_TYPES.includes(objectType)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
     if (objectType === 'principal' && !this.get(objectId)) fail(404, 'not_found', '相手が見つかりません。');
     if (subjectId === objectId && objectType === 'principal') fail(400, 'invalid_relation', '自分自身との関係は引けません。');
-    if (objectType !== 'principal' && typeof holder !== 'string') fail(400, 'invalid_relation', '保有者を指定してください。');
-    this.db.prepare('INSERT OR REPLACE INTO relations (subject_id,relation,object_type,holder_id,object_id,alias,scope,created_at) VALUES (?,?,?,?,?,?,?,?)')
-      .run(subjectId, relation, objectType, objectType === 'principal' ? '' : holder, objectId, alias ?? null, scope ?? null, now());
+    this.db.prepare('INSERT OR REPLACE INTO relations (subject_id,relation,object_type,object_id,alias,scope,created_at) VALUES (?,?,?,?,?,?,?)')
+      .run(subjectId, relation, objectType, objectId, alias ?? null, scope ?? null, now());
   }
-  unrelate(subjectId, relation, objectType, objectId, holder) {
-    return this.db.prepare('DELETE FROM relations WHERE subject_id=? AND relation=? AND object_type=? AND holder_id=? AND object_id=?')
-      .run(subjectId, relation, objectType, objectType === 'principal' ? '' : String(holder ?? ''), objectId).changes > 0;
+  unrelate(subjectId, relation, objectType, objectId) {
+    return this.db.prepare('DELETE FROM relations WHERE subject_id=? AND relation=? AND object_type=? AND object_id=?').run(subjectId, relation, objectType, objectId).changes > 0;
   }
-  has(subjectId, relation, objectType, objectId, holder) {
-    return this.db.prepare('SELECT scope FROM relations WHERE subject_id=? AND relation=? AND object_type=? AND holder_id=? AND object_id=?')
-      .get(subjectId, relation, objectType, objectType === 'principal' ? '' : String(holder ?? ''), objectId);
+  has(subjectId, relation, objectType, objectId) {
+    return this.db.prepare('SELECT scope FROM relations WHERE subject_id=? AND relation=? AND object_type=? AND object_id=?').get(subjectId, relation, objectType, objectId);
   }
   // Every line a principal is on, either end.
   relationsOf(id) {
-    return this.db.prepare('SELECT subject_id,relation,object_type,holder_id,object_id,alias,scope,created_at FROM relations WHERE subject_id=? OR (object_type=? AND object_id=?) ORDER BY created_at').all(id, 'principal', id)
-      .map(row => ({ ...row, holder_id: row.object_type === 'principal' ? undefined : row.holder_id }));
+    return this.db.prepare('SELECT subject_id,relation,object_type,object_id,alias,scope,created_at FROM relations WHERE subject_id=? OR (object_type=? AND object_id=?) ORDER BY created_at').all(id, 'principal', id);
+  }
+  // Lines onto one held thing: who may see or change it.
+  linesOnto(holdingId) {
+    return this.db.prepare("SELECT subject_id,relation,created_at FROM relations WHERE object_type='holding' AND object_id=? ORDER BY created_at").all(holdingId);
+  }
+  // What is held by others and shown to this principal, with the line it is shown along.
+  shownTo(id) {
+    return this.db.prepare(`SELECT h.id, h.holder_id, h.kind, h.name, h.size, h.type, h.readable, h.updated_at, r.relation FROM relations r JOIN holdings h ON h.id=r.object_id
+      WHERE r.subject_id=? AND r.object_type='holding' ORDER BY r.created_at`).all(id).map(row => ({ ...row, readable: row.readable === 1 }));
   }
   ownersOf(id) { return this.db.prepare("SELECT subject_id AS id FROM relations WHERE relation='owner' AND object_type='principal' AND object_id=?").all(id).map(row => row.id); }
   // The principals this one owns, each with the name it gave them and the credentials they carry.
