@@ -295,3 +295,21 @@ test('閲覧を許された相手は、その保有者の値だけを読み、�
   const refused = await f.request('/v1/secrets?name=shared&as=' + USER_B, { token: made.json.token, anonymous: true });
   assert.equal(refused.status, 403, refused.text);
 });
+
+test('編集を許された相手はその値を書き換え、値を消すと線は消え、名前を変えると線はついていく', async t => {
+  const f = await fixture(t);
+  await f.request('/v1/secrets?name=doc&secret=false', { method: 'PUT', raw: 'v1' });
+  const made = await f.request('/v1/principals', { method: 'POST', data: { name: 'editor', credential: 'key' } });
+  const token = made.json.token, id = made.json.principal.id;
+  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: id, relation: 'editor', object_type: 'secret', object_id: 'doc' } })).status, 201);
+  const written = await f.request('/v1/secrets?name=doc&as=' + USER_A, { method: 'PUT', raw: 'v2', token, anonymous: true });
+  assert.equal(written.status, 200, written.text);
+  assert.equal((await f.request('/v1/secrets?name=doc')).text, 'v2');
+  assert.equal((await f.request('/v1/secrets?name=doc', { method: 'PATCH', data: { name: 'moved' } })).status, 200);
+  assert.equal((await f.request('/v1/secrets?name=moved&as=' + USER_A, { token, anonymous: true })).status, 200, 'the line follows the name');
+  await f.request('/v1/secrets?name=moved', { method: 'DELETE', data: {} });
+  await f.request('/v1/secrets?name=moved&secret=false', { method: 'PUT', raw: 'fresh' });
+  assert.equal((await f.request('/v1/secrets?name=moved&as=' + USER_A, { token, anonymous: true })).status, 403, 'a new thing by the old name starts with no lines');
+  const owner = await f.request('/v1/relations', { method: 'POST', data: { subject: id, relation: 'owner', object_type: 'principal', object_id: USER_A } });
+  assert.equal(owner.status, 400, 'ownership is not drawn by hand');
+});

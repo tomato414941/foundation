@@ -364,17 +364,20 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       const actsFor = principals.actsFor(subject.id);
       const asked = url.searchParams.get('as');
       const holderId = asked ? principalId(asked) : actsFor.length === 1 ? actsFor[0].id : subject.id;
+      let asked_ = null;
       const permit = (name, type, id, holder = type === 'principal' ? id : holderId) => {
-        if (authorization.allowed({ subject, action: { name }, resource: { type, ...(id === undefined ? {} : { id }), holder } }).decision) return;
+        asked_ = { subject, action: { name }, resource: { type, ...(id === undefined ? {} : { id }), holder } };
+        if (authorization.allowed(asked_).decision) return;
         if (subject.credential.kind === 'link') fail(401, 'login_required', 'ログインしてください。');
         if (subject.credential.kind === 'key' && holder !== subject.id && !principals.relationsOf(subject.id).length) notApproved();
         fail(403, 'forbidden', 'この操作は許可されていません。');
       };
-      // Reading an upload may outlive its authorization. Recheck before committing any change.
+      // Reading an upload may outlive its authorization. Recheck before committing any change: the credential,
+      // and the same question the route asked before reading.
       const still = () => {
         if (subject.credential.kind === 'session') { if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。'); }
         else if (!principals.credentials(subject.id).some(row => row.id === subject.credential.id)) fail(401, 'not_approved', 'このキーは失効しています。');
-        if (holderId !== subject.id && !principals.has(subject.id, 'actor', 'principal', holderId) && !principals.has(subject.id, 'owner', 'principal', holderId)) fail(401, 'not_approved', 'この相手の代わりには動けません。');
+        if (asked_ ? !authorization.allowed(asked_).decision : holderId !== subject.id && !principals.has(subject.id, 'actor', 'principal', holderId) && !principals.has(subject.id, 'owner', 'principal', holderId)) fail(401, 'not_approved', 'この相手の代わりには動けません。');
       };
       const inputBody = async max => { const input = await body(req, max); still(); return input; };
       const inputBytes = async max => { const input = await raw(req, max); still(); return input; };
@@ -536,6 +539,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const subjectId = input.subject === undefined ? subject.id : principalId(input.subject);
         if (typeof input.relation !== 'string' || typeof input.object_type !== 'string' || typeof input.object_id !== 'string') fail(400, 'invalid_relation', '関係の指定を確認してください。');
         if (subjectId !== subject.id && !principals.has(subject.id, 'owner', 'principal', subjectId)) fail(403, 'forbidden', 'この操作は許可されていません。');
+        // Ownership comes from making or approving, never from a line drawn here; onto a held thing one draws viewer or editor.
+        if (input.object_type === 'principal' ? input.relation !== 'actor' : !['viewer', 'editor'].includes(input.relation)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
         if (input.object_type === 'principal') permit('relate', 'principal', input.object_id);
         else {
           if (input.object_type === 'secret' && !secrets.find(holderId, input.object_id)) fail(404, 'not_found', '保管されたものが見つかりません。');

@@ -85,11 +85,17 @@ export class Secrets {
       const row = this.at(ownerId, name);
       if (target !== name && this.find(ownerId, target)) fail(409, 'name_taken', 'その名前はすでに使われています。');
       this.db.prepare('UPDATE secrets SET name=?,updated_at=? WHERE id=?').run(target, new Date().toISOString(), row.id);
+      // Lines drawn onto the thing follow it to its new name.
+      this.db.prepare("UPDATE relations SET object_id=? WHERE object_type='secret' AND holder_id=? AND object_id=?").run(target, ownerId, row.name);
       return this.list(ownerId, target)[0];
     });
   }
+  // Removing the thing removes the lines onto it: a later thing by the same name starts with none.
   remove(ownerId, name) {
-    if (!this.db.prepare('DELETE FROM secrets WHERE owner_id=? AND name=?').run(ownerId, secretName(name)).changes) fail(404, 'not_found', '保管されたものが見つかりません。');
+    this.store.transaction(() => {
+      if (!this.db.prepare('DELETE FROM secrets WHERE owner_id=? AND name=?').run(ownerId, secretName(name)).changes) fail(404, 'not_found', '保管されたものが見つかりません。');
+      this.db.prepare("DELETE FROM relations WHERE object_type='secret' AND holder_id=? AND object_id=?").run(ownerId, secretName(name));
+    });
   }
   // Each input and delivery destination is explicit.
   deliver(ownerId, asked) {
