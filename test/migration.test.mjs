@@ -4,10 +4,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Store, digest } from '../src/store.mjs';
-import { Vault } from '../src/crypto.mjs';
+import { Store } from '../src/store.mjs';
+import { Vault, digest } from '../src/crypto.mjs';
 import { READONLY_SCOPE } from '../src/connectors/gmail/client.mjs';
-import { FakeAuth, fixture, KEY, USER_A, USER_B } from './helpers.mjs';
+import { FakeAuth, fixture, resources, KEY, USER_A, USER_B } from './helpers.mjs';
 
 // Schema 11, fixed independently of the current schema so the migration test cannot
 // accidentally create only the new shape. All credentials below are test fixtures.
@@ -79,26 +79,28 @@ async function legacy(t) {
 
 test('Schema 11 migrates encrypted values and pending state without changing their identities or contents', async t => {
   const old = await legacy(t), store = new Store(old.path, KEY); t.after(() => store.close());
+  const { secrets, connections, keys, sessions, flows } = resources(store);
   const fresh = new Store(':memory:', KEY), current = fresh.db.prepare('PRAGMA user_version').get().user_version; fresh.close();
   assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, current, 'carried to the shape a new database has');
   for (const entry of old.entries) {
-    const row = store.secret(entry.owner, entry.name);
+    const row = secrets.find(entry.owner, entry.name);
     assert.equal(row.id, entry.id); assert.equal(row.content, entry.sealed);
     assert.equal(row.created_at, old.stamp); assert.equal(row.updated_at, old.stamp);
-    assert.deepEqual(store.secretContent(row), entry.content);
+    assert.deepEqual(secrets.content(row), entry.content);
   }
-  const connection = store.acquisition(USER_A, old.connectionId);
-  assert.equal(connection.generation, 4); assert.equal(connection.state, old.encryptedState);
-  assert.deepEqual(store.acquisitionState(connection), old.state);
-  assert.equal(store.authenticate(old.token).owner_id, USER_A);
-  assert.equal(store.session(old.sessionToken).id, old.sessionId);
-  assert.equal(store.keys(USER_A)[0].issued_nonexpiring, 1);
+  const connection = connections.get(USER_A, old.connectionId);
+  assert.equal(connection.generation, 4);
+  assert.deepEqual(connections.state(connection), { private_state: old.state.renewal, facts: old.state.facts, expires_at: old.state.expires_at });
+  assert.equal(keys.find(old.token).owner_id, USER_A);
+  assert.equal(sessions.get(old.sessionToken).id, old.sessionId);
+  assert.equal(keys.list(USER_A)[0].name, 'Existing key');
   assert.equal(store.db.prepare('SELECT count(*) n FROM key_requests').get().n, 1);
-  const flow = store.takeFlow(old.sessionId, old.flowState);
+  const flow = flows.take(old.sessionId, old.flowState);
   assert.deepEqual(flow.previous, { id: old.connectionId, generation: 4 });
   assert.equal(flow.requestId, old.requestIds.connecting);
-  store.disconnect(USER_A, connection.id); store.removeAcquisition(USER_A, connection.id);
-  for (const entry of old.entries) assert.deepEqual(store.secretContent(store.secret(entry.owner, entry.name)), entry.content);
+  assert.equal(flow.connector, 'gmail.readonly');
+  connections.disconnect(USER_A, connection.id); connections.remove(USER_A, connection.id);
+  for (const entry of old.entries) assert.deepEqual(secrets.content(secrets.find(entry.owner, entry.name)), entry.content);
 });
 
 test('Migrated pending requests and OAuth callbacks complete through the current API', async t => {
@@ -113,12 +115,12 @@ test('Migrated pending requests and OAuth callbacks complete through the current
   assert.equal((await f.request('/v1/requests/' + old.requestIds.connected, { token: old.token })).json.request.result.connection_id, old.connectionId);
   const complete = await f.request('/v1/requests/' + old.requestIds.pending + '/done', { method: 'POST', headers, data: { entries: [{ name: 'new ordinary', content: 'new ordinary value' }] } });
   assert.equal(complete.status, 200, complete.text);
-  assert.equal(f.app.store.secretContent(f.app.store.secret(USER_A, 'new ordinary')).toString(), 'new ordinary value');
+  assert.equal(f.app.secrets.content(f.app.secrets.find(USER_A, 'new ordinary')).toString(), 'new ordinary value');
   const callback = await f.request('/oauth/gmail.readonly/callback?state=' + old.flowState + '&code=personal-readonly', { headers });
   assert.equal(callback.headers.get('location'), '/requests/' + old.requestIds.connecting + '?connection=connected');
-  assert.equal(f.app.store.acquisition(USER_A, old.connectionId).generation, 5);
+  assert.equal(f.app.connections.get(USER_A, old.connectionId).generation, 5);
   assert.equal((await f.request('/v1/requests/' + old.requestIds.connecting, { token: old.token })).json.request.result.connection_id, old.connectionId);
-  for (const entry of old.entries) assert.deepEqual(f.app.store.secretContent(f.app.store.secret(entry.owner, entry.name)), entry.content);
+  for (const entry of old.entries) assert.deepEqual(f.app.secrets.content(f.app.secrets.find(entry.owner, entry.name)), entry.content);
 });
 
 test('Wrong encryption key rolls the entire schema migration back; the original key still opens it', async t => {
@@ -129,6 +131,7 @@ test('Wrong encryption key rolls the entire schema migration back; the original 
   for (const entry of old.entries) assert.equal(before.prepare('SELECT content FROM secrets WHERE owner_id=? AND path=?').get(entry.owner, entry.name).content, entry.sealed);
   before.close();
   const opened = new Store(old.path, KEY);
-  assert.equal(opened.acquisition(USER_A, old.connectionId).state, old.encryptedState);
+  const { connections } = resources(opened);
+  assert.deepEqual(connections.state(connections.get(USER_A, old.connectionId)).private_state, old.state.renewal);
   opened.close();
 });

@@ -47,7 +47,7 @@ test('OpenRouter exchanges only PKCE code, preserves real expiry and zero budget
   assert.deepEqual(Object.keys(body).sort(), ['code', 'code_challenge_method', 'code_verifier']);
   assert.equal(createHash('sha256').update(body.code_verifier).digest('base64url'), url.searchParams.get('code_challenge'));
   assert.equal(f.openrouter.calls[1].url, OPENROUTER_API + '/key');
-  assert.equal(f.app.store.keys(USER_A).length, 0, 'connecting alone grants no runtime');
+  assert.equal(f.app.keys.list(USER_A).length, 0, 'connecting alone grants no runtime');
 });
 
 test('OpenRouter callback cannot use another session, forged state, or a denied authorization', async t => {
@@ -63,7 +63,7 @@ test('OpenRouter callback cannot use another session, forged state, or a denied 
   assert.equal(f.openrouter.calls.length, 0);
 });
 
-test('API key is delivered only to an approved key; revocation metadata never promises short expiry', async t => {
+test('承認したキーに認証情報と提供元の有効期限を渡し、失効後の取得を拒否する', async t => {
   const f = await openrouterFixture(t), token = 'fdn_' + randomBytes(32).toString('base64url');
   assert.equal((await f.request('/v1/connections', { token, anonymous: true })).status, 401, 'nothing before the key is approved');
   await f.approveKey(token);
@@ -83,8 +83,8 @@ test('API key is delivered only to an approved key; revocation metadata never pr
   assert.deepEqual(issued.json.delivery.environment, { OPENROUTER_API_KEY: f.openrouter.key() });
   assert.equal(issued.json.expires_at, null);
   assert.equal(issued.json.expires_in, null);
-  assert.equal(f.app.store.keys(USER_A)[0].issued_nonexpiring, 1);
-  await f.request('/v1/keys/' + f.app.store.keys(USER_A)[0].id, { method: 'DELETE' });
+  assert.ok(f.app.keys.list(USER_A)[0].last_used_at);
+  await f.request('/v1/keys/' + f.app.keys.list(USER_A)[0].id, { method: 'DELETE' });
   assert.equal((await credential(f, account, token)).status, 401);
 });
 
@@ -111,7 +111,7 @@ test('Local disconnect never pretends to delete OpenRouter key or calls a manage
   assert.equal(removed.status, 200);
   assert.equal(removed.json.service_revoked, null, 'the key stays at OpenRouter, and nothing pretends otherwise');
   assert.equal((await credential(f, account, agent.token)).status, 404);
-  assert.equal(f.app.store.acquisition(USER_A, account.id), undefined);
+  assert.equal(f.app.connections.get(USER_A, account.id), undefined);
   assert.ok(f.openrouter.calls.every(call => ['/auth/keys', '/key'].some(path => call.url === OPENROUTER_API + path)));
 });
 
@@ -125,12 +125,12 @@ test('Provider expiry, revocation and budget updates are checked before every AP
   assert.ok(issued.json.expires_in > 80_000, 'not replaced with a fictitious short lifetime');
   const connection = (await f.request('/v1/connections', { token: agent.token })).json.connections[0];
   assert.equal(connection.label, account.label, 'what the key can see about it is on the connection, not the delivery');
-  assert.equal(f.app.store.keys(USER_A)[0].issued_nonexpiring, 0);
+  assert.equal(connection.facts.expires_at, Date.parse(f.openrouter.info.expires_at));
   f.openrouter.keyHandler = () => json({ error: 'secret upstream response' }, 401);
   issued = await credential(f, account, agent.token);
   assert.equal(issued.json.error.code, 'reconnect_required');
   assert.doesNotMatch(issued.text, /secret upstream|sk-or-v1-/);
-  assert.equal(f.app.store.acquisition(USER_A, account.id).status, 'reconnect_required');
+  assert.equal(f.app.connections.get(USER_A, account.id).status, 'reconnect_required');
 });
 
 test('OpenRouter in-flight key is withheld after the key is revoked', async t => {

@@ -45,23 +45,22 @@ with tempfile.TemporaryDirectory(prefix='foundation-functions-ui-') as key_dir, 
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
 
-    # Nothing run yet: the page lists what Foundation can do, and says so.
+    # The page describes the operations available through the same API catalog.
     page.goto(args.base + '/functions', wait_until='networkidle')
     expect(page.get_by_role('heading', name='ファンクション', exact=True)).to_be_visible()
     expect(page.get_by_role('heading', name='HTTPS リクエスト', exact=True)).to_be_visible()
     expect(page.get_by_role('heading', name='接続の認証情報', exact=True)).to_be_visible()
-    expect(page.get_by_text('まだ実行されていません。', exact=True)).to_be_visible()
+    catalog = json.loads(cli('api', 'GET', '/v1/functions'))['functions']
+    for function in catalog:
+        expect(page.locator('.agent-row code').get_by_text(function['id'], exact=True)).to_be_visible()
+    expect(page.get_by_text('保存した値を使ってHTTPSリクエストを送ります。', exact=True)).to_be_visible()
+    expect(page.get_by_text('接続の認証情報を取得・更新します。', exact=True)).to_be_visible()
     review(page)
-
-    # The key sends one request through Foundation (the fixture reaches no real host, so it fails), and the owner sees the record.
-    cli('api', 'PUT', '/v1/secrets?name=api%20token&secret=true', '--json', json.dumps(SECRET))
-    cli('api', 'POST', '/v1/functions/http.request', '--json', json.dumps({'url': 'https://api.example.test/v1/items', 'headers': {'authorization': 'Bearer {{foundation:api token}}'}}), ok=False)
-    page.reload(wait_until='networkidle')
-    row = page.locator('.record-table tbody tr').first
-    expect(row).to_contain_text('dev-us のAI')
-    expect(row).to_contain_text('HTTPS リクエスト')
-    expect(row).to_contain_text('GET api.example.test')
-    expect(row).to_contain_text('失敗')
+    page.goto(args.base, wait_until='networkidle')
+    card = page.locator('.home-card').filter(has=page.get_by_role('heading', name='ファンクション', exact=True))
+    expect(card).to_contain_text(str(len(catalog)) + ' 種類')
+    card.click()
+    expect(page).to_have_url(args.base + '/functions')
     review(page)
     page.screenshot(path=str(shots / 'functions.png'), full_page=True)
     for width in [390, 320]:
@@ -71,4 +70,4 @@ with tempfile.TemporaryDirectory(prefix='foundation-functions-ui-') as key_dir, 
             page.screenshot(path=str(shots / 'functions-mobile.png'), full_page=True)
     assert not errors, errors
     browser.close()
-print('Functions screen passed: what Foundation does on a key\'s behalf, and the record of one run without its inputs.')
+print('ファンクション一覧の説明・ホームからの移動・モバイル表示を確認する: passed')

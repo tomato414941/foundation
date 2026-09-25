@@ -324,7 +324,3 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 
 .checkbox { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 15px; }
 .checkbox input { width: 18px; height: 18px; }
-
-.record-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-.record-table th, .record-table td { text-align: left; padding: 10px 20px; border-top: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
-.record-table th { font-weight: 600; color: var(--muted); }

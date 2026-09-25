@@ -1,4 +1,6 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+
+export const digest = value => createHash('sha256').update(value).digest('hex');
 
 export class Vault {
   constructor(key) {

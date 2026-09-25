@@ -129,15 +129,15 @@ async function main() {
   const configured = process.env.FOUNDATION_URL || await savedUrl();
   if (action === '--help' || action === '-h' || action === 'help' || !action) { console.log(HELP); return; }
   if (action === 'guide') {
-    let adapters;
+    let connectors;
     if (configured) {
       try {
         const response = await fetch(new URL('/v1/connectors', configured), { redirect: 'error', signal: AbortSignal.timeout(5_000) });
         const catalog = await response.json();
-        if (response.ok && Array.isArray(catalog.connectors)) adapters = catalog.connectors;
+        if (response.ok && Array.isArray(catalog.connectors)) connectors = catalog.connectors;
       } catch {}
     }
-    console.log(guide(adapters));
+    console.log(guide(connectors));
     return;
   }
   const separatorAt = args.indexOf('--'), command = separatorAt >= 0 ? args.slice(separatorAt + 1) : [];

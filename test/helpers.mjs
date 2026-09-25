@@ -7,6 +7,13 @@ export { FakeGmail } from '../src/connectors/gmail/fixture.mjs';
 import { Connectors } from '../src/connectors.mjs';
 import { gmailReadonly, gmailMetadata } from '../src/connectors/gmail/index.mjs';
 import { Connections } from '../src/connections.mjs';
+import { Secrets } from '../src/secrets.mjs';
+import { Keys } from '../src/keys.mjs';
+import { Sessions, OAuthFlows } from '../src/sessions.mjs';
+
+export function resources(store, connectors = []) {
+  return { secrets: new Secrets(store), connections: new Connections(store, new Connectors(connectors)), keys: new Keys(store), sessions: new Sessions(store), flows: new OAuthFlows(store) };
+}
 
 export const KEY = Buffer.alloc(32, 7);
 export const USER_A = '10000000-0000-4000-8000-000000000001';
@@ -35,12 +42,12 @@ export class FakeAuth {
 }
 
 // Seed a stored credential, including already-expired fixture tokens.
-export function acquired(store, connectors, adapterId, { subject, secret }) {
+export function acquired(store, connectors, connectorId, { subject, secret }) {
   const connections = new Connections(store, new Connectors(connectors));
-  const saved = store.saveAcquisition(USER_A, { adapter: adapterId, subject, label: subject, keptBy: 'test',
+  const saved = connections.write(USER_A, { connector: connectorId, subject, label: subject, keptBy: 'test',
     state: { private_state: secret, facts: {}, expires_at: secret.expires_at } });
-  const row = () => store.acquisition(USER_A, saved.id);
-  const state = () => store.acquisitionState(row());
+  const row = () => connections.get(USER_A, saved.id);
+  const state = () => connections.state(row());
   const run = () => connections.obtain(row());
   return { connections, row, run, state };
 }
@@ -72,7 +79,7 @@ export async function fixture(t, options = {}) {
     cookie = response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
     return response;
   }
-  // Gmail's read range is its adapter: gmail.readonly or gmail.metadata.
+  // Gmail's read range is its connector: gmail.readonly or gmail.metadata.
   async function start({ range = 'readonly', connection_id } = {}) {
     const result = await request('/v1/connections', { method: 'POST', data: { connector: 'gmail.' + range, connection_id } });
     assert.equal(result.status, 200, result.text);
@@ -90,8 +97,8 @@ export async function fixture(t, options = {}) {
     return (await request('/v1/state')).json.connections.find((item) => item.subject === code + '@example.test');
   }
   // Explicit credential processing: storage reads never call this operation.
-  async function deliver(acquisition, options = {}) {
-    return request('/v1/functions/connection.credentials', { method: 'POST', data: { connection_id: acquisition.id }, ...options });
+  async function deliver(connection, options = {}) {
+    return request('/v1/functions/connection.credentials', { method: 'POST', data: { connection_id: connection.id }, ...options });
   }
   // Makes a runtime key known to the owner: the key asks to be approved and the owner types its code.
   async function approveKey(token, name = 'dev-us') {
@@ -107,11 +114,11 @@ export async function fixture(t, options = {}) {
     assert.equal(result.status, 201, result.text);
     return result.json.key;
   }
-  // Ages an acquisition past its expiry, in what the store holds and in the shape its adapter reads back.
+  // Ages a connection past its expiry in both the envelope and the connector's private state.
   function expire(id, owner = USER_A) {
-    const acquisition = app.store.acquisition(owner, id);
-    const state = app.store.acquisitionState(acquisition), expires_at = Date.now() - 1;
-    app.store.saveState(acquisition, { ...state, expires_at, private_state: { ...(state.private_state ?? state.renewal), expires_at } });
+    const connection = app.connections.get(owner, id);
+    const state = app.connections.state(connection), expires_at = Date.now() - 1;
+    app.connections.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
   }
   if (options.login !== false) await login();
   return { app, auth, gmail, base, request, login, start, callback, credential, deliver, issueKey, approveKey, expire, close, cookie: () => cookie };

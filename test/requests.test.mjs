@@ -40,7 +40,7 @@ test('A new key asks only to be approved: no access before approval, the same pr
   const saved = await f.credential();
   const approved = await approve(f, row);
   assert.equal(approved.status, 200, approved.text);
-  assert.equal(approved.json.request.status, 'approved');
+  assert.equal(approved.json.request.status, 'done');
   assert.doesNotMatch(approved.text, /fdn_|google-access|refresh_token|token_hash/);
   const listed = await usable(f, token);
   assert.deepEqual(listed.json.connections.map(a => a.id), [saved.id]);
@@ -50,18 +50,18 @@ test('A new key asks only to be approved: no access before approval, the same pr
   assert.equal(delivered.json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal-readonly');
 
   assert.equal((await approve(f, row)).status, 409);
-  assert.equal(f.app.store.keys(USER_A).length, 1);
+  assert.equal(f.app.keys.list(USER_A).length, 1);
   assert.ok(!JSON.stringify(f.app.store.db.prepare('SELECT * FROM key_requests').all()).includes(token));
 });
 
 test('A key not yet approved cannot ask for a registration, an approval request registers nothing, and an approved key names an adapter', async t => {
   const f = await fixture(t);
   const refused = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key(), data: { ...asking, ...registration } });
-  assert.equal(refused.status, 409); assert.equal(refused.json.error.code, 'approval_required');
+  assert.equal(refused.status, 401); assert.equal(refused.json.error.code, 'not_approved');
   const { row } = await create(f);
   const attempt = await f.request('/v1/connections', { method: 'POST', data: { connector: 'gmail.readonly', request_id: row.id } });
   assert.equal(attempt.status, 410);
-  assert.equal(f.app.store.acquisitions(USER_A).length, 0);
+  assert.equal(f.app.connections.list(USER_A).length, 0);
   const approved = await f.issueKey();
   const bare = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: approved.token, data: { purpose: '何もない' } });
   assert.equal(bare.status, 400); assert.equal(bare.json.error.code, 'nothing_requested');
@@ -77,7 +77,7 @@ test('Request creation is idempotent, and asking for something else makes a new 
   assert.equal((await create(f, first.token, {}, registration)).row.id, first.row.id);
   const changed = await f.request('/v1/requests', { method: 'POST', token: first.token, data: { ...registration, connector: 'gmail.metadata' } });
   assert.equal(changed.status, 201); assert.notEqual(changed.json.request.id, first.row.id);
-  assert.equal(f.app.store.db.prepare('SELECT adapter FROM requests WHERE id=?').get(first.row.id).adapter, 'gmail.readonly');
+  assert.deepEqual((await f.request('/v1/requests/' + first.row.id, { token: first.token })).json.request.input, { connector: 'gmail.readonly' });
 });
 
 test('Email login returns to the exact request page and rejects open redirects', async t => {
@@ -111,23 +111,23 @@ test('A registration request stays with its owner, completes by registering, and
   await f.credential();
   const { row, agent: runtime } = await register(f, { connector: 'gmail.metadata' });
   assert.equal(row.key_name, 'dev-us');
-  const ownerCookie = 'fdn_session=' + f.app.store.createSession(f.auth.value());
+  const ownerCookie = 'fdn_session=' + f.app.sessions.create(f.auth.value());
   await f.login('other@example.test');
   assert.equal((await f.request('/v1/requests/' + row.id)).status, 404);
   const flow = new URL((await f.request('/v1/connections', { method: 'POST', headers: { cookie: ownerCookie }, data: { connector: 'gmail.metadata', request_id: row.id } })).json.url);
   await f.callback(flow, 'second-metadata', { headers: { cookie: ownerCookie } });
   const done = (await f.request('/v1/requests/' + row.id, { headers: { cookie: ownerCookie } })).json.request;
-  assert.equal(done.status, 'done'); assert.equal(done.result.label, 'second@example.test');
+  assert.equal(done.status, 'done'); assert.equal(f.app.connections.get(USER_A, done.result.connection_id).subject, 'second@example.test');
   assert.equal((await usable(f, runtime.token)).json.connections.length, 2);
   const next = await create(f, runtime.token, {}, registration);
-  f.app.store.removeKey(USER_A, runtime.id);
+  f.app.requestActions.revokeKey(USER_A, runtime.id);
   assert.equal((await usable(f, runtime.token)).status, 401);
-  assert.equal((await f.request('/v1/requests/' + next.row.id, { headers: { cookie: ownerCookie } })).json.request.status, 'revoked');
+  assert.equal((await f.request('/v1/requests/' + next.row.id, { headers: { cookie: ownerCookie } })).json.request.status, 'cancelled');
   const blocked = await f.request('/v1/connections', { method: 'POST', headers: { cookie: ownerCookie }, data: { connector: 'gmail.readonly', request_id: next.row.id } });
   assert.equal(blocked.status, 409);
-  assert.equal(f.app.store.keys(USER_A).length, 0);
-  assert.equal(f.app.store.keys(USER_B).length, 0);
-  assert.equal(f.app.store.acquisitions(USER_A).length, 2);
+  assert.equal(f.app.keys.list(USER_A).length, 0);
+  assert.equal(f.app.keys.list(USER_B).length, 0);
+  assert.equal(f.app.connections.list(USER_A).length, 2);
 });
 
 test('An approval request belongs to the owner who approves it', async t => {
@@ -154,7 +154,7 @@ for (const end of ['deny', 'cancel', 'expire']) test(`A ${end} registration requ
   release();
   const result = await callback;
   assert.equal(result.headers.get('location'), '/requests/' + row.id + '?connection=failed');
-  assert.equal(f.app.store.acquisitions(USER_A).length, 1);
+  assert.equal(f.app.connections.list(USER_A).length, 1);
   if (end === 'expire') {
     assert.equal(rowStatus(f, row.id), 'pending');
     f.app.store.sweep();
@@ -179,11 +179,11 @@ test('Cross-site creation, invalid names and cross-origin approval are rejected'
 test('What a key sees reflects a connection needing attention, one removed, and its own key revoked', async t => {
   const f = await fixture(t), saved = await f.credential(), { token, row } = await create(f);
   await approve(f, row);
-  f.app.store.reconnectRequired(f.app.store.acquisition(USER_A, saved.id));
+  f.app.connections.reconnectRequired(f.app.connections.get(USER_A, saved.id));
   assert.equal((await usable(f, token)).json.connections[0].status, 'reconnect_required');
-  f.app.store.disconnect(USER_A, saved.id);
+  f.app.connections.disconnect(USER_A, saved.id);
   assert.deepEqual((await usable(f, token)).json.connections, []);
-  f.app.store.removeKey(USER_A, f.app.store.keys(USER_A)[0].id);
+  f.app.requestActions.revokeKey(USER_A, f.app.keys.list(USER_A)[0].id);
   assert.equal((await usable(f, token)).status, 401);
 });
 
@@ -224,8 +224,8 @@ test('独自の接続も共通の依頼・認証・受け渡し・解除の動�
   assert.equal(start.status, 200, start.text);
   const callback = await f.request('/oauth/notes.oauth/callback?state=' + new URL(start.json.url).searchParams.get('state') + '&code=notes-code');
   assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?connection=connected');
-  const saved = f.app.store.acquisitions(USER_A)[0];
-  assert.equal(saved.adapter, 'notes.oauth'); assert.equal(saved.subject, 'notes-user');
+  const saved = f.app.connections.list(USER_A)[0];
+  assert.equal(saved.connector, 'notes.oauth'); assert.equal(saved.subject, 'notes-user');
   const delivered = await f.deliver(saved, { token });
   assert.deepEqual(delivered.json.delivery.environment, { NOTES_TOKEN: 'notes-access' });
   const listed = (await f.request('/v1/connections', { token })).json.connections[0];
@@ -247,7 +247,7 @@ test('The approval page never receives the confirmation code; entry is normalize
   assert.equal(rowStatus(f, row.id), 'pending');
   const relaxed = await approve(f, row, { confirmation_code: ' ' + row.confirmation_code.toLowerCase().replace('-', '') + ' ' });
   assert.equal(relaxed.status, 200, relaxed.text);
-  assert.equal(relaxed.json.request.status, 'approved');
+  assert.equal(relaxed.json.request.status, 'done');
   assert.equal(relaxed.json.request.confirmation_code, undefined);
   const second = await create(f, key());
   for (let attempt = 1; attempt <= 4; attempt++) assert.equal((await approve(f, second.row, { confirmation_code: '0000-0000' })).json.error.code, 'confirmation_required');
@@ -255,7 +255,7 @@ test('The approval page never receives the confirmation code; entry is normalize
   assert.equal(locked.status, 400); assert.equal(locked.json.error.code, 'confirmation_locked');
   assert.equal(rowStatus(f, second.row.id), 'denied');
   assert.equal((await approve(f, second.row)).status, 409);
-  assert.equal(f.app.store.keys(USER_A).length, 1);
+  assert.equal(f.app.keys.list(USER_A).length, 1);
 });
 
 test('An access key introduces itself: whoami, the owner can rename it, it can rename itself, and it can leave', async t => {
@@ -276,17 +276,17 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
   const agentId = me.json.key.id;
   assert.equal((await f.request('/v1/keys/' + agentId, { method: 'PATCH', data: { name: '' } })).status, 400);
   assert.equal((await f.request('/v1/keys/' + agentId, { method: 'PATCH', data: { name: '作業用' } })).status, 200);
-  assert.equal(f.app.store.keys(USER_A)[0].name, '作業用');
+  assert.equal(f.app.keys.list(USER_A)[0].name, '作業用');
   assert.equal((await f.request('/v1/keys/' + agentId, { method: 'PATCH', headers: { origin: 'https://evil.test' }, data: { name: 'x' } })).status, 403);
   const renamed = await f.request('/v1/keys/current', { method: 'PATCH', token, anonymous: true, data: { name: '作業用 Claude' } });
   assert.equal(renamed.status, 200, renamed.text); assert.equal(renamed.json.key.name, '作業用 Claude');
   assert.equal((await f.request('/v1/keys/current', { method: 'PATCH', token, anonymous: true, data: { name: '' } })).status, 400);
-  assert.equal(f.app.store.keys(USER_A)[0].name, '作業用 Claude');
+  assert.equal(f.app.keys.list(USER_A)[0].name, '作業用 Claude');
   // Leaving revokes the key but keeps the credentials.
   assert.equal((await f.request('/v1/keys/current', { method: 'DELETE', token, anonymous: true, data: {} })).status, 200);
   assert.equal((await f.request('/v1/connections', { token, anonymous: true })).status, 401);
-  assert.equal(f.app.store.keys(USER_A).length, 0);
-  assert.equal(f.app.store.acquisitions(USER_A).length, 1);
+  assert.equal(f.app.keys.list(USER_A).length, 0);
+  assert.equal(f.app.connections.list(USER_A).length, 1);
 });
 
 test('依頼元が認証失敗と再試行の経過を機密入力なしで確認する', async t => {

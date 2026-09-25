@@ -135,14 +135,14 @@ test('空・過大・公開・リンク・特殊ファイルの出力を安全�
 test('保存に失敗したときだけ復旧用の非公開出力を残し、入力は片づける', async t => {
   const f = await outputFixture(t);
   await f.request('/v1/secrets?name=input', { method: 'PUT', raw: 'input-secret' });
-  const put = f.app.store.writeSecret;
-  f.app.store.writeSecret = () => fail(503, 'storage_unavailable', 'generated-secret');
+  const put = f.app.secrets.put;
+  f.app.secrets.put = () => fail(503, 'storage_unavailable', 'generated-secret');
   const run = await execute(['exec', '--inputs', JSON.stringify([{ name: 'input', as: 'INPUT_FILE', filename: 'input' }]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
     require('node:fs').writeFileSync(process.env.AUTH_FILE, 'generated-secret');
     require('node:fs').writeFileSync(require('node:path').join(require('node:path').dirname(process.env.AUTH_FILE), 'unneeded-cache'), 'cache');
     console.log(JSON.stringify([process.env.INPUT_FILE, process.env.AUTH_FILE]));
   `], f.env);
-  f.app.store.writeSecret = put;
+  f.app.secrets.put = put;
   assert.equal(run.code, 1); assert.match(run.err, /retained for recovery/);
   const [inputPath, outputPath] = JSON.parse(run.out);
   assert.ok(run.err.includes(outputPath));

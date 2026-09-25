@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
-import { digest } from './store.mjs';
+import { digest } from './crypto.mjs';
 import { fail } from './errors.mjs';
 import { prepare as prepareFetch, send as sendFetch } from './fetch.mjs';
 
@@ -22,7 +22,7 @@ export function returnUrl(value) {
 }
 
 export class Integrations {
-  constructor(store) { this.store = store; this.db = store.db; }
+  constructor(store, keys) { this.store = store; this.db = store.db; this.keys = keys; }
   // The owner registers a product; its credential is shown once.
   // As with Stripe: where the product's page is (return), where to send its user when a link cannot be used
   // (refresh, the same page unless given), and where it hears that a request finished (webhook, signed).
@@ -67,7 +67,7 @@ export class Integrations {
     if (!found) fail(404, 'not_found', 'アカウントが見つかりません。');
     return found;
   }
-  view(account) { return { id: account.id, external_id: account.external_id, created_at: account.created_at, keys: this.store.keys(account.id) }; }
+  view(account) { return { id: account.id, external_id: account.external_id, created_at: account.created_at, keys: this.keys.list(account.id) }; }
   // Where a request made by one of these accounts is opened: the product's own page, which knows who its user is.
   returnUrlFor(ownerId) {
     return this.db.prepare('SELECT i.return_url FROM accounts a JOIN integrations i ON i.id=a.integration_id WHERE a.id=?').get(ownerId)?.return_url;
@@ -106,7 +106,7 @@ export class Integrations {
   deleteAccount(integration, externalId) {
     const account = this.account(integration, externalId);
     this.store.transaction(() => {
-      for (const table of ['secrets', 'keys', 'requests', 'acquisitions', 'request_links', 'invocations']) this.db.prepare(`DELETE FROM ${table} WHERE owner_id=?`).run(account.id);
+      for (const table of ['secrets', 'keys', 'requests', 'connections', 'request_links']) this.db.prepare(`DELETE FROM ${table} WHERE owner_id=?`).run(account.id);
       this.db.prepare('DELETE FROM accounts WHERE id=?').run(account.id);
     });
     return account;
@@ -116,7 +116,7 @@ export class Integrations {
     const account = this.db.prepare('SELECT * FROM accounts WHERE id=? AND integration_id=?').get(request.owner_id, integration.id);
     if (!account || (externalId !== undefined && account.external_id !== this.externalId(externalId))) fail(404, 'not_found', '依頼が見つかりません。');
     if (request.status !== 'pending') fail(409, 'request_finished', 'この依頼はすでに処理されています。');
-    if (request.adapter) fail(409, 'link_unsupported', '接続の依頼はまだリンクで引き渡せません。');
+    if (request.kind !== 'store') fail(409, 'link_unsupported', '接続の依頼はまだリンクで引き渡せません。');
     const secret = token('');
     this.db.prepare("INSERT INTO request_links (token_hash,request_id,owner_id,kind,expires_at) VALUES (?,?,?,'link',?)").run(digest(secret), request.id, request.owner_id, Date.now() + LINK_TTL);
     return { token: secret, expires_at: Date.now() + LINK_TTL };

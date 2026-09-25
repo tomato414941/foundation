@@ -73,12 +73,6 @@ test('A request goes out with what is kept in its headers and body, and comes ba
   assert.equal(answer.json.response.headers['x-echo'], 'Bearer [redacted]');
   assert.doesNotMatch(answer.text, new RegExp(TOKEN));
   assert.doesNotMatch(answer.text, new RegExp(Buffer.from(TOKEN).toString('base64').slice(0, 20)));
-  // The owner sees that it happened, and where to; never what went in or came back.
-  const record = (await f.request('/v1/state')).json.invocations;
-  assert.equal(record.length, 1);
-  assert.equal(record[0].function, 'http.request'); assert.equal(record[0].target, 'POST api.example.test'); assert.equal(record[0].status, 'ok');
-  assert.match(record[0].detail, /HTTP 200/);
-  assert.doesNotMatch(JSON.stringify(record), new RegExp(TOKEN));
 });
 
 test('A redirect comes back as it is, with what is kept taken out, and is not followed', async t => {
@@ -179,8 +173,8 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
 
   const binary = await f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/bytes', save: 'binary' } });
   assert.equal(binary.status, 200);
-  const owner = f.app.store.authenticate(key.token).owner_id;
-  assert.deepEqual(f.app.store.secretContent(f.app.store.secret(owner, 'binary')), Buffer.from([0, 255, 1]));
+  const owner = f.app.keys.find(key.token).owner_id;
+  assert.deepEqual(f.app.secrets.content(f.app.secrets.find(owner, 'binary')), Buffer.from([0, 255, 1]));
 });
 
 test('The HTTPS function retains destination and owner checks, and validates output names before sending', async t => {

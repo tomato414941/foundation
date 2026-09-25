@@ -72,10 +72,10 @@ test('Explicit credential outputs can be saved, renamed and delivered without li
   assert.equal((await f.request(own(snapshot))).text, 'google-access-personal-readonly');
   assert.equal(f.gmail.calls.length, calls, 'reads deliver the stored snapshot, with no provider invocation');
   assert.equal((await f.request(own(snapshot), { method: 'PATCH', data: { name: 'a/aa/aaa' } })).status, 200);
-  const oldCiphertext = f.app.store.secret(USER_A, 'a/aa/aaa').content;
+  const oldCiphertext = f.app.secrets.find(USER_A, 'a/aa/aaa').content;
   assert.equal((await invoke(f, token, personal)).status, 200);
   assert.ok(f.gmail.calls.length > calls, 'the explicit function renews an expired credential');
-  assert.equal(f.app.store.secret(USER_A, 'a/aa/aaa').content, oldCiphertext);
+  assert.equal(f.app.secrets.find(USER_A, 'a/aa/aaa').content, oldCiphertext);
   assert.equal((await f.request(route(unrelated), { token })).text, 'unrelated value');
   const removed = await f.request('/v1/connections/' + personal.id, { method: 'DELETE', data: { revoke: false } });
   assert.equal(removed.status, 200);
@@ -94,15 +94,15 @@ test('Selected output names are validated before provider calls; a failed batch 
   }
   assert.equal(f.gmail.calls.length, calls);
   for (let index = 0; index < SECRET_COUNT_MAX - 1; index++) {
-    f.app.store.writeSecret(USER_A, { name: 'kept-' + index, content: Buffer.from('existing'), readable: 0 });
+    f.app.secrets.put(USER_A, { name: 'kept-' + index, content: Buffer.from('existing'), secret: true });
   }
   f.gmail.refreshHandler = () => json({ access_token: 'google-access-personal-readonly', refresh_token: 'rotated-fixture-refresh-token', expires_in: 3600 });
   const refused = await invoke(f, token, connection, { GOOGLE_OAUTH_ACCESS_TOKEN: 'new-one', GMAIL_ACCOUNT_EMAIL: 'new-two' });
   assert.equal(refused.json.error.code, 'secret_limit');
-  const kept = f.app.store.secrets(USER_A);
+  const kept = f.app.secrets.list(USER_A);
   assert.equal(kept.length, SECRET_COUNT_MAX - 1);
   assert.ok(kept.every(row => row.name.startsWith('kept-')));
-  const updated = f.app.store.acquisitionState(f.app.store.acquisition(USER_A, connection.id));
+  const updated = f.app.connections.state(f.app.connections.get(USER_A, connection.id));
   assert.equal(updated.private_state.refresh_token, 'rotated-fixture-refresh-token', 'private renewal state survives a failed snapshot save');
   assert.ok(updated.expires_at > Date.now());
 });
@@ -121,7 +121,7 @@ for (const change of ['key', 'connection', 'reconnect']) test('An in-flight cred
   release();
   const result = await pending;
   assert.ok([401, 409].includes(result.status), result.text);
-  assert.deepEqual(f.app.store.secrets(USER_A), []);
+  assert.deepEqual(f.app.secrets.list(USER_A), []);
   assert.doesNotMatch(result.text, /google-access|refresh-personal/);
 });
 

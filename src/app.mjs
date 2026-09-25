@@ -3,7 +3,12 @@ import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { Store, digest } from './store.mjs';
+import { Store } from './store.mjs';
+import { digest } from './crypto.mjs';
+import { Keys } from './keys.mjs';
+import { Sessions, OAuthFlows } from './sessions.mjs';
+import { RequestActions } from './request-actions.mjs';
+import { requestDefinition, requestView } from './http-requests.mjs';
 import { fail, HttpError, nameValue } from './errors.mjs';
 import { Connectors } from './connectors.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
@@ -12,10 +17,10 @@ import { KeyRequests } from './key-requests.mjs';
 import { Integrations } from './integrations.mjs';
 import { Connections } from './connections.mjs';
 import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX, secretName } from './secrets.mjs';
-import { Objects, S3Space, OBJECT_MAX } from './objects.mjs';
+import { Objects, OBJECT_MAX } from './objects.mjs';
 import { respond } from './mcp.mjs';
-import { prepare as prepareFetch, send as sendFetch, FETCH_BODY_MAX } from './fetch.mjs';
-import { FUNCTIONS, outputNames, saveOutputs, deliveredOutputs } from './functions.mjs';
+import { FETCH_BODY_MAX } from './fetch.mjs';
+import { FUNCTIONS, Functions } from './functions.mjs';
 import { guide } from '../cli/guide.mjs';
 
 const VERSION = createRequire(import.meta.url)('../package.json').version;
@@ -24,12 +29,11 @@ const PUBLIC = new URL('../web/', import.meta.url);
 // The owner's pages. Each is the same shell; the script decides what to show from the path.
 const PAGES = ['/', '/secrets', '/connections', '/objects', '/keys', '/functions', '/developers', '/account'];
 const STATIC = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/secrets', ['index.html', 'text/html; charset=utf-8']], ['/objects', ['index.html', 'text/html; charset=utf-8']], ['/functions', ['index.html', 'text/html; charset=utf-8']], ['/developers', ['index.html', 'text/html; charset=utf-8']], ['/account', ['index.html', 'text/html; charset=utf-8']], ['/connections', ['index.html', 'text/html; charset=utf-8']], ['/keys', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
+STATIC.set('/request-view.js', ['request-view.js', 'text/javascript; charset=utf-8']);
 const MAX_BODY = 12_000;
 const SESSION_AGE = 14 * 86400;
 const LOGIN_CALLBACK = '/login/callback';
 const REQUEST_PAGE = /^\/requests\/[A-Za-z0-9_-]{43}$/, KEY_PAGE = /^\/key-requests\/[A-Za-z0-9_-]{43}$/;
-// A value a key kept itself passed through no adapter, so Foundation has nothing to say about what it reaches.
-const KEPT_ACCESS = Object.freeze({ name: '中身は確認していません', description: 'AIが自分で預けた値です。Foundationは何の値かも、何ができるかも確認していません。', restrictions: '心当たりのないものは削除してください。' });
 // A revision of the encrypted record, never a fingerprint of the plaintext value.
 const secretTag = row => '"' + digest(JSON.stringify([row.id, row.name, row.content, row.readable, row.updated_at])) + '"';
 
@@ -66,11 +70,6 @@ async function raw(req, max) {
   }
   return Buffer.concat(chunks);
 }
-// The owner's name for the group a credential belongs to; it starts from the adapter's or the request's, and may be changed.
-function serviceValue(value) {
-  if (typeof value !== 'string' || !value.trim() || value.trim().length > 40 || /[\x00-\x1f<>]/.test(value)) fail(400, 'invalid_service', 'サービス名は1〜40文字で入力してください。');
-  return value.trim();
-}
 function purposeValue(value = '') {
   if (typeof value !== 'string' || value.length > 240 || /[\x00-\x1f]/.test(value)) fail(400, 'invalid_purpose', '用途は240文字以内で入力してください。');
   return value.trim();
@@ -99,11 +98,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
   const secrets = new Secrets(store);
   const objects = new Objects(spaceBackend);
   const connections = new Connections(store, connectors);
-  const requests = new Requests(store, connectors), keyRequests = new KeyRequests(store), integrations = new Integrations(store);
-  // A request made by an account another product holds is opened on that product's page, which knows who its user is.
-  requests.returnUrlFor = ownerId => integrations.returnUrlFor(ownerId);
+  const keys = new Keys(store), sessions = new Sessions(store), flows = new OAuthFlows(store);
+  const requests = new Requests(store, keys), keyRequests = new KeyRequests(store, keys), integrations = new Integrations(store, keys);
+  const functions = new Functions({ connections, secrets, keys, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
-  requests.onChange = row => void integrations.notify(row.owner_id, 'request.' + row.status, { request: requests.summary(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() });
+  const viewRequest = (row, origin, options) => requestView({ requests, connectors, integrations }, row, origin, options);
+  const requestActions = new RequestActions({ store, requests, secrets, connections, keys,
+    changed: row => void integrations.notify(row.owner_id, 'request.' + row.status, { request: viewRequest(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() }) });
   const logins = new EmailLogins({ now: loginClock });
   const refreshing = new Map(), limits = new Map(), disconnects = new Set();
   const timer = setInterval(() => {
@@ -121,7 +122,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
   const readCookie = (req, name) => (req.headers.cookie ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(name + '='))?.slice(name.length + 1);
   const cookieToken = (req) => readCookie(req, 'fdn_session');
   function localSession(req) {
-    const value = store.session(cookieToken(req));
+    const value = sessions.get(cookieToken(req));
     if (!value) fail(401, 'login_required', 'ログインしてください。');
     return value;
   }
@@ -132,7 +133,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         if (!refreshing.has(row.id)) {
           const pending = (async () => {
             const fresh = await auth.refresh(row.value.refresh_token);
-            if (fresh.user.id !== row.owner_id || !store.updateSession(row.id, fresh)) fail(401, 'login_required', 'もう一度ログインしてください。');
+            if (fresh.user.id !== row.owner_id || !sessions.update(row.id, fresh)) fail(401, 'login_required', 'もう一度ログインしてください。');
           })();
           refreshing.set(row.id, pending);
           pending.finally(() => refreshing.delete(row.id)).catch(() => {});
@@ -144,48 +145,26 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       if (user.id !== fresh.owner_id || localSession(req).id !== row.id) fail(401, 'login_required', 'もう一度ログインしてください。');
       return { user, session: fresh };
     } catch (error) {
-      if (error instanceof HttpError && error.status === 401) store.removeSession(cookieToken(req));
+      if (error instanceof HttpError && error.status === 401) sessions.remove(cookieToken(req));
       throw error;
     }
   }
   const bearer = req => req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
   function actor(req) {
-    const key = store.authenticate(bearer(req));
+    const key = keys.authenticate(bearer(req));
     if (!key) fail(401, 'not_approved', 'このアクセスキーはまだ承認されていないか、失効しています。foundation connect (POST /v1/keys) で承認を依頼し、承認後にお試しください。');
     return key;
   }
   function requireOrigin(req, origin) {
     if (req.headers.origin !== origin) fail(403, 'origin_denied', 'この操作はFoundationの画面から行ってください。');
   }
-  // Connection identity, provider details and available outputs; never private renewal state.
-  const runtimeAcquisition = row => {
-    const adapter = connectors.get(row.adapter);
-    const facts = store.acquisitionState(row).facts;
-    return { id: row.id, connector: row.adapter, service: adapter.service, label: facts.label || row.label, status: row.status, facts,
-      access: adapter.access, api: adapter.service?.api || { base_url: '', documentation_url: '' },
-      outputs: adapter.variables };
-  };
-  function acquisitionFor(ownerId, id) {
-    if (typeof id !== 'string' || !id || id.length > 200 || /[\x00-\x1f\x7f]/.test(id)) fail(400, 'invalid_connection', '接続IDを指定してください。');
-    const row = store.acquisition(ownerId, id);
-    if (!row) fail(404, 'not_found', '接続が見つかりません。');
-    return row;
-  }
-  // Runs a service exchange and commits it atomically, checking that the same person is still here.
-  async function verifyConnection(req, session, user, operation, commit) {
+  // Authorization may take time. Check the browser again before committing any result.
+  async function verifyConnection(req, session, operation, commit) {
     const result = await operation();
     if (req.aborted || req.socket.destroyed || localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
-    return store.transaction(() => commit(result));
+    return commit(result);
   }
-  // Connection metadata and available outputs, independent of saved values.
-  function acquisitionView(row) {
-    const adapter = connectors.get(row.adapter), state = store.acquisitionState(row);
-    const { owner_id: _owner, state: _state, adapter: connector, ...rest } = row;
-    return { ...rest, connector, ...state.facts, expires_at: state.expires_at, access: adapter.access, service: adapter.service,
-      outputs: adapter.variables,
-      ...(adapter.revocationNote ? { revocation_note: adapter.revocationNote } : {}),
-      can_reconnect: adapter.canReconnect !== false, can_revoke: typeof adapter.revoke === 'function', available: adapter.available };
-  }
+  const connectionView = row => connections.view(row, { owner: true });
   const server = createServer(async (req, res) => {
     const send = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
     const redirect = (path) => { res.writeHead(303, { location: path }); res.end(); };
@@ -226,8 +205,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
             try { await auth.logout(session.access_token); } catch {}
             fail(401, 'login_expired', 'もう一度、ログイン用のメールを送信してください。');
           }
-          store.removeSession(cookieToken(req));
-          setCookie(store.createSession(session), SESSION_AGE);
+          sessions.remove(cookieToken(req));
+          setCookie(sessions.create(session), SESSION_AGE);
           setNamedCookie('fdn_login', '', 0);
           return redirect(destination);
         } catch (error) {
@@ -243,10 +222,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         try {
           const { user, session } = await principal(req);
           if (url.searchParams.getAll('state').length !== 1 || url.searchParams.getAll('code').length > 1) fail(400, 'invalid_state', '接続をやり直してください。');
-          const flow = store.takeFlow(session.id, url.searchParams.get('state'));
+          const flow = flows.take(session.id, url.searchParams.get('state'));
           if (!flow) fail(400, 'invalid_state', '接続をやり直してください。');
-          if (flow.adapter !== oauthCallback[1]) fail(400, 'invalid_state', '接続をやり直してください。');
-          const adapter = connectors.get(flow.adapter);
+          if (flow.connector !== oauthCallback[1]) fail(400, 'invalid_state', '接続をやり直してください。');
+          const connector = connectors.get(flow.connector);
           if (flow.requestId) {
             destination = '/requests/' + flow.requestId;
             requests.forUser(flow.requestId, user.id, true);
@@ -259,19 +238,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           if (!code || code.length > 8192) fail(400, 'invalid_state', '接続をやり直してください。');
           let previous;
           if (flow.previous) {
-            previous = acquisitionFor(user.id, flow.previous.id);
+            previous = connections.at(user.id, flow.previous.id);
             if (previous.generation !== flow.previous.generation || previous.status === 'disconnecting') fail(409, 'connection_changed', '接続状態が変わりました。');
           }
           if (flow.requestId) requests.forUser(flow.requestId, user.id, true);
-          await verifyConnection(req, session, user,
-            () => adapter.authorization.complete({ code, verifier: flow.verifier, redirectUri: flow.redirectUri }, connections.context(previous)),
-            result => {
-              if (flow.requestId) requests.forUser(flow.requestId, user.id, true);
-              const saved = connections.save(user.id, adapter.id, result, { keptBy: flow.requestedBy, previous });
-              if (flow.requestId) requests.done(flow.requestId, user.id, saved.id);
-              return saved.id;
-            });
-          if (flow.requestId) requests.record(flow.requestId, 'connected', { connector: adapter.id });
+          await verifyConnection(req, session,
+            () => connector.authorization.complete({ code, verifier: flow.verifier, redirectUri: flow.redirectUri }, connections.context(previous)),
+            result => requestActions.connect(flow.requestId, user.id, connector.id, result, { keptBy: flow.requestedBy, previous }));
           return redirect(connectionLocation('connected'));
         } catch (error) {
           if (progressRequestId && error instanceof HttpError) requests.record(progressRequestId, 'connect_failed', { connector: oauthCallback[1], code: error.code, message: error.message });
@@ -309,9 +282,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         return send(200, { ok: true });
       }
       if (path === '/v1/session' && method === 'DELETE') {
-        const session = store.session(cookieToken(req));
+        const session = sessions.get(cookieToken(req));
         logins.cancel(loginToken);
-        store.removeSession(cookieToken(req));
+        sessions.remove(cookieToken(req));
         setCookie('', 0);
         setNamedCookie('fdn_login', '', 0);
         let authLogout = true;
@@ -334,25 +307,26 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           const row = keyRequests.create(spoken, { name: nameValue(input.name, '依頼元'), validMinutes: input.valid_minutes ?? 30 });
           return send(201, { ...(issued ? { key: issued } : {}), request: keyRequests.summary(row, origin) });
         }
-        const key = store.authenticate(spoken);
+        const key = keys.authenticate(spoken);
         if (method === 'GET') {
           // A key the owner or an app made directly never asked; it has itself, and no request. One whose
           // request was approved but which no longer exists has been revoked, and hears so.
           let request = null;
           try { request = keyRequests.runtimeView(spoken, origin); } catch (error) { if (!(error instanceof HttpError)) throw error; }
-          if (!key && (!request || request.status === 'approved')) fail(401, 'not_approved', 'このアクセスキーはまだ承認されていないか、失効しています。foundation connect (POST /v1/keys) で承認を依頼し、承認後にお試しください。');
-          return send(200, { ...(key ? { key: store.keyDetails(key) } : {}), request });
+          if (!key && (!request || request.status === 'done')) fail(401, 'not_approved', 'このアクセスキーはまだ承認されていないか、失効しています。foundation connect (POST /v1/keys) で承認を依頼し、承認後にお試しください。');
+          return send(200, { ...(key ? { key: keys.get(key.owner_id, key.id) } : {}), request });
         }
         if (method === 'PATCH') {
           const input = await body(req);
-          store.renameKey(actor(req).owner_id, actor(req).id, nameValue(input.name));
-          return send(200, { key: store.keyDetails(actor(req)) });
+          const current = actor(req);
+          keys.rename(current.owner_id, current.id, nameValue(input.name));
+          return send(200, { key: keys.get(current.owner_id, current.id) });
         }
         if (method === 'DELETE') {
           await body(req);
           // An approved key retires itself: it stops working, and connections stay with the owner. One still
           // waiting withdraws its request instead.
-          if (key) { store.removeKey(key.owner_id, key.id); return send(200, { ok: true }); }
+          if (key) { requestActions.revokeKey(key.owner_id, key.id); return send(200, { ok: true }); }
           const cancelled = keyRequests.cancel(spoken); keyRequests.record(cancelled.id, 'cancelled');
           return send(200, { request: keyRequests.summary(cancelled, origin) });
         }
@@ -364,23 +338,26 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       if (requestRoute && !browser) {
         if (requestRoute[2]) fail(404, 'not_found', '指定された操作が見つかりません。');
         rateLimit('request-poll:' + requests.key(token), 30);
+        actor(req);
         const id = requestRoute[1];
         if (!id && method === 'POST') {
           const input = await body(req);
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
-          const row = requests.create(token, { purpose: purposeValue(input.purpose), adapter: input.connector, store: input.store, steps: input.steps ?? [], validMinutes: input.valid_minutes ?? 30 });
-          return send(201, { request: requests.summary(row, origin) });
+          const definition = requestDefinition(input);
+          if (definition.kind === 'connect') connectors.get(definition.input?.connector);
+          const row = requests.create(token, { ...definition, purpose: purposeValue(input.purpose), steps: input.steps ?? [], validMinutes: input.valid_minutes ?? 30 });
+          return send(201, { request: viewRequest(row, origin) });
         }
         if (!id && method === 'GET') {
           const status = url.searchParams.get('status');
           if (status !== null && !['pending', 'done', 'denied', 'cancelled'].includes(status)) fail(400, 'invalid_status', 'status は pending / done / denied / cancelled のいずれかです。');
-          return send(200, { requests: requests.list(token, status).map(row => requests.summary(row, origin)) });
+          return send(200, { requests: requests.list(token, status).map(row => viewRequest(row, origin)) });
         }
-        if (id && method === 'GET') return send(200, { request: requests.summary(requests.forKey(token, id), origin, { events: true }) });
+        if (id && method === 'GET') return send(200, { request: viewRequest(requests.forKey(token, id), origin, { events: true }) });
         if (id && method === 'DELETE') {
           await body(req);
-          const cancelled = requests.cancel(token, id); requests.record(cancelled.id, 'cancelled');
-          return send(200, { request: requests.summary(cancelled, origin) });
+          const cancelled = requestActions.cancel(token, id);
+          return send(200, { request: viewRequest(cancelled, origin) });
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
@@ -425,21 +402,17 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           // A key for the account, one per place the app runs its user's agent. Replacing one revokes the old.
           if (part === 'keys' && !keyId && method === 'POST') {
             const input = await body(req);
-            if (input.replaces !== undefined && !store.keys(account.id).some(item => item.id === input.replaces)) fail(404, 'not_found', '置き換えるキーが見つかりません。');
-            return store.transaction(() => {
-              if (input.replaces !== undefined) store.removeKey(account.id, input.replaces);
-              return send(201, { key: store.addKey(account.id, nameValue(input.name ?? integration.name, 'キー')) });
-            });
+            return send(201, { key: requestActions.replaceKey(account.id, input.replaces, nameValue(input.name ?? integration.name, 'キー')) });
           }
           if (part === 'keys' && keyId && method === 'DELETE') {
             await body(req);
-            if (!store.keys(account.id).some(item => item.id === keyId)) fail(404, 'not_found', 'キーが見つかりません。');
-            store.removeKey(account.id, keyId);
+            if (!keys.list(account.id).some(item => item.id === keyId)) fail(404, 'not_found', 'キーが見つかりません。');
+            requestActions.revokeKey(account.id, keyId);
             return send(200, { ok: true });
           }
           if (part === 'usage' && method === 'GET') {
             const space = objects.enabled ? await objects.usage(account.id) : null;
-            return send(200, { usage: { secrets: store.usage(account.id), objects: space ? { count: space.count, bytes: space.bytes } : null } });
+            return send(200, { usage: { secrets: secrets.usage(account.id), objects: space ? { count: space.count, bytes: space.bytes } : null } });
           }
         }
         if (path === '/v1/request-links' && method === 'POST') {
@@ -480,45 +453,39 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       const { user, session } = caller ? { user: { id: caller.owner_id, email: null }, session: null }
         : link ? { user: { id: link.owner_id, email: null, linked: true }, session: null } : await principal(req);
       const ownerId = user.id;
+      const requireAccess = () => {
+        if (caller) keys.requireCurrent(caller);
+        else if (link) {
+          if (integrations.linked(readCookie(req, 'fdn_link'), requestRoute[1])?.owner_id !== ownerId) fail(401, 'login_required', 'リンクを開き直してください。');
+        } else if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
+      };
+      // Reading an upload may outlive its authorization. Recheck before committing any change.
+      const inputBody = async max => { const input = await body(req, max); requireAccess(); return input; };
+      const inputBytes = async max => { const input = await raw(req, max); requireAccess(); return input; };
+
       if (requestRoute) {
         const row = requests.forUser(requestRoute[1], ownerId, requestRoute[2] === '/done');
-        if (!requestRoute[2] && method === 'GET') { requests.record(row.id, 'page_viewed'); return send(200, { request: requests.summary(row, origin) }); }
+        if (!requestRoute[2] && method === 'GET') { requests.record(row.id, 'page_viewed'); return send(200, { request: viewRequest(row, origin) }); }
         // The owner chooses each saved name. The requested read permissions still apply to its value.
         if (requestRoute[2] === '/done' && method === 'POST') {
-          if (requests.kindOf(row) !== 'store') fail(409, 'wrong_kind', 'この依頼は保管の依頼ではありません。');
-          // Several things asked for together are kept together: all of them, or none.
-          const asked = requests.details(row);
-          const input = await body(req, SECRET_MAX * asked.length);
-          const entries = input.entries;
-          if (!Array.isArray(entries) || entries.length !== asked.length || entries.some(entry => !entry || typeof entry.content !== 'string' || entry.content === '')) fail(400, 'invalid_values', '入力内容を確認してください。');
-          const names = entries.map(entry => secretName(entry.name));
-          if (new Set(names).size !== names.length) fail(400, 'duplicate_names', '保存名が重複しています。別の名前を入力してください。');
+          if (row.kind !== 'store') fail(409, 'wrong_kind', 'この依頼は保管の依頼ではありません。');
+          const input = await inputBody(SECRET_MAX * requests.input(row).fields.length);
           progressRequestId = row.id;
-          return store.transaction(() => {
-            requests.forUser(row.id, ownerId, true);
-            const occupied = names.find(name => store.secret(ownerId, name));
-            if (occupied !== undefined) fail(409, 'name_taken', `「${occupied}」はすでに使われています。別の保存名を入力してください。`);
-            for (const [at, one] of asked.entries()) {
-              secrets.put(ownerId, { name: names[at], content: Buffer.from(entries[at].content, 'utf8'), secret: one.secret });
-            }
-            requests.done(row.id, ownerId, JSON.stringify(names));
-            requests.record(row.id, 'stored');
-            return send(200, { stored: true, names });
-          });
+          const result = requestActions.save(row.id, ownerId, input.entries);
+          return send(200, { stored: true, ...result });
         }
         if (requestRoute[2] === '/deny' && method === 'POST') {
-          await body(req);
+          await inputBody();
           if (!user.linked && localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
           progressRequestId = row.id;
-          const result = requests.deny(row.id, ownerId);
-          requests.record(row.id, 'denied');
-          return send(200, { request: requests.summary(result, origin) });
+          const result = requestActions.deny(row.id, ownerId);
+          return send(200, { request: viewRequest(result, origin) });
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
       if (user.linked) fail(401, 'login_required', 'ログインしてください。');
       // The owner's screen, in one answer.
-      if (path === '/v1/state' && method === 'GET' && browser) return send(200, { user, secrets: secrets.list(ownerId), connections: store.acquisitions(ownerId).map(acquisitionView), keys: store.keys(ownerId), apps: integrations.list(ownerId), functions: FUNCTIONS, invocations: store.invocations(ownerId), connectors: connectors.ids().map(id => connectors.describe(id)) });
+      if (path === '/v1/state' && method === 'GET' && browser) return send(200, { user, secrets: secrets.list(ownerId), connections: connections.list(ownerId).map(connectionView), keys: keys.list(ownerId), apps: integrations.list(ownerId), functions: FUNCTIONS, connectors: connectors.ids().map(id => connectors.describe(id)) });
       // Everything, in one file, for the owner alone. Lending someone a place to keep things means they
       // can take them away again; without this the promise is words. Keys are included in full, because
       // a copy that leaves the secrets behind is not a copy.
@@ -526,10 +493,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         if (!browser) fail(403, 'owner_only', 'この操作は持ち主の画面からだけ行えます。');
         const kept = secrets.list(ownerId).map(row => {
           const full = secrets.at(ownerId, row.name);
-          return { ...row, content: store.secretContent(full).toString('base64'), encoding: 'base64' };
+          return { ...row, content: secrets.content(full).toString('base64'), encoding: 'base64' };
         });
         const value = { exported_at: new Date().toISOString(), owner: user.email, origin,
-          secrets: kept, connections: store.acquisitions(ownerId).map(acquisitionView), keys: store.keys(ownerId) };
+          secrets: kept, connections: connections.list(ownerId).map(connectionView), keys: keys.list(ownerId) };
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
           'content-disposition': `attachment; filename="foundation-${new Date().toISOString().slice(0, 10)}.json"` });
         return res.end(JSON.stringify(value, null, 2));
@@ -540,7 +507,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const row = keyRequests.forUser(keyRequestRoute[1], ownerId);
         if (!keyRequestRoute[2] && method === 'GET') { keyRequests.record(row.id, 'page_viewed'); return send(200, { request: keyRequests.summary(row, origin, { code: false }) }); }
         if (method === 'POST' && keyRequestRoute[2]) {
-          const input = await body(req);
+          const input = await inputBody();
           if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
           let result;
           try { result = keyRequestRoute[2] === '/deny' ? keyRequests.deny(row.id, ownerId) : keyRequests.approve(row.id, ownerId, input.confirmation_code); }
@@ -551,83 +518,84 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       }
       // The keys the owner approved, and ones they make themselves, without asking an agent to ask them.
       if (path === '/v1/keys' && browser) {
-        if (method === 'GET') return send(200, { keys: store.keys(ownerId) });
+        if (method === 'GET') return send(200, { keys: keys.list(ownerId) });
         if (method === 'POST') {
-          const input = await body(req);
-          return send(201, { key: store.addKey(ownerId, nameValue(input.name)) });
+          const input = await inputBody();
+          return send(201, { key: keys.create(ownerId, nameValue(input.name)) });
         }
       }
       const keyRoute = path.match(/^\/v1\/keys\/([a-f0-9-]{36})$/);
       if (keyRoute && browser) {
-        if (method === 'DELETE') { store.removeKey(ownerId, keyRoute[1]); return send(200, { ok: true }); }
+        if (method === 'DELETE') { requestActions.revokeKey(ownerId, keyRoute[1]); return send(200, { ok: true }); }
         if (method === 'PATCH') {
-          const input = await body(req);
-          store.renameKey(ownerId, keyRoute[1], nameValue(input.name));
+          const input = await inputBody();
+          keys.rename(ownerId, keyRoute[1], nameValue(input.name));
           return send(200, { ok: true });
         }
       }
       // Apps: other products that hold accounts for their own users. Each credential is shown once, here.
       if (path === '/v1/apps' && browser && method === 'GET') return send(200, { apps: integrations.list(ownerId) });
       if (path === '/v1/apps' && browser && method === 'POST') {
-        const input = await body(req);
+        const input = await inputBody();
         return send(201, { app: integrations.register(ownerId, { name: nameValue(input.name, 'アプリ'), returnUrl: input.return_url, refreshUrl: input.refresh_url || undefined, webhookUrl: input.webhook_url || undefined }) });
       }
       const appRoute = path.match(/^\/v1\/apps\/([a-f0-9-]{36})$/);
-      if (appRoute && browser && method === 'DELETE') { await body(req); integrations.remove(ownerId, appRoute[1]); return send(200, { ok: true }); }
+      if (appRoute && browser && method === 'DELETE') { await inputBody(); integrations.remove(ownerId, appRoute[1]); return send(200, { ok: true }); }
       // Connections: services Foundation connected itself. The owner sees everything about them; a key sees
       // what it needs to use one. Making one starts the service's own login; removing one may also revoke there.
       if (path === '/v1/connections' && method === 'GET') {
-        return send(200, { connections: browser ? store.acquisitions(ownerId).map(acquisitionView)
-          : store.acquisitions(ownerId).filter(row => row.status !== 'disconnecting').map(runtimeAcquisition) });
+        return send(200, { connections: browser ? connections.list(ownerId).map(connectionView)
+          : connections.list(ownerId).filter(row => row.status !== 'disconnecting').map(row => connections.view(row)) });
       }
       if (path === '/v1/connections' && method === 'POST' && browser) {
-        const input = await body(req);
-        const adapter = connectors.get(input.connector);
-        if (adapter.authorization.kind !== 'oauth') fail(400, 'unsupported_authorization', 'この接続方法には対応していません。');
+        const input = await inputBody();
+        const connector = connectors.get(input.connector);
+        if (connector.authorization.kind !== 'oauth') fail(400, 'unsupported_authorization', 'この接続方法には対応していません。');
         rateLimit('connect:' + ownerId, 10, 60_000);
         const request = input.request_id === undefined ? null : requests.forUser(input.request_id, ownerId, true);
         progressRequestId = request?.id || null;
-        if (request) requests.record(request.id, 'connect_started', { connector: adapter.id });
-        if (request && !request.adapter) fail(409, 'approval_only', 'この依頼はこの接続方法のものではありません。');
-        if (request && adapter.id !== request.adapter) fail(400, 'scope_mismatch', '依頼された接続方法で登録してください。');
+        if (request) requests.record(request.id, 'connect_started', { connector: connector.id });
+        if (request && request.kind !== 'connect') fail(409, 'approval_only', 'この依頼はこの接続方法のものではありません。');
+        if (request && connector.id !== requests.input(request).connector) fail(400, 'scope_mismatch', '依頼された接続方法で登録してください。');
         // Who asked for it, as they were called then. One started from the dashboard was asked by no one.
         const requestedBy = request?.requester_name ?? '';
-        const previous = input.connection_id === undefined ? undefined : acquisitionFor(ownerId, input.connection_id);
-        if (previous && previous.adapter !== adapter.id) fail(400, 'invalid_connector', '接続方法が一致しません。');
-        if (previous && adapter.canReconnect === false) fail(400, 'new_connection_required', '新しく登録してください。');
+        const previous = input.connection_id === undefined ? undefined : connections.at(ownerId, input.connection_id);
+        if (previous && previous.connector !== connector.id) fail(400, 'invalid_connector', '接続方法が一致しません。');
+        if (previous && connector.canReconnect === false) fail(400, 'new_connection_required', '新しく登録してください。');
         if (previous?.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
         const verifier = randomBytes(32).toString('base64url');
-        const redirectUri = origin + '/oauth/' + adapter.id + '/callback';
+        const redirectUri = origin + '/oauth/' + connector.id + '/callback';
         if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
-        const flow = { adapter: adapter.id, requestedBy, verifier, redirectUri, requestId: request?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
-        const state = store.addFlow(session.id, flow);
-        return send(200, { url: await adapter.authorization.begin({ state, verifier, redirectUri }, connections.context(previous)) });
+        const flow = { connector: connector.id, requestedBy, verifier, redirectUri, requestId: request?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
+        const state = flows.begin(session.id, flow);
+        return send(200, { url: await connector.authorization.begin({ state, verifier, redirectUri }, connections.context(previous)) });
       }
       const connectionRoute = path.match(/^\/v1\/connections\/(.+)$/);
       if (connectionRoute && browser && method === 'DELETE') {
-        const acquisition = acquisitionFor(ownerId, decodeURIComponent(connectionRoute[1]));
-        const input = await body(req);
+        const connection = connections.at(ownerId, decodeURIComponent(connectionRoute[1]));
+        const input = await inputBody();
         if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
-        const adapter = connectors.get(acquisition.adapter);
-        const canRevoke = typeof adapter.revoke === 'function';
-        if (disconnects.has(acquisition.id)) fail(409, 'disconnect_in_progress', '登録を解除しています。');
-        disconnects.add(acquisition.id);
+        const connector = connectors.get(connection.connector);
+        const canRevoke = typeof connector.revoke === 'function';
+        if (disconnects.has(connection.id)) fail(409, 'disconnect_in_progress', '登録を解除しています。');
+        disconnects.add(connection.id);
         try {
           // Removing it here always succeeds; asking the service to revoke is an attempt whose outcome is reported.
-          const previous = store.disconnect(ownerId, acquisition.id);
+          const previous = connections.disconnect(ownerId, connection.id);
           let revoked = null;
           if (input.revoke && canRevoke) {
-            try { await adapter.revoke(connections.context(previous).privateState); revoked = true; }
+            try { await connector.revoke(connections.context(previous).privateState); revoked = true; }
             catch { revoked = false; }
           }
-          store.removeAcquisition(ownerId, acquisition.id);
+          connections.remove(ownerId, connection.id);
           return send(200, { ok: true, service_revoked: revoked });
-        } finally { disconnects.delete(acquisition.id); }
+        } finally { disconnects.delete(connection.id); }
       }
       // What this owner is using, and what they may use. Lending has a cost, so both sides can see it.
       if (path === '/v1/usage' && method === 'GET') {
-        const kept = store.usage(ownerId);
+        const kept = secrets.usage(ownerId);
         const space = objects.enabled ? await objects.usage(ownerId) : null;
+        requireAccess();
         return send(200, { secrets: { ...kept, count_max: SECRET_COUNT_MAX, bytes_max: SECRET_TOTAL_MAX },
           objects: space ? { count: space.count, bytes: space.bytes, count_max: space.count_max, bytes_max: space.bytes_max } : null });
       }
@@ -636,7 +604,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       if (path === '/v1/objects' && method === 'GET') {
         objects.check();
         if (caller) rateLimit('objects:' + caller.id, 60);
-        return send(200, await objects.list(ownerId, url.searchParams.get('prefix') ?? '', url.searchParams.get('cursor') ?? undefined));
+        const listed = await objects.list(ownerId, url.searchParams.get('prefix') ?? '', url.searchParams.get('cursor') ?? undefined);
+        requireAccess();
+        return send(200, listed);
       }
       const objectRoute = path.match(/^\/v1\/objects\/(.+?)(\/link)?$/);
       if (objectRoute) {
@@ -645,20 +615,25 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const key = decodeURIComponent(objectRoute[1]);
         if (objectRoute[2]) {
           if (method !== 'POST') fail(405, 'method_not_allowed', 'この操作は利用できません。');
-          const input = await body(req);
-          return send(200, await objects.link(ownerId, key, input.minutes));
+          const input = await inputBody();
+          const link = await objects.link(ownerId, key, input.minutes);
+          requireAccess();
+          return send(200, link);
         }
         if (method === 'PUT') {
-          const content = await raw(req, OBJECT_MAX);
-          return send(200, await objects.put(ownerId, key, content, req.headers['content-type'] || 'application/octet-stream'));
+          const content = await inputBytes(OBJECT_MAX);
+          const saved = await objects.put(ownerId, key, content, req.headers['content-type'] || 'application/octet-stream');
+          requireAccess();
+          return send(200, saved);
         }
         if (method === 'GET') {
           const found = await objects.get(ownerId, key);
+          requireAccess();
           res.writeHead(200, { 'content-type': found.contentType, 'content-length': found.content.length,
             'content-disposition': `attachment; filename="object.bin"; filename*=UTF-8''${encodeURIComponent(key.split('/').pop()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}` });
           return res.end(found.content);
         }
-        if (method === 'DELETE') { await body(req); await objects.remove(ownerId, key); return send(200, { ok: true }); }
+        if (method === 'DELETE') { await inputBody(); await objects.remove(ownerId, key); requireAccess(); return send(200, { ok: true }); }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
       // What is kept, by name. A name is any text, so it travels as ?name=: a path would fold "." and ".." away.
@@ -667,19 +642,19 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const target = url.searchParams.get('name');
         if (method === 'GET') {
           // The owner reads anything of theirs; a key reads only what was left readable to it.
-          const { row, content } = browser ? (() => { const row = secrets.at(ownerId, target); return { row, content: store.secretContent(row) }; })() : secrets.read(ownerId, target);
+          const { row, content } = browser ? (() => { const row = secrets.at(ownerId, target); return { row, content: secrets.content(row) }; })() : secrets.read(ownerId, target);
           res.setHeader('etag', secretTag(row));
           res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length, 'content-disposition': `attachment; filename="secret.bin"; filename*=UTF-8''${encodeURIComponent(row.name).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}` });
           return res.end(content);
         }
         if (method === 'PUT') {
           if (caller) rateLimit('secrets:' + caller.id, 120);
-          const content = await raw(req, SECRET_MAX);
+          const content = await inputBytes(SECRET_MAX);
           if (!content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
           // What the owner keeps is secret unless they say otherwise; what a key keeps stays readable to it unless it asks.
           const saved = store.transaction(() => {
             const match = req.headers['if-match'];
-            const current = match === undefined ? null : store.secret(ownerId, secretName(target));
+            const current = match === undefined ? null : secrets.find(ownerId, secretName(target));
             if (match !== undefined && (!current || match !== secretTag(current))) fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
             const saved = secrets.put(ownerId, { name: target, content,
               secret: current ? !current.readable : browser ? url.searchParams.get('secret') !== 'false' : url.searchParams.get('secret') === 'true' });
@@ -690,11 +665,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         }
         // Rename without returning or changing the stored value.
         if (method === 'PATCH' && browser) {
-          const input = await body(req);
+          const input = await inputBody();
           return send(200, { secret: secrets.rename(ownerId, target, { name: input.name }) });
         }
         if (method === 'DELETE') {
-          await body(req);
+          await inputBody();
           secrets.remove(ownerId, target);
           return send(200, { ok: true });
         }
@@ -703,58 +678,23 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       if (!caller) fail(404, 'not_found', '指定された操作が見つかりません。');
       // Reading a saved value never invokes provider code or updates another value.
       if (path === '/v1/deliveries' && method === 'POST') {
-        const input = await body(req);
+        const input = await inputBody();
         rateLimit('issue:' + caller.id, 30);
         const names = Array.isArray(input.names) ? input.names : [];
-        for (const item of names) store.requireAccess(caller, secretName(typeof item === 'string' ? item : item?.name));
+        keys.requireCurrent(caller);
         const delivery = secrets.deliver(caller.owner_id, names);
-        store.recordIssuance(caller, null);
         return send(200, { delivery, expires_at: null, expires_in: null });
       }
       if (path === '/v1/functions' && method === 'GET') return send(200, { functions: FUNCTIONS });
       if (path === '/v1/functions/connection.credentials' && method === 'POST') {
-        const input = await body(req);
+        const input = await inputBody();
         rateLimit('issue:' + caller.id, 30);
-        const connection = acquisitionFor(caller.owner_id, input.connection_id);
-        const outputs = outputNames(input.save, connectors.get(connection.adapter).variables);
-        let result;
-        try { result = await connections.obtain(connection); }
-        catch (error) { store.recordInvocation(caller.owner_id, { key: caller, fn: 'connection.credentials', target: connection.label, status: 'failed', detail: error.code || 'error' }); throw error; }
-        const expires_at = result.state.expires_at;
-        if (expires_at !== null && !(Number.isFinite(expires_at) && expires_at > Date.now())) fail(502, 'service_response', '有効期限を確認できませんでした。');
-        actor(req);
-        connections.current(connection);
-        const saved = outputs ? saveOutputs(secrets, caller.owner_id, outputs, result.values) : null;
-        const output = saved ? { saved } : { delivery: deliveredOutputs(result.values) };
-        store.recordIssuance(caller, expires_at);
-        store.recordInvocation(caller.owner_id, { key: caller, fn: 'connection.credentials', target: connection.label, status: 'ok', detail: saved ? '保管: ' + saved.map(item => item.name).join(', ') : '渡した' });
-        return send(200, { ...output, facts: result.state.facts, expires_at,
-          expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
+        return send(200, await functions.credentials(caller, input));
       }
       if (path === '/v1/functions/http.request' && method === 'POST') {
-        const input = await body(req, FETCH_BODY_MAX * 2);
+        const input = await inputBody(FETCH_BODY_MAX * 2);
         rateLimit('fetch:' + caller.id, 30);
-        const ownHosts = [url.hostname, ...(external ? [external.hostname] : [])];
-        const prepared = prepareFetch(input, ownHosts);
-        const bindings = input.bindings ?? {};
-        if (!bindings || typeof bindings !== 'object' || Array.isArray(bindings)) fail(400, 'invalid_input', 'bindings は入力名と保存名の組で指定してください。');
-        const names = prepared.names.map(slot => secretName(Object.hasOwn(bindings, slot) ? bindings[slot] : slot));
-        for (const name of names) store.requireAccess(caller, name);
-        const outputs = input.save === undefined ? null : outputNames({ response: input.save }, ['response']);
-        const values = new Map(prepared.names.map((slot, at) => {
-          const content = store.secretContent(secrets.at(caller.owner_id, names[at])), text = content.toString('utf8');
-          if (!Buffer.from(text, 'utf8').equals(content)) fail(400, 'not_text', '指定された入力は文字列ではないため、リクエストには入れられません。');
-          return [slot, text];
-        }));
-        let response;
-        try { response = await sendFetch(prepared, values, { ...outbound, ownHosts }); }
-        catch (error) { store.recordInvocation(caller.owner_id, { key: caller, fn: 'http.request', target: prepared.method + ' ' + prepared.url.hostname, status: 'failed', detail: error.code || 'error' }); throw error; }
-        actor(req);
-        store.recordInvocation(caller.owner_id, { key: caller, fn: 'http.request', target: prepared.method + ' ' + prepared.url.hostname, status: 'ok', detail: 'HTTP ' + response.status + (names.length ? '、入力 ' + names.length + '件' : '') + (input.save === undefined ? '' : '、応答を保管') });
-        const saved = outputs ? saveOutputs(secrets, caller.owner_id, outputs,
-          new Map([['response', { content: Buffer.from(response.body, response.body_encoding === 'base64' ? 'base64' : 'utf8') }]])) : null;
-        store.recordIssuance(caller, null);
-        return send(200, saved ? { response: { status: response.status, headers: response.headers }, saved } : { response });
+        return send(200, await functions.request(caller, input, [url.hostname, ...(external ? [external.hostname] : [])]));
       }
       fail(404, 'not_found', '指定された操作が見つかりません。');
     } catch (error) {
@@ -767,7 +707,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   return {
-    server, store,
+    server, store, secrets, connections, keys, sessions, flows, requests, requestActions,
     async close() {
       clearInterval(timer);
       if (server.listening) await new Promise((resolve) => { server.close(resolve); server.closeIdleConnections(); });

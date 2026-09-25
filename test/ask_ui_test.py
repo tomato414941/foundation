@@ -71,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
         if width != 320:
             page.screenshot(path=str(shots / ('purpose-desktop.png' if width == 1280 else 'purpose-mobile.png')), full_page=True)
     page.get_by_role('button', name='登録しない', exact=True).click()
-    expect(page.get_by_role('heading', name='登録しませんでした', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='保存しませんでした', exact=True)).to_be_visible()
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # The AI suggests a name; the owner chooses the name used for storage.
@@ -118,7 +118,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     page.set_viewport_size({'width': 1280, 'height': 1000})
     saved_name.fill('cloudflare-api-token')
     page.get_by_role('button', name='登録する', exact=True).click()
-    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='保存しました', exact=True)).to_be_visible()
     assert cli('api', 'GET', '/v1/requests/' + asked['id'])['request']['result']['names'] == ['cloudflare-api-token']
     review(page)
 
@@ -126,10 +126,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     for width in [1280, 390]:
         page.set_viewport_size({'width': width, 'height': 1000})
         page.goto(asked['verification_uri'], wait_until='networkidle')
-        expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+        expect(page.get_by_role('heading', name='保存しました', exact=True)).to_be_visible()
         review(page)
         page.screenshot(path=str(shots / ('completed-desktop.png' if width == 1280 else 'completed-mobile.png')), full_page=True)
-        page.get_by_role('link', name='シークレットへ', exact=True).click()
+        page.get_by_role('link', name='シークレット', exact=True).click()
         expect(page).to_have_url(args.base + '/secrets')
         expect(page.get_by_role('heading', name='シークレット', exact=True)).to_be_visible()
         expect(page.locator('[aria-label="保存した値"]').get_by_role('heading', name='cloudflare-api-token', exact=True)).to_be_visible()
@@ -161,7 +161,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     for index in range(len(names)):
         page.get_by_label('入力 ' + str(index + 1), exact=True).fill('fixture-value-' + str(index))
     page.get_by_role('button', name='登録する', exact=True).click()
-    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='保存しました', exact=True)).to_be_visible()
     complete = cli('api', 'GET', '/v1/requests/' + multiple['id'])['request']
     assert complete['result']['names'] == names
     for name in names:

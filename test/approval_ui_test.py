@@ -72,6 +72,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'].lower())
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
+    expect(page.get_by_role('link', name='アクセスキー', exact=True)).to_have_attribute('href', '/keys')
+    page.get_by_role('link', name='アクセスキー', exact=True).click()
+    expect(page).to_have_url(args.base + '/keys')
+    expect(page.get_by_role('heading', name='アクセスキー', exact=True)).to_be_visible()
     review(page)
     assert cli('api', 'GET', '/v1/secrets')['secrets'] == []
 
@@ -101,8 +105,13 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     assert cli('api', 'GET', '/v1/secrets')['secrets'] == []
     authorization['deny'] = False
     page.get_by_role('button', name='Googleで接続', exact=True).click()
-    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     expect(page.get_by_text('personal@example.test', exact=False)).to_be_visible()
+    expect(page.get_by_role('link', name='接続', exact=True)).to_have_attribute('href', '/connections')
+    page.get_by_role('link', name='接続', exact=True).click()
+    expect(page).to_have_url(args.base + '/connections')
+    expect(page.get_by_role('heading', name='接続', exact=True)).to_be_visible()
+    page.goto(request['verification_uri'], wait_until='networkidle')
     review(page)
     page.screenshot(path=str(shots / 'request-approved.png'), full_page=True)
     connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['connection_id']
@@ -120,7 +129,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_role('dialog')).not_to_be_visible()
     cli('api', 'GET', '/v1/secrets', success=False)
     page.goto(pending['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_role('heading', name='アクセスキーは失効しています', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='依頼は取り消されました', exact=True)).to_be_visible()
 
     # 4. The same key file is now unknown again: it may ask to be approved, and the owner may refuse.
     request = cli('connect', '--name', 'dev-us のAI')['request']
@@ -140,7 +149,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.locator('.approval-facts')).to_contain_text('件名・差出人などの読み取り')
     page.get_by_role('button', name='Googleで接続', exact=True).click()
-    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     expect(page.get_by_text('headers@example.test', exact=False)).to_be_visible()
     review(page)
     request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'connector': 'gmail.readonly', 'purpose': '確認'}))['request']

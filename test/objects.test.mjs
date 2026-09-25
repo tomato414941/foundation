@@ -52,6 +52,25 @@ test('gives each owner their own room in the bucket', async (t) => {
   assert.deepEqual(f.bucket.calls, [['put', 'owners/' + owner + '/notes/today.txt']]);
 });
 
+test('オブジェクトの取得中に失効したキーへの返却を拒否する', async t => {
+  const f = await space(t);
+  await f.request('/v1/objects/private.txt', { method: 'PUT', token: KEY, raw: 'private-content' });
+  const key = (await f.request('/v1/keys/current', { token: KEY })).json.key;
+  const get = f.bucket.get.bind(f.bucket);
+  let began, release;
+  const started = new Promise(resolve => began = resolve);
+  f.bucket.get = async (...args) => { began(); await new Promise(resolve => release = resolve); return get(...args); };
+  const pending = f.request('/v1/objects/private.txt', { token: KEY });
+  await started;
+  await f.request('/v1/keys/' + key.id, { method: 'DELETE' });
+  release();
+  const refused = await pending;
+  assert.equal(refused.status, 401);
+  assert.equal(refused.json.error.code, 'not_approved');
+  f.bucket.get = get;
+  assert.equal((await f.request('/v1/objects/private.txt')).text, 'private-content');
+});
+
 test('lists what is there, and narrows by prefix', async (t) => {
   const f = await space(t);
   for (const key of ['a/one.txt', 'a/two.txt', 'b/three.txt']) {

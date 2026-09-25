@@ -72,7 +72,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     assert cli('api', 'GET', '/v1/secrets')['secrets'] == []
     authorization['deny'] = False
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
-    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
@@ -98,7 +98,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     runtime = page.locator('.agent-row').filter(has_text='dev-us のAI')
     runtime.get_by_role('button', name='失効', exact=True).click()
     dialog = page.get_by_role('dialog')
-    expect(dialog.get_by_text('有効期限が未指定または不明の認証情報', exact=False)).to_be_visible()
+    expect(dialog.get_by_text('取得済みの外部サービスの認証情報は、接続先で失効させてください。', exact=True)).to_be_visible()
     review(page)
     dialog.get_by_role('button', name='失効させる', exact=True).click()
     expect(dialog).not_to_be_visible()

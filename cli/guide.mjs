@@ -6,19 +6,19 @@
 //
 // This text is read by the agent, not by the owner, so it is English; everything the owner reads
 // (purposes, steps, the dashboard) stays in the owner's language.
-function adapterLines(adapters) {
-  if (!adapters) return ['     GET /v1/connectors lists what this server can obtain itself.'];
+function connectorLines(connectors) {
+  if (!connectors) return ['     GET /v1/connectors lists what this server can obtain itself.'];
   const lines = [];
-  for (const adapter of adapters.filter(item => item.available)) {
-    lines.push('     ' + adapter.id + '  ' + (adapter.service?.name || '') + ' / ' + adapter.access.name + (adapter.variables.length ? '  outputs: ' + adapter.variables.join(', ') : ''));
-    if (adapter.ai) lines.push('       ' + adapter.ai);
+  for (const connector of connectors.filter(item => item.available)) {
+    lines.push('     ' + connector.id + '  ' + (connector.service?.name || '') + ' / ' + connector.access.name + (connector.variables.length ? '  outputs: ' + connector.variables.join(', ') : ''));
+    if (connector.ai) lines.push('       ' + connector.ai);
   }
-  const unavailable = adapters.filter(item => !item.available);
+  const unavailable = connectors.filter(item => !item.available);
   if (unavailable.length) lines.push('     Currently unavailable: ' + unavailable.map(item => item.id).join(', '));
   return lines;
 }
 
-export function guide(adapters) {
+export function guide(connectors) {
   return ['Foundation keeps user-controlled values and objects, and runs explicitly requested built-in functions.',
     'A saved name identifies bytes. It does not select a service, a connection, a function, or an environment variable.',
     'Storage never invokes a provider: a value saved from a function is an independent snapshot, not a live connection.', '',
@@ -33,6 +33,8 @@ export function guide(adapters) {
     '     Returns verification_uri and confirmation_code. Give the owner both; they open the URL and type the code.',
     '     Until they do, every other call answers 401 not_approved. Retry GET /v1/keys/current every few seconds. Do not hammer it.',
     '   GET /v1/keys/current    your request and what happened at its page; once approved, also who you are (key).',
+    '     Approval also has kind=approve, status=done and result.key_id. A current key, not request completion, authorizes use.',
+    '     Revoking a key stops Foundation access; credentials already obtained must be revoked at their provider.',
     '   PATCH /v1/keys/current {"name"}    DELETE /v1/keys/current    cancels the request, or revokes your approved key.', '',
     'WHAT IS KEPT',
     '   PUT /v1/secrets?name=<name>&secret=true    body: raw bytes, up to 1MB. The same exact name replaces that value.',
@@ -57,13 +59,13 @@ export function guide(adapters) {
     '1. Put it there yourself. Anything you obtained or wrote: PUT /v1/secrets?name=<name>, above.',
     '',
     '2. ASKING THE OWNER, for what only they can fetch -- an API token, a key, a certificate they must go and create.',
-    '   POST /v1/requests  {"store": {...}, "purpose": "...", "steps": ["...", "..."], "valid_minutes": 30}',
-    '     store.name      suggested name; result.names returns the names the owner chose',
-    '     store.label     what they are being asked for, in their language. It titles the screen and names the field.',
+    '   POST /v1/requests  {"kind":"store", "input":{"fields":[{...}]}, "purpose":"...", "steps":["..."], "valid_minutes":30}',
+    '     fields[].name      suggested name; result.names returns the names the owner chose',
+    '     fields[].label     what they are being asked for, in their language. It titles the screen and names the field.',
 
-    '     store.site      the page where they make it, offered as a link',
-    '     store.secret    false lets you read it back afterwards; the default is that you cannot',
-    '     store.multiline true for something like a PEM',
+    '     fields[].site      the page where they make it, offered as a link',
+    '     fields[].secret    false lets you read it back afterwards; the default is that you cannot',
+    '     fields[].multiline true for something like a PEM',
     '     purpose         one concrete sentence the owner can judge, in their language',
     '     steps           what they do, one string per step (up to 20, 500 characters each, no line breaks). Foundation',
     '                     holds no instructions for anyone else\'s',
@@ -73,8 +75,8 @@ export function guide(adapters) {
     '',
     '3. CONNECTING A SERVICE for later explicit credential processing. OAuth renewal state stays with the connection,',
     '   separate from ordinary saved values. Connecting does not create named values.',
-    ...adapterLines(adapters),
-    '   POST /v1/requests  {"connector": "<id>", "purpose": "...", "valid_minutes": 30}   Give the owner the verification_uri.',
+    ...connectorLines(connectors),
+    '   POST /v1/requests  {"kind":"connect", "input":{"connector":"<id>"}, "purpose":"...", "valid_minutes":30}   Give the owner the verification_uri.',
     '   Poll GET /v1/requests/<id> every few seconds until done; result.connection_id identifies the connection.',
     '   GET /v1/connections   connection IDs, labels, provider details and available output identifiers.', '',
     'FUNCTIONS',
@@ -91,7 +93,10 @@ export function guide(adapters) {
     '   GET /v1/requests?status=pending   your requests. Several may be open at once (up to 10).',
     '   events is the raw record, in order: page_opened / page_viewed / connect_started / connect_failed (with a code and',
     '   Foundation\'s own message) / connected / stored / denied / cancelled. What was typed is never recorded.',
-    '   DELETE /v1/requests/<id>   cancels it. status is pending / done / denied / cancelled / revoked / reconnect_required.',
+    '   DELETE /v1/requests/<id>   cancels it. status is pending / done / denied / cancelled.',
+    '   Completion and result are fixed until the request expires, even if the resulting resource changes or is removed.',
+    '   Current connection state is at GET /v1/connections. Revoked keys receive 401; their pending requests are cancelled.',
+    '   Request feedback expires with the request. A done result is a connection_id or the names saved at completion.',
     '   Why a registration failed: invalid_values (wrong shape) / invalid_credential (the connector would not take it) /',
     '   reconnect_required (the service rejected it) / already_connected. A key approval shows its own events at',
     '   GET /v1/keys/current: confirmation_required (a wrong code) / confirmation_locked (5 tries).', '',
