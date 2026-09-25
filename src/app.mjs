@@ -542,13 +542,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           permit('rename', input.object_type, input.object_id, holderId);
         }
         if (method === 'POST') {
-          principals.relate(subjectId, input.relation, input.object_type, input.object_id, { scope: input.scope === undefined ? undefined : String(input.scope) });
-          records.write(subject.id, 'relation.added', input.object_type, input.object_id, { subject: subjectId, relation: input.relation });
+          principals.relate(subjectId, input.relation, input.object_type, input.object_id, { scope: input.scope === undefined ? undefined : String(input.scope), holder: holderId });
+          records.write(subject.id, 'relation.added', input.object_type, input.object_id, { subject: subjectId, relation: input.relation, holder: holderId });
           return send(201, { ok: true });
         }
         if (method === 'DELETE') {
-          principals.unrelate(subjectId, input.relation, input.object_type, input.object_id);
-          records.write(subject.id, 'relation.removed', input.object_type, input.object_id, { subject: subjectId, relation: input.relation });
+          principals.unrelate(subjectId, input.relation, input.object_type, input.object_id, holderId);
+          records.write(subject.id, 'relation.removed', input.object_type, input.object_id, { subject: subjectId, relation: input.relation, holder: holderId });
           return send(200, { ok: true });
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');

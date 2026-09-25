@@ -8,7 +8,7 @@
 const SELF = (subject, resource) => subject.id === resource.holder;
 const ACTOR = (subject, resource, principals) => Boolean(principals.has(subject.id, 'actor', 'principal', resource.holder));
 const OWNER = (subject, resource, principals) => Boolean(principals.has(subject.id, 'owner', 'principal', resource.holder));
-const LINE = relation => (subject, resource, principals) => Boolean(resource.id !== undefined && principals.has(subject.id, relation, resource.type, resource.id));
+const LINE = relation => (subject, resource, principals) => Boolean(resource.id !== undefined && principals.has(subject.id, relation, resource.type, resource.id, resource.holder));
 // Some things need a browser: a login session that can follow a service's consent screen and come back.
 const BROWSER = ['session', 'link'];
 

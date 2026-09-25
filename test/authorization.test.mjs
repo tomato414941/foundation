@@ -15,8 +15,9 @@ test('答えは subject・action・resource から decision だけを返し、�
   assert.equal(ask(actor, 'read', { type: 'secret', id: 'x', holder: person.id }), true, 'one who acts for the holder');
   assert.equal(ask(stranger, 'read', { type: 'secret', id: 'x', holder: person.id }), false, 'nobody else');
   assert.equal(ask(actor, 'rename', { type: 'secret', id: 'x', holder: person.id }), false, 'renaming is the holder\'s alone');
-  principals.relate(other.id, 'viewer', 'secret', 'x');
+  principals.relate(other.id, 'viewer', 'secret', 'x', { holder: person.id });
   assert.equal(ask(stranger, 'read', { type: 'secret', id: 'x', holder: person.id }), true, 'a line drawn onto the thing itself');
+  assert.equal(ask(stranger, 'read', { type: 'secret', id: 'x', holder: key.id }), false, 'the same name held by someone else is another thing');
   assert.equal(ask(stranger, 'write', { type: 'secret', id: 'x', holder: person.id }), false);
   assert.equal(ask(me, 'remove', { type: 'principal', id: key.id }), true, 'the owner');
   assert.equal(ask(actor, 'remove', { type: 'principal', id: key.id }), false, 'not oneself');

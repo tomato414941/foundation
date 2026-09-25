@@ -68,11 +68,11 @@ function migratePrincipalGraph({ db }) {
     CREATE INDEX credentials_principal ON credentials(principal_id);
     CREATE TABLE relations (
       subject_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, relation TEXT NOT NULL CHECK(relation IN ('owner','actor','viewer','editor')),
-      object_type TEXT NOT NULL CHECK(object_type IN ('principal','secret','object','connection')), object_id TEXT NOT NULL,
+      object_type TEXT NOT NULL CHECK(object_type IN ('principal','secret','object','connection')), holder_id TEXT NOT NULL DEFAULT '', object_id TEXT NOT NULL,
       alias TEXT, scope TEXT, created_at TEXT NOT NULL,
-      PRIMARY KEY (subject_id, relation, object_type, object_id)
+      PRIMARY KEY (subject_id, relation, object_type, holder_id, object_id)
     );
-    CREATE INDEX relations_object ON relations(object_type, object_id, relation);
+    CREATE INDEX relations_object ON relations(object_type, holder_id, object_id, relation);
     CREATE UNIQUE INDEX relations_alias ON relations(subject_id, relation, alias) WHERE alias IS NOT NULL;
     CREATE TABLE settings (
       principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
@@ -267,11 +267,11 @@ export const SCHEMA = `
   CREATE INDEX credentials_principal ON credentials(principal_id);
   CREATE TABLE relations (
     subject_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, relation TEXT NOT NULL CHECK(relation IN ('owner','actor','viewer','editor')),
-    object_type TEXT NOT NULL CHECK(object_type IN ('principal','secret','object','connection')), object_id TEXT NOT NULL,
+    object_type TEXT NOT NULL CHECK(object_type IN ('principal','secret','object','connection')), holder_id TEXT NOT NULL DEFAULT '', object_id TEXT NOT NULL,
     alias TEXT, scope TEXT, created_at TEXT NOT NULL,
-    PRIMARY KEY (subject_id, relation, object_type, object_id)
+    PRIMARY KEY (subject_id, relation, object_type, holder_id, object_id)
   );
-  CREATE INDEX relations_object ON relations(object_type, object_id, relation);
+  CREATE INDEX relations_object ON relations(object_type, holder_id, object_id, relation);
   CREATE UNIQUE INDEX relations_alias ON relations(subject_id, relation, alias) WHERE alias IS NOT NULL;
   CREATE TABLE settings (
     principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
