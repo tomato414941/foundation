@@ -50,7 +50,7 @@ export class Principals {
   remove(id) {
     return this.store.transaction(() => {
       for (const table of ['secrets', 'connections', 'sessions']) this.db.prepare(`DELETE FROM ${table} WHERE owner_id=?`).run(id);
-      this.db.prepare('DELETE FROM relations WHERE object_type=? AND object_id=?').run('principal', id);
+      this.db.prepare('DELETE FROM relations WHERE (object_type=? AND object_id=?) OR holder_id=?').run('principal', id, id);
       return this.db.prepare('DELETE FROM principals WHERE id=?').run(id).changes > 0;
     });
   }
