@@ -268,7 +268,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       // anything else; everyone else hears no.
       const permitFor = subject => (name, type, id) => {
         if (allowed({ subject, action: { name }, resource: { type, ...(id === undefined ? {} : { id }) } }).decision) return;
-        if (subject.type === 'linked') fail(401, 'login_required', 'ログインしてください。');
+        if (subject.via === 'link') fail(401, 'login_required', 'ログインしてください。');
         fail(403, 'forbidden', 'この操作は許可されていません。');
       };
       if (!browser && !token) fail(401, 'invalid_token', 'Bearer形式のアクセスキーを指定してください。');
@@ -398,7 +398,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const integration = integrations.authenticate(token);
         if (!integration) fail(401, 'not_an_app', 'このアプリキーは無効です。');
         rateLimit('app:' + integration.id, 300);
-        const permit = permitFor({ type: 'app', id: integration.id });
+        const permit = permitFor({ type: 'principal', id: integration.id, via: 'app-key' });
         const accountRoute = path.match(/^\/v1\/accounts\/([^/]+)(?:\/(keys|usage)(?:\/([a-f0-9-]{36}))?)?$/);
         if (accountRoute) {
           const externalId = decodeURIComponent(accountRoute[1]), part = accountRoute[2], keyId = accountRoute[3];
@@ -473,7 +473,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       const { user, session } = caller ? { user: { id: caller.owner_id, email: null }, session: null }
         : link ? { user: { id: link.owner_id, email: null, linked: true }, session: null } : await principal(req);
       const ownerId = user.id;
-      const subject = caller ? { type: 'key', id: caller.id } : link ? { type: 'linked', id: ownerId } : { type: 'owner', id: ownerId };
+      const subject = { type: 'principal', id: caller ? caller.id : ownerId, via: caller ? 'key' : link ? 'link' : 'session' };
       const permit = permitFor(subject);
       const requireAccess = () => {
         if (caller) keys.requireCurrent(caller);
@@ -572,7 +572,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       // what it needs to use one. Making one starts the service's own login; removing one may also revoke there.
       if (path === '/v1/connections' && method === 'GET') {
         permit('list', 'connection');
-        return send(200, { connections: subject.type === 'owner' ? connections.list(ownerId).map(connectionView)
+        return send(200, { connections: subject.via === 'session' ? connections.list(ownerId).map(connectionView)
           : connections.list(ownerId).filter(row => row.status !== 'disconnecting').map(row => connections.view(row)) });
       }
       if (path === '/v1/connections' && method === 'POST') {
@@ -678,7 +678,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         if (method === 'GET') {
           permit('read', 'secret', target);
           // The owner reads anything of theirs; a key reads only what was left readable to it.
-          const { row, content } = subject.type === 'owner' ? (() => { const row = secrets.at(ownerId, target); return { row, content: secrets.content(row) }; })() : secrets.read(ownerId, target);
+          const { row, content } = subject.via === 'session' ? (() => { const row = secrets.at(ownerId, target); return { row, content: secrets.content(row) }; })() : secrets.read(ownerId, target);
           res.setHeader('etag', secretTag(row));
           res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length, 'content-disposition': `attachment; filename="secret.bin"; filename*=UTF-8''${encodeURIComponent(row.name).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}` });
           return res.end(content);
@@ -694,7 +694,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
             const current = match === undefined ? null : secrets.find(ownerId, secretName(target));
             if (match !== undefined && (!current || match !== secretTag(current))) fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
             const saved = secrets.put(ownerId, { name: target, content,
-              secret: current ? !current.readable : subject.type === 'owner' ? url.searchParams.get('secret') !== 'false' : url.searchParams.get('secret') === 'true' });
+              secret: current ? !current.readable : subject.via === 'session' ? url.searchParams.get('secret') !== 'false' : url.searchParams.get('secret') === 'true' });
             res.setHeader('etag', secretTag(secrets.at(ownerId, target)));
             return saved;
           });

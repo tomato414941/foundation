@@ -1,7 +1,8 @@
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 // Names are opaque identifiers. Connection state is stored independently of ordinary values.
 // Migrations preserve resource identity and plaintext, and rebind ciphertext explicitly when needed.
 export const STEPS = {
+  17: migratePrincipals,
   16: migrateResponsibilities,
   // Each run of a built-in function is written down for the owner: which key, what, where to, and how it went.
   15: `
@@ -45,6 +46,46 @@ export const STEPS = {
     CREATE INDEX requests_token ON requests(token_hash, created_at);
   `,
 };
+
+// Whoever comes to Foundation is a principal: a row of its own, with a name and a beginning, and the
+// credentials that prove it kept apart from it. Keys and apps had carried their own hash and name; those
+// move to the principal they are. People known only by the id their login gave them get a row too.
+function migratePrincipals({ db }) {
+  db.exec(`
+    CREATE TABLE principals (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+    CREATE TABLE credentials (
+      hash TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK(kind IN ('key','app-key')), created_at TEXT NOT NULL, last_used_at TEXT
+    );
+    CREATE INDEX credentials_principal ON credentials(principal_id);
+  `);
+  const principal = db.prepare('INSERT OR IGNORE INTO principals (id,name,created_at) VALUES (?,?,?)');
+  const credential = db.prepare('INSERT INTO credentials (hash,principal_id,kind,created_at,last_used_at) VALUES (?,?,?,?,?)');
+  for (const row of db.prepare('SELECT id,name,created_at,token_hash,last_used_at FROM keys').all()) {
+    principal.run(row.id, row.name, row.created_at); credential.run(row.token_hash, row.id, 'key', row.created_at, row.last_used_at);
+  }
+  for (const row of db.prepare('SELECT id,name,created_at,token_hash,last_used_at FROM integrations').all()) {
+    principal.run(row.id, row.name, row.created_at); credential.run(row.token_hash, row.id, 'app-key', row.created_at, row.last_used_at);
+  }
+  for (const row of db.prepare('SELECT id,created_at FROM accounts').all()) principal.run(row.id, '', row.created_at);
+  const now = new Date().toISOString();
+  for (const table of ['keys', 'integrations', 'secrets', 'connections', 'sessions', 'requests', 'key_requests']) {
+    for (const row of db.prepare(`SELECT DISTINCT owner_id FROM ${table} WHERE owner_id IS NOT NULL`).all()) principal.run(row.owner_id, '', now);
+  }
+  db.exec(`
+    CREATE TABLE keys_next (id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at TEXT NOT NULL);
+    INSERT INTO keys_next SELECT id,owner_id,created_at FROM keys;
+    DROP TABLE keys;
+    ALTER TABLE keys_next RENAME TO keys;
+    CREATE TABLE integrations_next (
+      id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE, owner_id TEXT NOT NULL,
+      return_url TEXT NOT NULL, refresh_url TEXT, webhook_url TEXT, webhook_secret TEXT, created_at TEXT NOT NULL
+    );
+    INSERT INTO integrations_next SELECT id,owner_id,return_url,refresh_url,webhook_url,webhook_secret,created_at FROM integrations;
+    DROP TABLE integrations;
+    ALTER TABLE integrations_next RENAME TO integrations;
+  `);
+}
 
 function migrateResponsibilities({ db, vault }) {
   db.exec(`
@@ -127,10 +168,13 @@ function migrateNames(store) {
 
 export const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
-  CREATE TABLE keys (
-    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
-    last_used_at TEXT
+  CREATE TABLE principals (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+  CREATE TABLE credentials (
+    hash TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('key','app-key')), created_at TEXT NOT NULL, last_used_at TEXT
   );
+  CREATE INDEX credentials_principal ON credentials(principal_id);
+  CREATE TABLE keys (id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at TEXT NOT NULL);
   CREATE TABLE sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL, expires_at INTEGER NOT NULL);
   CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);
   CREATE TABLE key_requests (
@@ -161,9 +205,8 @@ export const SCHEMA = `
   );
   CREATE INDEX connections_owner ON connections(owner_id, id);
   CREATE TABLE integrations (
-    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
-    return_url TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT,
-    refresh_url TEXT, webhook_url TEXT, webhook_secret TEXT
+    id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE, owner_id TEXT NOT NULL,
+    return_url TEXT NOT NULL, refresh_url TEXT, webhook_url TEXT, webhook_secret TEXT, created_at TEXT NOT NULL
   );
   CREATE TABLE accounts (
     id TEXT PRIMARY KEY, integration_id TEXT NOT NULL, external_id TEXT NOT NULL, created_at TEXT NOT NULL,

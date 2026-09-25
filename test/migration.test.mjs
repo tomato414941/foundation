@@ -94,6 +94,10 @@ test('Schema 11 migrates encrypted values and pending state without changing the
   assert.equal(keys.find(old.token).owner_id, USER_A);
   assert.equal(sessions.get(old.sessionToken).id, old.sessionId);
   assert.equal(keys.list(USER_A)[0].name, 'Existing key');
+  // Everyone the old database knew is a principal now: the key, and each person by the id their login gave them.
+  assert.deepEqual({ ...store.db.prepare('SELECT id,name,created_at FROM principals WHERE id=?').get('legacy-key') }, { id: 'legacy-key', name: 'Existing key', created_at: old.stamp });
+  assert.deepEqual(store.db.prepare('SELECT id FROM principals WHERE id IN (?,?) ORDER BY id').all(USER_A, USER_B).map(row => row.id), [USER_A, USER_B].sort());
+  assert.deepEqual({ ...store.db.prepare('SELECT principal_id,kind FROM credentials WHERE hash=?').get(digest(old.token)) }, { principal_id: 'legacy-key', kind: 'key' });
   assert.equal(store.db.prepare('SELECT count(*) n FROM key_requests').get().n, 1);
   const flow = flows.take(old.sessionId, old.flowState);
   assert.deepEqual(flow.previous, { id: old.connectionId, generation: 4 });

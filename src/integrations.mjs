@@ -30,22 +30,27 @@ export class Integrations {
     if (this.list(ownerId).length >= 10) fail(409, 'integration_limit', '登録できるアプリは10件までです。');
     const back = returnUrl(target), refresh = refreshUrl ? returnUrl(refreshUrl) : back;
     if (webhookUrl) prepareFetch({ url: webhookUrl, method: 'POST' });
-    const id = randomUUID(), secret = token('fdni_'), signing = webhookUrl ? token('whsec_') : null;
-    this.db.prepare('INSERT INTO integrations (id,owner_id,name,token_hash,return_url,refresh_url,webhook_url,webhook_secret,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-      .run(id, ownerId, name, digest(secret), back, refresh, webhookUrl || null, signing && this.store.vault.seal(signing, 'integration:' + id), now());
+    const id = randomUUID(), secret = token('fdni_'), signing = webhookUrl ? token('whsec_') : null, at = now();
+    // An app is a principal too: its name lives with it, its credential beside it.
+    this.store.transaction(() => {
+      this.db.prepare('INSERT INTO principals (id,name,created_at) VALUES (?,?,?)').run(id, name, at);
+      this.db.prepare("INSERT INTO credentials (hash,principal_id,kind,created_at) VALUES (?,?,'app-key',?)").run(digest(secret), id, at);
+      this.db.prepare('INSERT INTO integrations (id,owner_id,return_url,refresh_url,webhook_url,webhook_secret,created_at) VALUES (?,?,?,?,?,?,?)')
+        .run(id, ownerId, back, refresh, webhookUrl || null, signing && this.store.vault.seal(signing, 'integration:' + id), at);
+    });
     return { ...this.list(ownerId).find(row => row.id === id), token: secret, ...(signing ? { webhook_secret: signing } : {}) };
   }
   list(ownerId) {
-    return this.db.prepare('SELECT i.id,i.name,i.return_url,i.refresh_url,i.webhook_url,i.created_at,i.last_used_at,(SELECT count(*) FROM accounts a WHERE a.integration_id=i.id) AS accounts FROM integrations i WHERE owner_id=? ORDER BY created_at,id').all(ownerId);
+    return this.db.prepare('SELECT i.id,p.name,i.return_url,i.refresh_url,i.webhook_url,i.created_at,c.last_used_at,(SELECT count(*) FROM accounts a WHERE a.integration_id=i.id) AS accounts FROM integrations i JOIN principals p ON p.id=i.id LEFT JOIN credentials c ON c.principal_id=i.id AND c.kind=\'app-key\' WHERE i.owner_id=? ORDER BY i.created_at,i.id').all(ownerId);
   }
   // Removing a product stops its credential. The accounts it made stay with the people they belong to.
   remove(ownerId, id) {
-    if (!this.db.prepare('DELETE FROM integrations WHERE owner_id=? AND id=?').run(ownerId, id).changes) fail(404, 'not_found', 'アプリの登録が見つかりません。');
+    if (!this.db.prepare('DELETE FROM principals WHERE id=(SELECT id FROM integrations WHERE owner_id=? AND id=?)').run(ownerId, id).changes) fail(404, 'not_found', 'アプリの登録が見つかりません。');
   }
   authenticate(value) {
     if (typeof value !== 'string' || !INTEGRATION_TOKEN.test(value)) return;
-    const row = this.db.prepare('SELECT * FROM integrations WHERE token_hash=?').get(digest(value));
-    if (row) this.db.prepare('UPDATE integrations SET last_used_at=? WHERE id=?').run(now(), row.id);
+    const row = this.db.prepare("SELECT i.*, p.name FROM credentials c JOIN integrations i ON i.id=c.principal_id JOIN principals p ON p.id=i.id WHERE c.hash=? AND c.kind='app-key'").get(digest(value));
+    if (row) this.db.prepare("UPDATE credentials SET last_used_at=? WHERE principal_id=? AND kind='app-key'").run(now(), row.id);
     return row;
   }
   externalId(value) {
@@ -58,8 +63,12 @@ export class Integrations {
     const found = this.db.prepare('SELECT * FROM accounts WHERE integration_id=? AND external_id=?').get(integration.id, external);
     if (found) return found;
     if (this.db.prepare('SELECT count(*) n FROM accounts WHERE integration_id=?').get(integration.id).n >= 100_000) fail(409, 'account_limit', '作成できるアカウントの上限に達しました。');
-    const id = randomUUID();
-    this.db.prepare('INSERT INTO accounts (id,integration_id,external_id,created_at) VALUES (?,?,?,?)').run(id, integration.id, external, now());
+    const id = randomUUID(), at = now();
+    // The account is a principal of its own, known to Foundation by nothing but this id.
+    this.store.transaction(() => {
+      this.db.prepare('INSERT INTO principals (id,name,created_at) VALUES (?,?,?)').run(id, '', at);
+      this.db.prepare('INSERT INTO accounts (id,integration_id,external_id,created_at) VALUES (?,?,?,?)').run(id, integration.id, external, at);
+    });
     return this.db.prepare('SELECT * FROM accounts WHERE id=?').get(id);
   }
   account(integration, externalId) {
@@ -73,7 +82,7 @@ export class Integrations {
     return this.db.prepare('SELECT i.return_url FROM accounts a JOIN integrations i ON i.id=a.integration_id WHERE a.id=?').get(ownerId)?.return_url;
   }
   integrationOf(ownerId) {
-    return this.db.prepare('SELECT i.*, a.external_id FROM accounts a JOIN integrations i ON i.id=a.integration_id WHERE a.id=?').get(ownerId);
+    return this.db.prepare('SELECT i.*, p.name, a.external_id FROM accounts a JOIN integrations i ON i.id=a.integration_id JOIN principals p ON p.id=i.id WHERE a.id=?').get(ownerId);
   }
   // Where the page sends someone back: after the request is finished (return), or when the link was no good (refresh).
   // Both name the request, so the product knows which one; neither says anything else.
@@ -106,8 +115,10 @@ export class Integrations {
   deleteAccount(integration, externalId) {
     const account = this.account(integration, externalId);
     this.store.transaction(() => {
-      for (const table of ['secrets', 'keys', 'requests', 'connections', 'request_links']) this.db.prepare(`DELETE FROM ${table} WHERE owner_id=?`).run(account.id);
+      this.db.prepare('DELETE FROM principals WHERE id IN (SELECT id FROM keys WHERE owner_id=?)').run(account.id);
+      for (const table of ['secrets', 'requests', 'connections', 'request_links']) this.db.prepare(`DELETE FROM ${table} WHERE owner_id=?`).run(account.id);
       this.db.prepare('DELETE FROM accounts WHERE id=?').run(account.id);
+      this.db.prepare('DELETE FROM principals WHERE id=?').run(account.id);
     });
     return account;
   }

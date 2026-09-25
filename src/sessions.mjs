@@ -9,6 +9,8 @@ export class Sessions {
     this.store.sweep();
     const token = randomBytes(32).toString('base64url'), id = digest(token);
     this.db.prepare('DELETE FROM sessions WHERE owner_id=? AND id IN (SELECT id FROM sessions WHERE owner_id=? ORDER BY expires_at DESC LIMIT -1 OFFSET 19)').run(value.user.id, value.user.id);
+    // Whoever logs in is a principal from then on, known here by the id their login gave them.
+    this.db.prepare('INSERT OR IGNORE INTO principals (id,name,created_at) VALUES (?,?,?)').run(value.user.id, '', new Date().toISOString());
     this.db.prepare('INSERT INTO sessions VALUES (?,?,?,?,?)').run(id, value.user.id, value.user.email, this.vault.seal(value, `session:${id}`), Date.now() + 14 * 86400_000);
     return token;
   }
