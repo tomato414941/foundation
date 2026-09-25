@@ -29,7 +29,7 @@ function setup(t, obtain) {
 
 test('各接続の設定を個別に読み込み、利用可否と出力を公開する', () => {
   const registry = new Connectors(builtins({ FOUNDATION_GCP_CLIENT_ID: 'test-id', FOUNDATION_GCP_CLIENT_SECRET: 'test-secret' }));
-  assert.deepEqual(registry.ids(), ['github.oauth', 'openrouter.oauth', 'gcp.oauth', 'gmail.readonly', 'gmail.metadata', 'ebay.oauth']);
+  assert.deepEqual(registry.ids(), ['github.oauth', 'openrouter.oauth', 'gcp.oauth', 'gmail.readonly', 'gmail.metadata', 'gmail.read-send', 'ebay.oauth']);
   const catalog = registry.ids().map(id => registry.describe(id));
   assert.equal(catalog.find(item => item.id === 'gcp.oauth').available, true);
   assert.equal(catalog.find(item => item.id === 'gmail.readonly').available, false);
