@@ -53,7 +53,7 @@ test('A new database is created in the current shape; a database of any other sh
   const dir = await directory(t), path = join(dir, 'state.sqlite');
   const created = new Store(path, KEY), live = resources(created);
   const connection = live.connections.write(USER_A, { connector: 'gmail.readonly', subject: 'kept@example.test', label: 'kept', state: { private_state: { refresh_token: 'keep-private' }, facts: {}, expires_at: null } });
-  live.secrets.put(USER_A, { name: 'gmail/kept/access-token', content: Buffer.from('google-access'), secret: true });
+  live.secrets.put(USER_A, { name: 'gmail/kept/access-token', content: Buffer.from('google-access') });
   live.principals.ensure(USER_A);
   const runtime = live.principals.create(USER_A, { name: 'runtime' });
   live.principals.relate(runtime.id, 'actor', 'principal', USER_A);

@@ -40,7 +40,9 @@ export function declaration(input) {
   }
   if (typeof input.label !== 'string' || !input.label.trim() || input.label.trim().length > 60 || /[\x00-\x1f\x7f<>]/.test(input.label)) fail(400, 'invalid_label', '何を入れてもらうかを1〜60文字で指定してください。');
   if (input.multiline !== undefined && typeof input.multiline !== 'boolean') fail(400, 'invalid_declaration', '複数行かどうかは true か false で指定してください。');
+  // Reading it back afterwards is asked for up front; the line is drawn when the value is kept.
+  if (input.readable !== undefined && typeof input.readable !== 'boolean') fail(400, 'invalid_declaration', '読み返すかどうかは true か false で指定してください。');
   // Replacing is a property of the request, declared up front, so the owner sees it before deciding.
   if (input.replace !== undefined && typeof input.replace !== 'boolean') fail(400, 'invalid_declaration', '置き換えかどうかは true か false で指定してください。');
-  return { name: secretName(input.name), secret: input.secret !== false, label: input.label.trim(), site: site?.href ?? '', multiline: input.multiline === true, replace: input.replace === true };
+  return { name: secretName(input.name), readable: input.readable === true, label: input.label.trim(), site: site?.href ?? '', multiline: input.multiline === true, replace: input.replace === true };
 }

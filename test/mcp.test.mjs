@@ -65,7 +65,7 @@ test('MCP discovers and invokes the credential function with metadata-only saved
   assert.equal(saved.json.result.structuredContent.saved[0].name, name);
   assert.doesNotMatch(saved.text, /google-access|refresh-personal/);
   const exact = await call('GET', '/v1/secrets?name=' + encodeURIComponent(name));
-  assert.equal(exact.json.result.structuredContent.error.code, 'write_only');
+  assert.equal(exact.json.result.structuredContent.error.code, 'forbidden');
 });
 
 test('reports a refused API call as a tool error the model can act on', async (t) => {

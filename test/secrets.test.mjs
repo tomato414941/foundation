@@ -27,21 +27,24 @@ const put = (f, token, name, content, query = {}, type = 'text/plain') =>
 
 test('Stored names and caller-selected environment variables are independent', async t => {
   const { f, token } = await keyed(t);
-  const kept = await put(f, token, 'github/gh-token', secret, { secret: 'true' });
+  const kept = await put(f, token, 'github/gh-token', secret);
   assert.equal(kept.status, 200, kept.text);
   assert.match(kept.json.secret.id, /^[0-9a-f-]{36}$/, 'a held thing has an id of its own');
   assert.deepEqual({ ...kept.json.secret, id: undefined, created_at: 0, updated_at: 0 },
-    { id: undefined, name: 'github/gh-token', size: secret.length, readable: false, created_at: 0, updated_at: 0 });
+    { id: undefined, name: 'github/gh-token', size: secret.length, created_at: 0, updated_at: 0 });
   assert.doesNotMatch(kept.text, new RegExp(secret), 'writing never echoes the bytes back');
 
   const listed = await f.request('/v1/secrets', { token, anonymous: true });
   assert.deepEqual(listed.json.secrets.map(row => row.name), ['github/gh-token']);
   assert.doesNotMatch(listed.text, new RegExp(secret), 'listing tells what is kept, never the bytes');
 
-  // Written as a secret, so the key that wrote it cannot read it back.
+  // What the key kept it may read back, along the line drawn for it; the holder can take that line away.
+  assert.equal((await f.request('/v1/secrets?name=github/gh-token', { token, anonymous: true })).status, 200);
+  const keyId = (await f.request('/v1/principals/me', { token, anonymous: true })).json.principal.id;
+  assert.equal((await f.request('/v1/relations', { method: 'DELETE', data: { subject: keyId, relation: 'editor', object_type: 'holding', object_id: kept.json.secret.id } })).status, 200);
   const refused = await f.request('/v1/secrets?name=github/gh-token', { token, anonymous: true });
   assert.equal(refused.status, 403);
-  assert.equal(refused.json.error.code, 'write_only');
+  assert.equal(refused.json.error.code, 'forbidden');
 
   const delivered = await f.request('/v1/deliveries', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'github/gh-token', as: 'GH_TOKEN' }] } });
   assert.deepEqual(delivered.json.delivery, { environment: { GH_TOKEN: secret }, files: [] });
@@ -160,12 +163,13 @@ test('The owner reads and removes anything kept, including what the key may not 
   assert.deepEqual((await f.request('/v1/secrets', { token, anonymous: true })).json.secrets, []);
 });
 
-test('The owner edits the value they opened while preserving its name and read permission', async t => {
+test('The owner edits the value they opened while preserving its name and the lines onto it', async t => {
   const { f, token } = await keyed(t);
   for (const privateValue of [true, false]) {
     const name = privateValue ? 'private value' : 'readable value';
     const path = '/v1/secrets?' + new URLSearchParams({ name });
-    await put(f, token, name, 'original', { secret: String(privateValue) });
+    // Kept by the owner, no line reaches it; kept by the key, the key is on a line to it.
+    if (privateValue) await f.request(path, { method: 'PUT', raw: 'original', type: 'text/plain' }); else await put(f, token, name, 'original');
     const opened = await f.request(path);
     const etag = opened.headers.get('etag');
     assert.ok(etag);
@@ -174,7 +178,6 @@ test('The owner edits the value they opened while preserving its name and read p
     const saved = await f.request(path, { method: 'PUT', raw: value, headers: { 'if-match': etag } });
     assert.equal(saved.status, 200, saved.text);
     assert.equal(saved.json.secret.name, name);
-    assert.equal(saved.json.secret.readable, !privateValue);
     assert.notEqual(saved.headers.get('etag'), etag);
     const updated = await f.request(path);
     assert.equal(updated.text, value);
@@ -187,14 +190,13 @@ test('The owner edits the value they opened while preserving its name and read p
 test('A stale editor preserves a newer value and its permissions', async t => {
   const { f, token } = await keyed(t);
   const path = '/v1/secrets?name=shared';
-  await put(f, token, 'shared', 'original', { secret: 'true' });
+  await put(f, token, 'shared', 'original');
   const opened = await f.request(path);
   await put(f, token, 'shared', 'newer value');
   const saved = await f.request(path, { method: 'PUT', raw: 'stale draft', headers: { 'if-match': opened.headers.get('etag') } });
   assert.equal(saved.status, 412, saved.text);
   assert.equal(saved.json.error.code, 'secret_changed');
   assert.equal((await f.request(path)).text, 'newer value');
-  assert.equal((await f.request('/v1/overview')).json.secrets[0].readable, true);
 });
 
 test('A stale editor respects renames, deletion, recreation, and owner boundaries', async t => {
@@ -284,13 +286,13 @@ test('An agent that cannot make a secret of its own is issued one, once', async 
 
 test('閲覧を許された相手は、その保有者の値だけを読み、別の保有者が同じ名前で持つ値は読めない', async t => {
   const f = await fixture(t);
-  const kept = await f.request('/v1/secrets?name=shared&secret=false', { method: 'PUT', raw: 'a-value' });
+  const kept = await f.request('/v1/secrets?name=shared', { method: 'PUT', raw: 'a-value' });
   const made = await f.request('/v1/principals', { method: 'POST', data: { name: 'reader', credential: 'key' } });
   assert.equal(made.status, 201, made.text);
   const granted = await f.request('/v1/relations', { method: 'POST', data: { subject: made.json.principal.id, relation: 'viewer', object_type: 'holding', object_id: kept.json.secret.id } });
   assert.equal(granted.status, 201, granted.text);
   await f.login('other@example.test');
-  await f.request('/v1/secrets?name=shared&secret=false', { method: 'PUT', raw: 'b-value' });
+  await f.request('/v1/secrets?name=shared', { method: 'PUT', raw: 'b-value' });
   const allowed = await f.request('/v1/secrets?name=shared&as=' + USER_A, { token: made.json.token, anonymous: true });
   assert.equal(allowed.status, 200, allowed.text); assert.equal(allowed.text, 'a-value');
   const refused = await f.request('/v1/secrets?name=shared&as=' + USER_B, { token: made.json.token, anonymous: true });
@@ -299,7 +301,7 @@ test('閲覧を許された相手は、その保有者の値だけを読み、�
 
 test('編集を許された相手はその値を書き換え、値を消すと線は消え、名前を変えると線はついていく', async t => {
   const f = await fixture(t);
-  const kept = await f.request('/v1/secrets?name=doc&secret=false', { method: 'PUT', raw: 'v1' });
+  const kept = await f.request('/v1/secrets?name=doc', { method: 'PUT', raw: 'v1' });
   const made = await f.request('/v1/principals', { method: 'POST', data: { name: 'editor', credential: 'key' } });
   const token = made.json.token, id = made.json.principal.id;
   assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: id, relation: 'editor', object_type: 'holding', object_id: kept.json.secret.id } })).status, 201);
@@ -309,7 +311,7 @@ test('編集を許された相手はその値を書き換え、値を消すと�
   assert.equal((await f.request('/v1/secrets?name=doc', { method: 'PATCH', data: { name: 'moved' } })).status, 200);
   assert.equal((await f.request('/v1/secrets?name=moved&as=' + USER_A, { token, anonymous: true })).status, 200, 'the line follows the name');
   await f.request('/v1/secrets?name=moved', { method: 'DELETE', data: {} });
-  await f.request('/v1/secrets?name=moved&secret=false', { method: 'PUT', raw: 'fresh' });
+  await f.request('/v1/secrets?name=moved', { method: 'PUT', raw: 'fresh' });
   assert.equal((await f.request('/v1/secrets?name=moved&as=' + USER_A, { token, anonymous: true })).status, 403, 'a new thing by the old name starts with no lines');
   const owner = await f.request('/v1/relations', { method: 'POST', data: { subject: id, relation: 'owner', object_type: 'principal', object_id: USER_A } });
   assert.equal(owner.status, 400, 'ownership is not drawn by hand');

@@ -50,7 +50,7 @@ async function setup(t) {
   const api = await service(t);
   const f = await fixture(t, { outbound: api.outbound });
   const key = await f.issueKey();
-  const put = await f.request('/v1/secrets?name=api/token&secret=true', { method: 'PUT', token: key.token, raw: TOKEN, type: 'text/plain' });
+  const put = await f.request('/v1/secrets?name=api/token', { method: 'PUT', token: key.token, raw: TOKEN, type: 'text/plain' });
   assert.equal(put.status, 200, put.text);
   const call = request => f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: request });
   return { ...api, f, key, call };
@@ -109,9 +109,9 @@ test('What goes out is checked: the key may use each path, headers are its own, 
   for (const name of ['host', 'Content-Length', 'accept-encoding', 'proxy-authorization', 'x-forwarded-for']) {
     assert.equal((await call({ url: 'https://api.example.test/', headers: { [name]: 'x' } })).json.error.code, 'invalid_headers', name);
   }
-  await f.request('/v1/secrets?name=api/multiline&secret=true', { method: 'PUT', token: key.token, raw: 'line1\nline2', type: 'text/plain' });
+  await f.request('/v1/secrets?name=api/multiline', { method: 'PUT', token: key.token, raw: 'line1\nline2', type: 'text/plain' });
   assert.equal((await call({ url: 'https://api.example.test/', headers: { authorization: '{{foundation:api/multiline}}' } })).json.error.code, 'invalid_headers');
-  await f.request('/v1/secrets?name=api/binary&secret=true', { method: 'PUT', token: key.token, raw: Buffer.from([0xff, 0xfe, 0x00]), type: 'application/octet-stream' });
+  await f.request('/v1/secrets?name=api/binary', { method: 'PUT', token: key.token, raw: Buffer.from([0xff, 0xfe, 0x00]), type: 'application/octet-stream' });
   assert.equal((await call({ url: 'https://api.example.test/', method: 'POST', body: '{{foundation:api/binary}}' })).json.error.code, 'not_text');
   assert.equal((await call({ url: 'https://api.example.test/', method: 'GET', body: 'x' })).json.error.code, 'invalid_body');
   assert.equal(received.length, 0, 'nothing refused ever went out');
@@ -152,7 +152,7 @@ test('Foundation itself is not reachable under another name that points at its o
 test('The HTTPS function binds opaque stored names explicitly and saves only its selected response body', async t => {
   const { f, key, received } = await setup(t), connection = await f.credential();
   const inputName = '{{入力}} /..,=x', outputName = '結果 /?';
-  const input = await f.request('/v1/secrets?name=' + encodeURIComponent(inputName) + '&secret=true', { method: 'PUT', token: key.token, raw: TOKEN });
+  const input = await f.request('/v1/secrets?name=' + encodeURIComponent(inputName) + '', { method: 'PUT', token: key.token, raw: TOKEN });
   assert.equal(input.status, 200);
   f.expire(connection.id);
   const calls = f.gmail.calls.length;

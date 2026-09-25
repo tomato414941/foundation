@@ -23,7 +23,6 @@ test('利用者が選んだ名前で保存し、依頼元に実際の保存名�
   assert.deepEqual(done.result.names, ['stripe-test-api-key']);
   const kept = f.app.secrets.list(USER_A);
   assert.deepEqual(kept.map(value => value.name), ['stripe-test-api-key']);
-  assert.equal(kept[0].readable, false);
   const delivered = await f.request('/v1/deliveries', { method: 'POST', token,
     data: { names: [{ name: done.result.names[0], as: 'STRIPE_KEY' }] } });
   assert.equal(delivered.json.delivery.environment.STRIPE_KEY, 'fixture-private-value');
@@ -33,7 +32,7 @@ test('同じ名前を使う登録を全件保留し、既存の値を保った�
   const f = await fixture(t), { token } = await f.issueKey();
   await f.request('/v1/secrets?name=existing', { method: 'PUT', raw: 'keep-this-value', type: 'text/plain' });
   const before = f.app.secrets.list(USER_A);
-  const row = await ask(f, token, ['first', 'second'], { secret: false });
+  const row = await ask(f, token, ['first', 'second'], { readable: true });
   const refused = await save(f, row, [entry('new-name'), entry('existing', 'replacement')]);
   assert.equal(refused.status, 409, refused.text);
   assert.equal(refused.json.error.code, 'name_taken');
@@ -105,19 +104,18 @@ test('依頼を作る時点で保存先を確かめ、食い違いは依頼元�
   assert.equal((await f.request('/v1/requests', { method: 'POST', token, data: { store: { name: 'existing', label: 'APIキー', replace: 'yes' } } })).status, 400);
 });
 
-test('置き換えの依頼は、持ち主がそのままの名前で完了すると既存の値だけを入れ替え、読み取り可否は保つ', async t => {
+test('置き換えの依頼は、持ち主がそのままの名前で完了すると既存の値だけを入れ替え、線はそのまま保つ', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
   await f.request('/v1/secrets?name=npm-token', { method: 'PUT', raw: 'old-value', type: 'text/plain' });
   const before = f.app.secrets.find(USER_A, 'npm-token');
-  assert.equal(before.readable, false);
-  const row = await ask(f, token, ['npm-token'], { replace: true, secret: false });
+  const row = await ask(f, token, ['npm-token'], { replace: true, readable: true });
   assert.equal(row.store[0].replace, true);
   const saved = await save(f, row, [entry('npm-token', 'new-value')]);
   assert.equal(saved.status, 200, saved.text);
   assert.deepEqual(saved.json, { stored: true, names: ['npm-token'], replaced: ['npm-token'] });
   const after = f.app.secrets.find(USER_A, 'npm-token');
   assert.equal(f.app.secrets.content(after).toString(), 'new-value');
-  assert.equal(after.readable, false, 'the request cannot loosen what the owner kept secret');
+  assert.equal((await f.request('/v1/secrets?name=npm-token', { token })).status, 403, 'the request cannot loosen what the owner kept to themselves');
   assert.equal(after.id, before.id, 'the same value, updated');
   assert.equal(f.app.secrets.list(USER_A).length, 1);
 });

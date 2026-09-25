@@ -83,7 +83,7 @@ test('スキーマ 19 は保管物を一つの表にまとめ、線は名前で�
 
   const store = new Store(path, KEY);
   t.after(() => store.close());
-  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 19);
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 20);
   const { secrets, principals, connections } = resources(store);
   const kept = secrets.find(USER_A, 'doc');
   assert.equal(kept.id, secretId, 'the thing keeps its id');

@@ -414,7 +414,7 @@ function renderStore(row, shell, expiry) {
   const site = asked.find(one => one.site)?.site;
   const field = (one, at) => one.multiline
     ? `<textarea id="stored-${at}" name="value-${at}" rows="6" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>`
-    : `<input id="stored-${at}" name="value-${at}" type="${one.secret ? 'password' : 'text'}" required maxlength="16384" autocomplete="off" spellcheck="false">`;
+    : `<input id="stored-${at}" name="value-${at}" type="${one.readable ? 'text' : 'password'}" required maxlength="16384" autocomplete="off" spellcheck="false">`;
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${title}</h1></div></header>
     <dl class="approval-facts">${row.purpose ? `<div class="approval-purpose"><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}</dl>
     ${stepsBlock(row.steps)}
@@ -550,11 +550,10 @@ function addSecret() {
   openDialog(`<h2 id="dialog-title">追加</h2>
     <form><label for="new-name">名前</label><input id="new-name" name="name" required maxlength="200" placeholder="任意の名前" autocomplete="off" spellcheck="false">
     <label for="new-value">値</label><textarea id="new-value" name="value" rows="4" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>
-    <label class="checkbox"><input type="checkbox" name="readable"> 値の直接読み出しを許可する</label>
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加</button></form>`);
   bindForm(async (form) => {
-    const name = form.get('name'), open = form.get('readable') === 'on';
-    const response = await fetch('/v1/secrets?name=' + encodeURIComponent(name) + (open ? '&secret=false' : ''),
+    const name = form.get('name');
+    const response = await fetch('/v1/secrets?name=' + encodeURIComponent(name),
       { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'text/plain' }, body: String(form.get('value')) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');

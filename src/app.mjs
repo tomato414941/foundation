@@ -40,7 +40,7 @@ const LINK_TTL = 10 * 60_000, LINKED_TTL = 30 * 60_000;
 const REQUEST_PAGE = /^\/requests\/[A-Za-z0-9_-]{43}$/;
 const PRINCIPAL_ID = /^[A-Za-z0-9-]{1,64}$/;
 // A revision of the encrypted record, never a fingerprint of the plaintext value.
-const secretTag = row => '"' + digest(JSON.stringify([row.id, row.name, row.content, row.readable, row.updated_at])) + '"';
+const secretTag = row => '"' + digest(JSON.stringify([row.id, row.name, row.content, row.updated_at])) + '"';
 
 function returnPath(value = '/') {
   if (!PAGES.includes(value) && (typeof value !== 'string' || !REQUEST_PAGE.test(value))) fail(400, 'invalid_return', '接続リンクを開き直してください。');
@@ -112,9 +112,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
   const authorization = new Authorization(principals);
   // One held thing, of whatever kind, by its id.
   const holding = id => {
-    const row = typeof id === 'string' ? store.db.prepare('SELECT id,holder_id,kind,name,size,type,readable,created_at,updated_at FROM holdings WHERE id=?').get(id) : undefined;
+    const row = typeof id === 'string' ? store.db.prepare('SELECT id,holder_id,kind,name,size,type,created_at,updated_at FROM holdings WHERE id=?').get(id) : undefined;
     if (!row) fail(404, 'not_found', '保管されたものが見つかりません。');
-    return { ...row, readable: row.readable === 1 };
+    return row;
   };
   const functions = new Functions({ connections, secrets, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
@@ -546,15 +546,21 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         if (typeof input.relation !== 'string' || typeof input.object_type !== 'string' || typeof input.object_id !== 'string') fail(400, 'invalid_relation', '関係の指定を確認してください。');
         // Ownership comes from making or approving, never from a line drawn here. Onto a held thing the holder draws
         // viewer or editor, to anyone; between principals one draws actor, for oneself or for what one owns.
+        // Anyone may step off a line they are on themselves.
+        const declining = method === 'DELETE' && subjectId === subject.id;
         if (input.object_type === 'principal') {
           if (input.relation !== 'actor') fail(400, 'invalid_relation', '関係の種類を確認してください。');
-          if (subjectId !== subject.id && !principals.has(subject.id, 'owner', 'principal', subjectId)) fail(403, 'forbidden', 'この操作は許可されていません。');
-          permit('relate', 'principal', input.object_id);
+          if (!declining) {
+            if (subjectId !== subject.id && !principals.has(subject.id, 'owner', 'principal', subjectId)) fail(403, 'forbidden', 'この操作は許可されていません。');
+            permit('relate', 'principal', input.object_id);
+          }
         } else if (input.object_type === 'holding') {
           if (!['viewer', 'editor'].includes(input.relation)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
-          const held = holding(input.object_id);
-          permit('share', held.kind, held.id, held.holder_id);
-          principals.at(subjectId);
+          if (!declining) {
+            const held = holding(input.object_id);
+            permit('share', held.kind, held.id, held.holder_id);
+            principals.at(subjectId);
+          }
         } else fail(400, 'invalid_relation', '関係の種類を確認してください。');
         if (method === 'POST') {
           principals.relate(subjectId, input.relation, input.object_type, input.object_id, { scope: input.scope === undefined ? undefined : String(input.scope) });
@@ -580,9 +586,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         if (holdingRoute[2] && method === 'GET') {
           permit('read', held.kind, held.id, held.holder_id);
           if (held.kind === 'secret') {
-            const row = secrets.byId(held.id);
-            if (held.holder_id !== subject.id && !row.readable) fail(403, 'write_only', 'この値の直接読み出しは許可されていません。');
-            const content = secrets.content(row);
+            const content = secrets.content(secrets.byId(held.id));
             res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length });
             return res.end(content);
           }
@@ -743,9 +747,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       if (path === '/v1/secrets' && url.searchParams.has('name')) {
         const target = url.searchParams.get('name'), held = secrets.find(holderId, target)?.id;
         if (method === 'GET') {
+          // Whoever may list may learn that a name is not there.
+          if (held === undefined) { permit('list', 'secret'); fail(404, 'not_found', '保管されたものが見つかりません。'); }
           permit('read', 'secret', held);
-          // The holder reads anything of theirs; anyone else reads only what was left readable.
-          const { row, content } = subject.id === holderId ? (() => { const row = secrets.at(holderId, target); return { row, content: secrets.content(row) }; })() : secrets.read(holderId, target);
+          const row = secrets.at(holderId, target), content = secrets.content(row);
           res.setHeader('etag', secretTag(row));
           res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length, 'content-disposition': `attachment; filename="secret.bin"; filename*=UTF-8''${encodeURIComponent(row.name).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}` });
           return res.end(content);
@@ -755,13 +760,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           limit('secrets', 120);
           const content = await inputBytes(SECRET_MAX);
           if (!content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
-          // What the holder keeps is secret unless they say otherwise; what an actor keeps stays readable to it unless it asks.
+          // A thing made for the holder by someone else is one its maker may read and write: a line says so.
           const saved = store.transaction(() => {
             const match = req.headers['if-match'];
             const current = match === undefined ? null : secrets.find(holderId, secretName(target));
             if (match !== undefined && (!current || match !== secretTag(current))) fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
-            const saved = secrets.put(holderId, { name: target, content,
-              secret: current ? !current.readable : subject.id === holderId ? url.searchParams.get('secret') !== 'false' : url.searchParams.get('secret') === 'true' });
+            const saved = secrets.put(holderId, { name: target, content });
+            if (held === undefined && subject.id !== holderId) principals.relate(subject.id, 'editor', 'holding', saved.id);
             res.setHeader('etag', secretTag(secrets.at(holderId, target)));
             return saved;
           });
