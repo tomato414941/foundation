@@ -3,7 +3,7 @@ import { digest } from './crypto.mjs';
 import { fail } from './errors.mjs';
 import { prepare as prepareFetch, send as sendFetch } from './fetch.mjs';
 
-// Another product (ai-simplicity, say) holding a Foundation account for each of its own users, so that they never
+// An app holding a Foundation account for each of its own users, so that they never
 // sign up here. The product's credential reaches no account's contents: it makes accounts, issues and revokes
 // their keys, hands one of its users to one request through a single-use link, and reads what they use.
 // Everything else about an account is exactly what it is for anyone: its keys are ordinary keys.

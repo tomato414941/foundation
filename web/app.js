@@ -518,7 +518,7 @@ function renameKey(key) {
 }
 function addIntegration() {
   openDialog(`<h2 id="dialog-title">アプリを登録</h2><form>
-    <label for="integration-name">名前</label><input id="integration-name" name="name" placeholder="ai-simplicity など" required maxlength="80" autocomplete="off">
+    <label for="integration-name">名前</label><input id="integration-name" name="name" placeholder="アプリの名前" required maxlength="80" autocomplete="off">
     <label for="integration-return">戻り先のURL</label><input id="integration-return" name="return_url" type="url" required placeholder="https://example.com/foundation" autocomplete="off">
     <p class="permission-note">依頼はこのページで開かれ、終わるとここに戻ります。</p>
     <label for="integration-refresh">リンクが使えないときの戻り先（省略可）</label><input id="integration-refresh" name="refresh_url" type="url" autocomplete="off">
