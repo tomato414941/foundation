@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, rm, writeFile, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fixture, USER_B } from './helpers.mjs';
+import { fixture, USER_A, USER_B } from './helpers.mjs';
 
 const key = () => 'fdn_' + randomBytes(32).toString('base64url');
 const secret = 'ghp_entry-fixture-' + randomBytes(12).toString('hex');
@@ -279,4 +279,19 @@ test('An agent that cannot make a secret of its own is issued one, once', async 
   assert.equal((await f.request('/v1/principals/me', { token: asked.json.key, anonymous: true })).status, 200);
   const again = await f.request('/v1/principals/me', { token: asked.json.key, anonymous: true });
   assert.equal(again.json.key, undefined, 'never handed out a second time');
+});
+
+test('閲覧を許された相手は、その保有者の値だけを読み、別の保有者が同じ名前で持つ値は読めない', async t => {
+  const f = await fixture(t);
+  await f.request('/v1/secrets?name=shared&secret=false', { method: 'PUT', raw: 'a-value' });
+  const made = await f.request('/v1/principals', { method: 'POST', data: { name: 'reader', credential: 'key' } });
+  assert.equal(made.status, 201, made.text);
+  const granted = await f.request('/v1/relations', { method: 'POST', data: { subject: made.json.principal.id, relation: 'viewer', object_type: 'secret', object_id: 'shared' } });
+  assert.equal(granted.status, 201, granted.text);
+  await f.login('other@example.test');
+  await f.request('/v1/secrets?name=shared&secret=false', { method: 'PUT', raw: 'b-value' });
+  const allowed = await f.request('/v1/secrets?name=shared&as=' + USER_A, { token: made.json.token, anonymous: true });
+  assert.equal(allowed.status, 200, allowed.text); assert.equal(allowed.text, 'a-value');
+  const refused = await f.request('/v1/secrets?name=shared&as=' + USER_B, { token: made.json.token, anonymous: true });
+  assert.equal(refused.status, 403, refused.text);
 });
