@@ -4,17 +4,18 @@ import { allowed, rules } from '../src/authorization.mjs';
 import { fixture } from './helpers.mjs';
 
 test('答えは subject・action・resource から decision だけを返し、規則は一覧できる', () => {
-  assert.deepEqual(allowed({ subject: { type: 'owner', id: 'u' }, action: { name: 'read' }, resource: { type: 'export' } }), { decision: true });
-  assert.deepEqual(allowed({ subject: { type: 'key', id: 'k' }, action: { name: 'read' }, resource: { type: 'export' } }), { decision: false });
-  assert.deepEqual(allowed({ subject: { type: 'key', id: 'k' }, action: { name: 'create' }, resource: { type: 'delivery' } }), { decision: true });
-  assert.deepEqual(allowed({ subject: { type: 'owner', id: 'u' }, action: { name: 'create' }, resource: { type: 'delivery' } }), { decision: false });
-  assert.deepEqual(allowed({ subject: { type: 'linked', id: 'u' }, action: { name: 'done' }, resource: { type: 'request', id: 'r' } }), { decision: true });
-  assert.deepEqual(allowed({ subject: { type: 'linked', id: 'u' }, action: { name: 'list' }, resource: { type: 'secret' } }), { decision: false });
-  assert.deepEqual(allowed({ subject: { type: 'nobody' }, action: { name: 'read' }, resource: { type: 'state' } }), { decision: false });
+  const who = (via, id = 'p') => ({ type: 'principal', id, via });
+  assert.deepEqual(allowed({ subject: who('session'), action: { name: 'read' }, resource: { type: 'export' } }), { decision: true });
+  assert.deepEqual(allowed({ subject: who('key'), action: { name: 'read' }, resource: { type: 'export' } }), { decision: false });
+  assert.deepEqual(allowed({ subject: who('key'), action: { name: 'create' }, resource: { type: 'delivery' } }), { decision: true });
+  assert.deepEqual(allowed({ subject: who('session'), action: { name: 'create' }, resource: { type: 'delivery' } }), { decision: false });
+  assert.deepEqual(allowed({ subject: who('link'), action: { name: 'done' }, resource: { type: 'request', id: 'r' } }), { decision: true });
+  assert.deepEqual(allowed({ subject: who('link'), action: { name: 'list' }, resource: { type: 'secret' } }), { decision: false });
+  assert.deepEqual(allowed({ subject: { type: 'user', id: 'p', via: 'session' }, action: { name: 'read' }, resource: { type: 'state' } }), { decision: false }, 'only a principal is asked about');
   assert.deepEqual(allowed({}), { decision: false });
   const listed = rules();
-  assert.ok(listed.some(rule => rule.resource === 'secret' && rule.action === 'rename' && rule.subjects.join() === 'owner'));
-  assert.ok(listed.every(rule => rule.subjects.every(door => ['owner', 'linked', 'key', 'app'].includes(door))));
+  assert.ok(listed.some(rule => rule.resource === 'secret' && rule.action === 'rename' && rule.via.join() === 'session'));
+  assert.ok(listed.every(rule => rule.via.every(way => ['session', 'link', 'key', 'app-key'].includes(way))));
 });
 
 test('ルートは同じ問いを立て、許されない主体には 403、依頼だけを渡された利用者には 401 で答える', async t => {
