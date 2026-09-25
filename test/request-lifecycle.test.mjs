@@ -62,7 +62,7 @@ test('キー失効時に未完了の依頼を取り消し、同じトークン�
   const doneRequest = await ask(f, key.token, 'store', { fields: [{ name: 'kept', label: 'トークン' }] });
   await f.request('/v1/requests/' + doneRequest.id + '/done', { method: 'POST', data: { entries: [{ name: 'kept', content: 'fixture-secret' }] } });
   const pending = await ask(f, key.token, 'connect', { connector: 'gmail.readonly' });
-  await f.request('/v1/keys/' + key.id, { method: 'DELETE' });
+  await f.request('/v1/principals/' + key.id, { method: 'DELETE', data: {} });
   const cancelled = (await f.request('/v1/requests/' + pending.id)).json.request;
   assert.equal(cancelled.status, 'cancelled');
   assert.equal(cancelled.reason, 'requester_revoked');
@@ -73,30 +73,30 @@ test('キー失効時に未完了の依頼を取り消し、同じトークン�
   assert.equal((await f.request('/v1/requests', { token: key.token })).status, 401);
   await f.approveKey(key.token, '再承認');
   assert.equal((await f.request('/v1/requests/' + doneRequest.id, { token: key.token })).status, 404);
-  assert.deepEqual((await f.request('/v1/requests', { token: key.token })).json.requests, []);
+  assert.deepEqual((await f.request('/v1/requests', { token: key.token })).json.requests.map(row => row.kind), ['actor'], 'a re-approved key is a new principal, with only its own asking behind it');
   assert.equal((await f.request('/v1/secrets', { token: key.token })).json.secrets[0].name, 'kept');
 });
 
 test('承認依頼の完了結果を保ち、失効キーの認証を拒否する', async t => {
   const f = await fixture(t), token = 'fdn_' + 'a'.repeat(43);
   const approval = await f.approveKey(token);
-  const approved = (await f.request('/v1/key-requests/' + approval.id)).json.request;
-  assert.equal(approved.kind, 'approve');
+  const approved = (await f.request('/v1/requests/' + approval.id)).json.request;
+  assert.equal(approved.kind, 'actor');
   assert.equal(approved.status, 'done');
-  await f.request('/v1/keys/' + approved.result.key_id, { method: 'DELETE' });
-  assert.deepEqual((await f.request('/v1/key-requests/' + approval.id)).json.request, approved);
-  assert.equal((await f.request('/v1/keys/current', { token })).status, 401);
+  await f.request('/v1/principals/' + approved.result.principal_id, { method: 'DELETE', data: {} });
+  assert.deepEqual((await f.request('/v1/requests/' + approval.id)).json.request, approved);
+  assert.equal((await f.request('/v1/principals/me', { token })).status, 401);
 });
 
 test('APIの認証成功をキーの最終利用として記録する', async t => {
   const f = await fixture(t), key = await f.issueKey();
-  assert.equal(key.last_used_at, null);
+  assert.equal((await f.request('/v1/overview')).json.actors[0].credentials[0].last_used_at, null);
   const before = Date.now();
   assert.equal((await f.request('/v1/connections', { token: key.token })).status, 200);
-  const current = (await f.request('/v1/keys')).json.keys[0];
+  const current = (await f.request('/v1/overview')).json.actors[0].credentials[0];
   assert.ok(Date.parse(current.last_used_at) >= before);
   assert.ok(Date.parse(current.last_used_at) <= Date.now());
-  assert.equal((await f.request('/v1/keys')).json.keys[0].last_used_at, current.last_used_at);
+  assert.equal((await f.request('/v1/overview')).json.actors[0].credentials[0].last_used_at, current.last_used_at);
 });
 
 for (const identity of ['キー', 'セッション']) test(`アップロード中に${identity}が失効した場合は保存を拒否して元の値を維持する`, async t => {
@@ -119,7 +119,7 @@ for (const identity of ['キー', 'セッション']) test(`アップロード�
   t.after(() => upload.destroy());
   upload.write('replacement-');
   await started;
-  if (identity === 'キー') await f.request('/v1/keys/' + key.id, { method: 'DELETE' });
+  if (identity === 'キー') await f.request('/v1/principals/' + key.id, { method: 'DELETE', data: {} });
   else await f.request('/v1/session', { method: 'DELETE' });
   upload.end('value');
   const result = await completed;
@@ -141,7 +141,7 @@ test('保存と依頼完了を一緒に確定し、失敗した場合は再試�
 });
 
 test('依頼の種類に合った完了表示と移動先を返す', () => {
-  for (const [kind, title, href] of [['connect', '接続しました', '/connections'], ['store', '保存しました', '/secrets'], ['approve', '承認しました', '/keys']]) {
+  for (const [kind, title, href] of [['connect', '接続しました', '/connections'], ['store', '保存しました', '/secrets'], ['actor', '承認しました', '/principals']]) {
     const view = requestResultView({ kind, status: 'done' });
     assert.equal(view.title, title); assert.equal(view.href, href); assert.equal(view.completed, true);
   }

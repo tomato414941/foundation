@@ -115,7 +115,7 @@ test('What goes out is checked: the key may use each path, headers are its own, 
   assert.equal((await call({ url: 'https://api.example.test/', method: 'POST', body: '{{foundation:api/binary}}' })).json.error.code, 'not_text');
   assert.equal((await call({ url: 'https://api.example.test/', method: 'GET', body: 'x' })).json.error.code, 'invalid_body');
   assert.equal(received.length, 0, 'nothing refused ever went out');
-  await f.request('/v1/keys/' + key.id, { method: 'DELETE' });
+  await f.request('/v1/principals/' + key.id, { method: 'DELETE', data: {} });
   assert.equal((await call({ url: 'https://api.example.test/', headers: { authorization: '{{foundation:api/token}}' } })).status, 401);
 });
 
@@ -173,7 +173,7 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
 
   const binary = await f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/bytes', save: 'binary' } });
   assert.equal(binary.status, 200);
-  const owner = f.app.keys.find(key.token).owner_id;
+  const owner = f.app.principals.actsFor(key.id)[0].id;
   assert.deepEqual(f.app.secrets.content(f.app.secrets.find(owner, 'binary')), Buffer.from([0, 255, 1]));
 });
 

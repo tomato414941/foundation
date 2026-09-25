@@ -70,7 +70,7 @@ async function previous(t) {
 
 test('稼働中の形式から保存値・接続・所有者・認証セッションを維持して移行する', async t => {
   const old = await previous(t), store = new Store(old.path, KEY); t.after(() => store.close());
-  const { secrets, connections, keys, sessions, flows } = resources(store);
+  const { secrets, connections, principals, sessions, flows } = resources(store);
   for (const entry of old.entries) {
     const row = secrets.at(entry.owner, entry.name);
     assert.equal(row.id, entry.id); assert.equal(row.content, entry.ciphertext); assert.equal(row.readable, entry.readable);
@@ -80,8 +80,8 @@ test('稼働中の形式から保存値・接続・所有者・認証セッシ�
   const row = connections.get(USER_A, old.connectionId);
   assert.equal(row.generation, 7); assert.equal(row.connector, 'gmail.readonly'); assert.equal(row.status, 'connected');
   assert.deepEqual(connections.state(row), old.state);
-  assert.equal(keys.find(old.token).id, old.keyId);
-  assert.equal(keys.find(old.token).last_used_at, old.stamp);
+  assert.deepEqual({ ...store.db.prepare('SELECT principal_id,last_used_at FROM credentials WHERE hash=?').get(digest(old.token)) }, { principal_id: old.keyId, last_used_at: old.stamp });
+  assert.equal(principals.actsFor(old.keyId)[0].id, USER_A);
   assert.equal(sessions.get(old.sessionToken).owner_id, USER_A);
   const flow = flows.take(digest(old.sessionToken), old.flowToken);
   assert.equal(flow.connector, 'gmail.readonly'); assert.equal(flow.requestId, old.ids.pending);
@@ -101,8 +101,8 @@ test('移行後の依頼で完了結果を返し、失効済みキーの未完�
   assert.equal(stored.kind, 'store'); assert.deepEqual(stored.result, { names: ['with, comma'] });
   const cancelled = (await f.request('/v1/requests/' + old.ids.revoked, { headers })).json.request;
   assert.equal(cancelled.status, 'cancelled'); assert.equal(cancelled.reason, 'requester_revoked');
-  const approval = (await f.request('/v1/key-requests/' + old.ids.approval, { headers })).json.request;
-  assert.equal(approval.kind, 'approve'); assert.equal(approval.status, 'done'); assert.deepEqual(approval.result, { key_id: old.keyId });
+  const approval = (await f.request('/v1/requests/' + old.ids.approval, { headers })).json.request;
+  assert.equal(approval.kind, 'actor'); assert.equal(approval.status, 'done'); assert.deepEqual(approval.result, { principal_id: old.keyId });
   const callback = await f.request('/oauth/gmail.readonly/callback?state=' + old.flowToken + '&code=personal-readonly', { headers });
   assert.match(callback.headers.get('location'), /connection=connected/);
   const completed = (await f.request('/v1/requests/' + old.ids.pending, { token: old.token })).json.request;

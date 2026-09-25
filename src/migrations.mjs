@@ -1,7 +1,8 @@
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 // Names are opaque identifiers. Connection state is stored independently of ordinary values.
 // Migrations preserve resource identity and plaintext, and rebind ciphertext explicitly when needed.
 export const STEPS = {
+  18: migratePrincipalGraph,
   17: migratePrincipals,
   16: migrateResponsibilities,
   // Each run of a built-in function is written down for the owner: which key, what, where to, and how it went.
@@ -46,6 +47,96 @@ export const STEPS = {
     CREATE INDEX requests_token ON requests(token_hash, created_at);
   `,
 };
+
+// Everything Foundation knew as a kind of thing becomes a principal and lines between principals. A key was
+// a principal made by its owner that acts for them; an app one made by its developer; an account one made by
+// its app, which calls it by a name of its own. Their credentials are all one kind of thing, and a single-use
+// link is a credential too: one scoped to a single request. A key waiting to be approved is a principal
+// already, with a request open to whoever will own it. What an app needs to hand its users back are its
+// settings. Nothing else changes: what is held keeps its holder.
+function migratePrincipalGraph({ db }) {
+  const now = new Date().toISOString();
+  db.exec(`
+    CREATE TABLE credentials_next (
+      id TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK(kind IN ('key','link')), scope TEXT, expires_at INTEGER, created_at TEXT NOT NULL, last_used_at TEXT
+    );
+    INSERT INTO credentials_next (id,hash,principal_id,kind,scope,expires_at,created_at,last_used_at)
+      SELECT lower(hex(randomblob(16))),hash,principal_id,'key',NULL,NULL,created_at,last_used_at FROM credentials;
+    DROP TABLE credentials;
+    ALTER TABLE credentials_next RENAME TO credentials;
+    CREATE INDEX credentials_principal ON credentials(principal_id);
+    CREATE TABLE relations (
+      subject_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, relation TEXT NOT NULL CHECK(relation IN ('owner','actor','viewer','editor')),
+      object_type TEXT NOT NULL CHECK(object_type IN ('principal','secret','object','connection')), object_id TEXT NOT NULL,
+      alias TEXT, scope TEXT, created_at TEXT NOT NULL,
+      PRIMARY KEY (subject_id, relation, object_type, object_id)
+    );
+    CREATE INDEX relations_object ON relations(object_type, object_id, relation);
+    CREATE UNIQUE INDEX relations_alias ON relations(subject_id, relation, alias) WHERE alias IS NOT NULL;
+    CREATE TABLE settings (
+      principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
+      return_url TEXT NOT NULL, refresh_url TEXT, webhook_url TEXT, webhook_secret TEXT, created_at TEXT NOT NULL
+    );
+    CREATE TABLE records (
+      id TEXT PRIMARY KEY, at TEXT NOT NULL, actor_id TEXT NOT NULL, action TEXT NOT NULL,
+      object_type TEXT NOT NULL, object_id TEXT NOT NULL, detail TEXT NOT NULL
+    );
+    CREATE INDEX records_actor ON records(actor_id, at);
+    CREATE INDEX records_object ON records(object_type, object_id, at);
+  `);
+  const relate = db.prepare('INSERT OR IGNORE INTO relations (subject_id,relation,object_type,object_id,alias,scope,created_at) VALUES (?,?,?,?,?,?,?)');
+  for (const row of db.prepare('SELECT id,owner_id,created_at FROM keys').all()) {
+    relate.run(row.owner_id, 'owner', 'principal', row.id, null, null, row.created_at);
+    relate.run(row.id, 'actor', 'principal', row.owner_id, null, null, row.created_at);
+  }
+  for (const row of db.prepare('SELECT * FROM integrations').all()) {
+    relate.run(row.owner_id, 'owner', 'principal', row.id, null, null, row.created_at);
+    db.prepare('INSERT INTO settings (principal_id,return_url,refresh_url,webhook_url,webhook_secret,created_at) VALUES (?,?,?,?,?,?)')
+      .run(row.id, row.return_url, row.refresh_url, row.webhook_url, row.webhook_secret, row.created_at);
+  }
+  for (const row of db.prepare('SELECT * FROM accounts').all()) relate.run(row.integration_id, 'owner', 'principal', row.id, row.external_id, null, row.created_at);
+  // Requests now name who asks and who is asked. A key still waiting to be approved is a principal with a
+  // credential and an open request to nobody in particular; finished approvals are not carried.
+  db.exec(`
+    CREATE TABLE requests_next (
+      id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,
+      kind TEXT NOT NULL CHECK(kind IN ('actor','store','connect')), input TEXT NOT NULL,
+      purpose TEXT NOT NULL, steps TEXT NOT NULL, code TEXT, attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, result TEXT, reason TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','denied','cancelled')),
+      created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    );
+    INSERT INTO requests_next (id,from_id,to_id,kind,input,purpose,steps,progress,result,reason,status,created_at,expires_at)
+      SELECT r.id,r.key_id,r.owner_id,r.kind,r.input,r.purpose,r.steps,r.progress,r.result,r.reason,r.status,r.created_at,r.expires_at
+      FROM requests r;
+  `);
+  for (const row of db.prepare('SELECT * FROM key_requests WHERE expires_at>?').all(Date.now())) {
+    let from = row.key_id ?? row.id;
+    if (row.status === 'pending') {
+      from = db.prepare('SELECT lower(hex(randomblob(16))) AS id').get().id;
+      db.prepare('INSERT INTO principals (id,name,created_at) VALUES (?,?,?)').run(from, row.name, now);
+      db.prepare("INSERT INTO credentials (id,hash,principal_id,kind,created_at) VALUES (lower(hex(randomblob(16))),?,?,'key',?)").run(row.token_hash, from, now);
+    }
+    db.prepare('INSERT INTO requests_next (id,from_id,to_id,kind,input,purpose,steps,code,attempts,progress,result,status,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(row.id, from, row.owner_id ?? null, 'actor', JSON.stringify({ name: row.name }), '', '[]', row.confirmation_code, row.confirmation_attempts, row.progress,
+        row.status === 'done' ? JSON.stringify({ principal_id: row.key_id }) : null, row.status, row.created_at, row.expires_at);
+  }
+  for (const row of db.prepare('SELECT * FROM request_links WHERE expires_at>?').all(Date.now())) {
+    db.prepare("INSERT OR IGNORE INTO credentials (id,hash,principal_id,kind,scope,expires_at,created_at) VALUES (lower(hex(randomblob(16))),?,?,'link',?,?,?)")
+      .run(row.token_hash, row.owner_id, 'request:' + row.request_id, row.expires_at, now);
+  }
+  db.exec(`
+    DROP TABLE requests;
+    ALTER TABLE requests_next RENAME TO requests;
+    CREATE INDEX requests_from ON requests(from_id, created_at);
+    CREATE INDEX requests_to ON requests(to_id, created_at);
+    DROP TABLE key_requests;
+    DROP TABLE request_links;
+    DROP TABLE accounts;
+    DROP TABLE integrations;
+    DROP TABLE keys;
+  `);
+}
 
 // Whoever comes to Foundation is a principal: a row of its own, with a name and a beginning, and the
 // credentials that prove it kept apart from it. Keys and apps had carried their own hash and name; those
@@ -170,26 +261,33 @@ export const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE principals (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
   CREATE TABLE credentials (
-    hash TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK(kind IN ('key','app-key')), created_at TEXT NOT NULL, last_used_at TEXT
+    id TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('key','link')), scope TEXT, expires_at INTEGER, created_at TEXT NOT NULL, last_used_at TEXT
   );
   CREATE INDEX credentials_principal ON credentials(principal_id);
-  CREATE TABLE keys (id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at TEXT NOT NULL);
+  CREATE TABLE relations (
+    subject_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, relation TEXT NOT NULL CHECK(relation IN ('owner','actor','viewer','editor')),
+    object_type TEXT NOT NULL CHECK(object_type IN ('principal','secret','object','connection')), object_id TEXT NOT NULL,
+    alias TEXT, scope TEXT, created_at TEXT NOT NULL,
+    PRIMARY KEY (subject_id, relation, object_type, object_id)
+  );
+  CREATE INDEX relations_object ON relations(object_type, object_id, relation);
+  CREATE UNIQUE INDEX relations_alias ON relations(subject_id, relation, alias) WHERE alias IS NOT NULL;
+  CREATE TABLE settings (
+    principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
+    return_url TEXT NOT NULL, refresh_url TEXT, webhook_url TEXT, webhook_secret TEXT, created_at TEXT NOT NULL
+  );
   CREATE TABLE sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL, expires_at INTEGER NOT NULL);
   CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);
-  CREATE TABLE key_requests (
-    id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, name TEXT NOT NULL, confirmation_code TEXT NOT NULL,
-    confirmation_attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, owner_id TEXT, key_id TEXT,
-    status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
-  );
-  CREATE INDEX key_requests_token ON key_requests(token_hash, created_at);
   CREATE TABLE requests (
-    id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, key_id TEXT NOT NULL, owner_id TEXT NOT NULL, requester_name TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK(kind IN ('connect','store')), input TEXT NOT NULL,
-    purpose TEXT NOT NULL, steps TEXT NOT NULL, progress TEXT, result TEXT, reason TEXT,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','denied','cancelled')), created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,
+    kind TEXT NOT NULL CHECK(kind IN ('actor','store','connect')), input TEXT NOT NULL,
+    purpose TEXT NOT NULL, steps TEXT NOT NULL, code TEXT, attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, result TEXT, reason TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','denied','cancelled')),
+    created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
   );
-  CREATE INDEX requests_token ON requests(token_hash, created_at);
+  CREATE INDEX requests_from ON requests(from_id, created_at);
+  CREATE INDEX requests_to ON requests(to_id, created_at);
   CREATE TABLE secrets (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL,
     size INTEGER NOT NULL, readable INTEGER NOT NULL,
@@ -197,6 +295,7 @@ export const SCHEMA = `
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     UNIQUE(owner_id, name)
   );
+  CREATE INDEX secrets_owner ON secrets(owner_id, name);
   CREATE TABLE connections (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, connector TEXT NOT NULL, subject TEXT NOT NULL,
     label TEXT NOT NULL, state TEXT NOT NULL, status TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 1,
@@ -204,17 +303,11 @@ export const SCHEMA = `
     UNIQUE(owner_id, connector, subject)
   );
   CREATE INDEX connections_owner ON connections(owner_id, id);
-  CREATE TABLE integrations (
-    id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE, owner_id TEXT NOT NULL,
-    return_url TEXT NOT NULL, refresh_url TEXT, webhook_url TEXT, webhook_secret TEXT, created_at TEXT NOT NULL
+  CREATE TABLE records (
+    id TEXT PRIMARY KEY, at TEXT NOT NULL, actor_id TEXT NOT NULL, action TEXT NOT NULL,
+    object_type TEXT NOT NULL, object_id TEXT NOT NULL, detail TEXT NOT NULL
   );
-  CREATE TABLE accounts (
-    id TEXT PRIMARY KEY, integration_id TEXT NOT NULL, external_id TEXT NOT NULL, created_at TEXT NOT NULL,
-    UNIQUE(integration_id, external_id)
-  );
-  CREATE TABLE request_links (
-    token_hash TEXT PRIMARY KEY, request_id TEXT NOT NULL, owner_id TEXT NOT NULL, kind TEXT NOT NULL, expires_at INTEGER NOT NULL
-  );
-  CREATE INDEX secrets_owner ON secrets(owner_id, name);
+  CREATE INDEX records_actor ON records(actor_id, at);
+  CREATE INDEX records_object ON records(object_type, object_id, at);
   PRAGMA user_version = ${SCHEMA_VERSION};
 `;

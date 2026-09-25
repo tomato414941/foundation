@@ -206,20 +206,22 @@ async function main() {
   // Asking the owner to approve this key. The key itself is never printed: it stays in the file.
   // A key the owner already approved has nothing to ask; connecting again only changes which server is remembered.
   if (action === 'connect') {
-    const answer = await send('/v1/keys', { name: name ?? hostname() + ' の ' + (agentName || 'AI') }, { accept: data => data.error?.code === 'already_approved' });
+    // A key someone already accepted has nothing to ask; connecting again only changes which server is remembered.
+    let me = null;
+    try { me = await send('/v1/principals/me', undefined, { method: 'GET' }); } catch {}
+    const answer = me?.acts_for?.length ? null : await send('/v1/requests', { kind: 'actor', input: { name: name ?? hostname() + ' の ' + (agentName || 'AI') } });
     if (connectTo !== undefined) await saveUrl(url.origin);
-    console.log(answer.error ? 'Already approved on ' + url.origin + '.' : JSON.stringify(answer, null, 2));
+    console.log(answer === null ? 'Already approved on ' + url.origin + '.' : JSON.stringify(answer, null, 2));
     console.log('\nKey file: ' + keyPath + '\nServer: ' + url.origin + (connectTo !== undefined ? ' (saved to ' + configPath() + ')' : '') + '\nEverything else is HTTP: Authorization: Bearer <the contents of that file>');
     return;
   }
-  // Even output-only commands need an approved key before they start an external login.
+  // Nothing runs before someone has accepted this key: a key that acts for nobody reaches only its own empty holdings,
+  // and the person it asked has yet to answer.
+  const current = await send('/v1/principals/me', undefined, { method: 'GET' });
+  if (!current.acts_for?.length) throw new Error('Foundation request failed (401, not_approved). This key acts for nobody yet' + (current.requests?.[0] ? '; it is waiting for approval at ' + current.requests[0].verification_uri : '') + '.');
   let delivery;
   if (names.length) ({ delivery } = await send('/v1/deliveries', { names }));
-  else {
-    const current = await send('/v1/keys/current', undefined, { method: 'GET' });
-    if (!current.key) throw new Error('Foundation request failed (401, not_approved). This key is waiting for approval at ' + current.request?.verification_uri + '.');
-    delivery = { environment: {}, files: [] };
-  }
+  else delivery = { environment: {}, files: [] };
   if (!delivery || typeof delivery.environment !== 'object' || !Array.isArray(delivery.files)) throw new Error('Foundation returned an invalid delivery.');
   // What each of them sets is the server's to say; this applies it and refuses anything it may not set.
   const environment = { ...process.env };

@@ -16,33 +16,35 @@ export const FUNCTIONS = [
 // Explicit operations. Their results may be returned or saved; neither choice is inferred
 // from a stored name, and neither operation changes a request's completion state.
 export class Functions {
-  constructor({ connections, secrets, keys, outbound = {} }) { this.connections = connections; this.secrets = secrets; this.keys = keys; this.outbound = outbound; }
-  async credentials(key, input) {
-    this.keys.requireCurrent(key);
-    const connection = this.connections.at(key.owner_id, input.connection_id);
+  // Run in a holder's name. `still` is asked again after every wait: whether the caller's credential is
+  // still good, since an authorization may be withdrawn while a service answers.
+  constructor({ connections, secrets, outbound = {} }) { this.connections = connections; this.secrets = secrets; this.outbound = outbound; }
+  async credentials({ holderId, still = () => {} }, input) {
+    still();
+    const connection = this.connections.at(holderId, input.connection_id);
     const outputs = outputNames(input.save, this.connections.connectors.get(connection.connector).variables);
     const result = await this.connections.obtain(connection), expires_at = result.state.expires_at;
     if (expires_at !== null && !(Number.isFinite(expires_at) && expires_at > Date.now())) fail(502, 'service_response', '有効期限を確認できませんでした。');
-    this.keys.requireCurrent(key);
+    still();
     this.connections.current(connection);
-    const saved = outputs ? saveOutputs(this.secrets, key.owner_id, outputs, result.values) : null;
+    const saved = outputs ? saveOutputs(this.secrets, holderId, outputs, result.values) : null;
     return { ...(saved ? { saved } : { delivery: deliveredOutputs(result.values) }), facts: result.state.facts, expires_at,
       expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) };
   }
-  async request(key, input, ownHosts) {
-    this.keys.requireCurrent(key);
+  async request({ holderId, still = () => {} }, input, ownHosts) {
+    still();
     const prepared = prepareFetch(input, ownHosts), bindings = input.bindings ?? {};
     if (!bindings || typeof bindings !== 'object' || Array.isArray(bindings)) fail(400, 'invalid_input', 'bindings は入力名と保存名の組で指定してください。');
     const names = prepared.names.map(slot => secretName(Object.hasOwn(bindings, slot) ? bindings[slot] : slot));
     const outputs = input.save === undefined ? null : outputNames({ response: input.save }, ['response']);
     const values = new Map(prepared.names.map((slot, at) => {
-      const content = this.secrets.content(this.secrets.at(key.owner_id, names[at])), text = content.toString('utf8');
+      const content = this.secrets.content(this.secrets.at(holderId, names[at])), text = content.toString('utf8');
       if (!Buffer.from(text, 'utf8').equals(content)) fail(400, 'not_text', '指定された入力は文字列ではないため、リクエストには入れられません。');
       return [slot, text];
     }));
     const response = await sendFetch(prepared, values, { ...this.outbound, ownHosts });
-    this.keys.requireCurrent(key);
-    const saved = outputs ? saveOutputs(this.secrets, key.owner_id, outputs,
+    still();
+    const saved = outputs ? saveOutputs(this.secrets, holderId, outputs,
       new Map([['response', { content: Buffer.from(response.body, response.body_encoding === 'base64' ? 'base64' : 'utf8') }]])) : null;
     return saved ? { response: { status: response.status, headers: response.headers }, saved } : { response };
   }

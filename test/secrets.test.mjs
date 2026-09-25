@@ -149,7 +149,7 @@ test('What is kept is bounded, so one owner cannot fill the disk', async t => {
 test('The owner reads and removes anything kept, including what the key may not read back', async t => {
   const { f, token } = await keyed(t);
   await put(f, token, 'github/token', secret, { env: 'GH_TOKEN', secret: 'true' });
-  const state = await f.request('/v1/state');
+  const state = await f.request('/v1/overview');
   assert.deepEqual(state.json.secrets.map(row => row.name), ['github/token']);
   assert.doesNotMatch(state.text, new RegExp(secret));
   const read = await f.request('/v1/secrets?name=github%2Ftoken');
@@ -193,7 +193,7 @@ test('A stale editor preserves a newer value and its permissions', async t => {
   assert.equal(saved.status, 412, saved.text);
   assert.equal(saved.json.error.code, 'secret_changed');
   assert.equal((await f.request(path)).text, 'newer value');
-  assert.equal((await f.request('/v1/state')).json.secrets[0].readable, true);
+  assert.equal((await f.request('/v1/overview')).json.secrets[0].readable, true);
 });
 
 test('A stale editor respects renames, deletion, recreation, and owner boundaries', async t => {
@@ -204,7 +204,7 @@ test('A stale editor respects renames, deletion, recreation, and owner boundarie
   const save = () => f.request(path, { method: 'PUT', raw: 'draft', headers: { 'if-match': etag } });
   await f.request(path, { method: 'PATCH', data: { name: 'renamed' } });
   assert.equal((await save()).status, 412);
-  assert.deepEqual((await f.request('/v1/state')).json.secrets.map(row => row.name), ['renamed']);
+  assert.deepEqual((await f.request('/v1/overview')).json.secrets.map(row => row.name), ['renamed']);
   await f.request('/v1/secrets?name=renamed', { method: 'PATCH', data: { name: 'original' } });
   await f.request(path, { method: 'DELETE', data: {} });
   assert.equal((await save()).status, 412);
@@ -215,7 +215,7 @@ test('A stale editor respects renames, deletion, recreation, and owner boundarie
   await f.login('other@example.test');
   assert.equal((await f.request(path)).status, 404);
   assert.equal((await f.request(path, { method: 'PUT', raw: 'other owner', headers: { 'if-match': current } })).status, 412);
-  assert.deepEqual((await f.request('/v1/state')).json.secrets, []);
+  assert.deepEqual((await f.request('/v1/overview')).json.secrets, []);
 });
 
 test('The runtime hands what is kept to a command, as bytes and as a file, and nothing else', async t => {
@@ -271,12 +271,12 @@ test('Storage needs an approved key, and the guide describes the API an agent ca
 
 test('An agent that cannot make a secret of its own is issued one, once', async t => {
   const f = await fixture(t);
-  const asked = await f.request('/v1/keys', { method: 'POST', anonymous: true, data: { name: 'an agent with no randomness' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', anonymous: true, data: { kind: 'actor', input: { name: 'an agent with no randomness' } } });
   assert.equal(asked.status, 201, asked.text);
   assert.match(asked.json.key, /^fdn_[A-Za-z0-9_-]{43}$/);
   // It is the key: approving the request approves it, and it works from then on.
-  await f.request('/v1/key-requests/' + asked.json.request.id + '/approve', { method: 'POST', data: { confirmation_code: asked.json.request.confirmation_code } });
-  assert.equal((await f.request('/v1/keys/current', { token: asked.json.key, anonymous: true })).status, 200);
-  const again = await f.request('/v1/keys/current', { token: asked.json.key, anonymous: true });
-  assert.equal(again.json.request.key, undefined, 'never handed out a second time');
+  await f.request('/v1/requests/' + asked.json.request.id + '/done', { method: 'POST', data: { confirmation_code: asked.json.request.confirmation_code } });
+  assert.equal((await f.request('/v1/principals/me', { token: asked.json.key, anonymous: true })).status, 200);
+  const again = await f.request('/v1/principals/me', { token: asked.json.key, anonymous: true });
+  assert.equal(again.json.key, undefined, 'never handed out a second time');
 });

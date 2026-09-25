@@ -90,7 +90,7 @@ with sync_playwright() as p:
     expect(page.get_by_role("heading", name="Foundation", exact=True)).to_be_visible()
     page.goto(args.base + "/connections", wait_until="networkidle")
     expect(page.get_by_role("button", name="メールの読み取り", exact=True)).to_be_enabled()
-    page.goto(args.base + "/keys", wait_until="networkidle")
+    page.goto(args.base + "/principals", wait_until="networkidle")
     expect(page.get_by_role("button", name="アクセスキーを追加", exact=True)).to_be_enabled()
     assert page.evaluate("localStorage.length === 0 && sessionStorage.length === 0")
     assert "fdn_session" not in page.evaluate("document.cookie")
@@ -135,7 +135,7 @@ with sync_playwright() as p:
     expect(page.get_by_text("保存した値はありません。", exact=True)).to_be_visible()
 
     def create_runtime(name):
-        page.goto(args.base + "/keys", wait_until="networkidle")
+        page.goto(args.base + "/principals", wait_until="networkidle")
         page.get_by_role("button", name="アクセスキーを追加", exact=True).click()
         dialog.get_by_label("アクセスキーの名前", exact=True).fill(name)
         dialog.get_by_role("button", name="アクセスキーを発行", exact=True).click()
@@ -180,7 +180,7 @@ with sync_playwright() as p:
     expect(page.get_by_text("登録をキャンセルしました。", exact=True)).to_be_visible()
     authorization["deny"] = False
 
-    page.goto(args.base + "/keys", wait_until="networkidle")
+    page.goto(args.base + "/principals", wait_until="networkidle")
     page.set_viewport_size({"width": 390, "height": 844})
     row.get_by_role("button", name="失効", exact=True).click()
     expect(dialog.get_by_text("取得済みの外部サービスの認証情報は、接続先で失効させてください。", exact=True)).to_be_visible()

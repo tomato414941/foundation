@@ -18,7 +18,7 @@ const inspected = (change = {}) => ({ active: true, sub: '1001', username: 'pers
 
 async function ebayFixture(t, ebay = new FakeEbay()) {
   const f = await fixture(t, { connectors: [ebayOauth(ebay)] });
-  const connections = async () => (await f.request('/v1/state')).json.connections;
+  const connections = async () => (await f.request('/v1/overview')).json.connections;
   async function start(input = {}) {
     const result = await f.request('/v1/connections', { method: 'POST', data: { connector: 'ebay.oauth', ...input } });
     assert.equal(result.status, 200, result.text);
@@ -93,7 +93,7 @@ test('依頼を完了し、確認済みのアカウント情報とAPI用トー�
   assert.equal(Number(delivered.json.delivery.environment.EBAY_OAUTH_EXPIRES_AT), delivered.json.expires_at);
   assert.doesNotMatch(delivered.text, /ebay-refresh-|test-ebay-secret/);
   assert.equal(f.ebay.refreshes, 0);
-  assert.deepEqual((await f.request('/v1/state')).json.secrets, []);
+  assert.deepEqual((await f.request('/v1/overview')).json.secrets, []);
 });
 
 test('アカウントを固定IDで区別し、名前の変更を反映して別の所有者から分離する', async t => {
