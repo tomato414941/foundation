@@ -81,8 +81,8 @@ export class Principals {
   }
   // What is held by others and shown to this principal, with the line it is shown along.
   shownTo(id) {
-    return this.db.prepare(`SELECT h.id, h.holder_id, h.kind, h.name, h.size, h.type, h.readable, h.updated_at, r.relation FROM relations r JOIN holdings h ON h.id=r.object_id
-      WHERE r.subject_id=? AND r.object_type='holding' ORDER BY r.created_at`).all(id).map(row => ({ ...row, readable: row.readable === 1 }));
+    return this.db.prepare(`SELECT h.id, h.holder_id, h.kind, h.name, h.size, h.type, h.updated_at, r.relation FROM relations r JOIN holdings h ON h.id=r.object_id
+      WHERE r.subject_id=? AND r.object_type='holding' ORDER BY r.created_at`).all(id);
   }
   ownersOf(id) { return this.db.prepare("SELECT subject_id AS id FROM relations WHERE relation='owner' AND object_type='principal' AND object_id=?").all(id).map(row => row.id); }
   // The principals this one owns, each with the name it gave them and the credentials they carry.

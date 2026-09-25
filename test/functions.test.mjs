@@ -60,7 +60,6 @@ test('Explicit credential outputs can be saved, renamed and delivered without li
   const saved = await invoke(f, token, personal, { GOOGLE_OAUTH_ACCESS_TOKEN: snapshot });
   assert.equal(saved.status, 200, saved.text);
   assert.deepEqual(saved.json.saved.map(row => row.name), [snapshot]);
-  assert.equal(saved.json.saved[0].readable, false);
   assert.ok(saved.json.expires_in > 3500);
   assert.doesNotMatch(saved.text, /google-access|refresh-personal/);
   assert.equal((await f.request(route(snapshot), { token })).status, 403);
@@ -94,7 +93,7 @@ test('Selected output names are validated before provider calls; a failed batch 
   }
   assert.equal(f.gmail.calls.length, calls);
   for (let index = 0; index < SECRET_COUNT_MAX - 1; index++) {
-    f.app.secrets.put(USER_A, { name: 'kept-' + index, content: Buffer.from('existing'), secret: true });
+    f.app.secrets.put(USER_A, { name: 'kept-' + index, content: Buffer.from('existing') });
   }
   f.gmail.refreshHandler = () => json({ access_token: 'google-access-personal-readonly', refresh_token: 'rotated-fixture-refresh-token', expires_in: 3600 });
   const refused = await invoke(f, token, connection, { GOOGLE_OAUTH_ACCESS_TOKEN: 'new-one', GMAIL_ACCOUNT_EMAIL: 'new-two' });

@@ -12,7 +12,8 @@ test('答えは subject・action・resource から decision だけを返し、�
   const ask = (subject, name, resource) => authorization.allowed({ subject, action: { name }, resource }).decision;
   const me = { id: person.id, credential: { kind: 'session' } }, actor = { id: key.id, credential: { kind: 'key' } }, stranger = { id: other.id, credential: { kind: 'key' } };
   assert.equal(ask(me, 'read', { type: 'secret', id: 'x', holder: person.id }), true, 'the holder');
-  assert.equal(ask(actor, 'read', { type: 'secret', id: 'x', holder: person.id }), true, 'one who acts for the holder');
+  assert.equal(ask(actor, 'list', { type: 'secret', holder: person.id }), true, 'one who acts for the holder reaches their things');
+  assert.equal(ask(actor, 'read', { type: 'secret', id: 'x', holder: person.id }), false, 'but reads a value only along a line to it');
   assert.equal(ask(stranger, 'read', { type: 'secret', id: 'x', holder: person.id }), false, 'nobody else');
   assert.equal(ask(actor, 'rename', { type: 'secret', id: 'x', holder: person.id }), false, 'renaming is the holder\'s alone');
   principals.relate(other.id, 'viewer', 'holding', 'x');

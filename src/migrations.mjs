@@ -1,7 +1,8 @@
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 // Names are opaque identifiers. Connection state is stored independently of ordinary values.
 // Migrations preserve resource identity and plaintext, and rebind ciphertext explicitly when needed.
 export const STEPS = {
+  20: migrateReadable,
   19: migrateHoldings,
   18: migratePrincipalGraph,
   17: migratePrincipals,
@@ -55,6 +56,18 @@ export const STEPS = {
 // link is a credential too: one scoped to a single request. A key waiting to be approved is a principal
 // already, with a request open to whoever will own it. What an app needs to hand its users back are its
 // settings. Nothing else changes: what is held keeps its holder.
+// Who may read a value directly is said by lines, not by a flag on the value. A value that was readable was
+// readable to every actor of its holder; each of them now has a viewer line onto it, and the flag goes.
+function migrateReadable({ db }) {
+  db.exec(`
+    INSERT OR IGNORE INTO relations (subject_id,relation,object_type,object_id,alias,scope,created_at)
+      SELECT r.subject_id,'viewer','holding',h.id,NULL,NULL,h.updated_at FROM holdings h
+      JOIN relations r ON r.relation='actor' AND r.object_type='principal' AND r.object_id=h.holder_id
+      WHERE h.kind='secret' AND h.readable=1;
+    ALTER TABLE holdings DROP COLUMN readable;
+  `);
+}
+
 // What a principal has is one kind of thing: a holding, with an id of its own. A secret, an object and a
 // connection differ in what is done with the content, not in what they are. Lines drawn onto a held thing point
 // at its id, so a name can change or be reused without the line following the wrong thing.
@@ -327,7 +340,7 @@ export const SCHEMA = `
   CREATE INDEX requests_to ON requests(to_id, created_at);
   CREATE TABLE holdings (
     id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('secret','object','connection')), name TEXT NOT NULL,
-    size INTEGER NOT NULL DEFAULT 0, readable INTEGER NOT NULL DEFAULT 0, type TEXT, content BLOB,
+    size INTEGER NOT NULL DEFAULT 0, type TEXT, content BLOB,
     connector TEXT, subject TEXT, status TEXT, generation INTEGER NOT NULL DEFAULT 1, kept_by TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   );

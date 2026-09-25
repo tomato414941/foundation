@@ -2,8 +2,8 @@ import { fail } from './errors.mjs';
 import { randomUUID } from 'node:crypto';
 import { validEnvName } from '../cli/env-name.mjs';
 
-// Bytes stored under an opaque name. Read permission is separate from delivery;
-// delivery instructions belong to each invocation, not the stored value.
+// Bytes stored under a name. Who may read them directly is a matter of lines onto the thing; delivery
+// instructions belong to each invocation, not the stored value.
 export const SECRET_MAX = 1024 * 1024;
 export const SECRET_COUNT_MAX = 200;
 export const SECRET_TOTAL_MAX = 20 * 1024 * 1024;
@@ -42,25 +42,22 @@ export function deliverable(content, { env, filename }) {
 export class Secrets {
   constructor(store) { this.store = store; this.db = store.db; this.vault = store.vault; }
   list(ownerId, prefix) {
-    const columns = 'id,name,size,readable,created_at,updated_at';
-    return (prefix === undefined
+    const columns = 'id,name,size,created_at,updated_at';
+    return prefix === undefined
       ? this.db.prepare(`SELECT ${columns} FROM holdings WHERE holder_id=? AND kind='secret' ORDER BY name`).all(ownerId)
-      : this.db.prepare(`SELECT ${columns} FROM holdings WHERE holder_id=? AND kind='secret' AND substr(name,1,length(?))=? COLLATE BINARY ORDER BY name`).all(ownerId, String(prefix), String(prefix)))
-      .map(row => ({ ...row, readable: row.readable === 1 }));
+      : this.db.prepare(`SELECT ${columns} FROM holdings WHERE holder_id=? AND kind='secret' AND substr(name,1,length(?))=? COLLATE BINARY ORDER BY name`).all(ownerId, String(prefix), String(prefix));
   }
   find(ownerId, name) {
-    const row = this.db.prepare("SELECT id,holder_id AS owner_id,name,size,readable,content,created_at,updated_at FROM holdings WHERE holder_id=? AND kind='secret' AND name=?").get(ownerId, secretName(name));
-    return row ? { ...row, readable: row.readable === 1 } : undefined;
+    return this.db.prepare("SELECT id,holder_id AS owner_id,name,size,content,created_at,updated_at FROM holdings WHERE holder_id=? AND kind='secret' AND name=?").get(ownerId, secretName(name));
   }
   // The thing itself, by its id, whoever holds it.
   byId(id) {
-    const row = typeof id === 'string' ? this.db.prepare("SELECT id,holder_id AS owner_id,name,size,readable,content,created_at,updated_at FROM holdings WHERE id=? AND kind='secret'").get(id) : undefined;
-    return row ? { ...row, readable: row.readable === 1 } : undefined;
+    return typeof id === 'string' ? this.db.prepare("SELECT id,holder_id AS owner_id,name,size,content,created_at,updated_at FROM holdings WHERE id=? AND kind='secret'").get(id) : undefined;
   }
   content(row) { return this.vault.openBytes(row.content, `entry:${row.owner_id}:${row.id}`); }
   usage(ownerId) { return this.db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(size),0) AS bytes FROM holdings WHERE holder_id=? AND kind='secret'").get(ownerId); }
-  // Writing the same name again replaces what is there, including its read permission.
-  put(ownerId, { name, content, secret }) {
+  // Writing the same name again replaces what is there. Who may read it is said by the lines onto it, not here.
+  put(ownerId, { name, content }) {
     if (content.length > SECRET_MAX) fail(413, 'secret_too_large', '1件あたり1MBまでです。');
     secretName(name);
     return this.store.transaction(() => {
@@ -68,12 +65,12 @@ export class Secrets {
       if (!existing && count >= SECRET_COUNT_MAX) fail(409, 'secret_limit', `保管できるのは${SECRET_COUNT_MAX}件までです。使わないものを消してください。`);
       if (bytes - (existing?.size ?? 0) + content.length > SECRET_TOTAL_MAX) fail(409, 'storage_full', '保管できる合計は20MBまでです。使わないものを消してください。');
       const id = existing?.id ?? randomUUID(), sealed = this.vault.sealBytes(content, `entry:${ownerId}:${id}`);
-      if (existing) this.db.prepare('UPDATE holdings SET size=?,readable=?,content=?,updated_at=? WHERE id=?').run(content.length, secret ? 0 : 1, sealed, stamp, id);
-      else this.db.prepare("INSERT INTO holdings (id,holder_id,kind,name,size,readable,content,created_at,updated_at) VALUES (?,?,'secret',?,?,?,?,?,?)").run(id, ownerId, name, content.length, secret ? 0 : 1, sealed, stamp, stamp);
+      if (existing) this.db.prepare('UPDATE holdings SET size=?,content=?,updated_at=? WHERE id=?').run(content.length, sealed, stamp, id);
+      else this.db.prepare("INSERT INTO holdings (id,holder_id,kind,name,size,content,created_at,updated_at) VALUES (?,?,'secret',?,?,?,?,?)").run(id, ownerId, name, content.length, sealed, stamp, stamp);
       return this.list(ownerId, name)[0];
     });
   }
-  // Writing by id: the same thing, whoever writes it, keeps its name and its read permission.
+  // Writing by id: the same thing, whoever writes it, keeps its name.
   write(row, content) {
     if (content.length > SECRET_MAX) fail(413, 'secret_too_large', '1件あたり1MBまでです。');
     return this.store.transaction(() => {
@@ -87,11 +84,6 @@ export class Secrets {
     const row = this.find(ownerId, name);
     if (!row) fail(404, 'not_found', '保管されたものが見つかりません。');
     return row;
-  }
-  read(ownerId, name) {
-    const row = this.at(ownerId, name);
-    if (!row.readable) fail(403, 'write_only', 'この値の直接読み出しは許可されていません。');
-    return { row, content: this.content(row) };
   }
   // Rename without exposing or modifying content. Lines onto the thing point at its id, so they need no care.
   rename(ownerId, name, { name: to }) {

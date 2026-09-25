@@ -162,7 +162,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     # The value is available to the AI under the name the owner chose.
     kept = cli('api', 'GET', '/v1/secrets')['secrets']
     assert [row['name'] for row in kept] == ['cloudflare-api-token', 'cloudflare/cloudflare-api-token']
-    assert kept[0]['readable'] is False
     refused = subprocess.run(['node', 'cli/runtime.mjs', 'api', 'GET', '/v1/secrets?name=cloudflare-api-token'], env=env, capture_output=True, text=True, timeout=15)
     assert refused.returncode == 1 and SECRET not in refused.stdout + refused.stderr
 

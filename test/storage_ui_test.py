@@ -69,7 +69,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     review(page)
 
     # The key keeps two things, with no request and no approval: one handed to a command, one only read back.
-    api('PUT', '/v1/secrets?name=github/gh-token&secret=true', SECRET.encode(), {'content-type': 'text/plain'})
+    api('PUT', '/v1/secrets?name=github/gh-token', SECRET.encode(), {'content-type': 'text/plain'})
     api('PUT', '/v1/secrets?name=release/2026-09-23', json.dumps({'step': 'レビュー待ち'}).encode(), {'content-type': 'application/json'})
     page.reload(wait_until='networkidle')
 
@@ -213,7 +213,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     github.get_by_role('button', name='保存', exact=True).click()
     expect(github.locator('.kept-document')).to_have_text('••••••••')
     assert page.request.get(args.base + '/v1/secrets?name=github%2Fgh-token').text() == updated
-    assert next(row for row in api('GET', '/v1/secrets')['secrets'] if row['name'] == 'github/gh-token')['readable'] is False
     github.get_by_role('button', name='値を表示', exact=True).click()
     expect(github.locator('.kept-document')).to_contain_text('new-value')
     assert github.locator('.kept-document').text_content() == updated
@@ -223,7 +222,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     # Another writer wins over a stale editor, which keeps the owner's draft for recovery.
     github.get_by_role('button', name='値を編集', exact=True).click()
     value_input.fill('my pending value')
-    api('PUT', '/v1/secrets?name=github/gh-token&secret=true', b'newer value')
+    api('PUT', '/v1/secrets?name=github/gh-token', b'newer value')
     github.get_by_role('button', name='保存', exact=True).click()
     expect(github.get_by_role('alert')).to_have_text('ほかの操作で変更されています。開き直して確認してください。')
     expect(value_input).to_have_value('my pending value')
@@ -241,7 +240,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     release.get_by_role('textbox', name='値', exact=True).fill('updated readable value')
     release.get_by_role('button', name='保存', exact=True).click()
     expect(release.get_by_role('button', name='値を編集', exact=True)).to_be_visible()
-    assert next(row for row in api('GET', '/v1/secrets')['secrets'] if row['name'] == 'release/2026-09-23')['readable'] is True
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # Changing one name leaves a different row's draft in place.
@@ -304,7 +302,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
 
     # Binary values stay files: download exact bytes, then replace them with a selected file.
     binary = b'\x00\xff\x01fixture'
-    api('PUT', '/v1/secrets?name=binary&secret=true', binary)
+    api('PUT', '/v1/secrets?name=binary', binary)
     page.reload(wait_until='networkidle')
     binary_row = page.get_by_role('article', name='binary', exact=True)
     binary_row.get_by_role('button', name='値を表示', exact=True).click()
@@ -318,7 +316,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     binary_row.get_by_role('button', name='保存', exact=True).click()
     expect(binary_row.get_by_text('ファイル', exact=True)).to_be_visible()
     assert page.request.get(args.base + '/v1/secrets?name=binary').body() == replaced
-    assert api('GET', '/v1/secrets')['secrets'][0]['readable'] is False
     review(page)
     assert not errors, errors
     context.close()

@@ -7,8 +7,8 @@ const KEY = 'fdn_' + 'e'.repeat(43);
 test('hands the owner everything they have, secrets included', async (t) => {
   const f = await fixture(t);
   await f.approveKey(KEY);
-  await f.request('/v1/secrets?name=notes/plan&secret=false', { method: 'PUT', token: KEY, raw: 'read me', type: 'text/plain' });
-  await f.request('/v1/secrets?name=keys/token&secret=true', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
+  await f.request('/v1/secrets?name=notes/plan', { method: 'PUT', token: KEY, raw: 'read me', type: 'text/plain' });
+  await f.request('/v1/secrets?name=keys/token', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
 
   const exported = await f.request('/v1/export');
   assert.equal(exported.status, 200, exported.text);
@@ -20,14 +20,13 @@ test('hands the owner everything they have, secrets included', async (t) => {
   assert.equal(Buffer.from(byPath['notes/plan'].content, 'base64').toString(), 'read me');
   assert.equal(Buffer.from(byPath['keys/token'].content, 'base64').toString(), 'sh-secret-value');
   
-  assert.equal(byPath['keys/token'].readable, false);
   assert.equal(value.principals.length, 1);
 });
 
 test('keeps the export to the owner\'s own session', async (t) => {
   const f = await fixture(t);
   await f.approveKey(KEY);
-  await f.request('/v1/secrets?name=keys/token&secret=true', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
+  await f.request('/v1/secrets?name=keys/token', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
 
   const asAKey = await f.request('/v1/export', { token: KEY, anonymous: true });
   assert.equal(asAKey.status, 403);

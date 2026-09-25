@@ -148,7 +148,6 @@ test('複数の同時要求を一回の更新にまとめ、保存した認証�
   const saved = await f.request('/v1/functions/connection.credentials', { method: 'POST', token,
     data: { connection_id: connection.id, save: { CLOUDFLARE_API_TOKEN: 'cloudflare-example' } } });
   assert.equal(saved.status, 200, saved.text);
-  assert.equal(saved.json.saved[0].readable, false);
   assert.doesNotMatch(saved.text, /cf-access-|cf-refresh-/);
   const delivered = await f.request('/v1/deliveries', { method: 'POST', token, data: { names: [{ name: 'cloudflare-example', as: 'CHOSEN_TOKEN' }] } });
   assert.equal(delivered.json.delivery.environment.CHOSEN_TOKEN, 'cf-access-personal-1');

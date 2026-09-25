@@ -73,7 +73,7 @@ test('稼働中の形式から保存値・接続・所有者・認証セッシ�
   const { secrets, connections, principals, sessions, flows } = resources(store);
   for (const entry of old.entries) {
     const row = secrets.at(entry.owner, entry.name);
-    assert.equal(row.id, entry.id); assert.equal(row.content, entry.ciphertext); assert.equal(row.readable, entry.readable);
+    assert.equal(row.id, entry.id); assert.equal(row.content, entry.ciphertext);
     assert.equal(row.created_at, old.stamp); assert.equal(row.updated_at, old.stamp);
     assert.deepEqual(secrets.content(row), entry.content);
   }

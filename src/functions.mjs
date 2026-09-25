@@ -70,7 +70,7 @@ export function saveOutputs(secrets, ownerId, names, values) {
   return secrets.store.transaction(() => names.map(({ output, name }) => {
     const value = values.get(output);
     if (!value) fail(502, 'service_response', '指定された出力が返されませんでした。');
-    return secrets.put(ownerId, { name, content: value.content, secret: true });
+    return secrets.put(ownerId, { name, content: value.content });
   }));
 }
 

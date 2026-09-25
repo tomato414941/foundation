@@ -48,7 +48,7 @@ test('コマンドが作った非公開ファイルを名前どおりに保存�
   assert.match(run.err, /Saved output as/);
   await assert.rejects(stat(dirname(run.out.trim())), { code: 'ENOENT' });
   const direct = await f.request('/v1/secrets?name=' + encodeURIComponent(output.name), { token: f.runtime.token });
-  assert.equal(direct.status, 403); assert.equal(direct.json.error.code, 'write_only');
+  assert.equal(direct.status, 403); assert.equal(direct.json.error.code, 'forbidden');
   const owner = await fetch(f.base + '/v1/secrets?name=' + encodeURIComponent(output.name), { headers: { cookie: f.cookie() } });
   assert.equal(owner.status, 200);
   assert.deepEqual(Buffer.from(await owner.arrayBuffer()), content);
@@ -152,7 +152,7 @@ test('保存に失敗したときだけ復旧用の非公開出力を残し、�
   assert.deepEqual(await readdir(dirname(outputPath)), [outputSpec.filename]);
   assert.equal(await readFile(outputPath, 'utf8'), 'generated-secret');
   assert.equal((await f.request('/v1/secrets?name=login%20config')).status, 404);
-  const retried = await execute(['api', 'PUT', '/v1/secrets?name=login%20config&secret=true', '--from', outputPath], f.env);
+  const retried = await execute(['api', 'PUT', '/v1/secrets?name=login%20config', '--from', outputPath], f.env);
   assert.equal(retried.code, 0, retried.err);
   assert.equal((await f.request('/v1/secrets?name=login%20config')).text, 'generated-secret');
   assert.doesNotMatch(run.out + run.err + retried.out + retried.err, /generated-secret|input-secret/);

@@ -38,7 +38,9 @@ export class RequestActions {
       const targets = asked.map((one, at) => this.placement(toId, one, names[at]));
       for (const [at, one] of asked.entries()) {
         const existing = targets[at];
-        this.secrets.put(toId, { name: names[at], content: Buffer.from(entries[at].content, 'utf8'), secret: existing ? !existing.readable : one.secret });
+        const saved = this.secrets.put(toId, { name: names[at], content: Buffer.from(entries[at].content, 'utf8') });
+        // Asked to read it back, the asker is put on a line to it; a value that already existed keeps its lines as they were.
+        if (!existing && one.readable) this.principals.relate(row.from_id, 'viewer', 'holding', saved.id);
       }
       this.requests.done(id, toId, { names, replaced: names.filter((_, at) => targets[at]) });
       this.requests.record(id, 'stored');
