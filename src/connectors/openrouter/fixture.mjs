@@ -41,7 +41,7 @@ export async function openrouterFixture(t, options = {}) {
   async function account(code = 'personal') {
     const result = await callback(await start(), code);
     if (!result.headers.get('location')?.includes('connection=connected')) throw new Error(result.headers.get('location'));
-    const state = (await f.request('/v1/state')).json;
+    const state = (await f.request('/v1/overview')).json;
     return state.connections.filter(item => item.connector === 'openrouter.oauth').at(-1);
   }
   const deliver = (connection, options) => f.request('/v1/functions/connection.credentials', { method: 'POST', data: { connection_id: connection.id }, ...options });

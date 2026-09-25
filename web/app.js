@@ -3,16 +3,15 @@ import { requestResultView, knownRequestKind } from './request-view.js';
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
 let state = null, toastTimer, loginTimer, revision = 0;
 // A request page is either what an approved key asks for (/requests/…) or a new key asking to be approved (/keys/…).
-const keyRequest = /^\/key-requests\//.test(location.pathname);
-const requestId = location.pathname.match(/^\/(?:requests|key-requests)\/([A-Za-z0-9_-]{43})$/)?.[1];
-const requestApi = requestId && (keyRequest ? '/v1/key-requests/' : '/v1/requests/') + requestId;
+const requestId = location.pathname.match(/^\/requests\/([A-Za-z0-9_-]{43})$/)?.[1];
+const requestApi = requestId && '/v1/requests/' + requestId;
 // Opened through another product's single-use link: there is no Foundation login, only that one request.
-const linkToken = requestId && !keyRequest ? new URLSearchParams(location.hash.slice(1)).get('link') : null;
+const linkToken = requestId ? new URLSearchParams(location.hash.slice(1)).get('link') : null;
 let linked = false, back = null;
 // Back to the product: its return page with how the request ended, or its refresh page when the link was no good.
 const backTo = row => { if (!row) return back.refresh_url; const url = new URL(back.return_url); url.searchParams.set('foundation_status', row.status); return url.href; };
 try { linked = Boolean(requestId) && sessionStorage.getItem('linked:' + requestId) === '1'; } catch {}
-const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : location.pathname === '/functions' ? 'functions' : location.pathname === '/developers' ? 'developers' : location.pathname === '/account' ? 'account' : location.pathname === '/connections' ? 'connections' : location.pathname === '/keys' ? 'keys' : 'home';
+const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : location.pathname === '/functions' ? 'functions' : location.pathname === '/account' ? 'account' : location.pathname === '/connections' ? 'connections' : location.pathname === '/principals' ? 'principals' : 'home';
 const pagePath = requestId ? location.pathname : page === 'home' ? '/' : '/' + page;
 let accessRequest = null, requestError = '';
 const loginMessages = {
@@ -134,7 +133,7 @@ const icon = (name) => {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
 const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true">F</span>Foundation</a>';
-const nav = `<nav class="page-nav">${[['/secrets', 'secrets', 'シークレット'], ['/connections', 'connections', '接続'], ['/objects', 'objects', 'オブジェクト'], ['/keys', 'keys', 'アクセスキー'], ['/functions', 'functions', 'ファンクション']]
+const nav = `<nav class="page-nav">${[['/secrets', 'secrets', 'シークレット'], ['/connections', 'connections', '接続'], ['/objects', 'objects', 'オブジェクト'], ['/principals', 'principals', 'アクセスキー'], ['/functions', 'functions', 'ファンクション']]
   .map(([href, name, label]) => `<a href="${href}"${name === page ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
 function toast(text) {
@@ -213,17 +212,17 @@ async function loadSpace() {
 }
 async function refresh() {
   if (linked) {
-    try { back = back || (await api('/v1/request-links/' + requestId)).back; } catch {}
+    try { back = back || (await api('/v1/requests/' + requestId + '/return')).back; } catch {}
     try { accessRequest = (await api(requestApi)).request; requestError = ''; }
     catch (error) { accessRequest = null; requestError = error.status === 401 ? 'このリンクはもう使えません。元の画面から開き直してください。' : error.message; }
-    state = { user: { email: '' }, secrets: [], keys: [], connections: [], connectors: [], space: null };
+    state = { user: { email: '' }, secrets: [], actors: [], principals: [], connections: [], connectors: [], space: null };
     render();
     return;
   }
   // The home is drawn as soon as the state is here; the objects' count, which asks the storage, fills in after.
   // The objects page is those objects, so it waits for them.
   const current = ++revision, loading = page === 'home' ? loadSpace() : null;
-  const [result, space] = await Promise.all([api('/v1/state'), page === 'objects' ? loadSpace() : undefined]);
+  const [result, space] = await Promise.all([api('/v1/overview'), page === 'objects' ? loadSpace() : undefined]);
   if (requestId && current === revision) {
     try {
       const found = (await api(requestApi)).request;
@@ -293,37 +292,33 @@ function render() {
     // The account itself: who this is, and the few things done to it rather than in it.
     app.innerHTML = shell(`<header class="page-heading"><h1>アカウント</h1><p>${esc(state.user.email)}</p></header>
       <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">データのダウンロード</h2><p>シークレットの値、接続とアクセスキーの一覧が JSON ファイルで入ります。オブジェクトは入りません。</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ダウンロード</a></div></section>
-      <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">開発者</h2></div></div><a class="button secondary" href="/developers">アプリの登録</a></div></section>`);
-    return;
-  }
-  if (page === 'developers') {
-    // For the few who build a product on Foundation. Everyone else never comes here.
-    app.innerHTML = shell(`<header class="page-heading"><h1>アプリ</h1></header>
-      <section class="resource-section" aria-labelledby="integration-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="integration-title">登録したアプリ</h2></div></div><button class="button secondary" data-action="add-integration">${icon('plus')} アプリを登録</button></div>
-      ${state.apps?.length ? `<div class="agent-list">${state.apps.map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${esc(new URL(item.return_url).host)} · 利用者 ${esc(String(item.accounts))} 人</p></div><div class="agent-permissions"><span class="muted">${item.last_used_at ? '最終利用 ' + esc(new Date(item.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</span>${item.webhook_url ? '<span class="muted block">完了を通知します</span>' : ''}</div><div class="agent-actions"><button class="text-button danger" data-action="remove-integration" data-id="${esc(item.id)}">削除</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>登録したアプリはありません。</p></div>'}</section>
-`);
+      <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">開発者</h2></div></div><a class="button secondary" href="/principals#apps">アプリの登録</a></div></section>`);
     return;
   }
   if (page === 'home') {
     // A look over everything, and the way to each page. Nothing is managed here.
-    const space = state.space, kept = state.secrets || [], connections = state.connections || [], keys = state.keys || [];
+    const space = state.space, kept = state.secrets || [], connections = state.connections || [], keys = state.actors || [];
     const card = (href, title, line) => `<a class="home-card" href="${href}"><h2>${title}</h2><p>${esc(line)}</p></a>`;
-    const lastUsed = keys.map(key => key.last_used_at).filter(Boolean).sort().at(-1);
+    const lastUsed = keys.flatMap(key => key.credentials.map(item => item.last_used_at)).filter(Boolean).sort().at(-1);
     app.innerHTML = shell(`<header class="page-heading"><h1>Foundation</h1></header>
       <div class="home-cards">
         ${card('/secrets', 'シークレット', `保存値 ${kept.length} 件`)}
         ${card('/connections', '接続', connections.length ? `${connections.length} 件・${connections.map(item => item.label).join('、')}` : 'ありません')}
         ${card('/objects', 'オブジェクト', space === undefined ? '…' : space?.available ? `${space.usage.count} 件・${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}` : '使えません')}
-        ${card('/keys', 'アクセスキー', keys.length ? `承認済み ${keys.length} 件${lastUsed ? '・最終利用 ' + new Date(lastUsed).toLocaleString('ja-JP') : ''}` : 'ありません')}
+        ${card('/principals', 'アクセスキー', keys.length ? `承認済み ${keys.length} 件${lastUsed ? '・最終利用 ' + new Date(lastUsed).toLocaleString('ja-JP') : ''}` : 'ありません')}
         ${card('/functions', 'ファンクション', `${state.functions?.length || 0} 種類`)}
       </div>`);
     return;
   }
-  if (page === 'keys') {
-    // Those approved to work on this person's behalf: what each is called, and when it last did.
+  if (page === 'principals') {
+    // Those made here by this person: the keys that act for them, and the apps that hold users of their own.
+    const actors = state.actors || [], apps = (state.principals || []).filter(item => !actors.some(actor => actor.id === item.id));
+    const used = item => { const at = item.credentials.map(c => c.last_used_at).filter(Boolean).sort().at(-1); return at ? '最終利用 ' + esc(new Date(at).toLocaleString('ja-JP')) : 'まだ利用されていません'; };
     app.innerHTML = shell(`<header class="page-heading"><h1>アクセスキー</h1></header>
       <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">承認済み</h2></div></div><button class="button secondary" data-action="add-key">${icon('plus')} アクセスキーを追加</button></div>
-      ${state.keys.length ? `<div class="agent-list">${state.keys.map(key => `<article class="agent-row"><div class="agent-name"><h3>${esc(key.name)}</h3><p>${key.last_used_at ? '最終利用 ' + esc(new Date(key.last_used_at).toLocaleString('ja-JP')) : 'まだ利用されていません'}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(key.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-key" data-id="${esc(key.id)}">名前を変更</button><button class="text-button danger" data-action="remove-key" data-id="${esc(key.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section>`);
+      ${actors.length ? `<div class="agent-list">${actors.map(key => `<article class="agent-row"><div class="agent-name"><h3>${esc(key.name)}</h3><p>${used(key)}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(key.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-key" data-id="${esc(key.id)}">名前を変更</button><button class="text-button danger" data-action="remove-key" data-id="${esc(key.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section>
+      <section class="resource-section" id="apps" aria-labelledby="integration-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="integration-title">アプリ</h2></div></div><button class="button secondary" data-action="add-integration">${icon('plus')} アプリを登録</button></div>
+      ${apps.length ? `<div class="agent-list">${apps.map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${used(item)}</p></div><div class="agent-permissions"><span class="muted">${esc(String(item.credentials.length))} 件のキー</span></div><div class="agent-actions"><button class="text-button danger" data-action="remove-integration" data-id="${esc(item.id)}">削除</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>登録したアプリはありません。</p></div>'}</section>`);
     return;
   }
   if (page === 'connections') {
@@ -394,7 +389,7 @@ function renderRequest() {
     return;
   }
   const expiry = `<p class="request-expiry">この依頼は ${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで有効です。</p>`;
-  if (row.kind === 'approve') { renderApproval(row, shell, expiry); return; }
+  if (row.kind === 'actor') { renderApproval(row, shell, expiry); return; }
   if (row.kind === 'store') { renderStore(row, shell, expiry); return; }
   if (!row.connector) {
     app.innerHTML = shell(`<section class="approval-card"><h1>接続</h1><p>この接続方法は現在利用できません。</p><button class="text-button full" data-action="deny-request">接続しない</button>${expiry}</section>`);
@@ -458,7 +453,7 @@ function renderApproval(row, shell, expiry) {
     submit.disabled = true;
     const errorElement = form.querySelector('[role="alert"]'); errorElement.textContent = '';
     try {
-      await api(`${requestApi}/approve`, { method: 'POST', data: { confirmation_code: form.elements.confirmationCode.value } });
+      await api(`${requestApi}/done`, { method: 'POST', data: { confirmation_code: form.elements.confirmationCode.value } });
       await refresh();
     } catch (error) { if (form.isConnected) { errorElement.textContent = error.message; submit.disabled = false; } }
   });
@@ -511,14 +506,14 @@ function disconnect(connection) {
 function addKey() {
   openDialog(`<h2 id="dialog-title">アクセスキーを追加</h2><p>AIの実行環境に置くキーを発行します。承認済みのキーと同じく、あなたが預けているものをすべて使えます。</p><form><label for="agent-name">アクセスキーの名前</label><input id="agent-name" name="name" placeholder="dev-us など" required maxlength="80" autocomplete="off"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">アクセスキーを発行</button></form>`);
   bindForm(async (form) => {
-    const result = await api('/v1/keys', { method: 'POST', data: { name: form.get('name') } });
+    const result = await api('/v1/principals', { method: 'POST', data: { name: form.get('name'), actor: true, credential: 'key' } });
     await refresh(); if (!state) return;
-    openDialog(`<h2 id="dialog-title">${esc(result.key.name)} のアクセスキー</h2><p>キーは一度だけ表示します。AIを動かす環境の秘密情報として保管してください。</p><label for="agent-token">アクセスキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.key.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button><label for="api-url">接続先</label><input id="api-url" readonly value="${esc(location.origin)}/v1"><p class="permission-note">キーを会話や共有ファイルに貼り付けないでください。</p><button class="button primary full" data-action="close-dialog">閉じる</button>`);
+    openDialog(`<h2 id="dialog-title">${esc(result.principal.name)} のアクセスキー</h2><p>キーは一度だけ表示します。AIを動かす環境の秘密情報として保管してください。</p><label for="agent-token">アクセスキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button><label for="api-url">接続先</label><input id="api-url" readonly value="${esc(location.origin)}/v1"><p class="permission-note">キーを会話や共有ファイルに貼り付けないでください。</p><button class="button primary full" data-action="close-dialog">閉じる</button>`);
   });
 }
 function renameKey(key) {
   openDialog(`<h2 id="dialog-title">アクセスキーの名前を変更</h2><form><label for="agent-name">名前</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off" value="${esc(key.name)}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
-  bindForm(async (form) => { await api(`/v1/keys/${key.id}`, { method: 'PATCH', data: { name: form.get('name') } }); closeDialog(); await refresh(); toast('名前を変更しました。'); });
+  bindForm(async (form) => { await api(`/v1/principals/${key.id}`, { method: 'PATCH', data: { name: form.get('name') } }); closeDialog(); await refresh(); toast('名前を変更しました。'); });
 }
 function addIntegration() {
   openDialog(`<h2 id="dialog-title">アプリを登録</h2><form>
@@ -529,7 +524,11 @@ function addIntegration() {
     <label for="integration-webhook">完了の通知先（省略可）</label><input id="integration-webhook" name="webhook_url" type="url" autocomplete="off">
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">アプリキーを発行</button></form>`);
   bindForm(async (form) => {
-    const result = (await api('/v1/apps', { method: 'POST', data: { name: form.get('name'), return_url: form.get('return_url'), refresh_url: form.get('refresh_url') || undefined, webhook_url: form.get('webhook_url') || undefined } })).app;
+    // An app is a principal of this person's making, with settings for handing its users back, and a key of its own.
+    const made = (await api('/v1/principals', { method: 'POST', data: { name: form.get('name') } })).principal;
+    const settings = (await api(`/v1/principals/${made.id}/settings`, { method: 'PUT', data: { return_url: form.get('return_url'), refresh_url: form.get('refresh_url') || undefined, webhook_url: form.get('webhook_url') || undefined } })).settings;
+    const issued = await api(`/v1/principals/${made.id}/credentials`, { method: 'POST', data: { kind: 'key' } });
+    const result = { ...made, token: issued.token, webhook_secret: settings.webhook_secret };
     await refresh(); if (!state) return;
     openDialog(`<h2 id="dialog-title">${esc(result.name)} のアプリキー</h2><p>キーは一度だけ表示します。</p><label for="agent-token">アプリキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button>
       ${result.webhook_secret ? `<label for="webhook-secret">通知の署名キー</label><textarea id="webhook-secret" rows="2" readonly spellcheck="false">${esc(result.webhook_secret)}</textarea><p class="permission-note">通知が本物かどうかを、この値で確かめます。</p>` : ''}
@@ -538,11 +537,11 @@ function addIntegration() {
 }
 function removeIntegration(item) {
   openDialog(`<h2 id="dialog-title">アプリの登録を削除しますか？</h2><p>${esc(item.name)}</p><form><p>アプリキーは使えなくなります。利用者のアカウントとアクセスキーは残ります。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">削除する</button></div></form>`);
-  bindForm(async () => { await api(`/v1/apps/${item.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('アプリの登録を削除しました。'); });
+  bindForm(async () => { await api(`/v1/principals/${item.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('アプリの登録を削除しました。'); });
 }
 function removeKey(key) {
   openDialog(`<h2 id="dialog-title">アクセスキーを失効させますか？</h2><p>${esc(key.name)}</p><form><p>このキーからFoundationを利用できなくなります。</p><p class="permission-note">取得済みの外部サービスの認証情報は、接続先で失効させてください。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">失効させる</button></div></form>`);
-  bindForm(async () => { await api(`/v1/keys/${key.id}`, { method: 'DELETE' }); closeDialog(); await refresh(); toast('アクセスキーを失効させました。'); });
+  bindForm(async () => { await api(`/v1/principals/${key.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('アクセスキーを失効させました。'); });
 }
 // One confirmation, for removing something a key kept. Nothing here can be undone, and nothing reaches the service.
 // The name and the way it reaches a command, changed without the value ever being handed back.
@@ -778,10 +777,10 @@ document.addEventListener('click', async (event) => {
     }
     if (action === 'edit-secret') editSecret((state.secrets || []).find(item => item.name === target.dataset.name), target);
     if (action === 'add-key') addKey();
-    if (action === 'remove-key') removeKey(state.keys.find((key) => key.id === id));
+    if (action === 'remove-key') removeKey(state.actors.find((key) => key.id === id));
     if (action === 'add-integration') addIntegration();
-    if (action === 'remove-integration') removeIntegration(state.apps.find((item) => item.id === id));
-    if (action === 'rename-key') renameKey(state.keys.find((key) => key.id === id));
+    if (action === 'remove-integration') removeIntegration(state.principals.find((item) => item.id === id));
+    if (action === 'rename-key') renameKey(state.actors.find((key) => key.id === id));
     if (action === 'copy-token') {
       const token = document.querySelector('#agent-token');
       try { await navigator.clipboard.writeText(token.value); toast('キーをコピーしました。'); }
@@ -793,7 +792,7 @@ const resultCode = new URL(location.href).searchParams.get('connection');
 window.addEventListener('pageshow', event => { if (event.persisted) void refresh().catch(() => {}); });
 if (linkToken) {
   try {
-    await api('/v1/request-links/claim', { method: 'POST', data: { request_id: requestId, link: linkToken } });
+    await api('/v1/credentials/exchange', { method: 'POST', data: { request_id: requestId, link: linkToken } });
     linked = true;
     try { sessionStorage.setItem('linked:' + requestId, '1'); } catch {}
   } catch (error) { if (!linked) { linked = true; requestError = error.message; } }

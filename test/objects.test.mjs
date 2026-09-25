@@ -48,21 +48,21 @@ test('keeps an object for an owner who has no bucket of their own', async (t) =>
 test('gives each owner their own room in the bucket', async (t) => {
   const f = await space(t);
   await f.request('/v1/objects/notes/today.txt', { method: 'PUT', token: KEY, raw: Buffer.from('mine'), type: 'text/plain' });
-  const owner = (await f.request('/v1/state')).json.user.id;
+  const owner = (await f.request('/v1/overview')).json.user.id;
   assert.deepEqual(f.bucket.calls, [['put', 'owners/' + owner + '/notes/today.txt']]);
 });
 
 test('オブジェクトの取得中に失効したキーへの返却を拒否する', async t => {
   const f = await space(t);
   await f.request('/v1/objects/private.txt', { method: 'PUT', token: KEY, raw: 'private-content' });
-  const key = (await f.request('/v1/keys/current', { token: KEY })).json.key;
+  const key = (await f.request('/v1/principals/me', { token: KEY })).json.principal;
   const get = f.bucket.get.bind(f.bucket);
   let began, release;
   const started = new Promise(resolve => began = resolve);
   f.bucket.get = async (...args) => { began(); await new Promise(resolve => release = resolve); return get(...args); };
   const pending = f.request('/v1/objects/private.txt', { token: KEY });
   await started;
-  await f.request('/v1/keys/' + key.id, { method: 'DELETE' });
+  await f.request('/v1/principals/' + key.id, { method: 'DELETE', data: {} });
   release();
   const refused = await pending;
   assert.equal(refused.status, 401);
@@ -176,7 +176,7 @@ test('says what an owner is using and what they may use', async (t) => {
 test('refuses to keep more than the space lends', async (t) => {
   const f = await space(t);
   f.bucket.objects.set('owners/x/big', { body: Buffer.alloc(0), contentType: 'text/plain', updated_at: Date.now() });
-  const owner = (await f.request('/v1/state')).json.user.id;
+  const owner = (await f.request('/v1/overview')).json.user.id;
   f.bucket.objects.delete('owners/x/big');
   f.bucket.objects.set(`owners/${owner}/big`, { body: { length: 1024 * 1024 * 1024 }, contentType: 'text/plain', updated_at: Date.now() });
   const refused = await f.request('/v1/objects/more.txt', { method: 'PUT', token: KEY, raw: Buffer.from('x'), type: 'text/plain' });

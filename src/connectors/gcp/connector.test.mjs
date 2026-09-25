@@ -23,7 +23,7 @@ async function gcpFixture(t, gcp = new FakeGcp()) {
     assert.match(done.headers.get('location'), /connection=connected/);
     return (await connections()).find(item => item.subject === (code === 'work' ? '1002' : '1001'));
   }
-  const connections = async () => (await f.request('/v1/state')).json.connections.filter(item => item.connector === 'gcp.oauth');
+  const connections = async () => (await f.request('/v1/overview')).json.connections.filter(item => item.connector === 'gcp.oauth');
   return { ...f, gcp, start, connect, connections };
 }
 
@@ -78,7 +78,7 @@ test('AIの依頼を完了し、接続の確認結果と短期トークンを分
   assert.equal(delivered.json.delivery.environment.GOOGLE_CLOUD_ACCOUNT_EMAIL, 'personal@example.test');
   assert.ok(Number(delivered.json.delivery.environment.GOOGLE_OAUTH_EXPIRES_AT) > Date.now());
   assert.doesNotMatch(delivered.text, /gcp-refresh-|test-gcp-secret/);
-  assert.deepEqual((await f.request('/v1/state')).json.secrets, []);
+  assert.deepEqual((await f.request('/v1/overview')).json.secrets, []);
 });
 
 test('複数アカウントをGoogleの固定IDで識別し、別の所有者から分離する', async t => {

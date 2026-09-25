@@ -94,7 +94,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
         if width != 320:
             page.screenshot(path=str(shots / ('connections-desktop.png' if width == 1280 else 'connections-mobile.png')), full_page=True)
 
-    page.goto(args.base + '/keys', wait_until='networkidle')
+    page.goto(args.base + '/principals', wait_until='networkidle')
     runtime = page.locator('.agent-row').filter(has_text='dev-us のAI')
     runtime.get_by_role('button', name='失効', exact=True).click()
     dialog = page.get_by_role('dialog')

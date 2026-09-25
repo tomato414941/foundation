@@ -5,10 +5,10 @@ import { fixture, USER_A } from './helpers.mjs';
 
 test('Login gives a private state behind a safe session cookie', async (t) => {
   const f = await fixture(t);
-  assert.equal((await f.request('/v1/state', { anonymous: true })).status, 401);
+  assert.equal((await f.request('/v1/overview', { anonymous: true })).status, 401);
   const login = await f.login();
   assert.match(login.headers.get('set-cookie'), /HttpOnly; SameSite=Lax/);
-  const result = await f.request('/v1/state');
+  const result = await f.request('/v1/overview');
   assert.equal(result.json.user.id, USER_A);
   assert.deepEqual(result.json.secrets, []);
   assert.deepEqual(result.json.connections, []);
@@ -29,7 +29,7 @@ test('OAuth uses state, PKCE, offline consent, native Google URL; callback is on
   assert.equal(complete.headers.get('location'), '/?connection=connected&connector=gmail.readonly');
   assert.equal((await f.callback(url)).headers.get('location'), '/?connection=expired&connector=gmail.readonly');
   assert.equal(f.gmail.exchangeCount, 1);
-  assert.equal((await f.request('/v1/state')).json.connections.length, 1);
+  assert.equal((await f.request('/v1/overview')).json.connections.length, 1);
 });
 
 test('OAuth state is browser-bound and expires; cancel and forged callbacks cannot connect', async (t) => {
@@ -78,19 +78,19 @@ test('Connections expose explicit credential outputs independently of saved name
 test('Owners cannot see, disconnect or reach each other\'s connections', async (t) => {
   const f = await fixture(t), first = await f.credential(), runtime = await f.issueKey();
   await f.login('second@example.test');
-  const state = await f.request('/v1/state');
+  const state = await f.request('/v1/overview');
   assert.deepEqual(state.json.connections, []);
   assert.deepEqual(state.json.secrets, []);
-  assert.deepEqual(state.json.keys, []);
+  assert.deepEqual(state.json.actors, []);
   assert.equal((await f.request('/v1/connections/' + encodeURIComponent(first.id), { method: 'DELETE', data: { revoke: true } })).status, 404);
-  const intruder = (await f.request('/v1/keys', { method: 'POST', data: { name: 'intruder' } })).json.key;
+  const intruder = await f.issueKey('intruder');
   assert.deepEqual((await f.request('/v1/connections', { token: intruder.token })).json.connections, []);
   assert.equal((await f.deliver(first, { token: intruder.token })).status, 404);
-  await f.request('/v1/keys/' + runtime.id, { method: 'DELETE' });
+  await f.request('/v1/principals/' + runtime.id, { method: 'DELETE', data: {} });
   assert.equal((await f.request('/v1/connections', { token: runtime.token })).json.connections.length, 1, 'the owner keeps it when one key is revoked');
   const second = await f.credential();
   assert.notEqual(second.id, first.id);
-  assert.equal((await f.request('/v1/state')).json.connections.length, 1);
+  assert.equal((await f.request('/v1/overview')).json.connections.length, 1);
 });
 
 test('Connecting again pins the Google account and stays within the same adapter', async (t) => {
@@ -110,7 +110,7 @@ test('The same account connected twice does not become two of them', async (t) =
   const f = await fixture(t), a = await f.credential(), agent = await f.issueKey();
   const flow = await f.start();
   assert.equal((await f.callback(flow, 'personal-readonly')).headers.get('location'), '/?connection=already_connected&connector=gmail.readonly');
-  assert.equal((await f.request('/v1/state')).json.connections[0].id, a.id);
+  assert.equal((await f.request('/v1/overview')).json.connections[0].id, a.id);
   assert.equal((await f.request('/v1/connections', { token: agent.token })).json.connections.length, 1);
 });
 
@@ -121,7 +121,7 @@ for (const change of ['agent', 'account']) test('In-flight token withheld after 
   f.gmail.refreshHandler = () => { began(); return new Promise((resolve) => { finish = resolve; }); };
   const pending = f.deliver(a, { token: runtime.token });
   await started;
-  if (change === 'agent') await f.request('/v1/keys/' + runtime.id, { method: 'DELETE' });
+  if (change === 'agent') await f.request('/v1/principals/' + runtime.id, { method: 'DELETE', data: {} });
   if (change === 'account') await f.request('/v1/connections/' + encodeURIComponent(a.id), { method: 'DELETE', data: { revoke: false } });
   finish();
   const result = await pending;
@@ -142,7 +142,7 @@ test('Refreshing is coalesced, and an invalid grant asks the owner to connect ag
   const response = await f.deliver(a, { token: agent.token });
   assert.equal(response.status, 409);
   assert.doesNotMatch(response.text, /secret-provider/);
-  assert.equal((await f.request('/v1/state')).json.connections[0].status, 'reconnect_required');
+  assert.equal((await f.request('/v1/overview')).json.connections[0].status, 'reconnect_required');
 });
 
 test('Disconnecting preserves saved values even when service revocation fails, and reports the failure', async (t) => {
@@ -152,7 +152,7 @@ test('Disconnecting preserves saved values even when service revocation fails, a
   const removed = await f.request('/v1/connections/' + encodeURIComponent(a.id), { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.status, 200);
   assert.equal(removed.json.service_revoked, false, 'the owner learns the grant is still at Google');
-  const state = await f.request('/v1/state');
+  const state = await f.request('/v1/overview');
   assert.deepEqual(state.json.connections, []);
   assert.deepEqual(state.json.secrets.map(row => row.name), ['gmail/personal-example-test/token']);
   assert.equal((await f.request('/v1/secrets?name=gmail%2Fpersonal-example-test%2Ftoken')).text, 'independent-copy');
@@ -167,5 +167,5 @@ test('Where the owners are named, nobody else can make themselves one', async t 
   assert.equal(refused.json.error.code, 'not_invited');
   assert.equal(f.auth.links.size, 0, 'no link is sent to an address that may not be here');
   await f.login();
-  assert.equal((await f.request('/v1/state')).json.user.email, 'owner@example.test', 'the named owner logs in as before');
+  assert.equal((await f.request('/v1/overview')).json.user.email, 'owner@example.test', 'the named owner logs in as before');
 });

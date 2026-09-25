@@ -8,11 +8,11 @@ import { Connectors } from '../src/connectors.mjs';
 import { gmailReadonly, gmailMetadata } from '../src/connectors/gmail/index.mjs';
 import { Connections } from '../src/connections.mjs';
 import { Secrets } from '../src/secrets.mjs';
-import { Keys } from '../src/keys.mjs';
+import { Principals } from '../src/principals.mjs';
 import { Sessions, OAuthFlows } from '../src/sessions.mjs';
 
 export function resources(store, connectors = []) {
-  return { secrets: new Secrets(store), connections: new Connections(store, new Connectors(connectors)), keys: new Keys(store), sessions: new Sessions(store), flows: new OAuthFlows(store) };
+  return { secrets: new Secrets(store), connections: new Connections(store, new Connectors(connectors)), principals: new Principals(store), sessions: new Sessions(store), flows: new OAuthFlows(store) };
 }
 
 export const KEY = Buffer.alloc(32, 7);
@@ -94,25 +94,25 @@ export async function fixture(t, options = {}) {
     const url = await start({ range });
     const response = await callback(url, code + '-' + range);
     assert.equal(response.headers.get('location'), '/?connection=connected&connector=gmail.' + range, response.text);
-    return (await request('/v1/state')).json.connections.find((item) => item.subject === code + '@example.test');
+    return (await request('/v1/overview')).json.connections.find((item) => item.subject === code + '@example.test');
   }
   // Explicit credential processing: storage reads never call this operation.
   async function deliver(connection, options = {}) {
     return request('/v1/functions/connection.credentials', { method: 'POST', data: { connection_id: connection.id }, ...options });
   }
-  // Makes a runtime key known to the owner: the key asks to be approved and the owner types its code.
+  // Makes a key known to the owner: the key asks to act for whoever opens its request, and the owner types its code.
   async function approveKey(token, name = 'dev-us') {
-    const asked = await request('/v1/keys', { method: 'POST', anonymous: true, token, data: { name } });
+    const asked = await request('/v1/requests', { method: 'POST', anonymous: true, token, data: { kind: 'actor', input: { name } } });
     assert.equal(asked.status, 201, asked.text);
-    const done = await request('/v1/key-requests/' + asked.json.request.id + '/approve', { method: 'POST', data: { confirmation_code: asked.json.request.confirmation_code } });
+    const done = await request('/v1/requests/' + asked.json.request.id + '/done', { method: 'POST', data: { confirmation_code: asked.json.request.confirmation_code } });
     assert.equal(done.status, 200, done.text);
     return asked.json.request;
   }
-  // A key the owner issues from the dashboard.
+  // A key the owner makes from the dashboard: a principal that acts for them, carrying a key.
   async function issueKey(name = 'dev-us') {
-    const result = await request('/v1/keys', { method: 'POST', data: { name } });
+    const result = await request('/v1/principals', { method: 'POST', data: { name, actor: true, credential: 'key' } });
     assert.equal(result.status, 201, result.text);
-    return result.json.key;
+    return { ...result.json.principal, token: result.json.token, credential_id: result.json.credential.id };
   }
   // Ages a connection past its expiry in both the envelope and the connector's private state.
   function expire(id, owner = USER_A) {

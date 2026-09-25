@@ -33,7 +33,7 @@ test('OpenRouter exchanges only PKCE code, preserves real expiry and zero budget
   const url = await f.startOpenRouter();
   assert.equal((await f.callbackOpenRouter(url)).headers.get('location'), '/?connection=connected&connector=openrouter.oauth');
   assert.match((await f.callbackOpenRouter(url)).headers.get('location'), /connection=expired/);
-  const response = await f.request('/v1/state');
+  const response = await f.request('/v1/overview');
   const account = response.json.connections[0];
   assert.equal(account.connector, 'openrouter.oauth');
   assert.deepEqual(account.outputs, ['OPENROUTER_API_KEY']);
@@ -47,7 +47,7 @@ test('OpenRouter exchanges only PKCE code, preserves real expiry and zero budget
   assert.deepEqual(Object.keys(body).sort(), ['code', 'code_challenge_method', 'code_verifier']);
   assert.equal(createHash('sha256').update(body.code_verifier).digest('base64url'), url.searchParams.get('code_challenge'));
   assert.equal(f.openrouter.calls[1].url, OPENROUTER_API + '/key');
-  assert.equal(f.app.keys.list(USER_A).length, 0, 'connecting alone grants no runtime');
+  assert.equal(f.app.principals.actorsOf(USER_A).length, 0, 'connecting alone grants no runtime');
 });
 
 test('OpenRouter callback cannot use another session, forged state, or a denied authorization', async t => {
@@ -65,7 +65,7 @@ test('OpenRouter callback cannot use another session, forged state, or a denied 
 
 test('承認したキーに認証情報と提供元の有効期限を渡し、失効後の取得を拒否する', async t => {
   const f = await openrouterFixture(t), token = 'fdn_' + randomBytes(32).toString('base64url');
-  assert.equal((await f.request('/v1/connections', { token, anonymous: true })).status, 401, 'nothing before the key is approved');
+  assert.equal((await f.request('/v1/connections', { token, anonymous: true })).status, 401, 'a key nobody knows is nobody');
   await f.approveKey(token);
   const created = await f.request('/v1/requests', { method: 'POST', token, data: { connector: 'openrouter.oauth', purpose: 'キー情報を確認。モデルは実行しない。' } });
   const row = created.json.request;
@@ -73,7 +73,7 @@ test('承認したキーに認証情報と提供元の有効期限を渡し、�
   assert.match(row.connector.access.restrictions, /読み取り専用のキーではありません/);
   const callback = await f.callbackOpenRouter(await f.startOpenRouter({ request_id: row.id }));
   assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?connection=connected');
-  const account = (await f.request('/v1/state')).json.connections[0];
+  const account = (await f.request('/v1/overview')).json.connections[0];
   assert.equal((await f.request('/v1/requests/' + row.id)).json.request.status, 'done', 'the request is complete');
   const listed = await f.request('/v1/connections', { token });
   assert.deepEqual(listed.json.connections[0].outputs, ['OPENROUTER_API_KEY']);
@@ -83,8 +83,8 @@ test('承認したキーに認証情報と提供元の有効期限を渡し、�
   assert.deepEqual(issued.json.delivery.environment, { OPENROUTER_API_KEY: f.openrouter.key() });
   assert.equal(issued.json.expires_at, null);
   assert.equal(issued.json.expires_in, null);
-  assert.ok(f.app.keys.list(USER_A)[0].last_used_at);
-  await f.request('/v1/keys/' + f.app.keys.list(USER_A)[0].id, { method: 'DELETE' });
+  assert.ok(f.app.principals.actorsOf(USER_A)[0].credentials[0].last_used_at);
+  await f.request('/v1/principals/' + f.app.principals.actorsOf(USER_A)[0].id, { method: 'DELETE', data: {} });
   assert.equal((await credential(f, account, token)).status, 401);
 });
 
@@ -97,7 +97,7 @@ test('OpenRouter keys are owner-separated, cannot silently replace connections, 
   const replacement = await f.request('/v1/connections', { method: 'POST', data: { connector: 'openrouter.oauth', connection_id: account.id } });
   assert.equal(replacement.json.error.code, 'new_connection_required');
   await f.login('other@example.test');
-  assert.equal((await f.request('/v1/state')).json.connections.length, 0);
+  assert.equal((await f.request('/v1/overview')).json.connections.length, 0);
   assert.equal((await f.request('/v1/connections/' + encodeURIComponent(account.id), { method: 'DELETE', data: { revoke: false } })).status, 404);
   const own = await f.openrouterAccount('other'), other = await f.issueKey();
   assert.equal((await credential(f, account, other.token)).status, 404);
@@ -140,7 +140,7 @@ test('OpenRouter in-flight key is withheld after the key is revoked', async t =>
   f.openrouter.keyHandler = async () => { started(); await new Promise(resolve => release = resolve); return json({ data: f.openrouter.info }); };
   const pending = credential(f, account, agent.token);
   await waiting;
-  await f.request('/v1/keys/' + agent.id, { method: 'DELETE' });
+  await f.request('/v1/principals/' + agent.id, { method: 'DELETE', data: {} });
   release();
   const result = await pending;
   assert.equal(result.status, 401);
@@ -190,8 +190,8 @@ test('CLI asks for approval, then injects the OpenRouter key only into the child
   const start = await execute(['connect', '--name', 'dev-us'], env);
   assert.equal(start.code, 0, start.err);
   const row = JSON.parse(start.out.split('\n\nKey file')[0]).request;
-  assert.match(row.verification_uri, /\/key-requests\//);
-  const approved = await f.request('/v1/key-requests/' + row.id + '/approve', { method: 'POST', data: { confirmation_code: row.confirmation_code } });
+  assert.match(row.verification_uri, /\/requests\//);
+  const approved = await f.request('/v1/requests/' + row.id + '/done', { method: 'POST', data: { confirmation_code: row.confirmation_code } });
   assert.equal(approved.status, 200);
   const saved = await execute(['api', 'POST', '/v1/functions/connection.credentials', '--json', JSON.stringify({ connection_id: account.id, save: { OPENROUTER_API_KEY: 'model key' } })], env);
   assert.equal(saved.code, 0, saved.err);
@@ -199,6 +199,6 @@ test('CLI asks for approval, then injects the OpenRouter key only into the child
   const run = await execute(['exec', 'OPENROUTER_API_KEY=model key', '--', process.execPath, '-e', 'if(!process.env.OPENROUTER_API_KEY || process.env.GOOGLE_OAUTH_ACCESS_TOKEN || process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2); console.log("authenticated")'], env);
   assert.equal(run.code, 0, run.err); assert.equal(run.out.trim(), 'authenticated');
   assert.doesNotMatch(start.out + start.err + run.out + run.err, /sk-or-v1-|fdn_/);
-  await f.request('/v1/keys/' + approved.json.request.key_id, { method: 'DELETE' });
+  await f.request('/v1/principals/' + approved.json.request.result.principal_id, { method: 'DELETE', data: {} });
   assert.equal((await execute(['exec', 'OPENROUTER_API_KEY=model key', '--', process.execPath, '-e', 'process.exit(0)'], env)).code, 1);
 });

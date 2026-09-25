@@ -14,7 +14,7 @@ async function githubFixture(t, github = new FakeGitHub()) {
     return new URL(result.json.url);
   }
   const back = (url, code) => f.request(new URL(url.searchParams.get('redirect_uri')).pathname + '?state=' + url.searchParams.get('state') + '&code=' + code);
-  const connections = async () => (await f.request('/v1/state')).json.connections.filter(item => item.connector === 'github.oauth');
+  const connections = async () => (await f.request('/v1/overview')).json.connections.filter(item => item.connector === 'github.oauth');
   return { ...f, github, start, back, connections };
 }
 
@@ -36,7 +36,7 @@ test('A connected GitHub account is named by its login and delivered to an appro
   assert.equal(connection.label, 'octo');
   assert.ok(connection.id);
   assert.deepEqual(connection.outputs, ['GH_TOKEN', 'GITHUB_TOKEN']);
-  assert.doesNotMatch(JSON.stringify(await f.request('/v1/state')), /gho_/);
+  assert.doesNotMatch(JSON.stringify(await f.request('/v1/overview')), /gho_/);
   const agent = await f.issueKey();
   const delivered = await f.deliver((await f.connections())[0], { token: agent.token, anonymous: true });
   assert.equal(delivered.status, 200, delivered.text);
@@ -90,7 +90,7 @@ test('Disconnecting revokes the grant at GitHub', async t => {
 
 test('Without a client ID and secret GitHub is offered as unavailable', async t => {
   const gmail = new FakeGmail(), f = await fixture(t, { gmail, connectors: [githubOauth(new GitHubClient()), gmailReadonly(gmail), gmailMetadata(gmail)] });
-  const adapter = (await f.request('/v1/state')).json.connectors.find(item => item.id === 'github.oauth');
+  const adapter = (await f.request('/v1/overview')).json.connectors.find(item => item.id === 'github.oauth');
   assert.equal(adapter.available, false);
   assert.equal((await f.request('/v1/connections', { method: 'POST', data: { connector: 'github.oauth' } })).status, 503);
 });

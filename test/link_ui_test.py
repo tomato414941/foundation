@@ -42,8 +42,8 @@ with sync_playwright() as p:
     owner.get_by_role('link', name='アカウント', exact=True).click()
     owner.wait_for_url('**/account')
     owner.get_by_role('link', name='アプリの登録', exact=True).click()
-    owner.wait_for_url('**/developers')
-    expect(owner.get_by_role('heading', name='アプリ', exact=True)).to_be_visible()
+    owner.wait_for_url('**/principals')
+    expect(owner.get_by_role('heading', name='アクセスキー', exact=True)).to_be_visible()
     owner.get_by_role('button', name='アプリを登録').click()
     dialog = owner.get_by_role('dialog')
     dialog.get_by_label('名前', exact=True).fill('ai-simplicity')
@@ -52,20 +52,20 @@ with sync_playwright() as p:
     dialog.get_by_role('button', name='アプリキーを発行').click()
     expect(dialog.get_by_role('heading', name='ai-simplicity のアプリキー', exact=True)).to_be_visible()
     product = dialog.get_by_label('アプリキー', exact=True).input_value()
-    assert product.startswith('fdni_')
+    assert product.startswith('fdn_')
     dialog.locator('button.primary', has_text='閉じる').click()
     section = owner.locator('[aria-labelledby="integration-title"]')
     expect(section.get_by_role('heading', name='ai-simplicity', exact=True)).to_be_visible()
-    expect(section.get_by_text('simplicity.example.test · 利用者 0 人', exact=True)).to_be_visible()
+    expect(section.get_by_text('1 件のキー', exact=True)).to_be_visible()
     review(owner)
     owner.screenshot(path=str(shots / 'integrations.png'), full_page=True)
 
     # The product makes its user's account and key; the user's AI asks for something to keep.
-    call('/v1/accounts/user-1', product, 'PUT', {})
-    key = call('/v1/accounts/user-1/keys', product, 'POST', {'name': 'ai-simplicity'})['key']['token']
+    user = call('/v1/principals', product, 'POST', {'alias': 'user-1'})['principal']
+    key = call('/v1/principals/' + user['id'] + '/credentials', product, 'POST', {'kind': 'key'})['token']
     asked = call('/v1/requests', key, 'POST', {'store': {'name': 'npm-token', 'label': 'npm のアクセストークン', 'site': 'https://www.npmjs.com/'},
                                              'purpose': 'パッケージの公開に使います。', 'steps': ['npmjs.com でアクセストークンを作ります。', '表示されたトークンをここに貼ります。']})['request']
-    link = call('/v1/request-links', product, 'POST', {'request_id': asked['id']})['url']
+    link = call('/v1/principals/' + user['id'] + '/credentials', product, 'POST', {'kind': 'link', 'request_id': asked['id']})['url']
 
     # The user, who has never signed up for Foundation, opens the link the product handed them.
     context = browser.new_context(viewport={'width': 1280, 'height': 1000})

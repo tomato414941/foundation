@@ -21,7 +21,7 @@ test('hands the owner everything they have, secrets included', async (t) => {
   assert.equal(Buffer.from(byPath['keys/token'].content, 'base64').toString(), 'sh-secret-value');
   
   assert.equal(byPath['keys/token'].readable, false);
-  assert.equal(value.keys.length, 1);
+  assert.equal(value.principals.length, 1);
 });
 
 test('keeps the export to the owner\'s own session', async (t) => {

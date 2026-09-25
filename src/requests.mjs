@@ -1,62 +1,62 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { fail } from './errors.mjs';
 import { requestInput, requestResult } from './request-input.mjs';
-import { REQUEST_ID, requestKey, validity, progress, events } from './request-state.mjs';
+import { REQUEST_ID, CODE_ATTEMPTS, validity, progress, events } from './request-state.mjs';
 
 const PENDING_MAX = 10, STEPS_MAX = 20, STEP_LENGTH = 500;
+const normalizeCode = value => typeof value === 'string' ? value.toUpperCase().replace(/[^0-9A-F]/g, '') : '';
 
-// An approved key asks its owner to connect a service or save values. Completion is a
-// fact about this exchange, not a projection of the current state of the resulting resource.
+// One principal asks another for what it cannot reach itself: to act for them (actor), to keep something for
+// it (store), or to connect a service (connect). Who is asked is named when known; a principal that is not
+// yet anyone's asks whoever will have it. Completion is a fact about this exchange, not a projection of the
+// current state of the resulting resource.
 export class Requests {
-  constructor(store, keys) { this.store = store; this.db = store.db; this.keys = keys; }
-  key(token) { return requestKey(token); }
+  constructor(store) { this.store = store; this.db = store.db; }
   get(id) {
     const row = typeof id === 'string' && REQUEST_ID.test(id) ? this.db.prepare('SELECT * FROM requests WHERE id=? AND expires_at>?').get(id, Date.now()) : null;
-    if (!row) fail(410, 'request_expired', 'この依頼は期限切れか、無効です。AIに新しい依頼を作ってもらってください。');
+    if (!row) fail(410, 'request_expired', 'この依頼は期限切れか、無効です。新しい依頼を作ってもらってください。');
     return row;
   }
-  forUser(id, ownerId, pending = false) {
+  // The one asked reads and answers it. An actor request addressed to nobody yet is answered by whoever opens it.
+  forTo(id, principalId, pending = false) {
     const row = this.get(id);
-    if (row.owner_id !== ownerId) fail(404, 'not_found', 'このアカウントでは依頼を確認できません。');
+    if (row.to_id !== null && row.to_id !== principalId) fail(404, 'not_found', 'このアカウントでは依頼を確認できません。');
+    if (row.to_id === null && row.kind !== 'actor') fail(404, 'not_found', 'このアカウントでは依頼を確認できません。');
     if (pending && row.status !== 'pending') fail(409, 'request_finished', 'この依頼はすでに処理されています。');
-    if (pending && !this.keyOf(row)) fail(409, 'request_revoked', '依頼元の利用は停止されています。新しい依頼を作ってもらってください。');
     return row;
   }
-  forKey(token, id) {
-    const key = this.keys.find(token);
-    if (!key) fail(401, 'not_approved', 'このアクセスキーはまだ承認されていないか、失効しています。');
+  forFrom(id, fromId) {
     const row = this.get(id);
-    if (row.token_hash !== this.key(token) || row.key_id !== key.id || row.owner_id !== key.owner_id) fail(404, 'not_found', '依頼が見つかりません。');
+    if (row.from_id !== fromId) fail(404, 'not_found', '依頼が見つかりません。');
     return row;
   }
-  keyOf(row) {
-    const key = this.keys.byHash(row.token_hash);
-    return key?.id === row.key_id && key.owner_id === row.owner_id ? key : undefined;
-  }
-  create(token, { kind, input, purpose = '', steps = [], validMinutes = 30 }) {
+  create(fromId, { kind, input, purpose = '', steps = [], validMinutes = 30, toId = null }) {
     const ttl = validity(validMinutes), definition = requestInput(kind, input);
     if (!Array.isArray(steps) || steps.length > STEPS_MAX || steps.some(step => typeof step !== 'string' || !step.trim() || step.length > STEP_LENGTH || /[\x00-\x1f\x7f]/.test(step))) {
       fail(400, 'invalid_steps', '手順は20件までの文字列の配列で、1件500文字以内・改行なしで指定してください。');
     }
+    if (kind !== 'actor' && toId === null) fail(400, 'invalid_request', '誰に頼むかを指定してください。');
     const written = JSON.stringify(steps.map(step => step.trim())), encoded = JSON.stringify(definition);
     this.store.sweep();
-    const hash = this.key(token), key = this.keys.find(token);
-    if (!key) fail(401, 'not_approved', 'このアクセスキーはまだ承認されていないか、失効しています。');
-    const same = this.db.prepare("SELECT * FROM requests WHERE token_hash=? AND key_id=? AND status='pending' AND expires_at>? AND kind=? AND input=? AND purpose=? AND steps=? AND expires_at-created_at=?")
-      .get(hash, key.id, Date.now(), kind, encoded, purpose, written, ttl);
+    const same = this.db.prepare("SELECT * FROM requests WHERE from_id=? AND to_id IS ? AND status='pending' AND expires_at>? AND kind=? AND input=? AND purpose=? AND steps=? AND expires_at-created_at=?")
+      .get(fromId, toId, Date.now(), kind, encoded, purpose, written, ttl);
     if (same) return same;
-    if (this.db.prepare("SELECT count(*) n FROM requests WHERE token_hash=? AND status='pending' AND expires_at>?").get(hash, Date.now()).n >= PENDING_MAX) fail(409, 'too_many_pending', '同時に開いておける依頼は10件までです。不要な依頼を取り消してください。');
+    if (kind === 'actor' && this.db.prepare("SELECT 1 FROM requests WHERE from_id=? AND kind='actor' AND status='pending' AND expires_at>?").get(fromId, Date.now())) fail(409, 'request_pending', '承認待ちの依頼があります。先に現在の依頼を確認してください。');
+    if (this.db.prepare("SELECT count(*) n FROM requests WHERE from_id=? AND status='pending' AND expires_at>?").get(fromId, Date.now()).n >= PENDING_MAX) fail(409, 'too_many_pending', '同時に開いておける依頼は10件までです。');
     if (this.db.prepare('SELECT count(*) n FROM requests').get().n >= 1000) fail(429, 'request_limit', '依頼が混み合っています。しばらく待ってからお試しください。');
     const id = randomBytes(32).toString('base64url'), now = Date.now();
-    this.db.prepare('INSERT INTO requests (id,token_hash,key_id,owner_id,requester_name,kind,input,purpose,steps,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-      .run(id, hash, key.id, key.owner_id, key.name, kind, encoded, purpose, written, now, now + ttl);
+    const code = kind === 'actor' ? randomBytes(4).toString('hex').toUpperCase() : null;
+    this.db.prepare('INSERT INTO requests (id,from_id,to_id,kind,input,purpose,steps,code,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .run(id, fromId, toId, kind, encoded, purpose, written, code && code.slice(0, 4) + '-' + code.slice(4), now, now + ttl);
     return this.get(id);
   }
-  list(token, status) {
-    const key = this.keys.find(token);
-    if (!key) fail(401, 'not_approved', 'このアクセスキーは失効しています。');
-    return this.db.prepare('SELECT * FROM requests WHERE token_hash=? AND key_id=? AND owner_id=? AND expires_at>? AND (? IS NULL OR status=?) ORDER BY created_at,rowid')
-      .all(this.key(token), key.id, key.owner_id, Date.now(), status ?? null, status ?? null);
+  list(fromId, status) {
+    return this.db.prepare('SELECT * FROM requests WHERE from_id=? AND expires_at>? AND (? IS NULL OR status=?) ORDER BY created_at,rowid')
+      .all(fromId, Date.now(), status ?? null, status ?? null);
+  }
+  listTo(toId, status) {
+    return this.db.prepare('SELECT * FROM requests WHERE to_id=? AND expires_at>? AND (? IS NULL OR status=?) ORDER BY created_at,rowid')
+      .all(toId, Date.now(), status ?? null, status ?? null);
   }
   input(row) { return JSON.parse(row.input); }
   record(id, event, detail) {
@@ -64,33 +64,49 @@ export class Requests {
     try { row = this.get(id); } catch { return; }
     this.db.prepare('UPDATE requests SET progress=? WHERE id=?').run(progress(row.progress, event, detail), row.id);
   }
-  done(id, ownerId, value) {
-    const row = this.forUser(id, ownerId, true), result = requestResult(row.kind, value);
-    this.db.prepare("UPDATE requests SET result=?,status='done' WHERE id=?").run(JSON.stringify(result), row.id);
+  done(id, toId, value) {
+    const row = this.forTo(id, toId, true), result = requestResult(row.kind, value);
+    this.db.prepare("UPDATE requests SET result=?,to_id=?,status='done' WHERE id=?").run(JSON.stringify(result), toId, row.id);
     return this.get(id);
   }
-  deny(id, ownerId) {
-    const row = this.forUser(id, ownerId, true);
-    this.db.prepare("UPDATE requests SET status='denied' WHERE id=?").run(row.id);
+  deny(id, toId) {
+    const row = this.forTo(id, toId, true);
+    this.db.prepare("UPDATE requests SET to_id=?,status='denied' WHERE id=?").run(toId, row.id);
     return this.get(id);
   }
-  cancel(token, id) {
-    const row = this.forKey(token, id);
+  cancel(fromId, id) {
+    const row = this.forFrom(id, fromId);
     if (row.status !== 'pending') fail(409, 'request_finished', 'この依頼はすでに処理されています。');
     this.db.prepare("UPDATE requests SET status='cancelled' WHERE id=?").run(row.id);
     return this.get(id);
   }
-  cancelForKey(ownerId, keyId) {
-    const rows = this.db.prepare("SELECT * FROM requests WHERE owner_id=? AND key_id=? AND status='pending' AND expires_at>?").all(ownerId, keyId, Date.now());
+  cancelFrom(fromId, reason = 'requester_revoked') {
+    const rows = this.db.prepare("SELECT * FROM requests WHERE from_id=? AND status='pending' AND expires_at>?").all(fromId, Date.now());
     for (const row of rows) {
-      this.db.prepare("UPDATE requests SET status='cancelled',reason='requester_revoked' WHERE id=?").run(row.id);
-      this.record(row.id, 'cancelled', { code: 'requester_revoked' });
+      this.db.prepare("UPDATE requests SET status='cancelled',reason=? WHERE id=?").run(reason, row.id);
+      this.record(row.id, 'cancelled', { code: reason });
     }
     return rows.map(row => this.get(row.id));
   }
-  summary(row, { includeEvents = false } = {}) {
-    return { id: row.id, kind: row.kind, input: this.input(row), requester_name: row.requester_name,
+  // The code the requester showed, typed by the one asked. Wrong entries count even when the surrounding
+  // transaction rolls back; five of them close the request.
+  verifyCode(id, toId, code) {
+    const row = this.forTo(id, toId, true);
+    if (row.kind !== 'actor') fail(409, 'wrong_kind', 'この依頼に確認コードはありません。');
+    const expected = Buffer.from(row.code.replace('-', '')), given = Buffer.from(normalizeCode(code));
+    if (given.length === expected.length && timingSafeEqual(given, expected)) return row;
+    const attempts = row.attempts + 1;
+    if (attempts >= CODE_ATTEMPTS) {
+      this.db.prepare("UPDATE requests SET attempts=?,to_id=?,status='denied',reason='confirmation_locked' WHERE id=?").run(attempts, toId, row.id);
+      fail(400, 'confirmation_locked', '確認コードの入力回数が上限に達したため、この依頼を取り消しました。新しい依頼を作ってもらってください。');
+    }
+    this.db.prepare('UPDATE requests SET attempts=? WHERE id=?').run(attempts, row.id);
+    fail(400, 'confirmation_required', '会話に表示された確認コードを入力してください。');
+  }
+  summary(row, { includeEvents = false, includeCode = false } = {}) {
+    return { id: row.id, kind: row.kind, from: row.from_id, to: row.to_id, input: this.input(row),
       purpose: row.purpose, steps: JSON.parse(row.steps), status: row.status,
+      ...(includeCode && row.code ? { confirmation_code: row.code } : {}),
       created_at: row.created_at, expires_at: row.expires_at,
       ...(row.reason ? { reason: row.reason } : {}),
       ...(row.status === 'done' ? { result: JSON.parse(row.result) } : {}),

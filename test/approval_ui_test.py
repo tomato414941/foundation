@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
 
     # 1. A new key asks only to be approved. The owner types the code; nothing is registered here.
     request = cli('connect', '--name', 'dev-us のAI')['request']
-    assert '/key-requests/' in request['verification_uri'] and request['confirmation_code']
+    assert '/requests/' in request['verification_uri'] and request['confirmation_code']
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 1050})
     page = context.new_page()
@@ -68,13 +68,13 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_label('確認コード', exact=True).fill('0000-0000')
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('alert')).to_contain_text('確認コードを入力してください')
-    cli('api', 'GET', '/v1/secrets', success=False)
+    assert cli('api', 'GET', '/v1/principals/me')['acts_for'] == []
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'].lower())
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
-    expect(page.get_by_role('link', name='アクセスキー', exact=True)).to_have_attribute('href', '/keys')
+    expect(page.get_by_role('link', name='アクセスキー', exact=True)).to_have_attribute('href', '/principals')
     page.get_by_role('link', name='アクセスキー', exact=True).click()
-    expect(page).to_have_url(args.base + '/keys')
+    expect(page).to_have_url(args.base + '/principals')
     expect(page.get_by_role('heading', name='アクセスキー', exact=True)).to_be_visible()
     review(page)
     assert cli('api', 'GET', '/v1/secrets')['secrets'] == []
@@ -122,7 +122,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
 
     # 3. Revoking the key stops it; its open registration link says so.
     pending = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'connector': 'gmail.metadata', 'purpose': '件名を確認する'}))['request']
-    page.goto(args.base + '/keys', wait_until='networkidle')
+    page.goto(args.base + '/principals', wait_until='networkidle')
     runtime = page.locator('.agent-row').filter(has_text='dev-us のAI')
     runtime.get_by_role('button', name='失効', exact=True).click()
     page.get_by_role('dialog').get_by_role('button', name='失効させる', exact=True).click()
@@ -137,7 +137,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
     page.get_by_role('button', name='承認しない', exact=True).click()
     expect(page.get_by_role('heading', name='承認しませんでした', exact=True)).to_be_visible()
-    cli('api', 'GET', '/v1/secrets', success=False)
+    assert cli('api', 'GET', '/v1/principals/me')['acts_for'] == []
 
     # 5. Approved again, the key asks for a metadata-only Gmail credential: another kind, its own registration.
     request = cli('connect', '--name', 'dev-us のAI')['request']

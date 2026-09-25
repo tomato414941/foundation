@@ -80,7 +80,7 @@ test('Default email-link signup/login uses secure HttpOnly cookies and a fixed c
   assert.doesNotMatch(result.text, /access_token|refresh_token|verifier/);
   assert.match(result.headers.get('referrer-policy'), /no-referrer/);
   assert.match(result.headers.getSetCookie().find(value => value.startsWith('fdn_login=')), /Max-Age=0/);
-  const state = await f.request('/v1/state', { headers: { cookie: sessionCookie(result) } });
+  const state = await f.request('/v1/overview', { headers: { cookie: sessionCookie(result) } });
   assert.equal(state.status, 200);
   assert.equal(state.json.user.id, USER_B);
   assert.equal(state.json.user.email, 'new@example.test');
@@ -187,7 +187,7 @@ for (const action of ['cancel', 'resend', 'logout', 'expire']) test(`In-flight v
   assert.equal(location(result), '/?login=expired');
   assert.equal(result.headers.get('set-cookie'), null);
   assert.equal(revoked, 1);
-  assert.equal((await f.request('/v1/state')).status, 401);
+  assert.equal((await f.request('/v1/overview')).status, 401);
 });
 
 test('A provider response for a different email cannot authenticate the browser', async (t) => {

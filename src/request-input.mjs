@@ -4,6 +4,8 @@ import { secretName } from './secrets.mjs';
 export function requestInput(kind, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'invalid_request', '依頼内容を指定してください。');
   if (kind === 'connect' && Object.keys(input).every(key => key === 'connector') && typeof input.connector === 'string') return { connector: input.connector };
+  // Asking to act for someone: only what the asker wants to be called.
+  if (kind === 'actor' && Object.keys(input).every(key => key === 'name') && typeof input.name === 'string' && input.name.trim() && input.name.length <= 80) return { name: input.name.trim() };
   if (kind === 'store' && Object.keys(input).every(key => key === 'fields')) return { fields: declarations(input.fields) };
   fail(400, 'invalid_request', '依頼の種類と内容が一致しません。');
 }
@@ -11,6 +13,7 @@ export function requestInput(kind, input) {
 export function requestResult(kind, result) {
   if (kind === 'connect' && typeof result?.connection_id === 'string' && result.connection_id) return { connection_id: result.connection_id };
   if (kind === 'store' && Array.isArray(result?.names) && result.names.length) return { names: result.names.map(secretName), replaced: (result.replaced ?? []).map(secretName) };
+  if (kind === 'actor' && typeof result?.principal_id === 'string' && result.principal_id) return { principal_id: result.principal_id };
   throw new Error('The result does not match the request');
 }
 

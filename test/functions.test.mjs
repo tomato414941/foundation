@@ -115,7 +115,7 @@ for (const change of ['key', 'connection', 'reconnect']) test('An in-flight cred
   f.gmail.refreshHandler = () => { began(); return new Promise(resolve => release = resolve); };
   const pending = invoke(f, key.token, connection, { GOOGLE_OAUTH_ACCESS_TOKEN: 'result' });
   await started;
-  if (change === 'key') await f.request('/v1/keys/' + key.id, { method: 'DELETE' });
+  if (change === 'key') await f.request('/v1/principals/' + key.id, { method: 'DELETE', data: {} });
   if (change === 'connection') await f.request('/v1/connections/' + connection.id, { method: 'DELETE', data: { revoke: false } });
   if (change === 'reconnect') await f.callback(await f.start({ connection_id: connection.id }));
   release();
