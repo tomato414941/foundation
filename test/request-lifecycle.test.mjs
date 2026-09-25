@@ -54,7 +54,7 @@ test('保存値の名前変更や削除後も依頼には完了時の保存名�
   await f.request('/v1/secrets?name=renamed', { method: 'DELETE', data: {} });
   const done = (await f.request('/v1/requests/' + request.id, { token: key.token })).json.request;
   assert.equal(done.status, 'done');
-  assert.deepEqual(done.result, { names: ['first'] });
+  assert.deepEqual(done.result, { names: ['first'], replaced: [] });
 });
 
 test('キー失効時に未完了の依頼を取り消し、同じトークンの再承認後も以前の依頼へのアクセスを拒否する', async t => {
@@ -68,7 +68,7 @@ test('キー失効時に未完了の依頼を取り消し、同じトークン�
   assert.equal(cancelled.reason, 'requester_revoked');
   const done = (await f.request('/v1/requests/' + doneRequest.id)).json.request;
   assert.equal(done.status, 'done');
-  assert.deepEqual(done.result, { names: ['kept'] });
+  assert.deepEqual(done.result, { names: ['kept'], replaced: [] });
   assert.equal((await f.request('/v1/requests/' + doneRequest.id, { token: key.token })).status, 401);
   assert.equal((await f.request('/v1/requests', { token: key.token })).status, 401);
   await f.approveKey(key.token, '再承認');
@@ -136,7 +136,7 @@ test('保存と依頼完了を一緒に確定し、失敗した場合は再試�
   assert.equal(f.app.requests.get(request.id).status, 'pending');
   assert.deepEqual(f.app.secrets.list(USER_A), []);
   f.app.requests.done = original;
-  assert.deepEqual(f.app.requestActions.save(request.id, USER_A, [{ name: 'value', content: 'fixture-value' }]), { names: ['value'] });
+  assert.deepEqual(f.app.requestActions.save(request.id, USER_A, [{ name: 'value', content: 'fixture-value' }]), { names: ['value'], replaced: [] });
   assert.equal(f.app.secrets.content(f.app.secrets.at(USER_A, 'value')).toString(), 'fixture-value');
 });
 
