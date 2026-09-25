@@ -22,6 +22,7 @@ import { respond } from './mcp.mjs';
 import { FETCH_BODY_MAX } from './fetch.mjs';
 import { FUNCTIONS, Functions } from './functions.mjs';
 import { guide } from '../cli/guide.mjs';
+import { allowed } from './authorization.mjs';
 
 const VERSION = createRequire(import.meta.url)('../package.json').version;
 
@@ -263,6 +264,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       // Without one the browser speaks, through its session cookie or a product's single-use link, and every
       // change it asks for must come from Foundation's own pages. Cookies are never read beside a token.
       const token = bearer(req), browser = req.headers.authorization === undefined;
+      // Every route asks this before it acts. A product's user, handed one request, is told to log in for
+      // anything else; everyone else hears no.
+      const permitFor = subject => (name, type, id) => {
+        if (allowed({ subject, action: { name }, resource: { type, ...(id === undefined ? {} : { id }) } }).decision) return;
+        if (subject.type === 'linked') fail(401, 'login_required', 'ログインしてください。');
+        fail(403, 'forbidden', 'この操作は許可されていません。');
+      };
       if (!browser && !token) fail(401, 'invalid_token', 'Bearer形式のアクセスキーを指定してください。');
       if (browser && !['GET', 'HEAD'].includes(method) && !(path === '/v1/keys' && method === 'POST' && !cookieToken(req))) requireOrigin(req, origin);
       if (!browser && req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
@@ -390,12 +398,14 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const integration = integrations.authenticate(token);
         if (!integration) fail(401, 'not_an_app', 'このアプリキーは無効です。');
         rateLimit('app:' + integration.id, 300);
+        const permit = permitFor({ type: 'app', id: integration.id });
         const accountRoute = path.match(/^\/v1\/accounts\/([^/]+)(?:\/(keys|usage)(?:\/([a-f0-9-]{36}))?)?$/);
         if (accountRoute) {
           const externalId = decodeURIComponent(accountRoute[1]), part = accountRoute[2], keyId = accountRoute[3];
-          if (!part && method === 'PUT') { await body(req); return send(200, { account: integrations.view(integrations.ensure(integration, externalId)) }); }
-          if (!part && method === 'GET') return send(200, { account: integrations.view(integrations.account(integration, externalId)) });
+          if (!part && method === 'PUT') { permit('ensure', 'account', externalId); await body(req); return send(200, { account: integrations.view(integrations.ensure(integration, externalId)) }); }
+          if (!part && method === 'GET') { permit('read', 'account', externalId); return send(200, { account: integrations.view(integrations.account(integration, externalId)) }); }
           if (!part && method === 'DELETE') {
+            permit('remove', 'account', externalId);
             await body(req);
             const removed = integrations.deleteAccount(integration, externalId);
             if (objects.enabled) {
@@ -407,21 +417,25 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           const account = integrations.account(integration, externalId);
           // A key for the account, one per place the app runs its user's agent. Replacing one revokes the old.
           if (part === 'keys' && !keyId && method === 'POST') {
+            permit('issue-key', 'account', externalId);
             const input = await body(req);
             return send(201, { key: requestActions.replaceKey(account.id, input.replaces, nameValue(input.name ?? integration.name, 'キー')) });
           }
           if (part === 'keys' && keyId && method === 'DELETE') {
+            permit('revoke-key', 'account', externalId);
             await body(req);
             if (!keys.list(account.id).some(item => item.id === keyId)) fail(404, 'not_found', 'キーが見つかりません。');
             requestActions.revokeKey(account.id, keyId);
             return send(200, { ok: true });
           }
           if (part === 'usage' && method === 'GET') {
+            permit('usage', 'account', externalId);
             const space = objects.enabled ? await objects.usage(account.id) : null;
             return send(200, { usage: { secrets: secrets.usage(account.id), objects: space ? { count: space.count, bytes: space.bytes } : null } });
           }
         }
         if (path === '/v1/request-links' && method === 'POST') {
+          permit('create', 'request-link');
           const input = await body(req);
           // Naming the user too (external_id) lets the app refuse a request that is not that user's.
           const made = integrations.link(integration, requests.get(input.request_id), input.external_id);
@@ -459,6 +473,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       const { user, session } = caller ? { user: { id: caller.owner_id, email: null }, session: null }
         : link ? { user: { id: link.owner_id, email: null, linked: true }, session: null } : await principal(req);
       const ownerId = user.id;
+      const subject = caller ? { type: 'key', id: caller.id } : link ? { type: 'linked', id: ownerId } : { type: 'owner', id: ownerId };
+      const permit = permitFor(subject);
       const requireAccess = () => {
         if (caller) keys.requireCurrent(caller);
         else if (link) {
@@ -471,9 +487,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
 
       if (requestRoute) {
         const row = requests.forUser(requestRoute[1], ownerId, requestRoute[2] === '/done');
-        if (!requestRoute[2] && method === 'GET') { requests.record(row.id, 'page_viewed'); return send(200, { request: viewRequest(row, origin) }); }
+        if (!requestRoute[2] && method === 'GET') { permit('read', 'request', row.id); requests.record(row.id, 'page_viewed'); return send(200, { request: viewRequest(row, origin) }); }
         // The owner chooses each saved name. The requested read permissions still apply to its value.
         if (requestRoute[2] === '/done' && method === 'POST') {
+          permit('done', 'request', row.id);
           if (row.kind !== 'store') fail(409, 'wrong_kind', 'この依頼は保管の依頼ではありません。');
           const input = await inputBody(SECRET_MAX * requests.input(row).fields.length);
           progressRequestId = row.id;
@@ -481,6 +498,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           return send(200, { stored: true, ...result });
         }
         if (requestRoute[2] === '/deny' && method === 'POST') {
+          permit('deny', 'request', row.id);
           await inputBody();
           if (!user.linked && localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
           progressRequestId = row.id;
@@ -489,14 +507,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
-      if (user.linked) fail(401, 'login_required', 'ログインしてください。');
       // The owner's screen, in one answer.
-      if (path === '/v1/state' && method === 'GET' && browser) return send(200, { user, secrets: secrets.list(ownerId), connections: connections.list(ownerId).map(connectionView), keys: keys.list(ownerId), apps: integrations.list(ownerId), functions: FUNCTIONS, connectors: connectors.ids().map(id => connectors.describe(id)) });
+      if (path === '/v1/state' && method === 'GET') { permit('read', 'state'); return send(200, { user, secrets: secrets.list(ownerId), connections: connections.list(ownerId).map(connectionView), keys: keys.list(ownerId), apps: integrations.list(ownerId), functions: FUNCTIONS, connectors: connectors.ids().map(id => connectors.describe(id)) }); }
       // Everything, in one file, for the owner alone. Lending someone a place to keep things means they
       // can take them away again; without this the promise is words. Keys are included in full, because
       // a copy that leaves the secrets behind is not a copy.
       if (path === '/v1/export' && method === 'GET') {
-        if (!browser) fail(403, 'owner_only', 'この操作は持ち主の画面からだけ行えます。');
+        permit('read', 'export');
         const kept = secrets.list(ownerId).map(row => {
           const full = secrets.at(ownerId, row.name);
           return { ...row, content: secrets.content(full).toString('base64'), encoding: 'base64' };
@@ -509,7 +526,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       }
       // The owner accepts a new key with the code the runtime showed, or turns it away.
       const keyRequestRoute = path.match(/^\/v1\/key-requests\/([A-Za-z0-9_-]{43})(\/(?:approve|deny))?$/);
-      if (keyRequestRoute && browser) {
+      if (keyRequestRoute) {
+        permit(keyRequestRoute[2] ? keyRequestRoute[2].slice(1) : 'read', 'key-request', keyRequestRoute[1]);
         const row = keyRequests.forUser(keyRequestRoute[1], ownerId);
         if (!keyRequestRoute[2] && method === 'GET') { keyRequests.record(row.id, 'page_viewed'); return send(200, { request: keyRequests.summary(row, origin, { code: false }) }); }
         if (method === 'POST' && keyRequestRoute[2]) {
@@ -523,37 +541,42 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         }
       }
       // The keys the owner approved, and ones they make themselves, without asking an agent to ask them.
-      if (path === '/v1/keys' && browser) {
-        if (method === 'GET') return send(200, { keys: keys.list(ownerId) });
+      if (path === '/v1/keys') {
+        if (method === 'GET') { permit('list', 'key'); return send(200, { keys: keys.list(ownerId) }); }
         if (method === 'POST') {
+          permit('create', 'key');
           const input = await inputBody();
           return send(201, { key: keys.create(ownerId, nameValue(input.name)) });
         }
       }
       const keyRoute = path.match(/^\/v1\/keys\/([a-f0-9-]{36})$/);
-      if (keyRoute && browser) {
-        if (method === 'DELETE') { requestActions.revokeKey(ownerId, keyRoute[1]); return send(200, { ok: true }); }
+      if (keyRoute) {
+        if (method === 'DELETE') { permit('revoke', 'key', keyRoute[1]); requestActions.revokeKey(ownerId, keyRoute[1]); return send(200, { ok: true }); }
         if (method === 'PATCH') {
+          permit('rename', 'key', keyRoute[1]);
           const input = await inputBody();
           keys.rename(ownerId, keyRoute[1], nameValue(input.name));
           return send(200, { ok: true });
         }
       }
       // Apps: other products that hold accounts for their own users. Each credential is shown once, here.
-      if (path === '/v1/apps' && browser && method === 'GET') return send(200, { apps: integrations.list(ownerId) });
-      if (path === '/v1/apps' && browser && method === 'POST') {
+      if (path === '/v1/apps' && method === 'GET') { permit('list', 'app'); return send(200, { apps: integrations.list(ownerId) }); }
+      if (path === '/v1/apps' && method === 'POST') {
+        permit('register', 'app');
         const input = await inputBody();
         return send(201, { app: integrations.register(ownerId, { name: nameValue(input.name, 'アプリ'), returnUrl: input.return_url, refreshUrl: input.refresh_url || undefined, webhookUrl: input.webhook_url || undefined }) });
       }
       const appRoute = path.match(/^\/v1\/apps\/([a-f0-9-]{36})$/);
-      if (appRoute && browser && method === 'DELETE') { await inputBody(); integrations.remove(ownerId, appRoute[1]); return send(200, { ok: true }); }
+      if (appRoute && method === 'DELETE') { permit('remove', 'app', appRoute[1]); await inputBody(); integrations.remove(ownerId, appRoute[1]); return send(200, { ok: true }); }
       // Connections: services Foundation connected itself. The owner sees everything about them; a key sees
       // what it needs to use one. Making one starts the service's own login; removing one may also revoke there.
       if (path === '/v1/connections' && method === 'GET') {
-        return send(200, { connections: browser ? connections.list(ownerId).map(connectionView)
+        permit('list', 'connection');
+        return send(200, { connections: subject.type === 'owner' ? connections.list(ownerId).map(connectionView)
           : connections.list(ownerId).filter(row => row.status !== 'disconnecting').map(row => connections.view(row)) });
       }
-      if (path === '/v1/connections' && method === 'POST' && browser) {
+      if (path === '/v1/connections' && method === 'POST') {
+        permit('create', 'connection');
         const input = await inputBody();
         const connector = connectors.get(input.connector);
         if (connector.authorization.kind !== 'oauth') fail(400, 'unsupported_authorization', 'この接続方法には対応していません。');
@@ -577,7 +600,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         return send(200, { url: await connector.authorization.begin({ state, verifier, redirectUri }, connections.context(previous)) });
       }
       const connectionRoute = path.match(/^\/v1\/connections\/(.+)$/);
-      if (connectionRoute && browser && method === 'DELETE') {
+      if (connectionRoute && method === 'DELETE') {
+        permit('remove', 'connection', decodeURIComponent(connectionRoute[1]));
         const connection = connections.at(ownerId, decodeURIComponent(connectionRoute[1]));
         const input = await inputBody();
         if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
@@ -599,6 +623,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       }
       // What this owner is using, and what they may use. Lending has a cost, so both sides can see it.
       if (path === '/v1/usage' && method === 'GET') {
+        permit('read', 'usage');
         const kept = secrets.usage(ownerId);
         const space = objects.enabled ? await objects.usage(ownerId) : null;
         requireAccess();
@@ -608,6 +633,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       // The owner's own space of objects. Lent from Foundation's bucket while the owner has none of
       // their own; the same calls reach a bucket of theirs once one is connected.
       if (path === '/v1/objects' && method === 'GET') {
+        permit('list', 'object');
         objects.check();
         if (caller) rateLimit('objects:' + caller.id, 60);
         const listed = await objects.list(ownerId, url.searchParams.get('prefix') ?? '', url.searchParams.get('cursor') ?? undefined);
@@ -621,39 +647,44 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const key = decodeURIComponent(objectRoute[1]);
         if (objectRoute[2]) {
           if (method !== 'POST') fail(405, 'method_not_allowed', 'この操作は利用できません。');
+          permit('link', 'object', key);
           const input = await inputBody();
           const link = await objects.link(ownerId, key, input.minutes);
           requireAccess();
           return send(200, link);
         }
         if (method === 'PUT') {
+          permit('write', 'object', key);
           const content = await inputBytes(OBJECT_MAX);
           const saved = await objects.put(ownerId, key, content, req.headers['content-type'] || 'application/octet-stream');
           requireAccess();
           return send(200, saved);
         }
         if (method === 'GET') {
+          permit('read', 'object', key);
           const found = await objects.get(ownerId, key);
           requireAccess();
           res.writeHead(200, { 'content-type': found.contentType, 'content-length': found.content.length,
             'content-disposition': `attachment; filename="object.bin"; filename*=UTF-8''${encodeURIComponent(key.split('/').pop()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}` });
           return res.end(found.content);
         }
-        if (method === 'DELETE') { await inputBody(); await objects.remove(ownerId, key); requireAccess(); return send(200, { ok: true }); }
+        if (method === 'DELETE') { permit('remove', 'object', key); await inputBody(); await objects.remove(ownerId, key); requireAccess(); return send(200, { ok: true }); }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
       // What is kept, by name. A name is any text, so it travels as ?name=: a path would fold "." and ".." away.
-      if (path === '/v1/secrets' && method === 'GET' && !url.searchParams.has('name')) return send(200, { secrets: secrets.list(ownerId, url.searchParams.get('prefix') ?? undefined) });
+      if (path === '/v1/secrets' && method === 'GET' && !url.searchParams.has('name')) { permit('list', 'secret'); return send(200, { secrets: secrets.list(ownerId, url.searchParams.get('prefix') ?? undefined) }); }
       if (path === '/v1/secrets' && url.searchParams.has('name')) {
         const target = url.searchParams.get('name');
         if (method === 'GET') {
+          permit('read', 'secret', target);
           // The owner reads anything of theirs; a key reads only what was left readable to it.
-          const { row, content } = browser ? (() => { const row = secrets.at(ownerId, target); return { row, content: secrets.content(row) }; })() : secrets.read(ownerId, target);
+          const { row, content } = subject.type === 'owner' ? (() => { const row = secrets.at(ownerId, target); return { row, content: secrets.content(row) }; })() : secrets.read(ownerId, target);
           res.setHeader('etag', secretTag(row));
           res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length, 'content-disposition': `attachment; filename="secret.bin"; filename*=UTF-8''${encodeURIComponent(row.name).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}` });
           return res.end(content);
         }
         if (method === 'PUT') {
+          permit('write', 'secret', target);
           if (caller) rateLimit('secrets:' + caller.id, 120);
           const content = await inputBytes(SECRET_MAX);
           if (!content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
@@ -663,27 +694,29 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
             const current = match === undefined ? null : secrets.find(ownerId, secretName(target));
             if (match !== undefined && (!current || match !== secretTag(current))) fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
             const saved = secrets.put(ownerId, { name: target, content,
-              secret: current ? !current.readable : browser ? url.searchParams.get('secret') !== 'false' : url.searchParams.get('secret') === 'true' });
+              secret: current ? !current.readable : subject.type === 'owner' ? url.searchParams.get('secret') !== 'false' : url.searchParams.get('secret') === 'true' });
             res.setHeader('etag', secretTag(secrets.at(ownerId, target)));
             return saved;
           });
           return send(200, { secret: saved });
         }
         // Rename without returning or changing the stored value.
-        if (method === 'PATCH' && browser) {
+        if (method === 'PATCH') {
+          permit('rename', 'secret', target);
           const input = await inputBody();
           return send(200, { secret: secrets.rename(ownerId, target, { name: input.name }) });
         }
         if (method === 'DELETE') {
+          permit('remove', 'secret', target);
           await inputBody();
           secrets.remove(ownerId, target);
           return send(200, { ok: true });
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
-      if (!caller) fail(404, 'not_found', '指定された操作が見つかりません。');
       // Reading a saved value never invokes provider code or updates another value.
       if (path === '/v1/deliveries' && method === 'POST') {
+        permit('create', 'delivery');
         const input = await inputBody();
         rateLimit('issue:' + caller.id, 30);
         const names = Array.isArray(input.names) ? input.names : [];
@@ -691,13 +724,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const delivery = secrets.deliver(caller.owner_id, names);
         return send(200, { delivery, expires_at: null, expires_in: null });
       }
-      if (path === '/v1/functions' && method === 'GET') return send(200, { functions: FUNCTIONS });
+      if (path === '/v1/functions' && method === 'GET') { permit('list', 'function'); return send(200, { functions: FUNCTIONS }); }
       if (path === '/v1/functions/connection.credentials' && method === 'POST') {
+        permit('invoke', 'function', 'connection.credentials');
         const input = await inputBody();
         rateLimit('issue:' + caller.id, 30);
         return send(200, await functions.credentials(caller, input));
       }
       if (path === '/v1/functions/http.request' && method === 'POST') {
+        permit('invoke', 'function', 'http.request');
         const input = await inputBody(FETCH_BODY_MAX * 2);
         rateLimit('fetch:' + caller.id, 30);
         return send(200, await functions.request(caller, input, [url.hostname, ...(external ? [external.hostname] : [])]));
