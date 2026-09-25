@@ -1,4 +1,5 @@
 import { fail } from './errors.mjs';
+import { randomUUID } from 'node:crypto';
 import { validEnvName } from '../cli/env-name.mjs';
 
 // Bytes stored under an opaque name. Read permission is separate from delivery;
@@ -39,32 +40,56 @@ export function deliverable(content, { env, filename }) {
 }
 
 export class Secrets {
-  constructor(store) { this.store = store; }
-  list(ownerId, prefix) { return this.store.secrets(ownerId, prefix === undefined ? undefined : String(prefix)); }
+  constructor(store) { this.store = store; this.db = store.db; this.vault = store.vault; }
+  list(ownerId, prefix) {
+    const columns = 'name,size,readable,created_at,updated_at';
+    return (prefix === undefined
+      ? this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? ORDER BY name`).all(ownerId)
+      : this.db.prepare(`SELECT ${columns} FROM secrets WHERE owner_id=? AND substr(name,1,length(?))=? COLLATE BINARY ORDER BY name`).all(ownerId, String(prefix), String(prefix)))
+      .map(row => ({ ...row, readable: row.readable === 1 }));
+  }
+  find(ownerId, name) {
+    const row = this.db.prepare('SELECT * FROM secrets WHERE owner_id=? AND name=?').get(ownerId, secretName(name));
+    return row ? { ...row, readable: row.readable === 1 } : undefined;
+  }
+  content(row) { return this.vault.openBytes(row.content, `entry:${row.owner_id}:${row.id}`); }
+  usage(ownerId) { return this.db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(size),0) AS bytes FROM secrets WHERE owner_id=?').get(ownerId); }
   // Writing the same name again replaces what is there, including its read permission.
   put(ownerId, { name, content, secret }) {
     if (content.length > SECRET_MAX) fail(413, 'secret_too_large', '1件あたり1MBまでです。');
-    return this.store.writeSecret(ownerId, { name: secretName(name), content, readable: secret ? 0 : 1 });
+    secretName(name);
+    return this.store.transaction(() => {
+      const stamp = new Date().toISOString(), existing = this.find(ownerId, name), { count, bytes } = this.usage(ownerId);
+      if (!existing && count >= SECRET_COUNT_MAX) fail(409, 'secret_limit', `保管できるのは${SECRET_COUNT_MAX}件までです。使わないものを消してください。`);
+      if (bytes - (existing?.size ?? 0) + content.length > SECRET_TOTAL_MAX) fail(409, 'storage_full', '保管できる合計は20MBまでです。使わないものを消してください。');
+      const id = existing?.id ?? randomUUID(), sealed = this.vault.sealBytes(content, `entry:${ownerId}:${id}`);
+      if (existing) this.db.prepare('UPDATE secrets SET size=?,readable=?,content=?,updated_at=? WHERE id=?').run(content.length, secret ? 0 : 1, sealed, stamp, id);
+      else this.db.prepare('INSERT INTO secrets (id,owner_id,name,size,readable,content,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id, ownerId, name, content.length, secret ? 0 : 1, sealed, stamp, stamp);
+      return this.list(ownerId, name)[0];
+    });
   }
   at(ownerId, name) {
-    const row = this.store.secret(ownerId, secretName(name));
+    const row = this.find(ownerId, name);
     if (!row) fail(404, 'not_found', '保管されたものが見つかりません。');
     return row;
   }
   read(ownerId, name) {
     const row = this.at(ownerId, name);
     if (!row.readable) fail(403, 'write_only', 'この値の直接読み出しは許可されていません。');
-    return { row, content: this.store.secretContent(row) };
+    return { row, content: this.content(row) };
   }
   // Rename without exposing or modifying content.
   rename(ownerId, name, { name: to }) {
-    this.at(ownerId, name);
-    const moved = this.store.renameSecret(ownerId, name, { name: secretName(to ?? name) });
-    if (!moved) fail(404, 'not_found', '保管されたものが見つかりません。');
-    return moved;
+    const target = secretName(to ?? name);
+    return this.store.transaction(() => {
+      const row = this.at(ownerId, name);
+      if (target !== name && this.find(ownerId, target)) fail(409, 'name_taken', 'その名前はすでに使われています。');
+      this.db.prepare('UPDATE secrets SET name=?,updated_at=? WHERE id=?').run(target, new Date().toISOString(), row.id);
+      return this.list(ownerId, target)[0];
+    });
   }
   remove(ownerId, name) {
-    if (!this.store.removeSecret(ownerId, secretName(name))) fail(404, 'not_found', '保管されたものが見つかりません。');
+    if (!this.db.prepare('DELETE FROM secrets WHERE owner_id=? AND name=?').run(ownerId, secretName(name)).changes) fail(404, 'not_found', '保管されたものが見つかりません。');
   }
   // Each input and delivery destination is explicit.
   deliver(ownerId, asked) {
@@ -74,7 +99,7 @@ export class Secrets {
     for (const item of wanted) {
       if (!item || typeof item !== 'object' || typeof item.name !== 'string') fail(400, 'invalid_names', '渡すものは {name, as} で指定してください。');
       const row = this.at(ownerId, item.name);
-      const content = this.store.secretContent(row);
+      const content = this.content(row);
       const name = item.as;
       if (!name) fail(400, 'no_variable', '渡す環境変数名を as で指定してください。');
       if (!validEnvName(name)) fail(400, 'invalid_env', '変数名は英大文字・数字・下線で指定してください。');
@@ -92,30 +117,4 @@ export class Secrets {
     }
     return { environment, files };
   }
-}
-
-// What an AI asks its owner to put into storage. Foundation holds no knowledge of the service involved:
-// the AI chooses its name and writes the instructions the owner follows.
-// Some things only make sense together: an Apple key is a .p8 and three identifiers, and asking for them
-// one screen at a time is four trips for the owner. So a request may declare several, and they are filled
-// in and kept in one go. Foundation still knows nothing about what they are for.
-export function declarations(input) {
-  const many = Array.isArray(input) ? input : [input];
-  if (!many.length || many.length > 8) fail(400, 'invalid_declaration', '一度に預けられるのは1〜8件です。');
-  const declared = many.map(one => declaration(one));
-  const names = new Set(declared.map(one => one.name));
-  if (names.size !== declared.length) fail(400, 'invalid_declaration', '同じ保管先を2回指定できません。');
-  return declared;
-}
-
-export function declaration(input) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'invalid_declaration', '保管するものの申告が必要です。');
-  let site;
-  if (input.site !== undefined && input.site !== '') {
-    try { site = new URL(input.site); } catch { fail(400, 'invalid_site', '作成ページはhttpsのURLで指定してください。'); }
-    if (site.protocol !== 'https:' || site.username || site.password || site.href.length > 300 || !site.hostname.includes('.')) fail(400, 'invalid_site', '作成ページはhttpsのURLで指定してください。');
-  }
-  if (typeof input.label !== 'string' || !input.label.trim() || input.label.trim().length > 60 || /[\x00-\x1f\x7f<>]/.test(input.label)) fail(400, 'invalid_label', '何を入れてもらうかを1〜60文字で指定してください。');
-  if (input.multiline !== undefined && typeof input.multiline !== 'boolean') fail(400, 'invalid_declaration', '複数行かどうかは true か false で指定してください。');
-  return { name: secretName(input.name), secret: input.secret !== false, label: input.label.trim(), site: site?.href ?? '', multiline: input.multiline === true };
 }

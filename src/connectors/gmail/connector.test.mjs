@@ -11,7 +11,7 @@ function setup(t, mode = 'readonly') {
   const scopes = [mode === 'metadata' ? METADATA_SCOPE : READONLY_SCOPE];
   const credentials = { access_token: 'google-access-personal-' + mode, refresh_token: 'refresh-personal-' + mode, scopes, expires_at: Date.now() - 1 };
   const held = acquired(store, [gmailReadonly(gmail), gmailMetadata(gmail)], 'gmail.' + mode, { subject: 'personal@example.test', secret: credentials });
-  return { run: held.run, gmail, account: held.row, credentials, state: () => store.acquisitionState(held.row()) };
+  return { run: held.run, gmail, account: held.row, credentials, state: held.state };
 }
 
 test('Google exchange and refresh keep tokens server-side and preserve actual read scopes', async (t) => {

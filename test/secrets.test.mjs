@@ -126,7 +126,7 @@ test('Listing narrows by a literal name prefix, and each owner reaches only thei
   await f.approveKey(other, 'other-machine');
   assert.deepEqual((await f.request('/v1/secrets', { token: other, anonymous: true })).json.secrets, []);
   assert.equal((await f.request('/v1/secrets?name=github/token', { token: other, anonymous: true })).status, 404);
-  assert.equal(f.app.store.secrets(USER_B).length, 0);
+  assert.equal(f.app.secrets.list(USER_B).length, 0);
 
   const dropped = await f.request('/v1/secrets?name=github/token', { method: 'DELETE', token, anonymous: true, data: {} });
   assert.equal(dropped.status, 200);

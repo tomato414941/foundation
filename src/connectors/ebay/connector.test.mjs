@@ -31,7 +31,7 @@ async function ebayFixture(t, ebay = new FakeEbay()) {
     assert.match(done.headers.get('location'), /connection=connected/);
     return (await connections()).find(item => item.subject === (code === 'work' ? '1002' : '1001'));
   }
-  const state = id => f.app.store.acquisitionState(f.app.store.acquisition(USER_A, id));
+  const state = id => f.app.connections.state(f.app.connections.get(USER_A, id));
   return { ...f, ebay, start, callback, connect, connections, state };
 }
 
@@ -166,7 +166,7 @@ test('更新用トークンの期限切れでは再接続を求める', async t 
   const f = await ebayFixture(t), a = await f.connect(), agent = await f.issueKey();
   f.expire(a.id);
   const state = f.state(a.id);
-  f.app.store.saveState(f.app.store.acquisition(USER_A, a.id), { ...state, private_state: { ...state.private_state, refresh_expires_at: Date.now() - 1 } });
+  f.app.connections.saveState(f.app.connections.get(USER_A, a.id), { ...state, private_state: { ...state.private_state, refresh_expires_at: Date.now() - 1 } });
   const delivered = await f.deliver(a, { token: agent.token });
   assert.equal(delivered.json.error.code, 'reconnect_required');
   assert.equal(f.ebay.refreshes, 0);

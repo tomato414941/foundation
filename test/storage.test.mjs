@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { configuration } from '../src/config.mjs';
 import { Store } from '../src/store.mjs';
 import { Vault } from '../src/crypto.mjs';
-import { fixture, KEY, USER_A } from './helpers.mjs';
+import { fixture, resources, KEY, USER_A } from './helpers.mjs';
 
 async function directory(t) { const path = await mkdtemp(join(tmpdir(), 'foundation-auth-test-')); t.after(() => rm(path, { recursive: true, force: true })); return path; }
 
@@ -19,9 +19,10 @@ test('Gmail and Supabase secrets are encrypted; keys and cookies never persist i
   const contents = await readFile(database);
   for (const value of ['google-access-personal', 'refresh-personal', 'supabase-access-owner', 'supabase-refresh-owner', agent.token, cookie.slice(12)]) assert.ok(!contents.includes(Buffer.from(value)), value);
   const second = new Store(database, KEY); t.after(() => second.close());
-  assert.equal(second.acquisitionState(second.acquisition(USER_A, account.id)).private_state.refresh_token, 'refresh-personal-readonly');
-  assert.ok(second.session(cookie.slice(12)));
-  assert.equal(second.authenticate(agent.token).owner_id, USER_A);
+  const persisted = resources(second);
+  assert.equal(persisted.connections.state(persisted.connections.get(USER_A, account.id)).private_state.refresh_token, 'refresh-personal-readonly');
+  assert.ok(persisted.sessions.get(cookie.slice(12)));
+  assert.equal(persisted.keys.find(agent.token).owner_id, USER_A);
   const tables = second.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((item) => item.name);
   assert.ok(!tables.some((name) => /mail|message|log|body/.test(name)));
   assert.equal((await stat(database)).mode & 0o777, 0o600);
@@ -50,16 +51,17 @@ test('Configuration creates a private encryption key; losing the key fails close
 
 test('A new database is created in the current shape; a database of any other shape is refused and left unchanged', async (t) => {
   const dir = await directory(t), path = join(dir, 'state.sqlite');
-  const created = new Store(path, KEY);
-  const connection = created.saveAcquisition(USER_A, { adapter: 'gmail.readonly', subject: 'kept@example.test', label: 'kept', state: { renewal: { refresh_token: 'keep-private' }, facts: {}, expires_at: null } });
-  created.writeSecret(USER_A, { name: 'gmail/kept/access-token', content: Buffer.from('google-access'), readable: 0 });
-  const agent = created.addKey(USER_A, 'runtime');
-  created.recordIssuance(agent, null);
+  const created = new Store(path, KEY), live = resources(created);
+  const connection = live.connections.write(USER_A, { connector: 'gmail.readonly', subject: 'kept@example.test', label: 'kept', state: { private_state: { refresh_token: 'keep-private' }, facts: {}, expires_at: null } });
+  live.secrets.put(USER_A, { name: 'gmail/kept/access-token', content: Buffer.from('google-access'), secret: true });
+  const agent = live.keys.create(USER_A, 'runtime');
+  const lastUsed = live.keys.authenticate(agent.token).last_used_at;
   created.close();
   const reopened = new Store(path, KEY); t.after(() => reopened.close());
-  assert.equal(reopened.acquisitionState(reopened.acquisition(USER_A, connection.id)).renewal.refresh_token, 'keep-private');
-  assert.deepEqual(reopened.secrets(USER_A).map(row => row.name), ['gmail/kept/access-token']);
-  assert.equal(reopened.keys(USER_A)[0].issued_nonexpiring, 1);
+  const persisted = resources(reopened);
+  assert.equal(persisted.connections.state(persisted.connections.get(USER_A, connection.id)).private_state.refresh_token, 'keep-private');
+  assert.deepEqual(persisted.secrets.list(USER_A).map(row => row.name), ['gmail/kept/access-token']);
+  assert.equal(persisted.keys.find(agent.token).last_used_at, lastUsed);
   for (const shape of ['CREATE TABLE accounts(id TEXT); INSERT INTO accounts VALUES (\'existing\');', 'CREATE TABLE accounts(id TEXT); PRAGMA user_version=999;', 'PRAGMA user_version=1;', 'CREATE TABLE entries(id TEXT);']) {
     const other = join(dir, 'other-' + Math.random().toString(36).slice(2) + '.sqlite'), db = new DatabaseSync(other);
     db.exec(shape); db.close();

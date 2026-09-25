@@ -81,7 +81,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
     expect(page.get_by_text('登録をキャンセルしました。', exact=True)).to_be_visible()
     authorization['deny'] = False
     page.get_by_role('button', name='Googleで接続', exact=True).click()
-    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     review(page)
     connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['connection_id']
     saved = cli('api', 'POST', '/v1/functions/connection.credentials', '--json', json.dumps({'connection_id': connection, 'save': {'CLOUDSDK_AUTH_ACCESS_TOKEN': 'cloud token'}}))

@@ -21,7 +21,7 @@ test('利用者が選んだ名前で保存し、依頼元に実際の保存名�
   const done = (await f.request(`/v1/requests/${row.id}`, { token })).json.request;
   assert.equal(done.status, 'done');
   assert.deepEqual(done.result.names, ['stripe-test-api-key']);
-  const kept = f.app.store.secrets(USER_A);
+  const kept = f.app.secrets.list(USER_A);
   assert.deepEqual(kept.map(value => value.name), ['stripe-test-api-key']);
   assert.equal(kept[0].readable, false);
   const delivered = await f.request('/v1/deliveries', { method: 'POST', token,
@@ -32,13 +32,13 @@ test('利用者が選んだ名前で保存し、依頼元に実際の保存名�
 test('同じ名前を使う登録を全件保留し、既存の値を保ったまま別名で再試行する', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
   await f.request('/v1/secrets?name=existing', { method: 'PUT', raw: 'keep-this-value', type: 'text/plain' });
-  const before = f.app.store.secrets(USER_A);
+  const before = f.app.secrets.list(USER_A);
   const row = await ask(f, token, ['first', 'second'], { secret: false });
   const refused = await save(f, row, [entry('new-name'), entry('existing', 'replacement')]);
   assert.equal(refused.status, 409, refused.text);
   assert.equal(refused.json.error.code, 'name_taken');
-  assert.deepEqual(f.app.store.secrets(USER_A), before);
-  assert.equal(f.app.store.secretContent(f.app.store.secret(USER_A, 'existing')).toString(), 'keep-this-value');
+  assert.deepEqual(f.app.secrets.list(USER_A), before);
+  assert.equal(f.app.secrets.content(f.app.secrets.find(USER_A, 'existing')).toString(), 'keep-this-value');
   assert.equal((await f.request(`/v1/requests/${row.id}`, { token })).json.request.status, 'pending');
   const saved = await save(f, row, [entry('new-name'), entry('other-name', 'replacement')]);
   assert.equal(saved.status, 200, saved.text);
@@ -52,7 +52,7 @@ test('依頼された名前をそのまま使う場合も同名の値を保護�
   await f.request('/v1/secrets?name=existing', { method: 'PUT', raw: 'original', type: 'text/plain' });
   const refused = await save(f, row, [entry('existing')]);
   assert.equal(refused.status, 409, refused.text);
-  assert.equal(f.app.store.secretContent(f.app.store.secret(USER_A, 'existing')).toString(), 'original');
+  assert.equal(f.app.secrets.content(f.app.secrets.find(USER_A, 'existing')).toString(), 'original');
 });
 
 test('保存名と値を検証して全件をまとめて登録する', async t => {
@@ -69,7 +69,7 @@ test('保存名と値を検証して全件をまとめて登録する', async t 
     [entry('one')],
   ]) {
     assert.equal((await save(f, row, entries)).status, 400);
-    assert.deepEqual(f.app.store.secrets(USER_A), []);
+    assert.deepEqual(f.app.secrets.list(USER_A), []);
     assert.equal((await f.request(`/v1/requests/${row.id}`, { token })).json.request.status, 'pending');
   }
   const names = ['__proto__', ' 日本語, {{name}} '];
@@ -88,7 +88,7 @@ test('同じ保存名への同時登録は一方だけを保存し、もう一�
   ]);
   assert.deepEqual(results.map(response => response.status).sort(), [200, 409]);
   const winner = results.findIndex(response => response.status === 200);
-  assert.equal(f.app.store.secretContent(f.app.store.secret(USER_A, 'shared')).toString(), ['first-value', 'second-value'][winner]);
+  assert.equal(f.app.secrets.content(f.app.secrets.find(USER_A, 'shared')).toString(), ['first-value', 'second-value'][winner]);
   const statuses = await Promise.all([first, second].map(async row => (await f.request(`/v1/requests/${row.id}`, { token })).json.request.status));
   assert.equal(statuses[winner], 'done');
   assert.equal(statuses[1 - winner], 'pending');

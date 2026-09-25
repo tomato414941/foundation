@@ -183,7 +183,7 @@ with sync_playwright() as p:
     page.goto(args.base + "/keys", wait_until="networkidle")
     page.set_viewport_size({"width": 390, "height": 844})
     row.get_by_role("button", name="失効", exact=True).click()
-    expect(dialog.get_by_text("有効期限まで", exact=False)).to_be_visible()
+    expect(dialog.get_by_text("取得済みの外部サービスの認証情報は、接続先で失効させてください。", exact=True)).to_be_visible()
     check_display(page)
     page.screenshot(path=str(shots / "revoke-mobile.png"), full_page=True)
     dialog.get_by_role("button", name="失効させる", exact=True).click()

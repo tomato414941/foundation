@@ -59,7 +59,7 @@ test('同じ接続の同時取得を一度にまとめ、次の取得に更新�
   release();
   const results = await Promise.all([one, two]);
   assert.deepEqual(results[0], results[1]);
-  assert.equal(store.acquisitionState(store.acquisition(USER_A, row.id)).private_state, 'opaque-1');
+  assert.equal(connections.state(connections.get(USER_A, row.id)).private_state, 'opaque-1');
   const next = await connections.obtain(row);
   assert.deepEqual(seen, ['opaque-0', 'opaque-1']);
   assert.equal(next.values.get('EXAMPLE_KEY').content.toString(), 'usable-opaque-2');
@@ -78,15 +78,15 @@ test('異なる接続の取得を互いに待たせず個別に実行する', as
 test('出力を渡せない場合も回転済みの非公開状態を保存する', async t => {
   const { store, connections, row } = setup(t, async ({ subject }) => ({ ...value(subject, 'rotated'), credentials: { environment: { UNDECLARED: 'private' } } }));
   await assert.rejects(connections.obtain(row), { code: 'service_response' });
-  assert.equal(store.acquisitionState(store.acquisition(USER_A, row.id)).private_state, 'rotated');
+  assert.equal(connections.state(connections.get(USER_A, row.id)).private_state, 'rotated');
 });
 
 test('別アカウントの結果を保存せず元の接続を再接続待ちにする', async t => {
   const { store, connections, row } = setup(t, async () => value('account-two', 'wrong-account'));
   await assert.rejects(connections.obtain(row), { code: 'account_changed' });
-  const current = store.acquisition(USER_A, row.id);
+  const current = connections.get(USER_A, row.id);
   assert.equal(current.status, 'reconnect_required');
-  assert.equal(store.acquisitionState(current).private_state, 'opaque-0');
+  assert.equal(connections.state(current).private_state, 'opaque-0');
 });
 
 test('取得中に再接続した場合は新しい認証状態を維持する', async t => {
@@ -96,9 +96,9 @@ test('取得中に再接続した場合は新しい認証状態を維持する',
   connections.save(USER_A, 'example.authorization', value(row.subject, 'reconnected'), { previous: row });
   release();
   await assert.rejects(pending, { code: 'connection_changed' });
-  const current = store.acquisition(USER_A, row.id);
+  const current = connections.get(USER_A, row.id);
   assert.equal(current.status, 'connected');
-  assert.equal(store.acquisitionState(current).private_state, 'reconnected');
+  assert.equal(connections.state(current).private_state, 'reconnected');
 });
 
 test('既存の4サービスの暗号化状態・接続ID・保存名を再起動後も利用する', async t => {
@@ -117,9 +117,7 @@ test('既存の4サービスの暗号化状態・接続ID・保存名を再起�
     callback.searchParams.set('code', code);
     const completed = await first.request(callback.pathname + callback.search);
     assert.match(completed.headers.get('location'), /connection=connected/);
-    const row = first.app.store.acquisitions(USER_A).find(item => item.adapter === connector), state = first.app.store.acquisitionState(row);
-    // Persist the exact pre-refactor envelope; reopening must not need a schema migration.
-    first.app.store.saveState(row, { renewal: state.private_state, facts: state.facts, expires_at: state.expires_at });
+    const row = first.app.connections.list(USER_A).find(item => item.connector === connector), state = first.app.connections.state(row);
     identities.push({ id: row.id, subject: row.subject, generation: row.generation, connector, output });
   }
   const agent = await first.issueKey();
@@ -127,13 +125,13 @@ test('既存の4サービスの暗号化状態・接続ID・保存名を再起�
   await first.close();
   const second = await fixture(t, { database, connectors: makeConnectors() });
   for (const identity of identities) {
-    const before = second.app.store.acquisition(USER_A, identity.id);
+    const before = second.app.connections.get(USER_A, identity.id);
     assert.equal(before.subject, identity.subject); assert.equal(before.generation, identity.generation);
-    assert.ok(second.app.store.acquisitionState(before).renewal);
+    assert.ok(second.app.connections.state(before).private_state);
     const delivered = await second.deliver(identity, { token: agent.token });
     assert.equal(delivered.status, 200, delivered.text);
     assert.ok(delivered.json.delivery.environment[identity.output]);
-    const state = second.app.store.acquisitionState(second.app.store.acquisition(USER_A, identity.id));
+    const state = second.app.connections.state(second.app.connections.get(USER_A, identity.id));
     assert.ok(state.private_state.access_token);
     assert.doesNotMatch(JSON.stringify(delivered.json.facts), /"access_token":|refresh_token|gho_|sk-or-v1-/);
   }

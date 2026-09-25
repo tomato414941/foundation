@@ -104,8 +104,8 @@ test('再接続は同じGoogle IDで行い、メールアドレスの変更を�
   f.gcp.exchangeHandler = () => json({ access_token: 'gcp-access-personal-new', scope: GCP_SCOPES.join(' '), expires_in: 3600 });
   const same = await f.connect('personal', { connection_id: a.id });
   assert.equal(same.id, a.id); assert.equal(same.label, 'renamed@example.test');
-  const row = f.app.store.acquisition(USER_A, a.id);
-  assert.equal(f.app.store.acquisitionState(row).private_state.refresh_token, 'gcp-refresh-personal');
+  const row = f.app.connections.get(USER_A, a.id);
+  assert.equal(f.app.connections.state(row).private_state.refresh_token, 'gcp-refresh-personal');
 });
 
 test('権限の不足や追加をAIに返し、Googleが発行した認証情報を利用可能にする', async t => {
@@ -150,7 +150,7 @@ test('有効期限内のトークンを再利用し、更新時は同時要求�
   assert.deepEqual(one.json.delivery, two.json.delivery); assert.equal(f.gcp.refreshes, 1);
   const saved = await f.deliver(a, { token: agent.token });
   assert.equal(saved.status, 200);
-  const current = f.app.store.acquisitionState(f.app.store.acquisition(USER_A, a.id));
+  const current = f.app.connections.state(f.app.connections.get(USER_A, a.id));
   assert.equal(current.private_state.refresh_token, 'gcp-refresh-personal-rotated');
   assert.deepEqual(current.private_state.scopes, GCP_SCOPES);
 });
@@ -162,7 +162,7 @@ test('アカウントが変わった更新は停止し、元の接続を再接�
   const result = await f.deliver(a, { token: agent.token });
   assert.equal(result.json.error.code, 'account_changed');
   assert.equal((await f.connections())[0].status, 'reconnect_required');
-  assert.equal(f.app.store.acquisitionState(f.app.store.acquisition(USER_A, a.id)).private_state.access_token, 'gcp-access-personal-0');
+  assert.equal(f.app.connections.state(f.app.connections.get(USER_A, a.id)).private_state.access_token, 'gcp-access-personal-0');
 });
 
 test('Googleの一時的な障害は再試行可能にし、失効した許可は再接続待ちにする', async t => {
