@@ -187,9 +187,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       if ((STATIC.has(path) || REQUEST_PAGE.test(path) || KEY_PAGE.test(path)) && method === 'GET') {
         if (REQUEST_PAGE.test(path)) requests.record(path.slice('/requests/'.length), 'page_opened');
         if (KEY_PAGE.test(path)) keyRequests.record(path.slice('/key-requests/'.length), 'page_opened');
+        // The page and its script are the same for everyone, so a browser keeps them and only asks whether
+        // they changed. What the API answers stays no-store.
         const [filename, type] = STATIC.get(STATIC.has(path) ? path : '/');
+        const content = await readFile(fileURLToPath(new URL(filename, PUBLIC))), tag = '"' + digest(content).slice(0, 32) + '"';
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('ETag', tag);
+        if (req.headers['if-none-match'] === tag) { res.writeHead(304); return res.end(); }
         res.writeHead(200, { 'content-type': type });
-        return res.end(await readFile(fileURLToPath(new URL(filename, PUBLIC))));
+        return res.end(content);
       }
       if (path === '/health' && method === 'GET') return send(200, { status: 'ok' });
       if (path === LOGIN_CALLBACK && method === 'GET') {

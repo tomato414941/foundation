@@ -220,7 +220,10 @@ async function refresh() {
     render();
     return;
   }
-  const current = ++revision, [result, space] = await Promise.all([api('/v1/state'), (page === 'home' || page === 'objects') ? loadSpace() : null]);
+  // The home is drawn as soon as the state is here; the objects' count, which asks the storage, fills in after.
+  // The objects page is those objects, so it waits for them.
+  const current = ++revision, loading = page === 'home' ? loadSpace() : null;
+  const [result, space] = await Promise.all([api('/v1/state'), page === 'objects' ? loadSpace() : undefined]);
   if (requestId && current === revision) {
     try {
       const found = (await api(requestApi)).request;
@@ -231,6 +234,7 @@ async function refresh() {
   if (current !== revision) return;
   state = { ...result, space };
   render();
+  if (loading) { const loaded = await loading; if (current === revision) { state = { ...state, space: loaded }; render(); } }
 }
 // Saved values and OAuth connections are independent lists.
 const keptWhen = value => new Date(value).toLocaleString('ja-JP');
@@ -309,7 +313,7 @@ function render() {
       <div class="home-cards">
         ${card('/secrets', 'シークレット', `保存値 ${kept.length} 件`)}
         ${card('/connections', '接続', connections.length ? `${connections.length} 件・${connections.map(item => item.label).join('、')}` : 'ありません')}
-        ${card('/objects', 'オブジェクト', space?.available ? `${space.usage.count} 件・${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}` : '使えません')}
+        ${card('/objects', 'オブジェクト', space === undefined ? '…' : space?.available ? `${space.usage.count} 件・${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}` : '使えません')}
         ${card('/keys', 'アクセスキー', keys.length ? `承認済み ${keys.length} 件${lastUsed ? '・最終利用 ' + new Date(lastUsed).toLocaleString('ja-JP') : ''}` : 'ありません')}
         ${card('/functions', 'ファンクション', `${state.functions?.length || 0} 種類`)}
       </div>`);
