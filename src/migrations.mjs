@@ -1,7 +1,8 @@
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 // Names are opaque identifiers. Connection state is stored independently of ordinary values.
 // Migrations preserve resource identity and plaintext, and rebind ciphertext explicitly when needed.
 export const STEPS = {
+  19: migrateHoldings,
   18: migratePrincipalGraph,
   17: migratePrincipals,
   16: migrateResponsibilities,
@@ -54,6 +55,42 @@ export const STEPS = {
 // link is a credential too: one scoped to a single request. A key waiting to be approved is a principal
 // already, with a request open to whoever will own it. What an app needs to hand its users back are its
 // settings. Nothing else changes: what is held keeps its holder.
+// What a principal has is one kind of thing: a holding, with an id of its own. A secret, an object and a
+// connection differ in what is done with the content, not in what they are. Lines drawn onto a held thing point
+// at its id, so a name can change or be reused without the line following the wrong thing.
+function migrateHoldings({ db }) {
+  db.exec(`
+    CREATE TABLE holdings (
+      id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('secret','object','connection')), name TEXT NOT NULL,
+      size INTEGER NOT NULL DEFAULT 0, readable INTEGER NOT NULL DEFAULT 0, type TEXT, content BLOB,
+      connector TEXT, subject TEXT, status TEXT, generation INTEGER NOT NULL DEFAULT 1, kept_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX holdings_holder ON holdings(holder_id, kind, name);
+    CREATE UNIQUE INDEX holdings_name ON holdings(holder_id, kind, name) WHERE kind <> 'connection';
+    INSERT INTO holdings (id,holder_id,kind,name,size,readable,content,created_at,updated_at)
+      SELECT id,owner_id,'secret',name,size,readable,content,created_at,updated_at FROM secrets;
+    INSERT INTO holdings (id,holder_id,kind,name,content,connector,subject,status,generation,kept_by,created_at,updated_at)
+      SELECT id,owner_id,'connection',label,state,connector,subject,status,generation,kept_by,created_at,updated_at FROM connections;
+    CREATE TABLE relations_next (
+      subject_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, relation TEXT NOT NULL CHECK(relation IN ('owner','actor','viewer','editor')),
+      object_type TEXT NOT NULL CHECK(object_type IN ('principal','holding')), object_id TEXT NOT NULL,
+      alias TEXT, scope TEXT, created_at TEXT NOT NULL,
+      PRIMARY KEY (subject_id, relation, object_type, object_id)
+    );
+    INSERT INTO relations_next SELECT subject_id,relation,'principal',object_id,alias,scope,created_at FROM relations WHERE object_type='principal';
+    INSERT OR IGNORE INTO relations_next
+      SELECT r.subject_id,r.relation,'holding',h.id,NULL,r.scope,r.created_at FROM relations r
+      JOIN holdings h ON h.kind='secret' AND h.holder_id=r.holder_id AND h.name=r.object_id WHERE r.object_type='secret';
+    DROP TABLE relations;
+    ALTER TABLE relations_next RENAME TO relations;
+    CREATE INDEX relations_object ON relations(object_type, object_id, relation);
+    CREATE UNIQUE INDEX relations_alias ON relations(subject_id, relation, alias) WHERE alias IS NOT NULL;
+    DROP TABLE secrets;
+    DROP TABLE connections;
+  `);
+}
+
 function migratePrincipalGraph({ db }) {
   const now = new Date().toISOString();
   db.exec(`
@@ -267,11 +304,11 @@ export const SCHEMA = `
   CREATE INDEX credentials_principal ON credentials(principal_id);
   CREATE TABLE relations (
     subject_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, relation TEXT NOT NULL CHECK(relation IN ('owner','actor','viewer','editor')),
-    object_type TEXT NOT NULL CHECK(object_type IN ('principal','secret','object','connection')), holder_id TEXT NOT NULL DEFAULT '', object_id TEXT NOT NULL,
+    object_type TEXT NOT NULL CHECK(object_type IN ('principal','holding')), object_id TEXT NOT NULL,
     alias TEXT, scope TEXT, created_at TEXT NOT NULL,
-    PRIMARY KEY (subject_id, relation, object_type, holder_id, object_id)
+    PRIMARY KEY (subject_id, relation, object_type, object_id)
   );
-  CREATE INDEX relations_object ON relations(object_type, holder_id, object_id, relation);
+  CREATE INDEX relations_object ON relations(object_type, object_id, relation);
   CREATE UNIQUE INDEX relations_alias ON relations(subject_id, relation, alias) WHERE alias IS NOT NULL;
   CREATE TABLE settings (
     principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
@@ -288,21 +325,14 @@ export const SCHEMA = `
   );
   CREATE INDEX requests_from ON requests(from_id, created_at);
   CREATE INDEX requests_to ON requests(to_id, created_at);
-  CREATE TABLE secrets (
-    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL,
-    size INTEGER NOT NULL, readable INTEGER NOT NULL,
-    content TEXT NOT NULL,
-    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-    UNIQUE(owner_id, name)
+  CREATE TABLE holdings (
+    id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('secret','object','connection')), name TEXT NOT NULL,
+    size INTEGER NOT NULL DEFAULT 0, readable INTEGER NOT NULL DEFAULT 0, type TEXT, content BLOB,
+    connector TEXT, subject TEXT, status TEXT, generation INTEGER NOT NULL DEFAULT 1, kept_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   );
-  CREATE INDEX secrets_owner ON secrets(owner_id, name);
-  CREATE TABLE connections (
-    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, connector TEXT NOT NULL, subject TEXT NOT NULL,
-    label TEXT NOT NULL, state TEXT NOT NULL, status TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 1,
-    kept_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-    UNIQUE(owner_id, connector, subject)
-  );
-  CREATE INDEX connections_owner ON connections(owner_id, id);
+  CREATE INDEX holdings_holder ON holdings(holder_id, kind, name);
+  CREATE UNIQUE INDEX holdings_name ON holdings(holder_id, kind, name) WHERE kind <> 'connection';
   CREATE TABLE records (
     id TEXT PRIMARY KEY, at TEXT NOT NULL, actor_id TEXT NOT NULL, action TEXT NOT NULL,
     object_type TEXT NOT NULL, object_id TEXT NOT NULL, detail TEXT NOT NULL

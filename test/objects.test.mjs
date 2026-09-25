@@ -37,7 +37,8 @@ test('keeps an object for an owner who has no bucket of their own', async (t) =>
   const f = await space(t);
   const put = await f.request('/v1/objects/report.pdf', { method: 'PUT', token: KEY, raw: Buffer.from('%PDF-1.4 hello'), type: 'application/pdf' });
   assert.equal(put.status, 200, put.text);
-  assert.deepEqual(put.json, { key: 'report.pdf', size: 14, content_type: 'application/pdf' });
+  assert.match(put.json.id, /^[0-9a-f-]{36}$/);
+  assert.deepEqual({ ...put.json, id: undefined }, { id: undefined, key: 'report.pdf', size: 14, content_type: 'application/pdf' });
 
   const got = await f.request('/v1/objects/report.pdf', { token: KEY });
   assert.equal(got.status, 200);
@@ -45,11 +46,12 @@ test('keeps an object for an owner who has no bucket of their own', async (t) =>
   assert.equal(got.headers.get('content-type'), 'application/pdf');
 });
 
-test('gives each owner their own room in the bucket', async (t) => {
+test('keeps the bytes under the holding\'s own id, so where they live is nobody else\'s business', async (t) => {
   const f = await space(t);
-  await f.request('/v1/objects/notes/today.txt', { method: 'PUT', token: KEY, raw: Buffer.from('mine'), type: 'text/plain' });
-  const owner = (await f.request('/v1/overview')).json.user.id;
-  assert.deepEqual(f.bucket.calls, [['put', 'owners/' + owner + '/notes/today.txt']]);
+  const put = await f.request('/v1/objects/notes/today.txt', { method: 'PUT', token: KEY, raw: Buffer.from('mine'), type: 'text/plain' });
+  assert.deepEqual(f.bucket.calls, [['put', 'holdings/' + put.json.id]]);
+  const listed = await f.request('/v1/objects', { token: KEY });
+  assert.equal(listed.json.objects[0].id, put.json.id);
 });
 
 test('オブジェクトの取得中に失効したキーへの返却を拒否する', async t => {
@@ -148,7 +150,7 @@ test('signs a listing the way S3 asks for it', async (t) => {
       return new Response('<ListBucketResult><Contents><Key>owners/1/a.txt</Key><Size>3</Size><LastModified>2026-09-23T00:00:00.000Z</LastModified></Contents><IsTruncated>false</IsTruncated></ListBucketResult>', { status: 200 });
     },
   });
-  const listed = await new Objects(bucket).list('1', '');
+  const listed = await bucket.list('owners/1/', '');
   assert.deepEqual(listed.objects, [{ key: 'a.txt', size: 3, updated_at: Date.parse('2026-09-23T00:00:00.000Z') }]);
   assert.equal(listed.cursor, null);
   assert.match(seen[0].url, /^https:\/\/example-bucket\.s3\.ap-northeast-1\.amazonaws\.com\/\?/);
@@ -175,11 +177,29 @@ test('says what an owner is using and what they may use', async (t) => {
 
 test('refuses to keep more than the space lends', async (t) => {
   const f = await space(t);
-  f.bucket.objects.set('owners/x/big', { body: Buffer.alloc(0), contentType: 'text/plain', updated_at: Date.now() });
   const owner = (await f.request('/v1/overview')).json.user.id;
-  f.bucket.objects.delete('owners/x/big');
-  f.bucket.objects.set(`owners/${owner}/big`, { body: { length: 1024 * 1024 * 1024 }, contentType: 'text/plain', updated_at: Date.now() });
+  f.app.store.db.prepare("INSERT INTO holdings (id,holder_id,kind,name,size,type,created_at,updated_at) VALUES ('big-1',?,'object','big',?,'text/plain','2026-01-01','2026-01-01')").run(owner, 1024 * 1024 * 1024);
   const refused = await f.request('/v1/objects/more.txt', { method: 'PUT', token: KEY, raw: Buffer.from('x'), type: 'text/plain' });
   assert.equal(refused.status, 409, refused.text);
   assert.equal(refused.json.error.code, 'space_full');
+});
+
+test('置いたものは ID で共有でき、見せられた相手は同じものを読み、編集を許された相手は同じものを書き換える', async (t) => {
+  const f = await space(t);
+  const put = await f.request('/v1/objects/plan.md', { method: 'PUT', raw: Buffer.from('# plan'), type: 'text/markdown' });
+  const made = await f.request('/v1/principals', { method: 'POST', data: { name: 'colleague', credential: 'key' } });
+  const token = made.json.token, id = made.json.principal.id;
+  assert.equal((await f.request('/v1/holdings/' + put.json.id + '/content', { token, anonymous: true })).status, 403, 'nothing before a line is drawn');
+  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: id, relation: 'viewer', object_type: 'holding', object_id: put.json.id } })).status, 201);
+  const shown = await f.request('/v1/holdings', { token, anonymous: true });
+  assert.deepEqual(shown.json.holdings.map(row => [row.id, row.kind, row.name, row.relation]), [[put.json.id, 'object', 'plan.md', 'viewer']]);
+  const read = await f.request('/v1/holdings/' + put.json.id + '/content', { token, anonymous: true });
+  assert.equal(read.status, 200); assert.equal(read.text, '# plan'); assert.equal(read.headers.get('content-type'), 'text/markdown');
+  assert.equal((await f.request('/v1/holdings/' + put.json.id + '/content', { method: 'PUT', raw: Buffer.from('# changed'), type: 'text/markdown', token, anonymous: true })).status, 403, 'a viewer does not write');
+  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: id, relation: 'editor', object_type: 'holding', object_id: put.json.id } })).status, 201);
+  assert.equal((await f.request('/v1/holdings/' + put.json.id + '/content', { method: 'PUT', raw: Buffer.from('# changed'), type: 'text/markdown', token, anonymous: true })).status, 200);
+  assert.equal((await f.request('/v1/objects/plan.md')).text, '# changed', 'the holder sees the change under their own name for it');
+  const lines = await f.request('/v1/holdings/' + put.json.id);
+  assert.deepEqual(lines.json.holding.lines.map(row => [row.subject_id, row.relation]).sort(), [[id, 'editor'], [id, 'viewer']], 'the holder sees who is on the thing');
+  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: id, relation: 'viewer', object_type: 'holding', object_id: put.json.id }, token, anonymous: true })).status, 403, 'only the holder draws lines');
 });

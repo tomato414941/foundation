@@ -5,11 +5,13 @@ import { randomUUID } from 'node:crypto';
 const invalidResult = () => fail(502, 'service_response', '接続先からの応答を確認できませんでした。');
 export const CONNECTION_LIMIT = 50;
 const now = () => new Date().toISOString();
+const COLUMNS = 'id, holder_id AS owner_id, connector, subject, name AS label, content AS state, status, generation, kept_by, created_at, updated_at';
 
 export class Connections {
   constructor(store, connectors) { this.store = store; this.db = store.db; this.vault = store.vault; this.connectors = connectors; this.pending = new Map(); }
-  list(ownerId) { return this.db.prepare('SELECT * FROM connections WHERE owner_id=? ORDER BY created_at,id').all(ownerId); }
-  get(ownerId, id) { return this.db.prepare('SELECT * FROM connections WHERE owner_id=? AND id=?').get(ownerId, id); }
+  // A connection is a holding: the row is read with the names this module has always used.
+  list(ownerId) { return this.db.prepare(`SELECT ${COLUMNS} FROM holdings WHERE kind='connection' AND holder_id=? ORDER BY created_at,id`).all(ownerId); }
+  get(ownerId, id) { return this.db.prepare(`SELECT ${COLUMNS} FROM holdings WHERE kind='connection' AND holder_id=? AND id=?`).get(ownerId, id); }
   at(ownerId, id) {
     if (typeof id !== 'string' || !id || id.length > 200 || /[\x00-\x1f\x7f]/.test(id)) fail(400, 'invalid_connection', '接続IDを指定してください。');
     const row = this.get(ownerId, id);
@@ -40,31 +42,37 @@ export class Connections {
         if (!existing || existing.generation !== previous.generation) fail(409, 'connection_changed', '状態が変わりました。もう一度お試しください。');
         if (existing.subject !== subject) fail(409, 'account_changed', '登録し直すには同じアカウントを選んでください。');
       }
-      if (!previous && this.db.prepare('SELECT 1 FROM connections WHERE owner_id=? AND connector=? AND subject=?').get(ownerId, connector, subject)) fail(409, 'already_connected', 'この認証情報は登録済みです。');
+      if (!previous && this.db.prepare("SELECT 1 FROM holdings WHERE kind='connection' AND holder_id=? AND connector=? AND subject=?").get(ownerId, connector, subject)) fail(409, 'already_connected', 'この認証情報は登録済みです。');
       if (!previous && this.list(ownerId).length >= CONNECTION_LIMIT) fail(409, 'connection_limit', `登録できる接続は${CONNECTION_LIMIT}件までです。`);
       const id = existing?.id ?? randomUUID(), sealed = this.vault.seal(state, `connection:${ownerId}:${id}`);
-      if (existing) this.db.prepare("UPDATE connections SET connector=?,subject=?,label=?,state=?,status='connected',generation=generation+1,updated_at=? WHERE id=?").run(connector, subject, label, sealed, stamp, id);
-      else this.db.prepare("INSERT INTO connections (id,owner_id,connector,subject,label,state,status,kept_by,created_at,updated_at) VALUES (?,?,?,?,?,?,'connected',?,?,?)").run(id, ownerId, connector, subject, label, sealed, keptBy, stamp, stamp);
+      if (existing) this.db.prepare("UPDATE holdings SET connector=?,subject=?,name=?,content=?,status='connected',generation=generation+1,updated_at=? WHERE id=?").run(connector, subject, label, sealed, stamp, id);
+      else this.db.prepare("INSERT INTO holdings (id,holder_id,kind,name,content,connector,subject,status,kept_by,created_at,updated_at) VALUES (?,?,'connection',?,?,?,?,'connected',?,?,?)").run(id, ownerId, label, sealed, connector, subject, keptBy, stamp, stamp);
       return this.get(ownerId, id);
     });
   }
   saveState(row, state) {
     return this.store.transaction(() => {
       this.current(row);
-      this.db.prepare('UPDATE connections SET state=?,updated_at=? WHERE id=?').run(this.vault.seal(state, `connection:${row.owner_id}:${row.id}`), now(), row.id);
+      this.db.prepare('UPDATE holdings SET content=?,updated_at=? WHERE id=?').run(this.vault.seal(state, `connection:${row.owner_id}:${row.id}`), now(), row.id);
     });
   }
   reconnectRequired(row) {
-    this.db.prepare("UPDATE connections SET status='reconnect_required',generation=generation+1,updated_at=? WHERE id=? AND owner_id=? AND generation=? AND status='connected'").run(now(), row.id, row.owner_id, row.generation);
+    this.db.prepare("UPDATE holdings SET status='reconnect_required',generation=generation+1,updated_at=? WHERE id=? AND holder_id=? AND generation=? AND status='connected'").run(now(), row.id, row.owner_id, row.generation);
   }
   disconnect(ownerId, id) {
     return this.store.transaction(() => {
       const row = this.at(ownerId, id);
-      this.db.prepare("UPDATE connections SET status='disconnecting',generation=generation+1,updated_at=? WHERE id=?").run(now(), row.id);
+      this.db.prepare("UPDATE holdings SET status='disconnecting',generation=generation+1,updated_at=? WHERE id=?").run(now(), row.id);
       return row;
     });
   }
-  remove(ownerId, id) { return this.db.prepare('DELETE FROM connections WHERE owner_id=? AND id=?').run(ownerId, id).changes > 0; }
+  remove(ownerId, id) {
+    return this.store.transaction(() => {
+      const gone = this.db.prepare("DELETE FROM holdings WHERE kind='connection' AND holder_id=? AND id=?").run(ownerId, id).changes > 0;
+      if (gone) this.db.prepare("DELETE FROM relations WHERE object_type='holding' AND object_id=?").run(id);
+      return gone;
+    });
+  }
   view(row, { owner = false } = {}) {
     const connector = this.connectors.get(row.connector), state = this.state(row);
     if (!owner) return { id: row.id, connector: row.connector, service: connector.service, label: state.facts.label || row.label, status: row.status, facts: state.facts,
