@@ -345,7 +345,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
           const definition = requestDefinition(input);
           if (definition.kind === 'connect') connectors.get(definition.input?.connector);
-          const row = requests.create(token, { ...definition, purpose: purposeValue(input.purpose), steps: input.steps ?? [], validMinutes: input.valid_minutes ?? 30 });
+          const row = requestActions.ask(token, { ...definition, purpose: purposeValue(input.purpose), steps: input.steps ?? [], validMinutes: input.valid_minutes ?? 30 });
           return send(201, { request: viewRequest(row, origin) });
         }
         if (!id && method === 'GET') {

@@ -410,8 +410,8 @@ function renderRequest() {
 // The owner puts something into storage for a key. Everything specific to the service is the AI's words;
 // Foundation shows only where it will go and how it will be handed over.
 function renderStore(row, shell, expiry) {
-  const asked = row.input.fields;
-  const title = asked.length === 1 ? `${esc(asked[0].label)}を預ける` : `${asked.length}件を預ける`;
+  const asked = row.input.fields, replacing = asked.some(one => one.replace);
+  const title = asked.length === 1 ? `${esc(asked[0].label)}を${replacing ? '置き換える' : '預ける'}` : `${asked.length}件を${replacing ? '置き換える' : '預ける'}`;
   const site = asked.find(one => one.site)?.site;
   const field = (one, at) => one.multiline
     ? `<textarea id="stored-${at}" name="value-${at}" rows="6" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>`
@@ -420,11 +420,17 @@ function renderStore(row, shell, expiry) {
     <dl class="approval-facts">${row.purpose ? `<div class="approval-purpose"><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}</dl>
     ${stepsBlock(row.steps)}
     ${site ? `<a class="button secondary full setup-link" href="${esc(site)}" target="_blank" rel="noopener noreferrer"><span>${esc(new URL(site).host)} を開く ↗</span></a>` : ''}
-    <form id="store-request-form">${asked.map((one, at) => `<div class="declared-field"><label for="stored-name-${at}">保存名</label><input id="stored-name-${at}" name="name-${at}" value="${esc(one.name)}" aria-describedby="stored-label-${at}" required maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false"><label id="stored-label-${at}" for="stored-${at}">${esc(one.label)}</label>${field(one, at)}</div>`).join('')}
+    <form id="store-request-form">${asked.map((one, at) => `<div class="declared-field"><label for="stored-name-${at}">保存名</label><input id="stored-name-${at}" name="name-${at}" value="${esc(one.name)}" aria-describedby="stored-label-${at}" required maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">${one.replace ? `<p class="permission-note replace-note" id="replace-note-${at}" data-name="${esc(one.name)}">既存の「${esc(one.name)}」を置き換えます。</p>` : ''}<label id="stored-label-${at}" for="stored-${at}">${esc(one.label)}</label>${field(one, at)}</div>`).join('')}
     <p class="permission-note">接続先での有効性や権限は確認しません。登録した値は、承認済みのAIが利用できます。</p>
     <p class="form-error" role="alert"></p>
     <button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>
     <button class="text-button full" type="button" data-action="deny-request">登録しない</button>${expiry}</section>`);
+  // A replacement the owner renames becomes a new value; the note says which it is now.
+  app.querySelectorAll('.replace-note').forEach(note => {
+    const nameInput = note.parentElement.querySelector('input[name^="name-"]');
+    const update = () => { note.textContent = nameInput.value === note.dataset.name ? `既存の「${note.dataset.name}」を置き換えます。` : `「${note.dataset.name}」はそのまま残り、「${nameInput.value}」として新しく保管します。`; };
+    nameInput.addEventListener('input', update);
+  });
   bindForm(async (data) => {
     const entries = asked.map((_, at) => ({ name: String(data.get('name-' + at) ?? ''), content: String(data.get('value-' + at) ?? '') }));
     try { await api(`/v1/requests/${row.id}/done`, { method: 'POST', data: { entries } }); }

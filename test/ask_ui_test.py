@@ -74,6 +74,29 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     expect(page.get_by_role('heading', name='保存しませんでした', exact=True)).to_be_visible()
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
+    # A rotation: the AI declares a replacement, the page says so, and renaming it makes it a new value instead.
+    kept = page.request.put(args.base + '/v1/secrets?name=npm token', headers={'content-type': 'text/plain', 'origin': args.base}, data='old-token')
+    assert kept.status == 200
+    rotation = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
+        'store': {'name': 'npm token', 'label': 'npmアクセストークン', 'replace': True}, 'purpose': '期限切れのトークンを新しいものに入れ替えます。'}))['request']
+    assert rotation['store'][0]['replace'] is True
+    page.goto(rotation['verification_uri'], wait_until='networkidle')
+    expect(page.get_by_role('heading', name='npmアクセストークンを置き換える', exact=True)).to_be_visible()
+    expect(page.get_by_text('既存の「npm token」を置き換えます。', exact=True)).to_be_visible()
+    review(page)
+    page.screenshot(path=str(shots / 'replace-desktop.png'), full_page=True)
+    page.get_by_label('保存名', exact=True).fill('npm token 2')
+    expect(page.get_by_text('「npm token」はそのまま残り、「npm token 2」として新しく保管します。', exact=True)).to_be_visible()
+    page.get_by_label('保存名', exact=True).fill('npm token')
+    expect(page.get_by_text('既存の「npm token」を置き換えます。', exact=True)).to_be_visible()
+    page.get_by_label('npmアクセストークン', exact=True).fill('new-token')
+    page.get_by_role('button', name='登録する', exact=True).click()
+    expect(page.get_by_role('heading', name='保存しました', exact=True)).to_be_visible()
+    assert page.request.get(args.base + '/v1/secrets?name=npm token').text() == 'new-token'
+    finished = cli('api', 'GET', '/v1/requests/' + rotation['id'])['request']
+    assert finished['result'] == {'names': ['npm token'], 'replaced': ['npm token']}
+    page.request.delete(args.base + '/v1/secrets?name=npm token', headers={'content-type': 'application/json', 'origin': args.base}, data='{}')
+
     # The AI suggests a name; the owner chooses the name used for storage.
     asked = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
         'store': {'name': 'cloudflare/cloudflare-api-token', 'label': 'CloudflareのAPIトークン',

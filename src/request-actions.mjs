@@ -1,11 +1,30 @@
 import { fail } from './errors.mjs';
 import { secretName } from './secrets.mjs';
+import { requestInput } from './request-input.mjs';
 
 // Operations crossing resource boundaries. Each local result and its request completion
 // commit together; notifications run only after the transaction has committed.
 export class RequestActions {
   constructor({ store, requests, secrets, connections, keys, changed = () => {} }) {
     Object.assign(this, { store, requests, secrets, connections, keys, changed });
+  }
+  // A store request is checked against what is kept when it is made, so a mismatch reaches the requester
+  // and never the owner: a name already in use must be declared a replacement, and a replacement must
+  // name something that exists. The same rule is applied again when the owner completes it (see save).
+  ask(token, { kind, input, ...rest }) {
+    const key = this.keys.find(token);
+    if (!key) fail(401, 'not_approved', 'このアクセスキーはまだ承認されていないか、失効しています。');
+    const definition = requestInput(kind, input);
+    if (kind === 'store') for (const field of definition.fields) this.placement(key.owner_id, field, field.name);
+    return this.requests.create(token, { kind, input, ...rest });
+  }
+  // Where one value will go: new under a free name, or in place of what a replacement names. Nothing
+  // else: a request never overwrites what it did not declare it would.
+  placement(ownerId, asked, name) {
+    const existing = this.secrets.find(ownerId, name), replacing = asked.replace && name === asked.name;
+    if (replacing && !existing) fail(409, 'name_missing', `「${name}」という保存値はありません。置き換えではなく、新しく預ける依頼にしてください。`);
+    if (!replacing && existing) fail(409, 'name_taken', `「${name}」はすでに使われています。別の保存名を入力してください。`);
+    return replacing ? existing : null;
   }
   save(id, ownerId, entries) {
     const done = this.store.transaction(() => {
@@ -15,10 +34,13 @@ export class RequestActions {
       if (!Array.isArray(entries) || entries.length !== asked.length || entries.some(entry => !entry || typeof entry.content !== 'string' || !entry.content)) fail(400, 'invalid_values', '入力内容を確認してください。');
       const names = entries.map(entry => secretName(entry.name));
       if (new Set(names).size !== names.length) fail(400, 'duplicate_names', '保存名が重複しています。別の名前を入力してください。');
-      const occupied = names.find(name => this.secrets.find(ownerId, name));
-      if (occupied !== undefined) fail(409, 'name_taken', `「${occupied}」はすでに使われています。別の保存名を入力してください。`);
-      for (const [at, one] of asked.entries()) this.secrets.put(ownerId, { name: names[at], content: Buffer.from(entries[at].content, 'utf8'), secret: one.secret });
-      this.requests.done(id, ownerId, { names });
+      // The owner may have given a replacement another name; then the existing value stays and this one is new.
+      const targets = asked.map((one, at) => this.placement(ownerId, one, names[at]));
+      for (const [at, one] of asked.entries()) {
+        const existing = targets[at];
+        this.secrets.put(ownerId, { name: names[at], content: Buffer.from(entries[at].content, 'utf8'), secret: existing ? !existing.readable : one.secret });
+      }
+      this.requests.done(id, ownerId, { names, replaced: names.filter((_, at) => targets[at]) });
       this.requests.record(id, 'stored');
       return this.requests.get(id);
     });

@@ -168,7 +168,7 @@ test('As with Stripe, a product gives a return page, a refresh page and a signed
   const call = (path, options = {}) => f.request('/v1' + path, { anonymous: true, token: made.token, ...options });
   await call('/accounts/user-1', { method: 'PUT', data: {} });
   const key = (await call('/accounts/user-1/keys', { method: 'POST', data: {} })).json.key;
-  const ask = async () => (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { store: { name: 'npm-token', label: 'npm' }, purpose: 'p', steps: [] } })).json.request;
+  const ask = async (name = 'npm-token') => (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { store: { name, label: 'npm' }, purpose: 'p', steps: [] } })).json.request;
   const first = await ask();
   const back = (await f.request('/v1/request-links/' + first.id, { anonymous: true })).json.back;
   assert.equal(back.name, 'ai-simplicity');
@@ -182,7 +182,8 @@ test('As with Stripe, a product gives a return page, a refresh page and a signed
   const claimed = await fetch(f.base + '/v1/request-links/claim', { method: 'POST', headers: { 'content-type': 'application/json', origin: f.base }, body: JSON.stringify({ request_id: first.id, link }) });
   const cookie = claimed.headers.getSetCookie()[0].split(';')[0];
   assert.equal((await f.request('/v1/requests/' + first.id + '/done', { method: 'POST', anonymous: true, headers: { cookie }, data: { entries: [{ name: 'npm-token', content: 'value' }] } })).status, 200);
-  const second = await ask();
+  // The first request's name is now taken, so the next asks for another.
+  const second = await ask('npm-token-next');
   await f.request('/v1/requests/' + second.id, { method: 'DELETE', anonymous: true, token: key.token, data: {} });
   await arrived(received, 2);
   const events = received.map(item => ({ ...item, event: JSON.parse(item.body) }));
