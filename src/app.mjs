@@ -725,7 +725,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         permit('connect', 'grant');
         const input = await inputBody();
         const connector = connectors.get(input.connector);
-        if (connector.authorization.kind !== 'oauth') fail(400, 'unsupported_authorization', 'この接続方法には対応していません。');
         limit('connect', 10);
         const request = input.request_id === undefined ? null : requests.forTo(input.request_id, holderId, true);
         progressRequestId = request?.id || null;
@@ -738,13 +737,39 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         if (previous && previous.connector !== connector.id) fail(400, 'invalid_connector', '接続方法が一致しません。');
         if (previous && connector.canReconnect === false) fail(400, 'new_connection_required', '新しく登録してください。');
         if (previous?.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
-        const verifier = randomBytes(32).toString('base64url');
-        const redirectUri = origin + '/oauth/' + connector.id + '/callback';
         if (!session) fail(401, 'login_required', 'ログインしてください。');
         still();
-        const flow = { connector: connector.id, requestedBy, verifier, redirectUri, requestId: request?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
-        const state = flows.begin(session.id, flow);
+        const flow = { connector: connector.id, requestedBy, requestId: request?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
+        // A role is made by the holder in the service's own console, then named here; what Foundation must remember
+        // meanwhile (the external ID it chose) travels in the flow, and the flow lasts until the answer is right.
+        if (connector.authorization.kind === 'role') {
+          const started = await connector.authorization.begin({ origin }, grants.context(previous));
+          still();
+          const state = flows.begin(session.id, { ...flow, kind: 'role', memo: started.memo ?? null });
+          return send(200, { url: started.url, state, complete: { fields: started.fields ?? [] } });
+        }
+        const verifier = randomBytes(32).toString('base64url');
+        const redirectUri = origin + '/oauth/' + connector.id + '/callback';
+        const state = flows.begin(session.id, { ...flow, verifier, redirectUri });
         return send(200, { url: await connector.authorization.begin({ state, verifier, redirectUri }, grants.context(previous)) });
+      }
+      if (path === '/v1/connections/complete' && method === 'POST') {
+        permit('connect', 'grant');
+        const input = await inputBody();
+        if (!session) fail(401, 'login_required', 'ログインしてください。');
+        limit('connect', 10);
+        const flow = flows.peek(session.id, input.state);
+        if (!flow || flow.kind !== 'role') fail(400, 'invalid_state', '接続をやり直してください。');
+        const connector = connectors.get(flow.connector);
+        const previous = flow.previous ? grants.connection(holderId, flow.previous.id) : undefined;
+        if (previous && previous.generation !== flow.previous.generation) fail(409, 'connection_changed', '接続状態が変わりました。');
+        if (flow.requestId) { requests.forTo(flow.requestId, holderId, true); progressRequestId = flow.requestId; }
+        const fields = input.fields && typeof input.fields === 'object' && !Array.isArray(input.fields) ? input.fields : {};
+        const saved = await verifyConnection(req, session,
+          () => connector.authorization.complete({ fields, memo: flow.memo }, grants.context(previous)),
+          result => requestActions.connect(flow.requestId, holderId, connector.id, result, { requestedBy: flow.requestedBy, previous }));
+        flows.drop(session.id, input.state);
+        return send(200, { connection: grants.view(saved, { owner: true }) });
       }
       const connectionRoute = path.match(/^\/v1\/connections\/(.+)$/);
       if (connectionRoute && method === 'DELETE') {

@@ -507,7 +507,23 @@ function connect(connectorId, connectionId) {
     <p class="permission-note">${esc(connector.access.name)}。${esc(connector.access.restrictions)} ${connectionId ? '' : '接続すると、承認済みのアクセスキーから使えるようになります。'}${connector.can_revoke ? '' : `停止は${esc(name)}で行います。`}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(connector.label)} ${icon('arrow')}</button></form>`);
   bindForm(async () => {
     const result = await api('/v1/connections', { method: 'POST', data: { connector: connector.id, ...(connectionId ? { connection_id: connectionId } : {}) } });
+    if (result.complete) { completeByHand(connector, result); return; }
     location.assign(result.url);
+  });
+}
+// A role flow: the service's console opens in another tab, the holder makes what Foundation asked for there, and
+// pastes back the one thing Foundation needs to find it. A wrong paste is answered here; the flow is not lost.
+function completeByHand(connector, started) {
+  const name = serviceName(connector);
+  openDialog(`<h2 id="dialog-title">${esc(name)}で役割を作る</h2>
+    <ol class="guidance-steps"><li><a class="button secondary" href="${esc(started.url)}" target="_blank" rel="noopener noreferrer">${esc(name)}の画面を開く ↗</a><p class="permission-note">内容を確認して「作成」を押します。1分ほどで終わります。</p></li>
+    <li>できあがった値を貼り付けます。</li></ol>
+    <form>${started.complete.fields.map(field => `<label for="complete-${esc(field.name)}">${esc(field.label)}</label><input id="complete-${esc(field.name)}" name="${esc(field.name)}" required autocomplete="off" spellcheck="false" placeholder="${esc(field.placeholder || '')}">`).join('')}
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">接続する ${icon('arrow')}</button></form>`);
+  bindForm(async (form) => {
+    const fields = Object.fromEntries(started.complete.fields.map(field => [field.name, String(form.get(field.name) || '')]));
+    await api('/v1/connections/complete', { method: 'POST', data: { state: started.state, fields } });
+    closeDialog(); await refresh(); toast(name + 'に接続しました。');
   });
 }
 // Disconnect only the connected grant; what was handed over by hand remains.
@@ -755,6 +771,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'request-connect') {
       target.disabled = true;
       const result = await api('/v1/connections', { method: 'POST', data: { connector: accessRequest.connector.id, request_id: requestId } });
+      if (result.complete) { target.disabled = false; completeByHand(accessRequest.connector, result); return; }
       location.assign(result.url);
     }
     if (action === 'deny-request') {
