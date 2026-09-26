@@ -24,6 +24,11 @@ Parameters:
     Type: String
     Default: 54.249.17.233.sslip.io
     Description: The host name the service is published under. Caddy obtains its certificate for this name, so it must resolve to the instance's address.
+  ClientHost:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$'
+    Description: Optional OAuth client website. Serves the Foundation logo and redirects to PublicHost.
   AcmeEmail:
     Type: String
     Default: tomato414941@gmail.com
@@ -186,6 +191,21 @@ Resources:
           	reverse_proxy 127.0.0.1:3417
           }
           CADDY
+          if [ -n "${ClientHost}" ]; then
+            cat >> /etc/caddy/Caddyfile <<CLIENT
+
+          ${ClientHost} {
+            encode zstd gzip
+            handle /logo.svg {
+              root * /opt/foundation/app/web
+              file_server
+            }
+            handle {
+              redir https://${PublicHost}{uri} 302
+            }
+          }
+          CLIENT
+          fi
           cat > /etc/systemd/system/caddy.service <<'UNIT'
           [Unit]
           Description=Caddy
