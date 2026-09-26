@@ -76,7 +76,7 @@ test('RuNameとstateで同意を開始し、同じセッションで一度だけ
 
 test('依頼を完了し、確認済みのアカウント情報とAPI用トークンを分けて渡す', async t => {
   const f = await ebayFixture(t), agent = await f.issueKey();
-  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { connector: 'ebay.oauth', purpose: '出品情報を管理します。' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { kind: 'connect', input: { connector: 'ebay.oauth' }, purpose: '出品情報を管理します。' } });
   assert.equal(asked.status, 201);
   const a = await f.connect('personal', { request_id: asked.json.request.id });
   const done = (await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token })).json.request;

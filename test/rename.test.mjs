@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture } from './helpers.mjs';
 
-const KEY = 'fdn_' + 'r'.repeat(43);
+let KEY;
 
 test('lets the owner change what something is called, without the value being handed back', async (t) => {
   const f = await fixture(t);
-  await f.approveKey(KEY);
+  KEY = (await f.approveKey()).token;
   await f.request('/v1/holdings?kind=secret&name=cloudflare/registrar-api-token',
     { method: 'PUT', token: KEY, raw: 'cf-token-value', type: 'text/plain' });
 
@@ -22,7 +22,7 @@ test('lets the owner change what something is called, without the value being ha
 
 test('refuses to move something onto a name already in use', async (t) => {
   const f = await fixture(t);
-  await f.approveKey(KEY);
+  KEY = (await f.approveKey()).token;
   for (const path of ['a/one', 'a/two']) {
     await f.request('/v1/holdings?kind=secret&name=' + path + '', { method: 'PUT', token: KEY, raw: 'x', type: 'text/plain' });
   }
@@ -33,7 +33,7 @@ test('refuses to move something onto a name already in use', async (t) => {
 
 test('hands the same value over under whatever names the caller asks for', async (t) => {
   const f = await fixture(t);
-  await f.approveKey(KEY);
+  KEY = (await f.approveKey()).token;
   await f.request('/v1/holdings?kind=secret&name=github/token', { method: 'PUT', token: KEY, raw: 'ghp_value', type: 'text/plain' });
   const delivered = await f.request('/v1/deliveries', { method: 'POST', token: KEY, anonymous: true,
     data: { names: [{ name: 'github/token', as: 'GH_TOKEN' }, { name: 'github/token', as: 'GITHUB_TOKEN' }] } });
@@ -43,7 +43,7 @@ test('hands the same value over under whatever names the caller asks for', async
 
 test('requires the caller to specify the delivery variable', async (t) => {
   const f = await fixture(t);
-  await f.approveKey(KEY);
+  KEY = (await f.approveKey()).token;
   await f.request('/v1/holdings?kind=secret&name=notes/2026-09-23', { method: 'PUT', token: KEY, raw: 'x', type: 'text/plain' });
   const refused = await f.request('/v1/deliveries', { method: 'POST', token: KEY, anonymous: true, data: { names: ['notes/2026-09-23'] } });
   assert.equal(refused.status, 400);
@@ -52,13 +52,13 @@ test('requires the caller to specify the delivery variable', async (t) => {
 
 test('asks for several things at once, and keeps them together or not at all', async (t) => {
   const f = await fixture(t);
-  await f.approveKey(KEY);
+  KEY = (await f.approveKey()).token;
   const asked = await f.request('/v1/requests', { method: 'POST', token: KEY, anonymous: true, data: {
-    store: [
+    kind: 'store', input: { fields: [
       { name: 'apple/auth-key', label: '.p8 の中身', multiline: true, type: 'text/plain' },
       { name: 'apple/key-id', label: 'Key ID', readable: true },
       { name: 'apple/issuer-id', label: 'Issuer ID', readable: true },
-    ],
+    ] },
     purpose: 'ビルドの提出に使います。' } });
   assert.equal(asked.status, 201, asked.text);
   assert.equal(asked.json.request.kind, 'store');
@@ -81,7 +81,7 @@ test('asks for several things at once, and keeps them together or not at all', a
 
 test('lets the owner put something there themselves', async (t) => {
   const f = await fixture(t);
-  await f.approveKey(KEY);
+  KEY = (await f.approveKey()).token;
   const put = await f.request('/v1/holdings?kind=secret&name=' + encodeURIComponent('aws/session-token'),
     { method: 'PUT', raw: 'sh-token-value', type: 'text/plain' });
   assert.equal(put.status, 200, put.text);

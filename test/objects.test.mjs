@@ -5,7 +5,7 @@ import { fixture } from './helpers.mjs';
 import { Objects, S3Space } from '../src/objects.mjs';
 import { fail } from '../src/errors.mjs';
 
-const KEY = 'fdn_' + 'o'.repeat(43);
+let KEY;
 
 // A bucket that answers like S3 does: whole objects under a key, listed by prefix as XML.
 class FakeBucket {
@@ -29,7 +29,7 @@ class FakeBucket {
 async function space(t) {
   const bucket = new FakeBucket();
   const f = await fixture(t, { space: bucket });
-  await f.approveKey(KEY);
+  KEY = (await f.approveKey()).token;
   return { ...f, bucket };
 }
 
@@ -122,7 +122,7 @@ test('takes a name in the owner\'s own language', async (t) => {
 
 test('says so when no bucket is configured', async (t) => {
   const f = await fixture(t);
-  await f.approveKey(KEY);
+  KEY = (await f.approveKey()).token;
   const result = await f.request('/v1/holdings?kind=object', { token: KEY });
   assert.equal(result.status, 503);
   assert.equal(result.json.error.code, 'space_unavailable');
@@ -131,9 +131,9 @@ test('says so when no bucket is configured', async (t) => {
 test('keeps one owner out of another owner\'s room', async (t) => {
   const f = await space(t);
   await f.request('/v1/holdings?kind=object&name=private.txt', { method: 'PUT', token: KEY, raw: Buffer.from('secret'), type: 'text/plain' });
-  const other = 'fdn_' + 'p'.repeat(43);
+  let other;
   await f.login('other@example.test');
-  await f.approveKey(other, 'their-ai');
+  other = (await f.approveKey('their-ai')).token;
   const listed = await f.request('/v1/holdings?kind=object', { token: other });
   assert.deepEqual(listed.json.holdings, []);
   const read = await f.read('object', 'private.txt', { token: other });

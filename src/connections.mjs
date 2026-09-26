@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 const invalidResult = () => fail(502, 'service_response', '接続先からの応答を確認できませんでした。');
 export const CONNECTION_LIMIT = 50;
 const now = () => new Date().toISOString();
-const COLUMNS = 'id, holder_id AS owner_id, connector, subject, name AS label, content AS state, status, generation, kept_by, created_at, updated_at';
+const COLUMNS = 'id, holder_id AS owner_id, connector, subject, name AS label, content AS state, status, generation, created_at, updated_at';
 
 export class Connections {
   constructor(store, connectors) { this.store = store; this.db = store.db; this.vault = store.vault; this.connectors = connectors; this.pending = new Map(); }
@@ -27,15 +27,15 @@ export class Connections {
       || (result.expiresAt !== null && !(Number.isFinite(result.expiresAt) && result.expiresAt > Date.now()))) invalidResult();
     return { private_state: result.privateState, facts: result.facts, expires_at: result.expiresAt };
   }
-  save(ownerId, connectorId, result, { keptBy = '', previous } = {}) {
+  save(ownerId, connectorId, result, { previous } = {}) {
     this.connectors.get(connectorId);
     const state = this.nextState(result);
     if (previous && result.subject !== previous.subject) fail(409, 'account_changed', '接続先のアカウントが変わりました。');
     const label = String(state.facts.label || result.subject).slice(0, 80);
-    return this.write(ownerId, { connector: connectorId, subject: result.subject, label, keptBy, state }, previous);
+    return this.write(ownerId, { connector: connectorId, subject: result.subject, label, state }, previous);
   }
   // Identity and renewal state belong to the connection, independently of saved values or requests.
-  write(ownerId, { connector, subject, label, state, keptBy = '' }, previous) {
+  write(ownerId, { connector, subject, label, state }, previous) {
     return this.store.transaction(() => {
       const stamp = now(), existing = previous ? this.get(ownerId, previous.id) : undefined;
       if (previous) {
@@ -46,7 +46,7 @@ export class Connections {
       if (!previous && this.list(ownerId).length >= CONNECTION_LIMIT) fail(409, 'connection_limit', `登録できる接続は${CONNECTION_LIMIT}件までです。`);
       const id = existing?.id ?? randomUUID(), sealed = this.vault.seal(state, `connection:${ownerId}:${id}`);
       if (existing) this.db.prepare("UPDATE holdings SET connector=?,subject=?,name=?,content=?,status='connected',generation=generation+1,updated_at=? WHERE id=?").run(connector, subject, label, sealed, stamp, id);
-      else this.db.prepare("INSERT INTO holdings (id,holder_id,kind,name,content,connector,subject,status,kept_by,created_at,updated_at) VALUES (?,?,'connection',?,?,?,?,'connected',?,?,?)").run(id, ownerId, label, sealed, connector, subject, keptBy, stamp, stamp);
+      else this.db.prepare("INSERT INTO holdings (id,holder_id,kind,name,content,connector,subject,status,created_at,updated_at) VALUES (?,?,'connection',?,?,?,?,'connected',?,?)").run(id, ownerId, label, sealed, connector, subject, stamp, stamp);
       return this.get(ownerId, id);
     });
   }

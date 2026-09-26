@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { fixture } from './helpers.mjs';
 import { LATEST, SUPPORTED } from '../src/mcp.mjs';
 
-const KEY = 'fdn_' + 'm'.repeat(43);
+let KEY;
 const META = 'io.modelcontextprotocol/';
 const meta = (version = LATEST) => ({ [META + 'protocolVersion']: version, [META + 'clientCapabilities']: {}, [META + 'clientInfo']: { name: 'test', version: '1' } });
 
@@ -17,7 +17,7 @@ async function modern(f, message, { token = KEY, version = LATEST, headers = {} 
 
 async function connected(t) {
   const f = await fixture(t);
-  await f.approveKey(KEY);
+  KEY = (await f.approveKey()).token;
   return f;
 }
 

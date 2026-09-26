@@ -24,7 +24,7 @@ async function setup(t) {
     return { account: ensured.json.principal, key: { id: key.json.credential.id, token: key.json.token } };
   };
   const ask = async key => {
-    const asked = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { store: { name: 'npm-token', label: 'npm のトークン' }, purpose: '公開に使います', steps: ['トークンを作る'] } });
+    const asked = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { kind: 'store', input: { fields: { name: 'npm-token', label: 'npm のトークン' } }, purpose: '公開に使います', steps: ['トークンを作る'] } });
     assert.equal(asked.status, 201, asked.text);
     return asked.json.request;
   };
@@ -122,7 +122,7 @@ test('A link is made only for the app\'s own users\' open store requests, and ex
   const token = new URLSearchParams(new URL(made.json.url).hash.slice(1)).get('link');
   f.app.store.db.prepare("UPDATE credentials SET expires_at=0 WHERE kind='link'").run();
   assert.equal((await visitor()('/v1/credentials/exchange', { method: 'POST', data: { request_id: request.id, link: token } })).status, 410);
-  const connect = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { connector: 'gmail.readonly', purpose: '確認' } });
+  const connect = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { kind: 'connect', input: { connector: 'gmail.readonly' }, purpose: '確認' } });
   assert.equal((await link(user, connect.json.request.id)).json.error.code, 'link_unsupported');
 });
 
@@ -181,14 +181,14 @@ test('As with Stripe, an app gives a return page, a refresh page and a signed we
   const call = (path, options = {}) => f.request('/v1' + path, { anonymous: true, token: product, ...options });
   const user = (await call('/principals', { method: 'POST', data: { alias: 'user-1' } })).json.principal;
   const key = (await call('/principals/' + user.id + '/credentials', { method: 'POST', data: { kind: 'key' } })).json;
-  const ask = async (name = 'npm-token') => (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { store: { name, label: 'npm' }, purpose: 'p', steps: [] } })).json.request;
+  const ask = async (name = 'npm-token') => (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { kind: 'store', input: { fields: { name, label: 'npm' } }, purpose: 'p', steps: [] } })).json.request;
   const first = await ask();
   const back = (await f.request('/v1/requests/' + first.id + '/return', { anonymous: true })).json.back;
   assert.equal(back.name, 'ai-simplicity');
   assert.equal(back.refresh_url, 'https://simplicity.example.test/foundation/again?foundation_request=' + first.id);
   assert.equal(new URL(back.return_url).searchParams.get('from'), 'foundation', 'the app\'s own query is kept');
   const own = await f.issueKey('own');
-  const unheld = (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: own.token, data: { store: { name: 'x', label: 'x' }, purpose: 'p' } })).json.request;
+  const unheld = (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: own.token, data: { kind: 'store', input: { fields: { name: 'x', label: 'x' } }, purpose: 'p' } })).json.request;
   assert.equal((await f.request('/v1/requests/' + unheld.id + '/return', { anonymous: true })).status, 404, 'no way back for a request no app handles');
   // Done and cancelled: each is told to the app, signed with the secret it was given.
   const made = (await call('/principals/' + user.id + '/credentials', { method: 'POST', data: { kind: 'link', request_id: first.id } })).json;

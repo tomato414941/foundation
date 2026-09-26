@@ -127,7 +127,7 @@ for (const change of ['key', 'connection', 'reconnect']) test('An in-flight cred
 test('A storage request preserves comma and punctuation names in its completion result', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
   const names = ['one, two', '{{value}}', '__proto__'];
-  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { store: names.map(name => ({ name, label: name })), purpose: '値の保存' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'store', input: { fields: names.map(name => ({ name, label: name })) }, purpose: '値の保存' } });
   assert.equal(asked.status, 201, asked.text);
   const complete = await f.request('/v1/requests/' + asked.json.request.id + '/done', { method: 'POST', data: { entries: names.map(name => ({ name, content: 'value-' + name })) } });
   assert.equal(complete.status, 200, complete.text);

@@ -1,15 +1,9 @@
 import { fail } from './errors.mjs';
 
-// The old flat input is accepted only at the HTTP boundary. Domain code uses one shape.
+// A request is its kind and its input, and nothing else names them.
 export function requestDefinition(value) {
-  if (value.kind !== undefined || value.input !== undefined) {
-    if (value.connector !== undefined || value.store !== undefined) fail(400, 'invalid_request', '依頼の形式を一つに揃えてください。');
-    return { kind: value.kind, input: value.input };
-  }
-  if (value.connector !== undefined && value.store !== undefined) fail(400, 'invalid_request', '接続方法と保管の申告は同時に指定できません。');
-  if (value.connector !== undefined) return { kind: 'connect', input: { connector: value.connector } };
-  if (value.store !== undefined) return { kind: 'store', input: { fields: value.store } };
-  fail(400, 'nothing_requested', '依頼の種類と内容を指定してください。');
+  if (typeof value.kind !== 'string' || !value.input || typeof value.input !== 'object' || Array.isArray(value.input)) fail(400, 'nothing_requested', '依頼の種類と内容を指定してください。');
+  return { kind: value.kind, input: value.input };
 }
 
 // A request as anyone sees it: who asks (by name), what for, and where it is answered. The one asked by an

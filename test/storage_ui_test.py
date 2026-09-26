@@ -9,6 +9,8 @@ from pathlib import Path
 from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright, expect
 
+OWNER = '10000000-0000-4000-8000-000000000001'
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--base', required=True)
 parser.add_argument('--screenshots', required=True)
@@ -40,6 +42,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
 
     # Everything but connect and exec is plain HTTP, which is how an agent uses it.
     def api(method, path, body=None, headers=None):
+        if 'as=' not in path: path += ('&' if '?' in path else '?') + 'as=' + OWNER
         request = urllib.request.Request(args.base + path, method=method, data=body,
                                          headers={'authorization': 'Bearer ' + key, **(headers or {})})
         with urllib.request.urlopen(request) as response:

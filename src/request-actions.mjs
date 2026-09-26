@@ -50,13 +50,14 @@ export class RequestActions {
     this.changed(done);
     return JSON.parse(done.result);
   }
-  connect(id, holderId, connector, result, options) {
+  connect(id, holderId, connector, result, { requestedBy = '', previous } = {}) {
     const saved = this.store.transaction(() => {
       if (id) {
         const row = this.requests.forTo(id, holderId, true);
         if (row.kind !== 'connect' || this.requests.input(row).connector !== connector) fail(409, 'wrong_kind', '依頼された接続方法で登録してください。');
       }
-      const saved = this.connections.save(holderId, connector, result, options);
+      const saved = this.connections.save(holderId, connector, result, { previous });
+      this.records.write(holderId, previous ? 'connection.renewed' : 'connection.created', 'connection', saved.id, { connector, requested_by: requestedBy || null, request: id || null });
       if (id) {
         this.requests.done(id, holderId, { connection_id: saved.id });
         this.requests.record(id, 'connected', { connector });

@@ -10,17 +10,16 @@ async function ask(f, token, kind, input) {
   return answer.json.request;
 }
 
-test('明示した依頼の種類と内容を保存し、従来の入力形式も同じ依頼として扱う', async t => {
+test('依頼の種類と内容を保存し、同じ依頼を二度出しても一つとして扱う', async t => {
   const f = await fixture(t), key = await f.issueKey();
   const request = await ask(f, key.token, 'connect', { connector: 'gmail.readonly' });
-  const legacy = await f.request('/v1/requests', { method: 'POST', token: key.token, data: { connector: 'gmail.readonly' } });
-  assert.equal(legacy.json.request.id, request.id);
+  const again = await f.request('/v1/requests', { method: 'POST', token: key.token, data: { kind: 'connect', input: { connector: 'gmail.readonly' } } });
+  assert.equal(again.json.request.id, request.id);
   assert.equal(request.kind, 'connect');
   assert.deepEqual(request.input, { connector: 'gmail.readonly' });
   for (const data of [
     { kind: 'other', input: {} }, { kind: 'connect', input: { fields: [] } },
-    { kind: 'store', input: { connector: 'gmail.readonly' } },
-    { kind: 'connect', input: { connector: 'gmail.readonly' }, store: { name: 'x', label: 'x' } },
+    { kind: 'store', input: { connector: 'gmail.readonly' } }, { connector: 'gmail.readonly' },
   ]) assert.equal((await f.request('/v1/requests', { method: 'POST', token: key.token, data })).status, 400);
 });
 
@@ -71,15 +70,15 @@ test('キー失効時に未完了の依頼を取り消し、同じトークン�
   assert.deepEqual(done.result, { names: ['kept'], replaced: [] });
   assert.equal((await f.request('/v1/requests/' + doneRequest.id, { token: key.token })).status, 401);
   assert.equal((await f.request('/v1/requests', { token: key.token })).status, 401);
-  await f.approveKey(key.token, '再承認');
-  assert.equal((await f.request('/v1/requests/' + doneRequest.id, { token: key.token })).status, 404);
-  assert.deepEqual((await f.request('/v1/requests', { token: key.token })).json.requests.map(row => row.kind), ['actor'], 'a re-approved key is a new principal, with only its own asking behind it');
-  assert.equal((await f.request('/v1/holdings?kind=secret', { token: key.token })).json.holdings[0].name, 'kept');
+  const again = await f.approveKey('再承認');
+  assert.equal((await f.request('/v1/requests/' + doneRequest.id, { token: again.token })).status, 404);
+  assert.deepEqual((await f.request('/v1/requests', { token: again.token })).json.requests.map(row => row.kind), ['actor'], 'a newly approved machine is a new principal, with only its own asking behind it');
+  assert.equal((await f.request('/v1/holdings?kind=secret', { token: again.token })).json.holdings[0].name, 'kept');
 });
 
 test('承認依頼の完了結果を保ち、失効キーの認証を拒否する', async t => {
-  const f = await fixture(t), token = 'fdn_' + 'a'.repeat(43);
-  const approval = await f.approveKey(token);
+  const f = await fixture(t);
+  const approval = await f.approveKey(), token = approval.token;
   const approved = (await f.request('/v1/requests/' + approval.id)).json.request;
   assert.equal(approved.kind, 'actor');
   assert.equal(approved.status, 'done');

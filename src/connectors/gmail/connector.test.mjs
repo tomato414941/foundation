@@ -97,7 +97,7 @@ test('件名のみの接続に本文権限が加わったことを報告する',
 
 test('不足するGmail権限を依頼元が接続一覧と認証情報の取得結果で確認する', async t => {
   const f = await fixture(t), agent = await f.issueKey();
-  const request = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { connector: 'gmail.readonly' } });
+  const request = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { kind: 'connect', input: { connector: 'gmail.readonly' } } });
   const start = await f.request('/v1/connections', { method: 'POST', data: { connector: 'gmail.readonly', request_id: request.json.request.id } });
   const done = await f.callback(new URL(start.json.url), 'personal-metadata');
   assert.match(done.headers.get('location'), /connection=connected/);

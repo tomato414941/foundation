@@ -128,7 +128,7 @@ test('既存の4サービスの暗号化状態・接続ID・保存名を再起�
     const before = second.app.connections.get(USER_A, identity.id);
     assert.equal(before.subject, identity.subject); assert.equal(before.generation, identity.generation);
     assert.ok(second.app.connections.state(before).private_state);
-    const delivered = await second.deliver(identity, { token: agent.token });
+    const delivered = await second.deliver(identity, { token: agent.token, as: USER_A });
     assert.equal(delivered.status, 200, delivered.text);
     assert.ok(delivered.json.delivery.environment[identity.output]);
     const state = second.app.connections.state(second.app.connections.get(USER_A, identity.id));

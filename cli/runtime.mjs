@@ -3,7 +3,7 @@ import { open, mkdir, stat, lstat, mkdtemp, writeFile, chmod, readFile, rename }
 import { parseArgs } from 'node:util';
 import { rmSync, readdirSync, constants } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { homedir, hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -21,21 +21,9 @@ import { guide } from './guide.mjs';
 // There is also `api`, which is for people and for scripts rather than for agents: it attaches the key to a
 // request and prints what comes back. One escape hatch, so that the API can grow without this program growing
 // a verb for every endpoint, and without deciding for an agent how it ought to use any of them.
-async function runtimeKey(path, create, privateDirectory) {
-  if (create) {
-    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    if (privateDirectory) {
-      const directory = await stat(dirname(path));
-      if ((directory.mode & 0o077) || (process.getuid && directory.uid !== process.getuid())) throw new Error('Foundation key directory must be owned by the current user and private (mode 700).');
-    }
-    let created;
-    try {
-      created = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-      await created.writeFile('fdn_' + randomBytes(32).toString('base64url') + '\n');
-      await created.sync();
-    } catch (error) { if (error.code !== 'EEXIST') throw error; }
-    finally { await created?.close(); }
-  }
+// The key file: what Foundation issued, kept private. Nothing here makes a key; Foundation does, once, when this
+// machine becomes a principal, and the file is the only place it lives afterwards.
+async function readKey(path, { missingOk = false } = {}) {
   let handle;
   try {
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -45,10 +33,19 @@ async function runtimeKey(path, create, privateDirectory) {
     if (!/^fdn_[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('Invalid runtime key file.');
     return token;
   } catch (error) {
-    if (error.code === 'ENOENT') throw new Error('No key yet. Run: foundation connect');
+    if (error.code === 'ENOENT') { if (missingOk) return null; throw new Error('No key yet. Run: foundation connect'); }
     if (error.code === 'ELOOP') throw new Error('Runtime key file must not be a symbolic link.');
     throw error;
   } finally { await handle?.close(); }
+}
+async function writeKey(path, token, privateDirectory) {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  if (privateDirectory) {
+    const directory = await stat(dirname(path));
+    if ((directory.mode & 0o077) || (process.getuid && directory.uid !== process.getuid())) throw new Error('Foundation key directory must be owned by the current user and private (mode 700).');
+  }
+  const created = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+  try { await created.writeFile(token + '\n'); await created.sync(); } finally { await created.close(); }
 }
 
 const VERSION = createRequire(import.meta.url)('./package.json').version;
@@ -185,7 +182,7 @@ async function main() {
   }
   const url = serverUrl(connectTo ?? configured);
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
-  const token = await runtimeKey(keyPath, action === 'connect', !process.env.FOUNDATION_RUNTIME_KEY_FILE);
+  let token = await readKey(keyPath, { missingOk: action === 'connect' });
   async function send(target, payload, { accept, method = 'POST', type = 'application/json' } = {}) {
     const response = await fetch(url.origin + target, { method, headers: { authorization: 'Bearer ' + token, ...(payload === undefined ? {} : { 'content-type': type }) },
       body: payload === undefined ? undefined : type === 'application/json' ? JSON.stringify(payload) : payload, redirect: 'error', signal: AbortSignal.timeout(30_000) });
@@ -195,6 +192,10 @@ async function main() {
   }
   // One request, with the key attached and the answer printed as it came. Nothing here knows the endpoints.
   if (action === 'api') {
+    if (!/[?&]as=/.test(call.target)) {
+      const me = await send('/v1/principals/me', undefined, { method: 'GET', accept: () => true });
+      if (me.acts_for?.length === 1) call.target += (call.target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(me.acts_for[0].id);
+    }
     const response = await fetch(url.origin + call.target, { method: call.method, headers: { authorization: 'Bearer ' + token, ...(call.body === undefined ? {} : { 'content-type': call.type }) },
       ...(call.body === undefined ? {} : { body: call.body }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
     const bytes = Buffer.from(await response.arrayBuffer());
@@ -207,9 +208,18 @@ async function main() {
   // A key the owner already approved has nothing to ask; connecting again only changes which server is remembered.
   if (action === 'connect') {
     // A key someone already accepted has nothing to ask; connecting again only changes which server is remembered.
+    // No key, or one this server does not know: become a principal there first, and keep what it issues.
+    const wanted = name ?? hostname() + ' の ' + (agentName || 'AI');
     let me = null;
-    try { me = await send('/v1/principals/me', undefined, { method: 'GET' }); } catch {}
-    const answer = me?.acts_for?.length ? null : await send('/v1/requests', { kind: 'actor', input: { name: name ?? hostname() + ' の ' + (agentName || 'AI') } });
+    if (token) me = await send('/v1/principals/me', undefined, { method: 'GET', accept: data => data.error?.code === 'not_approved' });
+    if (!token || me?.error) {
+      const response = await fetch(url.origin + '/v1/principals', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: wanted }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
+      const made = await response.json();
+      if (!response.ok || !/^fdn_[A-Za-z0-9_-]{43}$/.test(made.token ?? '')) throw new Error('Foundation did not issue a key (' + response.status + ', ' + (made.error?.code || 'unknown') + ').');
+      await writeKey(keyPath, made.token, !process.env.FOUNDATION_RUNTIME_KEY_FILE);
+      token = made.token; me = null;
+    }
+    const answer = me?.acts_for?.length ? null : await send('/v1/requests', { kind: 'actor', input: { name: wanted } });
     if (connectTo !== undefined) await saveUrl(url.origin);
     console.log(answer === null ? 'Already approved on ' + url.origin + '.' : JSON.stringify(answer, null, 2));
     console.log('\nKey file: ' + keyPath + '\nServer: ' + url.origin + (connectTo !== undefined ? ' (saved to ' + configPath() + ')' : '') + '\nEverything else is HTTP: Authorization: Bearer <the contents of that file>');
@@ -219,8 +229,12 @@ async function main() {
   // and the person it asked has yet to answer.
   const current = await send('/v1/principals/me', undefined, { method: 'GET' });
   if (!current.acts_for?.length) throw new Error('Foundation request failed (401, not_approved). This key acts for nobody yet' + (current.requests?.[0] ? '; it is waiting for approval at ' + current.requests[0].verification_uri : '') + '.');
+  // Whose holdings a run reaches: the one this key acts for, or the one named when it acts for several.
+  const holder = process.env.FOUNDATION_AS || (current.acts_for.length === 1 ? current.acts_for[0].id : null);
+  if (!holder) throw new Error('This key acts for several principals. Set FOUNDATION_AS=<principal id> to say which one this run is for.');
+  const forHolder = target => target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(holder);
   let delivery;
-  if (names.length) ({ delivery } = await send('/v1/deliveries', { names }));
+  if (names.length) ({ delivery } = await send(forHolder('/v1/deliveries'), { names }));
   else delivery = { environment: {}, files: [] };
   if (!delivery || typeof delivery.environment !== 'object' || !Array.isArray(delivery.files)) throw new Error('Foundation returned an invalid delivery.');
   // What each of them sets is the server's to say; this applies it and refuses anything it may not set.
@@ -289,7 +303,7 @@ async function main() {
       retainOutput = true;
       // The command wrote it; the agent never saw it, and keeps it that way: the line drawn for the one who kept it is declined.
       let saved;
-      try { saved = await send('/v1/holdings?kind=secret&name=' + encodeURIComponent(output.name), bytes, { method: 'PUT', type: 'application/octet-stream' }); }
+      try { saved = await send(forHolder('/v1/holdings?kind=secret&name=' + encodeURIComponent(output.name)), bytes, { method: 'PUT', type: 'application/octet-stream' }); }
       catch { throw new Error(recovery()); }
       try { await send('/v1/relations', { relation: 'editor', object_type: 'holding', object_id: saved.holding.id }, { method: 'DELETE' }); } catch {}
       retainOutput = false;

@@ -61,7 +61,7 @@ test('Google Cloudの同意をstate・PKCE・オフライン更新付きで要�
 
 test('AIの依頼を完了し、接続の確認結果と短期トークンを分けて渡す', async t => {
   const f = await gcpFixture(t), agent = await f.issueKey();
-  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { connector: 'gcp.oauth', purpose: 'Google Cloudの設定を確認します。' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { kind: 'connect', input: { connector: 'gcp.oauth' }, purpose: 'Google Cloudの設定を確認します。' } });
   assert.equal(asked.status, 201);
   const a = await f.connect('personal', { request_id: asked.json.request.id });
   const done = await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token });

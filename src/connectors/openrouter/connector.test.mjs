@@ -64,10 +64,10 @@ test('OpenRouter callback cannot use another session, forged state, or a denied 
 });
 
 test('承認したキーに認証情報と提供元の有効期限を渡し、失効後の取得を拒否する', async t => {
-  const f = await openrouterFixture(t), token = 'fdn_' + randomBytes(32).toString('base64url');
+  const f = await openrouterFixture(t); let token = 'fdn_' + randomBytes(32).toString('base64url');
   assert.equal((await f.request('/v1/connections', { token, anonymous: true })).status, 401, 'a key nobody knows is nobody');
-  await f.approveKey(token);
-  const created = await f.request('/v1/requests', { method: 'POST', token, data: { connector: 'openrouter.oauth', purpose: 'キー情報を確認。モデルは実行しない。' } });
+  token = (await f.approveKey()).token;
+  const created = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'connect', input: { connector: 'openrouter.oauth' }, purpose: 'キー情報を確認。モデルは実行しない。' } });
   const row = created.json.request;
   assert.equal(row.connector.can_revoke, false);
   assert.match(row.connector.access.restrictions, /読み取り専用のキーではありません/);
