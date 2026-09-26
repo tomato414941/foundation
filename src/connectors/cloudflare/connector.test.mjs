@@ -139,25 +139,22 @@ test('更新応答で省略された権限と更新トークンを元の認可�
 test('複数の同時要求を一回の更新にまとめ、後続の取得でも更新済みの認証情報を渡す', async t => {
   const f = await cloudflareFixture(t), connection = await f.connect(), { token } = await f.issueKey();
   f.expire(connection.id);
-  let release, entered;
-  const started = new Promise(resolve => entered = resolve);
+  let release;
   const hold = new Promise(resolve => release = resolve);
-  f.cloudflare.refreshHandler = async () => { entered(); await hold; };
-  const one = f.deliver(connection, { token });
-  await started;
-  const two = f.deliver(connection, { token });
+  f.cloudflare.refreshHandler = async () => { await hold; };
+  const names = [{ name: connection.id }];
+  const one = f.app.grants.deliver(USER_A, names), two = f.app.grants.deliver(USER_A, names);
   release();
   const results = await Promise.all([one, two]);
   for (const result of results) {
-    assert.equal(result.status, 200, result.text);
-    assert.equal(result.json.delivery.environment.CLOUDFLARE_API_TOKEN, 'cf-access-personal-1');
-    assert.doesNotMatch(result.text, /cf-refresh-/);
+    assert.equal(result.delivery.environment.CLOUDFLARE_API_TOKEN, 'cf-access-personal-1');
+    assert.doesNotMatch(JSON.stringify(result), /cf-refresh-/);
   }
-  assert.deepEqual(results[0].json.delivery, results[1].json.delivery);
+  assert.deepEqual(results[0].delivery, results[1].delivery);
   assert.equal(f.cloudflare.refreshes, 1);
   const delivered = await f.deliver(connection, { token });
   assert.equal(delivered.status, 200, delivered.text);
-  assert.deepEqual(delivered.json.delivery, results[0].json.delivery);
+  assert.deepEqual(delivered.json.delivery, results[0].delivery);
   assert.equal(f.cloudflare.refreshes, 1);
 });
 
