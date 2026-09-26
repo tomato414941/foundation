@@ -15,7 +15,7 @@ export function ebayOauth(client) {
     access: { name: '出品と販売設定の管理', description: '出品・在庫・価格と、配送・支払い・返品ポリシーを管理できます。',
       restrictions: '特定の商品には限定されません。出品の公開や変更で料金が発生する場合があります。' },
     revocationNote: 'eBay側の許可を取り消すと、この接続で取得済みの認証情報も使えなくなる場合があります。',
-    ai: 'Use EBAY_ACCESS_TOKEN as a Bearer token with production eBay APIs. Requested scopes: sell.account and sell.inventory; orders, fulfillment and refunds are not requested. Inspect facts.scopes, missing_scopes and additional_scopes before use. Invoke connection.credentials again before token expiry; saved copies do not refresh. EBAY_OAUTH_EXPIRES_AT is Unix time in milliseconds. Expired or revoked refresh tokens require reconnection. Taxonomy APIs may require a separate application token.',
+    ai: 'Use EBAY_ACCESS_TOKEN as a Bearer token with production eBay APIs. Requested scopes: sell.account and sell.inventory; orders, fulfillment and refunds are not requested. Before use, inspect scopes, missing_scopes and additional_scopes in facts from GET /v1/connections. Obtain current credentials with POST /v1/deliveries and {"names":[{"name":"<connection id>"}]}; Foundation refreshes tokens when needed. EBAY_OAUTH_EXPIRES_AT is Unix time in milliseconds. Expired or revoked refresh tokens require reconnection. Taxonomy APIs may require a separate application token.',
     variables: ['EBAY_ACCESS_TOKEN', 'EBAY_ACCOUNT_ID', 'EBAY_USERNAME', 'EBAY_OAUTH_EXPIRES_AT'],
     authorization: {
       kind: 'oauth',
