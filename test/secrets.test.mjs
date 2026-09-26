@@ -264,12 +264,12 @@ test('The runtime hands what is kept to a command, as bytes and as a file, and n
   assert.match(refused.err, /connect .* exec/);
 });
 
-test('Storage needs an approved key, and the guide describes the API an agent calls itself', async t => {
+test('保存には承認済みキーを要求し、ガイドに保存と受け渡しのAPIを示す', async t => {
   const f = await fixture(t), token = key();
   assert.equal((await f.request('/v1/holdings?kind=secret', { token, anonymous: true })).status, 401);
   const guide = (await run(['guide'], {})).out.toString();
-  assert.match(guide, /PUT \/v1\/secrets\?name=<name>/);
-  assert.match(guide, /POST \/v1\/deliver/);
+  assert.match(guide, /PUT \/v1\/holdings\?kind=secret&name=<name>/);
+  assert.match(guide, /POST \/v1\/deliveries/);
   assert.match(guide, /Nothing here needs a shell/);
   assert.match(guide, /foundation exec <ENV>/, 'and the one thing that does need one');
 });
