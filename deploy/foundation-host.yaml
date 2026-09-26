@@ -22,7 +22,7 @@ Parameters:
     Description: An existing bucket for the file space (empty for none). The host may create and read objects under files/ only.
   PublicHost:
     Type: String
-    Default: 54.249.17.233.sslip.io
+    Default: foundationsystems.app
     Description: The host name the service is published under. Caddy obtains its certificate for this name, so it must resolve to the instance's address.
   ClientHost:
     Type: String
