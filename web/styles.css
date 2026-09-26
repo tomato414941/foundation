@@ -332,3 +332,10 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 
 .checkbox { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 15px; }
 .checkbox input { width: 18px; height: 18px; }
+
+.grant-group + .grant-group { margin-top: 8px; }
+.grant-group-name { margin: 12px 20px 0; font-size: 14px; font-weight: 600; color: var(--muted); }
+.tag { display: inline-flex; align-items: center; align-self: center; height: 22px; padding: 0 9px; margin-right: 4px; border-radius: 999px; background: var(--soft); font-size: 12px; line-height: 22px; color: inherit; }
+.tag-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.tag-chip { min-height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: 14px; color: var(--muted); }
+.tag-chip.chosen { background: var(--selected); color: inherit; border-color: transparent; }

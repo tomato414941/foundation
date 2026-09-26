@@ -18,7 +18,7 @@ const inspected = (change = {}) => ({ active: true, sub: '1001', username: 'pers
 
 async function ebayFixture(t, ebay = new FakeEbay()) {
   const f = await fixture(t, { connectors: [ebayOauth(ebay)] });
-  const connections = async () => (await f.request('/v1/overview')).json.connections;
+  const connections = async () => (await f.request('/v1/overview')).json.grants;
   async function start(input = {}) {
     const result = await f.request('/v1/connections', { method: 'POST', data: { connector: 'ebay.oauth', ...input } });
     assert.equal(result.status, 200, result.text);
@@ -31,7 +31,7 @@ async function ebayFixture(t, ebay = new FakeEbay()) {
     assert.match(done.headers.get('location'), /connection=connected/);
     return (await connections()).find(item => item.subject === (code === 'work' ? '1002' : '1001'));
   }
-  const state = id => f.app.connections.state(f.app.connections.get(USER_A, id));
+  const state = id => f.app.grants.state(f.app.grants.held(USER_A, id));
   return { ...f, ebay, start, callback, connect, connections, state };
 }
 
@@ -93,7 +93,8 @@ test('依頼を完了し、確認済みのアカウント情報とAPI用トー�
   assert.equal(Number(delivered.json.delivery.environment.EBAY_OAUTH_EXPIRES_AT), delivered.json.expires_at);
   assert.doesNotMatch(delivered.text, /ebay-refresh-|test-ebay-secret/);
   assert.equal(f.ebay.refreshes, 0);
-  assert.deepEqual((await f.request('/v1/overview')).json.secrets, []);
+  const kept = (await f.request('/v1/overview')).json.grants;
+  assert.deepEqual(kept.map(item => ({ id: item.id, method: item.method })), [{ id: a.id, method: 'authorized' }]);
 });
 
 test('アカウントを固定IDで区別し、名前の変更を反映して別の所有者から分離する', async t => {
@@ -119,10 +120,13 @@ test('eBayが報告した権限と有効期限を利用し、権限の不足や�
   const a = await f.connect(), delivered = await f.deliver(a, { token: agent.token });
   assert.equal(a.label, '1001');
   assert.equal(delivered.json.expires_at, exp * 1000);
-  assert.deepEqual(delivered.json.facts.missing_scopes, [EBAY_SCOPES[1]]);
-  assert.deepEqual(delivered.json.facts.additional_scopes, [extra]);
+  const facts = await f.connectionFacts(a, { token: agent.token });
+  assert.deepEqual(facts.missing_scopes, [EBAY_SCOPES[1]]);
+  assert.deepEqual(facts.additional_scopes, [extra]);
   f.ebay.inspectHandler = () => json(inspected({ scope: '' }));
-  assert.deepEqual((await f.deliver(a, { token: agent.token })).json.facts.missing_scopes, EBAY_SCOPES);
+  const updated = await f.deliver(a, { token: agent.token });
+  assert.equal(updated.status, 200, updated.text);
+  assert.deepEqual((await f.connectionFacts(a, { token: agent.token })).missing_scopes, EBAY_SCOPES);
 });
 
 test('同時取得をまとめて期限切れトークンを更新し、更新用トークンの元の期限を保持する', async t => {
@@ -166,7 +170,7 @@ test('更新用トークンの期限切れでは再接続を求める', async t 
   const f = await ebayFixture(t), a = await f.connect(), agent = await f.issueKey();
   f.expire(a.id);
   const state = f.state(a.id);
-  f.app.connections.saveState(f.app.connections.get(USER_A, a.id), { ...state, private_state: { ...state.private_state, refresh_expires_at: Date.now() - 1 } });
+  f.app.grants.saveState(f.app.grants.held(USER_A, a.id), { ...state, private_state: { ...state.private_state, refresh_expires_at: Date.now() - 1 } });
   const delivered = await f.deliver(a, { token: agent.token });
   assert.equal(delivered.json.error.code, 'reconnect_required');
   assert.equal(f.ebay.refreshes, 0);
@@ -180,7 +184,7 @@ test('eBayの障害やアプリ設定の失敗は再試行可能にし、許可�
     const result = await f.deliver(a, { token: agent.token });
     assert.ok(result.status >= 500);
     assert.doesNotMatch(result.text, /private-provider|ebay-refresh/);
-    assert.equal((await f.connections())[0].status, 'connected');
+    assert.equal((await f.connections())[0].status, 'usable');
   }
   f.ebay.refreshHandler = () => json({ error: 'invalid_grant', error_description: 'private-provider-error' }, 400);
   assert.equal((await f.deliver(a, { token: agent.token })).json.error.code, 'reconnect_required');
@@ -238,23 +242,20 @@ test('接続解除時にeBayへの取り消しを選べ、失敗した場合も�
   }
 });
 
-test('保存したeBay認証情報をCLI経由で子プロセスに渡す', async t => {
+test('接続IDからeBay認証情報を更新し、CLI経由で子プロセスに渡す', async t => {
   const f = await ebayFixture(t), a = await f.connect(), agent = await f.issueKey();
-  const name = 'eBay/API token';
-  const saved = await f.request('/v1/functions/connection.credentials', { method: 'POST', token: agent.token, data: { connection_id: a.id, save: { EBAY_ACCESS_TOKEN: name } } });
-  assert.equal(saved.status, 200); assert.equal(saved.json.saved[0].name, name);
-  assert.doesNotMatch(saved.text, /ebay-access-|ebay-refresh-/);
+  f.expire(a.id);
   const dir = await mkdtemp(join(tmpdir(), 'foundation-ebay-cli-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'key');
   await writeFile(keyPath, agent.token, { mode: 0o600 });
-  const child = spawn(process.execPath, ['cli/runtime.mjs', 'exec', 'EBAY_ACCESS_TOKEN=' + name, '--', process.execPath, '-e',
-    'if(process.env.EBAY_ACCESS_TOKEN!=="ebay-access-personal-0"||process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("ebay-ready")'],
+  const child = spawn(process.execPath, ['cli/runtime.mjs', 'exec', '--inputs', JSON.stringify([{ name: a.id }]), '--', process.execPath, '-e',
+    'if(process.env.EBAY_ACCESS_TOKEN!=="ebay-access-personal-1"||process.env.EBAY_ACCOUNT_ID!=="1001"||process.env.EBAY_USERNAME!=="personal-seller"||process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("ebay-ready")'],
   { env: { ...process.env, FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath } });
   let out = '', err = '';
   child.stdout.on('data', value => { out += value; }); child.stderr.on('data', value => { err += value; });
   const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
   assert.equal(code, 0, err); assert.equal(out.trim(), 'ebay-ready');
   assert.doesNotMatch(out + err, /ebay-access-|ebay-refresh-/);
-  assert.equal(f.ebay.refreshes, 0);
+  assert.equal(f.ebay.refreshes, 1);
 });

@@ -16,10 +16,10 @@ export const GRANT_COUNT_MAX = 200;
 export const GRANT_TOTAL_MAX = 20 * 1024 * 1024;
 export const VALUE_MAX = 16384;
 export const CONNECTION_LIMIT = 50;
-export const PURPOSE_MAX = 80;
+export const TAG_MAX = 40, TAGS_MAX = 16;
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const PROVIDER = /^[a-z][a-z0-9-]{0,39}$/;
-const COLUMNS = 'h.id,h.holder_id,h.kind,h.name,h.created_at,h.updated_at,g.method,g.provider,g.purpose,g.connector,g.subject,g.status,g.generation,g.size';
+const COLUMNS = 'h.id,h.holder_id,h.kind,h.name,h.created_at,h.updated_at,g.method,g.provider,g.connector,g.subject,g.status,g.generation,g.size';
 const FROM = 'FROM holdings h JOIN grants g ON g.holding_id=h.id';
 const invalidResult = () => fail(502, 'service_response', '接続先からの応答を確認できませんでした。');
 const now = () => new Date().toISOString();
@@ -29,10 +29,14 @@ export function providerName(value) {
   if (typeof value !== 'string' || !PROVIDER.test(value)) fail(400, 'invalid_provider', '相手先は英小文字・数字・ハイフンで指定してください。');
   return value;
 }
-export function purposeText(value) {
-  if (value === undefined || value === null) return '';
-  if (typeof value !== 'string' || value.length > PURPOSE_MAX || /[\x00-\x1f\x7f]/.test(value)) fail(400, 'invalid_purpose', `用途は${PURPOSE_MAX}文字以内で指定してください。`);
-  return value.trim();
+// Tags are the holder's words for grouping: a project, an environment, whatever they sort by. Given as an
+// array or as comma-separated text; each is trimmed, and the set is what is kept.
+export function tagList(value) {
+  const many = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
+  if (value !== undefined && value !== null && !Array.isArray(value) && typeof value !== 'string') fail(400, 'invalid_tags', 'タグは文字列の配列で指定してください。');
+  const tags = [...new Set(many.map(tag => typeof tag === 'string' ? tag.trim().replace(/\s+/g, ' ') : null).filter(tag => tag !== ''))];
+  if (tags.length > TAGS_MAX || tags.some(tag => tag === null || tag.length > TAG_MAX || /[\x00-\x1f\x7f,]/.test(tag))) fail(400, 'invalid_tags', `タグは${TAGS_MAX}件までで、1件は${TAG_MAX}文字以内、カンマは使えません。`);
+  return tags;
 }
 
 // Delivery variable and optional filename are explicitly chosen by the caller.
@@ -79,12 +83,23 @@ export class Grants {
     if (!row) fail(404, 'not_found', '保管されたものが見つかりません。');
     return row;
   }
-  list(holderId, { method, provider, prefix } = {}) {
+  list(holderId, { method, provider, tag, prefix } = {}) {
     const where = ['h.holder_id=?'], params = [holderId];
     if (method) { where.push('g.method=?'); params.push(method); }
     if (provider) { where.push('g.provider=?'); params.push(provider); }
+    if (tag) { where.push('EXISTS (SELECT 1 FROM grant_tags t WHERE t.holding_id=h.id AND t.tag=?)'); params.push(tag); }
     if (prefix !== undefined) { where.push('substr(h.name,1,length(?))=? COLLATE BINARY'); params.push(String(prefix), String(prefix)); }
     return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE ${where.join(' AND ')} ORDER BY h.name, h.created_at, h.id`).all(...params);
+  }
+  tags(row) { return this.db.prepare('SELECT tag FROM grant_tags WHERE holding_id=? ORDER BY tag').all(row.id).map(item => item.tag); }
+  // Every tag a holder has used, so a screen can offer them; nothing defines a tag beyond its use.
+  tagsUsed(holderId) {
+    return this.db.prepare('SELECT t.tag, COUNT(*) AS count FROM grant_tags t JOIN holdings h ON h.id=t.holding_id WHERE h.holder_id=? GROUP BY t.tag ORDER BY t.tag').all(holderId);
+  }
+  setTags(id, tags) {
+    this.db.prepare('DELETE FROM grant_tags WHERE holding_id=?').run(id);
+    const insert = this.db.prepare('INSERT INTO grant_tags (holding_id,tag) VALUES (?,?)');
+    for (const tag of tags) insert.run(id, tag);
   }
   usage(holderId) {
     return this.db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(g.size),0) AS bytes ${FROM} WHERE h.holder_id=? AND g.method='given'`).get(holderId);
@@ -98,22 +113,23 @@ export class Grants {
     return this.vault.openBytes(sealed, this.binding(row));
   }
   // Writing the same name again replaces what is there. Who may read it is said by the lines onto it, not here.
-  put(holderId, { name, content, provider, purpose }) {
+  put(holderId, { name, content, provider, tags }) {
     if (content.length > GRANT_MAX) fail(413, 'too_large', '1件あたり1MBまでです。');
     holdingName(name);
-    const chosenProvider = providerName(provider), chosenPurpose = purposeText(purpose);
+    const chosenProvider = providerName(provider), chosenTags = tags === undefined ? undefined : tagList(tags);
     return this.store.transaction(() => {
       const existing = this.find(holderId, name), { count, bytes } = this.usage(holderId);
       if (!existing && count >= GRANT_COUNT_MAX) fail(409, 'grant_limit', `預けられるのは${GRANT_COUNT_MAX}件までです。使わないものを消してください。`);
       if (bytes - (existing?.size ?? 0) + content.length > GRANT_TOTAL_MAX) fail(409, 'storage_full', '預けられる合計は20MBまでです。使わないものを消してください。');
       const id = existing?.id ?? randomUUID(), sealed = this.vault.sealBytes(content, `grant:${holderId}:${id}`);
       if (existing) {
-        this.db.prepare('UPDATE grants SET size=?,state=?,provider=COALESCE(?,provider),purpose=CASE WHEN ?=\'\' THEN purpose ELSE ? END WHERE holding_id=?').run(content.length, sealed, chosenProvider, chosenPurpose, chosenPurpose, id);
+        this.db.prepare('UPDATE grants SET size=?,state=?,provider=COALESCE(?,provider) WHERE holding_id=?').run(content.length, sealed, chosenProvider, id);
         this.holdings.touch(id);
       } else {
         this.holdings.insert(id, holderId, 'grant', name);
-        this.db.prepare("INSERT INTO grants (holding_id,method,provider,purpose,size,state) VALUES (?,'given',?,?,?,?)").run(id, chosenProvider, chosenPurpose, content.length, sealed);
+        this.db.prepare("INSERT INTO grants (holding_id,method,provider,size,state) VALUES (?,'given',?,?,?)").run(id, chosenProvider, content.length, sealed);
       }
+      if (chosenTags !== undefined) this.setTags(id, chosenTags);
       return this.get(id);
     });
   }
@@ -134,13 +150,14 @@ export class Grants {
     if (row.method === 'given' && wanted !== row.name && this.find(row.holder_id, wanted)) fail(409, 'name_taken', 'その名前はすでに使われています。');
     return this.get(this.holdings.rename(row, wanted).id);
   }
-  // Provider and purpose are the holder's words about a grant, changed without touching what it holds.
-  describe(row, { provider, purpose }) {
-    const sets = [], params = [];
-    if (provider !== undefined) { sets.push('provider=?'); params.push(providerName(provider)); }
-    if (purpose !== undefined) { sets.push('purpose=?'); params.push(purposeText(purpose)); }
-    if (sets.length) { this.db.prepare(`UPDATE grants SET ${sets.join(',')} WHERE holding_id=?`).run(...params, row.id); this.holdings.touch(row.id); }
-    return this.get(row.id);
+  // Provider and tags are the holder's words about a grant, changed without touching what it holds.
+  describe(row, { provider, tags }) {
+    return this.store.transaction(() => {
+      if (provider !== undefined) this.db.prepare('UPDATE grants SET provider=? WHERE holding_id=?').run(providerName(provider), row.id);
+      if (tags !== undefined) this.setTags(row.id, tagList(tags));
+      if (provider !== undefined || tags !== undefined) this.holdings.touch(row.id);
+      return this.get(row.id);
+    });
   }
   remove(row) { this.holdings.remove(row); }
 
@@ -161,16 +178,16 @@ export class Grants {
     if (!row || row.method === 'given') fail(404, 'not_found', '接続が見つかりません。');
     return row;
   }
-  save(holderId, connectorId, result, { previous, purpose } = {}) {
+  save(holderId, connectorId, result, { previous, tags } = {}) {
     const connector = this.connectors.get(connectorId);
     const state = this.nextState(result);
     if (previous && result.subject !== previous.subject) fail(409, 'account_changed', '接続先のアカウントが変わりました。');
     const label = String(state.facts.label || result.subject).slice(0, 80);
     const method = connector.authorization?.kind === 'role' ? 'delegated' : 'authorized';
-    return this.writeConnection(holderId, { connector: connectorId, method, provider: connector.provider ?? connectorId.split('.')[0], subject: result.subject, label, state, purpose }, previous);
+    return this.writeConnection(holderId, { connector: connectorId, method, provider: connector.provider ?? connectorId.split('.')[0], subject: result.subject, label, state, tags }, previous);
   }
   // Identity and renewal state belong to the grant, independently of saved values or requests.
-  writeConnection(holderId, { connector, method, provider, subject, label, state, purpose }, previous) {
+  writeConnection(holderId, { connector, method, provider, subject, label, state, tags }, previous) {
     return this.store.transaction(() => {
       const existing = previous ? this.held(holderId, previous.id) : undefined;
       if (previous) {
@@ -185,7 +202,8 @@ export class Grants {
         this.holdings.rename(existing, label);
       } else {
         this.holdings.insert(id, holderId, 'grant', label);
-        this.db.prepare("INSERT INTO grants (holding_id,method,provider,purpose,connector,subject,status,state) VALUES (?,?,?,?,?,?,'usable',?)").run(id, method, provider, purposeText(purpose), connector, subject, sealed);
+        this.db.prepare("INSERT INTO grants (holding_id,method,provider,connector,subject,status,state) VALUES (?,?,?,?,?,'usable',?)").run(id, method, provider, connector, subject, sealed);
+        if (tags !== undefined) this.setTags(id, tagList(tags));
       }
       return this.get(id);
     });
@@ -317,7 +335,7 @@ export class Grants {
   // What is said of a grant. The holder sees everything but the sealed state; whoever acts for them sees what
   // they need to use it.
   view(row, { owner = false } = {}) {
-    const base = { ...this.holdings.view(row), method: row.method, provider: row.provider, purpose: row.purpose, status: row.status };
+    const base = { ...this.holdings.view(row), method: row.method, provider: row.provider, tags: this.tags(row), status: row.status };
     if (row.method === 'given') return { ...base, size: row.size };
     const connector = this.connectors.get(row.connector), state = this.state(row);
     const shared = { connector: row.connector, service: connector.service, label: state.facts.label || row.name, facts: state.facts,

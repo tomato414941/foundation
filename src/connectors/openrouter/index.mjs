@@ -9,7 +9,7 @@ export function openrouterOauth(client) {
   const result = ({ subject, secret }) => ({ subject, privateState: secret, facts: client.facts(secret),
     expiresAt: secret.expires_at, credentials: { environment: { OPENROUTER_API_KEY: secret.access_token } } });
   return {
-    id: 'openrouter.oauth', service: OPENROUTER, label: 'OpenRouterで接続', register: 'oauth', available: client.enabled, canReconnect: false, credentialType: 'api_key',
+    id: 'openrouter.oauth', service: OPENROUTER, label: 'OpenRouterで接続', provider: 'openrouter', register: 'oauth', available: client.enabled, canReconnect: false, credentialType: 'api_key',
     // OpenRouter makes the key before Foundation receives it, so a registration that fails can leave one behind.
     failureNote: { text: '登録できなくても、OpenRouterで作成済みのキーが残る場合があります。', link: '不要なキーはOpenRouterで削除してください', href: 'https://openrouter.ai/keys' },
     intro: 'OpenRouterでログインし、Foundation用のキーを作成します。',

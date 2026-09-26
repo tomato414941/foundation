@@ -105,6 +105,13 @@ export async function fixture(t, options = {}) {
   async function deliver(connection, options = {}) {
     return request('/v1/deliveries', { method: 'POST', data: { names: [{ name: connection.id }] }, ...options });
   }
+  async function connectionFacts(connection, options = {}) {
+    const listed = await request('/v1/connections', options);
+    assert.equal(listed.status, 200, listed.text);
+    const found = listed.json.connections.find(item => item.id === connection.id);
+    assert.ok(found, '接続一覧から対象の接続を取得する');
+    return found.facts;
+  }
   // Makes a key known to the owner: the key asks to act for whoever opens its request, and the owner types its code.
   // A machine becomes a principal with no credential, is issued a key, asks to act for the person, and is approved.
   async function become(name = 'dev-us') {
@@ -146,5 +153,5 @@ export async function fixture(t, options = {}) {
     app.grants.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
   }
   if (options.login !== false) await login();
-  return { app, auth, gmail, base, request, lookup, read, keep, drop, become, login, start, callback, credential, deliver, issueKey, approveKey, expire, close, cookie: () => cookie };
+  return { app, auth, gmail, base, request, lookup, read, keep, drop, become, login, start, callback, credential, deliver, connectionFacts, issueKey, approveKey, expire, close, cookie: () => cookie };
 }

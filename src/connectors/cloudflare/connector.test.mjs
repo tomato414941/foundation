@@ -13,13 +13,13 @@ async function cloudflareFixture(t, cloudflare = new FakeCloudflare()) {
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
-  const connections = async () => (await f.request('/v1/overview')).json.connections;
+  const connections = async () => (await f.request('/v1/overview')).json.grants;
   async function connect(code = 'personal', input = {}) {
     const done = await f.callback(await start(input), code);
     assert.match(done.headers.get('location'), /connection=connected/);
     return (await connections()).find(item => item.subject === (code === 'work' ? '2' : '1').repeat(32));
   }
-  const secret = connection => f.app.connections.state(f.app.connections.get(USER_A, connection.id)).private_state;
+  const secret = connection => f.app.grants.state(f.app.grants.held(USER_A, connection.id)).private_state;
   return { ...f, cloudflare, start, connect, connections, secret };
 }
 
@@ -106,8 +106,9 @@ test('権限の不足と追加をCloudflareの応答に従って報告する', a
   f.cloudflare.scopes = 'user-details.read offline_access workers-r2.read';
   const connection = await f.connect(), delivered = await f.deliver(connection);
   assert.equal(delivered.status, 200);
-  assert.deepEqual(delivered.json.facts.missing_scopes, ['account-settings.read', 'dns.write', 'registrar-domains.admin', 'zone.read']);
-  assert.deepEqual(delivered.json.facts.additional_scopes, ['workers-r2.read']);
+  const facts = await f.connectionFacts(connection);
+  assert.deepEqual(facts.missing_scopes, ['account-settings.read', 'dns.write', 'registrar-domains.admin', 'zone.read']);
+  assert.deepEqual(facts.additional_scopes, ['workers-r2.read']);
 });
 
 test('有効期限が近づいた認証情報を更新し、ローテーション後の更新トークンを次回に使用する', async t => {
@@ -122,7 +123,7 @@ test('有効期限が近づいた認証情報を更新し、ローテーショ�
   const second = await f.deliver(connection);
   assert.equal(second.json.delivery.environment.CLOUDFLARE_API_TOKEN, 'cf-access-personal-2');
   assert.equal(f.cloudflare.calls.filter(call => call.options.body?.get('grant_type') === 'refresh_token')[1].options.body.get('refresh_token'), 'cf-refresh-personal-1');
-  assert.equal(second.json.facts.user_id, connection.subject);
+  assert.equal((await f.connectionFacts(connection)).user_id, connection.subject);
 });
 
 test('更新応答で省略された権限と更新トークンを元の認可から引き継ぐ', async t => {
@@ -132,25 +133,32 @@ test('更新応答で省略された権限と更新トークンを元の認可�
   const delivered = await f.deliver(connection);
   assert.equal(delivered.status, 200, delivered.text);
   assert.equal(f.secret(connection).refresh_token, 'cf-refresh-personal-0');
-  assert.deepEqual(delivered.json.facts.scopes, CLOUDFLARE_SCOPES);
+  assert.deepEqual((await f.connectionFacts(connection)).scopes, CLOUDFLARE_SCOPES);
 });
 
-test('複数の同時要求を一回の更新にまとめ、保存した認証情報を後から受け渡す', async t => {
+test('複数の同時要求を一回の更新にまとめ、後続の取得でも更新済みの認証情報を渡す', async t => {
   const f = await cloudflareFixture(t), connection = await f.connect(), { token } = await f.issueKey();
   f.expire(connection.id);
-  let release;
+  let release, entered;
+  const started = new Promise(resolve => entered = resolve);
   const hold = new Promise(resolve => release = resolve);
-  f.cloudflare.refreshHandler = async () => { await hold; };
-  const row = f.app.connections.get(USER_A, connection.id), one = f.app.connections.obtain(row), two = f.app.connections.obtain(row);
+  f.cloudflare.refreshHandler = async () => { entered(); await hold; };
+  const one = f.deliver(connection, { token });
+  await started;
+  const two = f.deliver(connection, { token });
   release();
-  await Promise.all([one, two]);
+  const results = await Promise.all([one, two]);
+  for (const result of results) {
+    assert.equal(result.status, 200, result.text);
+    assert.equal(result.json.delivery.environment.CLOUDFLARE_API_TOKEN, 'cf-access-personal-1');
+    assert.doesNotMatch(result.text, /cf-refresh-/);
+  }
+  assert.deepEqual(results[0].json.delivery, results[1].json.delivery);
   assert.equal(f.cloudflare.refreshes, 1);
-  const saved = await f.request('/v1/functions/connection.credentials', { method: 'POST', token,
-    data: { connection_id: connection.id, save: { CLOUDFLARE_API_TOKEN: 'cloudflare-example' } } });
-  assert.equal(saved.status, 200, saved.text);
-  assert.doesNotMatch(saved.text, /cf-access-|cf-refresh-/);
-  const delivered = await f.request('/v1/deliveries', { method: 'POST', token, data: { names: [{ name: 'cloudflare-example', as: 'CHOSEN_TOKEN' }] } });
-  assert.equal(delivered.json.delivery.environment.CHOSEN_TOKEN, 'cf-access-personal-1');
+  const delivered = await f.deliver(connection, { token });
+  assert.equal(delivered.status, 200, delivered.text);
+  assert.deepEqual(delivered.json.delivery, results[0].json.delivery);
+  assert.equal(f.cloudflare.refreshes, 1);
 });
 
 test('失効した更新トークンでは再接続を案内し、一時的な通信障害は再試行できる状態を維持する', async t => {
@@ -158,7 +166,7 @@ test('失効した更新トークンでは再接続を案内し、一時的な�
   f.expire(connection.id);
   f.cloudflare.refreshHandler = () => json({ error: 'temporarily_unavailable' }, 503);
   assert.equal((await f.deliver(connection)).status, 502);
-  assert.equal((await f.connections())[0].status, 'connected');
+  assert.equal((await f.connections())[0].status, 'usable');
   f.cloudflare.refreshHandler = () => json({ error: 'invalid_grant' }, 400);
   assert.equal((await f.deliver(connection)).status, 409);
   assert.equal((await f.connections())[0].status, 'reconnect_required');
@@ -171,7 +179,7 @@ test('クライアント認証の失敗を接続設定の問題として報告�
   const delivered = await f.deliver(connection);
   assert.equal(delivered.status, 503);
   assert.equal(delivered.json.error.code, 'cloudflare_unavailable');
-  assert.equal((await f.connections())[0].status, 'connected');
+  assert.equal((await f.connections())[0].status, 'usable');
   assert.doesNotMatch(delivered.text, /test-cloudflare-secret/);
 });
 

@@ -14,7 +14,7 @@ function gmail(client, range, description) {
   const result = ({ subject, secret }) => ({ subject, privateState: secret, facts: client.facts(secret, subject, range), expiresAt: secret.expires_at,
     credentials: { environment: { GOOGLE_OAUTH_ACCESS_TOKEN: secret.access_token, GMAIL_ACCOUNT_EMAIL: subject, GOOGLE_OAUTH_EXPIRES_AT: String(secret.expires_at) } } });
   return {
-    id: 'gmail.' + range, service, label: 'Googleで接続', register: 'oauth', credentialType: 'oauth2_access_token', available: client.enabled, variables, ...description,
+    id: 'gmail.' + range, service, label: 'Googleで接続', provider: 'gmail', register: 'oauth', credentialType: 'oauth2_access_token', available: client.enabled, variables, ...description,
     ai: 'Inspect facts.scopes, missing_scopes and additional_scopes before using Gmail. Scope differences are reported, not blocked. Invoke connection.credentials again before token expiry; saved copies do not refresh.',
     authorization: {
       kind: 'oauth',

@@ -10,7 +10,7 @@ export function cloudflareOauth(client) {
   const result = ({ subject, secret }) => ({ subject, privateState: secret, facts: client.facts(secret), expiresAt: secret.expires_at,
     credentials: { environment: { CLOUDFLARE_API_TOKEN: secret.access_token, CLOUDFLARE_OAUTH_EXPIRES_AT: String(secret.expires_at) } } });
   return {
-    id: 'cloudflare.oauth', service, label: 'Cloudflareで接続', register: 'oauth', credentialType: 'oauth2_access_token', available: client.enabled,
+    id: 'cloudflare.oauth', service, label: 'Cloudflareで接続', provider: 'cloudflare', register: 'oauth', credentialType: 'oauth2_access_token', available: client.enabled,
     intro: 'Cloudflareで対象のアカウントを選び、アクセスを許可します。',
     access: { name: 'ドメインとDNSの管理', description: 'アカウント情報の読み取り、DNSレコードの編集、ドメインの登録・更新などの管理を行えます。',
       restrictions: '選択したアカウントのドメインが対象です。ドメインの登録・更新には料金がかかります。' },
