@@ -250,7 +250,7 @@ async function main() {
       }
     }
   };
-  const recovery = () => 'Foundation could not confirm the output was saved. The private output file is retained for recovery: ' + outputPath + '\nRetry with foundation api PUT "/v1/secrets?name=<URL-encoded-name>" --from <file>, then remove that recovery file.';
+  const recovery = () => 'Foundation could not confirm the output was saved. The private output file is retained for recovery: ' + outputPath + '\nRetry with foundation api PUT "/v1/holdings?kind=secret&name=<URL-encoded-name>" --from <file>, then remove that recovery file.';
   process.once('exit', cleanup);
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => {
     interrupted = true;
@@ -289,9 +289,9 @@ async function main() {
       retainOutput = true;
       // The command wrote it; the agent never saw it, and keeps it that way: the line drawn for the one who kept it is declined.
       let saved;
-      try { saved = await send('/v1/secrets?name=' + encodeURIComponent(output.name), bytes, { method: 'PUT', type: 'application/octet-stream' }); }
+      try { saved = await send('/v1/holdings?kind=secret&name=' + encodeURIComponent(output.name), bytes, { method: 'PUT', type: 'application/octet-stream' }); }
       catch { throw new Error(recovery()); }
-      try { await send('/v1/relations', { relation: 'editor', object_type: 'holding', object_id: saved.secret.id }, { method: 'DELETE' }); } catch {}
+      try { await send('/v1/relations', { relation: 'editor', object_type: 'holding', object_id: saved.holding.id }, { method: 'DELETE' }); } catch {}
       retainOutput = false;
       console.error('Saved output as ' + JSON.stringify(output.name) + '.');
     }

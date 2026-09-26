@@ -121,7 +121,7 @@ test('既存の4サービスの暗号化状態・接続ID・保存名を再起�
     identities.push({ id: row.id, subject: row.subject, generation: row.generation, connector, output });
   }
   const agent = await first.issueKey();
-  await first.request('/v1/secrets?name=a%2Faa%2Faaa', { method: 'PUT', raw: 'independent-snapshot' });
+  await first.request('/v1/holdings?kind=secret&name=a%2Faa%2Faaa', { method: 'PUT', raw: 'independent-snapshot' });
   await first.close();
   const second = await fixture(t, { database, connectors: makeConnectors() });
   for (const identity of identities) {
@@ -135,5 +135,5 @@ test('既存の4サービスの暗号化状態・接続ID・保存名を再起�
     assert.ok(state.private_state.access_token);
     assert.doesNotMatch(JSON.stringify(delivered.json.facts), /"access_token":|refresh_token|gho_|sk-or-v1-/);
   }
-  assert.equal((await second.request('/v1/secrets?name=a%2Faa%2Faaa')).text, 'independent-snapshot');
+  assert.equal((await second.read('secret', 'a/aa/aaa')).text, 'independent-snapshot');
 });

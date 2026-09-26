@@ -574,44 +574,136 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
-      // Held things by id: the same thing whoever holds it, reached along the lines drawn onto it.
-      if (path === '/v1/holdings' && method === 'GET') { permit('list', 'holding', undefined, subject.id); return send(200, { holdings: principals.shownTo(subject.id) }); }
-      const holdingRoute = path.match(/^\/v1\/holdings\/([a-f0-9-]{36})(\/content)?$/);
-      if (holdingRoute) {
-        const held = holding(holdingRoute[1]);
-        if (!holdingRoute[2] && method === 'GET') {
-          permit('read', held.kind, held.id, held.holder_id);
-          return send(200, { holding: { ...held, ...(held.holder_id === subject.id ? { lines: principals.linesOnto(held.id) } : {}) } });
+      // Held things. Each has an id, and that is how lines, records and the calls below refer to it. A name is how
+      // the holder calls one: a way to find or place a thing, not its identity. The bytes of a secret sit here,
+      // encrypted; the bytes of an object sit in the space; a connection is made by its own flow (/v1/connections).
+      const HOLDING_KINDS = ['secret', 'object', 'connection'];
+      const asHolding = (kind, row) => kind === 'secret' ? { id: row.id, kind, name: row.name, size: row.size, type: null, holder_id: holderId, created_at: row.created_at, updated_at: row.updated_at }
+        : kind === 'object' ? { id: row.id, kind, name: row.key, size: row.size, type: row.content_type, holder_id: holderId, created_at: row.created_at ?? null, updated_at: typeof row.updated_at === 'number' ? new Date(row.updated_at).toISOString() : row.updated_at }
+        : { id: row.id, kind, name: row.label, holder_id: holderId, created_at: row.created_at, updated_at: row.updated_at, ...connections.view(row, { owner: subject.id === holderId }) };
+      const holdingKind = required => {
+        const kind = url.searchParams.get('kind') ?? undefined;
+        if ((required && kind === undefined) || (kind !== undefined && !HOLDING_KINDS.includes(kind))) fail(400, 'invalid_kind', 'kind は secret / object / connection のいずれかです。');
+        return kind;
+      };
+      if (path === '/v1/holdings' && method === 'GET') {
+        if (url.searchParams.get('shown') === 'me') { permit('list', 'holding', undefined, subject.id); return send(200, { holdings: principals.shownTo(subject.id) }); }
+        const kind = holdingKind(false), name = url.searchParams.get('name') ?? undefined, prefix = url.searchParams.get('prefix') ?? undefined;
+        const kinds = kind ? [kind] : HOLDING_KINDS;
+        if (kind === 'object') objects.check();
+        for (const one of kinds) permit('list', one);
+        if (name !== undefined) {
+          const found = (kinds.includes('secret') && secrets.find(holderId, name)) || (kinds.includes('object') && objects.enabled && objects.find(holderId, name));
+          if (!found) fail(404, 'not_found', '保管されたものが見つかりません。');
+          return send(200, { holding: asHolding(found.key === undefined ? 'secret' : 'object', found) });
         }
-        if (holdingRoute[2] && method === 'GET') {
+        const rows = [];
+        if (kinds.includes('secret')) rows.push(...secrets.list(holderId, prefix).map(row => asHolding('secret', row)));
+        if (kinds.includes('object') && objects.enabled) { limit('objects', 60); rows.push(...(await objects.list(holderId, prefix ?? '')).objects.map(row => asHolding('object', row))); still(); }
+        if (kinds.includes('connection')) rows.push(...connections.list(holderId).filter(row => subject.id === holderId || row.status !== 'disconnecting').map(row => asHolding('connection', row)));
+        return send(200, { holdings: rows });
+      }
+      // Placing a thing by name: the holder's name for it. The same name, same kind, replaces what is there.
+      if (path === '/v1/holdings' && method === 'PUT') {
+        const kind = holdingKind(true), name = url.searchParams.get('name');
+        if (kind === 'connection') fail(400, 'invalid_kind', '接続は /v1/connections から作ります。');
+        if (name === null) fail(400, 'invalid_name', '名前を指定してください。');
+        const existing = kind === 'secret' ? secrets.find(holderId, name) : (objects.check(), objects.find(holderId, name));
+        permit('write', kind, existing?.id);
+        limit(kind === 'secret' ? 'secrets' : 'objects', kind === 'secret' ? 120 : 60);
+        const content = await inputBytes(kind === 'secret' ? SECRET_MAX : OBJECT_MAX);
+        if (kind === 'secret' && !content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
+        // A thing made for the holder by someone else is one its maker may read and write: a line says so.
+        const line = saved => { if (!existing && subject.id !== holderId) principals.relate(subject.id, 'editor', 'holding', saved.id); };
+        if (kind === 'secret') {
+          const saved = store.transaction(() => {
+            const match = req.headers['if-match'];
+            const current = match === undefined ? null : secrets.find(holderId, secretName(name));
+            if (match !== undefined && (!current || match !== secretTag(current))) fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
+            const saved = secrets.put(holderId, { name, content });
+            line(saved);
+            res.setHeader('etag', secretTag(secrets.at(holderId, name)));
+            return saved;
+          });
+          return send(200, { holding: asHolding('secret', saved) });
+        }
+        const saved = await objects.put(holderId, name, content, req.headers['content-type'] || 'application/octet-stream');
+        still();
+        line(saved);
+        return send(200, { holding: asHolding('object', objects.find(holderId, name)) });
+      }
+      const holdingRoute = path.match(/^\/v1\/holdings\/([a-f0-9-]{36})(\/content|\/link)?$/);
+      if (holdingRoute) {
+        const held = holding(holdingRoute[1]), part = holdingRoute[2];
+        const view = () => held.kind === 'connection' ? { ...held, ...connections.view(connections.get(held.holder_id, held.id), { owner: subject.id === held.holder_id }) } : held;
+        if (!part && method === 'GET') {
           permit('read', held.kind, held.id, held.holder_id);
+          return send(200, { holding: { ...view(), ...(held.holder_id === subject.id ? { lines: principals.linesOnto(held.id) } : {}) } });
+        }
+        // Renaming changes what the holder calls it and nothing else: lines, records and the bytes stay.
+        if (!part && method === 'PATCH') {
+          if (held.kind === 'connection') fail(405, 'method_not_allowed', 'この操作は利用できません。');
+          permit('rename', held.kind, held.id, held.holder_id);
+          const input = await inputBody();
+          if (held.kind === 'secret') return send(200, { holding: asHolding('secret', secrets.renameRow(secrets.byId(held.id), input.name)) });
+          return send(200, { holding: asHolding('object', objects.rename(objects.byId(held.id), input.name)) });
+        }
+        if (!part && method === 'DELETE') {
+          if (held.kind === 'connection') fail(405, 'method_not_allowed', '接続の解除は /v1/connections から行います。');
+          permit('remove', held.kind, held.id, held.holder_id);
+          await inputBody();
+          if (held.kind === 'secret') secrets.removeRow(secrets.byId(held.id)); else { await objects.removeRow(objects.byId(held.id)); still(); }
+          return send(200, { ok: true });
+        }
+        if (part === '/content' && method === 'GET') {
+          permit('read', held.kind, held.id, held.holder_id);
+          const disposition = `attachment; filename="holding.bin"; filename*=UTF-8''${encodeURIComponent(held.name.split('/').pop()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}`;
           if (held.kind === 'secret') {
-            const content = secrets.content(secrets.byId(held.id));
-            res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length });
+            const row = secrets.byId(held.id), content = secrets.content(row);
+            res.setHeader('etag', secretTag(row));
+            res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length, 'content-disposition': disposition });
             return res.end(content);
           }
           if (held.kind === 'object') {
             const found = await objects.read(objects.byId(held.id));
             still();
-            res.writeHead(200, { 'content-type': found.contentType, 'content-length': found.content.length });
+            res.writeHead(200, { 'content-type': found.contentType, 'content-length': found.content.length, 'content-disposition': disposition });
             return res.end(found.content);
           }
           fail(405, 'method_not_allowed', 'この操作は利用できません。');
         }
-        if (holdingRoute[2] && method === 'PUT') {
+        if (part === '/content' && method === 'PUT') {
           permit('write', held.kind, held.id, held.holder_id);
           if (held.kind === 'secret') {
+            limit('secrets', 120);
             const content = await inputBytes(SECRET_MAX);
             if (!content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
-            return send(200, { secret: secrets.write(secrets.byId(held.id), content) });
+            const saved = store.transaction(() => {
+              const match = req.headers['if-match'], current = secrets.byId(held.id);
+              if (match !== undefined && (!current || match !== secretTag(current))) fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
+              const saved = secrets.write(current, content);
+              res.setHeader('etag', secretTag(secrets.byId(held.id)));
+              return saved;
+            });
+            return send(200, { holding: { ...asHolding('secret', saved), holder_id: held.holder_id } });
           }
           if (held.kind === 'object') {
+            limit('objects', 60);
             const content = await inputBytes(OBJECT_MAX);
-            const saved = await objects.write(objects.byId(held.id), content, req.headers['content-type'] || 'application/octet-stream');
+            await objects.write(objects.byId(held.id), content, req.headers['content-type'] || 'application/octet-stream');
             still();
-            return send(200, saved);
+            return send(200, { holding: { ...asHolding('object', objects.byId(held.id)), holder_id: held.holder_id } });
           }
           fail(405, 'method_not_allowed', 'この操作は利用できません。');
+        }
+        if (part === '/link' && method === 'POST') {
+          if (held.kind !== 'object') fail(405, 'method_not_allowed', 'この操作は利用できません。');
+          permit('link', 'object', held.id, held.holder_id);
+          const input = await inputBody();
+          limit('objects', 60);
+          const link = await objects.link(objects.byId(held.id), input.minutes);
+          still();
+          return send(200, link);
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
@@ -700,91 +792,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         still();
         return send(200, { secrets: { ...kept, count_max: SECRET_COUNT_MAX, bytes_max: SECRET_TOTAL_MAX },
           objects: space ? { count: space.count, bytes: space.bytes, count_max: space.count_max, bytes_max: space.bytes_max } : null });
-      }
-      // The holder's own space of objects. Lent from Foundation's bucket while the holder has none of
-      // their own; the same calls reach a bucket of theirs once one is connected.
-      if (path === '/v1/objects' && method === 'GET') {
-        permit('list', 'object');
-        objects.check();
-        limit('objects', 60);
-        const listed = await objects.list(holderId, url.searchParams.get('prefix') ?? '', url.searchParams.get('cursor') ?? undefined);
-        still();
-        return send(200, listed);
-      }
-      const objectRoute = path.match(/^\/v1\/objects\/(.+?)(\/link)?$/);
-      if (objectRoute) {
-        objects.check();
-        limit('objects', 60);
-        const key = decodeURIComponent(objectRoute[1]);
-        if (objectRoute[2]) {
-          if (method !== 'POST') fail(405, 'method_not_allowed', 'この操作は利用できません。');
-          permit('link', 'object', objects.find(holderId, key)?.id);
-          const input = await inputBody();
-          const link = await objects.link(holderId, key, input.minutes);
-          still();
-          return send(200, link);
-        }
-        if (method === 'PUT') {
-          permit('write', 'object', objects.find(holderId, key)?.id);
-          const content = await inputBytes(OBJECT_MAX);
-          const saved = await objects.put(holderId, key, content, req.headers['content-type'] || 'application/octet-stream');
-          still();
-          return send(200, saved);
-        }
-        if (method === 'GET') {
-          permit('read', 'object', objects.find(holderId, key)?.id);
-          const found = await objects.get(holderId, key);
-          still();
-          res.writeHead(200, { 'content-type': found.contentType, 'content-length': found.content.length,
-            'content-disposition': `attachment; filename="object.bin"; filename*=UTF-8''${encodeURIComponent(key.split('/').pop()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}` });
-          return res.end(found.content);
-        }
-        if (method === 'DELETE') { permit('remove', 'object', objects.find(holderId, key)?.id); await inputBody(); await objects.remove(holderId, key); still(); return send(200, { ok: true }); }
-        fail(405, 'method_not_allowed', 'この操作は利用できません。');
-      }
-      // What is kept, by name. A name is any text, so it travels as ?name=: a path would fold "." and ".." away.
-      if (path === '/v1/secrets' && method === 'GET' && !url.searchParams.has('name')) { permit('list', 'secret'); return send(200, { secrets: secrets.list(holderId, url.searchParams.get('prefix') ?? undefined) }); }
-      if (path === '/v1/secrets' && url.searchParams.has('name')) {
-        const target = url.searchParams.get('name'), held = secrets.find(holderId, target)?.id;
-        if (method === 'GET') {
-          // Whoever may list may learn that a name is not there.
-          if (held === undefined) { permit('list', 'secret'); fail(404, 'not_found', '保管されたものが見つかりません。'); }
-          permit('read', 'secret', held);
-          const row = secrets.at(holderId, target), content = secrets.content(row);
-          res.setHeader('etag', secretTag(row));
-          res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length, 'content-disposition': `attachment; filename="secret.bin"; filename*=UTF-8''${encodeURIComponent(row.name).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}` });
-          return res.end(content);
-        }
-        if (method === 'PUT') {
-          permit('write', 'secret', held);
-          limit('secrets', 120);
-          const content = await inputBytes(SECRET_MAX);
-          if (!content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
-          // A thing made for the holder by someone else is one its maker may read and write: a line says so.
-          const saved = store.transaction(() => {
-            const match = req.headers['if-match'];
-            const current = match === undefined ? null : secrets.find(holderId, secretName(target));
-            if (match !== undefined && (!current || match !== secretTag(current))) fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
-            const saved = secrets.put(holderId, { name: target, content });
-            if (held === undefined && subject.id !== holderId) principals.relate(subject.id, 'editor', 'holding', saved.id);
-            res.setHeader('etag', secretTag(secrets.at(holderId, target)));
-            return saved;
-          });
-          return send(200, { secret: saved });
-        }
-        // Rename without returning or changing the stored value.
-        if (method === 'PATCH') {
-          permit('rename', 'secret', held);
-          const input = await inputBody();
-          return send(200, { secret: secrets.rename(holderId, target, { name: input.name }) });
-        }
-        if (method === 'DELETE') {
-          permit('remove', 'secret', held);
-          await inputBody();
-          secrets.remove(holderId, target);
-          return send(200, { ok: true });
-        }
-        fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
       // Reading a saved value never invokes provider code or updates another value.
       if (path === '/v1/deliveries' && method === 'POST') {

@@ -36,13 +36,14 @@ test('答えは subject・action・resource から decision だけを返し、�
 
 test('ルートは同じ問いを立て、許されない主体には 403、依頼だけを渡された利用者には 401 で答える', async t => {
   const f = await fixture(t), key = await f.issueKey();
+  const kept = await f.keep('secret', 'x', 'value');
   for (const [path, options] of [['/v1/overview', {}], ['/v1/export', {}],
-    ['/v1/secrets?name=x', { method: 'PATCH', data: { name: 'y' } }], ['/v1/connections', { method: 'POST', data: { connector: 'gmail.readonly' } }]]) {
+    ['/v1/holdings/' + kept.json.holding.id, { method: 'PATCH', data: { name: 'y' } }], ['/v1/connections', { method: 'POST', data: { connector: 'gmail.readonly' } }]]) {
     const refused = await f.request(path, { ...options, token: key.token, anonymous: true });
     assert.equal(refused.status, 403, path + ' ' + refused.text); assert.equal(refused.json.error.code, 'forbidden');
   }
-  assert.equal((await f.request('/v1/secrets', { token: key.token, anonymous: true })).status, 200, 'what both may do still works');
-  assert.equal((await f.request('/v1/secrets')).status, 200);
+  assert.equal((await f.request('/v1/holdings?kind=secret', { token: key.token, anonymous: true })).status, 200, 'what both may do still works');
+  assert.equal((await f.request('/v1/holdings?kind=secret')).status, 200);
   assert.equal((await f.request('/v1/functions')).status, 200, 'the holder may do what those acting for them may');
   assert.equal((await f.request('/v1/principals/' + key.id, { method: 'DELETE', token: key.token, anonymous: true, data: {} })).status, 403, 'nobody removes what they do not own');
   const stranger = await f.request('/v1/principals/' + USER_A, { token: key.token, anonymous: true });

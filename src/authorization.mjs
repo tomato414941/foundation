@@ -20,7 +20,7 @@ const RULES = {
     'issue-credential': [SELF, OWNER], 'revoke-credential': [SELF, OWNER], relate: [SELF, OWNER], settings: [SELF, OWNER],
   },
   secret: { list: [SELF, ACTOR], read: [SELF, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')], remove: [SELF, ACTOR], rename: [SELF], share: [SELF] },
-  object: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')], remove: [SELF, ACTOR], link: [SELF, ACTOR], share: [SELF] },
+  object: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')], remove: [SELF, ACTOR], rename: [SELF], link: [SELF, ACTOR], share: [SELF] },
   connection: { list: [SELF, ACTOR], read: [SELF, ACTOR], create: [SELF], remove: [SELF], share: [SELF], browser: ['create', 'remove'] },
   usage: { read: [SELF, ACTOR, OWNER] },
   delivery: { create: [SELF, ACTOR] },

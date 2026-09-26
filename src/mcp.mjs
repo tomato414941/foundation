@@ -33,7 +33,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], description: 'HTTP method' },
-        path: { type: 'string', maxLength: 2048, description: 'Path beginning with /v1/, for example /v1/secrets' },
+        path: { type: 'string', maxLength: 2048, description: 'Path beginning with /v1/, for example /v1/holdings?kind=secret' },
         body: { description: 'JSON body for anything but GET' },
       },
       required: ['method', 'path'],

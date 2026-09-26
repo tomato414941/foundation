@@ -54,9 +54,9 @@ test('Connections expose explicit credential outputs independently of saved name
   assert.notEqual(a.id, b.id);
   assert.equal(a.label, 'personal@example.test');
   assert.equal(b.label, 'work@example.test');
-  const saved = await f.request('/v1/secrets?name=gmail%2Fpersonal-example-test', { method: 'PUT', raw: 'independent-value' });
+  const saved = await f.request('/v1/holdings?kind=secret&name=gmail%2Fpersonal-example-test', { method: 'PUT', raw: 'independent-value' });
   assert.equal(saved.status, 200);
-  assert.deepEqual((await f.request('/v1/secrets', { token: agent.token })).json.secrets.map(row => row.name), ['gmail/personal-example-test']);
+  assert.deepEqual((await f.request('/v1/holdings?kind=secret', { token: agent.token })).json.holdings.map(row => row.name), ['gmail/personal-example-test']);
   const connections = await f.request('/v1/connections', { token: agent.token });
   assert.deepEqual(connections.json.connections.map(item => item.id), [a.id, b.id]);
   assert.equal(connections.json.connections[0].service.api.base_url, 'https://gmail.googleapis.com/gmail/v1');
@@ -71,7 +71,7 @@ test('Connections expose explicit credential outputs independently of saved name
   assert.equal((await f.deliver(b, { token: agent.token })).json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-work-metadata');
 
   // Credential processing leaves existing saved values unchanged.
-  assert.equal((await f.request('/v1/secrets?name=gmail%2Fpersonal-example-test')).text, 'independent-value');
+  assert.equal((await f.read('secret', 'gmail/personal-example-test')).text, 'independent-value');
   assert.ok(!f.gmail.calls.some((call) => call.url.includes('/messages')));
 });
 
@@ -147,7 +147,7 @@ test('Refreshing is coalesced, and an invalid grant asks the owner to connect ag
 
 test('Disconnecting preserves saved values even when service revocation fails, and reports the failure', async (t) => {
   const f = await fixture(t), a = await f.credential(), agent = await f.issueKey();
-  await f.request('/v1/secrets?name=gmail%2Fpersonal-example-test%2Ftoken', { method: 'PUT', raw: 'independent-copy' });
+  await f.request('/v1/holdings?kind=secret&name=gmail%2Fpersonal-example-test%2Ftoken', { method: 'PUT', raw: 'independent-copy' });
   f.gmail.revokeHandler = () => new Response('{}', { status: 503 });
   const removed = await f.request('/v1/connections/' + encodeURIComponent(a.id), { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.status, 200);
@@ -155,7 +155,7 @@ test('Disconnecting preserves saved values even when service revocation fails, a
   const state = await f.request('/v1/overview');
   assert.deepEqual(state.json.connections, []);
   assert.deepEqual(state.json.secrets.map(row => row.name), ['gmail/personal-example-test/token']);
-  assert.equal((await f.request('/v1/secrets?name=gmail%2Fpersonal-example-test%2Ftoken')).text, 'independent-copy');
+  assert.equal((await f.read('secret', 'gmail/personal-example-test/token')).text, 'independent-copy');
   assert.equal((await f.deliver(a, { token: agent.token })).status, 404);
   assert.deepEqual((await f.request('/v1/connections', { token: agent.token })).json.connections, []);
 });

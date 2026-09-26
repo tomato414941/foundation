@@ -30,7 +30,7 @@ test('利用者が選んだ名前で保存し、依頼元に実際の保存名�
 
 test('同じ名前を使う登録を全件保留し、既存の値を保ったまま別名で再試行する', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
-  await f.request('/v1/secrets?name=existing', { method: 'PUT', raw: 'keep-this-value', type: 'text/plain' });
+  await f.request('/v1/holdings?kind=secret&name=existing', { method: 'PUT', raw: 'keep-this-value', type: 'text/plain' });
   const before = f.app.secrets.list(USER_A);
   const row = await ask(f, token, ['first', 'second'], { readable: true });
   const refused = await save(f, row, [entry('new-name'), entry('existing', 'replacement')]);
@@ -41,14 +41,14 @@ test('同じ名前を使う登録を全件保留し、既存の値を保った�
   assert.equal((await f.request(`/v1/requests/${row.id}`, { token })).json.request.status, 'pending');
   const saved = await save(f, row, [entry('new-name'), entry('other-name', 'replacement')]);
   assert.equal(saved.status, 200, saved.text);
-  assert.equal((await f.request('/v1/secrets?name=other-name', { token })).text, 'replacement');
+  assert.equal((await f.read('secret', 'other-name', { token })).text, 'replacement');
   assert.deepEqual(saved.json.names, ['new-name', 'other-name']);
 });
 
 test('依頼された名前をそのまま使う場合も同名の値を保護する', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
   const row = await ask(f, token, ['existing']);
-  await f.request('/v1/secrets?name=existing', { method: 'PUT', raw: 'original', type: 'text/plain' });
+  await f.request('/v1/holdings?kind=secret&name=existing', { method: 'PUT', raw: 'original', type: 'text/plain' });
   const refused = await save(f, row, [entry('existing')]);
   assert.equal(refused.status, 409, refused.text);
   assert.equal(f.app.secrets.content(f.app.secrets.find(USER_A, 'existing')).toString(), 'original');
@@ -95,7 +95,7 @@ test('同じ保存名への同時登録は一方だけを保存し、もう一�
 
 test('依頼を作る時点で保存先を確かめ、食い違いは依頼元にだけ返す', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
-  await f.request('/v1/secrets?name=existing', { method: 'PUT', raw: 'keep-this-value', type: 'text/plain' });
+  await f.request('/v1/holdings?kind=secret&name=existing', { method: 'PUT', raw: 'keep-this-value', type: 'text/plain' });
   const taken = await f.request('/v1/requests', { method: 'POST', token, data: { store: { name: 'existing', label: 'APIキー' } } });
   assert.equal(taken.status, 409); assert.equal(taken.json.error.code, 'name_taken');
   const missing = await f.request('/v1/requests', { method: 'POST', token, data: { store: { name: 'nothing-here', label: 'APIキー', replace: true } } });
@@ -106,7 +106,7 @@ test('依頼を作る時点で保存先を確かめ、食い違いは依頼元�
 
 test('置き換えの依頼は、持ち主がそのままの名前で完了すると既存の値だけを入れ替え、線はそのまま保つ', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
-  await f.request('/v1/secrets?name=npm-token', { method: 'PUT', raw: 'old-value', type: 'text/plain' });
+  await f.request('/v1/holdings?kind=secret&name=npm-token', { method: 'PUT', raw: 'old-value', type: 'text/plain' });
   const before = f.app.secrets.find(USER_A, 'npm-token');
   const row = await ask(f, token, ['npm-token'], { replace: true, readable: true });
   assert.equal(row.store[0].replace, true);
@@ -115,14 +115,14 @@ test('置き換えの依頼は、持ち主がそのままの名前で完了す�
   assert.deepEqual(saved.json, { stored: true, names: ['npm-token'], replaced: ['npm-token'] });
   const after = f.app.secrets.find(USER_A, 'npm-token');
   assert.equal(f.app.secrets.content(after).toString(), 'new-value');
-  assert.equal((await f.request('/v1/secrets?name=npm-token', { token })).status, 403, 'the request cannot loosen what the owner kept to themselves');
+  assert.equal((await f.read('secret', 'npm-token', { token })).status, 403, 'the request cannot loosen what the owner kept to themselves');
   assert.equal(after.id, before.id, 'the same value, updated');
   assert.equal(f.app.secrets.list(USER_A).length, 1);
 });
 
 test('置き換えの依頼でも持ち主が別の名前を付ければ、既存の値は残り新しく保管される', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
-  await f.request('/v1/secrets?name=npm-token', { method: 'PUT', raw: 'old-value', type: 'text/plain' });
+  await f.request('/v1/holdings?kind=secret&name=npm-token', { method: 'PUT', raw: 'old-value', type: 'text/plain' });
   const row = await ask(f, token, ['npm-token'], { replace: true });
   const saved = await save(f, row, [entry('npm-token-2', 'new-value')]);
   assert.equal(saved.status, 200, saved.text);
@@ -135,9 +135,9 @@ test('置き換えの依頼でも持ち主が別の名前を付ければ、既�
 
 test('完了までに置き換える相手が消えていれば止め、依頼は保留のまま理由を記録する', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
-  await f.request('/v1/secrets?name=npm-token', { method: 'PUT', raw: 'old-value', type: 'text/plain' });
+  await f.request('/v1/holdings?kind=secret&name=npm-token', { method: 'PUT', raw: 'old-value', type: 'text/plain' });
   const row = await ask(f, token, ['npm-token'], { replace: true });
-  await f.request('/v1/secrets?name=npm-token', { method: 'DELETE', data: {} });
+  await f.drop('secret', 'npm-token');
   const refused = await save(f, row, [entry('npm-token', 'new-value')]);
   assert.equal(refused.status, 409); assert.equal(refused.json.error.code, 'name_missing');
   const seen = (await f.request(`/v1/requests/${row.id}`, { token })).json.request;

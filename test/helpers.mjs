@@ -109,6 +109,17 @@ export async function fixture(t, options = {}) {
     return asked.json.request;
   }
   // A key the owner makes from the dashboard: a principal that acts for them, carrying a key.
+  // Held things by name: the holder's name finds the id, and the id reaches the thing.
+  const lookup = (kind, name, options = {}) => request('/v1/holdings?' + new URLSearchParams({ kind, name }), options);
+  async function read(kind, name, options = {}) {
+    const found = await lookup(kind, name, options);
+    return found.status === 200 ? request('/v1/holdings/' + found.json.holding.id + '/content', options) : found;
+  }
+  const keep = (kind, name, raw, options = {}) => request('/v1/holdings?' + new URLSearchParams({ kind, name }), { method: 'PUT', raw, type: 'text/plain', ...options });
+  async function drop(kind, name, options = {}) {
+    const found = await lookup(kind, name, options);
+    return found.status === 200 ? request('/v1/holdings/' + found.json.holding.id, { method: 'DELETE', data: {}, ...options }) : found;
+  }
   async function issueKey(name = 'dev-us') {
     const result = await request('/v1/principals', { method: 'POST', data: { name, actor: true, credential: 'key' } });
     assert.equal(result.status, 201, result.text);
@@ -121,5 +132,5 @@ export async function fixture(t, options = {}) {
     app.connections.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
   }
   if (options.login !== false) await login();
-  return { app, auth, gmail, base, request, login, start, callback, credential, deliver, issueKey, approveKey, expire, close, cookie: () => cookie };
+  return { app, auth, gmail, base, request, lookup, read, keep, drop, login, start, callback, credential, deliver, issueKey, approveKey, expire, close, cookie: () => cookie };
 }

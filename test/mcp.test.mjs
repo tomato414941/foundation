@@ -48,11 +48,11 @@ test('hands over the guide an agent reads first', async (t) => {
 
 test('makes an API call with the caller\'s own key and returns what it said', async (t) => {
   const f = await connected(t);
-  const stored = await f.request('/v1/secrets?name=notes/plan', { method: 'PUT', token: KEY, raw: 'one line', type: 'text/plain' });
+  const stored = await f.request('/v1/holdings?kind=secret&name=notes/plan', { method: 'PUT', token: KEY, raw: 'one line', type: 'text/plain' });
   assert.equal(stored.status, 200, stored.text);
-  const result = await modern(f, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'foundation_api', arguments: { method: 'GET', path: '/v1/secrets' } } });
+  const result = await modern(f, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'foundation_api', arguments: { method: 'GET', path: '/v1/holdings?kind=secret' } } });
   assert.equal(result.status, 200, result.text);
-  assert.deepEqual(result.json.result.structuredContent.secrets.map(entry => entry.name), ['notes/plan']);
+  assert.deepEqual(result.json.result.structuredContent.holdings.map(entry => entry.name), ['notes/plan']);
 });
 
 test('MCP discovers and invokes the credential function with metadata-only saved outputs', async t => {
@@ -64,13 +64,14 @@ test('MCP discovers and invokes the credential function with metadata-only saved
   const saved = await call('POST', '/v1/functions/connection.credentials', { connection_id: connection.id, save: { GOOGLE_OAUTH_ACCESS_TOKEN: name } });
   assert.equal(saved.json.result.structuredContent.saved[0].name, name);
   assert.doesNotMatch(saved.text, /google-access|refresh-personal/);
-  const exact = await call('GET', '/v1/secrets?name=' + encodeURIComponent(name));
+  const found = await call('GET', '/v1/holdings?kind=secret&name=' + encodeURIComponent(name));
+  const exact = await call('GET', '/v1/holdings/' + found.json.result.structuredContent.holding.id + '/content');
   assert.equal(exact.json.result.structuredContent.error.code, 'forbidden');
 });
 
 test('reports a refused API call as a tool error the model can act on', async (t) => {
   const f = await connected(t);
-  const result = await modern(f, { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'foundation_api', arguments: { method: 'GET', path: '/v1/secrets?name=missing/thing' } } });
+  const result = await modern(f, { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'foundation_api', arguments: { method: 'GET', path: '/v1/holdings?kind=secret&name=missing/thing' } } });
   assert.equal(result.status, 200, result.text);
   assert.equal(result.json.result.isError, true);
   assert.equal(result.json.result.structuredContent.error.code, 'not_found');
