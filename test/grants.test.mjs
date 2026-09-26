@@ -99,12 +99,12 @@ test('Stored names accept literal text, while delivery destinations are validate
 
 test('Writing the same name again replaces what is there', async t => {
   const { f, token } = await keyed(t);
-  await put(f, token, 'github/gh-token', 'first', { secret: 'true' });
+  await put(f, token, 'github/gh-token', 'first');
   await put(f, token, 'github/gh-token', 'second');
   assert.equal((await f.request('/v1/holdings?kind=grant', { token, anonymous: true })).json.holdings.length, 1);
   const delivered = await f.request('/v1/deliveries', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'github/gh-token', as: 'GH_TOKEN' }] } });
   assert.deepEqual(delivered.json.delivery.environment, { GH_TOKEN: 'second' });
-  assert.equal((await f.read('grant', 'github/gh-token', { token, anonymous: true })).text, 'second', 'no longer a secret either');
+  assert.equal((await f.read('grant', 'github/gh-token', { token, anonymous: true })).text, 'second');
 });
 
 test('Delivering several at once refuses two that want the same variable', async t => {

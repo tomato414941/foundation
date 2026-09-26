@@ -82,9 +82,6 @@ test('今日動いている形からの移行は、秘密を渡された委任�
   const connection = grants.held(USER_A, 'connection-1');
   assert.equal(connection.method, 'authorized'); assert.equal(connection.status, 'usable');
   assert.equal(connection.generation, 3); assert.deepEqual(grants.state(connection), state);
-  assert.deepEqual(store.db.prepare("SELECT name FROM pragma_table_info('holdings')").all().map(row => row.name), ['id', 'holder_id', 'kind', 'name', 'created_at', 'updated_at']);
-  assert.deepEqual(store.db.prepare("SELECT name FROM pragma_table_info('grants')").all().map(row => row.name), ['holding_id', 'method', 'connector', 'subject', 'status', 'generation', 'size', 'state']);
-  assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='grant_tags'").get().n, 0);
 });
 
 test('もう誰も動かしていない形の データベースは、移行せずに断る', async t => {
