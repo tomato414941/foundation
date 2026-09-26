@@ -248,15 +248,34 @@ function connectionRow(connection) {
   const warning = connection.status !== 'usable';
   const until = connection.expiry_known === false ? '有効期限は不明です' : connection.expires_at ? '認証情報の有効期限 ' + esc(new Date(connection.expires_at).toLocaleString('ja-JP')) : '';
   return `<article class="agent-row connection-row"><div class="connection-identity">${serviceLogo(connection.service)}<div class="agent-name"><h3>${esc(connection.service.name)}</h3><p class="connection-account">${esc(connection.label)}</p></div></div>
-    <div class="connection-details"><p class="connection-status${warning ? ' warning-text' : ''}">${esc(statusName(connection.status))}</p><p class="muted">${esc(connection.access?.name || '')}</p>${until ? `<p class="muted">${until}</p>` : ''}</div>
-    <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}" data-connector="${esc(connection.connector)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
+    <div class="connection-details"><p class="connection-status${warning ? ' warning-text' : ''}">${esc(statusName(connection.status))}</p><p class="muted">${esc(connection.access?.name || '')}</p>${until ? `<p class="muted">${until}</p>` : ''}${(connection.tags || []).length ? `<p>${connection.tags.map(tag => `<span class="tag">${esc(tag)}</span>`).join('')}</p>` : ''}</div>
+    <div class="agent-actions"><button class="text-button" data-action="describe-grant" data-id="${esc(connection.id)}">タグ</button>${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}" data-connector="${esc(connection.connector)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
 }
 function grantRow(entry) {
   return `<article class="grant-row" aria-label="${esc(entry.name)}"><div class="grant-field"><span class="grant-field-label">名前</span><div class="agent-name grant-title"><h3>${esc(entry.name)}</h3><button class="icon-button" data-action="copy-name" data-name="${esc(entry.name)}" aria-label="名前をコピー" title="名前をコピー">${icon('copy')}</button><button class="icon-button" data-action="edit-grant" data-name="${esc(entry.name)}" aria-label="名前を編集" title="名前を編集">${icon('edit')}</button></div></div>
     <div class="grant-field"><span class="grant-field-label">値</span><section class="grant-value-panel" aria-label="値"></section></div>
     <footer class="grant-footer"><p class="grant-meta">${grantMeta(entry)}</p><button class="text-button danger" data-action="drop-grant" data-name="${esc(entry.name)}">削除</button></footer></article>`;
 }
-const grantMeta = entry => `${entry.provider ? `<span>${esc(entry.provider)}</span>` : ''}${entry.purpose ? `<span>${esc(entry.purpose)}</span>` : ''}<span>${esc(kiloBytes(entry.size))}</span><span>更新 ${esc(keptWhen(entry.updated_at))}</span>`;
+const grantMeta = entry => `${(entry.tags || []).map(tag => `<span class="tag">${esc(tag)}</span>`).join('')}<span>${esc(kiloBytes(entry.size))}</span><span>更新 ${esc(keptWhen(entry.updated_at))}</span><button class="text-button" data-action="describe-grant" data-id="${esc(entry.id)}">相手先とタグ</button>`;
+// Grants are shown by the service they belong to; those with none come last, together.
+const providerName = id => state.connectors.find(item => item.provider === id)?.service?.name || id;
+function byProvider(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = row.provider || '';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  return [...groups].sort(([a], [b]) => (a === '') - (b === '') || a.localeCompare(b));
+}
+let tagFilter = '';
+const tagged = rows => tagFilter ? rows.filter(row => (row.tags || []).includes(tagFilter)) : rows;
+function tagBar() {
+  const tags = state.tags || [];
+  if (!tags.length) return '';
+  const chip = (tag, label) => `<button class="tag-chip${tagFilter === tag ? ' chosen' : ''}" data-action="filter-tag" data-tag="${esc(tag)}" aria-pressed="${tagFilter === tag}">${esc(label)}</button>`;
+  return `<div class="tag-bar" aria-label="タグで絞り込む">${chip('', 'すべて')}${tags.map(item => chip(item.tag, item.tag)).join('')}</div>`;
+}
 function connectSection() {
   const available = state.connectors.filter(connector => connector.available);
   if (!available.length) return '';
@@ -326,14 +345,16 @@ function render() {
   }
   // Grants: what this person let Foundation use. Those handed over by hand, those a service authorized, and the
   // services that can still be connected.
-  const kept = given(), connections = connected();
+  const kept = tagged(given()), connections = tagged(connected());
+  const group = (rows, render) => byProvider(rows).map(([provider, items]) => `<div class="grant-group"><p class="grant-group-name">${esc(provider ? providerName(provider) : '相手先なし')}</p><div class="agent-list">${items.map(render).join('')}</div></div>`).join('');
   app.innerHTML = shell(`<header class="page-heading page-heading-actions"><div><h1>委任</h1></div>
     <button class="button secondary" data-action="add-grant">${icon('plus')} 預ける</button></header>
+    ${tagBar()}
     <section class="resource-section" aria-labelledby="given-title"><div class="section-heading"><h2 id="given-title">預けたもの</h2></div>
-    <div aria-label="預けたもの">${kept.length ? `<div class="agent-list">${kept.map(grantRow).join('')}</div>` : '<div class="access-empty"><p>預けたものはありません。</p></div>'}</div></section>
-    ${connections.length ? `<section class="resource-section" aria-labelledby="connections-title"><div class="section-heading"><h2 id="connections-title">接続済み</h2></div><div class="agent-list">${connections.map(connectionRow).join('')}</div></section>` : ''}
+    <div aria-label="預けたもの">${kept.length ? group(kept, grantRow) : `<div class="access-empty"><p>${tagFilter ? 'このタグの預けたものはありません。' : '預けたものはありません。'}</p></div>`}</div></section>
+    ${connections.length ? `<section class="resource-section" aria-labelledby="connections-title"><div class="section-heading"><h2 id="connections-title">接続済み</h2></div>${group(connections, connectionRow)}</section>` : ''}
     ${connectSection()}`);
-  app.querySelectorAll('.grant-row').forEach((row, at) => bindGrantValue(kept[at], row));
+  app.querySelectorAll('.grant-row').forEach(row => bindGrantValue(kept.find(item => item.name === row.getAttribute('aria-label')), row));
 }
 function bindObjects() {
   const filter = document.querySelector('#object-filter');
@@ -547,19 +568,33 @@ function removeKey(key) {
 // One confirmation, for removing something a key kept. Nothing here can be undone, and nothing reaches the service.
 // The name and the way it reaches a command, changed without the value ever being handed back.
 // Something the owner has in hand, put there without an agent asking for it first.
+// Provider and tags: the service a grant belongs to (a short id such as stripe or aws), and the holder's own words
+// for grouping. Known providers are offered; anything else is typed.
+const providerOptions = () => [...new Set([...(state.connectors || []).map(item => item.provider), ...(state.grants || []).map(item => item.provider)].filter(Boolean))].sort();
+const describeFields = (provider = '', tags = []) => `<label for="grant-provider">相手先（省略可）</label><input id="grant-provider" name="provider" list="grant-providers" maxlength="40" pattern="[a-z][a-z0-9-]*" placeholder="例: stripe" autocomplete="off" spellcheck="false" value="${esc(provider)}"><datalist id="grant-providers">${providerOptions().map(id => `<option value="${esc(id)}">`).join('')}</datalist>
+    <label for="grant-tags">タグ（省略可、カンマ区切り）</label><input id="grant-tags" name="tags" maxlength="200" placeholder="例: favor, staging" autocomplete="off" value="${esc(tags.join(', '))}">`;
 function addGrant() {
   openDialog(`<h2 id="dialog-title">預ける</h2>
     <form><label for="new-name">名前</label><input id="new-name" name="name" required maxlength="200" placeholder="任意の名前" autocomplete="off" spellcheck="false">
     <label for="new-value">値</label><textarea id="new-value" name="value" rows="4" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>
-    <label for="new-purpose">用途（省略可）</label><input id="new-purpose" name="purpose" maxlength="80" placeholder="例: Favor ステージング" autocomplete="off">
+    ${describeFields()}
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">預ける</button></form>`);
   bindForm(async (form) => {
-    const name = form.get('name'), purpose = String(form.get('purpose') || '').trim();
-    const response = await fetch('/v1/holdings?' + new URLSearchParams({ kind: 'grant', name, ...(purpose ? { purpose } : {}) }),
+    const name = form.get('name'), provider = String(form.get('provider') || '').trim().toLowerCase(), tags = String(form.get('tags') || '').trim();
+    const response = await fetch('/v1/holdings?' + new URLSearchParams({ kind: 'grant', name, ...(provider ? { provider } : {}), ...(tags ? { tags } : {}) }),
       { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'text/plain' }, body: String(form.get('value')) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || '預けられませんでした。');
     closeDialog(); await refresh(); toast(name + ' を預けました。');
+  });
+}
+function describeGrant(entry) {
+  openDialog(`<h2 id="dialog-title">${esc(entry.label || entry.name)} の相手先とタグ</h2><form>${describeFields(entry.provider || '', entry.tags || [])}
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
+  bindForm(async (form) => {
+    const provider = String(form.get('provider') || '').trim().toLowerCase(), tags = String(form.get('tags') || '');
+    await api('/v1/holdings/' + entry.id, { method: 'PATCH', data: { provider: provider || null, tags } });
+    closeDialog(); await refresh(); toast('保存しました。');
   });
 }
 function editGrant(entry, trigger) {
@@ -772,6 +807,8 @@ document.addEventListener('click', async (event) => {
         async () => { for (const key of keys) await api('/v1/holdings/' + state.space.objects.find(item => item.key === key).id, { method: 'DELETE', data: {} }); objectChosen = new Set(); });
     }
     if (action === 'add-grant') addGrant();
+    if (action === 'describe-grant') describeGrant((state.grants || []).find(item => item.id === id));
+    if (action === 'filter-tag') { tagFilter = target.dataset.tag; render(); }
     if (action === 'copy-name') {
       try { await navigator.clipboard.writeText(target.dataset.name); toast('コピーしました。'); }
       catch { toast('コピーできませんでした。'); }

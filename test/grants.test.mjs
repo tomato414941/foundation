@@ -31,7 +31,7 @@ test('Stored names and caller-selected environment variables are independent', a
   assert.equal(kept.status, 200, kept.text);
   assert.match(kept.json.holding.id, /^[0-9a-f-]{36}$/, 'a held thing has an id of its own');
   assert.deepEqual({ ...kept.json.holding, id: undefined, created_at: 0, updated_at: 0 },
-    { id: undefined, kind: 'grant', name: 'github/gh-token', holder_id: USER_A, created_at: 0, updated_at: 0, method: 'given', provider: null, purpose: '', status: 'usable', size: secret.length });
+    { id: undefined, kind: 'grant', name: 'github/gh-token', holder_id: USER_A, created_at: 0, updated_at: 0, method: 'given', provider: null, tags: [], status: 'usable', size: secret.length });
   assert.doesNotMatch(kept.text, new RegExp(secret), 'writing never echoes the bytes back');
 
   const listed = await f.request('/v1/holdings?kind=grant', { token, anonymous: true });
@@ -318,4 +318,29 @@ test('編集を許された相手はその値を書き換え、値を消すと�
   assert.equal((await f.request('/v1/holdings/' + fresh.json.holding.id + '/content', { token, anonymous: true })).status, 403, 'a new thing by the old name starts with no lines');
   const owner = await f.request('/v1/relations', { method: 'POST', data: { subject: id, relation: 'owner', object_type: 'principal', object_id: USER_A } });
   assert.equal(owner.status, 400, 'ownership is not drawn by hand');
+});
+
+test('相手先とタグは持ち主の言葉で、絞り込みに使え、接続には接続方法の相手先が付く', async t => {
+  const { f, token } = await keyed(t);
+  const kept = await put(f, token, 'stripe key', 'sk_test_x', { provider: 'stripe', tags: 'favor, staging' });
+  assert.equal(kept.status, 200, kept.text);
+  assert.equal(kept.json.holding.provider, 'stripe'); assert.deepEqual(kept.json.holding.tags, ['favor', 'staging']);
+  await put(f, token, 'resend key', 're_x', { provider: 'resend', tags: 'favor,production' });
+  await put(f, token, 'a note', 'x');
+  const stripe = await f.request('/v1/holdings?kind=grant&provider=stripe', { token, anonymous: true });
+  assert.deepEqual(stripe.json.holdings.map(row => row.name), ['stripe key']);
+  const favor = await f.request('/v1/holdings?kind=grant&tag=favor', { token, anonymous: true });
+  assert.deepEqual(favor.json.holdings.map(row => row.name).sort(), ['resend key', 'stripe key']);
+  assert.deepEqual((await f.request('/v1/holdings?kind=grant&tag=production', { token, anonymous: true })).json.holdings.map(row => row.name), ['resend key']);
+  // The words change without the value changing; a connection's provider comes from its connector.
+  const changed = await f.request('/v1/holdings/' + kept.json.holding.id, { method: 'PATCH', data: { provider: 'stripe-live', tags: ['favor', 'production'] } });
+  assert.equal(changed.status, 200, changed.text); assert.equal(changed.json.holding.provider, 'stripe-live'); assert.deepEqual(changed.json.holding.tags, ['favor', 'production']);
+  assert.equal((await f.read('grant', 'stripe key', { token, anonymous: true })).text, 'sk_test_x');
+  assert.equal((await f.request('/v1/holdings/' + kept.json.holding.id, { method: 'PATCH', data: { provider: 'Stripe Live' } })).json.error.code, 'invalid_provider');
+  assert.equal((await f.request('/v1/holdings/' + kept.json.holding.id, { method: 'PATCH', data: { tags: ['a,b'] } })).json.error.code, 'invalid_tags');
+  const connection = await f.credential();
+  assert.equal(connection.provider, 'gmail'); assert.deepEqual(connection.tags, []);
+  const overview = await f.request('/v1/overview');
+  assert.deepEqual(overview.json.tags.map(item => [item.tag, item.count]), [['favor', 2], ['production', 2]]);
+  assert.deepEqual((await f.request('/v1/connectors', { anonymous: true })).json.connectors.map(item => item.provider), ['gmail', 'gmail']);
 });

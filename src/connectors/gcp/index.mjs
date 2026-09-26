@@ -10,7 +10,7 @@ export function gcpOauth(client) {
   const result = ({ subject, secret }) => ({ subject, privateState: secret, facts: client.facts(secret),
     expiresAt: secret.expires_at, credentials: { environment: { CLOUDSDK_AUTH_ACCESS_TOKEN: secret.access_token, GOOGLE_CLOUD_ACCOUNT_EMAIL: secret.identity.email, GOOGLE_OAUTH_EXPIRES_AT: String(secret.expires_at) } } });
   return {
-    id: 'gcp.oauth', service: GCP, label: 'Googleで接続', register: 'oauth', credentialType: 'oauth2_access_token', available: client.enabled,
+    id: 'gcp.oauth', service: GCP, label: 'Googleで接続', provider: 'gcp', register: 'oauth', credentialType: 'oauth2_access_token', available: client.enabled,
     intro: 'Googleアカウントでログインし、Google Cloudへのアクセスを許可します。',
     access: { name: 'Google Cloudの操作', description: '許可した範囲とアカウントのIAM権限に従い、リソースの作成・変更・削除を行えます。', restrictions: '特定のプロジェクトには限定されません。操作により料金が発生する場合があります。' },
     revocationNote: 'Google側の許可を取り消すと、同じアカウントの他のGoogle接続も使えなくなる場合があります。',

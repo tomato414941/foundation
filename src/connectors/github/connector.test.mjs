@@ -14,7 +14,7 @@ async function githubFixture(t, github = new FakeGitHub()) {
     return new URL(result.json.url);
   }
   const back = (url, code) => f.request(new URL(url.searchParams.get('redirect_uri')).pathname + '?state=' + url.searchParams.get('state') + '&code=' + code);
-  const connections = async () => (await f.request('/v1/overview')).json.connections.filter(item => item.connector === 'github.oauth');
+  const connections = async () => (await f.request('/v1/overview')).json.grants.filter(item => item.connector === 'github.oauth');
   return { ...f, github, start, back, connections };
 }
 
@@ -43,7 +43,7 @@ test('A connected GitHub account is named by its login and delivered to an appro
   assert.deepEqual(delivered.json.delivery.environment, { GH_TOKEN: 'gho_octo', GITHUB_TOKEN: 'gho_octo' });
 });
 
-test('不足・追加されたGitHub権限を認証情報とともにAIに返す', async t => {
+test('不足・追加されたGitHub権限を接続一覧で確認し、認証情報を取得する', async t => {
   const f = await githubFixture(t);
   f.github.scopes = 'read:org, admin:org';
   const done = await f.back(await f.start(), 'octo');
@@ -51,8 +51,9 @@ test('不足・追加されたGitHub権限を認証情報とともにAIに返す
   const agent = await f.issueKey(), [connection] = await f.connections();
   const result = await f.deliver(connection, { token: agent.token });
   assert.equal(result.status, 200, result.text);
-  assert.deepEqual(result.json.facts.missing_scopes, ['gist', 'repo', 'workflow']);
-  assert.deepEqual(result.json.facts.additional_scopes, ['admin:org']);
+  const facts = await f.connectionFacts(connection, { token: agent.token });
+  assert.deepEqual(facts.missing_scopes, ['gist', 'repo', 'workflow']);
+  assert.deepEqual(facts.additional_scopes, ['admin:org']);
   assert.equal(result.json.delivery.environment.GH_TOKEN, 'gho_octo');
 });
 

@@ -10,7 +10,7 @@ export function githubOauth(client) {
   const result = ({ subject, secret }) => ({ subject, privateState: secret, facts: client.facts(secret),
     expiresAt: secret.expires_at, credentials: { environment: { GH_TOKEN: secret.access_token, GITHUB_TOKEN: secret.access_token } } });
   return {
-    id: 'github.oauth', service: GITHUB, label: 'GitHubで接続', register: 'oauth', credentialType: 'oauth2_access_token', available: client.enabled,
+    id: 'github.oauth', service: GITHUB, label: 'GitHubで接続', provider: 'github', register: 'oauth', credentialType: 'oauth2_access_token', available: client.enabled,
     intro: 'GitHubでログインし、リポジトリへのアクセスを許可します。',
     access: { name: 'リポジトリの読み書き', description: 'あなたがアクセスできるすべてのリポジトリ (非公開を含む) の読み書き、Actions のワークフローの変更、Gist の作成、組織の閲覧', restrictions: 'リポジトリや組織の削除・管理者設定の変更は要求しません。GitHub側の許可は解除時に取り消せます。' },
     ai: 'gh and most tools read it directly. For git push/pull, run gh auth setup-git inside the exec, then use git. Requested scopes: repo, workflow, read:org, gist. Inspect facts.scopes, missing_scopes and additional_scopes; differences are reported, not blocked.',

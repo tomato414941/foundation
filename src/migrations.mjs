@@ -22,10 +22,11 @@ function migrateGrantsAndObjects(store) {
     CREATE UNIQUE INDEX holdings_object_name ON holdings(holder_id, name) WHERE kind='object';
     CREATE TABLE grants (
       holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE,
-      method TEXT NOT NULL CHECK(method IN ('given','authorized','delegated')), provider TEXT, purpose TEXT NOT NULL DEFAULT '',
+      method TEXT NOT NULL CHECK(method IN ('given','authorized','delegated')), provider TEXT,
       connector TEXT, subject TEXT, status TEXT NOT NULL DEFAULT 'usable' CHECK(status IN ('usable','reconnect_required','disconnecting')),
       generation INTEGER NOT NULL DEFAULT 1, size INTEGER NOT NULL DEFAULT 0, state BLOB
     );
+    CREATE TABLE grant_tags (holding_id TEXT NOT NULL REFERENCES holdings(id) ON DELETE CASCADE, tag TEXT NOT NULL, PRIMARY KEY (holding_id, tag));
     CREATE TABLE objects (holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE, size INTEGER NOT NULL DEFAULT 0, type TEXT);
   `);
   const holding = db.prepare('INSERT INTO holdings (id,holder_id,kind,name,created_at,updated_at) VALUES (?,?,?,?,?,?)');
@@ -81,10 +82,11 @@ export const SCHEMA = `
   CREATE UNIQUE INDEX holdings_object_name ON holdings(holder_id, name) WHERE kind='object';
   CREATE TABLE grants (
     holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE,
-    method TEXT NOT NULL CHECK(method IN ('given','authorized','delegated')), provider TEXT, purpose TEXT NOT NULL DEFAULT '',
+    method TEXT NOT NULL CHECK(method IN ('given','authorized','delegated')), provider TEXT,
     connector TEXT, subject TEXT, status TEXT NOT NULL DEFAULT 'usable' CHECK(status IN ('usable','reconnect_required','disconnecting')),
     generation INTEGER NOT NULL DEFAULT 1, size INTEGER NOT NULL DEFAULT 0, state BLOB
   );
+  CREATE TABLE grant_tags (holding_id TEXT NOT NULL REFERENCES holdings(id) ON DELETE CASCADE, tag TEXT NOT NULL, PRIMARY KEY (holding_id, tag));
   CREATE TABLE objects (holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE, size INTEGER NOT NULL DEFAULT 0, type TEXT);
   CREATE TABLE records (
     id TEXT PRIMARY KEY, at TEXT NOT NULL, actor_id TEXT NOT NULL, action TEXT NOT NULL,

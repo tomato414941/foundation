@@ -10,7 +10,7 @@ export function ebayOauth(client) {
   const result = ({ subject, secret }) => ({ subject, privateState: secret, facts: client.facts(secret), expiresAt: secret.expires_at,
     credentials: { environment: { EBAY_ACCESS_TOKEN: secret.access_token, EBAY_ACCOUNT_ID: subject, EBAY_USERNAME: secret.identity.username, EBAY_OAUTH_EXPIRES_AT: String(secret.expires_at) } } });
   return {
-    id: 'ebay.oauth', service: EBAY, label: 'eBayで接続', register: 'oauth', credentialType: 'oauth2_access_token', available: client.enabled,
+    id: 'ebay.oauth', service: EBAY, label: 'eBayで接続', provider: 'ebay', register: 'oauth', credentialType: 'oauth2_access_token', available: client.enabled,
     intro: 'eBayにログインし、出品と販売設定へのアクセスを許可します。',
     access: { name: '出品と販売設定の管理', description: '出品・在庫・価格と、配送・支払い・返品ポリシーを管理できます。',
       restrictions: '特定の商品には限定されません。出品の公開や変更で料金が発生する場合があります。' },
