@@ -700,7 +700,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
-      if (path === '/v1/records' && method === 'GET') { permit('list', 'record', undefined, subject.id); return send(200, { records: records.listFor(subject.id, principals.actorsOf(subject.id).map(row => row.id)) }); }
+      if (path === '/v1/records' && method === 'GET') { permit('list', 'record', undefined, subject.id); return send(200, { records: records.list(subject.id) }); }
       // The holder's screen, in one answer.
       if (path === '/v1/overview' && method === 'GET') {
         permit('read', 'overview');
