@@ -36,7 +36,9 @@ with sync_playwright() as p:
     owner.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     owner.get_by_role('button', name='ログインメールを送信', exact=True).click()
     expect(owner.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    owner.goto(args.base + '/login/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
+    owner.goto(args.base + '/login/confirm#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    owner.get_by_role('button', name='ログイン', exact=True).click()
+    owner.wait_for_load_state('networkidle')
     owner.set_viewport_size({'width': 1280, 'height': 1000})
     # The registration lives on its own page, reached through the account, not the home.
     owner.get_by_role('link', name='アカウント', exact=True).click()

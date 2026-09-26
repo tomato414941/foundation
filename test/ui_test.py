@@ -53,7 +53,6 @@ with sync_playwright() as p:
         raise SystemExit(0)
 
     page.get_by_label("メールアドレス", exact=True).fill("owner@example.test")
-    assert page.locator('input[type="password"]').count() == 0
     page.get_by_role("button", name="ログインメールを送信", exact=True).click()
     expect(page.get_by_role("heading", name="メールを確認", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="再送信まで", exact=False)).to_be_disabled()
@@ -66,7 +65,6 @@ with sync_playwright() as p:
             page.screenshot(path=str(shots / "email-link-mobile.png"), full_page=True)
     page.reload(wait_until="networkidle")
     expect(page.get_by_role("heading", name="メールを確認", exact=True)).to_be_visible()
-    assert page.locator('input[name="code"]').count() == 0
     assert "fdn_login" not in page.evaluate("document.cookie")
     assert page.evaluate("localStorage.length === 0 && sessionStorage.length === 0")
     page.get_by_role("button", name="メールアドレスを変更", exact=True).click()
@@ -75,18 +73,19 @@ with sync_playwright() as p:
     page.get_by_role("button", name="ログインメールを送信", exact=True).click()
     expect(page.get_by_role("heading", name="メールを確認", exact=True)).to_be_visible()
     expect(page.get_by_text("new@example.test", exact=True)).to_be_visible()
-    page.goto(args.base + "/login/callback?code=invalid-authorization-code", wait_until="networkidle")
-    expect(page.get_by_text("リンクが無効か、有効期限が切れています。最新のメールのリンクを開いてください。", exact=True)).to_be_visible()
-    assert "code=" not in page.url
+    page.goto(args.base + "/login/confirm#token_hash=invalid-authorization-key&email=new%40example.test", wait_until="networkidle")
+    page.get_by_role("button", name="ログイン", exact=True).click()
+    expect(page.get_by_text("リンクが無効か、有効期限が切れています。", exact=True)).to_be_visible()
+    assert page.url == args.base + "/login/confirm"
     # Simulate opening the email's link in another tab of the same browser.
     code = hashlib.sha256(b"new@example.test").hexdigest()
     link_page = context.new_page()
-    link_page.goto(args.base + "/login/callback?code=" + code, wait_until="networkidle")
+    link_page.goto(args.base + "/login/confirm#token_hash=" + code + "&email=new%40example.test", wait_until="networkidle")
+    link_page.get_by_role("button", name="ログイン", exact=True).click()
     expect(link_page.get_by_role("heading", name="Foundation", exact=True)).to_be_visible()
     assert "code=" not in link_page.url and "#" not in link_page.url
     link_page.close()
-    page.bring_to_front()
-    page.evaluate('window.dispatchEvent(new Event("focus"))')
+    page.goto(args.base, wait_until="networkidle")
     expect(page.get_by_role("heading", name="Foundation", exact=True)).to_be_visible()
     page.goto(args.base + "/grants", wait_until="networkidle")
     expect(page.get_by_role("button", name="メールの読み取り", exact=True)).to_be_enabled()

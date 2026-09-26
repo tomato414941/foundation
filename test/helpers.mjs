@@ -21,20 +21,19 @@ export const USER_A = '10000000-0000-4000-8000-000000000001';
 export const USER_B = '10000000-0000-4000-8000-000000000002';
 export const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 export class FakeAuth {
-  constructor() { this.enabled = true; this.refreshes = 0; this.revoked = false; this.links = new Map(); this.codeFactory = () => randomUUID(); }
+  constructor() { this.enabled = true; this.refreshes = 0; this.revoked = false; this.links = new Map(); this.codeFactory = () => randomUUID(); this.now = Date.now; }
   value(email = 'owner@example.test') { return { access_token: 'supabase-access-' + email, refresh_token: 'supabase-refresh-' + email, expires_at: Date.now() + 3600_000, user: { id: email === 'owner@example.test' ? USER_A : USER_B, email } }; }
-  async sendLink(email, redirectUri, storage) {
+  async sendLink(email, redirectUri) {
     if (!this.enabled) fail(503, 'auth_unavailable', '現在ログインを利用できません。');
     if (this.sendHandler) await this.sendHandler(email);
-    const code = this.codeFactory(email), verifier = randomUUID();
-    storage.set('test-verifier', verifier);
-    this.links.set(email, { email, code, verifier, url: redirectUri + '?code=' + code });
+    const code = this.codeFactory(email);
+    this.links.set(email, { email, code, expires_at: this.now() + 900_000, url: redirectUri + '#' + new URLSearchParams({ token_hash: code, email }) });
   }
-  async exchangeLink(code, storage) {
+  async verifyLink(code) {
     const link = [...this.links.values()].find(value => value.code === code);
-    if (this.verifyHandler) await this.verifyHandler(code, storage);
-    if (!link || storage.get('test-verifier') !== link.verifier) fail(401, 'invalid_link', 'リンクが無効か、有効期限が切れています。');
-    if (this.links.get(link.email) === link) this.links.delete(link.email);
+    if (!link || link.expires_at <= this.now()) fail(401, 'invalid_link', 'リンクが無効か、有効期限が切れています。');
+    this.links.delete(link.email);
+    if (this.verifyHandler) await this.verifyHandler(code);
     return this.value(link.email);
   }
   async user(token) { if (this.revoked || !token.startsWith('supabase-access-')) fail(401, 'login_required', 'ログインしてください。'); return this.value(token.slice('supabase-access-'.length)).user; }
@@ -74,13 +73,11 @@ export async function fixture(t, options = {}) {
     return { status: response.status, json, text, headers: response.headers };
   }
   async function login(email = 'owner@example.test') {
-    const sent = await request('/v1/login', { method: 'POST', data: { email } });
-    assert.equal(sent.status, 202, sent.text);
-    const challenge = sent.headers.getSetCookie().find(value => value.startsWith('fdn_login=')).split(';')[0];
-    const url = new URL(auth.links.get(email).url);
-    const response = await request(url.pathname + url.search, { headers: { cookie: [cookie, challenge].filter(Boolean).join('; '), 'sec-fetch-site': 'cross-site' } });
-    assert.equal(response.status, 303, response.text);
-    assert.equal(response.headers.get('location'), '/');
+    // The other tests need a verified identity, not a real email delivery or its resend cooldown.
+    await auth.sendLink(email, base + '/login/confirm');
+    const response = await request('/v1/login/verify', { method: 'POST', data: { email, token_hash: auth.links.get(email).code } });
+    assert.equal(response.status, 200, response.text);
+    assert.equal(response.json.return_to, '/');
     cookie = response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
     return response;
   }
