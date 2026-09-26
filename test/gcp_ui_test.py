@@ -139,15 +139,15 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
     dialog.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_text('認証情報を登録しました。', exact=True)).to_be_visible()
     page.goto(args.base + '/grants', wait_until='networkidle')
-    expect(page.get_by_role('heading', name='personal@example.test', exact=True)).to_be_visible()
-    expect(page.get_by_role('heading', name='work@example.test', exact=True)).to_be_visible()
+    expect(page.get_by_text('personal@example.test', exact=True)).to_be_visible()
+    expect(page.get_by_text('work@example.test', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
         review(page)
         if shots and width != 320:
             page.screenshot(path=str(shots / ('gcp-desktop.png' if width == 1280 else 'gcp-mobile.png')), full_page=True)
 
-    row = page.locator('.agent-row').filter(has=page.get_by_role('heading', name='personal@example.test', exact=True))
+    row = page.locator('.agent-row').filter(has=page.get_by_text('personal@example.test', exact=True))
     row.get_by_role('button', name='接続し直す', exact=True).click()
     authorization['account'] = 'personal'
     dialog.get_by_role('button', name='Googleで接続', exact=True).click()
@@ -159,7 +159,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
     dialog.get_by_label('Google Cloud側の許可も取り消す').uncheck()
     dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(page.get_by_role('heading', name='work@example.test', exact=True)).to_be_visible()
+    expect(page.get_by_text('work@example.test', exact=True)).to_be_visible()
     page.goto(args.base + '/grants', wait_until='networkidle')
     expect(page.get_by_role('heading', name='委任', exact=True)).to_be_visible()
     review(page)

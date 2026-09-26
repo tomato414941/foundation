@@ -129,7 +129,9 @@ with sync_playwright() as p:
     # Connections are listed independently of saved values.
     page.goto(args.base + "/grants", wait_until="networkidle")
     gmail = page.locator('[aria-labelledby="connections-title"]')
-    expect(gmail.locator(".agent-name h3")).to_have_text(["personal@example.test", "work@example.test"])
+    expect(gmail.get_by_role("heading", name="Gmail", exact=True)).to_have_count(2)
+    expect(gmail.get_by_text("personal@example.test", exact=True)).to_be_visible()
+    expect(gmail.get_by_text("work@example.test", exact=True)).to_be_visible()
     expect(gmail.get_by_text("件名・差出人などの読み取り", exact=True)).to_be_visible()
     page.goto(args.base + "/grants", wait_until="networkidle")
     expect(page.get_by_text("預けたものはありません。", exact=True)).to_be_visible()
@@ -200,7 +202,8 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "disconnect-mobile.png"), full_page=True)
     dialog.get_by_role("button", name="接続を解除", exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(gmail.locator(".agent-name h3")).to_have_text(["work@example.test"])
+    expect(gmail.get_by_role("heading", name="Gmail", exact=True)).to_have_count(1)
+    expect(gmail.get_by_text("work@example.test", exact=True)).to_be_visible()
     assert deliver(connection_id, token_b).status == 404, "processing requires a connected account"
     page.get_by_role("button", name="ログアウト", exact=True).click()
     expect(page.get_by_role("heading", name="ログイン", exact=True)).to_be_visible()

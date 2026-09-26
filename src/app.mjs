@@ -33,6 +33,7 @@ const STATIC = new Map(PAGES.map(page => [page, ['index.html', 'text/html; chars
 STATIC.set('/app.js', ['app.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/request-view.js', ['request-view.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/styles.css', ['styles.css', 'text/css; charset=utf-8']);
+STATIC.set('/service-logos.svg', ['service-logos.svg', 'image/svg+xml']);
 const MAX_BODY = 12_000;
 const SESSION_AGE = 14 * 86400;
 const LOGIN_CALLBACK = '/login/callback';
