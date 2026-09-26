@@ -4,7 +4,7 @@ import { fixture, USER_A } from './helpers.mjs';
 
 async function ask(f, token, names = ['suggested'], options = {}) {
   const response = await f.request('/v1/requests', { method: 'POST', token, data: {
-    store: names.map(name => ({ name, label: 'APIキー', ...options })),
+    kind: 'store', input: { fields: names.map(name => ({ name, label: 'APIキー', ...options })) },
   } });
   assert.equal(response.status, 201, response.text);
   return response.json.request;
@@ -96,12 +96,12 @@ test('同じ保存名への同時登録は一方だけを保存し、もう一�
 test('依頼を作る時点で保存先を確かめ、食い違いは依頼元にだけ返す', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
   await f.request('/v1/holdings?kind=secret&name=existing', { method: 'PUT', raw: 'keep-this-value', type: 'text/plain' });
-  const taken = await f.request('/v1/requests', { method: 'POST', token, data: { store: { name: 'existing', label: 'APIキー' } } });
+  const taken = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'store', input: { fields: { name: 'existing', label: 'APIキー' }  }} });
   assert.equal(taken.status, 409); assert.equal(taken.json.error.code, 'name_taken');
-  const missing = await f.request('/v1/requests', { method: 'POST', token, data: { store: { name: 'nothing-here', label: 'APIキー', replace: true } } });
+  const missing = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'store', input: { fields: { name: 'nothing-here', label: 'APIキー', replace: true }  }} });
   assert.equal(missing.status, 409); assert.equal(missing.json.error.code, 'name_missing');
   assert.deepEqual((await f.request('/v1/requests', { token })).json.requests, [], 'nothing reached the owner');
-  assert.equal((await f.request('/v1/requests', { method: 'POST', token, data: { store: { name: 'existing', label: 'APIキー', replace: 'yes' } } })).status, 400);
+  assert.equal((await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'store', input: { fields: { name: 'existing', label: 'APIキー', replace: 'yes' }  }} })).status, 400);
 });
 
 test('置き換えの依頼は、持ち主がそのままの名前で完了すると既存の値だけを入れ替え、線はそのまま保つ', async t => {

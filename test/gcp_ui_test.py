@@ -52,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
 
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'connector': 'gcp.oauth', 'purpose': 'Google Cloudの設定を確認します。リソースの作成や変更はしません。'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'connector': 'gcp.oauth'}, 'purpose': 'Google Cloudの設定を確認します。リソースの作成や変更はしません。'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
     expect(page.locator('.approval-facts')).to_contain_text('Google Cloudの操作')

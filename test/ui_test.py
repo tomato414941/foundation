@@ -149,10 +149,14 @@ with sync_playwright() as p:
     token_a = create_runtime("dev-us")
     token_b = create_runtime("別のアクセスキー")
     caller = p.request.new_context(base_url=args.base)
+    # An issued key names the person it acts for on every call, as the CLI does.
+    OWNER = page.request.get(args.base + "/v1/overview").json()["user"]["id"]
+    def held(path):
+        return path + ('&' if '?' in path else '?') + 'as=' + OWNER
     def runtime(path, token, method="GET"):
-        return caller.fetch(path, method=method, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data="{}" if method == "POST" else None)
+        return caller.fetch(held(path), method=method, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data="{}" if method == "POST" else None)
     def deliver(connection_id, token):
-        return caller.fetch("/v1/functions/connection.credentials", method="POST", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data=json.dumps({"connection_id": connection_id}))
+        return caller.fetch(held("/v1/functions/connection.credentials"), method="POST", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data=json.dumps({"connection_id": connection_id}))
     connections = runtime("/v1/connections", token_a).json()["connections"]
     assert len(connections) == 2, "an issued key uses everything its owner keeps"
     connection_id = connections[0]["id"]

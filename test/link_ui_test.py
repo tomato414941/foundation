@@ -63,7 +63,7 @@ with sync_playwright() as p:
     # The product makes its user's account and key; the user's AI asks for something to keep.
     user = call('/v1/principals', product, 'POST', {'alias': 'user-1'})['principal']
     key = call('/v1/principals/' + user['id'] + '/credentials', product, 'POST', {'kind': 'key'})['token']
-    asked = call('/v1/requests', key, 'POST', {'store': {'name': 'npm-token', 'label': 'npm のアクセストークン', 'site': 'https://www.npmjs.com/'},
+    asked = call('/v1/requests', key, 'POST', {'kind': 'store', 'input': {'fields': {'name': 'npm-token', 'label': 'npm のアクセストークン', 'site': 'https://www.npmjs.com/'}},
                                              'purpose': 'パッケージの公開に使います。', 'steps': ['npmjs.com でアクセストークンを作ります。', '表示されたトークンをここに貼ります。']})['request']
     link = call('/v1/principals/' + user['id'] + '/credentials', product, 'POST', {'kind': 'link', 'request_id': asked['id']})['url']
 

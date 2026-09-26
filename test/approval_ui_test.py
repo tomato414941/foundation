@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     assert cli('api', 'GET', '/v1/holdings?kind=secret')['holdings'] == []
 
     # 2. The approved key asks for a registration, on its own link and without a code.
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'connector': 'gmail.readonly', 'purpose': '届いたメールを確認する'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'connector': 'gmail.readonly'}, 'purpose': '届いたメールを確認する'}))['request']
     assert request['kind'] == 'connect' and 'confirmation_code' not in request
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
@@ -121,7 +121,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
     # 3. Revoking the key stops it; its open registration link says so.
-    pending = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'connector': 'gmail.metadata', 'purpose': '件名を確認する'}))['request']
+    pending = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'connector': 'gmail.metadata'}, 'purpose': '件名を確認する'}))['request']
     page.goto(args.base + '/principals', wait_until='networkidle')
     runtime = page.locator('.agent-row').filter(has_text='dev-us のAI')
     runtime.get_by_role('button', name='失効', exact=True).click()
@@ -145,19 +145,19 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
     page.get_by_role('button', name='承認する', exact=True).click()
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'connector': 'gmail.metadata', 'purpose': '件名を確認する'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'connector': 'gmail.metadata'}, 'purpose': '件名を確認する'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.locator('.approval-facts')).to_contain_text('件名・差出人などの読み取り')
     page.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     expect(page.get_by_text('headers@example.test', exact=False)).to_be_visible()
     review(page)
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'connector': 'gmail.readonly', 'purpose': '確認'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'connector': 'gmail.readonly'}, 'purpose': '確認'}))['request']
     cli('api', 'DELETE', '/v1/requests/' + request['id'])
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='依頼は取り消されました', exact=True)).to_be_visible()
 
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'connector': 'gmail.readonly', 'purpose': '<img src=x onerror="window.xss=1">' + '長い用途' * 50}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'connector': 'gmail.readonly'}, 'purpose': '<img src=x onerror="window.xss=1">' + '長い用途' * 50}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     assert page.locator('.approval-card img').count() == 0
     assert page.evaluate('window.xss === undefined')

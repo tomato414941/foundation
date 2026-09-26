@@ -18,8 +18,8 @@ const run = (args, env, input) => new Promise((resolve, reject) => {
   child.once('exit', code => resolve({ code, out: Buffer.concat(out), err: Buffer.concat(err).toString() }));
 });
 async function keyed(t) {
-  const f = await fixture(t), token = key();
-  await f.approveKey(token);
+  const f = await fixture(t); let token;
+  token = (await f.approveKey()).token;
   return { f, token };
 }
 const put = (f, token, name, content, query = {}, type = 'text/plain') =>
@@ -126,8 +126,8 @@ test('Listing narrows by a literal name prefix, and each owner reaches only thei
   assert.deepEqual(narrowed.json.holdings.map(row => row.name), ['github/token', 'github/user']);
 
   await f.login('other@example.test');
-  const other = key();
-  await f.approveKey(other, 'other-machine');
+  let other;
+  other = (await f.approveKey('other-machine')).token;
   assert.deepEqual((await f.request('/v1/holdings?kind=secret', { token: other, anonymous: true })).json.holdings, []);
   assert.equal((await f.read('secret', 'github/token', { token: other, anonymous: true })).status, 404);
   assert.equal(f.app.secrets.list(USER_B).length, 0);
@@ -265,7 +265,7 @@ test('The runtime hands what is kept to a command, as bytes and as a file, and n
 });
 
 test('保存には承認済みキーを要求し、ガイドに保存と受け渡しのAPIを示す', async t => {
-  const f = await fixture(t), token = key();
+  const f = await fixture(t); let token;
   assert.equal((await f.request('/v1/holdings?kind=secret', { token, anonymous: true })).status, 401);
   const guide = (await run(['guide'], {})).out.toString();
   assert.match(guide, /PUT \/v1\/holdings\?kind=secret&name=<name>/);
@@ -274,16 +274,17 @@ test('保存には承認済みキーを要求し、ガイドに保存と受け�
   assert.match(guide, /foundation exec <ENV>/, 'and the one thing that does need one');
 });
 
-test('An agent that cannot make a secret of its own is issued one, once', async t => {
+test('Anyone becomes a principal with no credential, is issued a key once, and reaches nothing until a line is drawn', async t => {
   const f = await fixture(t);
-  const asked = await f.request('/v1/requests', { method: 'POST', anonymous: true, data: { kind: 'actor', input: { name: 'an agent with no randomness' } } });
-  assert.equal(asked.status, 201, asked.text);
-  assert.match(asked.json.key, /^fdn_[A-Za-z0-9_-]{43}$/);
-  // It is the key: approving the request approves it, and it works from then on.
-  await f.request('/v1/requests/' + asked.json.request.id + '/done', { method: 'POST', data: { confirmation_code: asked.json.request.confirmation_code } });
-  assert.equal((await f.request('/v1/principals/me', { token: asked.json.key, anonymous: true })).status, 200);
-  const again = await f.request('/v1/principals/me', { token: asked.json.key, anonymous: true });
-  assert.equal(again.json.key, undefined, 'never handed out a second time');
+  const made = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { name: 'a new machine' } });
+  assert.equal(made.status, 201, made.text);
+  assert.match(made.json.token, /^fdn_[A-Za-z0-9_-]{43}$/);
+  const me = await f.request('/v1/principals/me', { token: made.json.token, anonymous: true });
+  assert.equal(me.status, 200); assert.deepEqual(me.json.acts_for, []); assert.equal(me.json.token, undefined, 'never handed out a second time');
+  assert.deepEqual((await f.request('/v1/holdings?kind=secret', { token: made.json.token, anonymous: true })).json.holdings, [], 'its own holdings, empty');
+  assert.equal((await f.request('/v1/holdings?kind=secret&as=' + USER_A, { token: made.json.token, anonymous: true })).status, 401, 'and nobody else\'s');
+  const unknown = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: 'fdn_' + 'z'.repeat(43), data: { kind: 'actor', input: { name: 'x' } } });
+  assert.equal(unknown.status, 401, 'a key nobody issued is just unknown');
 });
 
 test('閲覧を許された相手は、その保有者の値だけを読み、別の保有者が同じ名前で持つ値は読めない', async t => {

@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture } from './helpers.mjs';
 
-const KEY = 'fdn_' + 'e'.repeat(43);
+let KEY;
 
 test('hands the owner everything they have, secrets included', async (t) => {
   const f = await fixture(t);
-  await f.approveKey(KEY);
+  KEY = (await f.approveKey()).token;
   await f.request('/v1/holdings?kind=secret&name=notes/plan', { method: 'PUT', token: KEY, raw: 'read me', type: 'text/plain' });
   await f.request('/v1/holdings?kind=secret&name=keys/token', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
 
@@ -25,7 +25,7 @@ test('hands the owner everything they have, secrets included', async (t) => {
 
 test('keeps the export to the owner\'s own session', async (t) => {
   const f = await fixture(t);
-  await f.approveKey(KEY);
+  KEY = (await f.approveKey()).token;
   await f.request('/v1/holdings?kind=secret&name=keys/token', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
 
   const asAKey = await f.request('/v1/export', { token: KEY, anonymous: true });

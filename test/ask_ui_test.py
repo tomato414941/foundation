@@ -68,7 +68,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     # A longer purpose reads vertically on desktop as well as narrow screens.
     purpose = 'Foundationに預けた認証情報でnpmアカウントへの接続を確認します。パッケージの公開や変更は行いません。'
     npm_request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
-        'store': {'name': 'npm token', 'label': 'npmアクセストークン', 'site': 'https://www.npmjs.com/'},
+        'kind': 'store', 'input': {'fields': {'name': 'npm token', 'label': 'npmアクセストークン', 'site': 'https://www.npmjs.com/'}},
         'purpose': purpose}))['request']
     page.goto(npm_request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='npmアクセストークンを預ける', exact=True)).to_be_visible()
@@ -86,7 +86,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     kept = page.request.put(args.base + '/v1/holdings?kind=secret&name=npm token', headers={'content-type': 'text/plain', 'origin': args.base}, data='old-token')
     assert kept.status == 200
     rotation = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
-        'store': {'name': 'npm token', 'label': 'npmアクセストークン', 'replace': True}, 'purpose': '期限切れのトークンを新しいものに入れ替えます。'}))['request']
+        'kind': 'store', 'input': {'fields': {'name': 'npm token', 'label': 'npmアクセストークン', 'replace': True}}, 'purpose': '期限切れのトークンを新しいものに入れ替えます。'}))['request']
     assert rotation['store'][0]['replace'] is True
     page.goto(rotation['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='npmアクセストークンを置き換える', exact=True)).to_be_visible()
@@ -107,8 +107,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
 
     # The AI suggests a name; the owner chooses the name used for storage.
     asked = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
-        'store': {'name': 'cloudflare/cloudflare-api-token', 'label': 'CloudflareのAPIトークン',
-                  'site': 'https://dash.cloudflare.com/profile/api-tokens'},
+        'kind': 'store', 'input': {'fields': {'name': 'cloudflare/cloudflare-api-token', 'label': 'CloudflareのAPIトークン',
+                  'site': 'https://dash.cloudflare.com/profile/api-tokens'}},
         'purpose': 'DNSレコードの確認に使います。',
         'steps': ['APIトークンを作成 を押し、テンプレートから「Edit zone DNS」を選びます。', '対象のゾーンを選んで作成し、表示されたトークンを貼ってください。']}))['request']
     assert asked['kind'] == 'store'
@@ -185,7 +185,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     # Stored names are not DOM form-property names, either.
     names = ['querySelector', 'elements', '__proto__']
     multiple = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
-        'store': [{'name': name, 'label': '入力 ' + str(index + 1)} for index, name in enumerate(names)],
+        'kind': 'store', 'input': {'fields': [{'name': name, 'label': '入力 ' + str(index + 1)} for index, name in enumerate(names)]},
         'purpose': '値を保存します。'}))['request']
     page.goto(multiple['verification_uri'], wait_until='networkidle')
     for index in range(len(names)):

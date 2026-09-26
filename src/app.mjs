@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { Store } from './store.mjs';
 import { digest } from './crypto.mjs';
-import { Principals, KEY, LINK } from './principals.mjs';
+import { Principals, LINK } from './principals.mjs';
 import { Sessions, OAuthFlows } from './sessions.mjs';
 import { RequestActions } from './request-actions.mjs';
 import { requestDefinition, requestView } from './http-requests.mjs';
@@ -259,7 +259,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           if (flow.requestId) requests.forTo(flow.requestId, user.id, true);
           await verifyConnection(req, session,
             () => connector.authorization.complete({ code, verifier: flow.verifier, redirectUri: flow.redirectUri }, connections.context(previous)),
-            result => requestActions.connect(flow.requestId, user.id, connector.id, result, { keptBy: flow.requestedBy, previous }));
+            result => requestActions.connect(flow.requestId, user.id, connector.id, result, { requestedBy: flow.requestedBy, previous }));
           return redirect(connectionLocation('connected'));
         } catch (error) {
           if (progressRequestId && error instanceof HttpError) requests.record(progressRequestId, 'connect_failed', { connector: oauthCallback[1], code: error.code, message: error.message });
@@ -274,8 +274,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       // asks for must come from Foundation's own pages. Cookies are never read beside a token.
       const token = bearer(req), browser = req.headers.authorization === undefined;
       if (!browser && !token) fail(401, 'invalid_token', 'Bearer形式のキーを指定してください。');
-      const anonymousAsk = browser && requestRoute && !requestRoute[1] && method === 'POST' && !cookieToken(req);
-      if (browser && !['GET', 'HEAD'].includes(method) && !anonymousAsk) requireOrigin(req, origin);
+      // Becoming a principal needs no credential and no login: the request carries nothing to protect.
+      const becoming = path === '/v1/principals' && method === 'POST' && browser && !cookieToken(req);
+      if (browser && !['GET', 'HEAD'].includes(method) && !becoming) requireOrigin(req, origin);
       if (!browser && req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
       if (path === '/v1/login' && method === 'GET') return send(200, { available: auth.emailEnabled ?? auth.enabled, method: 'email_link', pending: logins.summary(loginToken) });
       if (path === '/v1/login' && method === 'POST') {
@@ -330,29 +331,21 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         return send(200, { ok: true });
       }
       // Who is asking. A token names a principal by its credential; a browser is the person who logged in, or the
-      // one a link handed to a single request. A token nobody knows may still ask to act for someone: that is how
-      // a new key introduces itself, and it becomes a principal by asking.
+      // one a link handed to a single request.
       let subject, session = null, user = null;
       const known = browser ? undefined : principals.authenticate(token);
-      if (anonymousAsk || (!browser && !known)) {
-        // A key nobody knows, or no key at all, may still ask to act for someone: that is how a new key introduces
-        // itself, and it becomes a principal by asking. One that cannot make a secret of its own is issued one, once.
-        if (!anonymousAsk && !(requestRoute && !requestRoute[1] && method === 'POST' && KEY.test(token))) notApproved();
+      // Anyone may become a principal: one row and one key, issued here and shown once. It reaches nothing until
+      // someone draws it a line; what it may do never comes from the making, only from the lines.
+      if (becoming) {
         const input = await body(req);
-        const definition = requestDefinition(input);
-        if (definition.kind !== 'actor') notApproved();
-        rateLimit('request-create:' + clientAddress(req), 12, 600_000);
-        const secret = anonymousAsk ? 'fdn_' + randomBytes(32).toString('base64url') : token;
+        rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
         const made = store.transaction(() => {
-          // A new principal each time a token nobody knows asks: whatever an earlier principal with the same secret
-          // was told or given stays with that earlier one.
-          const principal = principals.ensure(randomUUID(), nameValue(definition.input?.name, '依頼元'));
-          principals.issue(principal.id, { kind: 'key', token: secret });
-          return principal;
+          const principal = principals.ensure(randomUUID(), nameValue(input.name, '相手'));
+          return { principal, issued: principals.issue(principal.id, { kind: 'key' }) };
         });
-        const row = requestActions.ask(made.id, { kind: 'actor', input: definition.input, purpose: purposeValue(input.purpose), steps: input.steps ?? [], validMinutes: input.valid_minutes ?? 30 });
-        return send(201, { ...(anonymousAsk ? { key: secret } : {}), request: viewRequest(row, origin, { code: true }) });
+        return send(201, { principal: made.principal, token: made.issued.token, credential: { id: made.issued.id, kind: 'key' } });
       }
+      if (!browser && !known) notApproved();
       if (!browser) subject = { id: known.principal.id, credential: known.credential };
       else {
         const linkToken = requestRoute?.[1] ? readCookie(req, 'fdn_link') : undefined;
@@ -365,11 +358,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         }
       }
       const self = principals.get(subject.id);
-      // In whose name. Someone acting for exactly one other acts for them unless they say otherwise; anyone else is
-      // taken to mean themselves.
+      // In whose name. A principal acts as itself unless it names whom it acts for (?as=<id>); whether it may is
+      // the same question as any other, answered from the lines.
       const actsFor = principals.actsFor(subject.id);
       const asked = url.searchParams.get('as');
-      const holderId = asked ? principalId(asked) : actsFor.length === 1 ? actsFor[0].id : subject.id;
+      const holderId = asked ? principalId(asked) : subject.id;
       let asked_ = null;
       const permit = (name, type, id, holder = type === 'principal' ? id : holderId) => {
         asked_ = { subject, action: { name }, resource: { type, ...(id === undefined ? {} : { id }), holder } };
@@ -383,7 +376,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       const still = () => {
         if (subject.credential.kind === 'session') { if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。'); }
         else if (!principals.credentials(subject.id).some(row => row.id === subject.credential.id)) fail(401, 'not_approved', 'このキーは失効しています。');
-        if (asked_ ? !authorization.allowed(asked_).decision : holderId !== subject.id && !principals.has(subject.id, 'actor', 'principal', holderId) && !principals.has(subject.id, 'owner', 'principal', holderId)) fail(401, 'not_approved', 'この相手の代わりには動けません。');
+        if (asked_ && !authorization.allowed(asked_).decision) fail(401, 'not_approved', 'この相手の代わりには動けません。');
       };
       const inputBody = async max => { const input = await body(req, max); still(); return input; };
       const inputBytes = async max => { const input = await raw(req, max); still(); return input; };
@@ -829,8 +822,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const answer = await respond(await body(req), req.headers, {
           serverInfo: { name: 'foundation', version: VERSION },
           guide: () => guide(connectors.ids().map(id => connectors.describe(id))),
+          // The tool names whom the caller acts for when it is exactly one and the call did not say.
           call: async ({ method: verb, path: target, body: payload }) => {
-            const response = await fetch(`http://127.0.0.1:${port}${target}`, {
+            const named = actsFor.length === 1 && !/[?&]as=/.test(target) ? target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(actsFor[0].id) : target;
+            const response = await fetch(`http://127.0.0.1:${port}${named}`, {
               method: verb, redirect: 'error', signal: AbortSignal.timeout(20_000),
               headers: { authorization, ...(payload === undefined ? {} : { 'content-type': 'application/json' }) },
               ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),

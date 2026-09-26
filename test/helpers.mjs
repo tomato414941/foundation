@@ -61,7 +61,11 @@ export async function fixture(t, options = {}) {
   const base = 'http://127.0.0.1:' + app.server.address().port;
   let cookie;
   // `data` is sent as JSON; `raw` is sent as given, with `type` as its content type.
-  async function request(path, { method = 'GET', data, raw, type = 'application/octet-stream', token, anonymous = false, headers = {} } = {}) {
+  // A token that acts for exactly one principal names them on every call, as the CLI and the MCP tool do.
+  const actsFor = new Map();
+  async function request(path, { method = 'GET', data, raw, type = 'application/octet-stream', token, anonymous = false, headers = {}, as } = {}) {
+    const holder = as ?? (token && actsFor.get(token));
+    if (holder && !/[?&]as=/.test(path)) path += (path.includes('?') ? '&' : '?') + 'as=' + holder;
     const body = raw !== undefined ? raw : data !== undefined ? JSON.stringify(data) : undefined;
     const response = await fetch(base + path, { method, redirect: 'manual', headers: { ...(!anonymous && cookie ? { cookie } : {}), ...(method !== 'GET' ? { origin: options.publicOrigin || base } : {}), ...(body !== undefined ? { 'content-type': raw !== undefined ? type : 'application/json' } : {}), ...(token ? { authorization: 'Bearer ' + token } : {}), ...headers }, ...(body !== undefined ? { body } : {}) });
     const text = await response.text();
@@ -101,12 +105,20 @@ export async function fixture(t, options = {}) {
     return request('/v1/functions/connection.credentials', { method: 'POST', data: { connection_id: connection.id }, ...options });
   }
   // Makes a key known to the owner: the key asks to act for whoever opens its request, and the owner types its code.
-  async function approveKey(token, name = 'dev-us') {
-    const asked = await request('/v1/requests', { method: 'POST', anonymous: true, token, data: { kind: 'actor', input: { name } } });
+  // A machine becomes a principal with no credential, is issued a key, asks to act for the person, and is approved.
+  async function become(name = 'dev-us') {
+    const made = await request('/v1/principals', { method: 'POST', anonymous: true, data: { name } });
+    assert.equal(made.status, 201, made.text);
+    return { id: made.json.principal.id, token: made.json.token };
+  }
+  async function approveKey(name = 'dev-us') {
+    const made = await become(name);
+    const asked = await request('/v1/requests', { method: 'POST', anonymous: true, token: made.token, data: { kind: 'actor', input: { name } } });
     assert.equal(asked.status, 201, asked.text);
     const done = await request('/v1/requests/' + asked.json.request.id + '/done', { method: 'POST', data: { confirmation_code: asked.json.request.confirmation_code } });
     assert.equal(done.status, 200, done.text);
-    return asked.json.request;
+    actsFor.set(made.token, done.json.request.to);
+    return { ...asked.json.request, token: made.token, principal_id: made.id };
   }
   // A key the owner makes from the dashboard: a principal that acts for them, carrying a key.
   // Held things by name: the holder's name finds the id, and the id reaches the thing.
@@ -123,6 +135,7 @@ export async function fixture(t, options = {}) {
   async function issueKey(name = 'dev-us') {
     const result = await request('/v1/principals', { method: 'POST', data: { name, actor: true, credential: 'key' } });
     assert.equal(result.status, 201, result.text);
+    actsFor.set(result.json.token, result.json.principal.acts_for[0].id);
     return { ...result.json.principal, token: result.json.token, credential_id: result.json.credential.id };
   }
   // Ages a connection past its expiry in both the envelope and the connector's private state.
@@ -132,5 +145,5 @@ export async function fixture(t, options = {}) {
     app.connections.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
   }
   if (options.login !== false) await login();
-  return { app, auth, gmail, base, request, lookup, read, keep, drop, login, start, callback, credential, deliver, issueKey, approveKey, expire, close, cookie: () => cookie };
+  return { app, auth, gmail, base, request, lookup, read, keep, drop, become, login, start, callback, credential, deliver, issueKey, approveKey, expire, close, cookie: () => cookie };
 }

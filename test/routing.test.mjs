@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture } from './helpers.mjs';
+import { fixture, USER_A } from './helpers.mjs';
 
 test('同じURLでCookieとBearerを受け付け、Bearerがある場合はその所有者として扱う', async t => {
   const f = await fixture(t), first = await f.credential(), key = await f.issueKey();
@@ -27,7 +27,7 @@ test('解釈できないAuthorizationが付いた要求をCookieで代用せず�
 });
 
 test('Cookieによる更新は同一Originに限定し、CLIのBearerではOriginなしで更新する', async t => {
-  const f = await fixture(t), key = await f.issueKey(), path = '/v1/holdings?kind=secret&name=url-review';
+  const f = await fixture(t), key = await f.issueKey(), path = '/v1/holdings?kind=secret&name=url-review&as=' + USER_A;
   const request = async headers => {
     const response = await fetch(f.base + path, { method: 'PUT', headers: { 'content-type': 'application/octet-stream', ...headers }, body: 'fixture-value' });
     await response.arrayBuffer();
