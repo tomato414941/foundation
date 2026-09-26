@@ -40,77 +40,50 @@ export function deliverable(content, { env, filename }) {
 }
 
 export class Secrets {
-  constructor(store) { this.store = store; this.db = store.db; this.vault = store.vault; }
-  list(ownerId, prefix) {
-    const columns = 'id,name,size,created_at,updated_at';
-    return prefix === undefined
-      ? this.db.prepare(`SELECT ${columns} FROM holdings WHERE holder_id=? AND kind='secret' ORDER BY name`).all(ownerId)
-      : this.db.prepare(`SELECT ${columns} FROM holdings WHERE holder_id=? AND kind='secret' AND substr(name,1,length(?))=? COLLATE BINARY ORDER BY name`).all(ownerId, String(prefix), String(prefix));
+  constructor(store, holdings) { this.store = store; this.db = store.db; this.vault = store.vault; this.holdings = holdings; }
+  list(holderId, prefix) { return this.holdings.list(holderId, 'secret', prefix); }
+  find(holderId, name) { return this.holdings.find(holderId, 'secret', secretName(name)); }
+  at(holderId, name) {
+    const row = this.find(holderId, name);
+    if (!row) fail(404, 'not_found', '保管されたものが見つかりません。');
+    return row;
   }
-  find(ownerId, name) {
-    return this.db.prepare("SELECT id,holder_id AS owner_id,name,size,content,created_at,updated_at FROM holdings WHERE holder_id=? AND kind='secret' AND name=?").get(ownerId, secretName(name));
+  usage(holderId) { return this.holdings.usage(holderId, 'secret'); }
+  // The bytes, sealed to this one holding: its holder and its id are part of what seals them.
+  content(row) {
+    const sealed = this.db.prepare("SELECT content FROM holdings WHERE id=? AND kind='secret'").get(row.id)?.content;
+    if (sealed === undefined) fail(404, 'not_found', '保管されたものが見つかりません。');
+    return this.vault.openBytes(sealed, `entry:${row.holder_id}:${row.id}`);
   }
-  // The thing itself, by its id, whoever holds it.
-  byId(id) {
-    return typeof id === 'string' ? this.db.prepare("SELECT id,holder_id AS owner_id,name,size,content,created_at,updated_at FROM holdings WHERE id=? AND kind='secret'").get(id) : undefined;
-  }
-  content(row) { return this.vault.openBytes(row.content, `entry:${row.owner_id}:${row.id}`); }
-  usage(ownerId) { return this.db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(size),0) AS bytes FROM holdings WHERE holder_id=? AND kind='secret'").get(ownerId); }
   // Writing the same name again replaces what is there. Who may read it is said by the lines onto it, not here.
-  put(ownerId, { name, content }) {
+  put(holderId, { name, content }) {
     if (content.length > SECRET_MAX) fail(413, 'secret_too_large', '1件あたり1MBまでです。');
     secretName(name);
     return this.store.transaction(() => {
-      const stamp = new Date().toISOString(), existing = this.find(ownerId, name), { count, bytes } = this.usage(ownerId);
+      const existing = this.find(holderId, name), { count, bytes } = this.usage(holderId);
       if (!existing && count >= SECRET_COUNT_MAX) fail(409, 'secret_limit', `保管できるのは${SECRET_COUNT_MAX}件までです。使わないものを消してください。`);
       if (bytes - (existing?.size ?? 0) + content.length > SECRET_TOTAL_MAX) fail(409, 'storage_full', '保管できる合計は20MBまでです。使わないものを消してください。');
-      const id = existing?.id ?? randomUUID(), sealed = this.vault.sealBytes(content, `entry:${ownerId}:${id}`);
-      if (existing) this.db.prepare('UPDATE holdings SET size=?,content=?,updated_at=? WHERE id=?').run(content.length, sealed, stamp, id);
-      else this.db.prepare("INSERT INTO holdings (id,holder_id,kind,name,size,content,created_at,updated_at) VALUES (?,?,'secret',?,?,?,?,?)").run(id, ownerId, name, content.length, sealed, stamp, stamp);
-      return this.list(ownerId, name)[0];
+      const id = existing?.id ?? randomUUID(), sealed = this.vault.sealBytes(content, `entry:${holderId}:${id}`);
+      return existing ? this.holdings.update(id, { size: content.length, content: sealed }) : this.holdings.insert(id, holderId, 'secret', name, { size: content.length, content: sealed });
     });
   }
   // Writing by id: the same thing, whoever writes it, keeps its name.
   write(row, content) {
     if (content.length > SECRET_MAX) fail(413, 'secret_too_large', '1件あたり1MBまでです。');
     return this.store.transaction(() => {
-      const { bytes } = this.usage(row.owner_id);
+      const { bytes } = this.usage(row.holder_id);
       if (bytes - row.size + content.length > SECRET_TOTAL_MAX) fail(409, 'storage_full', '保管できる合計は20MBまでです。使わないものを消してください。');
-      this.db.prepare('UPDATE holdings SET size=?,content=?,updated_at=? WHERE id=?').run(content.length, this.vault.sealBytes(content, `entry:${row.owner_id}:${row.id}`), new Date().toISOString(), row.id);
-      return this.list(row.owner_id, row.name)[0];
-    });
-  }
-  at(ownerId, name) {
-    const row = this.find(ownerId, name);
-    if (!row) fail(404, 'not_found', '保管されたものが見つかりません。');
-    return row;
-  }
-  // Rename without exposing or modifying content. Lines onto the thing point at its id, so they need no care.
-  rename(ownerId, name, { name: to }) { return this.renameRow(this.at(ownerId, name), to ?? name); }
-  renameRow(row, to) {
-    const target = secretName(to);
-    return this.store.transaction(() => {
-      if (target !== row.name && this.find(row.owner_id, target)) fail(409, 'name_taken', 'その名前はすでに使われています。');
-      this.db.prepare('UPDATE holdings SET name=?,updated_at=? WHERE id=?').run(target, new Date().toISOString(), row.id);
-      return this.list(row.owner_id, target)[0];
-    });
-  }
-  // Removing the thing removes the lines onto it: a later thing by the same name is another thing.
-  remove(ownerId, name) { this.removeRow(this.at(ownerId, name)); }
-  removeRow(row) {
-    this.store.transaction(() => {
-      this.db.prepare('DELETE FROM holdings WHERE id=?').run(row.id);
-      this.db.prepare("DELETE FROM relations WHERE object_type='holding' AND object_id=?").run(row.id);
+      return this.holdings.update(row.id, { size: content.length, content: this.vault.sealBytes(content, `entry:${row.holder_id}:${row.id}`) });
     });
   }
   // Each input and delivery destination is explicit.
-  deliver(ownerId, asked) {
+  deliver(holderId, asked) {
     const wanted = (Array.isArray(asked) ? asked : []).map(item => typeof item === 'string' ? { name: item } : item);
     if (!wanted.length || wanted.length > 16) fail(400, 'invalid_names', '渡すものを1〜16件で指定してください。');
     const environment = {}, files = [], taken = new Map(), filenames = new Set();
     for (const item of wanted) {
       if (!item || typeof item !== 'object' || typeof item.name !== 'string') fail(400, 'invalid_names', '渡すものは {name, as} で指定してください。');
-      const row = this.at(ownerId, item.name);
+      const row = this.at(holderId, item.name);
       const content = this.content(row);
       const name = item.as;
       if (!name) fail(400, 'no_variable', '渡す環境変数名を as で指定してください。');

@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
+import { Holdings } from '../src/holdings.mjs';
 import { Connections } from '../src/connections.mjs';
 import { Connectors } from '../src/connectors.mjs';
 import { builtins } from '../src/connectors/index.mjs';
@@ -21,7 +22,7 @@ const value = (subject, state = 'opaque-0') => ({ subject, privateState: state, 
 const example = obtain => ({ id: 'example.authorization', available: true, variables: ['EXAMPLE_KEY'],
   authorization: { kind: 'oauth', begin() {}, complete() {} }, obtain });
 function setup(t, obtain) {
-  const store = new Store(':memory:', KEY), connections = new Connections(store, new Connectors([example(obtain)]));
+  const store = new Store(':memory:', KEY), connections = new Connections(store, new Connectors([example(obtain)]), new Holdings(store));
   t.after(() => store.close());
   const row = connections.save(USER_A, 'example.authorization', value('account-one'));
   return { store, connections, row };

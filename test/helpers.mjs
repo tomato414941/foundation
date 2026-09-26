@@ -8,11 +8,13 @@ import { Connectors } from '../src/connectors.mjs';
 import { gmailReadonly, gmailMetadata } from '../src/connectors/gmail/index.mjs';
 import { Connections } from '../src/connections.mjs';
 import { Secrets } from '../src/secrets.mjs';
+import { Holdings } from '../src/holdings.mjs';
 import { Principals } from '../src/principals.mjs';
 import { Sessions, OAuthFlows } from '../src/sessions.mjs';
 
 export function resources(store, connectors = []) {
-  return { secrets: new Secrets(store), connections: new Connections(store, new Connectors(connectors)), principals: new Principals(store), sessions: new Sessions(store), flows: new OAuthFlows(store) };
+  const holdings = new Holdings(store);
+  return { holdings, secrets: new Secrets(store, holdings), connections: new Connections(store, new Connectors(connectors), holdings), principals: new Principals(store), sessions: new Sessions(store), flows: new OAuthFlows(store) };
 }
 
 export const KEY = Buffer.alloc(32, 7);
@@ -43,7 +45,7 @@ export class FakeAuth {
 
 // Seed a stored credential, including already-expired fixture tokens.
 export function acquired(store, connectors, connectorId, { subject, secret }) {
-  const connections = new Connections(store, new Connectors(connectors));
+  const connections = new Connections(store, new Connectors(connectors), new Holdings(store));
   const saved = connections.write(USER_A, { connector: connectorId, subject, label: subject, keptBy: 'test',
     state: { private_state: secret, facts: {}, expires_at: secret.expires_at } });
   const row = () => connections.get(USER_A, saved.id);

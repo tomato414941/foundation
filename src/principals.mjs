@@ -44,14 +44,12 @@ export class Principals {
     if (!this.db.prepare('UPDATE principals SET name=? WHERE id=?').run(name, id).changes) fail(404, 'not_found', '相手が見つかりません。');
     return this.get(id);
   }
-  // Removing a principal takes everything that is only its own: its credentials and lines (by cascade) and what it
-  // holds. The principals it made stay, as their own; the requests it was part of stay, as records. What sits in
-  // the object space is the caller's to clear.
+  // Removing a principal takes its credentials and lines (by cascade) and its sessions. What it holds is the
+  // holdings' business, cleared by the caller first; the principals it made stay, as their own; the requests it was
+  // part of stay, as records.
   remove(id) {
     return this.store.transaction(() => {
       this.db.prepare('DELETE FROM sessions WHERE owner_id=?').run(id);
-      this.db.prepare("DELETE FROM relations WHERE object_type='holding' AND object_id IN (SELECT id FROM holdings WHERE holder_id=?)").run(id);
-      this.db.prepare('DELETE FROM holdings WHERE holder_id=?').run(id);
       this.db.prepare('DELETE FROM relations WHERE object_type=? AND object_id=?').run('principal', id);
       return this.db.prepare('DELETE FROM principals WHERE id=?').run(id).changes > 0;
     });
