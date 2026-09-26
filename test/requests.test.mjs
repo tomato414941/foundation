@@ -84,7 +84,7 @@ test('Request creation is idempotent, and asking for something else makes a new 
   assert.deepEqual((await f.request('/v1/requests/' + first.row.id, { token: first.token })).json.request.input, { connector: 'gmail.readonly' });
 });
 
-test('Email login returns to the exact request page and rejects open redirects', async t => {
+test('メール認証後は依頼のページへ戻し、外部への転送を拒否する', async t => {
   const f = await fixture(t, { login: false }), { row } = await create(f);
   for (const return_to of ['https://evil.test/', '//evil.test/', '/keys/x', '/requests/' + row.id + '?next=evil', '/requests/' + row.id + '/..', 42]) {
     const response = await f.request('/v1/login', { method: 'POST', data: { email: 'owner@example.test', return_to } });
@@ -92,11 +92,13 @@ test('Email login returns to the exact request page and rejects open redirects',
   }
   const sent = await f.request('/v1/login', { method: 'POST', data: { email: 'owner@example.test', return_to: '/requests/' + row.id } });
   assert.equal(sent.status, 202);
-  const cookie = sent.headers.getSetCookie().find(value => value.startsWith('fdn_login=')).split(';')[0];
   const url = new URL(f.auth.links.get('owner@example.test').url);
-  const callback = await f.request(url.pathname + url.search, { headers: { cookie, 'sec-fetch-site': 'cross-site' } });
-  assert.equal(callback.status, 303);
-  assert.equal(callback.headers.get('location'), '/requests/' + row.id);
+  const keys = new URLSearchParams(url.hash.slice(1));
+  const result = await f.request('/v1/login/verify', { method: 'POST', data: {
+    email: keys.get('email'), token_hash: keys.get('token_hash'), return_to: url.searchParams.get('return_to'),
+  } });
+  assert.equal(result.status, 200);
+  assert.equal(result.json.return_to, '/requests/' + row.id);
 });
 
 test('Approval requires the confirmation code; a registration keeps to the requested adapter and needs no code', async t => {

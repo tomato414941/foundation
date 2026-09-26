@@ -49,7 +49,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_role('button', name='ログインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     callback = context.new_page()
-    callback.goto(args.base + '/login/callback?code=' + hashlib.sha256(b'owner@example.test').hexdigest(), wait_until='networkidle')
+    callback.goto(args.base + '/login/confirm?' + urlencode({'return_to': urlparse(request['verification_uri']).path}) + '#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    callback.get_by_role('button', name='ログイン', exact=True).click()
     expect(callback.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
     assert callback.url == request['verification_uri']
     callback.close()

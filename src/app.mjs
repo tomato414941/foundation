@@ -30,13 +30,14 @@ const PUBLIC = new URL('../web/', import.meta.url);
 // The owner's pages. Each is the same shell; the script decides what to show from the path.
 const PAGES = ['/', '/grants', '/objects', '/principals', '/functions', '/account'];
 const STATIC = new Map(PAGES.map(page => [page, ['index.html', 'text/html; charset=utf-8']]));
+STATIC.set('/login/confirm', ['index.html', 'text/html; charset=utf-8']);
 STATIC.set('/app.js', ['app.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/request-view.js', ['request-view.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/styles.css', ['styles.css', 'text/css; charset=utf-8']);
 STATIC.set('/service-logos.svg', ['service-logos.svg', 'image/svg+xml']);
 const MAX_BODY = 12_000;
 const SESSION_AGE = 14 * 86400;
-const LOGIN_CALLBACK = '/login/callback';
+const LOGIN_CONFIRM = '/login/confirm';
 const LINK_TTL = 10 * 60_000, LINKED_TTL = 30 * 60_000;
 const REQUEST_PAGE = /^\/requests\/[A-Za-z0-9_-]{43}$/;
 const PRINCIPAL_ID = /^[A-Za-z0-9-]{1,64}$/;
@@ -46,6 +47,11 @@ const grantTag = row => '"' + digest(JSON.stringify([row.id, row.name, row.size,
 function returnPath(value = '/') {
   if (!PAGES.includes(value) && (typeof value !== 'string' || !REQUEST_PAGE.test(value))) fail(400, 'invalid_return', '接続リンクを開き直してください。');
   return value;
+}
+
+function loginEmail(value) {
+  if (typeof value !== 'string' || value.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(value.trim())) fail(400, 'invalid_email', 'メールアドレスを確認してください。');
+  return value.trim().toLowerCase();
 }
 
 async function body(req, max = MAX_BODY) {
@@ -197,36 +203,14 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         // they changed. What the API answers stays no-store.
         const [filename, type] = STATIC.get(STATIC.has(path) ? path : '/');
         const content = await readFile(fileURLToPath(new URL(filename, PUBLIC))), tag = '"' + digest(content).slice(0, 32) + '"';
-        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Cache-Control', path === LOGIN_CONFIRM ? 'no-store' : 'no-cache');
         res.setHeader('ETag', tag);
         if (req.headers['if-none-match'] === tag) { res.writeHead(304); return res.end(); }
         res.writeHead(200, { 'content-type': type });
         return res.end(content);
       }
       if (path === '/health' && method === 'GET') return send(200, { status: 'ok' });
-      if (path === LOGIN_CALLBACK && method === 'GET') {
-        let pending, destination = logins.get(loginToken)?.returnTo || '/';
-        try {
-          rateLimit('login:' + clientAddress(req), 30, 600_000);
-          const code = url.searchParams.get('code');
-          if (url.searchParams.has('error') || url.searchParams.getAll('code').length !== 1 || !/^[A-Za-z0-9_-]{20,2048}$/.test(code || '')) fail(400, 'invalid_link', 'ログイン用のリンクを開き直してください。');
-          pending = logins.begin(loginToken);
-          destination = pending.returnTo || '/';
-          const session = await auth.exchangeLink(code, pending.storage);
-          if (session.user.email.toLowerCase() !== pending.email || !logins.consume(loginToken, pending)) {
-            try { await auth.logout(session.access_token); } catch {}
-            fail(401, 'login_expired', 'もう一度、ログイン用のメールを送信してください。');
-          }
-          sessions.remove(cookieToken(req));
-          setCookie(sessions.create(session), SESSION_AGE);
-          setNamedCookie('fdn_login', '', 0);
-          return redirect(destination);
-        } catch (error) {
-          if (pending?.attempts >= 5) { logins.cancel(loginToken); setNamedCookie('fdn_login', '', 0); }
-          const code = error.code === 'login_expired' ? 'expired' : error.code === 'login_busy' ? 'busy' : error.status === 429 ? 'limited' : error.status === 503 ? 'unavailable' : 'invalid';
-          return redirect(destination + '?login=' + code);
-        } finally { if (pending) logins.release(loginToken, pending); }
-      }
+      if (path === '/login/callback' && method === 'GET') return redirect('/?login=invalid');
       const oauthCallback = path.match(/^\/oauth\/([a-z][a-z0-9.-]{0,63})\/callback$/);
       if (oauthCallback && method === 'GET') {
         let destination = '/';
@@ -276,19 +260,44 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       if (path === '/v1/login' && method === 'GET') return send(200, { available: auth.emailEnabled ?? auth.enabled, method: 'email_link', pending: logins.summary(loginToken) });
       if (path === '/v1/login' && method === 'POST') {
         const input = await body(req);
-        if (typeof input.email !== 'string' || input.email.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(input.email.trim())) fail(400, 'invalid_email', 'メールアドレスを確認してください。');
+        const email = loginEmail(input?.email);
         // Reachable from anywhere means anyone who finds the URL could otherwise make themselves an owner here.
-        if (owners && !owners.has(input.email.trim().toLowerCase())) fail(403, 'not_invited', 'このアドレスではご利用いただけません。');
+        if (owners && !owners.has(email)) fail(403, 'not_invited', 'このアドレスではご利用いただけません。');
         const destination = returnPath(input.return_to);
         rateLimit('link-send:' + clientAddress(req), 12, 600_000);
-        const { token: pendingToken, row } = logins.reserve(input.email.trim().toLowerCase());
-        row.returnTo = destination;
+        const { token: pendingToken, row } = logins.reserve(email);
         try {
-          await auth.sendLink(row.email, origin + LOGIN_CALLBACK, row.storage);
+          const redirectUri = origin + LOGIN_CONFIRM + (destination === '/' ? '' : '?' + new URLSearchParams({ return_to: destination }));
+          await auth.sendLink(row.email, redirectUri);
           logins.sent(pendingToken, loginToken);
           setNamedCookie('fdn_login', pendingToken, LOGIN_TTL / 1000);
           return send(202, { pending: logins.summary(pendingToken) });
         } catch (error) { logins.cancel(pendingToken); throw error; }
+      }
+      if (path === '/v1/login/verify' && method === 'POST') {
+        requireOrigin(req, origin);
+        rateLimit('login:' + clientAddress(req), 30, 600_000);
+        const input = await body(req), email = loginEmail(input?.email), destination = returnPath(input.return_to);
+        if (typeof input.token_hash !== 'string' || !/^[A-Za-z0-9_-]{20,2048}$/.test(input.token_hash)) fail(400, 'invalid_link', 'リンクが無効です。最新のメールのリンクを開いてください。');
+        if (owners && !owners.has(email)) fail(403, 'not_invited', 'このアドレスではご利用いただけません。');
+        // The displayed account is untrusted until the provider returns the matching identity.
+        // Merely opening the confirmation page never consumes the key or changes a session.
+        let session;
+        try { session = await auth.verifyLink(input.token_hash); }
+        catch (error) {
+          if (error instanceof HttpError) throw error;
+          fail(503, 'auth_unavailable', 'ログインサービスに接続できません。しばらく待ってからお試しください。');
+        }
+        if (session.user.email.toLowerCase() !== email || req.aborted || req.socket.destroyed) {
+          try { await auth.logout(session.access_token); } catch {}
+          fail(401, 'invalid_link', 'リンクが無効です。最新のメールのリンクを開いてください。');
+        }
+        const next = sessions.create(session);
+        sessions.remove(cookieToken(req));
+        setCookie(next, SESSION_AGE);
+        logins.cancel(loginToken);
+        setNamedCookie('fdn_login', '', 0);
+        return send(200, { ok: true, return_to: destination });
       }
       if (path === '/v1/login' && method === 'DELETE') {
         logins.cancel(loginToken); setNamedCookie('fdn_login', '', 0);

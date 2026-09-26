@@ -2,6 +2,11 @@ import { requestResultView, knownRequestKind } from './request-view.js';
 
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
 let state = null, toastTimer, loginTimer, revision = 0;
+const isLoginConfirmation = location.pathname === '/login/confirm';
+// A fragment is not sent in HTTP requests. Keep the emailed key only in this page's memory.
+const loginLink = isLoginConfirmation ? new URLSearchParams(location.hash.slice(1)) : null;
+const loginReturn = isLoginConfirmation ? new URL(location.href).searchParams.get('return_to') || '/' : '/';
+if (isLoginConfirmation) history.replaceState(null, '', '/login/confirm');
 // A request page is either what an approved key asks for (/requests/…) or a new key asking to be approved (/keys/…).
 const requestId = location.pathname.match(/^\/requests\/([A-Za-z0-9_-]{43})$/)?.[1];
 const requestApi = requestId && '/v1/requests/' + requestId;
@@ -15,7 +20,7 @@ const page = location.pathname === '/objects' ? 'objects' : location.pathname ==
 const pagePath = requestId ? location.pathname : page === 'home' ? '/' : '/' + page;
 let accessRequest = null, requestError = '';
 const loginMessages = {
-  expired: 'メールを送信したブラウザでリンクを開いてください。期限が切れた場合は、もう一度メールを送信してください。',
+  expired: '有効期限が切れています。もう一度ログインメールを送信してください。',
   invalid: 'リンクが無効か、有効期限が切れています。最新のメールのリンクを開いてください。',
   busy: 'ログインを確認しています。少し待ってからページを開き直してください。',
   limited: '操作が続いています。しばらく待ってからお試しください。',
@@ -151,10 +156,34 @@ async function api(path, { method = 'GET', data, signal } = {}) {
   const result = await response.json();
   if (!response.ok) {
     const error = new Error(result.error?.message || '処理を完了できませんでした。'); error.status = response.status; error.code = result.error?.code;
-    if (response.status === 401 && !linked && path !== '/v1/session' && path !== '/v1/login') await showLogin();
+    if (response.status === 401 && !linked && path !== '/v1/session' && !path.startsWith('/v1/login')) await showLogin();
     throw error;
   }
   return result;
+}
+function showLoginConfirmation() {
+  const email = loginLink.get('email') || '', tokenHash = loginLink.get('token_hash') || '';
+  const valid = loginLink.getAll('email').length === 1 && loginLink.getAll('token_hash').length === 1
+    && email.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(email) && /^[A-Za-z0-9_-]{20,2048}$/.test(tokenHash);
+  app.innerHTML = `<div class="workspace login-shell"><header class="topbar">${brand}</header><main class="login-main"><div class="login-symbol" aria-hidden="true">${icon('mail')}</div>
+    <h1>${valid ? 'ログイン' : 'リンクを確認'}</h1>
+    ${valid ? `<p class="login-address">${esc(email)}</p><form id="confirm-login"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">ログイン ${icon('arrow')}</button></form>
+    <p class="login-footer"><a href="/">別のメールアドレスを使う</a></p>` : '<p class="login-help">メールに届いたリンクを開き直してください。</p><p class="login-footer"><a href="/">ログインメールを送信</a></p>'}</main></div>`;
+  if (!valid) return;
+  const form = document.querySelector('#confirm-login'), button = form.querySelector('button');
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (button.disabled) return;
+    button.disabled = true;
+    form.querySelector('.form-error').textContent = '';
+    try {
+      const result = await api('/v1/login/verify', { method: 'POST', data: { email, token_hash: tokenHash, return_to: loginReturn } });
+      location.replace(result.return_to);
+    } catch (error) {
+      form.querySelector('.form-error').textContent = error.message;
+      button.disabled = false;
+    }
+  });
 }
 async function showLogin({ email = '', message = loginNotice } = {}) {
   clearInterval(loginTimer);
@@ -164,7 +193,7 @@ async function showLogin({ email = '', message = loginNotice } = {}) {
   if (current !== revision) return;
   const pending = config.available ? config.pending : null;
   app.innerHTML = `<div class="workspace login-shell"><header class="topbar">${brand}</header><main class="login-main"><div class="login-symbol" aria-hidden="true">${icon('mail')}</div>${requestId ? '<p class="login-context">依頼の確認</p>' : ''}<h1>${pending ? 'メールを確認' : 'ログイン'}</h1>
-    ${pending ? `<p class="login-intro" id="email-sent">ログイン用のリンクをお送りしました。</p><p class="login-address">${esc(pending.email)}</p><p class="login-help">メールのリンクを、このブラウザで開いてください。有効期限は1時間です。</p>` : '<p class="login-intro">メールに届くリンクからログインできます。</p>'}
+    ${pending ? `<p class="login-intro" id="email-sent">ログイン用のリンクをお送りしました。</p><p class="login-address">${esc(pending.email)}</p><p class="login-help">メールのリンクからログインしてください。有効期限は15分です。</p>` : '<p class="login-intro">メールに届くリンクからログインできます。</p>'}
     <form id="login-form">${pending ? '' : `<label for="login-email">メールアドレス</label><input id="login-email" name="email" type="email" autocomplete="email" required maxlength="254" value="${esc(email)}" ${config.available ? '' : 'disabled'}>`}
     <p class="form-error" role="alert">${config.available ? esc(message) : '現在ログインを利用できません。'}</p><button class="button ${pending ? 'secondary' : 'primary'} full" type="submit" ${pending ? 'id="resend-link" disabled' : config.available ? '' : 'disabled'}>${pending ? 'メールを再送信' : 'ログインメールを送信'} ${pending ? '' : icon('arrow')}</button></form>
     ${pending ? '<p class="login-help login-delivery">届かない場合は、迷惑メールフォルダもご確認ください。</p><div class="login-actions"><button class="text-button" type="button" id="change-email">メールアドレスを変更</button></div>' : config.available ? '<p class="login-help login-footer">初めての方も、このまま始められます。</p>' : ''}</main></div>`;
@@ -844,7 +873,7 @@ document.addEventListener('click', async (event) => {
   } catch (error) { if (target.isConnected) target.disabled = false; toast(error.message); }
 });
 const resultCode = new URL(location.href).searchParams.get('connection');
-window.addEventListener('pageshow', event => { if (event.persisted) void refresh().catch(() => {}); });
+window.addEventListener('pageshow', event => { if (event.persisted && !isLoginConfirmation) void refresh().catch(() => {}); });
 if (linkToken) {
   try {
     await api('/v1/credentials/exchange', { method: 'POST', data: { request_id: requestId, link: linkToken } });
@@ -852,8 +881,11 @@ if (linkToken) {
     try { sessionStorage.setItem('linked:' + requestId, '1'); } catch {}
   } catch (error) { if (!linked) { linked = true; requestError = error.message; } }
 }
-if (location.search || location.hash) history.replaceState(null, '', pagePath);
-try { await refresh(); } catch (error) { if (error.status !== 401) { await showLogin(); toast(error.message); } }
+if (isLoginConfirmation) showLoginConfirmation();
+else {
+  if (location.search || location.hash) history.replaceState(null, '', pagePath);
+  try { await refresh(); } catch (error) { if (error.status !== 401) { await showLogin(); toast(error.message); } }
+}
 // What came back from an OAuth round trip, in words that hold for any service.
 const resultMessages = { connected: '認証情報を登録しました。', denied: '登録をキャンセルしました。', expired: '登録の手続きが切れました。もう一度お試しください。',
   wrong_account: '登録し直すには同じアカウントを選んでください。', already_connected: 'この認証情報は登録済みです。', scope: '求めた範囲とサービスの許可が一致しません。',
