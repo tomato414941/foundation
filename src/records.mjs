@@ -16,10 +16,4 @@ export class Records {
       WHERE actor_id=? OR (object_type='principal' AND object_id=?) ORDER BY at DESC, id DESC LIMIT ?`).all(principalId, principalId, limit)
       .map(row => ({ ...row, detail: JSON.parse(row.detail) }));
   }
-  // What was done in a holder's name: every record whose actor acts for them, or is them.
-  listFor(holderId, actorIds, { limit = 100 } = {}) {
-    const ids = [holderId, ...actorIds];
-    return this.db.prepare(`SELECT id,at,actor_id,action,object_type,object_id,detail FROM records WHERE actor_id IN (${ids.map(() => '?').join(',')}) ORDER BY at DESC, id DESC LIMIT ?`)
-      .all(...ids, limit).map(row => ({ ...row, detail: JSON.parse(row.detail) }));
-  }
 }
