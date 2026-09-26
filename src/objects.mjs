@@ -154,16 +154,26 @@ export class Objects {
   async remove(ownerId, key) {
     this.check();
     const row = this.find(ownerId, key);
-    if (!row) return;
+    if (row) await this.removeRow(row);
+  }
+  async removeRow(row) {
+    this.check();
     await this.space.remove(ROOM, row.id);
     this.store.transaction(() => {
       this.db.prepare('DELETE FROM holdings WHERE id=?').run(row.id);
       this.db.prepare("DELETE FROM relations WHERE object_type='holding' AND object_id=?").run(row.id);
     });
   }
-  async link(ownerId, key, minutes) {
+  // A new name for the same thing: the bytes sit under the id, so nothing moves.
+  rename(row, to) {
+    const target = objectKey(to);
+    if (target !== row.key && this.find(row.holder_id, target)) fail(409, 'name_taken', 'その名前はすでに使われています。');
+    this.db.prepare('UPDATE holdings SET name=?,updated_at=? WHERE id=?').run(target, new Date().toISOString(), row.id);
+    return this.byId(row.id);
+  }
+  async link(row, minutes) {
     this.check();
-    const row = this.at(ownerId, key), seconds = this.minutes(minutes) * 60;
+    const seconds = this.minutes(minutes) * 60;
     return { id: row.id, key: row.key, url: await this.space.link(ROOM, row.id, seconds), url_expires_at: Date.now() + seconds * 1000 };
   }
 }

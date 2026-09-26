@@ -76,7 +76,7 @@ function spaceSection() {
       <td class="object-name"><span class="object-mark" aria-hidden="true">${icon('folder')}</span><button class="link-button" data-action="go-prefix" data-prefix="${esc(objectPrefix + item.name)}">${esc(item.name.slice(0, -1))}</button></td>
       <td>フォルダ</td><td>${esc(kiloBytes(item.bytes))}</td><td>${item.count} 件</td></tr>`).join('')
     + shown.map(item => `<tr><td><input type="checkbox" data-action="choose-object" data-key="${esc(item.key)}" ${objectChosen.has(item.key) ? 'checked' : ''} aria-label="${esc(item.name)} を選ぶ"></td>
-      <td class="object-name"><span class="object-mark" aria-hidden="true">${icon('note')}</span><a href="/v1/objects/${encodeURIComponent(item.key)}" download>${esc(item.name)}</a></td>
+      <td class="object-name"><span class="object-mark" aria-hidden="true">${icon('note')}</span><a href="/v1/holdings/${esc(item.id)}/content" download>${esc(item.name)}</a></td>
       <td>${esc(kindOf(item.name))}</td><td>${esc(kiloBytes(item.size))}</td><td>${esc(keptWhen(item.updated_at))}</td></tr>`).join('');
   const body = space.objects.length === 0 ? '<div class="access-empty"><p>まだ何も置かれていません。AIに頼むか、ここから追加できます。</p></div>'
     : here.length === 0 ? `<div class="access-empty"><p>${needle ? `「${esc(objectFilter)}」に当てはまるものはありません。` : 'ここには何もありません。'}</p></div>`
@@ -204,9 +204,7 @@ window.addEventListener('focus', () => { if (document.querySelector('#email-sent
 // The owner's objects: every page of the listing, and how much of the space they use.
 async function loadSpace() {
   try {
-    const objects = [];
-    let cursor;
-    do { const page = await api('/v1/objects' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '')); objects.push(...page.objects); cursor = page.cursor; } while (cursor);
+    const objects = (await api('/v1/holdings?kind=object')).holdings.map(item => ({ ...item, key: item.name, updated_at: Date.parse(item.updated_at) }));
     return { available: true, objects, usage: (await api('/v1/usage')).objects };
   } catch { return null; }
 }
@@ -356,7 +354,7 @@ function bindObjects() {
     upload.disabled = true;
     try {
       const key = objectPrefix + file.name;
-      const response = await fetch('/v1/objects/' + encodeURIComponent(key), { method: 'PUT', credentials: 'same-origin',
+      const response = await fetch('/v1/holdings?' + new URLSearchParams({ kind: 'object', name: key }), { method: 'PUT', credentials: 'same-origin',
         headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
@@ -553,7 +551,7 @@ function addSecret() {
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加</button></form>`);
   bindForm(async (form) => {
     const name = form.get('name');
-    const response = await fetch('/v1/secrets?name=' + encodeURIComponent(name),
+    const response = await fetch('/v1/holdings?' + new URLSearchParams({ kind: 'secret', name }),
       { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'text/plain' }, body: String(form.get('value')) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
@@ -592,8 +590,8 @@ function editSecret(entry, trigger) {
     saving = true; save.disabled = true; cancel.disabled = true; input.readOnly = true;
     form.setAttribute('aria-busy', 'true'); error.textContent = '';
     try {
-      const { secret: saved } = await api('/v1/secrets?name=' + encodeURIComponent(entry.name), { method: 'PATCH', data: { name } });
-      state.secrets = state.secrets.map(item => item.name === entry.name ? saved : item);
+      const { holding: saved } = await api('/v1/holdings/' + entry.id, { method: 'PATCH', data: { name } });
+      state.secrets = state.secrets.map(item => item.id === entry.id ? saved : item);
       const template = document.createElement('template'); template.innerHTML = secretRow(saved);
       const next = template.content.firstElementChild;
       row.replaceWith(next); bindSecretValue(saved, next);
@@ -608,7 +606,7 @@ function editSecret(entry, trigger) {
   input.focus(); input.select();
 }
 function bindSecretValue(entry, row) {
-  const path = '/v1/secrets?name=' + encodeURIComponent(entry.name), panel = row.querySelector('.secret-value-panel');
+  const path = '/v1/holdings/' + entry.id + '/content', panel = row.querySelector('.secret-value-panel');
   let value = null, text = null, etag = null, revealed = false, binary = false, busy = false;
   const lock = locked => row.querySelectorAll('[data-action]').forEach(button => { button.disabled = locked; });
   const clear = () => { value = null; text = null; etag = null; revealed = false; };
@@ -690,8 +688,8 @@ function bindSecretValue(entry, row) {
           headers: { 'content-type': 'application/octet-stream', 'if-match': etag }, body: bytes });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error?.message || '保存できませんでした。');
-        binary = decode(bytes) === null; entry = result.secret; clear();
-        state.secrets = state.secrets.map(item => item.name === entry.name ? entry : item);
+        binary = decode(bytes) === null; entry = result.holding; clear();
+        state.secrets = state.secrets.map(item => item.id === entry.id ? entry : item);
         if (!panel.isConnected) return;
         row.querySelector('.secret-meta').innerHTML = secretMeta(entry); panel.classList.remove('editing');
         show('edit'); toast('保存しました。');
@@ -729,8 +727,8 @@ document.addEventListener('click', async (event) => {
     if (action === 'reconnect') connect(target.dataset.connector, target.dataset.id);
     if (action === 'disconnect') disconnect(state.connections.find(item => item.id === target.dataset.id));
     if (action === 'drop-secret') {
-      const name = target.dataset.name;
-      confirmRemoval(name + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/v1/secrets?name=' + encodeURIComponent(name), { method: 'DELETE', data: {} }));
+      const name = target.dataset.name, entry = state.secrets.find(item => item.name === name);
+      confirmRemoval(name + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/v1/holdings/' + entry.id, { method: 'DELETE', data: {} }));
     }
     if (action === 'go-prefix') { objectPrefix = target.dataset.prefix; objectFilter = ''; objectLimit = 100; objectChosen = new Set(); render(); }
     if (action === 'more-objects') { objectLimit += 100; render(); }
@@ -754,7 +752,7 @@ document.addEventListener('click', async (event) => {
       const key = chosenKeys()[0];
       target.disabled = true;
       try {
-        const result = await api('/v1/objects/' + encodeURIComponent(key) + '/link', { method: 'POST', data: { minutes: 60 } });
+        const result = await api('/v1/holdings/' + state.space.objects.find(item => item.key === key).id + '/link', { method: 'POST', data: { minutes: 60 } });
         try { await navigator.clipboard.writeText(result.url); toast('URLをコピーしました。1時間で切れます。'); }
         catch {
           openDialog(`<h2 id="dialog-title">取り出し用のURL</h2><p>${esc(key)} を、このURLを知っている人なら誰でも取り出せます。1時間で切れます。</p>
@@ -767,7 +765,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'drop-chosen') {
       const keys = chosenKeys();
       confirmRemoval(keys.length === 1 ? keys[0] + ' を削除しますか？' : keys.length + '件を削除しますか？', '置き場から消えます。元には戻せません。',
-        async () => { for (const key of keys) await api('/v1/objects/' + encodeURIComponent(key), { method: 'DELETE', data: {} }); objectChosen = new Set(); });
+        async () => { for (const key of keys) await api('/v1/holdings/' + state.space.objects.find(item => item.key === key).id, { method: 'DELETE', data: {} }); objectChosen = new Set(); });
     }
     if (action === 'add-secret') addSecret();
     if (action === 'copy-name') {

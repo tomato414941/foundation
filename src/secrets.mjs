@@ -86,19 +86,19 @@ export class Secrets {
     return row;
   }
   // Rename without exposing or modifying content. Lines onto the thing point at its id, so they need no care.
-  rename(ownerId, name, { name: to }) {
-    const target = secretName(to ?? name);
+  rename(ownerId, name, { name: to }) { return this.renameRow(this.at(ownerId, name), to ?? name); }
+  renameRow(row, to) {
+    const target = secretName(to);
     return this.store.transaction(() => {
-      const row = this.at(ownerId, name);
-      if (target !== name && this.find(ownerId, target)) fail(409, 'name_taken', 'その名前はすでに使われています。');
+      if (target !== row.name && this.find(row.owner_id, target)) fail(409, 'name_taken', 'その名前はすでに使われています。');
       this.db.prepare('UPDATE holdings SET name=?,updated_at=? WHERE id=?').run(target, new Date().toISOString(), row.id);
-      return this.list(ownerId, target)[0];
+      return this.list(row.owner_id, target)[0];
     });
   }
   // Removing the thing removes the lines onto it: a later thing by the same name is another thing.
-  remove(ownerId, name) {
+  remove(ownerId, name) { this.removeRow(this.at(ownerId, name)); }
+  removeRow(row) {
     this.store.transaction(() => {
-      const row = this.at(ownerId, name);
       this.db.prepare('DELETE FROM holdings WHERE id=?').run(row.id);
       this.db.prepare("DELETE FROM relations WHERE object_type='holding' AND object_id=?").run(row.id);
     });

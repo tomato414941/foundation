@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page).to_have_url(args.base + '/principals')
     expect(page.get_by_role('heading', name='アクセスキー', exact=True)).to_be_visible()
     review(page)
-    assert cli('api', 'GET', '/v1/secrets')['secrets'] == []
+    assert cli('api', 'GET', '/v1/holdings?kind=secret')['holdings'] == []
 
     # 2. The approved key asks for a registration, on its own link and without a code.
     request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'connector': 'gmail.readonly', 'purpose': '届いたメールを確認する'}))['request']
@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_text('登録をキャンセルしました。', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']
-    assert cli('api', 'GET', '/v1/secrets')['secrets'] == []
+    assert cli('api', 'GET', '/v1/holdings?kind=secret')['holdings'] == []
     authorization['deny'] = False
     page.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
@@ -127,7 +127,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     runtime.get_by_role('button', name='失効', exact=True).click()
     page.get_by_role('dialog').get_by_role('button', name='失効させる', exact=True).click()
     expect(page.get_by_role('dialog')).not_to_be_visible()
-    cli('api', 'GET', '/v1/secrets', success=False)
+    cli('api', 'GET', '/v1/holdings?kind=secret', success=False)
     page.goto(pending['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='依頼は取り消されました', exact=True)).to_be_visible()
 

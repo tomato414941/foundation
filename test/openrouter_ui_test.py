@@ -69,7 +69,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.route('https://openrouter.ai/auth?*', consent)
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
     expect(page.get_by_text('登録をキャンセルしました。', exact=True)).to_be_visible()
-    assert cli('api', 'GET', '/v1/secrets')['secrets'] == []
+    assert cli('api', 'GET', '/v1/holdings?kind=secret')['holdings'] == []
     authorization['deny'] = False
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     review(page)
     dialog.get_by_role('button', name='失効させる', exact=True).click()
     expect(dialog).not_to_be_visible()
-    cli('api', 'GET', '/v1/secrets', success=False)
+    cli('api', 'GET', '/v1/holdings?kind=secret', success=False)
 
     page.goto(args.base + '/connections', wait_until='networkidle')
     section.get_by_role('button', name='接続を解除', exact=True).click()

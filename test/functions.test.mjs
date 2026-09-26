@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { fixture, USER_A, json } from './helpers.mjs';
 import { SECRET_COUNT_MAX } from '../src/secrets.mjs';
 
-const route = name => '/v1/secrets?name=' + encodeURIComponent(name);
-const own = name => '/v1/secrets?name=' + encodeURIComponent(name);
+const route = name => '/v1/holdings?kind=secret&name=' + encodeURIComponent(name);
+const own = name => '/v1/holdings?kind=secret&name=' + encodeURIComponent(name);
 const invoke = (f, token, connection, save) => f.request('/v1/functions/connection.credentials', {
   method: 'POST', token, data: { connection_id: connection.id, ...(save === undefined ? {} : { save }) },
 });
@@ -15,16 +15,16 @@ test('Every accepted name round-trips literally through HTTP, including Unicode,
   for (const [index, name] of names.entries()) {
     const content = 'value-' + index;
     const put = await f.request(route(name), { method: 'PUT', token, raw: content });
-    assert.equal(put.status, 200, put.text); assert.equal(put.json.secret.name, name);
-    assert.equal((await f.request(route(name), { token })).text, content);
-    assert.equal((await f.request(own(name))).text, content);
+    assert.equal(put.status, 200, put.text); assert.equal(put.json.holding.name, name);
+    assert.equal((await f.read('secret', name, { token })).text, content);
+    assert.equal((await f.read('secret', name)).text, content);
   }
-  assert.deepEqual(new Set((await f.request('/v1/secrets', { token })).json.secrets.map(row => row.name)), new Set(names));
-  const renamed = await f.request(own('..'), { method: 'PATCH', data: { name: ' ../新しい名=, ' } });
-  assert.equal(renamed.status, 200); assert.equal(renamed.json.secret.name, ' ../新しい名=, ');
-  assert.equal((await f.request(route(' ../新しい名=, '), { token })).text, 'value-3');
-  assert.equal((await f.request(route(' ../新しい名=, '), { method: 'DELETE', token, data: {} })).status, 200);
-  assert.equal((await f.request(route(' ../新しい名=, '), { token })).status, 404);
+  assert.deepEqual(new Set((await f.request('/v1/holdings?kind=secret', { token })).json.holdings.map(row => row.name)), new Set(names));
+  const renamed = await f.request('/v1/holdings/' + (await f.lookup('secret', '..')).json.holding.id, { method: 'PATCH', data: { name: ' ../新しい名=, ' } });
+  assert.equal(renamed.status, 200); assert.equal(renamed.json.holding.name, ' ../新しい名=, ');
+  assert.equal((await f.read('secret', ' ../新しい名=, ', { token })).text, 'value-3');
+  assert.equal((await f.drop('secret', ' ../新しい名=, ', { token })).status, 200);
+  assert.equal((await f.read('secret', ' ../新しい名=, ', { token })).status, 404);
 });
 
 test('Name prefix filtering uses literal, case-sensitive text rather than wildcard or directory semantics', async t => {
@@ -32,8 +32,8 @@ test('Name prefix filtering uses literal, case-sensitive text rather than wildca
   const names = ['a', 'a_', 'a_2', 'a%', 'ab', 'ab/c', 'A_', 'a/?'];
   for (const name of names) await f.request(route(name), { method: 'PUT', token, raw: 'x' });
   for (const [prefix, expected] of [['a_', ['a_', 'a_2']], ['a%', ['a%']], ['A', ['A_']], ['ab', ['ab', 'ab/c']]]) {
-    const listed = await f.request('/v1/secrets?prefix=' + encodeURIComponent(prefix), { token });
-    assert.deepEqual(listed.json.secrets.map(row => row.name), expected);
+    const listed = await f.request('/v1/holdings?kind=secret&prefix=' + encodeURIComponent(prefix), { token });
+    assert.deepEqual(listed.json.holdings.map(row => row.name), expected);
   }
 });
 
@@ -62,23 +62,23 @@ test('Explicit credential outputs can be saved, renamed and delivered without li
   assert.deepEqual(saved.json.saved.map(row => row.name), [snapshot]);
   assert.ok(saved.json.expires_in > 3500);
   assert.doesNotMatch(saved.text, /google-access|refresh-personal/);
-  assert.equal((await f.request(route(snapshot), { token })).status, 403);
+  assert.equal((await f.read('secret', snapshot, { token })).status, 403);
   f.expire(personal.id);
   const calls = f.gmail.calls.length;
   const delivered = await f.request('/v1/deliveries', { method: 'POST', token, data: { names: [{ name: snapshot, as: 'CHOSEN_TOKEN' }] } });
   assert.deepEqual(delivered.json.delivery.environment, { CHOSEN_TOKEN: 'google-access-personal-readonly' });
   assert.equal(delivered.json.expires_at, null);
-  assert.equal((await f.request(own(snapshot))).text, 'google-access-personal-readonly');
+  assert.equal((await f.read('secret', snapshot)).text, 'google-access-personal-readonly');
   assert.equal(f.gmail.calls.length, calls, 'reads deliver the stored snapshot, with no provider invocation');
-  assert.equal((await f.request(own(snapshot), { method: 'PATCH', data: { name: 'a/aa/aaa' } })).status, 200);
+  assert.equal((await f.request('/v1/holdings/' + (await f.lookup('secret', snapshot)).json.holding.id, { method: 'PATCH', data: { name: 'a/aa/aaa' } })).status, 200);
   const oldCiphertext = f.app.secrets.find(USER_A, 'a/aa/aaa').content;
   assert.equal((await invoke(f, token, personal)).status, 200);
   assert.ok(f.gmail.calls.length > calls, 'the explicit function renews an expired credential');
   assert.equal(f.app.secrets.find(USER_A, 'a/aa/aaa').content, oldCiphertext);
-  assert.equal((await f.request(route(unrelated), { token })).text, 'unrelated value');
+  assert.equal((await f.read('secret', unrelated, { token })).text, 'unrelated value');
   const removed = await f.request('/v1/connections/' + personal.id, { method: 'DELETE', data: { revoke: false } });
   assert.equal(removed.status, 200);
-  assert.equal((await f.request(own('a/aa/aaa'))).text, 'google-access-personal-readonly');
+  assert.equal((await f.read('secret', 'a/aa/aaa')).text, 'google-access-personal-readonly');
   assert.equal((await invoke(f, token, work)).json.delivery.environment.GMAIL_ACCOUNT_EMAIL, 'work@example.test');
   assert.equal((await invoke(f, token, personal)).status, 404);
 });
@@ -133,5 +133,5 @@ test('A storage request preserves comma and punctuation names in its completion 
   assert.equal(complete.status, 200, complete.text);
   const done = await f.request('/v1/requests/' + asked.json.request.id, { token });
   assert.deepEqual(done.json.request.result.names, names);
-  for (const name of names) assert.equal((await f.request(own(name))).text, 'value-' + name);
+  for (const name of names) assert.equal((await f.read('secret', name)).text, 'value-' + name);
 });

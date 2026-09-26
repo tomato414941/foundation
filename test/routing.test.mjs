@@ -20,14 +20,14 @@ test('解釈できないAuthorizationが付いた要求をCookieで代用せず�
   for (const authorization of ['Basic invalid', 'Bearer', '', 'Bearer invalid token', 'Bearer not-an-approved-key']) {
     const read = await f.request('/v1/connections', { headers: { authorization } });
     assert.equal(read.status, 401, authorization || '(empty header)');
-    const write = await f.request('/v1/secrets?name=must-not-write', { method: 'PUT', raw: 'untrusted', headers: { authorization } });
+    const write = await f.request('/v1/holdings?kind=secret&name=must-not-write', { method: 'PUT', raw: 'untrusted', headers: { authorization } });
     assert.equal(write.status, 401, authorization || '(empty header)');
   }
-  assert.deepEqual((await f.request('/v1/secrets')).json.secrets, []);
+  assert.deepEqual((await f.request('/v1/holdings?kind=secret')).json.holdings, []);
 });
 
 test('Cookieによる更新は同一Originに限定し、CLIのBearerではOriginなしで更新する', async t => {
-  const f = await fixture(t), key = await f.issueKey(), path = '/v1/secrets?name=url-review';
+  const f = await fixture(t), key = await f.issueKey(), path = '/v1/holdings?kind=secret&name=url-review';
   const request = async headers => {
     const response = await fetch(f.base + path, { method: 'PUT', headers: { 'content-type': 'application/octet-stream', ...headers }, body: 'fixture-value' });
     await response.arrayBuffer();
@@ -37,5 +37,5 @@ test('Cookieによる更新は同一Originに限定し、CLIのBearerではOrigi
   assert.equal(await request({ cookie: f.cookie(), origin: 'https://elsewhere.example' }), 403);
   assert.equal(await request({ authorization: 'Bearer ' + key.token, origin: 'https://elsewhere.example' }), 403);
   assert.equal(await request({ authorization: 'Bearer ' + key.token }), 200);
-  assert.equal((await f.request(path)).text, 'fixture-value');
+  assert.equal((await f.read('secret', 'url-review')).text, 'fixture-value');
 });
