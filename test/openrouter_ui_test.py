@@ -69,7 +69,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.route('https://openrouter.ai/auth?*', consent)
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
     expect(page.get_by_text('登録をキャンセルしました。', exact=True)).to_be_visible()
-    assert cli('api', 'GET', '/v1/holdings?kind=secret')['holdings'] == []
+    assert cli('api', 'GET', '/v1/holdings?kind=grant')['holdings'] == []
     authorization['deny'] = False
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
@@ -79,12 +79,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
         if width != 320:
             page.screenshot(path=str(shots / ('approval-desktop.png' if width == 1280 else 'approval-mobile.png')), full_page=True)
     connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['connection_id']
-    saved = cli('api', 'POST', '/v1/functions/connection.credentials', '--json', json.dumps({'connection_id': connection, 'save': {'OPENROUTER_API_KEY': 'model key'}}))
-    assert saved['saved'][0]['name'] == 'model key'
-    command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'OPENROUTER_API_KEY=model key', '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
+    command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'OPENROUTER_API_KEY=' + connection, '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/grants', wait_until='networkidle')
     section = page.locator('[aria-labelledby="connections-title"]')
     assert 'Gmail' not in section.inner_text() and 'メール' not in section.inner_text()
     expect(section.get_by_role('button', name='接続し直す', exact=True)).to_have_count(0)
@@ -102,9 +100,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     review(page)
     dialog.get_by_role('button', name='失効させる', exact=True).click()
     expect(dialog).not_to_be_visible()
-    cli('api', 'GET', '/v1/holdings?kind=secret', success=False)
+    cli('api', 'GET', '/v1/holdings?kind=grant', success=False)
 
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/grants', wait_until='networkidle')
     section.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog.get_by_text('OpenRouter側のキーは残ります。', exact=False)).to_be_visible()
     review(page)
@@ -112,11 +110,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(page.locator('[aria-labelledby="connections-title"]')).to_have_count(0)
-    page.goto(args.base + '/secrets', wait_until='networkidle')
-    expect(page.get_by_role('heading', name='model key', exact=True)).to_be_visible()
 
     # Starting one from the dashboard uses the same flow, and asks for nothing the service decides.
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/grants', wait_until='networkidle')
     page.get_by_role('button', name='OpenRouterで接続', exact=True).first.click()
     review(page)
     authorization['code'] = 'second'

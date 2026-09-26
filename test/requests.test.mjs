@@ -64,7 +64,7 @@ test('A key not yet approved cannot ask for a registration, an approval request 
   const { row } = await create(f);
   const attempt = await f.request('/v1/connections', { method: 'POST', data: { connector: 'gmail.readonly', request_id: row.id } });
   assert.equal(attempt.status, 409); assert.equal(attempt.json.error.code, 'approval_only');
-  assert.equal(f.app.connections.list(USER_A).length, 0);
+  assert.equal(f.app.grants.connections(USER_A).length, 0);
   const approved = await f.issueKey();
   const bare = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: approved.token, data: { purpose: '何もない' } });
   assert.equal(bare.status, 400); assert.equal(bare.json.error.code, 'nothing_requested');
@@ -121,7 +121,7 @@ test('A registration request stays with its owner, completes by registering, and
   const flow = new URL((await f.request('/v1/connections', { method: 'POST', headers: { cookie: ownerCookie }, data: { connector: 'gmail.metadata', request_id: row.id } })).json.url);
   await f.callback(flow, 'second-metadata', { headers: { cookie: ownerCookie } });
   const done = (await f.request('/v1/requests/' + row.id, { headers: { cookie: ownerCookie } })).json.request;
-  assert.equal(done.status, 'done'); assert.equal(f.app.connections.get(USER_A, done.result.connection_id).subject, 'second@example.test');
+  assert.equal(done.status, 'done'); assert.equal(f.app.grants.held(USER_A, done.result.connection_id).subject, 'second@example.test');
   assert.equal((await usable(f, runtime.token)).json.connections.length, 2);
   const next = await create(f, runtime.token, {}, registration);
   f.app.requestActions.removePrincipal(USER_A, runtime.id);
@@ -131,7 +131,7 @@ test('A registration request stays with its owner, completes by registering, and
   assert.equal(blocked.status, 409);
   assert.equal(f.app.principals.actorsOf(USER_A).length, 0);
   assert.equal(f.app.principals.actorsOf(USER_B).length, 0);
-  assert.equal(f.app.connections.list(USER_A).length, 2);
+  assert.equal(f.app.grants.connections(USER_A).length, 2);
 });
 
 test('An approval request belongs to the owner who approves it', async t => {
@@ -158,7 +158,7 @@ for (const end of ['deny', 'cancel', 'expire']) test(`A ${end} registration requ
   release();
   const result = await callback;
   assert.equal(result.headers.get('location'), '/requests/' + row.id + '?connection=failed');
-  assert.equal(f.app.connections.list(USER_A).length, 1);
+  assert.equal(f.app.grants.connections(USER_A).length, 1);
   if (end === 'expire') {
     assert.equal(rowStatus(f, row.id), 'pending');
     f.app.store.sweep();
@@ -183,9 +183,9 @@ test('Cross-site creation, invalid names and cross-origin approval are rejected'
 test('What a key sees reflects a connection needing attention, one removed, and its own key revoked', async t => {
   const f = await fixture(t), saved = await f.credential(), { token, row } = await create(f);
   await approve(f, row);
-  f.app.connections.reconnectRequired(f.app.connections.get(USER_A, saved.id));
+  f.app.grants.reconnectRequired(f.app.grants.held(USER_A, saved.id));
   assert.equal((await usable(f, token)).json.connections[0].status, 'reconnect_required');
-  f.app.connections.disconnect(USER_A, saved.id);
+  f.app.grants.disconnect(USER_A, saved.id);
   assert.deepEqual((await usable(f, token)).json.connections, []);
   f.app.requestActions.removePrincipal(USER_A, f.app.principals.actorsOf(USER_A)[0].id);
   assert.equal((await usable(f, token)).status, 401);
@@ -228,7 +228,7 @@ test('独自の接続も共通の依頼・認証・受け渡し・解除の動�
   assert.equal(start.status, 200, start.text);
   const callback = await f.request('/oauth/notes.oauth/callback?state=' + new URL(start.json.url).searchParams.get('state') + '&code=notes-code');
   assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?connection=connected');
-  const saved = f.app.connections.list(USER_A)[0];
+  const saved = f.app.grants.connections(USER_A)[0];
   assert.equal(saved.connector, 'notes.oauth'); assert.equal(saved.subject, 'notes-user');
   const delivered = await f.deliver(saved, { token });
   assert.deepEqual(delivered.json.delivery.environment, { NOTES_TOKEN: 'notes-access' });
@@ -290,7 +290,7 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
   assert.equal((await f.request('/v1/principals/me', { method: 'DELETE', token, anonymous: true, data: {} })).status, 200);
   assert.equal((await f.request('/v1/connections', { token, anonymous: true })).status, 401);
   assert.equal(f.app.principals.actorsOf(USER_A).length, 0);
-  assert.equal(f.app.connections.list(USER_A).length, 1);
+  assert.equal(f.app.grants.connections(USER_A).length, 1);
 });
 
 test('依頼元が認証失敗と再試行の経過を機密入力なしで確認する', async t => {

@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     browser = p.chromium.launch(headless=True)
     # The owner's name for a thing finds its id; the id reaches the thing.
     def held(page, name):
-        found = page.request.get(args.base + '/v1/holdings?' + urlencode({'kind': 'secret', 'name': name}))
+        found = page.request.get(args.base + '/v1/holdings?' + urlencode({'kind': 'grant', 'name': name}))
         assert found.status == 200, found.text()
         return found.json()['holding']['id']
     def read(page, name):
@@ -79,11 +79,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
         if width != 320:
             page.screenshot(path=str(shots / ('purpose-desktop.png' if width == 1280 else 'purpose-mobile.png')), full_page=True)
     page.get_by_role('button', name='登録しない', exact=True).click()
-    expect(page.get_by_role('heading', name='保存しませんでした', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='預けませんでした', exact=True)).to_be_visible()
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # A rotation: the AI declares a replacement, the page says so, and renaming it makes it a new value instead.
-    kept = page.request.put(args.base + '/v1/holdings?kind=secret&name=npm token', headers={'content-type': 'text/plain', 'origin': args.base}, data='old-token')
+    kept = page.request.put(args.base + '/v1/holdings?kind=grant&name=npm token', headers={'content-type': 'text/plain', 'origin': args.base}, data='old-token')
     assert kept.status == 200
     rotation = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
         'kind': 'store', 'input': {'fields': {'name': 'npm token', 'label': 'npmアクセストークン', 'replace': True}}, 'purpose': '期限切れのトークンを新しいものに入れ替えます。'}))['request']
@@ -99,7 +99,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     expect(page.get_by_text('既存の「npm token」を置き換えます。', exact=True)).to_be_visible()
     page.get_by_label('npmアクセストークン', exact=True).fill('new-token')
     page.get_by_role('button', name='登録する', exact=True).click()
-    expect(page.get_by_role('heading', name='保存しました', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='預けました', exact=True)).to_be_visible()
     assert read(page, 'npm token').text() == 'new-token'
     finished = cli('api', 'GET', '/v1/requests/' + rotation['id'])['request']
     assert finished['result'] == {'names': ['npm token'], 'replaced': ['npm token']}
@@ -132,7 +132,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # Another value may be saved after the request page opens. The submitted name is checked again.
-    existing = page.request.put(args.base + '/v1/holdings?kind=secret&name=cloudflare/cloudflare-api-token',
+    existing = page.request.put(args.base + '/v1/holdings?kind=grant&name=cloudflare/cloudflare-api-token',
                                headers={'content-type': 'text/plain', 'origin': args.base}, data='existing-value')
     assert existing.status == 200
     value.fill(SECRET)
@@ -149,7 +149,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     page.set_viewport_size({'width': 1280, 'height': 1000})
     saved_name.fill('cloudflare-api-token')
     page.get_by_role('button', name='登録する', exact=True).click()
-    expect(page.get_by_role('heading', name='保存しました', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='預けました', exact=True)).to_be_visible()
     assert cli('api', 'GET', '/v1/requests/' + asked['id'])['request']['result']['names'] == ['cloudflare-api-token']
     review(page)
 
@@ -157,18 +157,18 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     for width in [1280, 390]:
         page.set_viewport_size({'width': width, 'height': 1000})
         page.goto(asked['verification_uri'], wait_until='networkidle')
-        expect(page.get_by_role('heading', name='保存しました', exact=True)).to_be_visible()
+        expect(page.get_by_role('heading', name='預けました', exact=True)).to_be_visible()
         review(page)
         page.screenshot(path=str(shots / ('completed-desktop.png' if width == 1280 else 'completed-mobile.png')), full_page=True)
-        page.get_by_role('link', name='シークレット', exact=True).click()
-        expect(page).to_have_url(args.base + '/secrets')
-        expect(page.get_by_role('heading', name='シークレット', exact=True)).to_be_visible()
-        expect(page.locator('[aria-label="保存した値"]').get_by_role('heading', name='cloudflare-api-token', exact=True)).to_be_visible()
+        page.get_by_role('link', name='委任', exact=True).click()
+        expect(page).to_have_url(args.base + '/grants')
+        expect(page.get_by_role('heading', name='委任', exact=True)).to_be_visible()
+        expect(page.locator('[aria-label="預けたもの"]').get_by_role('heading', name='cloudflare-api-token', exact=True)).to_be_visible()
         review(page)
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # The value is available to the AI under the name the owner chose.
-    kept = cli('api', 'GET', '/v1/holdings?kind=secret')['holdings']
+    kept = cli('api', 'GET', '/v1/holdings?kind=grant')['holdings']
     assert [row['name'] for row in kept] == ['cloudflare-api-token', 'cloudflare/cloudflare-api-token']
     refused = subprocess.run(['node', 'cli/runtime.mjs', 'api', 'GET', '/v1/holdings/' + kept[0]['id'] + '/content'], env=env, capture_output=True, text=True, timeout=15)
     assert refused.returncode == 1 and SECRET not in refused.stdout + refused.stderr
@@ -178,8 +178,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
                           env=env, capture_output=True, text=True, timeout=15)
     assert used.returncode == 0 and used.stdout.strip() == 'ready', used.stderr
 
-    page.goto(args.base + '/secrets', wait_until='networkidle')
-    expect(page.locator('[aria-label="保存した値"]').get_by_role('heading', name='cloudflare-api-token', exact=True)).to_be_visible()
+    page.goto(args.base + '/grants', wait_until='networkidle')
+    expect(page.locator('[aria-label="預けたもの"]').get_by_role('heading', name='cloudflare-api-token', exact=True)).to_be_visible()
     review(page)
 
     # Stored names are not DOM form-property names, either.
@@ -191,7 +191,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     for index in range(len(names)):
         page.get_by_label('入力 ' + str(index + 1), exact=True).fill('fixture-value-' + str(index))
     page.get_by_role('button', name='登録する', exact=True).click()
-    expect(page.get_by_role('heading', name='保存しました', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='預けました', exact=True)).to_be_visible()
     complete = cli('api', 'GET', '/v1/requests/' + multiple['id'])['request']
     assert complete['result']['names'] == names
     for name in names:

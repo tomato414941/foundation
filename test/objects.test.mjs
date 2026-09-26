@@ -164,21 +164,22 @@ test('signs a listing the way S3 asks for it', async (t) => {
 test('says what an owner is using and what they may use', async (t) => {
   const f = await space(t);
   await f.request('/v1/holdings?kind=object&name=a.txt', { method: 'PUT', token: KEY, raw: Buffer.from('12345'), type: 'text/plain' });
-  await f.request('/v1/holdings?kind=secret&name=notes/plan', { method: 'PUT', token: KEY, raw: 'abc', type: 'text/plain' });
+  await f.request('/v1/holdings?kind=grant&name=notes/plan', { method: 'PUT', token: KEY, raw: 'abc', type: 'text/plain' });
   const usage = await f.request('/v1/usage', { token: KEY });
   assert.equal(usage.status, 200, usage.text);
   assert.equal(usage.json.objects.count, 1);
   assert.equal(usage.json.objects.bytes, 5);
   assert.equal(usage.json.objects.bytes_max, 1024 * 1024 * 1024);
-  assert.equal(usage.json.secrets.count, 1);
-  assert.equal(usage.json.secrets.bytes, 3);
-  assert.equal(usage.json.secrets.count_max, 200);
+  assert.equal(usage.json.grants.count, 1);
+  assert.equal(usage.json.grants.bytes, 3);
+  assert.equal(usage.json.grants.count_max, 200);
 });
 
 test('refuses to keep more than the space lends', async (t) => {
   const f = await space(t);
   const owner = (await f.request('/v1/overview')).json.user.id;
-  f.app.store.db.prepare("INSERT INTO holdings (id,holder_id,kind,name,size,type,created_at,updated_at) VALUES ('big-1',?,'object','big',?,'text/plain','2026-01-01','2026-01-01')").run(owner, 1024 * 1024 * 1024);
+  f.app.store.db.prepare("INSERT INTO holdings (id,holder_id,kind,name,created_at,updated_at) VALUES ('big-1',?,'object','big','2026-01-01','2026-01-01')").run(owner);
+  f.app.store.db.prepare("INSERT INTO objects (holding_id,size,type) VALUES ('big-1',?,'text/plain')").run(1024 * 1024 * 1024);
   const refused = await f.request('/v1/holdings?kind=object&name=more.txt', { method: 'PUT', token: KEY, raw: Buffer.from('x'), type: 'text/plain' });
   assert.equal(refused.status, 409, refused.text);
   assert.equal(refused.json.error.code, 'space_full');

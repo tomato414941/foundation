@@ -1,12 +1,12 @@
 import { fail } from './errors.mjs';
-import { secretName } from './secrets.mjs';
+import { holdingName } from './holdings.mjs';
 import { requestInput } from './request-input.mjs';
 
 // Operations crossing resource boundaries. Each local result and its request completion
 // commit together; notifications run only after the transaction has committed.
 export class RequestActions {
-  constructor({ store, requests, secrets, connections, principals, records, changed = () => {} }) {
-    Object.assign(this, { store, requests, secrets, connections, principals, records, changed });
+  constructor({ store, requests, grants, principals, records, changed = () => {} }) {
+    Object.assign(this, { store, requests, grants, principals, records, changed });
   }
   // A store request is checked against what is kept when it is made, so a mismatch reaches the requester
   // and never the one asked: a name already in use must be declared a replacement, and a replacement must
@@ -21,7 +21,7 @@ export class RequestActions {
   // Where one value will go: new under a free name, or in place of what a replacement names. Nothing
   // else: a request never overwrites what it did not declare it would.
   placement(holderId, asked, name) {
-    const existing = this.secrets.find(holderId, name), replacing = asked.replace && name === asked.name;
+    const existing = this.grants.find(holderId, name), replacing = asked.replace && name === asked.name;
     if (replacing && !existing) fail(409, 'name_missing', `「${name}」という保存値はありません。置き換えではなく、新しく預ける依頼にしてください。`);
     if (!replacing && existing) fail(409, 'name_taken', `「${name}」はすでに使われています。別の保存名を入力してください。`);
     return replacing ? existing : null;
@@ -32,13 +32,13 @@ export class RequestActions {
       if (row.kind !== 'store') fail(409, 'wrong_kind', 'この依頼は保管の依頼ではありません。');
       const asked = this.requests.input(row).fields;
       if (!Array.isArray(entries) || entries.length !== asked.length || entries.some(entry => !entry || typeof entry.content !== 'string' || !entry.content)) fail(400, 'invalid_values', '入力内容を確認してください。');
-      const names = entries.map(entry => secretName(entry.name));
+      const names = entries.map(entry => holdingName(entry.name));
       if (new Set(names).size !== names.length) fail(400, 'duplicate_names', '保存名が重複しています。別の名前を入力してください。');
       // The one asked may have given a replacement another name; then the existing value stays and this one is new.
       const targets = asked.map((one, at) => this.placement(toId, one, names[at]));
       for (const [at, one] of asked.entries()) {
         const existing = targets[at];
-        const saved = this.secrets.put(toId, { name: names[at], content: Buffer.from(entries[at].content, 'utf8') });
+        const saved = this.grants.put(toId, { name: names[at], content: Buffer.from(entries[at].content, 'utf8') });
         // Asked to read it back, the asker is put on a line to it; a value that already existed keeps its lines as they were.
         if (!existing && one.readable) this.principals.relate(row.from_id, 'viewer', 'holding', saved.id);
       }
@@ -56,8 +56,8 @@ export class RequestActions {
         const row = this.requests.forTo(id, holderId, true);
         if (row.kind !== 'connect' || this.requests.input(row).connector !== connector) fail(409, 'wrong_kind', '依頼された接続方法で登録してください。');
       }
-      const saved = this.connections.save(holderId, connector, result, { previous });
-      this.records.write(holderId, previous ? 'connection.renewed' : 'connection.created', 'connection', saved.id, { connector, requested_by: requestedBy || null, request: id || null });
+      const saved = this.grants.save(holderId, connector, result, { previous });
+      this.records.write(holderId, previous ? 'connection.renewed' : 'connection.created', 'grant', saved.id, { connector, requested_by: requestedBy || null, request: id || null });
       if (id) {
         this.requests.done(id, holderId, { connection_id: saved.id });
         this.requests.record(id, 'connected', { connector });

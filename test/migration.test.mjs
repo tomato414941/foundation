@@ -58,7 +58,7 @@ const SCHEMA_20 = `
   PRAGMA user_version = 20;
 `;
 
-test('今日動いている形からの移行は、持ち物と接続をそのまま保ち、誰が作ったかの列だけを落とす', async t => {
+test('今日動いている形からの移行は、秘密を渡された委任に、接続を許可された委任に移し、中身をそのまま保つ', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), db = new DatabaseSync(path), vault = new Vault(KEY);
@@ -74,12 +74,15 @@ test('今日動いている形からの移行は、持ち物と接続をその�
 
   const store = new Store(path, KEY);
   t.after(() => store.close());
-  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 21);
-  const { secrets, connections } = resources(store);
-  assert.deepEqual(secrets.content(secrets.find(USER_A, 'doc')), content);
-  const connection = connections.get(USER_A, 'connection-1');
-  assert.equal(connection.generation, 3); assert.deepEqual(connections.state(connection), state);
-  assert.equal(store.db.prepare("SELECT count(*) n FROM pragma_table_info('holdings') WHERE name='kept_by'").get().n, 0);
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 22);
+  const { grants } = resources(store, [{ id: 'gmail.readonly', available: false, variables: [], authorization: { kind: 'oauth', begin() {}, complete() {} }, obtain() {} }]);
+  const doc = grants.find(USER_A, 'doc');
+  assert.equal(doc.method, 'given'); assert.equal(doc.provider, null);
+  assert.deepEqual(grants.content(doc), content);
+  const connection = grants.held(USER_A, 'connection-1');
+  assert.equal(connection.method, 'authorized'); assert.equal(connection.provider, 'gmail'); assert.equal(connection.status, 'usable');
+  assert.equal(connection.generation, 3); assert.deepEqual(grants.state(connection), state);
+  assert.deepEqual(store.db.prepare("SELECT name FROM pragma_table_info('holdings')").all().map(row => row.name), ['id', 'holder_id', 'kind', 'name', 'created_at', 'updated_at']);
 });
 
 test('もう誰も動かしていない形の データベースは、移行せずに断る', async t => {

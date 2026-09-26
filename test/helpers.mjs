@@ -6,15 +6,14 @@ import { FakeGmail } from '../src/connectors/gmail/fixture.mjs';
 export { FakeGmail } from '../src/connectors/gmail/fixture.mjs';
 import { Connectors } from '../src/connectors.mjs';
 import { gmailReadonly, gmailMetadata } from '../src/connectors/gmail/index.mjs';
-import { Connections } from '../src/connections.mjs';
-import { Secrets } from '../src/secrets.mjs';
+import { Grants } from '../src/grants.mjs';
 import { Holdings } from '../src/holdings.mjs';
 import { Principals } from '../src/principals.mjs';
 import { Sessions, OAuthFlows } from '../src/sessions.mjs';
 
 export function resources(store, connectors = []) {
   const holdings = new Holdings(store);
-  return { holdings, secrets: new Secrets(store, holdings), connections: new Connections(store, new Connectors(connectors), holdings), principals: new Principals(store), sessions: new Sessions(store), flows: new OAuthFlows(store) };
+  return { holdings, grants: new Grants(store, holdings, new Connectors(connectors)), principals: new Principals(store), sessions: new Sessions(store), flows: new OAuthFlows(store) };
 }
 
 export const KEY = Buffer.alloc(32, 7);
@@ -45,13 +44,13 @@ export class FakeAuth {
 
 // Seed a stored credential, including already-expired fixture tokens.
 export function acquired(store, connectors, connectorId, { subject, secret }) {
-  const connections = new Connections(store, new Connectors(connectors), new Holdings(store));
-  const saved = connections.write(USER_A, { connector: connectorId, subject, label: subject, keptBy: 'test',
+  const grants = new Grants(store, new Holdings(store), new Connectors(connectors));
+  const saved = grants.writeConnection(USER_A, { connector: connectorId, method: 'authorized', provider: connectorId.split('.')[0], subject, label: subject,
     state: { private_state: secret, facts: {}, expires_at: secret.expires_at } });
-  const row = () => connections.get(USER_A, saved.id);
-  const state = () => connections.state(row());
-  const run = () => connections.obtain(row());
-  return { connections, row, run, state };
+  const row = () => grants.held(USER_A, saved.id);
+  const state = () => grants.state(row());
+  const run = () => grants.obtain(row());
+  return { grants, row, run, state };
 }
 export async function fixture(t, options = {}) {
   const { gmail = new FakeGmail(), connectors = [gmailReadonly(gmail), gmailMetadata(gmail)], ...rest } = options, auth = options.auth || new FakeAuth();
@@ -100,11 +99,11 @@ export async function fixture(t, options = {}) {
     const url = await start({ range });
     const response = await callback(url, code + '-' + range);
     assert.equal(response.headers.get('location'), '/?connection=connected&connector=gmail.' + range, response.text);
-    return (await request('/v1/overview')).json.connections.find((item) => item.subject === code + '@example.test');
+    return (await request('/v1/overview')).json.grants.find((item) => item.subject === code + '@example.test');
   }
-  // Explicit credential processing: storage reads never call this operation.
+  // Delivering a connected grant derives what it yields now; nothing else reaches the provider.
   async function deliver(connection, options = {}) {
-    return request('/v1/functions/connection.credentials', { method: 'POST', data: { connection_id: connection.id }, ...options });
+    return request('/v1/deliveries', { method: 'POST', data: { names: [{ name: connection.id }] }, ...options });
   }
   // Makes a key known to the owner: the key asks to act for whoever opens its request, and the owner types its code.
   // A machine becomes a principal with no credential, is issued a key, asks to act for the person, and is approved.
@@ -142,9 +141,9 @@ export async function fixture(t, options = {}) {
   }
   // Ages a connection past its expiry in both the envelope and the connector's private state.
   function expire(id, owner = USER_A) {
-    const connection = app.connections.get(owner, id);
-    const state = app.connections.state(connection), expires_at = Date.now() - 1;
-    app.connections.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
+    const connection = app.grants.held(owner, id);
+    const state = app.grants.state(connection), expires_at = Date.now() - 1;
+    app.grants.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
   }
   if (options.login !== false) await login();
   return { app, auth, gmail, base, request, lookup, read, keep, drop, become, login, start, callback, credential, deliver, issueKey, approveKey, expire, close, cookie: () => cookie };
