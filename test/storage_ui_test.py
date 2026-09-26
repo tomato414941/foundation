@@ -76,9 +76,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
 
     # Nothing kept yet, and the page says so.
-    page.goto(args.base + '/grants', wait_until='networkidle')
-    expect(page.get_by_role('heading', name='委任', exact=True)).to_be_visible()
-    expect(page.get_by_text('預けたものはありません。', exact=False)).to_be_visible()
+    page.goto(args.base + '/credentials', wait_until='networkidle')
+    expect(page.get_by_role('heading', name='認証情報', exact=True)).to_be_visible()
+    expect(page.get_by_text('認証情報はありません。', exact=False)).to_be_visible()
     review(page)
 
     # The key keeps two things, with no request and no approval: one handed to a command, one only read back.
@@ -282,18 +282,18 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     github.get_by_role('button', name='削除', exact=True).click()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(page.get_by_text('預けたものはありません。', exact=False)).to_be_visible()
+    expect(page.get_by_text('認証情報はありません。', exact=False)).to_be_visible()
     assert api('GET', '/v1/holdings?kind=grant')['holdings'] == []
 
     # Opaque names survive the owner form, HTML rendering, rename and direct preview.
     literal = ' a/aa/aaa, <img src=x onerror="window.foundationNameXss=1"> '
-    page.get_by_role('button', name='預ける', exact=True).click()
+    page.get_by_role('button', name='追加', exact=True).click()
     dialog.get_by_label('名前', exact=True).fill(literal)
     dialog.get_by_label('値', exact=True).fill(SECRET)
-    dialog.get_by_role('button', name='預ける', exact=True).click()
+    dialog.get_by_role('button', name='追加', exact=True).click()
     expect(dialog).not_to_be_visible()
     assert api('GET', '/v1/holdings?kind=grant')['holdings'][0]['name'] == literal
-    title = page.locator('[aria-label="預けたもの"] .agent-name h3')
+    title = page.locator('[aria-label="認証情報"] .agent-name h3')
     assert title.text_content() == literal
     assert page.evaluate('window.foundationNameXss === undefined')
     for width in [1280, 390, 320]:

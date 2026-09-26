@@ -16,7 +16,7 @@ let linked = false, back = null;
 // Back to the product: its return page with how the request ended, or its refresh page when the link was no good.
 const backTo = row => { if (!row) return back.refresh_url; const url = new URL(back.return_url); url.searchParams.set('foundation_status', row.status); return url.href; };
 try { linked = Boolean(requestId) && sessionStorage.getItem('linked:' + requestId) === '1'; } catch {}
-const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/grants' ? 'grants' : location.pathname === '/functions' ? 'functions' : location.pathname === '/account' ? 'account' : location.pathname === '/principals' ? 'principals' : 'home';
+const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/credentials' ? 'credentials' : location.pathname === '/connections' ? 'connections' : location.pathname === '/functions' ? 'functions' : location.pathname === '/account' ? 'account' : location.pathname === '/principals' ? 'principals' : 'home';
 const pagePath = requestId ? location.pathname : page === 'home' ? '/' : '/' + page;
 let accessRequest = null, requestError = '';
 const loginMessages = {
@@ -142,7 +142,7 @@ const icon = (name) => {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
 const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true">F</span>Foundation</a>';
-const nav = `<nav class="page-nav">${[['/grants', 'grants', '委任'], ['/objects', 'objects', 'オブジェクト'], ['/principals', 'principals', 'アクセスキー'], ['/functions', 'functions', 'ファンクション']]
+const nav = `<nav class="page-nav">${[['/credentials', 'credentials', '認証情報'], ['/connections', 'connections', '接続'], ['/objects', 'objects', 'オブジェクト'], ['/principals', 'principals', 'アクセスキー'], ['/functions', 'functions', 'ファンクション']]
   .map(([href, name, label]) => `<a href="${href}"${name === page ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
 function toast(text) {
@@ -324,7 +324,7 @@ function render() {
   if (page === 'account') {
     // The account itself: who this is, and the few things done to it rather than in it.
     app.innerHTML = shell(`<header class="page-heading"><h1>アカウント</h1><p>${esc(state.user.email)}</p></header>
-      <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">データのダウンロード</h2><p>シークレットの値、接続とアクセスキーの一覧が JSON ファイルで入ります。オブジェクトは入りません。</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ダウンロード</a></div></section>
+      <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">データのダウンロード</h2><p>認証情報の値、接続とアクセスキーの一覧が JSON ファイルで入ります。オブジェクトは入りません。</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ダウンロード</a></div></section>
       <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">開発者</h2></div></div><a class="button secondary" href="/principals#apps">アプリの登録</a></div></section>`);
     return;
   }
@@ -335,7 +335,8 @@ function render() {
     const lastUsed = keys.flatMap(key => key.credentials.map(item => item.last_used_at)).filter(Boolean).sort().at(-1);
     app.innerHTML = shell(`<header class="page-heading"><h1>Foundation</h1></header>
       <div class="home-cards">
-        ${card('/grants', '委任', `預けたもの ${kept.length} 件・接続 ${connections.length} 件${connections.length ? '（' + connections.map(item => item.label).join('、') + '）' : ''}`)}
+        ${card('/credentials', '認証情報', `${kept.length} 件`)}
+        ${card('/connections', '接続', `${connections.length} 件${connections.length ? '（' + connections.map(item => item.label).join('、') + '）' : ''}`)}
         ${card('/objects', 'オブジェクト', space === undefined ? '…' : space?.available ? `${space.usage.count} 件・${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}` : '使えません')}
         ${card('/principals', 'アクセスキー', keys.length ? `承認済み ${keys.length} 件${lastUsed ? '・最終利用 ' + new Date(lastUsed).toLocaleString('ja-JP') : ''}` : 'ありません')}
         ${card('/functions', 'ファンクション', `${state.functions?.length || 0} 種類`)}
@@ -353,16 +354,22 @@ function render() {
       ${apps.length ? `<div class="agent-list">${apps.map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${used(item)}</p></div><div class="agent-permissions"><span class="muted">${esc(String(item.credentials.length))} 件のキー</span></div><div class="agent-actions"><button class="text-button danger" data-action="remove-integration" data-id="${esc(item.id)}">削除</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>登録したアプリはありません。</p></div>'}</section>`);
     return;
   }
-  // Grants: what this person let Foundation use. Those handed over by hand, those a service authorized, and the
-  // services that can still be connected.
-  const kept = given(), connections = connected();
-  app.innerHTML = shell(`<header class="page-heading page-heading-actions"><div><h1>委任</h1></div>
-    <button class="button secondary" data-action="add-grant">${icon('plus')} 預ける</button></header>
-    <section class="resource-section" aria-labelledby="given-title"><div class="section-heading"><h2 id="given-title">預けたもの</h2></div>
-    <div aria-label="預けたもの">${kept.length ? `<div class="agent-list">${kept.map(grantRow).join('')}</div>` : '<div class="access-empty"><p>預けたものはありません。</p></div>'}</div></section>
-    ${connections.length ? `<section class="resource-section" aria-labelledby="connections-title"><div class="section-heading"><h2 id="connections-title">接続済み</h2></div><div class="agent-list">${connections.map(connectionRow).join('')}</div></section>` : ''}
-    ${connectSection()}`);
-  app.querySelectorAll('.grant-row').forEach(row => bindGrantValue(kept.find(item => item.name === row.getAttribute('aria-label')), row));
+  if (page === 'connections') {
+    const connections = connected();
+    app.innerHTML = shell(`<header class="page-heading"><h1>接続</h1></header>
+      <section class="resource-section" aria-labelledby="connections-title"><div class="section-heading"><h2 id="connections-title">接続済み</h2></div>
+        ${connections.length ? `<div class="agent-list">${connections.map(connectionRow).join('')}</div>` : '<div class="access-empty"><p>接続済みのサービスはありません。</p></div>'}</section>
+      ${connectSection()}`);
+    return;
+  }
+  if (page === 'credentials') {
+    const kept = given();
+    app.innerHTML = shell(`<header class="page-heading page-heading-actions"><h1>認証情報</h1>
+      <button class="button secondary" data-action="add-grant">${icon('plus')} 追加</button></header>
+      <section class="resource-section" aria-label="認証情報">
+        ${kept.length ? `<div class="agent-list">${kept.map(grantRow).join('')}</div>` : '<div class="access-empty"><p>認証情報はありません。</p></div>'}</section>`);
+    app.querySelectorAll('.grant-row').forEach(row => bindGrantValue(kept.find(item => item.name === row.getAttribute('aria-label')), row));
+  }
 }
 function bindObjects() {
   const filter = document.querySelector('#object-filter');
@@ -440,7 +447,7 @@ function renderRequest() {
 // Foundation shows only where it will go and how it will be handed over.
 function renderStore(row, shell, expiry) {
   const asked = row.input.fields, replacing = asked.some(one => one.replace);
-  const title = asked.length === 1 ? `${esc(asked[0].label)}を${replacing ? '置き換える' : '預ける'}` : `${asked.length}件を${replacing ? '置き換える' : '預ける'}`;
+  const title = asked.length === 1 ? `${esc(asked[0].label)}を${replacing ? '置き換える' : '登録する'}` : `${asked.length}件を${replacing ? '置き換える' : '登録する'}`;
   const site = asked.find(one => one.site)?.site;
   const field = (one, at) => one.multiline
     ? `<textarea id="stored-${at}" name="value-${at}" rows="6" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>`
@@ -593,17 +600,17 @@ function removeKey(key) {
 // The name and the way it reaches a command, changed without the value ever being handed back.
 // Something the owner has in hand, put there without an agent asking for it first.
 function addGrant() {
-  openDialog(`<h2 id="dialog-title">預ける</h2>
+  openDialog(`<h2 id="dialog-title">認証情報を追加</h2>
     <form><label for="new-name">名前</label><input id="new-name" name="name" required maxlength="200" placeholder="任意の名前" autocomplete="off" spellcheck="false">
     <label for="new-value">値</label><textarea id="new-value" name="value" rows="4" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>
-    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">預ける</button></form>`);
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加</button></form>`);
   bindForm(async (form) => {
     const name = form.get('name');
     const response = await fetch('/v1/holdings?' + new URLSearchParams({ kind: 'grant', name }),
       { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'text/plain' }, body: String(form.get('value')) });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error?.message || '預けられませんでした。');
-    closeDialog(); await refresh(); toast(name + ' を預けました。');
+    if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
+    closeDialog(); await refresh(); toast(name + ' を追加しました。');
   });
 }
 function editGrant(entry, trigger) {
@@ -849,7 +856,7 @@ else {
   try { await refresh(); } catch (error) { if (error.status !== 401) { await showLogin(); toast(error.message); } }
 }
 // What came back from an OAuth round trip, in words that hold for any service.
-const resultMessages = { connected: '認証情報を登録しました。', denied: '登録をキャンセルしました。', expired: '登録の手続きが切れました。もう一度お試しください。',
-  wrong_account: '登録し直すには同じアカウントを選んでください。', already_connected: 'この認証情報は登録済みです。', scope: '求めた範囲とサービスの許可が一致しません。',
-  retry: '継続利用の許可を取得できませんでした。もう一度登録してください。', changed: '認証情報の状態が変わりました。もう一度お試しください。', failed: '登録できませんでした。もう一度お試しください。' };
-if (resultCode) toast(resultMessages[resultCode] || '登録を確認し、もう一度お試しください。');
+const resultMessages = { connected: '接続しました。', denied: '接続をキャンセルしました。', expired: '接続の手続きが切れました。もう一度お試しください。',
+  wrong_account: '接続し直すには同じアカウントを選んでください。', already_connected: 'このアカウントは接続済みです。', scope: '求めた範囲とサービスの許可が一致しません。',
+  retry: '継続利用の許可を取得できませんでした。もう一度接続してください。', changed: '接続の状態が変わりました。もう一度お試しください。', failed: '接続できませんでした。もう一度お試しください。' };
+if (resultCode) toast(resultMessages[resultCode] || '接続を確認し、もう一度お試しください。');

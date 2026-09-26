@@ -2,6 +2,34 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, USER_A } from './helpers.mjs';
 
+test('認証情報と接続の画面をそれぞれのURLから開く', async t => {
+  const f = await fixture(t);
+  for (const path of ['/credentials', '/connections']) {
+    const page = await f.request(path, { anonymous: true });
+    assert.equal(page.status, 200, path);
+    assert.match(page.headers.get('content-type'), /^text\/html/);
+    assert.match(page.text, /src="\/app\.js"/);
+    assert.equal(page.headers.get('cache-control'), 'no-cache');
+  }
+});
+
+test('以前のブックマークから認証情報の画面へ案内する', async t => {
+  const f = await fixture(t), page = await f.request('/grants', { anonymous: true });
+  assert.equal(page.status, 303);
+  assert.equal(page.headers.get('location'), '/credentials');
+});
+
+test('ログインを終えると開こうとしていた認証情報または接続の画面へ戻る', async t => {
+  const f = await fixture(t);
+  for (const [path, destination] of [['/credentials', '/credentials'], ['/connections', '/connections'], ['/grants', '/credentials']]) {
+    const email = 'return-' + destination.slice(1) + '@example.test';
+    await f.auth.sendLink(email, f.base + '/login/confirm');
+    const result = await f.request('/v1/login/verify', { method: 'POST', data: { email, token_hash: f.auth.links.get(email).code, return_to: path } });
+    assert.equal(result.status, 200, result.text);
+    assert.equal(result.json.return_to, destination);
+  }
+});
+
 test('同じURLでCookieとBearerを受け付け、Bearerがある場合はその所有者として扱う', async t => {
   const f = await fixture(t), first = await f.credential(), key = await f.issueKey();
   await f.login('second@example.test');

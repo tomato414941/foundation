@@ -31,7 +31,7 @@ test('OpenRouter authorization binds state in callback and uses S256 without app
 test('OpenRouter exchanges only PKCE code, preserves real expiry and zero budget, exposes no secrets in UI state', async t => {
   const f = await openrouterFixture(t);
   const url = await f.startOpenRouter();
-  assert.equal((await f.callbackOpenRouter(url)).headers.get('location'), '/?connection=connected&connector=openrouter.oauth');
+  assert.equal((await f.callbackOpenRouter(url)).headers.get('location'), '/connections?connection=connected&connector=openrouter.oauth');
   assert.match((await f.callbackOpenRouter(url)).headers.get('location'), /connection=expired/);
   const response = await f.request('/v1/overview');
   const account = response.json.grants[0];

@@ -95,7 +95,7 @@ export async function fixture(t, options = {}) {
   async function credential(code = 'personal', range = 'readonly') {
     const url = await start({ range });
     const response = await callback(url, code + '-' + range);
-    assert.equal(response.headers.get('location'), '/?connection=connected&connector=gmail.' + range, response.text);
+    assert.equal(response.headers.get('location'), '/connections?connection=connected&connector=gmail.' + range, response.text);
     return (await request('/v1/overview')).json.grants.find((item) => item.subject === code + '@example.test');
   }
   // Delivering a connected grant derives what it yields now; nothing else reaches the provider.

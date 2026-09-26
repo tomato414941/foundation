@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
 
     page.route('https://accounts.google.com/o/oauth2/v2/auth?*', consent)
     page.get_by_role('button', name='Googleで接続', exact=True).click()
-    expect(page.get_by_text('登録をキャンセルしました。', exact=True)).to_be_visible()
+    expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
     authorization['deny'] = False
     page.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
@@ -131,7 +131,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
             cloud.server_close()
             thread.join()
 
-    page.goto(args.base + '/grants', wait_until='networkidle')
+    page.goto(args.base + '/connections', wait_until='networkidle')
     add = page.locator('.agent-row').filter(has=page.get_by_role('heading', name='Google Cloud', exact=True))
     add.get_by_role('button', name='Googleで接続', exact=True).click()
     dialog = page.get_by_role('dialog')
@@ -139,8 +139,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
     review(page)
     authorization['account'] = 'work'
     dialog.get_by_role('button', name='Googleで接続', exact=True).click()
-    expect(page.get_by_text('認証情報を登録しました。', exact=True)).to_be_visible()
-    page.goto(args.base + '/grants', wait_until='networkidle')
+    expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
+    page.goto(args.base + '/connections', wait_until='networkidle')
     expect(page.get_by_text('personal@example.test', exact=True)).to_be_visible()
     expect(page.get_by_text('work@example.test', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
@@ -153,8 +153,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
     row.get_by_role('button', name='接続し直す', exact=True).click()
     authorization['account'] = 'personal'
     dialog.get_by_role('button', name='Googleで接続', exact=True).click()
-    expect(page.get_by_text('認証情報を登録しました。', exact=True)).to_be_visible()
-    page.goto(args.base + '/grants', wait_until='networkidle')
+    expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
+    page.goto(args.base + '/connections', wait_until='networkidle')
     row.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog.get_by_text('他のGoogle接続も使えなくなる場合があります。', exact=False)).to_be_visible()
     review(page)
@@ -162,8 +162,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
     dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(page.get_by_text('work@example.test', exact=True)).to_be_visible()
-    page.goto(args.base + '/grants', wait_until='networkidle')
-    expect(page.get_by_role('heading', name='委任', exact=True)).to_be_visible()
+    page.goto(args.base + '/connections', wait_until='networkidle')
+    expect(page.get_by_role('heading', name='接続', exact=True)).to_be_visible()
     review(page)
     assert not errors, errors
     context.close()

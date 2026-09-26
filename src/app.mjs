@@ -28,7 +28,7 @@ const VERSION = createRequire(import.meta.url)('../package.json').version;
 
 const PUBLIC = new URL('../web/', import.meta.url);
 // The owner's pages. Each is the same shell; the script decides what to show from the path.
-const PAGES = ['/', '/grants', '/objects', '/principals', '/functions', '/account'];
+const PAGES = ['/', '/credentials', '/connections', '/objects', '/principals', '/functions', '/account'];
 const STATIC = new Map(PAGES.map(page => [page, ['index.html', 'text/html; charset=utf-8']]));
 STATIC.set('/login/confirm', ['index.html', 'text/html; charset=utf-8']);
 STATIC.set('/app.js', ['app.js', 'text/javascript; charset=utf-8']);
@@ -45,6 +45,7 @@ const PRINCIPAL_ID = /^[A-Za-z0-9-]{1,64}$/;
 const grantTag = row => '"' + digest(JSON.stringify([row.id, row.name, row.size, row.updated_at])) + '"';
 
 function returnPath(value = '/') {
+  if (value === '/grants') return '/credentials';
   if (!PAGES.includes(value) && (typeof value !== 'string' || !REQUEST_PAGE.test(value))) fail(400, 'invalid_return', '接続リンクを開き直してください。');
   return value;
 }
@@ -197,6 +198,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       const setNamedCookie = (name, value, age, cookiePath = '/') => res.appendHeader('Set-Cookie', `${name}=${value}; HttpOnly; SameSite=${cookiePath === '/' ? 'Lax' : 'Strict'}; Path=${cookiePath}; Max-Age=${age}${external ? '; Secure' : ''}`);
       const setCookie = (value, age) => setNamedCookie('fdn_session', value, age);
       const loginToken = readCookie(req, 'fdn_login');
+      if (path === '/grants' && method === 'GET') return redirect('/credentials' + url.search);
       if ((STATIC.has(path) || REQUEST_PAGE.test(path)) && method === 'GET') {
         if (REQUEST_PAGE.test(path)) requests.record(path.slice('/requests/'.length), 'page_opened');
         // The page and its script are the same for everyone, so a browser keeps them and only asks whether
@@ -213,8 +215,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       if (path === '/login/callback' && method === 'GET') return redirect('/?login=invalid');
       const oauthCallback = path.match(/^\/oauth\/([a-z][a-z0-9.-]{0,63})\/callback$/);
       if (oauthCallback && method === 'GET') {
-        let destination = '/';
-        const connectionLocation = code => destination + '?connection=' + code + (destination === '/' ? '&connector=' + encodeURIComponent(oauthCallback[1]) : '');
+        let destination = '/connections';
+        const connectionLocation = code => destination + '?connection=' + code + (destination === '/connections' ? '&connector=' + encodeURIComponent(oauthCallback[1]) : '');
         try {
           const { user, session } = await loggedIn(req);
           if (url.searchParams.getAll('state').length !== 1 || url.searchParams.getAll('code').length > 1) fail(400, 'invalid_state', '接続をやり直してください。');

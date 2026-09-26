@@ -101,17 +101,17 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
 
     page.route('https://accounts.google.com/o/oauth2/v2/auth?*', consent)
     page.get_by_role('button', name='Googleで接続', exact=True).click()
-    expect(page.get_by_text('登録をキャンセルしました。', exact=True)).to_be_visible()
+    expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']
     assert cli('api', 'GET', '/v1/holdings?kind=grant')['holdings'] == []
     authorization['deny'] = False
     page.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     expect(page.get_by_text('personal@example.test', exact=False)).to_be_visible()
-    expect(page.get_by_role('link', name='委任', exact=True)).to_have_attribute('href', '/grants')
-    page.get_by_role('link', name='委任', exact=True).click()
-    expect(page).to_have_url(args.base + '/grants')
-    expect(page.get_by_role('heading', name='委任', exact=True)).to_be_visible()
+    expect(page.get_by_role('link', name='接続', exact=True)).to_have_attribute('href', '/connections')
+    page.get_by_role('link', name='接続', exact=True).click()
+    expect(page).to_have_url(args.base + '/connections')
+    expect(page.get_by_role('heading', name='接続', exact=True)).to_be_visible()
     page.goto(request['verification_uri'], wait_until='networkidle')
     review(page)
     page.screenshot(path=str(shots / 'request-approved.png'), full_page=True)

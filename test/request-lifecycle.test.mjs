@@ -140,9 +140,10 @@ test('保存と依頼完了を一緒に確定し、失敗した場合は再試�
 });
 
 test('依頼の種類に合った完了表示と移動先を返す', () => {
-  for (const [kind, title, href] of [['connect', '接続しました', '/grants'], ['store', '預けました', '/grants'], ['actor', '承認しました', '/principals']]) {
+  for (const [kind, title, href, label] of [['connect', '接続しました', '/connections', '接続'], ['store', '登録しました', '/credentials', '認証情報'], ['actor', '承認しました', '/principals', 'アクセスキー']]) {
     const view = requestResultView({ kind, status: 'done' });
     assert.equal(view.title, title); assert.equal(view.href, href); assert.equal(view.completed, true);
+    assert.equal(view.label, label);
   }
   const unknown = requestResultView({ kind: '__proto__', status: 'done' });
   assert.equal(unknown.title, '依頼を確認できません');

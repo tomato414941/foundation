@@ -26,8 +26,8 @@ test('OAuth uses state, PKCE, offline consent, native Google URL; callback is on
   assert.ok(url.searchParams.get('prompt').includes('consent'));
   assert.equal(url.searchParams.get('redirect_uri'), f.base + '/oauth/gmail.readonly/callback');
   const complete = await f.callback(url, 'personal-readonly', { headers: { 'sec-fetch-site': 'cross-site' } });
-  assert.equal(complete.headers.get('location'), '/?connection=connected&connector=gmail.readonly');
-  assert.equal((await f.callback(url)).headers.get('location'), '/?connection=expired&connector=gmail.readonly');
+  assert.equal(complete.headers.get('location'), '/connections?connection=connected&connector=gmail.readonly');
+  assert.equal((await f.callback(url)).headers.get('location'), '/connections?connection=expired&connector=gmail.readonly');
   assert.equal(f.gmail.exchangeCount, 1);
   assert.equal((await f.request('/v1/overview')).json.grants.filter(row => row.method !== 'given').length, 1);
 });
@@ -35,15 +35,15 @@ test('OAuth uses state, PKCE, offline consent, native Google URL; callback is on
 test('OAuth state is browser-bound and expires; cancel and forged callbacks cannot connect', async (t) => {
   const f = await fixture(t);
   const url = await f.start();
-  assert.equal((await f.callback(url, 'personal-readonly', { anonymous: true })).headers.get('location'), '/?connection=expired&connector=gmail.readonly');
+  assert.equal((await f.callback(url, 'personal-readonly', { anonymous: true })).headers.get('location'), '/connections?connection=expired&connector=gmail.readonly');
   await f.login('second@example.test');
-  assert.equal((await f.callback(url)).headers.get('location'), '/?connection=expired&connector=gmail.readonly');
+  assert.equal((await f.callback(url)).headers.get('location'), '/connections?connection=expired&connector=gmail.readonly');
   const second = await f.start();
   f.app.store.db.prepare('UPDATE oauth_flows SET expires_at=0').run();
-  assert.equal((await f.callback(second)).headers.get('location'), '/?connection=expired&connector=gmail.readonly');
+  assert.equal((await f.callback(second)).headers.get('location'), '/connections?connection=expired&connector=gmail.readonly');
   const cancel = await f.start();
   const cancelled = await f.request('/oauth/gmail.readonly/callback?state=' + cancel.searchParams.get('state') + '&error=access_denied&error_description=secret-provider-value');
-  assert.equal(cancelled.headers.get('location'), '/?connection=denied&connector=gmail.readonly');
+  assert.equal(cancelled.headers.get('location'), '/connections?connection=denied&connector=gmail.readonly');
   assert.doesNotMatch(cancelled.text, /secret-provider/);
   assert.equal(f.gmail.exchangeCount, 0);
 });
@@ -99,10 +99,10 @@ test('Connecting again pins the Google account and stays within the same adapter
   assert.equal((await f.request('/v1/connections', { method: 'POST', data: { connector: 'gmail.readonly', connection_id: a.id } })).json.error.code, 'invalid_connector');
   let flow = await f.start({ range: 'metadata', connection_id: a.id });
   assert.equal(flow.searchParams.get('login_hint'), 'personal@example.test');
-  assert.equal((await f.callback(flow, 'work-metadata')).headers.get('location'), '/?connection=wrong_account&connector=gmail.metadata');
+  assert.equal((await f.callback(flow, 'work-metadata')).headers.get('location'), '/connections?connection=wrong_account&connector=gmail.metadata');
   assert.equal((await f.request('/v1/connections', { token: agent.token })).json.connections.length, 1);
   flow = await f.start({ range: 'metadata', connection_id: a.id });
-  assert.equal((await f.callback(flow, 'personal-metadata')).headers.get('location'), '/?connection=connected&connector=gmail.metadata');
+  assert.equal((await f.callback(flow, 'personal-metadata')).headers.get('location'), '/connections?connection=connected&connector=gmail.metadata');
   const seen = (await f.request('/v1/connections', { token: agent.token })).json.connections;
   assert.equal(seen.length, 1); assert.equal(seen[0].id, a.id);
 });
@@ -110,7 +110,7 @@ test('Connecting again pins the Google account and stays within the same adapter
 test('The same account connected twice does not become two of them', async (t) => {
   const f = await fixture(t), a = await f.credential(), agent = await f.issueKey();
   const flow = await f.start();
-  assert.equal((await f.callback(flow, 'personal-readonly')).headers.get('location'), '/?connection=already_connected&connector=gmail.readonly');
+  assert.equal((await f.callback(flow, 'personal-readonly')).headers.get('location'), '/connections?connection=already_connected&connector=gmail.readonly');
   assert.equal((await f.request('/v1/overview')).json.grants.filter(row => row.method !== 'given')[0].id, a.id);
   assert.equal((await f.request('/v1/connections', { token: agent.token })).json.connections.length, 1);
 });

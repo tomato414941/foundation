@@ -1,7 +1,7 @@
 const kinds = {
   actor: { done: '承認しました', denied: '承認しませんでした', href: '/principals', label: 'アクセスキー' },
-  connect: { done: '接続しました', denied: '接続しませんでした', href: '/grants', label: '委任' },
-  store: { done: '預けました', denied: '預けませんでした', href: '/grants', label: '委任' },
+  connect: { done: '接続しました', denied: '接続しませんでした', href: '/connections', label: '接続' },
+  store: { done: '登録しました', denied: '登録しませんでした', href: '/credentials', label: '認証情報' },
 };
 
 export function requestResultView(row, error = '') {

@@ -70,7 +70,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
 
     page.route('https://openrouter.ai/auth?*', consent)
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
-    expect(page.get_by_text('登録をキャンセルしました。', exact=True)).to_be_visible()
+    expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
     assert cli('api', 'GET', '/v1/holdings?kind=grant')['holdings'] == []
     authorization['deny'] = False
     page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
@@ -84,7 +84,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'OPENROUTER_API_KEY=' + connection, '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
-    page.goto(args.base + '/grants', wait_until='networkidle')
+    page.goto(args.base + '/connections', wait_until='networkidle')
     section = page.locator('[aria-labelledby="connections-title"]')
     assert 'Gmail' not in section.inner_text() and 'メール' not in section.inner_text()
     expect(section.get_by_role('button', name='接続し直す', exact=True)).to_have_count(0)
@@ -104,22 +104,22 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     expect(dialog).not_to_be_visible()
     cli('api', 'GET', '/v1/holdings?kind=grant', success=False)
 
-    page.goto(args.base + '/grants', wait_until='networkidle')
+    page.goto(args.base + '/connections', wait_until='networkidle')
     section.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog.get_by_text('OpenRouter側のキーは残ります。', exact=False)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'disconnect-mobile.png'), full_page=True)
     dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(page.locator('[aria-labelledby="connections-title"]')).to_have_count(0)
+    expect(page.get_by_text('接続済みのサービスはありません。', exact=True)).to_be_visible()
 
     # Starting one from the dashboard uses the same flow, and asks for nothing the service decides.
-    page.goto(args.base + '/grants', wait_until='networkidle')
+    page.goto(args.base + '/connections', wait_until='networkidle')
     page.get_by_role('button', name='OpenRouterで接続', exact=True).first.click()
     review(page)
     authorization['code'] = 'second'
     dialog.get_by_role('button', name='OpenRouterで接続', exact=True).click()
-    expect(page.get_by_text('認証情報を登録しました。', exact=True)).to_be_visible()
+    expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
     review(page)
     assert not errors, errors
     context.close()

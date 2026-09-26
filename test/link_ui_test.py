@@ -75,7 +75,7 @@ with sync_playwright() as p:
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.goto(link, wait_until='networkidle')
-    expect(page.get_by_role('heading', name='npm のアクセストークンを預ける', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='npm のアクセストークンを登録する', exact=True)).to_be_visible()
     assert '#' not in page.url, 'the link is taken out of the address bar once spent'
     expect(page.get_by_role('button', name='ログアウト')).to_have_count(0)
     expect(page.get_by_text('パッケージの公開に使います。', exact=True)).to_be_visible()
@@ -84,7 +84,7 @@ with sync_playwright() as p:
     page.get_by_label('保存名', exact=True).fill('npm-api-token')
     page.get_by_label('npm のアクセストークン', exact=True).fill(SECRET)
     page.get_by_role('button', name='登録する').click()
-    expect(page.get_by_role('heading', name='預けました', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
     expect(page.get_by_role('main').get_by_role('link')).to_have_text(['ai-simplicityに戻る'])
     returned = page.get_by_role('link', name='ai-simplicityに戻る').get_attribute('href')
     assert returned == 'https://simplicity.example.test/foundation?foundation_request=' + asked['id'] + '&foundation_status=done', returned
@@ -97,7 +97,7 @@ with sync_playwright() as p:
     # The same link opened again reaches nothing.
     again = browser.new_context().new_page()
     again.goto(link, wait_until='networkidle')
-    expect(again.get_by_role('heading', name='npm のアクセストークンを預ける', exact=True)).to_have_count(0)
+    expect(again.get_by_role('heading', name='npm のアクセストークンを登録する', exact=True)).to_have_count(0)
     expect(again.get_by_role('button', name='ログアウト')).to_have_count(0)
     assert again.get_by_role('link', name='ai-simplicityに戻る').get_attribute('href') == 'https://simplicity.example.test/foundation/again?foundation_request=' + asked['id']
     review(again)
