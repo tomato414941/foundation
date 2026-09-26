@@ -147,7 +147,7 @@ with sync_playwright() as p:
     expect(credentials.get_by_role('heading')).to_have_text(['ブラウザ検証用 API キー'])
     page.reload(wait_until='networkidle')
     expect(credentials.get_by_role('heading')).to_have_text(['ブラウザ検証用 API キー'])
-    for width in [1280, 390, 320]:
+    for width in [1280, 1100, 1024, 900, 801, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 950})
         check_display(page)
         page.screenshot(path=str(shots / ('credentials-' + str(width) + '.png')), full_page=True)
@@ -201,7 +201,7 @@ with sync_playwright() as p:
     row = page.locator(".agent-row").filter(has_text="laptop")
     assert deliver(connection_id, token_b).status == 200
 
-    for width in [1280, 800, 768, 601, 600, 390, 320]:
+    for width in [1280, 1100, 1024, 900, 801, 800, 768, 601, 600, 390, 320]:
         page.set_viewport_size({"width": width, "height": 950})
         check_display(page)
     page.set_viewport_size({"width": 390, "height": 1000})

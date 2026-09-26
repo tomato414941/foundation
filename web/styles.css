@@ -283,6 +283,11 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 .page-nav { display: flex; gap: 4px; margin-left: 12px; }
 .page-nav a { min-height: 44px; display: inline-flex; align-items: center; white-space: nowrap; padding: 0 12px; border-radius: 8px; font-size: 15px; font-weight: 500; color: var(--muted, #62716a); text-decoration: none; }
 .page-nav a[aria-current="page"] { background: #eef2ec; color: inherit; }
+@media (min-width: 801px) and (max-width: 1100px) {
+  .topbar { flex-wrap: wrap; row-gap: 0; padding-bottom: 8px; }
+  .page-nav { order: 3; flex-basis: 100%; margin-left: -12px; flex-wrap: wrap; }
+  .user-menu { margin-left: auto; }
+}
 .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin: 0 0 8px; font-size: 15px; }
 .crumbs span { color: var(--muted, #62716a); }
 .crumbs .text-button { min-height: 36px; padding: 4px 2px; }
@@ -332,4 +337,3 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 
 .checkbox { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 15px; }
 .checkbox input { width: 18px; height: 18px; }
-
