@@ -22,7 +22,7 @@ const RULES = {
   // A grant is read (what it is) by whoever acts for the holder; its content, when it has one, only along a line.
   // Using one - deriving what it yields for a command - is a delivery. Connecting and disconnecting need a browser.
   grant: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], content: [SELF, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')],
-    remove: [SELF, ACTOR], rename: [SELF], describe: [SELF], share: [SELF], connect: [SELF], disconnect: [SELF], browser: ['connect', 'disconnect'] },
+    remove: [SELF, ACTOR], rename: [SELF], share: [SELF], connect: [SELF], disconnect: [SELF], browser: ['connect', 'disconnect'] },
   object: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')], remove: [SELF, ACTOR], rename: [SELF], link: [SELF, ACTOR], share: [SELF] },
   usage: { read: [SELF, ACTOR, OWNER] },
   delivery: { create: [SELF, ACTOR] },

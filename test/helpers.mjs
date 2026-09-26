@@ -44,7 +44,7 @@ export class FakeAuth {
 // Seed a stored credential, including already-expired fixture tokens.
 export function acquired(store, connectors, connectorId, { subject, secret }) {
   const grants = new Grants(store, new Holdings(store), new Connectors(connectors));
-  const saved = grants.writeConnection(USER_A, { connector: connectorId, method: 'authorized', provider: connectorId.split('.')[0], subject, label: subject,
+  const saved = grants.writeConnection(USER_A, { connector: connectorId, method: 'authorized', subject, label: subject,
     state: { private_state: secret, facts: {}, expires_at: secret.expires_at } });
   const row = () => grants.held(USER_A, saved.id);
   const state = () => grants.state(row());

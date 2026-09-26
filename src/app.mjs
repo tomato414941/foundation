@@ -590,9 +590,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         }
         const rows = [];
         if (kinds.includes('grant')) {
-          const wanted = url.searchParams.get('method') ?? undefined, provider = url.searchParams.get('provider') ?? undefined, tag = url.searchParams.get('tag') ?? undefined;
+          const wanted = url.searchParams.get('method') ?? undefined;
           if (wanted !== undefined && !METHODS.includes(wanted)) fail(400, 'invalid_method', 'method は given / authorized / delegated のいずれかです。');
-          rows.push(...grants.list(holderId, { method: wanted, provider, tag, prefix }).filter(row => subject.id === holderId || row.status !== 'disconnecting'));
+          rows.push(...grants.list(holderId, { method: wanted, prefix }).filter(row => subject.id === holderId || row.status !== 'disconnecting'));
         }
         if (kinds.includes('object')) { if (kind === 'object') objects.check(); if (objects.enabled) { limit('objects', 60); rows.push(...objects.list(holderId, prefix ?? '')); } }
         return send(200, { holdings: rows.map(shown) });
@@ -614,7 +614,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
             const match = req.headers['if-match'];
             const current = match === undefined ? null : grants.find(holderId, name);
             if (match !== undefined && (!current || match !== grantTag(current))) fail(412, 'grant_changed', 'ほかの操作で変更されています。開き直して確認してください。');
-            const saved = grants.put(holderId, { name, content, provider: url.searchParams.get('provider') ?? undefined, tags: url.searchParams.get('tags') ?? undefined });
+            const saved = grants.put(holderId, { name, content });
             line(saved);
             res.setHeader('etag', grantTag(saved));
             return saved;
@@ -634,17 +634,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           permit('read', held.kind, held.id, held.holder_id);
           return send(200, { holding: { ...shown(held), ...(held.holder_id === subject.id ? { lines: principals.linesOnto(held.id) } : {}) } });
         }
-        // Renaming changes what the holder calls it and nothing else: lines, records and the content stay. Provider
-        // and tags are likewise the holder's words about a grant.
+        // Renaming changes what the holder calls it and nothing else: lines, records and the content stay.
         if (!part && method === 'PATCH') {
           const input = await inputBody();
-          if (input.name !== undefined) permit('rename', held.kind, held.id, held.holder_id);
-          if (input.provider !== undefined || input.tags !== undefined) permit('describe', 'grant', held.id, held.holder_id);
+          permit('rename', held.kind, held.id, held.holder_id);
           if (held.kind === 'object') return send(200, { holding: shown(objects.rename(objects.get(held.id), input.name)) });
-          let row = grant;
-          if (input.name !== undefined) row = grants.rename(row, input.name);
-          row = grants.describe(row, { provider: input.provider, tags: input.tags });
-          return send(200, { holding: shown(row) });
+          return send(200, { holding: shown(grants.rename(grant, input.name)) });
         }
         if (!part && method === 'DELETE') {
           if (grant && !given) fail(405, 'method_not_allowed', '接続の解除は /v1/connections から行います。');
@@ -707,7 +702,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       // The holder's screen, in one answer.
       if (path === '/v1/overview' && method === 'GET') {
         permit('read', 'overview');
-        return send(200, { user: { id: subject.id, email: user?.email ?? null }, principal: self, grants: grants.list(holderId).map(row => grants.view(row, { owner: true })), tags: grants.tagsUsed(holderId),
+        return send(200, { user: { id: subject.id, email: user?.email ?? null }, principal: self, grants: grants.list(holderId).map(row => grants.view(row, { owner: true })),
           principals: principals.owned(holderId), actors: principals.actorsOf(holderId), requests: requests.listTo(holderId, 'pending').map(row => viewRequest(row, origin)),
           functions: FUNCTIONS, connectors: connectors.ids().map(id => connectors.describe(id)), settings: settings.get(holderId) ?? null });
       }

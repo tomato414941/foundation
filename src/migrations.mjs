@@ -1,10 +1,12 @@
-export const SCHEMA_VERSION = 22;
+export const SCHEMA_VERSION = 23;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
   // Who asked for a connection is a record, not a column on the connection.
   21: 'ALTER TABLE holdings DROP COLUMN kept_by;',
   22: migrateGrantsAndObjects,
+  // A grant is told apart by its name and its method; no provider or tags are kept about it.
+  23: 'DROP TABLE grant_tags; ALTER TABLE grants DROP COLUMN provider;',
 };
 
 // A held thing was one row for every kind, with the columns of each kind side by side. Now the row says only
@@ -82,11 +84,10 @@ export const SCHEMA = `
   CREATE UNIQUE INDEX holdings_object_name ON holdings(holder_id, name) WHERE kind='object';
   CREATE TABLE grants (
     holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE,
-    method TEXT NOT NULL CHECK(method IN ('given','authorized','delegated')), provider TEXT,
+    method TEXT NOT NULL CHECK(method IN ('given','authorized','delegated')),
     connector TEXT, subject TEXT, status TEXT NOT NULL DEFAULT 'usable' CHECK(status IN ('usable','reconnect_required','disconnecting')),
     generation INTEGER NOT NULL DEFAULT 1, size INTEGER NOT NULL DEFAULT 0, state BLOB
   );
-  CREATE TABLE grant_tags (holding_id TEXT NOT NULL REFERENCES holdings(id) ON DELETE CASCADE, tag TEXT NOT NULL, PRIMARY KEY (holding_id, tag));
   CREATE TABLE objects (holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE, size INTEGER NOT NULL DEFAULT 0, type TEXT);
   CREATE TABLE records (
     id TEXT PRIMARY KEY, at TEXT NOT NULL, actor_id TEXT NOT NULL, action TEXT NOT NULL,

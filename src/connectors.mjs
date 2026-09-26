@@ -8,7 +8,6 @@ export class Connectors {
     this.connectors = new Map();
     for (const connector of connectors) {
       if (!connector || typeof connector.id !== 'string' || !/^[a-z][a-z0-9.-]{0,63}$/.test(connector.id) || this.connectors.has(connector.id)) throw new Error('Invalid or duplicate connector ID');
-      if (connector.provider !== undefined && !/^[a-z][a-z0-9-]{0,39}$/.test(connector.provider)) throw new Error('Invalid connector provider: ' + connector.id);
       if (!Array.isArray(connector.variables) || new Set(connector.variables).size !== connector.variables.length
         || connector.variables.some(value => typeof value !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value))
         || !['oauth', 'role'].includes(connector.authorization?.kind) || typeof connector.obtain !== 'function' || typeof connector.authorization?.begin !== 'function'
@@ -25,7 +24,7 @@ export class Connectors {
   ids() { return [...this.connectors.keys()]; }
   describe(id) {
     const connector = this.get(id);
-    return { id, provider: connector.provider ?? id.split('.')[0], flow: connector.authorization.kind, service: connector.service, label: connector.label, register: connector.register, available: connector.available,
+    return { id, flow: connector.authorization.kind, service: connector.service, label: connector.label, register: connector.register, available: connector.available,
       intro: connector.intro || '', access: connector.access, variables: connector.variables,
       ...(connector.ai ? { ai: connector.ai } : {}), ...(connector.kind ? { kind: connector.kind } : {}), ...(connector.failureNote ? { failure_note: connector.failureNote } : {}),
       ...(connector.revocationNote ? { revocation_note: connector.revocationNote } : {}),

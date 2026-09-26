@@ -17,7 +17,7 @@ export function awsRole(client) {
     validUntil: assumed.expiresAt,
   });
   return {
-    id: 'aws.role', service, label: 'AWSで役割を作る', provider: 'aws', register: 'role', credentialType: 'sts_temporary_credentials', available: client.enabled,
+    id: 'aws.role', service, label: 'AWSで役割を作る', register: 'role', credentialType: 'sts_temporary_credentials', available: client.enabled,
     intro: 'AWSの画面でFoundation用の役割を作ります。鍵は預かりません。',
     access: { name: 'AWSアカウントの操作', description: '役割に付けた権限 (管理者、または読み取りのみ) の範囲で、AWSのリソースを扱えます。', restrictions: '役割を消せば止まります。Foundationが鍵を持つことはありません。' },
     revocationNote: 'AWS側で CloudFormation のスタック foundation-connection を削除すると、この接続は使えなくなります。',

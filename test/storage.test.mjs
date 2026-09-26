@@ -52,7 +52,7 @@ test('Configuration creates a private encryption key; losing the key fails close
 test('A new database is created in the current shape; a database of any other shape is refused and left unchanged', async (t) => {
   const dir = await directory(t), path = join(dir, 'state.sqlite');
   const created = new Store(path, KEY), live = resources(created);
-  const connection = live.grants.writeConnection(USER_A, { connector: 'gmail.readonly', method: 'authorized', provider: 'gmail', subject: 'kept@example.test', label: 'kept', state: { private_state: { refresh_token: 'keep-private' }, facts: {}, expires_at: null } });
+  const connection = live.grants.writeConnection(USER_A, { connector: 'gmail.readonly', method: 'authorized', subject: 'kept@example.test', label: 'kept', state: { private_state: { refresh_token: 'keep-private' }, facts: {}, expires_at: null } });
   live.grants.put(USER_A, { name: 'gmail/kept/access-token', content: Buffer.from('google-access') });
   live.principals.ensure(USER_A);
   const runtime = live.principals.create(USER_A, { name: 'runtime' });

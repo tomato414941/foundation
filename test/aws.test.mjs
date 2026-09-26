@@ -19,7 +19,7 @@ async function connected(t) {
 test('AWSは鍵を預からず、持ち主が作った役割を外部IDつきで引き受け、使うたびに一時的な認証情報を得る', async t => {
   const { aws, f } = await connected(t);
   const catalog = (await f.request('/v1/connectors', { anonymous: true })).json.connectors;
-  assert.deepEqual(catalog.map(item => [item.id, item.flow, item.provider]), [['aws.role', 'role', 'aws']]);
+  assert.deepEqual(catalog.map(item => [item.id, item.flow]), [['aws.role', 'role']]);
   const started = await f.request('/v1/connections', { method: 'POST', data: { connector: 'aws.role' } });
   assert.equal(started.status, 200, started.text);
   const parameters = linkParameters(started.json.url);
@@ -40,7 +40,7 @@ test('AWSは鍵を預からず、持ち主が作った役割を外部IDつきで
   const arn = aws.make(parameters.param_ExternalId);
   const done = await f.request('/v1/connections/complete', { method: 'POST', data: { state: started.json.state, fields: { role_arn: arn } } });
   assert.equal(done.status, 200, done.text);
-  assert.equal(done.json.connection.method, 'delegated'); assert.equal(done.json.connection.provider, 'aws');
+  assert.equal(done.json.connection.method, 'delegated');
   assert.equal(done.json.connection.subject, 'aws:222222222222:foundation-connection-FoundationRole-ABC');
   assert.equal(done.json.connection.label, '222222222222 / foundation-connection-FoundationRole-ABC');
   assert.doesNotMatch(done.text, new RegExp(parameters.param_ExternalId), 'the external ID is Foundation\'s to keep');
