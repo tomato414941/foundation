@@ -50,7 +50,7 @@ async function setup(t) {
   const api = await service(t);
   const f = await fixture(t, { outbound: api.outbound });
   const key = await f.issueKey();
-  const put = await f.request('/v1/holdings?kind=secret&name=api/token', { method: 'PUT', token: key.token, raw: TOKEN, type: 'text/plain' });
+  const put = await f.request('/v1/holdings?kind=grant&name=api/token', { method: 'PUT', token: key.token, raw: TOKEN, type: 'text/plain' });
   assert.equal(put.status, 200, put.text);
   const call = request => f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: request });
   return { ...api, f, key, call };
@@ -109,9 +109,9 @@ test('What goes out is checked: the key may use each path, headers are its own, 
   for (const name of ['host', 'Content-Length', 'accept-encoding', 'proxy-authorization', 'x-forwarded-for']) {
     assert.equal((await call({ url: 'https://api.example.test/', headers: { [name]: 'x' } })).json.error.code, 'invalid_headers', name);
   }
-  await f.request('/v1/holdings?kind=secret&name=api/multiline', { method: 'PUT', token: key.token, raw: 'line1\nline2', type: 'text/plain' });
+  await f.request('/v1/holdings?kind=grant&name=api/multiline', { method: 'PUT', token: key.token, raw: 'line1\nline2', type: 'text/plain' });
   assert.equal((await call({ url: 'https://api.example.test/', headers: { authorization: '{{foundation:api/multiline}}' } })).json.error.code, 'invalid_headers');
-  await f.request('/v1/holdings?kind=secret&name=api/binary', { method: 'PUT', token: key.token, raw: Buffer.from([0xff, 0xfe, 0x00]), type: 'application/octet-stream' });
+  await f.request('/v1/holdings?kind=grant&name=api/binary', { method: 'PUT', token: key.token, raw: Buffer.from([0xff, 0xfe, 0x00]), type: 'application/octet-stream' });
   assert.equal((await call({ url: 'https://api.example.test/', method: 'POST', body: '{{foundation:api/binary}}' })).json.error.code, 'not_text');
   assert.equal((await call({ url: 'https://api.example.test/', method: 'GET', body: 'x' })).json.error.code, 'invalid_body');
   assert.equal(received.length, 0, 'nothing refused ever went out');
@@ -152,7 +152,7 @@ test('Foundation itself is not reachable under another name that points at its o
 test('The HTTPS function binds opaque stored names explicitly and saves only its selected response body', async t => {
   const { f, key, received } = await setup(t), connection = await f.credential();
   const inputName = '{{入力}} /..,=x', outputName = '結果 /?';
-  const input = await f.request('/v1/holdings?kind=secret&name=' + encodeURIComponent(inputName) + '', { method: 'PUT', token: key.token, raw: TOKEN });
+  const input = await f.request('/v1/holdings?kind=grant&name=' + encodeURIComponent(inputName) + '', { method: 'PUT', token: key.token, raw: TOKEN });
   assert.equal(input.status, 200);
   f.expire(connection.id);
   const calls = f.gmail.calls.length;
@@ -165,16 +165,16 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
   assert.deepEqual(saved.json.saved.map(row => row.name), [outputName]);
   assert.equal(saved.json.response.status, 200);
   assert.equal(saved.json.response.body, undefined);
-  const body = await f.read('secret', (outputName));
+  const body = await f.read('grant', (outputName));
   assert.equal(JSON.parse(body.text).authorization, 'Bearer [redacted]');
   assert.equal(f.gmail.calls.length, calls, 'using a saved value does not process any connection');
-  assert.equal((await f.read('secret', (outputName), { token: key.token })).status, 403);
+  assert.equal((await f.read('grant', (outputName), { token: key.token })).status, 403);
   assert.doesNotMatch(saved.text, new RegExp(TOKEN));
 
   const binary = await f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/bytes', save: 'binary' } });
   assert.equal(binary.status, 200);
   const owner = f.app.principals.actsFor(key.id)[0].id;
-  assert.deepEqual(f.app.secrets.content(f.app.secrets.find(owner, 'binary')), Buffer.from([0, 255, 1]));
+  assert.deepEqual(f.app.grants.content(f.app.grants.find(owner, 'binary')), Buffer.from([0, 255, 1]));
 });
 
 test('The HTTPS function retains destination and owner checks, and validates output names before sending', async t => {

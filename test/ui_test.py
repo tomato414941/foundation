@@ -88,7 +88,7 @@ with sync_playwright() as p:
     page.bring_to_front()
     page.evaluate('window.dispatchEvent(new Event("focus"))')
     expect(page.get_by_role("heading", name="Foundation", exact=True)).to_be_visible()
-    page.goto(args.base + "/connections", wait_until="networkidle")
+    page.goto(args.base + "/grants", wait_until="networkidle")
     expect(page.get_by_role("button", name="メールの読み取り", exact=True)).to_be_enabled()
     page.goto(args.base + "/principals", wait_until="networkidle")
     expect(page.get_by_role("button", name="アクセスキーを追加", exact=True)).to_be_enabled()
@@ -111,8 +111,8 @@ with sync_playwright() as p:
     # Each read range is its own connection; the owner starts the one they want.
     def connect(code, metadata=False):
         authorization["code"] = code
-        if "/connections" not in page.url:
-            page.goto(args.base + "/connections", wait_until="networkidle")
+        if "/grants" not in page.url:
+            page.goto(args.base + "/grants", wait_until="networkidle")
         page.locator(".agent-row").filter(has_text="Gmail").get_by_role("button", name="件名・差出人などの読み取り" if metadata else "メールの読み取り", exact=True).click()
         expect(dialog).to_be_visible()
         check_display(page)
@@ -127,12 +127,12 @@ with sync_playwright() as p:
     connect("personal-readonly")
     connect("work-metadata", True)
     # Connections are listed independently of saved values.
-    page.goto(args.base + "/connections", wait_until="networkidle")
+    page.goto(args.base + "/grants", wait_until="networkidle")
     gmail = page.locator('[aria-labelledby="connections-title"]')
     expect(gmail.locator(".agent-name h3")).to_have_text(["personal@example.test", "work@example.test"])
     expect(gmail.get_by_text("件名・差出人などの読み取り", exact=True)).to_be_visible()
-    page.goto(args.base + "/secrets", wait_until="networkidle")
-    expect(page.get_by_text("保存した値はありません。", exact=True)).to_be_visible()
+    page.goto(args.base + "/grants", wait_until="networkidle")
+    expect(page.get_by_text("預けたものはありません。", exact=True)).to_be_visible()
 
     def create_runtime(name):
         page.goto(args.base + "/principals", wait_until="networkidle")
@@ -143,7 +143,7 @@ with sync_playwright() as p:
         token = dialog.locator("#agent-token").input_value()
         # Deliberately never screenshot keys, including test keys.
         dialog.get_by_role("button", name="閉じる", exact=True).last.click()
-        page.goto(args.base + "/secrets", wait_until="networkidle")
+        page.goto(args.base + "/grants", wait_until="networkidle")
         return token
 
     token_a = create_runtime("dev-us")
@@ -156,7 +156,7 @@ with sync_playwright() as p:
     def runtime(path, token, method="GET"):
         return caller.fetch(held(path), method=method, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data="{}" if method == "POST" else None)
     def deliver(connection_id, token):
-        return caller.fetch(held("/v1/functions/connection.credentials"), method="POST", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data=json.dumps({"connection_id": connection_id}))
+        return caller.fetch(held("/v1/deliveries"), method="POST", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data=json.dumps({"names": [{"name": connection_id}]}))
     connections = runtime("/v1/connections", token_a).json()["connections"]
     assert len(connections) == 2, "an issued key uses everything its owner keeps"
     connection_id = connections[0]["id"]
@@ -178,7 +178,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "mobile.png"), full_page=True)
     # Cancellation returns a useful message without disclosing provider errors.
     authorization["deny"] = True
-    page.goto(args.base + "/connections", wait_until="networkidle")
+    page.goto(args.base + "/grants", wait_until="networkidle")
     gmail.get_by_role("button", name="接続し直す", exact=True).first.click()
     dialog.locator("button[type=submit]").click()
     expect(page.get_by_text("登録をキャンセルしました。", exact=True)).to_be_visible()
@@ -194,7 +194,7 @@ with sync_playwright() as p:
     expect(dialog).not_to_be_visible()
     assert runtime("/v1/connections", token_a).status == 401
     assert runtime("/v1/connections", token_b).status == 200
-    page.goto(args.base + "/connections", wait_until="networkidle")
+    page.goto(args.base + "/grants", wait_until="networkidle")
     gmail.get_by_role("button", name="接続を解除", exact=True).first.click()
     check_display(page)
     page.screenshot(path=str(shots / "disconnect-mobile.png"), full_page=True)

@@ -11,7 +11,7 @@ let linked = false, back = null;
 // Back to the product: its return page with how the request ended, or its refresh page when the link was no good.
 const backTo = row => { if (!row) return back.refresh_url; const url = new URL(back.return_url); url.searchParams.set('foundation_status', row.status); return url.href; };
 try { linked = Boolean(requestId) && sessionStorage.getItem('linked:' + requestId) === '1'; } catch {}
-const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/secrets' ? 'secrets' : location.pathname === '/functions' ? 'functions' : location.pathname === '/account' ? 'account' : location.pathname === '/connections' ? 'connections' : location.pathname === '/principals' ? 'principals' : 'home';
+const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/grants' ? 'grants' : location.pathname === '/functions' ? 'functions' : location.pathname === '/account' ? 'account' : location.pathname === '/principals' ? 'principals' : 'home';
 const pagePath = requestId ? location.pathname : page === 'home' ? '/' : '/' + page;
 let accessRequest = null, requestError = '';
 const loginMessages = {
@@ -133,7 +133,7 @@ const icon = (name) => {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
 const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true">F</span>Foundation</a>';
-const nav = `<nav class="page-nav">${[['/secrets', 'secrets', 'シークレット'], ['/connections', 'connections', '接続'], ['/objects', 'objects', 'オブジェクト'], ['/principals', 'principals', 'アクセスキー'], ['/functions', 'functions', 'ファンクション']]
+const nav = `<nav class="page-nav">${[['/grants', 'grants', '委任'], ['/objects', 'objects', 'オブジェクト'], ['/principals', 'principals', 'アクセスキー'], ['/functions', 'functions', 'ファンクション']]
   .map(([href, name, label]) => `<a href="${href}"${name === page ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
 function toast(text) {
@@ -213,7 +213,7 @@ async function refresh() {
     try { back = back || (await api('/v1/requests/' + requestId + '/return')).back; } catch {}
     try { accessRequest = (await api(requestApi)).request; requestError = ''; }
     catch (error) { accessRequest = null; requestError = error.status === 401 ? 'このリンクはもう使えません。元の画面から開き直してください。' : error.message; }
-    state = { user: { email: '' }, secrets: [], actors: [], principals: [], connections: [], connectors: [], space: null };
+    state = { user: { email: '' }, grants: [], actors: [], principals: [], connectors: [], space: null };
     render();
     return;
   }
@@ -233,24 +233,26 @@ async function refresh() {
   render();
   if (loading) { const loaded = await loading; if (current === revision) { state = { ...state, space: loaded }; render(); } }
 }
-// Saved values and OAuth connections are independent lists.
+// What the holder let Foundation use: grants they handed over (given) and services they connected.
+const given = () => (state.grants || []).filter(item => item.method === 'given');
+const connected = () => (state.grants || []).filter(item => item.method !== 'given');
 const keptWhen = value => new Date(value).toLocaleString('ja-JP');
 const kiloBytes = size => size < 1024 ? size + ' バイト' : size < 1024 * 1024 ? Math.round(size / 1024) + ' KB'
   : size < 1024 * 1024 * 1024 ? Math.round(size / (1024 * 1024)) + ' MB' : (size / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-const statusName = status => ({ connected: '利用できます', reconnect_required: '接続し直しが必要です', disconnecting: '解除しています' }[status] || '確認が必要です');
+const statusName = status => ({ usable: '利用できます', reconnect_required: '接続し直しが必要です', disconnecting: '解除しています' }[status] || '確認が必要です');
 function connectionRow(connection) {
-  const warning = connection.status !== 'connected';
+  const warning = connection.status !== 'usable';
   const until = connection.expiry_known === false ? '有効期限は不明です' : connection.expires_at ? '認証情報の有効期限 ' + esc(new Date(connection.expires_at).toLocaleString('ja-JP')) : '';
   return `<article class="agent-row"><div class="agent-name"><h3>${esc(connection.label)}</h3><p>${esc(connection.service?.name || '')} · <span class="${warning ? 'warning-text' : ''}">${esc(statusName(connection.status))}</span></p></div>
     <div class="agent-permissions"><span class="muted">${esc(connection.access?.name || '')}</span><span class="muted block">${until}</span></div>
     <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}" data-connector="${esc(connection.connector)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
 }
-function secretRow(entry) {
-  return `<article class="secret-row" aria-label="${esc(entry.name)}"><div class="secret-field"><span class="secret-field-label">名前</span><div class="agent-name secret-title"><h3>${esc(entry.name)}</h3><button class="icon-button" data-action="copy-name" data-name="${esc(entry.name)}" aria-label="名前をコピー" title="名前をコピー">${icon('copy')}</button><button class="icon-button" data-action="edit-secret" data-name="${esc(entry.name)}" aria-label="名前を編集" title="名前を編集">${icon('edit')}</button></div></div>
-    <div class="secret-field"><span class="secret-field-label">値</span><section class="secret-value-panel" aria-label="値"></section></div>
-    <footer class="secret-footer"><p class="secret-meta">${secretMeta(entry)}</p><button class="text-button danger" data-action="drop-secret" data-name="${esc(entry.name)}">削除</button></footer></article>`;
+function grantRow(entry) {
+  return `<article class="grant-row" aria-label="${esc(entry.name)}"><div class="grant-field"><span class="grant-field-label">名前</span><div class="agent-name grant-title"><h3>${esc(entry.name)}</h3><button class="icon-button" data-action="copy-name" data-name="${esc(entry.name)}" aria-label="名前をコピー" title="名前をコピー">${icon('copy')}</button><button class="icon-button" data-action="edit-grant" data-name="${esc(entry.name)}" aria-label="名前を編集" title="名前を編集">${icon('edit')}</button></div></div>
+    <div class="grant-field"><span class="grant-field-label">値</span><section class="grant-value-panel" aria-label="値"></section></div>
+    <footer class="grant-footer"><p class="grant-meta">${grantMeta(entry)}</p><button class="text-button danger" data-action="drop-grant" data-name="${esc(entry.name)}">削除</button></footer></article>`;
 }
-const secretMeta = entry => `<span>${esc(kiloBytes(entry.size))}</span><span>更新 ${esc(keptWhen(entry.updated_at))}</span>`;
+const grantMeta = entry => `${entry.provider ? `<span>${esc(entry.provider)}</span>` : ''}${entry.purpose ? `<span>${esc(entry.purpose)}</span>` : ''}<span>${esc(kiloBytes(entry.size))}</span><span>更新 ${esc(keptWhen(entry.updated_at))}</span>`;
 function connectSection() {
   const available = state.connectors.filter(connector => connector.available);
   if (!available.length) return '';
@@ -279,7 +281,7 @@ function render() {
   }
   if (page === 'functions') {
     // Available operations, independent of their invocations.
-    const known = { 'http.request': ['HTTPS リクエスト', '保存した値を使ってHTTPSリクエストを送ります。'], 'connection.credentials': ['接続の認証情報', '接続の認証情報を取得・更新します。'] };
+    const known = { 'http.request': ['HTTPS リクエスト', '預けたものを使ってHTTPSリクエストを送ります。'] };
     app.innerHTML = shell(`<header class="page-heading"><h1>ファンクション</h1></header>
       <section class="resource-section" aria-labelledby="functions-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="functions-title">処理</h2></div></div></div>
       <div class="agent-list">${(state.functions || []).map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(known[item.id]?.[0] || item.id)}</h3><p><code>${esc(item.id)}</code></p></div><div class="agent-permissions"><span class="muted">${esc(known[item.id]?.[1] || item.description)}</span></div><div class="agent-actions"></div></article>`).join('')}</div></section>
@@ -295,13 +297,12 @@ function render() {
   }
   if (page === 'home') {
     // A look over everything, and the way to each page. Nothing is managed here.
-    const space = state.space, kept = state.secrets || [], connections = state.connections || [], keys = state.actors || [];
+    const space = state.space, kept = given(), connections = connected(), keys = state.actors || [];
     const card = (href, title, line) => `<a class="home-card" href="${href}"><h2>${title}</h2><p>${esc(line)}</p></a>`;
     const lastUsed = keys.flatMap(key => key.credentials.map(item => item.last_used_at)).filter(Boolean).sort().at(-1);
     app.innerHTML = shell(`<header class="page-heading"><h1>Foundation</h1></header>
       <div class="home-cards">
-        ${card('/secrets', 'シークレット', `保存値 ${kept.length} 件`)}
-        ${card('/connections', '接続', connections.length ? `${connections.length} 件・${connections.map(item => item.label).join('、')}` : 'ありません')}
+        ${card('/grants', '委任', `預けたもの ${kept.length} 件・接続 ${connections.length} 件${connections.length ? '（' + connections.map(item => item.label).join('、') + '）' : ''}`)}
         ${card('/objects', 'オブジェクト', space === undefined ? '…' : space?.available ? `${space.usage.count} 件・${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}` : '使えません')}
         ${card('/principals', 'アクセスキー', keys.length ? `承認済み ${keys.length} 件${lastUsed ? '・最終利用 ' + new Date(lastUsed).toLocaleString('ja-JP') : ''}` : 'ありません')}
         ${card('/functions', 'ファンクション', `${state.functions?.length || 0} 種類`)}
@@ -319,18 +320,16 @@ function render() {
       ${apps.length ? `<div class="agent-list">${apps.map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${used(item)}</p></div><div class="agent-permissions"><span class="muted">${esc(String(item.credentials.length))} 件のキー</span></div><div class="agent-actions"><button class="text-button danger" data-action="remove-integration" data-id="${esc(item.id)}">削除</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>登録したアプリはありません。</p></div>'}</section>`);
     return;
   }
-  if (page === 'connections') {
-    const connections = state.connections || [];
-    app.innerHTML = shell(`<header class="page-heading"><h1>接続</h1></header>
+  // Grants: what this person let Foundation use. Those handed over by hand, those a service authorized, and the
+  // services that can still be connected.
+  const kept = given(), connections = connected();
+  app.innerHTML = shell(`<header class="page-heading page-heading-actions"><div><h1>委任</h1></div>
+    <button class="button secondary" data-action="add-grant">${icon('plus')} 預ける</button></header>
+    <section class="resource-section" aria-labelledby="given-title"><div class="section-heading"><h2 id="given-title">預けたもの</h2></div>
+    <div aria-label="預けたもの">${kept.length ? `<div class="agent-list">${kept.map(grantRow).join('')}</div>` : '<div class="access-empty"><p>預けたものはありません。</p></div>'}</div></section>
     ${connections.length ? `<section class="resource-section" aria-labelledby="connections-title"><div class="section-heading"><h2 id="connections-title">接続済み</h2></div><div class="agent-list">${connections.map(connectionRow).join('')}</div></section>` : ''}
     ${connectSection()}`);
-    return;
-  }
-  const kept = state.secrets || [];
-  app.innerHTML = shell(`<header class="page-heading page-heading-actions"><div><h1>シークレット</h1></div>
-    <button class="button secondary" data-action="add-secret">${icon('plus')} 追加</button></header>
-    <section class="resource-section" aria-label="保存した値">${kept.length ? `<div class="agent-list">${kept.map(secretRow).join('')}</div>` : '<div class="access-empty"><p>保存した値はありません。</p></div>'}</section>`);
-  app.querySelectorAll('.secret-row').forEach((row, at) => bindSecretValue(kept[at], row));
+  app.querySelectorAll('.grant-row').forEach((row, at) => bindGrantValue(kept[at], row));
 }
 function bindObjects() {
   const filter = document.querySelector('#object-filter');
@@ -380,7 +379,7 @@ function renderRequest() {
   const shell = (content) => `<div class="workspace"><header class="topbar">${brand}${linked ? '' : `<div class="user-menu"><a href="/account"${page === 'account' ? ' aria-current="page"' : ''}>アカウント</a><button class="text-button" data-action="logout">ログアウト</button></div>`}</header><main class="approval-main">${content}</main></div>`;
   if (!row || row.status !== 'pending' || !knownRequestKind(row.kind)) {
     const view = requestResultView(row, requestError);
-    const subject = view.completed ? row.kind === 'store' ? row.result.names.join('、') : row.kind === 'connect' ? state.connections.find(item => item.id === row.result.connection_id)?.label : row.requester_name : '';
+    const subject = view.completed ? row.kind === 'store' ? row.result.names.join('、') : row.kind === 'connect' ? connected().find(item => item.id === row.result.connection_id)?.label : row.requester_name : '';
     const link = !linked ? '<a class="button secondary" href="' + view.href + '">' + view.label + ' ' + icon('arrow') + '</a>'
       : back ? '<a class="button secondary" href="' + esc(backTo(row)) + '">' + esc(back.name) + 'に戻る</a>' : '';
     app.innerHTML = shell('<section class="approval-card approval-result"><span class="approval-symbol">' + icon(view.completed ? 'check' : 'lock') + '</span><h1>' + view.title + '</h1>' + (subject ? '<p>' + esc(subject) + '</p>' : '') + (view.description ? '<p>' + esc(view.description) + '</p>' : '') + link + '</section>');
@@ -486,7 +485,7 @@ function connect(connectorId, connectionId) {
     location.assign(result.url);
   });
 }
-// Disconnect only the OAuth connection; independently saved values remain.
+// Disconnect only the connected grant; what was handed over by hand remains.
 function disconnect(connection) {
   const revoke = connection.can_revoke
     ? `<label class="check"><input type="checkbox" name="revoke" checked> ${esc(connection.service?.name || '')}側の許可も取り消す</label>${connection.revocation_note ? `<p class="permission-note">${esc(connection.revocation_note)}</p>` : ''}`
@@ -544,27 +543,28 @@ function removeKey(key) {
 // One confirmation, for removing something a key kept. Nothing here can be undone, and nothing reaches the service.
 // The name and the way it reaches a command, changed without the value ever being handed back.
 // Something the owner has in hand, put there without an agent asking for it first.
-function addSecret() {
-  openDialog(`<h2 id="dialog-title">追加</h2>
+function addGrant() {
+  openDialog(`<h2 id="dialog-title">預ける</h2>
     <form><label for="new-name">名前</label><input id="new-name" name="name" required maxlength="200" placeholder="任意の名前" autocomplete="off" spellcheck="false">
     <label for="new-value">値</label><textarea id="new-value" name="value" rows="4" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>
-    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加</button></form>`);
+    <label for="new-purpose">用途（省略可）</label><input id="new-purpose" name="purpose" maxlength="80" placeholder="例: Favor ステージング" autocomplete="off">
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">預ける</button></form>`);
   bindForm(async (form) => {
-    const name = form.get('name');
-    const response = await fetch('/v1/holdings?' + new URLSearchParams({ kind: 'secret', name }),
+    const name = form.get('name'), purpose = String(form.get('purpose') || '').trim();
+    const response = await fetch('/v1/holdings?' + new URLSearchParams({ kind: 'grant', name, ...(purpose ? { purpose } : {}) }),
       { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'text/plain' }, body: String(form.get('value')) });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
-    closeDialog(); await refresh(); toast(name + ' を追加しました。');
+    if (!response.ok) throw new Error(result.error?.message || '預けられませんでした。');
+    closeDialog(); await refresh(); toast(name + ' を預けました。');
   });
 }
-function editSecret(entry, trigger) {
+function editGrant(entry, trigger) {
   if (!entry) return;
-  const row = trigger.closest('.secret-row'), heading = row.querySelector('h3');
+  const row = trigger.closest('.grant-row'), heading = row.querySelector('h3');
   const actions = [...row.querySelectorAll('button')];
   const form = document.createElement('form');
-  form.className = 'secret-name-editor'; form.setAttribute('aria-label', '名前の変更');
-  form.innerHTML = `<div class="secret-name-field"><input name="name" aria-label="名前" required maxlength="200" value="${esc(entry.name)}" autocomplete="off" autocapitalize="off" spellcheck="false">
+  form.className = 'grant-name-editor'; form.setAttribute('aria-label', '名前の変更');
+  form.innerHTML = `<div class="grant-name-field"><input name="name" aria-label="名前" required maxlength="200" value="${esc(entry.name)}" autocomplete="off" autocapitalize="off" spellcheck="false">
     <button class="icon-button save-name" type="submit" aria-label="保存" title="保存">${icon('check')}</button>
     <button class="icon-button" type="button" aria-label="キャンセル" title="キャンセル">${icon('close')}</button></div><p class="form-error" role="alert"></p>`;
   heading.hidden = true; heading.after(form); row.classList.add('renaming');
@@ -591,11 +591,11 @@ function editSecret(entry, trigger) {
     form.setAttribute('aria-busy', 'true'); error.textContent = '';
     try {
       const { holding: saved } = await api('/v1/holdings/' + entry.id, { method: 'PATCH', data: { name } });
-      state.secrets = state.secrets.map(item => item.id === entry.id ? saved : item);
-      const template = document.createElement('template'); template.innerHTML = secretRow(saved);
+      state.grants = state.grants.map(item => item.id === entry.id ? saved : item);
+      const template = document.createElement('template'); template.innerHTML = grantRow(saved);
       const next = template.content.firstElementChild;
-      row.replaceWith(next); bindSecretValue(saved, next);
-      next.querySelector('[data-action="edit-secret"]').focus();
+      row.replaceWith(next); bindGrantValue(saved, next);
+      next.querySelector('[data-action="edit-grant"]').focus();
       toast('名前を変更しました。');
     } catch (failure) { if (form.isConnected) { error.textContent = failure.message; input.focus(); } }
     finally {
@@ -605,8 +605,8 @@ function editSecret(entry, trigger) {
   });
   input.focus(); input.select();
 }
-function bindSecretValue(entry, row) {
-  const path = '/v1/holdings/' + entry.id + '/content', panel = row.querySelector('.secret-value-panel');
+function bindGrantValue(entry, row) {
+  const path = '/v1/holdings/' + entry.id + '/content', panel = row.querySelector('.grant-value-panel');
   let value = null, text = null, etag = null, revealed = false, binary = false, busy = false;
   const lock = locked => row.querySelectorAll('[data-action]').forEach(button => { button.disabled = locked; });
   const clear = () => { value = null; text = null; etag = null; revealed = false; };
@@ -637,8 +637,8 @@ function bindSecretValue(entry, row) {
   };
   const show = (focus) => {
     lock(false);
-    panel.innerHTML = `<div class="secret-value-line">${binary ? `<span class="secret-file">${icon('note')}ファイル</span>`
-      : `<pre class="kept-document${revealed ? '' : ' secret-mask'}" aria-label="${revealed ? '値' : '値（非表示）'}">${revealed ? esc(text) : '••••••••'}</pre>`}<div class="secret-value-actions">${binary
+    panel.innerHTML = `<div class="grant-value-line">${binary ? `<span class="grant-file">${icon('note')}ファイル</span>`
+      : `<pre class="kept-document${revealed ? '' : ' grant-mask'}" aria-label="${revealed ? '値' : '値（非表示）'}">${revealed ? esc(text) : '••••••••'}</pre>`}<div class="grant-value-actions">${binary
       ? `<a class="icon-button" href="${path}" download aria-label="ダウンロード" title="ダウンロード">${icon('download')}</a>`
       : control('reveal', revealed ? '値を隠す' : '値を表示', revealed ? 'eye-off' : 'eye') + control('copy', 'コピー', 'copy')}${control('edit', '値を編集', 'edit')}</div></div><p class="form-error" role="alert"></p>`;
     panel.querySelectorAll('[data-value-action]').forEach(button => button.addEventListener('click', async () => {
@@ -689,9 +689,9 @@ function bindSecretValue(entry, row) {
         const result = await response.json();
         if (!response.ok) throw new Error(result.error?.message || '保存できませんでした。');
         binary = decode(bytes) === null; entry = result.holding; clear();
-        state.secrets = state.secrets.map(item => item.id === entry.id ? entry : item);
+        state.grants = state.grants.map(item => item.id === entry.id ? entry : item);
         if (!panel.isConnected) return;
-        row.querySelector('.secret-meta').innerHTML = secretMeta(entry); panel.classList.remove('editing');
+        row.querySelector('.grant-meta').innerHTML = grantMeta(entry); panel.classList.remove('editing');
         show('edit'); toast('保存しました。');
       } catch (failure) { if (form.isConnected) error.textContent = failure instanceof TypeError ? '接続できませんでした。' : failure.message; }
       finally {
@@ -725,9 +725,9 @@ document.addEventListener('click', async (event) => {
     }
     if (action === 'add-connector') connect(target.dataset.connector);
     if (action === 'reconnect') connect(target.dataset.connector, target.dataset.id);
-    if (action === 'disconnect') disconnect(state.connections.find(item => item.id === target.dataset.id));
-    if (action === 'drop-secret') {
-      const name = target.dataset.name, entry = state.secrets.find(item => item.name === name);
+    if (action === 'disconnect') disconnect(connected().find(item => item.id === target.dataset.id));
+    if (action === 'drop-grant') {
+      const name = target.dataset.name, entry = given().find(item => item.name === name);
       confirmRemoval(name + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/v1/holdings/' + entry.id, { method: 'DELETE', data: {} }));
     }
     if (action === 'go-prefix') { objectPrefix = target.dataset.prefix; objectFilter = ''; objectLimit = 100; objectChosen = new Set(); render(); }
@@ -767,12 +767,12 @@ document.addEventListener('click', async (event) => {
       confirmRemoval(keys.length === 1 ? keys[0] + ' を削除しますか？' : keys.length + '件を削除しますか？', '置き場から消えます。元には戻せません。',
         async () => { for (const key of keys) await api('/v1/holdings/' + state.space.objects.find(item => item.key === key).id, { method: 'DELETE', data: {} }); objectChosen = new Set(); });
     }
-    if (action === 'add-secret') addSecret();
+    if (action === 'add-grant') addGrant();
     if (action === 'copy-name') {
       try { await navigator.clipboard.writeText(target.dataset.name); toast('コピーしました。'); }
       catch { toast('コピーできませんでした。'); }
     }
-    if (action === 'edit-secret') editSecret((state.secrets || []).find(item => item.name === target.dataset.name), target);
+    if (action === 'edit-grant') editGrant(given().find(item => item.name === target.dataset.name), target);
     if (action === 'add-key') addKey();
     if (action === 'remove-key') removeKey(state.actors.find((key) => key.id === id));
     if (action === 'add-integration') addIntegration();

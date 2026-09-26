@@ -18,11 +18,11 @@ async function deliveries(f, options) {
 
 test('複数の利用者の代理を務めるキーの操作履歴を、対象の利用者ごとに取得する', async t => {
   const f = await fixture(t), key = await f.issueKey('shared agent');
-  await f.keep('secret', 'first-value', 'fixture-a');
+  await f.keep('grant', 'first-value', 'fixture-a');
   await deliver(f, key, USER_A, 'first-value');
 
   await f.login('other@example.test');
-  await f.keep('secret', 'second-value', 'fixture-b');
+  await f.keep('grant', 'second-value', 'fixture-b');
   const asked = await f.request('/v1/requests', {
     method: 'POST', token: key.token, anonymous: true,
     data: { kind: 'actor', to: USER_B, input: { name: 'shared agent' } },
@@ -46,7 +46,7 @@ test('複数の利用者の代理を務めるキーの操作履歴を、対象�
 
 test('代理の許可を取り消した後も、本人を対象とした操作履歴を取得する', async t => {
   const f = await fixture(t), key = await f.issueKey();
-  await f.keep('secret', 'kept-value', 'fixture-value');
+  await f.keep('grant', 'kept-value', 'fixture-value');
   await deliver(f, key, USER_A, 'kept-value');
   const before = await deliveries(f);
   assert.equal(before.length, 1);

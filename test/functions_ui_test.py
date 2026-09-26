@@ -49,12 +49,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-functions-ui-') as key_dir, 
     page.goto(args.base + '/functions', wait_until='networkidle')
     expect(page.get_by_role('heading', name='ファンクション', exact=True)).to_be_visible()
     expect(page.get_by_role('heading', name='HTTPS リクエスト', exact=True)).to_be_visible()
-    expect(page.get_by_role('heading', name='接続の認証情報', exact=True)).to_be_visible()
     catalog = json.loads(cli('api', 'GET', '/v1/functions'))['functions']
     for function in catalog:
         expect(page.locator('.agent-row code').get_by_text(function['id'], exact=True)).to_be_visible()
-    expect(page.get_by_text('保存した値を使ってHTTPSリクエストを送ります。', exact=True)).to_be_visible()
-    expect(page.get_by_text('接続の認証情報を取得・更新します。', exact=True)).to_be_visible()
+    expect(page.get_by_text('預けたものを使ってHTTPSリクエストを送ります。', exact=True)).to_be_visible()
     review(page)
     page.goto(args.base, wait_until='networkidle')
     card = page.locator('.home-card').filter(has=page.get_by_role('heading', name='ファンクション', exact=True))

@@ -51,14 +51,14 @@ test('An app makes one principal per user, and each keeps to itself', async t =>
   assert.notEqual(first.account.id, second.account.id);
   assert.notEqual(first.account.id, USER_A);
   assert.equal((await call('/principals', { method: 'POST', data: { alias: 'user-1' } })).json.principal.id, first.account.id, 'the same user is the same principal');
-  assert.equal((await f.request('/v1/holdings?kind=secret&name=npm-token', { method: 'PUT', anonymous: true, token: first.key.token, raw: 'tok-1', type: 'text/plain' })).status, 200);
-  assert.deepEqual((await f.request('/v1/holdings?kind=secret', { anonymous: true, token: second.key.token })).json.holdings, []);
-  assert.deepEqual((await f.request('/v1/overview')).json.secrets, [], 'nor are they the developer\'s who made the app');
+  assert.equal((await f.request('/v1/holdings?kind=grant&name=npm-token', { method: 'PUT', anonymous: true, token: first.key.token, raw: 'tok-1', type: 'text/plain' })).status, 200);
+  assert.deepEqual((await f.request('/v1/holdings?kind=grant', { anonymous: true, token: second.key.token })).json.holdings, []);
+  assert.deepEqual((await f.request('/v1/overview')).json.grants.filter(row => row.method === 'given'), [], 'nor are they the developer\'s who made the app');
   // The app's own key reaches none of its users' contents: the app acts for nobody.
-  assert.deepEqual((await f.request('/v1/holdings?kind=secret', { anonymous: true, token: product })).json.holdings, []);
-  assert.equal((await f.request('/v1/holdings?kind=secret&as=' + first.account.id, { anonymous: true, token: product })).status, 403);
+  assert.deepEqual((await f.request('/v1/holdings?kind=grant', { anonymous: true, token: product })).json.holdings, []);
+  assert.equal((await f.request('/v1/holdings?kind=grant&as=' + first.account.id, { anonymous: true, token: product })).status, 403);
   const usage = await call('/usage?as=' + first.account.id);
-  assert.equal(usage.status, 200, usage.text); assert.equal(usage.json.secrets.count, 1);
+  assert.equal(usage.status, 200, usage.text); assert.equal(usage.json.grants.count, 1);
   assert.equal((await call('/usage?as=' + USER_A)).status, 403, 'and not the developer\'s either');
   assert.equal((await call('/principals', { method: 'POST', data: { alias: '' } })).status, 400);
   const listed = (await call('/principals')).json.principals;
@@ -129,7 +129,7 @@ test('A link is made only for the app\'s own users\' open store requests, and ex
 test('Removing a user takes what they hold with it; removing the app stops its key but not its users', async t => {
   const { f, app, call, account, product } = await setup(t);
   const { account: user, key } = await account('user-1');
-  await f.request('/v1/holdings?kind=secret&name=npm-token', { method: 'PUT', anonymous: true, token: key.token, raw: 'tok', type: 'text/plain' });
+  await f.request('/v1/holdings?kind=grant&name=npm-token', { method: 'PUT', anonymous: true, token: key.token, raw: 'tok', type: 'text/plain' });
   const kept = await account('user-2');
   assert.equal((await call('/principals/' + user.id, { method: 'DELETE', data: {} })).status, 200);
   assert.equal((await f.request('/v1/principals/me', { anonymous: true, token: key.token })).status, 401);

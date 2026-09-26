@@ -19,9 +19,11 @@ const RULES = {
     read: [SELF, OWNER], rename: [SELF, OWNER], remove: [OWNER], list: [SELF],
     'issue-credential': [SELF, OWNER], 'revoke-credential': [SELF, OWNER], relate: [SELF, OWNER], settings: [SELF, OWNER],
   },
-  secret: { list: [SELF, ACTOR], read: [SELF, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')], remove: [SELF, ACTOR], rename: [SELF], share: [SELF] },
+  // A grant is read (what it is) by whoever acts for the holder; its content, when it has one, only along a line.
+  // Using one - deriving what it yields for a command - is a delivery. Connecting and disconnecting need a browser.
+  grant: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], content: [SELF, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')],
+    remove: [SELF, ACTOR], rename: [SELF], describe: [SELF], share: [SELF], connect: [SELF], disconnect: [SELF], browser: ['connect', 'disconnect'] },
   object: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')], remove: [SELF, ACTOR], rename: [SELF], link: [SELF, ACTOR], share: [SELF] },
-  connection: { list: [SELF, ACTOR], read: [SELF, ACTOR], create: [SELF], remove: [SELF], share: [SELF], browser: ['create', 'remove'] },
   usage: { read: [SELF, ACTOR, OWNER] },
   delivery: { create: [SELF, ACTOR] },
   function: { list: [SELF, ACTOR], invoke: [SELF, ACTOR] },

@@ -107,7 +107,7 @@ Commands:
                                        Send one request to the Foundation API with the key attached.
   exec <ENV>=<name> [...] -- <command> [args...]
                                        Run a command with saved values in its environment.
-  exec --inputs '<json>' -- <command>  The same, with files or structured inputs.
+  exec --inputs '<json>' -- <command>  The same, with files, structured inputs, or a connected grant by id.
   exec --output '<json>' -- <command>  Also save a file the command writes.
   guide                                The API guide: what Foundation keeps, and how to ask it for things.
   version                              Print the version.
@@ -150,8 +150,10 @@ async function main() {
       if (at < 1) throw new Error('Specify the environment variable explicitly: ENV=name');
       return { name: value.slice(at + 1), as: value.slice(0, at) };
     });
-    if (!Array.isArray(names) || names.length > 16 || names.some(item => !item || typeof item.name !== 'string' || !item.name || !validEnvName(item.as))) throw new Error('Each input needs a name and a non-reserved environment variable in as.');
-    if (new Set(names.map(item => item.as)).size !== names.length) throw new Error('Each input needs a different environment variable.');
+    // A connected grant names its own variables, so an input may leave `as` out; a given one must say where it goes.
+    if (!Array.isArray(names) || names.length > 16 || names.some(item => !item || typeof item.name !== 'string' || !item.name || (item.as !== undefined && !validEnvName(item.as)))) throw new Error('Each input needs a name and, when given, a non-reserved environment variable in as.');
+    const chosen = names.map(item => item.as).filter(value => value !== undefined);
+    if (new Set(chosen).size !== chosen.length) throw new Error('Each input needs a different environment variable.');
     if (parsed.values.output !== undefined) {
       try { output = JSON.parse(parsed.values.output); } catch { throw new Error('--output must be a JSON object {name, as, filename}.'); }
       if (!output || Array.isArray(output) || typeof output !== 'object' || Object.keys(output).some(key => !['name', 'as', 'filename'].includes(key))) throw new Error('--output must be a JSON object {name, as, filename}.');
@@ -264,7 +266,7 @@ async function main() {
       }
     }
   };
-  const recovery = () => 'Foundation could not confirm the output was saved. The private output file is retained for recovery: ' + outputPath + '\nRetry with foundation api PUT "/v1/holdings?kind=secret&name=<URL-encoded-name>" --from <file>, then remove that recovery file.';
+  const recovery = () => 'Foundation could not confirm the output was saved. The private output file is retained for recovery: ' + outputPath + '\nRetry with foundation api PUT "/v1/holdings?kind=grant&name=<URL-encoded-name>" --from <file>, then remove that recovery file.';
   process.once('exit', cleanup);
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => {
     interrupted = true;
@@ -303,7 +305,7 @@ async function main() {
       retainOutput = true;
       // The command wrote it; the agent never saw it, and keeps it that way: the line drawn for the one who kept it is declined.
       let saved;
-      try { saved = await send(forHolder('/v1/holdings?kind=secret&name=' + encodeURIComponent(output.name)), bytes, { method: 'PUT', type: 'application/octet-stream' }); }
+      try { saved = await send(forHolder('/v1/holdings?kind=grant&name=' + encodeURIComponent(output.name)), bytes, { method: 'PUT', type: 'application/octet-stream' }); }
       catch { throw new Error(recovery()); }
       try { await send('/v1/relations', { relation: 'editor', object_type: 'holding', object_id: saved.holding.id }, { method: 'DELETE' }); } catch {}
       retainOutput = false;

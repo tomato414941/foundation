@@ -84,10 +84,12 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     review(page)
     connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['connection_id']
-    saved = cli('api', 'POST', '/v1/functions/connection.credentials', '--json', json.dumps({'connection_id': connection, 'save': {'CLOUDSDK_AUTH_ACCESS_TOKEN': 'cloud token'}}))
-    assert saved['facts']['iam_checked'] is False
-    assert saved['facts']['missing_scopes'] == []
-    assert saved['saved'][0]['name'] == 'cloud token'
+    facts = next(row for row in cli('api', 'GET', '/v1/connections')['connections'] if row['id'] == connection)['facts']
+    assert facts['iam_checked'] is False
+    assert facts['missing_scopes'] == []
+    handed = subprocess.run(['node', 'cli/runtime.mjs', 'exec', '--inputs', json.dumps([{'name': connection}]), '--', 'node', '-e',
+                             'if(!process.env.CLOUDSDK_AUTH_ACCESS_TOKEN||!process.env.GOOGLE_CLOUD_ACCOUNT_EMAIL)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=30)
+    assert handed.returncode == 0 and handed.stdout.strip() == 'ready', handed.stderr
 
     # If gcloud is installed, prove it consumes the delivered token against a local fake API.
     # No existing gcloud configuration, credentials, or real Google API is used.
@@ -115,7 +117,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
                          'CLOUDSDK_COMPONENT_MANAGER_DISABLE_UPDATE_CHECK': 'true',
                          'CLOUDSDK_API_ENDPOINT_OVERRIDES_CLOUDRESOURCEMANAGER': 'http://127.0.0.1:' + str(cloud.server_port) + '/'})
         try:
-            command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'CLOUDSDK_AUTH_ACCESS_TOKEN=cloud token', '--', gcloud,
+            command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', '--inputs', json.dumps([{'name': connection}]), '--', gcloud,
                                       'projects', 'list', '--project=foundation-fixture', '--format=value(projectId)', '--quiet'],
                                      env=isolated, capture_output=True, text=True, timeout=30)
             assert command.returncode == 0, command.stderr
@@ -127,7 +129,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
             cloud.server_close()
             thread.join()
 
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/grants', wait_until='networkidle')
     add = page.locator('.agent-row').filter(has=page.get_by_role('heading', name='Google Cloud', exact=True))
     add.get_by_role('button', name='Googleで接続', exact=True).click()
     dialog = page.get_by_role('dialog')
@@ -136,7 +138,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
     authorization['account'] = 'work'
     dialog.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_text('認証情報を登録しました。', exact=True)).to_be_visible()
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/grants', wait_until='networkidle')
     expect(page.get_by_role('heading', name='personal@example.test', exact=True)).to_be_visible()
     expect(page.get_by_role('heading', name='work@example.test', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
@@ -150,7 +152,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
     authorization['account'] = 'personal'
     dialog.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_text('認証情報を登録しました。', exact=True)).to_be_visible()
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/grants', wait_until='networkidle')
     row.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog.get_by_text('他のGoogle接続も使えなくなる場合があります。', exact=False)).to_be_visible()
     review(page)
@@ -158,8 +160,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
     dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(page.get_by_role('heading', name='work@example.test', exact=True)).to_be_visible()
-    page.goto(args.base + '/secrets', wait_until='networkidle')
-    expect(page.get_by_role('heading', name='cloud token', exact=True)).to_be_visible()
+    page.goto(args.base + '/grants', wait_until='networkidle')
+    expect(page.get_by_role('heading', name='委任', exact=True)).to_be_visible()
     review(page)
     assert not errors, errors
     context.close()

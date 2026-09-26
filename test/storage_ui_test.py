@@ -52,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     key = open(key_dir + '/runtime-key').read().strip()
     # The owner's name for a thing finds its id; the id reaches the thing.
     def held(page, name):
-        found = page.request.get(args.base + '/v1/holdings?' + urlencode({'kind': 'secret', 'name': name}))
+        found = page.request.get(args.base + '/v1/holdings?' + urlencode({'kind': 'grant', 'name': name}))
         assert found.status == 200, found.text()
         return found.json()['holding']['id']
     def read(page, name):
@@ -74,14 +74,14 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
 
     # Nothing kept yet, and the page says so.
-    page.goto(args.base + '/secrets', wait_until='networkidle')
-    expect(page.get_by_role('heading', name='シークレット', exact=True)).to_be_visible()
-    expect(page.get_by_text('保存した値はありません。', exact=False)).to_be_visible()
+    page.goto(args.base + '/grants', wait_until='networkidle')
+    expect(page.get_by_role('heading', name='委任', exact=True)).to_be_visible()
+    expect(page.get_by_text('預けたものはありません。', exact=False)).to_be_visible()
     review(page)
 
     # The key keeps two things, with no request and no approval: one handed to a command, one only read back.
-    api('PUT', '/v1/holdings?kind=secret&name=github/gh-token', SECRET.encode(), {'content-type': 'text/plain'})
-    api('PUT', '/v1/holdings?kind=secret&name=release/2026-09-23', json.dumps({'step': 'レビュー待ち'}).encode(), {'content-type': 'application/json'})
+    api('PUT', '/v1/holdings?kind=grant&name=github/gh-token', SECRET.encode(), {'content-type': 'text/plain'})
+    api('PUT', '/v1/holdings?kind=grant&name=release/2026-09-23', json.dumps({'step': 'レビュー待ち'}).encode(), {'content-type': 'application/json'})
     page.reload(wait_until='networkidle')
 
     github = page.get_by_role('article', name='github/gh-token', exact=True)
@@ -137,7 +137,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     name_input.fill('another draft')
     name_input.press('Escape')
     expect(github.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
-    assert [row['name'] for row in api('GET', '/v1/holdings?kind=secret')['holdings']] == ['github/gh-token', 'release/2026-09-23']
+    assert [row['name'] for row in api('GET', '/v1/holdings?kind=grant')['holdings']] == ['github/gh-token', 'release/2026-09-23']
 
     # An occupied name stays editable; saving a corrected name preserves the stored bytes.
     github.get_by_role('button', name='名前を編集', exact=True).click()
@@ -167,8 +167,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
         page.set_viewport_size({'width': width, 'height': 1000})
         for label in ['値を表示', 'コピー', '値を編集']:
             expect(github.get_by_role('button', name=label, exact=True)).to_be_visible()
-        value_box = github.locator('.secret-value-panel').bounding_box()
-        metadata_box = github.locator('.secret-meta').bounding_box()
+        value_box = github.locator('.grant-value-panel').bounding_box()
+        metadata_box = github.locator('.grant-meta').bounding_box()
         assert metadata_box['y'] >= value_box['y'] + value_box['height']
         mask_box = github.locator('.kept-document').bounding_box()
         eye_box = github.get_by_role('button', name='値を表示', exact=True).bounding_box()
@@ -233,7 +233,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     # Another writer wins over a stale editor, which keeps the owner's draft for recovery.
     github.get_by_role('button', name='値を編集', exact=True).click()
     value_input.fill('my pending value')
-    api('PUT', '/v1/holdings?kind=secret&name=github/gh-token', b'newer value')
+    api('PUT', '/v1/holdings?kind=grant&name=github/gh-token', b'newer value')
     github.get_by_role('button', name='保存', exact=True).click()
     expect(github.get_by_role('alert')).to_have_text('ほかの操作で変更されています。開き直して確認してください。')
     expect(value_input).to_have_value('my pending value')
@@ -242,7 +242,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
 
     # Readable text retains its access setting and unchanged CRLF/BOM bytes survive an edit/save.
     unchanged = '\ufefffirst\r\nsecond\r\n'
-    api('PUT', '/v1/holdings?kind=secret&name=release/2026-09-23', unchanged.encode('utf-8'))
+    api('PUT', '/v1/holdings?kind=grant&name=release/2026-09-23', unchanged.encode('utf-8'))
     release.get_by_role('button', name='値を編集', exact=True).click()
     release.get_by_role('button', name='保存', exact=True).click()
     expect(release.get_by_role('button', name='値を編集', exact=True)).to_be_visible()
@@ -275,23 +275,23 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     expect(dialog.get_by_role('heading', name='release note を削除しますか？', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert [row['name'] for row in api('GET', '/v1/holdings?kind=secret')['holdings']] == ['github/gh-token']
+    assert [row['name'] for row in api('GET', '/v1/holdings?kind=grant')['holdings']] == ['github/gh-token']
 
     github.get_by_role('button', name='削除', exact=True).click()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(page.get_by_text('保存した値はありません。', exact=False)).to_be_visible()
-    assert api('GET', '/v1/holdings?kind=secret')['holdings'] == []
+    expect(page.get_by_text('預けたものはありません。', exact=False)).to_be_visible()
+    assert api('GET', '/v1/holdings?kind=grant')['holdings'] == []
 
     # Opaque names survive the owner form, HTML rendering, rename and direct preview.
     literal = ' a/aa/aaa, <img src=x onerror="window.foundationNameXss=1"> '
-    page.get_by_role('button', name='追加', exact=True).click()
+    page.get_by_role('button', name='預ける', exact=True).click()
     dialog.get_by_label('名前', exact=True).fill(literal)
     dialog.get_by_label('値', exact=True).fill(SECRET)
-    dialog.get_by_role('button', name='追加', exact=True).click()
+    dialog.get_by_role('button', name='預ける', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert api('GET', '/v1/holdings?kind=secret')['holdings'][0]['name'] == literal
-    title = page.locator('[aria-label="保存した値"] .agent-name h3')
+    assert api('GET', '/v1/holdings?kind=grant')['holdings'][0]['name'] == literal
+    title = page.locator('[aria-label="預けたもの"] .agent-name h3')
     assert title.text_content() == literal
     assert page.evaluate('window.foundationNameXss === undefined')
     for width in [1280, 390, 320]:
@@ -309,11 +309,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     page.get_by_role('button', name='削除', exact=True).click()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert api('GET', '/v1/holdings?kind=secret')['holdings'] == []
+    assert api('GET', '/v1/holdings?kind=grant')['holdings'] == []
 
     # Binary values stay files: download exact bytes, then replace them with a selected file.
     binary = b'\x00\xff\x01fixture'
-    api('PUT', '/v1/holdings?kind=secret&name=binary', binary)
+    api('PUT', '/v1/holdings?kind=grant&name=binary', binary)
     page.reload(wait_until='networkidle')
     binary_row = page.get_by_role('article', name='binary', exact=True)
     binary_row.get_by_role('button', name='値を表示', exact=True).click()

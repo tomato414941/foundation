@@ -15,9 +15,8 @@ import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { Requests } from './requests.mjs';
 import { Settings } from './settings.mjs';
 import { Records } from './records.mjs';
-import { Connections } from './connections.mjs';
-import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX, secretName } from './secrets.mjs';
-import { Objects, OBJECT_MAX, objectKey } from './objects.mjs';
+import { Grants, GRANT_MAX, GRANT_COUNT_MAX, GRANT_TOTAL_MAX, METHODS } from './grants.mjs';
+import { Objects, OBJECT_MAX } from './objects.mjs';
 import { Holdings, KINDS } from './holdings.mjs';
 import { respond } from './mcp.mjs';
 import { FETCH_BODY_MAX } from './fetch.mjs';
@@ -29,7 +28,7 @@ const VERSION = createRequire(import.meta.url)('../package.json').version;
 
 const PUBLIC = new URL('../web/', import.meta.url);
 // The owner's pages. Each is the same shell; the script decides what to show from the path.
-const PAGES = ['/', '/secrets', '/connections', '/objects', '/principals', '/functions', '/account'];
+const PAGES = ['/', '/grants', '/objects', '/principals', '/functions', '/account'];
 const STATIC = new Map(PAGES.map(page => [page, ['index.html', 'text/html; charset=utf-8']]));
 STATIC.set('/app.js', ['app.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/request-view.js', ['request-view.js', 'text/javascript; charset=utf-8']);
@@ -41,7 +40,7 @@ const LINK_TTL = 10 * 60_000, LINKED_TTL = 30 * 60_000;
 const REQUEST_PAGE = /^\/requests\/[A-Za-z0-9_-]{43}$/;
 const PRINCIPAL_ID = /^[A-Za-z0-9-]{1,64}$/;
 // A revision of the encrypted record, never a fingerprint of the plaintext value.
-const secretTag = row => '"' + digest(JSON.stringify([row.id, row.name, row.size, row.updated_at])) + '"';
+const grantTag = row => '"' + digest(JSON.stringify([row.id, row.name, row.size, row.updated_at])) + '"';
 
 function returnPath(value = '/') {
   if (!PAGES.includes(value) && (typeof value !== 'string' || !REQUEST_PAGE.test(value))) fail(400, 'invalid_return', '接続リンクを開き直してください。');
@@ -106,16 +105,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
   };
   const connectors = new Connectors(connectorList);
   const holdings = new Holdings(store);
-  const secrets = new Secrets(store, holdings);
-  const objects = new Objects(spaceBackend, holdings);
-  const connections = new Connections(store, connectors, holdings);
+  const grants = new Grants(store, holdings, connectors);
+  const objects = new Objects(spaceBackend, holdings, store);
   const principals = new Principals(store), sessions = new Sessions(store), flows = new OAuthFlows(store);
   const requests = new Requests(store), settings = new Settings(store, principals), records = new Records(store);
   const authorization = new Authorization(principals);
-  const functions = new Functions({ connections, secrets, outbound });
+  const functions = new Functions({ grants, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
   const viewRequest = (row, origin, options) => requestView({ requests, connectors, principals, settings }, row, origin, options);
-  const requestActions = new RequestActions({ store, requests, secrets, connections, principals, records,
+  const requestActions = new RequestActions({ store, requests, grants, principals, records,
     changed: row => { if (row.to_id) void settings.notify(row.to_id, 'request.' + row.status, { request: viewRequest(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() }); } });
   const logins = new EmailLogins({ now: loginClock });
   const refreshing = new Map(), limits = new Map(), disconnects = new Set();
@@ -249,12 +247,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           if (!code || code.length > 8192) fail(400, 'invalid_state', '接続をやり直してください。');
           let previous;
           if (flow.previous) {
-            previous = connections.at(user.id, flow.previous.id);
+            previous = grants.connection(user.id, flow.previous.id);
             if (previous.generation !== flow.previous.generation || previous.status === 'disconnecting') fail(409, 'connection_changed', '接続状態が変わりました。');
           }
           if (flow.requestId) requests.forTo(flow.requestId, user.id, true);
           await verifyConnection(req, session,
-            () => connector.authorization.complete({ code, verifier: flow.verifier, redirectUri: flow.redirectUri }, connections.context(previous)),
+            () => connector.authorization.complete({ code, verifier: flow.verifier, redirectUri: flow.redirectUri }, grants.context(previous)),
             result => requestActions.connect(flow.requestId, user.id, connector.id, result, { requestedBy: flow.requestedBy, previous }));
           return redirect(connectionLocation('connected'));
         } catch (error) {
@@ -388,7 +386,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           if (definition.kind === 'connect') connectors.get(definition.input?.connector);
           const toId = definition.kind === 'actor' ? (input.to === undefined ? null : principalId(input.to)) : input.to === undefined ? holderId : principalId(input.to);
           if (toId !== null && !principals.get(toId)) fail(404, 'not_found', '相手が見つかりません。');
-          if (definition.kind !== 'actor') permit('list', 'secret', undefined, toId);
+          if (definition.kind !== 'actor') permit('list', 'grant', undefined, toId);
           const row = requestActions.ask(subject.id, { ...definition, toId, purpose: purposeValue(input.purpose), steps: input.steps ?? [], validMinutes: input.valid_minutes ?? 30 });
           return send(201, { request: viewRequest(row, origin, { code: definition.kind === 'actor' }) });
         }
@@ -419,7 +417,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           permit('done', 'request', id, row.to_id ?? subject.id);
           progressRequestId = pending.id;
           if (pending.kind === 'store') {
-            const input = await inputBody(SECRET_MAX * requests.input(pending).fields.length);
+            const input = await inputBody(GRANT_MAX * requests.input(pending).fields.length);
             return send(200, { stored: true, ...requestActions.save(id, subject.id, input.entries) });
           }
           if (pending.kind === 'actor') {
@@ -562,12 +560,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
       // Held things. Each has an id, and that is how lines, records and the calls below refer to it. A name is how
-      // the holder calls one: a way to find or place a thing, not its identity. What is said of one is the same for
-      // every kind; a connection adds what its connector knows.
-      const shown = row => row.kind === 'connection' ? { ...holdings.view(row), ...connections.view(connections.get(row.holder_id, row.id), { owner: subject.id === row.holder_id }) } : holdings.view(row);
+      // the holder calls one: a way to find or place a thing, not its identity. A grant says what it is and how it
+      // came to be held; an object says its size and type. Neither says anything of its content here.
+      const shown = row => row.kind === 'grant' ? grants.view(grants.get(row.id), { owner: subject.id === row.holder_id }) : objects.view(objects.get(row.id));
       const holdingKind = required => {
         const kind = url.searchParams.get('kind') ?? undefined;
-        if ((required && kind === undefined) || (kind !== undefined && !KINDS.includes(kind))) fail(400, 'invalid_kind', 'kind は secret / object / connection のいずれかです。');
+        if ((required && kind === undefined) || (kind !== undefined && !KINDS.includes(kind))) fail(400, 'invalid_kind', 'kind は grant / object のいずれかです。');
         return kind;
       };
       if (path === '/v1/holdings' && method === 'GET') {
@@ -575,38 +573,40 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const kind = holdingKind(false), name = url.searchParams.get('name') ?? undefined, prefix = url.searchParams.get('prefix') ?? undefined;
         const kinds = kind ? [kind] : KINDS;
         for (const one of kinds) permit('list', one);
-        if (kind === 'object') objects.check();
         if (name !== undefined) {
-          const found = (kinds.includes('secret') && secrets.find(holderId, name)) || (kinds.includes('object') && objects.enabled && objects.find(holderId, name));
+          const found = (kinds.includes('grant') && grants.find(holderId, name)) || (kinds.includes('object') && objects.enabled && objects.find(holderId, name));
           if (!found) fail(404, 'not_found', '保管されたものが見つかりません。');
           return send(200, { holding: shown(found) });
         }
         const rows = [];
-        if (kinds.includes('secret')) rows.push(...secrets.list(holderId, prefix));
-        if (kinds.includes('object') && objects.enabled) { limit('objects', 60); rows.push(...objects.list(holderId, prefix ?? '')); }
-        if (kinds.includes('connection')) rows.push(...connections.list(holderId).filter(row => subject.id === holderId || row.status !== 'disconnecting'));
+        if (kinds.includes('grant')) {
+          const wanted = url.searchParams.get('method') ?? undefined, provider = url.searchParams.get('provider') ?? undefined;
+          if (wanted !== undefined && !METHODS.includes(wanted)) fail(400, 'invalid_method', 'method は given / authorized / delegated のいずれかです。');
+          rows.push(...grants.list(holderId, { method: wanted, provider, prefix }).filter(row => subject.id === holderId || row.status !== 'disconnecting'));
+        }
+        if (kinds.includes('object')) { if (kind === 'object') objects.check(); if (objects.enabled) { limit('objects', 60); rows.push(...objects.list(holderId, prefix ?? '')); } }
         return send(200, { holdings: rows.map(shown) });
       }
       // Placing a thing by name: the holder's name for it. The same name, same kind, replaces what is there.
+      // A grant placed this way is given: the holder hands the bytes over. Connections are made at /v1/connections.
       if (path === '/v1/holdings' && method === 'PUT') {
         const kind = holdingKind(true), name = url.searchParams.get('name');
-        if (kind === 'connection') fail(400, 'invalid_kind', '接続は /v1/connections から作ります。');
         if (name === null) fail(400, 'invalid_name', '名前を指定してください。');
-        const existing = kind === 'secret' ? secrets.find(holderId, name) : (objects.check(), objects.find(holderId, name));
+        const existing = kind === 'grant' ? grants.find(holderId, name) : (objects.check(), objects.find(holderId, name));
         permit('write', kind, existing?.id);
-        limit(kind === 'secret' ? 'secrets' : 'objects', kind === 'secret' ? 120 : 60);
-        const content = await inputBytes(kind === 'secret' ? SECRET_MAX : OBJECT_MAX);
-        if (kind === 'secret' && !content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
+        limit(kind === 'grant' ? 'grants' : 'objects', kind === 'grant' ? 120 : 60);
+        const content = await inputBytes(kind === 'grant' ? GRANT_MAX : OBJECT_MAX);
+        if (kind === 'grant' && !content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
         // A thing made for the holder by someone else is one its maker may read and write: a line says so.
         const line = saved => { if (!existing && subject.id !== holderId) principals.relate(subject.id, 'editor', 'holding', saved.id); };
-        if (kind === 'secret') {
+        if (kind === 'grant') {
           const saved = store.transaction(() => {
             const match = req.headers['if-match'];
-            const current = match === undefined ? null : secrets.find(holderId, secretName(name));
-            if (match !== undefined && (!current || match !== secretTag(current))) fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
-            const saved = secrets.put(holderId, { name, content });
+            const current = match === undefined ? null : grants.find(holderId, name);
+            if (match !== undefined && (!current || match !== grantTag(current))) fail(412, 'grant_changed', 'ほかの操作で変更されています。開き直して確認してください。');
+            const saved = grants.put(holderId, { name, content, provider: url.searchParams.get('provider') ?? undefined, purpose: url.searchParams.get('purpose') ?? undefined });
             line(saved);
-            res.setHeader('etag', secretTag(saved));
+            res.setHeader('etag', grantTag(saved));
             return saved;
           });
           return send(200, { holding: shown(saved) });
@@ -619,71 +619,75 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       const holdingRoute = path.match(/^\/v1\/holdings\/([a-f0-9-]{36})(\/content|\/link)?$/);
       if (holdingRoute) {
         const held = holdings.at(holdingRoute[1]), part = holdingRoute[2];
+        const grant = held.kind === 'grant' ? grants.get(held.id) : null, given = grant?.method === 'given';
         if (!part && method === 'GET') {
           permit('read', held.kind, held.id, held.holder_id);
           return send(200, { holding: { ...shown(held), ...(held.holder_id === subject.id ? { lines: principals.linesOnto(held.id) } : {}) } });
         }
-        // Renaming changes what the holder calls it and nothing else: lines, records and the bytes stay.
+        // Renaming changes what the holder calls it and nothing else: lines, records and the content stay. Provider
+        // and purpose are likewise the holder's words about a grant.
         if (!part && method === 'PATCH') {
-          if (held.kind === 'connection') fail(405, 'method_not_allowed', 'この操作は利用できません。');
-          permit('rename', held.kind, held.id, held.holder_id);
           const input = await inputBody();
-          return send(200, { holding: shown(holdings.rename(held, held.kind === 'secret' ? secretName(input.name) : objectKey(input.name))) });
+          if (input.name !== undefined) permit('rename', held.kind, held.id, held.holder_id);
+          if (input.provider !== undefined || input.purpose !== undefined) permit('describe', 'grant', held.id, held.holder_id);
+          if (held.kind === 'object') return send(200, { holding: shown(objects.rename(objects.get(held.id), input.name)) });
+          let row = grant;
+          if (input.name !== undefined) row = grants.rename(row, input.name);
+          row = grants.describe(row, { provider: input.provider, purpose: input.purpose });
+          return send(200, { holding: shown(row) });
         }
         if (!part && method === 'DELETE') {
-          if (held.kind === 'connection') fail(405, 'method_not_allowed', '接続の解除は /v1/connections から行います。');
+          if (grant && !given) fail(405, 'method_not_allowed', '接続の解除は /v1/connections から行います。');
           permit('remove', held.kind, held.id, held.holder_id);
           await inputBody();
-          if (held.kind === 'secret') holdings.remove(held); else { await objects.remove(held); still(); }
+          if (held.kind === 'grant') grants.remove(held); else { await objects.remove(objects.get(held.id)); still(); }
           return send(200, { ok: true });
         }
+        // The content of a thing: an object's bytes, or what a given grant holds. A connected grant has nothing to
+        // read; what it yields is derived when it is delivered.
         if (part === '/content' && method === 'GET') {
-          permit('read', held.kind, held.id, held.holder_id);
+          if (grant && !given) fail(405, 'method_not_allowed', 'この委任に読める中身はありません。渡すには /v1/deliveries を使います。');
+          permit(held.kind === 'grant' ? 'content' : 'read', held.kind, held.id, held.holder_id);
           const disposition = `attachment; filename="holding.bin"; filename*=UTF-8''${encodeURIComponent(held.name.split('/').pop()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}`;
-          if (held.kind === 'secret') {
-            const content = secrets.content(held);
-            res.setHeader('etag', secretTag(held));
+          if (given) {
+            const content = grants.content(grant);
+            res.setHeader('etag', grantTag(grant));
             res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length, 'content-disposition': disposition });
             return res.end(content);
           }
-          if (held.kind === 'object') {
-            const found = await objects.read(held);
-            still();
-            res.writeHead(200, { 'content-type': found.contentType, 'content-length': found.content.length, 'content-disposition': disposition });
-            return res.end(found.content);
-          }
-          fail(405, 'method_not_allowed', 'この操作は利用できません。');
+          const found = await objects.read(objects.get(held.id));
+          still();
+          res.writeHead(200, { 'content-type': found.contentType, 'content-length': found.content.length, 'content-disposition': disposition });
+          return res.end(found.content);
         }
         if (part === '/content' && method === 'PUT') {
+          if (grant && !given) fail(405, 'method_not_allowed', 'この委任の中身は書き換えられません。');
           permit('write', held.kind, held.id, held.holder_id);
-          if (held.kind === 'secret') {
-            limit('secrets', 120);
-            const content = await inputBytes(SECRET_MAX);
+          if (given) {
+            limit('grants', 120);
+            const content = await inputBytes(GRANT_MAX);
             if (!content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
             const saved = store.transaction(() => {
-              const match = req.headers['if-match'], current = holdings.at(held.id);
-              if (match !== undefined && match !== secretTag(current)) fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
-              const saved = secrets.write(current, content);
-              res.setHeader('etag', secretTag(saved));
+              const match = req.headers['if-match'], current = grants.get(held.id);
+              if (match !== undefined && match !== grantTag(current)) fail(412, 'grant_changed', 'ほかの操作で変更されています。開き直して確認してください。');
+              const saved = grants.write(current, content);
+              res.setHeader('etag', grantTag(saved));
               return saved;
             });
             return send(200, { holding: shown(saved) });
           }
-          if (held.kind === 'object') {
-            limit('objects', 60);
-            const content = await inputBytes(OBJECT_MAX);
-            const saved = await objects.write(held, content, req.headers['content-type'] || 'application/octet-stream');
-            still();
-            return send(200, { holding: shown(saved) });
-          }
-          fail(405, 'method_not_allowed', 'この操作は利用できません。');
+          limit('objects', 60);
+          const content = await inputBytes(OBJECT_MAX);
+          const saved = await objects.write(objects.get(held.id), content, req.headers['content-type'] || 'application/octet-stream');
+          still();
+          return send(200, { holding: shown(saved) });
         }
         if (part === '/link' && method === 'POST') {
           if (held.kind !== 'object') fail(405, 'method_not_allowed', 'この操作は利用できません。');
           permit('link', 'object', held.id, held.holder_id);
           const input = await inputBody();
           limit('objects', 60);
-          const link = await objects.link(held, input.minutes);
+          const link = await objects.link(objects.get(held.id), input.minutes);
           still();
           return send(200, link);
         }
@@ -693,7 +697,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       // The holder's screen, in one answer.
       if (path === '/v1/overview' && method === 'GET') {
         permit('read', 'overview');
-        return send(200, { user: { id: subject.id, email: user?.email ?? null }, principal: self, secrets: secrets.list(holderId), connections: connections.list(holderId).map(row => connections.view(row, { owner: true })),
+        return send(200, { user: { id: subject.id, email: user?.email ?? null }, principal: self, grants: grants.list(holderId).map(row => grants.view(row, { owner: true })),
           principals: principals.owned(holderId), actors: principals.actorsOf(holderId), requests: requests.listTo(holderId, 'pending').map(row => viewRequest(row, origin)),
           functions: FUNCTIONS, connectors: connectors.ids().map(id => connectors.describe(id)), settings: settings.get(holderId) ?? null });
       }
@@ -701,12 +705,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       // can take them away again; without this the promise is words.
       if (path === '/v1/export' && method === 'GET') {
         permit('read', 'export');
-        const kept = secrets.list(holderId).map(row => {
-          const full = secrets.at(holderId, row.name);
-          return { ...row, content: secrets.content(full).toString('base64'), encoding: 'base64' };
-        });
-        const value = { exported_at: new Date().toISOString(), owner: user?.email ?? null, origin,
-          secrets: kept, connections: connections.list(holderId).map(row => connections.view(row, { owner: true })), principals: principals.owned(holderId) };
+        // A given grant goes out with its bytes; a connected one with what is known of it, since what renews it is
+        // Foundation's to keep and would be of no use elsewhere.
+        const kept = grants.list(holderId).map(row => ({ ...grants.view(row, { owner: true }), ...(row.method === 'given' ? { content: grants.content(row).toString('base64'), encoding: 'base64' } : {}) }));
+        const value = { exported_at: new Date().toISOString(), owner: user?.email ?? null, origin, grants: kept, principals: principals.owned(holderId) };
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
           'content-disposition': `attachment; filename="foundation-${new Date().toISOString().slice(0, 10)}.json"` });
         return res.end(JSON.stringify(value, null, 2));
@@ -714,12 +716,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       // Connections: services Foundation connected itself. The holder sees everything about them; whoever acts
       // for them sees what they need to use one. Making one starts the service's own login; removing one may also revoke there.
       if (path === '/v1/connections' && method === 'GET') {
-        permit('list', 'connection');
-        return send(200, { connections: subject.id === holderId ? connections.list(holderId).map(row => connections.view(row, { owner: true }))
-          : connections.list(holderId).filter(row => row.status !== 'disconnecting').map(row => connections.view(row)) });
+        permit('list', 'grant');
+        return send(200, { connections: subject.id === holderId ? grants.connections(holderId).map(row => grants.view(row, { owner: true }))
+          : grants.connections(holderId).filter(row => row.status !== 'disconnecting').map(row => grants.view(row)) });
       }
       if (path === '/v1/connections' && method === 'POST') {
-        permit('create', 'connection');
+        permit('connect', 'grant');
         const input = await inputBody();
         const connector = connectors.get(input.connector);
         if (connector.authorization.kind !== 'oauth') fail(400, 'unsupported_authorization', 'この接続方法には対応していません。');
@@ -731,7 +733,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         if (request && connector.id !== requests.input(request).connector) fail(400, 'scope_mismatch', '依頼された接続方法で登録してください。');
         // Who asked for it, as they were called then. One started from the dashboard was asked by no one.
         const requestedBy = request ? principals.get(request.from_id)?.name ?? '' : '';
-        const previous = input.connection_id === undefined ? undefined : connections.at(holderId, input.connection_id);
+        const previous = input.connection_id === undefined ? undefined : grants.connection(holderId, input.connection_id);
         if (previous && previous.connector !== connector.id) fail(400, 'invalid_connector', '接続方法が一致しません。');
         if (previous && connector.canReconnect === false) fail(400, 'new_connection_required', '新しく登録してください。');
         if (previous?.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
@@ -741,12 +743,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         still();
         const flow = { connector: connector.id, requestedBy, verifier, redirectUri, requestId: request?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };
         const state = flows.begin(session.id, flow);
-        return send(200, { url: await connector.authorization.begin({ state, verifier, redirectUri }, connections.context(previous)) });
+        return send(200, { url: await connector.authorization.begin({ state, verifier, redirectUri }, grants.context(previous)) });
       }
       const connectionRoute = path.match(/^\/v1\/connections\/(.+)$/);
       if (connectionRoute && method === 'DELETE') {
-        permit('remove', 'connection', decodeURIComponent(connectionRoute[1]));
-        const connection = connections.at(holderId, decodeURIComponent(connectionRoute[1]));
+        permit('disconnect', 'grant', decodeURIComponent(connectionRoute[1]));
+        const connection = grants.connection(holderId, decodeURIComponent(connectionRoute[1]));
         const input = await inputBody();
         if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
         const connector = connectors.get(connection.connector);
@@ -755,45 +757,39 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         disconnects.add(connection.id);
         try {
           // Removing it here always succeeds; asking the service to revoke is an attempt whose outcome is reported.
-          const previous = connections.disconnect(holderId, connection.id);
+          const previous = grants.disconnect(holderId, connection.id);
           let revoked = null;
           if (input.revoke && canRevoke) {
-            try { await connector.revoke(connections.context(previous).privateState); revoked = true; }
+            try { await connector.revoke(grants.context(previous).privateState); revoked = true; }
             catch { revoked = false; }
           }
-          connections.remove(holderId, connection.id);
-          records.write(subject.id, 'connection.removed', 'connection', connection.id, { revoked });
+          grants.remove(previous);
+          records.write(subject.id, 'connection.removed', 'grant', connection.id, { revoked });
           return send(200, { ok: true, service_revoked: revoked });
         } finally { disconnects.delete(connection.id); }
       }
       // What this holder is using, and what they may use. Lending has a cost, so both sides can see it.
       if (path === '/v1/usage' && method === 'GET') {
         permit('read', 'usage');
-        const kept = secrets.usage(holderId);
+        const kept = grants.usage(holderId);
         const space = objects.enabled ? await objects.usage(holderId) : null;
         still();
-        return send(200, { secrets: { ...kept, count_max: SECRET_COUNT_MAX, bytes_max: SECRET_TOTAL_MAX },
+        return send(200, { grants: { ...kept, count_max: GRANT_COUNT_MAX, bytes_max: GRANT_TOTAL_MAX },
           objects: space ? { count: space.count, bytes: space.bytes, count_max: space.count_max, bytes_max: space.bytes_max } : null });
       }
-      // Reading a saved value never invokes provider code or updates another value.
+      // Delivering derives what each grant yields now: a given one its bytes, a connected one what its connector
+      // obtains. This is the one place a stored thing reaches a provider.
       if (path === '/v1/deliveries' && method === 'POST') {
         permit('create', 'delivery');
         const input = await inputBody();
         limit('issue', 30);
         const names = Array.isArray(input.names) ? input.names : [];
-        const delivery = secrets.deliver(holderId, names);
+        const { delivery, expires_at } = await grants.deliver(holderId, names);
+        still();
         records.write(subject.id, 'delivery', 'principal', holderId, { names: names.map(item => typeof item === 'string' ? item : item?.name).filter(Boolean) });
-        return send(200, { delivery, expires_at: null, expires_in: null });
+        return send(200, { delivery, expires_at, expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
       }
       if (path === '/v1/functions' && method === 'GET') { permit('list', 'function'); return send(200, { functions: FUNCTIONS }); }
-      if (path === '/v1/functions/connection.credentials' && method === 'POST') {
-        permit('invoke', 'function', 'connection.credentials');
-        const input = await inputBody();
-        limit('issue', 30);
-        const result = await functions.credentials({ holderId, still }, input);
-        records.write(subject.id, 'function', 'principal', holderId, { function: 'connection.credentials', connection: input.connection_id, saved: result.saved?.map(item => item.name) ?? null });
-        return send(200, result);
-      }
       if (path === '/v1/functions/http.request' && method === 'POST') {
         permit('invoke', 'function', 'http.request');
         const input = await inputBody(FETCH_BODY_MAX * 2);
@@ -836,7 +832,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   return {
-    server, store, secrets, connections, principals, sessions, flows, requests, requestActions, settings, records,
+    server, store, holdings, grants, objects, principals, sessions, flows, requests, requestActions, settings, records,
     async close() {
       clearInterval(timer);
       if (server.listening) await new Promise((resolve) => { server.close(resolve); server.closeIdleConnections(); });

@@ -1,5 +1,5 @@
 import { fail } from './errors.mjs';
-import { secretName } from './secrets.mjs';
+import { holdingName } from './holdings.mjs';
 
 export function requestInput(kind, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'invalid_request', '依頼内容を指定してください。');
@@ -12,7 +12,7 @@ export function requestInput(kind, input) {
 
 export function requestResult(kind, result) {
   if (kind === 'connect' && typeof result?.connection_id === 'string' && result.connection_id) return { connection_id: result.connection_id };
-  if (kind === 'store' && Array.isArray(result?.names) && result.names.length) return { names: result.names.map(secretName), replaced: (result.replaced ?? []).map(secretName) };
+  if (kind === 'store' && Array.isArray(result?.names) && result.names.length) return { names: result.names.map(holdingName), replaced: (result.replaced ?? []).map(holdingName) };
   if (kind === 'actor' && typeof result?.principal_id === 'string' && result.principal_id) return { principal_id: result.principal_id };
   throw new Error('The result does not match the request');
 }
@@ -44,5 +44,5 @@ export function declaration(input) {
   if (input.readable !== undefined && typeof input.readable !== 'boolean') fail(400, 'invalid_declaration', '読み返すかどうかは true か false で指定してください。');
   // Replacing is a property of the request, declared up front, so the owner sees it before deciding.
   if (input.replace !== undefined && typeof input.replace !== 'boolean') fail(400, 'invalid_declaration', '置き換えかどうかは true か false で指定してください。');
-  return { name: secretName(input.name), readable: input.readable === true, label: input.label.trim(), site: site?.href ?? '', multiline: input.multiline === true, replace: input.replace === true };
+  return { name: holdingName(input.name), readable: input.readable === true, label: input.label.trim(), site: site?.href ?? '', multiline: input.multiline === true, replace: input.replace === true };
 }

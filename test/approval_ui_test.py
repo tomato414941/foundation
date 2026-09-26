@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page).to_have_url(args.base + '/principals')
     expect(page.get_by_role('heading', name='アクセスキー', exact=True)).to_be_visible()
     review(page)
-    assert cli('api', 'GET', '/v1/holdings?kind=secret')['holdings'] == []
+    assert cli('api', 'GET', '/v1/holdings?kind=grant')['holdings'] == []
 
     # 2. The approved key asks for a registration, on its own link and without a code.
     request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'connector': 'gmail.readonly'}, 'purpose': '届いたメールを確認する'}))['request']
@@ -102,22 +102,22 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_text('登録をキャンセルしました。', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']
-    assert cli('api', 'GET', '/v1/holdings?kind=secret')['holdings'] == []
+    assert cli('api', 'GET', '/v1/holdings?kind=grant')['holdings'] == []
     authorization['deny'] = False
     page.get_by_role('button', name='Googleで接続', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     expect(page.get_by_text('personal@example.test', exact=False)).to_be_visible()
-    expect(page.get_by_role('link', name='接続', exact=True)).to_have_attribute('href', '/connections')
-    page.get_by_role('link', name='接続', exact=True).click()
-    expect(page).to_have_url(args.base + '/connections')
-    expect(page.get_by_role('heading', name='接続', exact=True)).to_be_visible()
+    expect(page.get_by_role('link', name='委任', exact=True)).to_have_attribute('href', '/grants')
+    page.get_by_role('link', name='委任', exact=True).click()
+    expect(page).to_have_url(args.base + '/grants')
+    expect(page.get_by_role('heading', name='委任', exact=True)).to_be_visible()
     page.goto(request['verification_uri'], wait_until='networkidle')
     review(page)
     page.screenshot(path=str(shots / 'request-approved.png'), full_page=True)
     connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['connection_id']
-    saved = cli('api', 'POST', '/v1/functions/connection.credentials', '--json', json.dumps({'connection_id': connection, 'save': {'GOOGLE_OAUTH_ACCESS_TOKEN': 'mail token'}}))
-    assert saved['saved'][0]['name'] == 'mail token'
-    command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'GOOGLE_OAUTH_ACCESS_TOKEN=mail token', '--', 'node', '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
+    listed = cli('api', 'GET', '/v1/holdings?kind=grant')['holdings']
+    assert [row['method'] for row in listed if row['id'] == connection] == ['authorized']
+    command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', '--inputs', json.dumps([{'name': connection}]), '--', 'node', '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
     # 3. Revoking the key stops it; its open registration link says so.
@@ -127,7 +127,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     runtime.get_by_role('button', name='失効', exact=True).click()
     page.get_by_role('dialog').get_by_role('button', name='失効させる', exact=True).click()
     expect(page.get_by_role('dialog')).not_to_be_visible()
-    cli('api', 'GET', '/v1/holdings?kind=secret', success=False)
+    cli('api', 'GET', '/v1/holdings?kind=grant', success=False)
     page.goto(pending['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='依頼は取り消されました', exact=True)).to_be_visible()
 
