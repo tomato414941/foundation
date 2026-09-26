@@ -63,14 +63,14 @@ with sync_playwright() as p:
     dialog.get_by_role('button', name='eBayで接続', exact=True).click()
     expect(page.get_by_text('認証情報を登録しました。', exact=True)).to_be_visible()
     page.goto(args.base + '/grants', wait_until='networkidle')
-    expect(page.get_by_role('heading', name='personal-seller', exact=True)).to_be_visible()
+    expect(page.get_by_text('personal-seller', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
         review(page)
         if shots and width != 320:
             page.screenshot(path=str(shots / ('ebay-desktop.png' if width == 1280 else 'ebay-mobile.png')), full_page=True)
 
-    row = page.locator('.agent-row').filter(has=page.get_by_role('heading', name='personal-seller', exact=True))
+    row = page.locator('.agent-row').filter(has=page.get_by_text('personal-seller', exact=True))
     row.get_by_role('button', name='接続し直す', exact=True).click()
     expect(dialog.get_by_role('heading', name='eBayに接続し直す', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='eBayで接続', exact=True).click()
@@ -81,7 +81,7 @@ with sync_playwright() as p:
     review(page)
     dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(page.get_by_text('解除しました。', exact=True)).to_be_visible()
-    expect(page.get_by_role('heading', name='personal-seller', exact=True)).to_have_count(0)
+    expect(page.get_by_text('personal-seller', exact=True)).to_have_count(0)
     assert not errors, errors
     browser.close()
     print('eBay: 接続・同意拒否・再接続・解除と、PC・スマートフォンの表示を確認しました。')

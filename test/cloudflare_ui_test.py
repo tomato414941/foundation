@@ -52,7 +52,7 @@ with sync_playwright() as p:
     dialog.get_by_role('button', name='Cloudflareで接続', exact=True).click()
     expect(page.get_by_text('認証情報を登録しました。', exact=True)).to_be_visible()
     page.goto(args.base + '/grants', wait_until='networkidle')
-    expect(page.get_by_role('heading', name='personal@example.test', exact=True)).to_be_visible()
+    expect(page.get_by_text('personal@example.test', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'horizontal overflow'
@@ -62,7 +62,7 @@ with sync_playwright() as p:
         if shots and width != 320:
             page.screenshot(path=str(shots / ('cloudflare-desktop.png' if width == 1280 else 'cloudflare-mobile.png')), full_page=True)
 
-    row = page.locator('.agent-row').filter(has=page.get_by_role('heading', name='personal@example.test', exact=True))
+    row = page.locator('.agent-row').filter(has=page.get_by_text('personal@example.test', exact=True))
     row.get_by_role('button', name='接続し直す', exact=True).click()
     expect(dialog.get_by_role('heading', name='Cloudflareに接続し直す', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='Cloudflareで接続', exact=True).click()

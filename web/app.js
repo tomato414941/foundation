@@ -110,6 +110,10 @@ function paging(total, showing) {
 
 // The service a connection reaches.
 const serviceName = connector => connector.service?.name || connector.label;
+const serviceLogo = service => {
+  const name = { Cloudflare: 'cloudflare', GitHub: 'github', Gmail: 'gmail', 'Google Cloud': 'googlecloud', OpenRouter: 'openrouter', eBay: 'ebay' }[service?.name];
+  return name ? `<svg viewBox="0 0 24 24" aria-hidden="true"><use href="/service-logos.svg#${name}"/></svg>` : icon(service?.icon || 'key');
+};
 const icon = (name) => {
   const paths = {
     plus: '<path d="M12 5v14M5 12h14"/>', close: '<path d="m6 6 12 12M6 18 18 6"/>',
@@ -243,8 +247,8 @@ const statusName = status => ({ usable: '利用できます', reconnect_required
 function connectionRow(connection) {
   const warning = connection.status !== 'usable';
   const until = connection.expiry_known === false ? '有効期限は不明です' : connection.expires_at ? '認証情報の有効期限 ' + esc(new Date(connection.expires_at).toLocaleString('ja-JP')) : '';
-  return `<article class="agent-row"><div class="agent-name"><h3>${esc(connection.label)}</h3><p>${esc(connection.service?.name || '')} · <span class="${warning ? 'warning-text' : ''}">${esc(statusName(connection.status))}</span></p></div>
-    <div class="agent-permissions"><span class="muted">${esc(connection.access?.name || '')}</span><span class="muted block">${until}</span></div>
+  return `<article class="agent-row connection-row"><div class="connection-identity">${serviceLogo(connection.service)}<div class="agent-name"><h3>${esc(connection.service.name)}</h3><p class="connection-account">${esc(connection.label)}</p></div></div>
+    <div class="connection-details"><p class="connection-status${warning ? ' warning-text' : ''}">${esc(statusName(connection.status))}</p><p class="muted">${esc(connection.access?.name || '')}</p>${until ? `<p class="muted">${until}</p>` : ''}</div>
     <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}" data-connector="${esc(connection.connector)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
 }
 function grantRow(entry) {
@@ -262,7 +266,7 @@ function connectSection() {
     if (!services.has(name)) services.set(name, { name, icon: connector.service?.icon || 'key', connectors: [] });
     services.get(name).connectors.push(connector);
   }
-  const row = service => `<article class="agent-row"><div class="agent-name"><h3>${esc(service.name)}</h3><p>${esc(service.connectors.map(connector => connector.kind || connector.access.name).join(' / '))}</p></div>
+  const row = service => `<article class="agent-row"><div class="connection-identity">${serviceLogo(service)}<div class="agent-name"><h3>${esc(service.name)}</h3><p>${esc(service.connectors.map(connector => connector.kind || connector.access.name).join(' / '))}</p></div></div>
     <div class="agent-permissions"><span class="muted">${esc(service.connectors[0].intro)}</span></div>
     <div class="agent-actions">${service.connectors.map(connector => `<button class="button secondary" data-action="add-connector" data-connector="${esc(connector.id)}">${icon('plus')} ${esc(service.connectors.length > 1 ? connector.kind || connector.access.name : connector.label)}</button>`).join('')}</div></article>`;
   return `<section class="resource-section" aria-labelledby="connect-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('lock')}</span><div><h2 id="connect-title">接続を追加</h2><p>接続先の画面で認証します</p></div></div></div>
