@@ -12,6 +12,8 @@ import { ebayOauth } from '../src/connectors/ebay/index.mjs';
 import { FakeEbay } from '../src/connectors/ebay/fixture.mjs';
 import { cloudflareOauth } from '../src/connectors/cloudflare/index.mjs';
 import { FakeCloudflare } from '../src/connectors/cloudflare/fixture.mjs';
+import { awsRole } from '../src/connectors/aws/index.mjs';
+import { FakeAws } from '../src/connectors/aws/fixture.mjs';
 
 // A bucket that lives in memory, so the lent space can be seen and used in the browser tests.
 const bucket = new Map();
@@ -38,7 +40,11 @@ const auth = new FakeAuth(), gmail = new FakeGmail();
 auth.codeFactory = email => createHash('sha256').update(email).digest('hex');
 if (process.env.FOUNDATION_TEST_EMPTY_CONFIG === '1') { auth.enabled = false; gmail.enabled = false; }
 const gmailOnly = () => [gmailReadonly(gmail), gmailMetadata(gmail)];
-const connectors = process.env.FOUNDATION_TEST_CLOUDFLARE === '1' ? [cloudflareOauth(new FakeCloudflare()), ...gmailOnly()]
+// The AWS fixture knows one role, made with the external ID the test reads from the link it is handed.
+export const aws = new FakeAws();
+aws.lenient = true;
+const connectors = process.env.FOUNDATION_TEST_AWS === '1' ? [awsRole(aws), ...gmailOnly()]
+  : process.env.FOUNDATION_TEST_CLOUDFLARE === '1' ? [cloudflareOauth(new FakeCloudflare()), ...gmailOnly()]
   : process.env.FOUNDATION_TEST_EBAY === '1' ? [ebayOauth(new FakeEbay()), ...gmailOnly()]
   : process.env.FOUNDATION_TEST_GCP === '1' ? [gcpOauth(new FakeGcp()), ...gmailOnly()]
   : process.env.FOUNDATION_TEST_GITHUB === '1' ? [githubOauth(new FakeGitHub()), ...gmailOnly()]

@@ -1,0 +1,38 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Lets one Foundation act in this AWS account through a role, without any long-lived key. Foundation's own role may assume it, and only with the external ID this stack was made with. Delete the stack to take the permission back."
+Parameters:
+  FoundationRoleArn:
+    Type: String
+    Description: The role Foundation itself runs as. Only this principal may assume the role made here.
+    AllowedPattern: '^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$'
+  ExternalId:
+    Type: String
+    Description: The value Foundation gave you for this connection. It is checked on every use.
+    MinLength: 16
+    MaxLength: 128
+    NoEcho: true
+  Access:
+    Type: String
+    Description: What Foundation may do here.
+    Default: AdministratorAccess
+    AllowedValues: [AdministratorAccess, ReadOnlyAccess]
+Resources:
+  FoundationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Assumed by Foundation on your behalf. Made by the foundation-connection stack; delete the stack to revoke.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: !Ref FoundationRoleArn }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { 'sts:ExternalId': !Ref ExternalId }
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/${Access}'
+Outputs:
+  RoleArn:
+    Description: Paste this into Foundation to finish connecting.
+    Value: !GetAtt FoundationRole.Arn

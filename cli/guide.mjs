@@ -102,6 +102,8 @@ export function guide(connectors) {
     '   grant, never in a value you can read. Connecting creates one grant, listed with the others.',
     ...connectorLines(connectors),
     '   POST /v1/requests  {"kind":"connect", "input":{"connector":"<id>"}, "purpose":"...", "valid_minutes":30}   Give the owner the verification_uri.',
+    '   A connector whose flow is "role" (aws.role) has the owner make a role for Foundation in their own console and',
+    '   paste its name; nothing of theirs is kept but that name, and each delivery obtains an hour of credentials.',
     '   Poll GET /v1/requests/<id> every few seconds until done; result.connection_id identifies the connection.',
     '   GET /v1/connections   the connected grants: ids, labels, service details and the variables each yields.',
     '   To use one, deliver it (above) or bind it in http.request (below). Disconnecting removes the grant; what was',

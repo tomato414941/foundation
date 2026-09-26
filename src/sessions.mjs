@@ -39,4 +39,12 @@ export class OAuthFlows {
     const row = this.db.prepare('DELETE FROM oauth_flows WHERE id=? AND session_id=? AND expires_at>? RETURNING payload').get(id, sessionId, Date.now());
     return row ? this.vault.open(row.payload, `oauth:${sessionId}:${id}`) : undefined;
   }
+  // A flow the holder completes by hand may take a wrong answer first; it stays until an answer is right.
+  peek(sessionId, state) {
+    if (typeof state !== 'string' || !TOKEN.test(state)) return;
+    const id = digest(state);
+    const row = this.db.prepare('SELECT payload FROM oauth_flows WHERE id=? AND session_id=? AND expires_at>?').get(id, sessionId, Date.now());
+    return row ? this.vault.open(row.payload, `oauth:${sessionId}:${id}`) : undefined;
+  }
+  drop(sessionId, state) { this.db.prepare('DELETE FROM oauth_flows WHERE id=? AND session_id=?').run(digest(state), sessionId); }
 }

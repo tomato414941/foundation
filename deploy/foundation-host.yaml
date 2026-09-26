@@ -142,6 +142,12 @@ Resources:
               - Effect: Allow
                 Action: [s3:PutObject, s3:GetObject, s3:ListBucket]
                 Resource: [!GetAtt BackupBucket.Arn, !Sub '${BackupBucket.Arn}/*']
+              # Account holders connect AWS by making a role that trusts this one (deploy/aws-connection.yaml).
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: '*'
+                Condition:
+                  StringLike: { 'sts:ExternalId': '?*' }
               - !If
                 - HasFiles
                 - Effect: Allow
@@ -232,6 +238,8 @@ Resources:
           echo "FOUNDATION_KMS_KEY_ID=${DataKey.Arn}" >> /etc/foundation/env
           echo "FOUNDATION_AWS_REGION=${AWS::Region}" >> /etc/foundation/env
           echo "FOUNDATION_BACKUP_BUCKET=${BackupBucket}" >> /etc/foundation/env
+          echo "FOUNDATION_AWS_ROLE_ARN=${InstanceRole.Arn}" >> /etc/foundation/env
+          echo "FOUNDATION_AWS_TEMPLATE_BUCKET=${BackupBucket}" >> /etc/foundation/env
           echo "FOUNDATION_PUBLIC_ORIGIN=https://${PublicHost}" >> /etc/foundation/env
           echo "FOUNDATION_TRUSTED_PROXIES=127.0.0.1" >> /etc/foundation/env
           if [ -n "${FilesBucket}" ]; then echo "FOUNDATION_FILES_BUCKET=${FilesBucket}" >> /etc/foundation/env; echo "FOUNDATION_FILES_REGION=${AWS::Region}" >> /etc/foundation/env; fi
