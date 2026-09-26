@@ -16,10 +16,10 @@ Parameters:
     Type: String
     Default: https://github.com/tomato414941/foundation.git
     Description: Where the Foundation code is cloned from.
-  FilesBucket:
+  ObjectsBucket:
     Type: String
     Default: ''
-    Description: An existing bucket for the file space (empty for none). The host may create and read objects under files/ only.
+    Description: An existing bucket for objects (empty for none). The host may list it and create, read and delete its objects.
   PublicHost:
     Type: String
     Default: foundationsystems.app
@@ -34,7 +34,7 @@ Parameters:
     Default: tomato414941@gmail.com
     Description: Where the certificate authority sends notices about the certificate.
 Conditions:
-  HasFiles: !Not [!Equals [!Ref FilesBucket, '']]
+  HasObjects: !Not [!Equals [!Ref ObjectsBucket, '']]
 Resources:
   Vpc:
     Type: AWS::EC2::VPC
@@ -118,7 +118,7 @@ Resources:
       VersioningConfiguration: { Status: Enabled }
       LifecycleConfiguration:
         Rules:
-          - { Id: expire-old-backups, Status: Enabled, ExpirationInDays: 90, NoncurrentVersionExpiration: { NoncurrentDays: 30 } }
+          - { Id: expire-old-backups, Status: Enabled, ExpirationInDays: 30, NoncurrentVersionExpiration: { NoncurrentDays: 30 } }
   InstanceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -149,10 +149,16 @@ Resources:
                 Condition:
                   StringLike: { 'sts:ExternalId': '?*' }
               - !If
-                - HasFiles
+                - HasObjects
                 - Effect: Allow
-                  Action: [s3:PutObject, s3:GetObject]
-                  Resource: !Sub 'arn:${AWS::Partition}:s3:::${FilesBucket}/files/*'
+                  Action: s3:ListBucket
+                  Resource: !Sub 'arn:${AWS::Partition}:s3:::${ObjectsBucket}'
+                - !Ref AWS::NoValue
+              - !If
+                - HasObjects
+                - Effect: Allow
+                  Action: [s3:PutObject, s3:GetObject, s3:DeleteObject]
+                  Resource: !Sub 'arn:${AWS::Partition}:s3:::${ObjectsBucket}/*'
                 - !Ref AWS::NoValue
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -242,7 +248,7 @@ Resources:
           echo "FOUNDATION_AWS_TEMPLATE_BUCKET=${BackupBucket}" >> /etc/foundation/env
           echo "FOUNDATION_PUBLIC_ORIGIN=https://${PublicHost}" >> /etc/foundation/env
           echo "FOUNDATION_TRUSTED_PROXIES=127.0.0.1" >> /etc/foundation/env
-          if [ -n "${FilesBucket}" ]; then echo "FOUNDATION_FILES_BUCKET=${FilesBucket}" >> /etc/foundation/env; echo "FOUNDATION_FILES_REGION=${AWS::Region}" >> /etc/foundation/env; fi
+          if [ -n "${ObjectsBucket}" ]; then echo "FOUNDATION_OBJECTS_BUCKET=${ObjectsBucket}" >> /etc/foundation/env; fi
           chown -R foundation:foundation /opt/foundation /var/lib/foundation /etc/foundation
           chmod 700 /var/lib/foundation && chmod 600 /etc/foundation/env
           cat > /etc/systemd/system/foundation.service <<'UNIT'
