@@ -19,9 +19,10 @@ async function gcpFixture(t, gcp = new FakeGcp()) {
     return new URL(result.json.url);
   }
   async function connect(code = 'personal', input = {}) {
+    const ids = new Set((await connections()).map(item => item.id));
     const done = await f.callback(await start(input), code);
     assert.match(done.headers.get('location'), /connection=connected/);
-    return (await connections()).find(item => item.subject === (code === 'work' ? '1002' : '1001'));
+    return (await connections()).find(item => input.connection_id ? item.id === input.connection_id : !ids.has(item.id));
   }
   const connections = async () => (await f.request('/v1/overview')).json.grants.filter(item => item.connector === 'gcp.oauth');
   return { ...f, gcp, start, connect, connections };
@@ -88,7 +89,8 @@ test('複数アカウントをGoogleの固定IDで識別し、別の所有者か
   assert.equal(a.subject, '1001'); assert.equal(b.subject, '1002');
   assert.equal((await f.deliver(b, { token: agent.token })).json.delivery.environment.GOOGLE_CLOUD_ACCOUNT_EMAIL, 'work@example.test');
   const duplicate = await f.callback(await f.start(), 'personal');
-  assert.match(duplicate.headers.get('location'), /connection=already_connected/);
+  assert.match(duplicate.headers.get('location'), /connection=connected/);
+  assert.equal((await f.request('/v1/connections')).json.connections.length, 3);
   await f.login('second@example.test');
   const stranger = await f.issueKey();
   assert.deepEqual((await f.request('/v1/connections', { token: stranger.token })).json.connections, []);

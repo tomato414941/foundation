@@ -83,3 +83,28 @@ test('接続方法の一覧にAWSが並び、設定がなければ利用でき�
   assert.equal(registry.describe('aws.role').credential_type, 'sts_temporary_credentials');
   assert.equal(registry.describe('aws.role').can_revoke, false);
 });
+
+test('AWSの再接続依頼を同じ役割のARNと外部IDで完了し、接続IDを維持する', async t => {
+  const { aws, f } = await connected(t), key = await f.issueKey();
+  const start = () => f.request('/v1/connections', { method: 'POST', data: { connector: 'aws.role' } });
+  const created = await start(), externalId = linkParameters(created.json.url).param_ExternalId;
+  const arn = aws.make(externalId), another = aws.make(externalId, '222222222222', 'another-role');
+  const first = await f.request('/v1/connections/complete', { method: 'POST', data: { state: created.json.state, fields: { role_arn: arn } } });
+  assert.equal(first.status, 200, first.text);
+  const connection = first.json.connection;
+  const asked = await f.request('/v1/requests', { method: 'POST', token: key.token, data: {
+    kind: 'connect', input: { connector: 'aws.role', connection_id: connection.id } } });
+  assert.equal(asked.status, 201, asked.text);
+  const flow = await f.request('/v1/connections', { method: 'POST', data: { connector: 'aws.role', request_id: asked.json.request.id } });
+  assert.equal(flow.status, 200, flow.text);
+  const wrong = await f.request('/v1/connections/complete', { method: 'POST', data: { state: flow.json.state, fields: { role_arn: another } } });
+  assert.equal(wrong.status, 409);
+  assert.equal(wrong.json.error.code, 'account_changed');
+  const same = await f.request('/v1/connections/complete', { method: 'POST', data: { state: flow.json.state, fields: { role_arn: ' ' + arn + ' ' } } });
+  assert.equal(same.status, 200, same.text);
+  assert.equal(same.json.connection.id, connection.id);
+  assert.equal((await f.deliver(connection, { token: key.token })).status, 200);
+  const completed = (await f.request('/v1/requests/' + asked.json.request.id, { token: key.token })).json.request;
+  assert.equal(completed.status, 'done');
+  assert.equal(completed.result.connection_id, connection.id);
+});

@@ -12,12 +12,14 @@ export function cloudflareOauth(client) {
   return {
     id: 'cloudflare.oauth', service, label: 'Cloudflareで接続', register: 'oauth', credentialType: 'oauth2_access_token', available: client.enabled,
     intro: 'Cloudflareで対象のアカウントを選び、アクセスを許可します。',
+    revocationNote: 'Cloudflare側の取り消しは、同じアプリへの他の接続にも影響する場合があります。',
     access: { name: 'ドメインとDNSの管理', description: 'アカウント情報の読み取り、DNSレコードの編集、ドメインの登録・更新などの管理を行えます。',
       restrictions: '選択したアカウントのドメインが対象です。ドメインの登録・更新には料金がかかります。' },
-    ai: 'Use CLOUDFLARE_API_TOKEN as a Bearer token with Cloudflare v4 APIs. Inspect scopes, missing_scopes and additional_scopes in facts from GET /v1/connections; differences are reported, not blocked. List /accounts and choose the target explicitly: facts.user_id identifies the user, not a Cloudflare account. Domain registrations and renewals incur charges. Obtain current credentials with POST /v1/deliveries and {"names":[{"name":"<connection id>"}]}; Foundation refreshes tokens when needed. CLOUDFLARE_OAUTH_EXPIRES_AT is Unix time in milliseconds. Revoked consent is detected on the next token refresh.',
+    ai: 'Use CLOUDFLARE_API_TOKEN as a Bearer token with Cloudflare v4 APIs. Inspect scopes, missing_scopes and additional_scopes in facts from GET /v1/connections. facts.user_id identifies the authorizing user; facts.client_id identifies the OAuth app. facts.observed_accounts is a dated /accounts snapshot, not the full consent policy; null means unknown. List /accounts when using the token and choose the target explicitly. The same user may have several connections; never infer the target or authorization identity from user_id. Reconnect by requesting input.connection_id; changes to observed accounts, scopes or the OAuth app require the owner to confirm. Domain registrations and renewals incur charges. Obtain credentials with POST /v1/deliveries and {"names":[{"name":"<connection id>"}]}; Foundation refreshes tokens when needed. CLOUDFLARE_OAUTH_EXPIRES_AT is Unix time in milliseconds. Revocation may affect other connections for the same app and is detected on refresh.',
     variables: ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_OAUTH_EXPIRES_AT'],
     authorization: {
       kind: 'oauth',
+      changes: (result, previous) => client.changes(result.privateState, previous.privateState),
       begin: context => client.authorize(context),
       complete: async (context, previous) => result(await client.exchange(context, previous)),
     },

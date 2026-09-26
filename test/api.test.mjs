@@ -107,12 +107,14 @@ test('Connecting again pins the Google account and stays within the same adapter
   assert.equal(seen.length, 1); assert.equal(seen[0].id, a.id);
 });
 
-test('The same account connected twice does not become two of them', async (t) => {
+test('同じGmailユーザーの新たな認可を別の接続として保存する', async (t) => {
   const f = await fixture(t), a = await f.credential(), agent = await f.issueKey();
   const flow = await f.start();
-  assert.equal((await f.callback(flow, 'personal-readonly')).headers.get('location'), '/connections?connection=already_connected&connector=gmail.readonly');
+  assert.equal((await f.callback(flow, 'personal-readonly')).headers.get('location'), '/connections?connection=connected&connector=gmail.readonly');
   assert.equal((await f.request('/v1/overview')).json.grants.filter(row => row.method !== 'given')[0].id, a.id);
-  assert.equal((await f.request('/v1/connections', { token: agent.token })).json.connections.length, 1);
+  const connections = (await f.request('/v1/connections', { token: agent.token })).json.connections;
+  assert.equal(connections.length, 2);
+  assert.equal(new Set(connections.map(item => item.id)).size, 2);
 });
 
 for (const change of ['agent', 'account']) test('In-flight token withheld after ' + change, async (t) => {

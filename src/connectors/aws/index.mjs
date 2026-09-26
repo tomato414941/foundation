@@ -1,4 +1,5 @@
 import { AwsClient, AWS_API, AWS_DOCS, AWS_CONSOLE } from './client.mjs';
+import { fail } from '../../errors.mjs';
 
 export const configuration = env => ({ roleArn: env.FOUNDATION_AWS_ROLE_ARN || '', region: env.FOUNDATION_AWS_REGION || 'ap-northeast-1', templateBucket: env.FOUNDATION_AWS_TEMPLATE_BUCKET || '' });
 export const create = env => [awsRole(new AwsClient(configuration(env)))];
@@ -31,8 +32,10 @@ export function awsRole(client) {
         return { url, fields: [{ name: 'role_arn', label: '作成された役割のARN', placeholder: 'arn:aws:iam::123456789012:role/foundation-connection-FoundationRole-...' }], memo: { external_id: externalId } };
       },
       complete: async ({ fields, memo }, previous) => {
+        const role = client.parseRole(fields?.role_arn);
+        if (previous && role.arn !== previous.privateState.role_arn) fail(409, 'account_changed', '同じAWSの役割を指定してください。');
         const externalId = previous?.privateState?.external_id ?? memo?.external_id;
-        const assumed = await client.assume({ roleArn: fields?.role_arn, externalId });
+        const assumed = await client.assume({ roleArn: role.arn, externalId });
         return { ...result({ ...assumed, externalId }), expiresAt: null };
       },
     },

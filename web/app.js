@@ -277,8 +277,14 @@ function connectionRow(connection) {
   const warning = connection.status !== 'usable';
   const until = connection.expiry_known === false ? '有効期限は不明です' : connection.expires_at ? '認証情報の有効期限 ' + esc(new Date(connection.expires_at).toLocaleString('ja-JP')) : '';
   return `<article class="agent-row connection-row"><div class="connection-identity">${serviceLogo(connection.service)}<div class="agent-name"><h3>${esc(connection.service.name)}</h3><p class="connection-account">${esc(connection.label)}</p></div></div>
-    <div class="connection-details"><p class="connection-status${warning ? ' warning-text' : ''}">${esc(statusName(connection.status))}</p><p class="muted">${esc(connection.access?.name || '')}</p>${until ? `<p class="muted">${until}</p>` : ''}</div>
+    <div class="connection-details"><p class="connection-status${warning ? ' warning-text' : ''}">${esc(statusName(connection.status))}</p><p class="muted">${esc(connection.access?.name || '')}</p>${cloudflareDetails(connection)}${until ? `<p class="muted">${until}</p>` : ''}</div>
     <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}" data-connector="${esc(connection.connector)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
+}
+function cloudflareDetails(connection) {
+  if (connection.connector !== 'cloudflare.oauth') return '';
+  const accounts = connection.facts.observed_accounts;
+  const names = accounts ? accounts.items.map(item => item.name).join('、') || 'なし' : '未確認';
+  return `<p class="muted">確認できたアカウント：${esc(names)}${accounts && !accounts.complete ? '（一部）' : ''}</p><p class="muted">権限：${esc((connection.facts.scopes || []).filter(scope => scope !== 'offline_access').join('、'))}</p>`;
 }
 function grantRow(entry) {
   return `<article class="grant-row" aria-label="${esc(entry.name)}"><div class="grant-field"><span class="grant-field-label">名前</span><div class="agent-name grant-title"><h3>${esc(entry.name)}</h3><button class="icon-button" data-action="copy-name" data-name="${esc(entry.name)}" aria-label="名前をコピー" title="名前をコピー">${icon('copy')}</button><button class="icon-button" data-action="edit-grant" data-name="${esc(entry.name)}" aria-label="名前を編集" title="名前を編集">${icon('edit')}</button></div></div>
@@ -433,12 +439,13 @@ function renderRequest() {
     return;
   }
   const connector = row.connector, name = serviceName(connector);
+  const reconnecting = Boolean(row.input.connection_id), title = reconnecting ? name + 'に接続し直す' : connector.label;
   const unavailable = `<p class="form-error" role="status">現在${esc(name)}に接続できません。</p>`;
-  const body = !connector.available ? unavailable
-    : `<button class="button primary full request-connect" type="button" data-action="request-connect">${esc(connector.label)} ${icon('arrow')}</button>
+  const body = reconnecting && !row.connection ? '<p class="form-error" role="status">更新する接続が見つかりません。</p>' : !connector.available ? unavailable
+    : `<button class="button primary full request-connect" type="button" data-action="request-connect">${esc(title)} ${icon('arrow')}</button>
       ${connector.failure_note && ['failed', 'scope', 'retry', 'changed'].includes(resultCode) ? `<p class="permission-note">${esc(connector.failure_note.text)}<a href="${esc(connector.failure_note.href)}" target="_blank" rel="noopener noreferrer">${esc(connector.failure_note.link)} ↗</a></p>` : ''}`;
-  app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(connector.label)}</h1></div></header>
-    <dl class="approval-facts">${row.purpose ? `<div class="approval-purpose"><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}<div><dt>届く範囲</dt><dd>${esc(connector.access.name)}${connector.access.restrictions ? `<small class="muted block">${esc(connector.access.restrictions)}</small>` : ''}</dd></div></dl>
+  app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(title)}</h1></div></header>
+    <dl class="approval-facts">${row.connection ? `<div><dt>更新する接続</dt><dd>${esc(row.connection.label)}${cloudflareDetails(row.connection)}</dd></div>` : ''}${row.purpose ? `<div class="approval-purpose"><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}<div><dt>届く範囲</dt><dd>${esc(connector.access.name)}${connector.access.restrictions ? `<small class="muted block">${esc(connector.access.restrictions)}</small>` : ''}</dd></div></dl>
     ${stepsBlock(row.steps)}
     <div class="register-body">${body}</div>
     <button class="text-button full" type="button" data-action="deny-request">接続しない</button>${expiry}</section>`);
@@ -842,6 +849,7 @@ document.addEventListener('click', async (event) => {
   } catch (error) { if (target.isConnected) target.disabled = false; toast(error.message); }
 });
 const resultCode = new URL(location.href).searchParams.get('connection');
+const confirmationState = resultCode === 'review' ? new URL(location.href).searchParams.get('state') : null;
 window.addEventListener('pageshow', event => { if (event.persisted && !isLoginConfirmation) void refresh().catch(() => {}); });
 if (linkToken) {
   try {
@@ -852,11 +860,25 @@ if (linkToken) {
 }
 if (isLoginConfirmation) showLoginConfirmation();
 else {
-  if (location.search || location.hash) history.replaceState(null, '', pagePath);
+  if ((location.search || location.hash) && resultCode !== 'review') history.replaceState(null, '', pagePath);
   try { await refresh(); } catch (error) { if (error.status !== 401) { await showLogin(); toast(error.message); } }
 }
 // What came back from an OAuth round trip, in words that hold for any service.
 const resultMessages = { connected: '接続しました。', denied: '接続をキャンセルしました。', expired: '接続の手続きが切れました。もう一度お試しください。',
-  wrong_account: '接続し直すには同じアカウントを選んでください。', already_connected: 'このアカウントは接続済みです。', scope: '求めた範囲とサービスの許可が一致しません。',
+  wrong_account: '更新する接続と同じユーザーや役割を選んでください。', scope: '求めた範囲とサービスの許可が一致しません。',
   retry: '継続利用の許可を取得できませんでした。もう一度接続してください。', changed: '接続の状態が変わりました。もう一度お試しください。', failed: '接続できませんでした。もう一度お試しください。' };
-if (resultCode) toast(resultMessages[resultCode] || '接続を確認し、もう一度お試しください。');
+if (resultCode === 'review') {
+  try {
+    const review = await api('/v1/connections/confirmation?state=' + encodeURIComponent(confirmationState));
+    const values = items => items.length ? items.map(esc).join('<br>') : 'なし';
+    openDialog(`<h2 id="dialog-title">接続の変更を確認</h2><p>${esc(review.connection.service.name)} · ${esc(review.connection.label)}</p>
+      <dl class="approval-facts">${review.changes.map(change => `<div><dt>${esc(change.label)}</dt><dd><p>変更前：${values(change.before)}</p><p>変更後：${values(change.after)}</p></dd></div>`).join('')}</dl>
+      <p class="permission-note">更新すると、この接続を使うAIにも変更後の権限が渡ります。キャンセルしても、接続先で許可した内容は残ります。</p>
+      <form><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="cancel-connection-review">キャンセル</button><button type="submit" class="button primary">この内容で更新</button></div></form>`);
+    document.querySelector('[data-action="cancel-connection-review"]').addEventListener('click', async () => {
+      try { await api('/v1/connections/confirmation', { method: 'DELETE', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); }
+      catch (error) { toast(error.message); }
+    });
+    bindForm(async () => { await api('/v1/connections/confirmation', { method: 'POST', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); await refresh(); toast('接続を更新しました。'); });
+  } catch (error) { toast(error.message); }
+} else if (resultCode) toast(resultMessages[resultCode] || '接続を確認し、もう一度お試しください。');

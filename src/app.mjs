@@ -120,7 +120,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
   const authorization = new Authorization(principals);
   const functions = new Functions({ grants, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
-  const viewRequest = (row, origin, options) => requestView({ requests, connectors, principals, settings }, row, origin, options);
+  const viewRequest = (row, origin, options) => requestView({ requests, connectors, principals, settings, grants }, row, origin, options);
   const requestActions = new RequestActions({ store, requests, grants, principals, records,
     changed: row => { if (row.to_id) void settings.notify(row.to_id, 'request.' + row.status, { request: viewRequest(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() }); } });
   const logins = new EmailLogins({ now: loginClock });
@@ -222,7 +222,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           if (url.searchParams.getAll('state').length !== 1 || url.searchParams.getAll('code').length > 1) fail(400, 'invalid_state', '接続をやり直してください。');
           const flow = flows.take(session.id, url.searchParams.get('state'));
           if (!flow) fail(400, 'invalid_state', '接続をやり直してください。');
-          if (flow.connector !== oauthCallback[1]) fail(400, 'invalid_state', '接続をやり直してください。');
+          if (flow.kind || flow.connector !== oauthCallback[1]) fail(400, 'invalid_state', '接続をやり直してください。');
           const connector = connectors.get(flow.connector);
           if (flow.requestId) {
             destination = '/requests/' + flow.requestId;
@@ -238,13 +238,29 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
             if (previous.generation !== flow.previous.generation || previous.status === 'disconnecting') fail(409, 'connection_changed', '接続状態が変わりました。');
           }
           if (flow.requestId) requests.forTo(flow.requestId, user.id, true);
-          await verifyConnection(req, session,
-            () => connector.authorization.complete({ code, verifier: flow.verifier, redirectUri: flow.redirectUri }, grants.context(previous)),
-            result => requestActions.connect(flow.requestId, user.id, connector.id, result, { requestedBy: flow.requestedBy, previous }));
+          const previousContext = grants.context(previous);
+          const completion = await verifyConnection(req, session,
+            () => connector.authorization.complete({ code, verifier: flow.verifier, redirectUri: flow.redirectUri }, previousContext),
+            result => {
+              const changes = previous ? connector.authorization.changes?.(result, previousContext) : undefined;
+              if (changes?.length) {
+                if (flow.requestId) requests.forTo(flow.requestId, user.id, true);
+                const current = grants.reconnection(user.id, connector.id, previous.id);
+                if (current.generation !== previous.generation) fail(409, 'connection_changed', '接続状態が変わりました。');
+                grants.nextState(result);
+                const { credentials, ...kept } = result;
+                const state = flows.begin(session.id, { kind: 'confirmation', connector: connector.id, requestId: flow.requestId,
+                  requestedBy: flow.requestedBy, previous: flow.previous, result: kept, changes });
+                if (flow.requestId) requests.record(flow.requestId, 'connect_review', { connector: connector.id });
+                return { confirmation: state };
+              }
+              requestActions.connect(flow.requestId, user.id, connector.id, result, { requestedBy: flow.requestedBy, previous });
+            });
+          if (completion?.confirmation) return redirect(connectionLocation('review') + '&state=' + completion.confirmation);
           return redirect(connectionLocation('connected'));
         } catch (error) {
           if (progressRequestId && error instanceof HttpError) requests.record(progressRequestId, 'connect_failed', { connector: oauthCallback[1], code: error.code, message: error.message });
-          const codes = { authorization_denied: 'denied', invalid_state: 'expired', login_required: 'expired', account_changed: 'wrong_account', already_connected: 'already_connected', scope_mismatch: 'scope', refresh_missing: 'retry', connection_changed: 'changed', service_response: 'failed' };
+          const codes = { authorization_denied: 'denied', invalid_state: 'expired', login_required: 'expired', account_changed: 'wrong_account', scope_mismatch: 'scope', refresh_missing: 'retry', connection_changed: 'changed', service_response: 'failed' };
           return redirect(connectionLocation(codes[error.code] || 'failed'));
         }
       }
@@ -727,6 +743,23 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         return send(200, { connections: subject.id === holderId ? grants.connections(holderId).map(row => grants.view(row, { owner: true }))
           : grants.connections(holderId).filter(row => row.status !== 'disconnecting').map(row => grants.view(row)) });
       }
+      if (path === '/v1/connections/confirmation' && ['GET', 'POST', 'DELETE'].includes(method)) {
+        permit('connect', 'grant');
+        if (!session) fail(401, 'login_required', 'ログインしてください。');
+        const state = method === 'GET' ? url.searchParams.get('state') : (await inputBody()).state;
+        const flow = flows.peek(session.id, state);
+        if (!flow || flow.kind !== 'confirmation') fail(400, 'invalid_state', '接続をやり直してください。');
+        progressRequestId = flow.requestId || null;
+        if (method === 'DELETE') { flows.drop(session.id, state); return send(200, { ok: true }); }
+        const previous = grants.reconnection(holderId, flow.connector, flow.previous.id);
+        if (previous.generation !== flow.previous.generation) fail(409, 'connection_changed', '接続状態が変わりました。');
+        if (flow.requestId) requests.forTo(flow.requestId, holderId, true);
+        if (method === 'GET') return send(200, { connection: grants.view(previous, { owner: true }), changes: flow.changes });
+        still();
+        const saved = requestActions.connect(flow.requestId, holderId, flow.connector, flow.result, { requestedBy: flow.requestedBy, previous });
+        flows.drop(session.id, state);
+        return send(200, { connection: grants.view(saved, { owner: true }) });
+      }
       if (path === '/v1/connections' && method === 'POST') {
         permit('connect', 'grant');
         const input = await inputBody();
@@ -739,10 +772,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         if (request && connector.id !== requests.input(request).connector) fail(400, 'scope_mismatch', '依頼された接続方法で登録してください。');
         // Who asked for it, as they were called then. One started from the dashboard was asked by no one.
         const requestedBy = request ? principals.get(request.from_id)?.name ?? '' : '';
-        const previous = input.connection_id === undefined ? undefined : grants.connection(holderId, input.connection_id);
-        if (previous && previous.connector !== connector.id) fail(400, 'invalid_connector', '接続方法が一致しません。');
-        if (previous && connector.canReconnect === false) fail(400, 'new_connection_required', '新しく登録してください。');
-        if (previous?.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
+        const target = request ? requests.input(request).connection_id : input.connection_id;
+        if (request && input.connection_id !== undefined && input.connection_id !== target) fail(409, 'connection_changed', '依頼された接続を選んでください。');
+        const previous = target === undefined ? undefined : grants.reconnection(holderId, connector.id, target);
         if (!session) fail(401, 'login_required', 'ログインしてください。');
         still();
         const flow = { connector: connector.id, requestedBy, requestId: request?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null };

@@ -8,12 +8,14 @@ export function requestDefinition(value) {
 
 // A request as anyone sees it: who asks (by name), what for, and where it is answered. The one asked by an
 // app's user is sent to that app's own page, which knows who they are.
-export function requestView({ requests, connectors, principals, settings }, row, origin, { events = false, code = false } = {}) {
+export function requestView({ requests, connectors, principals, settings, grants }, row, origin, { events = false, code = false } = {}) {
   const value = requests.summary(row, { includeEvents: events, includeCode: code });
   const from = principals.get(row.from_id);
   const connector = value.kind === 'connect' && connectors.ids().includes(value.input.connector) ? connectors.describe(value.input.connector) : undefined;
+  const target = connector && value.input.connection_id ? grants.held(row.to_id, value.input.connection_id) : undefined;
   const back = row.to_id ? settings.returnUrlFor(row.to_id) : undefined;
   const verification_uri = back ? back + (back.includes('?') ? '&' : '?') + 'foundation_request=' + row.id : origin + '/requests/' + row.id;
   return { ...value, requester_name: from?.name ?? value.input.name ?? '', verification_uri,
-    ...(connector ? { connector } : {}), ...(value.kind === 'store' ? { store: value.input.fields } : {}) };
+    ...(connector ? { connector, ...(value.input.connection_id ? { connection: target ? grants.view(target) : null } : {}) } : {}),
+    ...(value.kind === 'store' ? { store: value.input.fields } : {}) };
 }

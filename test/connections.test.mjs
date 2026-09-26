@@ -16,6 +16,7 @@ import { FakeGcp } from '../src/connectors/gcp/fixture.mjs';
 import { FakeGitHub } from '../src/connectors/github/fixture.mjs';
 import { FakeOpenRouter } from '../src/connectors/openrouter/fixture.mjs';
 import { fixture, FakeGmail, KEY, USER_A } from './helpers.mjs';
+import { fail } from '../src/errors.mjs';
 
 const value = (subject, state = 'opaque-0') => ({ subject, privateState: state, facts: { label: subject }, expiresAt: null,
   credentials: { environment: { EXAMPLE_KEY: 'usable-' + state } } });
@@ -82,12 +83,21 @@ test('出力を渡せない場合も回転済みの非公開状態を保存す�
   assert.equal(connections.state(connections.held(USER_A, row.id)).private_state, 'rotated');
 });
 
-test('別アカウントの結果を保存せず元の接続を再接続待ちにする', async t => {
-  const { store, connections, row } = setup(t, async () => value('account-two', 'wrong-account'));
+test('コネクターが本人確認の不一致を報告した接続を再接続待ちにする', async t => {
+  const { store, connections, row } = setup(t, async () => fail(409, 'account_changed', 'Account changed'));
   await assert.rejects(connections.obtain(row), { code: 'account_changed' });
   const current = connections.held(USER_A, row.id);
   assert.equal(current.status, 'reconnect_required');
   assert.equal(connections.state(current).private_state, 'opaque-0');
+});
+
+test('コネクターが確認した識別情報を更新し、同じ接続IDで取得を続ける', async t => {
+  const { connections, row } = setup(t, async () => value('updated-identity', 'renewed'));
+  const result = await connections.obtain(row);
+  const current = connections.held(USER_A, row.id);
+  assert.equal(current.subject, 'updated-identity');
+  assert.equal(current.id, row.id);
+  assert.equal(result.values.get('EXAMPLE_KEY').content.toString(), 'usable-renewed');
 });
 
 test('取得中に再接続した場合は新しい認証状態を維持する', async t => {

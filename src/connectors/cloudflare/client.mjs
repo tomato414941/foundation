@@ -75,12 +75,36 @@ export class CloudflareClient {
       || typeof user.email !== 'string' || user.email.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(user.email)) invalidResponse();
     return { user_id: user.id, email: user.email, checked_at: Date.now() };
   }
+  // These are the accounts this token can list now, not the provider's consent policy.
+  // Failure to list them must not discard an otherwise valid authorization.
+  async accounts(accessToken) {
+    const items = new Map();
+    try {
+      for (let page = 1; page <= 10; page++) {
+        const response = await this.call(CLOUDFLARE_API + '/accounts?per_page=50&page=' + page, { headers: { authorization: 'Bearer ' + accessToken } });
+        if (!response.ok) return null;
+        const data = await response.json();
+        if (data?.success !== true || !Array.isArray(data.result)) return null;
+        for (const account of data.result) {
+          if (!account || typeof account.id !== 'string' || !/^[a-f0-9]{32}$/.test(account.id)
+            || typeof account.name !== 'string' || !account.name || account.name.length > 512) return null;
+          items.set(account.id, { id: account.id, name: account.name });
+        }
+        const pages = data.result_info?.total_pages;
+        if (Number.isSafeInteger(pages) && pages >= 0 ? page >= pages : data.result.length < 50) {
+          return { items: [...items.values()], complete: true, checked_at: Date.now() };
+        }
+      }
+      return { items: [...items.values()], complete: false, checked_at: Date.now() };
+    } catch { return null; }
+  }
   async exchange({ code, verifier, redirectUri }, previous) {
     const data = await this.tokenRequest({ grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: redirectUri });
     // Reconnection obtains a fresh grant; never reuse another authorization's refresh token.
     const grant = this.grant(data), identity = await this.identity(grant.access_token);
-    if (previous && previous.subject !== identity.user_id) fail(409, 'account_changed', '同じCloudflareアカウントで接続し直してください。');
-    return { subject: identity.user_id, secret: { ...grant, identity } };
+    if (previous && previous.subject !== identity.user_id) fail(409, 'account_changed', '同じCloudflareユーザーで接続し直してください。');
+    const accounts = grant.scopes.includes('account-settings.read') ? await this.accounts(grant.access_token) : null;
+    return { subject: identity.user_id, secret: { ...grant, identity, accounts } };
   }
   async token(existing, { subject }) {
     this.check();
@@ -89,13 +113,28 @@ export class CloudflareClient {
     const data = await this.tokenRequest({ grant_type: 'refresh_token', refresh_token: existing.refresh_token });
     // The refresh grant is already bound to this client and user. Persist its rotated token
     // immediately, without a second network request that could lose it on failure.
-    return { ...this.grant(data, existing), identity: existing.identity };
+    return { ...this.grant(data, existing), identity: existing.identity, accounts: existing.accounts ?? null };
   }
   facts(secret) {
-    return { label: secret.identity.email, user_id: secret.identity.user_id, scopes: secret.scopes,
+    return { label: secret.identity.email, user_id: secret.identity.user_id, client_id: secret.client_id, scopes: secret.scopes,
+      observed_accounts: secret.accounts ?? null,
       missing_scopes: CLOUDFLARE_SCOPES.filter(scope => !secret.scopes.includes(scope)),
       additional_scopes: secret.scopes.filter(scope => !CLOUDFLARE_SCOPES.includes(scope)),
       checked_at: secret.identity.checked_at };
+  }
+  changes(secret, previous) {
+    const changes = [];
+    if (secret.client_id !== previous.client_id) changes.push({ label: 'OAuthアプリ', before: [previous.client_id], after: [secret.client_id] });
+    if (JSON.stringify([...secret.scopes].sort()) !== JSON.stringify([...previous.scopes].sort())) {
+      changes.push({ label: '権限', before: previous.scopes, after: secret.scopes });
+    }
+    const ids = accounts => accounts?.complete ? accounts.items.map(item => item.id).sort() : null;
+    const before = ids(previous.accounts), after = ids(secret.accounts);
+    if (before === null || after === null || JSON.stringify(before) !== JSON.stringify(after)) {
+      const names = accounts => accounts?.complete ? accounts.items.map(item => item.name + ' (' + item.id + ')') : ['未確認'];
+      changes.push({ label: '確認できたアカウント', before: names(previous.accounts), after: names(secret.accounts) });
+    }
+    return changes;
   }
   async revoke(secret) {
     this.check();

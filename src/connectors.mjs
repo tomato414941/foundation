@@ -12,6 +12,7 @@ export class Connectors {
         || connector.variables.some(value => typeof value !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value))
         || !['oauth', 'role'].includes(connector.authorization?.kind) || typeof connector.obtain !== 'function' || typeof connector.authorization?.begin !== 'function'
         || typeof connector.authorization?.complete !== 'function'
+        || (connector.authorization.changes !== undefined && typeof connector.authorization.changes !== 'function')
         || (connector.revoke !== undefined && typeof connector.revoke !== 'function')) throw new Error('Invalid connector contract: ' + connector.id);
       this.connectors.set(connector.id, connector);
     }

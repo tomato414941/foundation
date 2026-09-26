@@ -14,6 +14,10 @@ export class RequestActions {
   ask(fromId, { kind, input, toId, ...rest }) {
     const definition = requestInput(kind, input);
     if (kind === 'store') for (const field of definition.fields) this.placement(toId, field, field.name);
+    if (kind === 'connect') {
+      this.grants.connectors.get(definition.connector);
+      if (definition.connection_id !== undefined) this.grants.reconnection(toId, definition.connector, definition.connection_id);
+    }
     const row = this.requests.create(fromId, { kind, input, toId, ...rest });
     this.records.write(fromId, 'request.asked', 'request', row.id, { kind, to: toId });
     return row;
@@ -54,7 +58,9 @@ export class RequestActions {
     const saved = this.store.transaction(() => {
       if (id) {
         const row = this.requests.forTo(id, holderId, true);
-        if (row.kind !== 'connect' || this.requests.input(row).connector !== connector) fail(409, 'wrong_kind', '依頼された接続方法で登録してください。');
+        const input = this.requests.input(row);
+        if (row.kind !== 'connect' || input.connector !== connector) fail(409, 'wrong_kind', '依頼された接続方法で登録してください。');
+        if (input.connection_id !== previous?.id) fail(409, 'connection_changed', '依頼された接続を選んでください。');
       }
       const saved = this.grants.save(holderId, connector, result, { previous });
       this.records.write(holderId, previous ? 'connection.renewed' : 'connection.created', 'grant', saved.id, { connector, requested_by: requestedBy || null, request: id || null });

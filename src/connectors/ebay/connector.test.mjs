@@ -27,9 +27,10 @@ async function ebayFixture(t, ebay = new FakeEbay()) {
   // eBay resolves the RuName to this registered callback before returning the query.
   const callback = (url, code = 'personal', options = {}, extra = {}) => f.request('/oauth/ebay.oauth/callback?' + new URLSearchParams({ state: url.searchParams.get('state'), code, ...extra }), options);
   async function connect(code = 'personal', input = {}) {
+    const ids = new Set((await connections()).map(item => item.id));
     const done = await callback(await start(input), code);
     assert.match(done.headers.get('location'), /connection=connected/);
-    return (await connections()).find(item => item.subject === (code === 'work' ? '1002' : '1001'));
+    return (await connections()).find(item => input.connection_id ? item.id === input.connection_id : !ids.has(item.id));
   }
   const state = id => f.app.grants.state(f.app.grants.held(USER_A, id));
   return { ...f, ebay, start, callback, connect, connections, state };
@@ -101,7 +102,8 @@ test('アカウントを固定IDで区別し、名前の変更を反映して別
   const f = await ebayFixture(t), a = await f.connect(), b = await f.connect('work');
   assert.notEqual(a.id, b.id);
   assert.equal(a.subject, '1001'); assert.equal(b.subject, '1002');
-  assert.match((await f.callback(await f.start(), 'personal')).headers.get('location'), /connection=already_connected/);
+  assert.match((await f.callback(await f.start(), 'personal')).headers.get('location'), /connection=connected/);
+  assert.equal((await f.request('/v1/connections')).json.connections.length, 3);
   assert.match((await f.callback(await f.start({ connection_id: a.id }), 'work')).headers.get('location'), /connection=wrong_account/);
   f.ebay.inspectHandler = () => json(inspected({ username: 'renamed-seller' }));
   const reconnected = await f.connect('personal', { connection_id: a.id });

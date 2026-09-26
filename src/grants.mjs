@@ -138,10 +138,16 @@ export class Grants {
     if (!row || row.method === 'given') fail(404, 'not_found', '接続が見つかりません。');
     return row;
   }
+  reconnection(holderId, connectorId, id) {
+    const row = this.connection(holderId, id), connector = this.connectors.get(connectorId);
+    if (row.connector !== connectorId) fail(400, 'invalid_connector', '接続方法が一致しません。');
+    if (connector.canReconnect === false) fail(400, 'new_connection_required', '新しく登録してください。');
+    if (row.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
+    return row;
+  }
   save(holderId, connectorId, result, { previous } = {}) {
     const connector = this.connectors.get(connectorId);
     const state = this.nextState(result);
-    if (previous && result.subject !== previous.subject) fail(409, 'account_changed', '接続先のアカウントが変わりました。');
     const label = String(state.facts.label || result.subject).slice(0, 80);
     const method = connector.authorization?.kind === 'role' ? 'delegated' : 'authorized';
     return this.writeConnection(holderId, { connector: connectorId, method, subject: result.subject, label, state }, previous);
@@ -152,9 +158,10 @@ export class Grants {
       const existing = previous ? this.held(holderId, previous.id) : undefined;
       if (previous) {
         if (!existing || existing.generation !== previous.generation) fail(409, 'connection_changed', '状態が変わりました。もう一度お試しください。');
-        if (existing.subject !== subject) fail(409, 'account_changed', '登録し直すには同じアカウントを選んでください。');
+        this.reconnection(holderId, connector, existing.id);
       }
-      if (!previous && this.db.prepare(`SELECT 1 ${FROM} WHERE h.holder_id=? AND g.connector=? AND g.subject=?`).get(holderId, connector, subject)) fail(409, 'already_connected', 'この認証情報は登録済みです。');
+      // A connector's subject describes its own identity, not a universal authorization key.
+      // An explicit target updates that holding; a new authorization gets a new holding.
       if (!previous && this.connections(holderId).length >= CONNECTION_LIMIT) fail(409, 'connection_limit', `登録できる接続は${CONNECTION_LIMIT}件までです。`);
       const id = existing?.id ?? randomUUID(), sealed = this.vault.seal(state, `grant:${holderId}:${id}`);
       if (existing) {
@@ -167,10 +174,10 @@ export class Grants {
       return this.get(id);
     });
   }
-  saveState(row, state) {
+  saveState(row, state, subject = row.subject) {
     return this.store.transaction(() => {
       this.current(row);
-      this.db.prepare('UPDATE grants SET state=? WHERE holding_id=?').run(this.vault.seal(state, this.binding(row)), row.id);
+      this.db.prepare('UPDATE grants SET subject=?,state=? WHERE holding_id=?').run(subject, this.vault.seal(state, this.binding(row)), row.id);
       this.holdings.touch(row.id);
     });
   }
@@ -224,9 +231,8 @@ export class Grants {
     const connector = this.connectors.get(row.connector);
     try {
       const result = await connector.obtain(this.context(row));
-      if (result?.subject !== row.subject) fail(409, 'account_changed', '接続先のアカウントが変わりました。');
       const state = this.nextState(result);
-      this.saveState(row, state);
+      this.saveState(row, state, result.subject);
       return { state, values: this.outputs(connector, result.credentials) };
     } catch (error) {
       if (error instanceof HttpError && ['reconnect_required', 'account_changed', 'refresh_missing'].includes(error.code)) this.reconnectRequired(row);
