@@ -14,7 +14,7 @@ export function gcpOauth(client) {
     intro: 'Googleアカウントでログインし、Google Cloudへのアクセスを許可します。',
     access: { name: 'Google Cloudの操作', description: '許可した範囲とアカウントのIAM権限に従い、リソースの作成・変更・削除を行えます。', restrictions: '特定のプロジェクトには限定されません。操作により料金が発生する場合があります。' },
     revocationNote: 'Google側の許可を取り消すと、同じアカウントの他のGoogle接続も使えなくなる場合があります。',
-    ai: 'Use CLOUDSDK_AUTH_ACCESS_TOKEN with gcloud or as a Bearer token with the relevant Google Cloud API. Inspect facts.scopes, missing_scopes and additional_scopes in the connection list or credential function result; differences are reported, not blocked. IAM is not checked. Choose --project explicitly: it is not an access restriction. Invoke connection.credentials again before token expiry; saved copies do not refresh.',
+    ai: 'Use CLOUDSDK_AUTH_ACCESS_TOKEN with gcloud or as a Bearer token with the relevant Google Cloud API. Inspect scopes, missing_scopes and additional_scopes in facts from GET /v1/connections; differences are reported, not blocked. IAM is not checked. Choose --project explicitly: it is not an access restriction. Obtain current credentials with POST /v1/deliveries and {"names":[{"name":"<connection id>"}]}; Foundation refreshes tokens when needed.',
     variables: ['CLOUDSDK_AUTH_ACCESS_TOKEN', 'GOOGLE_CLOUD_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT'],
     authorization: {
       kind: 'oauth',

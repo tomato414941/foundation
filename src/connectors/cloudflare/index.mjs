@@ -14,7 +14,7 @@ export function cloudflareOauth(client) {
     intro: 'Cloudflareで対象のアカウントを選び、アクセスを許可します。',
     access: { name: 'ドメインとDNSの管理', description: 'アカウント情報の読み取り、DNSレコードの編集、ドメインの登録・更新などの管理を行えます。',
       restrictions: '選択したアカウントのドメインが対象です。ドメインの登録・更新には料金がかかります。' },
-    ai: 'Use CLOUDFLARE_API_TOKEN as a Bearer token with Cloudflare v4 APIs. Inspect facts.scopes, missing_scopes and additional_scopes; differences are reported, not blocked. List /accounts and choose the target explicitly: facts.user_id identifies the user, not a Cloudflare account. Domain registrations and renewals incur charges. Invoke connection.credentials again before expiry; saved copies do not refresh. CLOUDFLARE_OAUTH_EXPIRES_AT is Unix time in milliseconds. Revoked consent is detected on the next token refresh.',
+    ai: 'Use CLOUDFLARE_API_TOKEN as a Bearer token with Cloudflare v4 APIs. Inspect scopes, missing_scopes and additional_scopes in facts from GET /v1/connections; differences are reported, not blocked. List /accounts and choose the target explicitly: facts.user_id identifies the user, not a Cloudflare account. Domain registrations and renewals incur charges. Obtain current credentials with POST /v1/deliveries and {"names":[{"name":"<connection id>"}]}; Foundation refreshes tokens when needed. CLOUDFLARE_OAUTH_EXPIRES_AT is Unix time in milliseconds. Revoked consent is detected on the next token refresh.',
     variables: ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_OAUTH_EXPIRES_AT'],
     authorization: {
       kind: 'oauth',
