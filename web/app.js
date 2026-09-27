@@ -339,7 +339,7 @@ function render() {
     const space = state.space, kept = given(), connections = connected(), keys = state.actors || [];
     const card = (href, title, line) => `<a class="home-card" href="${href}"><h2>${title}</h2><p>${esc(line)}</p></a>`;
     const lastUsed = keys.flatMap(key => key.credentials.map(item => item.last_used_at)).filter(Boolean).sort().at(-1);
-    app.innerHTML = shell(`<header class="page-heading page-heading-actions home-heading"><h1>Foundation</h1><button class="button primary" data-action="start-ai">${icon('network')} AIと使う</button></header>
+    app.innerHTML = shell(`<header class="page-heading"><h1>Foundation</h1></header>
       <div class="home-cards">
         ${card('/credentials', '認証情報', `${kept.length} 件`)}
         ${card('/connections', '接続', `${connections.length} 件${connections.length ? '（' + connections.map(item => item.label).join('、') + '）' : ''}`)}
@@ -519,22 +519,6 @@ function closeDialog() {
   dialog.innerHTML = '';
 }
 dialog.addEventListener('cancel', (event) => { event.preventDefault(); closeDialog(); });
-function startAi() {
-  const message = '私のFoundationに接続してください。\n' + location.origin + '/start';
-  openDialog(`<h2 id="dialog-title">AIと使う</h2><p>コピーして、使いたいAIに送ってください。</p>
-    <textarea class="start-message" id="start-message" aria-label="AIへのメッセージ" rows="4" readonly spellcheck="false">${esc(message)}</textarea>
-    <button class="button primary full" type="button" id="copy-start-message" aria-live="polite">${icon('copy')} メッセージをコピー</button>`);
-  const field = dialog.querySelector('#start-message'), copy = dialog.querySelector('#copy-start-message');
-  copy.addEventListener('click', async () => {
-    try {
-      await navigator.clipboard.writeText(message);
-      copy.innerHTML = `${icon('check')} コピーしました`;
-    } catch {
-      field.focus(); field.select(); field.setSelectionRange(0, field.value.length);
-      toast('メッセージを選択しました。コピーしてください。');
-    }
-  });
-}
 function bindForm(handler, container = dialog) {
   container.querySelector('form').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -821,7 +805,6 @@ document.addEventListener('click', async (event) => {
   const { action, id } = target.dataset;
   try {
     if (action === 'close-dialog') closeDialog();
-    if (action === 'start-ai') startAi();
     if (action === 'logout') { target.disabled = true; await api('/v1/session', { method: 'DELETE', data: {} }); await showLogin(); }
     if (action === 'request-connect') {
       target.disabled = true;

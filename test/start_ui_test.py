@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -25,8 +26,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
                               capture_output=True, text=True, timeout=30)
 
     browser = p.chromium.launch(headless=True)
-    context = browser.new_context(viewport={'width': 1280, 'height': 800},
-                                  permissions=['clipboard-read', 'clipboard-write'])
+    context = browser.new_context(viewport={'width': 1280, 'height': 800})
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -40,39 +40,26 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
               wait_until='networkidle')
     page.get_by_role('button', name='ログイン', exact=True).click()
     expect(page.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()
-    page.screenshot(path=str(shots / 'home-desktop.png'), full_page=True)
 
-    page.get_by_role('button', name='AIと使う', exact=True).click()
-    dialog = page.get_by_role('dialog', name='AIと使う', exact=True)
-    message = dialog.get_by_role('textbox', name='AIへのメッセージ', exact=True)
-    text = '私のFoundationに接続してください。\n' + args.base + '/start'
-    expect(message).to_have_value(text)
+    # After sign-in, the home page opens each resource page on desktop and mobile.
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 844 if width < 400 else 800})
-        expect(dialog.get_by_role('button', name='メッセージをコピー', exact=True)).to_be_visible()
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-        assert message.evaluate('(field) => field.scrollHeight <= field.clientHeight')
         if width != 320:
-            page.screenshot(path=str(shots / f'start-{width}.png'), full_page=True)
+            page.screenshot(path=str(shots / f'home-{width}.png'), full_page=True)
+        for title, path in [('認証情報', '/credentials'), ('接続', '/connections'),
+                            ('オブジェクト', '/objects'), ('アクセス管理', '/principals'),
+                            ('ファンクション', '/functions')]:
+            page.get_by_role('main').get_by_role('link', name=re.compile('^' + title)).click()
+            expect(page).to_have_url(args.base + path)
+            expect(page.get_by_role('heading', name=title, exact=True)).to_be_visible()
+            page.goto(args.base, wait_until='networkidle')
+            expect(page.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()
     page.set_viewport_size({'width': 1280, 'height': 800})
-    dialog.get_by_role('button', name='メッセージをコピー', exact=True).click()
-    expect(dialog.get_by_role('button', name='コピーしました', exact=True)).to_be_visible()
-    assert page.evaluate('navigator.clipboard.readText()') == text
 
-    # A browser that rejects clipboard writes still lets the owner copy the selected text.
-    page.evaluate("""() => Object.defineProperty(navigator, 'clipboard', {configurable: true,
-        value: {writeText: async () => {throw new DOMException('Denied', 'NotAllowedError');}}})""")
-    dialog.get_by_role('button', name='コピーしました', exact=True).click()
-    expect(message).to_be_focused()
-    assert message.evaluate('(field) => field.value.slice(field.selectionStart, field.selectionEnd)') == text
-    expect(page.get_by_role('status')).to_have_text('メッセージを選択しました。コピーしてください。')
-    page.keyboard.press('Escape')
-    expect(dialog).not_to_be_visible()
-    expect(page.get_by_role('button', name='AIと使う', exact=True)).to_be_focused()
-
-    # The copied URL works outside the owner's signed-in browser.
+    # The public guide works outside the owner's signed-in browser.
     public = p.request.new_context()
-    response = public.get(text.splitlines()[-1])
+    response = public.get(args.base + '/start')
     assert response.status == 200
     assert response.headers['content-type'].startswith('text/plain')
     assert 'foundation connect ' + args.base in response.text()
@@ -116,4 +103,4 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     assert not errors, errors
     context.close()
     browser.close()
-    print('Start UI passed: public guide, clipboard and fallback, responsive layout, fresh CLI approval, delivery and revocation.')
+    print('Start UI passed: home navigation, responsive layout, public guide, fresh CLI approval, delivery and revocation.')
