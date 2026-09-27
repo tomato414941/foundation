@@ -111,7 +111,7 @@ test('権限の不足と追加をCloudflareの応答に従って報告する', a
   const connection = await f.connect(), delivered = await f.deliver(connection);
   assert.equal(delivered.status, 200);
   const facts = await f.connectionFacts(connection);
-  assert.deepEqual(facts.missing_scopes, ['account-settings.read', 'dns.write', 'email-routing-address.write', 'email-routing-rule.write', 'registrar-domains.admin', 'zone.read']);
+  assert.deepEqual(facts.missing_scopes, ['account-settings.read', 'dns.write', 'email-routing-address.write', 'email-routing-rule.write', 'registrar-domains.admin', 'zone-settings.read', 'zone.read']);
   assert.deepEqual(facts.additional_scopes, ['workers-r2.read']);
 });
 

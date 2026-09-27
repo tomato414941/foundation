@@ -5,7 +5,7 @@ export const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
 export const CLOUDFLARE_DOCS = 'https://developers.cloudflare.com/api/';
 export const CLOUDFLARE_SETTINGS = 'https://dash.cloudflare.com/?to=/profile/access-management/authorization';
 // Cloudflare's self-managed clients use the dot-delimited IDs from GET /oauth/scopes.
-export const CLOUDFLARE_SCOPES = ['user-details.read', 'account-settings.read', 'zone.read', 'dns.write', 'registrar-domains.admin', 'email-routing-address.write', 'email-routing-rule.write', 'offline_access'].sort();
+export const CLOUDFLARE_SCOPES = ['user-details.read', 'account-settings.read', 'zone.read', 'dns.write', 'zone-settings.read', 'registrar-domains.admin', 'email-routing-address.write', 'email-routing-rule.write', 'offline_access'].sort();
 const OAUTH = 'https://dash.cloudflare.com/oauth2';
 const validToken = value => typeof value === 'string' && value.length > 0 && value.length <= 8192 && !/[^\x21-\x7e]/.test(value);
 const invalidResponse = () => fail(502, 'service_response', 'Cloudflareからの認証応答を確認できませんでした。');
