@@ -33,8 +33,8 @@ export class Connectors {
       ...(connector.revocationNote ? { revocation_note: connector.revocationNote } : {}),
       can_reconnect: connector.canReconnect !== false, can_revoke: typeof connector.revoke === 'function', credential_type: connector.credentialType || 'unknown',
       scopes: connector.scopes ? { base: connector.scopes.base, documentation_url: connector.scopes.documentationUrl || '' } : null,
-      // What the holder's own app needs: the given grants to name when connecting with it.
-      own_client: typeof connector.withClient === 'function' ? { fields: connector.clientFields ?? ['client_id', 'client_secret'] } : null };
+      // Whether apps held by someone can be used here, and what registering one asks for.
+      apps: typeof connector.withClient === 'function' ? { fields: connector.clientFields ?? ['client_id', 'client_secret'] } : null };
   }
 }
 

@@ -1,6 +1,6 @@
 import { fail, HttpError } from './errors.mjs';
 import { scopeFacts } from './scopes.mjs';
-import { withOwnClient } from './connectors.mjs';
+import { Apps } from './apps.mjs';
 import { randomUUID } from 'node:crypto';
 import { validEnvName } from '../cli/env-name.mjs';
 import { holdingName } from './holdings.mjs';
@@ -19,7 +19,7 @@ export const GRANT_TOTAL_MAX = 20 * 1024 * 1024;
 export const VALUE_MAX = 16384;
 export const CONNECTION_LIMIT = 50;
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const COLUMNS = 'h.id,h.holder_id,h.kind,h.name,h.created_at,h.updated_at,g.method,g.connector,g.subject,g.status,g.generation,g.size';
+const COLUMNS = 'h.id,h.holder_id,h.kind,h.name,h.created_at,h.updated_at,g.method,g.connector,g.app_id,g.subject,g.status,g.generation,g.size';
 const FROM = 'FROM holdings h JOIN grants g ON g.holding_id=h.id';
 const invalidResult = () => fail(502, 'service_response', '接続先からの応答を確認できませんでした。');
 const now = () => new Date().toISOString();
@@ -48,7 +48,11 @@ export function deliverable(content, { env, filename }) {
 export class Grants {
   constructor(store, holdings, connectors) {
     this.store = store; this.db = store.db; this.vault = store.vault; this.holdings = holdings; this.connectors = connectors; this.pending = new Map();
+    // The apps connections are made through (apps.mjs). A connection with none was made through Foundation's own.
+    this.apps = new Apps(store, holdings, connectors);
   }
+  // The connector as it speaks for this connection: through the app it was made with.
+  connectorFor(row) { return row.app_id ? this.apps.connector(this.apps.at(row.app_id)) : this.connectors.get(row.connector); }
   binding(row) { return `grant:${row.holder_id}:${row.id}`; }
 
   // Finding. A name finds a given grant: the holder's word for what they handed over. The others are found by id.
@@ -59,25 +63,6 @@ export class Grants {
     const row = this.find(holderId, name);
     if (!row) fail(404, 'not_found', '保管されたものが見つかりません。');
     return row;
-  }
-  // A holder's own OAuth app, kept as given grants of theirs: its ID and secret (and eBay's RuName). The connection
-  // remembers them by id, so renaming them changes nothing; removing them stops the connection until it is made again.
-  ownClient(holderId, reference) {
-    const ids = {}, credentials = {}, fields = { client_id: 'clientId', client_secret: 'clientSecret', ru_name: 'ruName' };
-    for (const [key, name] of Object.entries(fields)) {
-      if (reference[key] === undefined) continue;
-      let row;
-      try { row = this.resolve(holderId, reference[key]); } catch { fail(409, 'client_missing', '接続に使うアプリの預けたものが見つかりません。預け直してから接続し直してください。'); }
-      const text = this.content(row).toString('utf8').trim();
-      if (!text || text.length > 2048 || /[\x00-\x1f\x7f]/.test(text)) fail(400, 'invalid_client', 'アプリのIDや秘密の値を確認してください。');
-      ids[key] = row.id; credentials[name] = text;
-    }
-    return { ids, credentials };
-  }
-  // The connector to talk to the service with for this connection: Foundation's app, or the holder's own.
-  connectorFor(row) {
-    const connector = this.connectors.get(row.connector), client = this.state(row).client;
-    return client ? withOwnClient(connector, this.ownClient(row.holder_id, client).credentials) : connector;
   }
   // By name or by id: the way a caller refers to one when handing it to a command.
   resolve(holderId, reference) {
@@ -146,14 +131,12 @@ export class Grants {
   state(row) { return this.vault.open(this.db.prepare('SELECT state FROM grants WHERE holding_id=?').get(row.id).state, this.binding(row)); }
   context(row) { return row ? { subject: row.subject, privateState: this.state(row).private_state } : undefined; }
   // requested: the scopes this connection asked the service for (null for a connector without scopes).
-  // client: the given grants holding the holder's own OAuth app, when the connection was made with it.
-  nextState(result, { requested, client } = {}) {
+  nextState(result, { requested } = {}) {
     if (!result || typeof result.subject !== 'string' || !result.subject || result.subject.length > 512
       || !Object.hasOwn(result, 'privateState') || result.privateState === undefined
       || !result.facts || typeof result.facts !== 'object' || Array.isArray(result.facts)
       || (result.expiresAt !== null && !(Number.isFinite(result.expiresAt) && result.expiresAt > Date.now()))) invalidResult();
-    return { private_state: result.privateState, facts: result.facts, expires_at: result.expiresAt, ...(requested ? { requested_scopes: requested } : {}),
-      ...(client ? { client } : {}) };
+    return { private_state: result.privateState, facts: result.facts, expires_at: result.expiresAt, ...(requested ? { requested_scopes: requested } : {}) };
   }
   connections(holderId) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE h.holder_id=? AND g.method<>'given' ORDER BY h.created_at, h.id`).all(holderId); }
   connection(holderId, id) {
@@ -169,15 +152,16 @@ export class Grants {
     if (row.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
     return row;
   }
-  save(holderId, connectorId, result, { previous, scopes, client } = {}) {
+  // app: the holding id of the app the connection was made through, or null for Foundation's own.
+  save(holderId, connectorId, result, { previous, scopes, app = null } = {}) {
     const connector = this.connectors.get(connectorId);
-    const state = this.nextState(result, { requested: scopes, client });
+    const state = this.nextState(result, { requested: scopes });
     const label = String(state.facts.label || result.subject).slice(0, 80);
     const method = connector.authorization?.kind === 'role' ? 'delegated' : 'authorized';
-    return this.writeConnection(holderId, { connector: connectorId, method, subject: result.subject, label, state }, previous);
+    return this.writeConnection(holderId, { connector: connectorId, app, method, subject: result.subject, label, state }, previous);
   }
   // Identity and renewal state belong to the grant, independently of saved values or requests.
-  writeConnection(holderId, { connector, method, subject, label, state }, previous) {
+  writeConnection(holderId, { connector, app = null, method, subject, label, state }, previous) {
     return this.store.transaction(() => {
       const existing = previous ? this.held(holderId, previous.id) : undefined;
       if (previous) {
@@ -189,11 +173,11 @@ export class Grants {
       if (!previous && this.connections(holderId).length >= CONNECTION_LIMIT) fail(409, 'connection_limit', `登録できる接続は${CONNECTION_LIMIT}件までです。`);
       const id = existing?.id ?? randomUUID(), sealed = this.vault.seal(state, `grant:${holderId}:${id}`);
       if (existing) {
-        this.db.prepare("UPDATE grants SET connector=?,subject=?,state=?,status='usable',generation=generation+1 WHERE holding_id=?").run(connector, subject, sealed, id);
+        this.db.prepare("UPDATE grants SET connector=?,app_id=?,subject=?,state=?,status='usable',generation=generation+1 WHERE holding_id=?").run(connector, app, subject, sealed, id);
         this.holdings.rename(existing, label);
       } else {
         this.holdings.insert(id, holderId, 'grant', label);
-        this.db.prepare("INSERT INTO grants (holding_id,method,connector,subject,status,state) VALUES (?,?,?,?,'usable',?)").run(id, method, connector, subject, sealed);
+        this.db.prepare("INSERT INTO grants (holding_id,method,connector,app_id,subject,status,state) VALUES (?,?,?,?,?,'usable',?)").run(id, method, connector, app, subject, sealed);
       }
       return this.get(id);
     });
@@ -255,14 +239,13 @@ export class Grants {
     const connector = this.connectors.get(row.connector);
     try {
       // Read before asking the service: the grant may be removed while the service answers.
-      const { requested_scopes: requested, client } = this.state(row);
-      const active = client ? withOwnClient(connector, this.ownClient(row.holder_id, client).credentials) : connector;
+      const requested = this.state(row).requested_scopes, active = this.connectorFor(row);
       const result = await active.obtain(this.context(row));
-      const state = this.nextState(result, { requested, client });
+      const state = this.nextState(result, { requested });
       this.saveState(row, state, result.subject);
       return { state, values: this.outputs(connector, result.credentials) };
     } catch (error) {
-      if (error instanceof HttpError && ['reconnect_required', 'account_changed', 'refresh_missing', 'client_missing'].includes(error.code)) this.reconnectRequired(row);
+      if (error instanceof HttpError && ['reconnect_required', 'account_changed', 'refresh_missing'].includes(error.code)) this.reconnectRequired(row);
       throw error;
     }
   }
@@ -324,13 +307,19 @@ export class Grants {
     return chosen.content;
   }
 
+  // Which app a connection was made through, as anyone who may see the connection may see it.
+  appView(row) {
+    if (row.method !== 'authorized' || typeof this.connectors.get(row.connector).withClient !== 'function') return null;
+    const app = row.app_id ? this.apps.get(row.app_id) : null;
+    return app ? { id: app.id, name: app.name, foundation: false } : { id: 'foundation', name: 'Foundationのアプリ', foundation: true };
+  }
   // What is said of a grant. The holder sees everything but the sealed state; whoever acts for them sees what
   // they need to use it.
   view(row, { owner = false } = {}) {
     const base = { ...this.holdings.view(row), method: row.method, status: row.status };
     if (row.method === 'given') return { ...base, size: row.size };
     const connector = this.connectors.get(row.connector), state = this.state(row);
-    const shared = { connector: row.connector, service: connector.service, label: state.facts.label || row.name, facts: { ...state.facts, ...scopeFacts(state) }, own_client: Boolean(state.client),
+    const shared = { connector: row.connector, service: connector.service, label: state.facts.label || row.name, facts: { ...state.facts, ...scopeFacts(state) }, app: this.appView(row),
       access: connector.access, api: connector.service?.api || { base_url: '', documentation_url: '' }, outputs: connector.variables };
     if (!owner) return { ...base, ...shared };
     return { ...base, ...shared, subject: row.subject, generation: row.generation, expires_at: state.expires_at,

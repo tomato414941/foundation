@@ -14,8 +14,14 @@ export class RequestActions {
   ask(fromId, { kind, input, toId, ...rest }) {
     const definition = requestInput(kind, input);
     if (kind === 'store') for (const field of definition.fields) this.placement(toId, field, field.name);
+    if (kind === 'app') this.grants.apps.fields(this.grants.connectors.get(definition.connector));
     if (kind === 'connect') {
       this.grants.connectors.get(definition.connector);
+      if (definition.app !== undefined) {
+        const app = this.grants.apps.get(definition.app);
+        if (!app || !this.grants.apps.usableBy(toId, app.id)) fail(404, 'not_found', 'アプリが見つかりません。');
+        if (app.connector !== definition.connector) fail(400, 'app_mismatch', 'このアプリは別の接続先のものです。');
+      }
       if (definition.connection_id !== undefined) this.grants.reconnection(toId, definition.connector, definition.connection_id);
     }
     const row = this.requests.create(fromId, { kind, input, toId, ...rest });
@@ -54,7 +60,24 @@ export class RequestActions {
     this.changed(done);
     return JSON.parse(done.result);
   }
-  connect(id, holderId, connector, result, { requestedBy = '', previous, scopes, client } = {}) {
+  // The one asked registers an app of theirs: its ID and secret go into the app, and the asker learns its id.
+  registerApp(id, toId, input) {
+    const done = this.store.transaction(() => {
+      const row = this.requests.forTo(id, toId, true);
+      if (row.kind !== 'app') fail(409, 'wrong_kind', 'この依頼はアプリの登録の依頼ではありません。');
+      const asked = this.requests.input(row);
+      if (this.grants.apps.find(toId, input?.name ?? '')) fail(409, 'name_taken', 'その名前のアプリはすでにあります。別の名前を入力してください。');
+      const app = this.grants.apps.put(toId, { ...input, connector: asked.connector });
+      this.records.write(toId, 'app.created', 'holding', app.id, { connector: asked.connector, request: id });
+      this.requests.done(id, toId, { app_id: app.id });
+      this.requests.record(id, 'registered', { connector: asked.connector });
+      this.records.write(toId, 'request.done', 'request', id, { kind: 'app', connector: asked.connector });
+      return this.requests.get(id);
+    });
+    this.changed(done);
+    return JSON.parse(done.result);
+  }
+  connect(id, holderId, connector, result, { requestedBy = '', previous, scopes, app = null } = {}) {
     const saved = this.store.transaction(() => {
       if (id) {
         const row = this.requests.forTo(id, holderId, true);
@@ -62,7 +85,7 @@ export class RequestActions {
         if (row.kind !== 'connect' || input.connector !== connector) fail(409, 'wrong_kind', '依頼された接続方法で登録してください。');
         if (input.connection_id !== previous?.id) fail(409, 'connection_changed', '依頼された接続を選んでください。');
       }
-      const saved = this.grants.save(holderId, connector, result, { previous, scopes, client });
+      const saved = this.grants.save(holderId, connector, result, { previous, scopes, app });
       this.records.write(holderId, previous ? 'connection.renewed' : 'connection.created', 'grant', saved.id, { connector, requested_by: requestedBy || null, request: id || null });
       if (id) {
         this.requests.done(id, holderId, { connection_id: saved.id });

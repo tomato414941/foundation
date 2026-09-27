@@ -6,16 +6,17 @@ export class FakeEbay extends EbayClient {
     super({ clientId: 'test-ebay-client', clientSecret: 'test-ebay-secret', ruName: 'Test-Foundation-RuName' }, { fetcher: (url, options) => this.fetch(url, options) });
     this.calls = []; this.exchanges = 0; this.refreshes = 0;
     // Like eBay, grants what the consent screen asked for unless a test says otherwise.
-    this.scopes = null; this.asked = [];
+    this.scopes = null; this.consent = { asked: [] };
   }
-  authorize(context) { this.asked = context.scopes; return super.authorize(context); }
+  // Shared with the copies made for someone's own app, which ask for consent through the same fake.
+  authorize(context) { this.consent.asked = context.scopes; return super.authorize(context); }
   async fetch(url, options) {
     this.calls.push({ url, options });
     if (url.endsWith('/revoke')) return this.revokeHandler?.(options.body) || new Response('', { status: 200 });
     if (url.endsWith('/introspect')) {
       const account = options.body.get('token').split('-')[2];
       return this.inspectHandler?.(account, options.body) || json({ active: true, sub: account === 'work' ? '1002' : '1001', username: account + '-seller',
-        scope: this.scopes ?? this.asked.join(' '), client_id: this.clientId, exp: Math.floor(Date.now() / 1000) + 7200, token_type: 'Bearer', aud: EBAY_API, iss: EBAY_API + '/identity' });
+        scope: this.scopes ?? this.consent.asked.join(' '), client_id: this.clientId, exp: Math.floor(Date.now() / 1000) + 7200, token_type: 'Bearer', aud: EBAY_API, iss: EBAY_API + '/identity' });
     }
     if (url.endsWith('/token')) {
       const exchange = options.body.get('grant_type') === 'authorization_code';

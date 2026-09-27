@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 24;
+export const SCHEMA_VERSION = 25;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -8,7 +8,52 @@ export const STEPS = {
   // A grant is told apart by its name and its method; no provider or tags are kept about it.
   23: 'DROP TABLE grant_tags; ALTER TABLE grants DROP COLUMN provider;',
   24: migrateGoogleConnections,
+  25: holdAppsAsTheirOwnKind,
 };
+
+// An OAuth app becomes a holding of its own kind, and a connection says which app it was made through. SQLite
+// changes a CHECK only by making the table again: the children of holdings move to new tables first, so dropping
+// the old ones never cascades into data. Nothing else refers to requests.
+function holdAppsAsTheirOwnKind(store) {
+  store.db.exec(`
+    CREATE TABLE holdings_next (
+      id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('grant','object','app')), name TEXT NOT NULL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    INSERT INTO holdings_next SELECT id, holder_id, kind, name, created_at, updated_at FROM holdings;
+    CREATE TABLE grants_next (
+      holding_id TEXT PRIMARY KEY REFERENCES holdings_next(id) ON DELETE CASCADE,
+      method TEXT NOT NULL CHECK(method IN ('given','authorized','delegated')),
+      connector TEXT, app_id TEXT, subject TEXT, status TEXT NOT NULL DEFAULT 'usable' CHECK(status IN ('usable','reconnect_required','disconnecting')),
+      generation INTEGER NOT NULL DEFAULT 1, size INTEGER NOT NULL DEFAULT 0, state BLOB
+    );
+    INSERT INTO grants_next (holding_id, method, connector, subject, status, generation, size, state)
+      SELECT holding_id, method, connector, subject, status, generation, size, state FROM grants;
+    CREATE TABLE objects_next (holding_id TEXT PRIMARY KEY REFERENCES holdings_next(id) ON DELETE CASCADE, size INTEGER NOT NULL DEFAULT 0, type TEXT);
+    INSERT INTO objects_next SELECT holding_id, size, type FROM objects;
+    CREATE TABLE apps (
+      holding_id TEXT PRIMARY KEY REFERENCES holdings_next(id) ON DELETE CASCADE,
+      connector TEXT NOT NULL, client_id TEXT NOT NULL, secret BLOB NOT NULL
+    );
+    DROP TABLE grants; DROP TABLE objects; DROP TABLE holdings;
+    ALTER TABLE holdings_next RENAME TO holdings; ALTER TABLE grants_next RENAME TO grants; ALTER TABLE objects_next RENAME TO objects;
+    CREATE INDEX holdings_holder ON holdings(holder_id, kind, name);
+    CREATE UNIQUE INDEX holdings_object_name ON holdings(holder_id, name) WHERE kind='object';
+    CREATE UNIQUE INDEX holdings_app_name ON holdings(holder_id, name) WHERE kind='app';
+    CREATE INDEX grants_app ON grants(app_id) WHERE app_id IS NOT NULL;
+    CREATE TABLE requests_next (
+      id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,
+      kind TEXT NOT NULL CHECK(kind IN ('actor','store','connect','app')), input TEXT NOT NULL,
+      purpose TEXT NOT NULL, steps TEXT NOT NULL, code TEXT, attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, result TEXT, reason TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','denied','cancelled')),
+      created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    );
+    INSERT INTO requests_next SELECT id, from_id, to_id, kind, input, purpose, steps, code, attempts, progress, result, reason, status, created_at, expires_at FROM requests;
+    DROP TABLE requests; ALTER TABLE requests_next RENAME TO requests;
+    CREATE INDEX requests_from ON requests(from_id, created_at);
+    CREATE INDEX requests_to ON requests(to_id, created_at);
+  `);
+}
 
 // Gmail (one connector per read range) and Google Cloud were Google connections under fixed scopes. Now there is
 // one Google connection, asking for the scopes the holder chose, and naming the account by its address. Each old
@@ -88,7 +133,7 @@ export const SCHEMA = `
   CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);
   CREATE TABLE requests (
     id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,
-    kind TEXT NOT NULL CHECK(kind IN ('actor','store','connect')), input TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('actor','store','connect','app')), input TEXT NOT NULL,
     purpose TEXT NOT NULL, steps TEXT NOT NULL, code TEXT, attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, result TEXT, reason TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','denied','cancelled')),
     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
@@ -96,18 +141,25 @@ export const SCHEMA = `
   CREATE INDEX requests_from ON requests(from_id, created_at);
   CREATE INDEX requests_to ON requests(to_id, created_at);
   CREATE TABLE holdings (
-    id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('grant','object')), name TEXT NOT NULL,
+    id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('grant','object','app')), name TEXT NOT NULL,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   );
   CREATE INDEX holdings_holder ON holdings(holder_id, kind, name);
   CREATE UNIQUE INDEX holdings_object_name ON holdings(holder_id, name) WHERE kind='object';
+  CREATE UNIQUE INDEX holdings_app_name ON holdings(holder_id, name) WHERE kind='app';
   CREATE TABLE grants (
     holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE,
     method TEXT NOT NULL CHECK(method IN ('given','authorized','delegated')),
-    connector TEXT, subject TEXT, status TEXT NOT NULL DEFAULT 'usable' CHECK(status IN ('usable','reconnect_required','disconnecting')),
+    connector TEXT, app_id TEXT, subject TEXT, status TEXT NOT NULL DEFAULT 'usable' CHECK(status IN ('usable','reconnect_required','disconnecting')),
     generation INTEGER NOT NULL DEFAULT 1, size INTEGER NOT NULL DEFAULT 0, state BLOB
   );
+  CREATE INDEX grants_app ON grants(app_id) WHERE app_id IS NOT NULL;
   CREATE TABLE objects (holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE, size INTEGER NOT NULL DEFAULT 0, type TEXT);
+  -- An OAuth app someone holds: which service it is for, its client ID, and its sealed secret (and eBay's RuName).
+  CREATE TABLE apps (
+    holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE,
+    connector TEXT NOT NULL, client_id TEXT NOT NULL, secret BLOB NOT NULL
+  );
   CREATE TABLE records (
     id TEXT PRIMARY KEY, at TEXT NOT NULL, actor_id TEXT NOT NULL, action TEXT NOT NULL,
     object_type TEXT NOT NULL, object_id TEXT NOT NULL, detail TEXT NOT NULL

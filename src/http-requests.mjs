@@ -11,11 +11,14 @@ export function requestDefinition(value) {
 export function requestView({ requests, connectors, principals, settings, grants }, row, origin, { events = false, code = false } = {}) {
   const value = requests.summary(row, { includeEvents: events, includeCode: code });
   const from = principals.get(row.from_id);
-  const connector = value.kind === 'connect' && connectors.ids().includes(value.input.connector) ? connectors.describe(value.input.connector) : undefined;
+  const connector = ['connect', 'app'].includes(value.kind) && connectors.ids().includes(value.input.connector) ? connectors.describe(value.input.connector) : undefined;
+  // The app a connection will be made through, by the name its holder gave it.
+  const app = value.kind === 'connect' && value.input.app ? grants.apps.get(value.input.app) : undefined;
   const target = connector && value.input.connection_id ? grants.held(row.to_id, value.input.connection_id) : undefined;
   const back = row.to_id ? settings.returnUrlFor(row.to_id) : undefined;
   const verification_uri = back ? back + (back.includes('?') ? '&' : '?') + 'foundation_request=' + row.id : origin + '/requests/' + row.id;
   return { ...value, requester_name: from?.name ?? value.input.name ?? '', verification_uri,
     ...(connector ? { connector, ...(value.input.connection_id ? { connection: target ? grants.view(target) : null } : {}) } : {}),
+    ...(value.kind === 'connect' ? { app: app ? { id: app.id, name: app.name, foundation: false } : value.input.app ? null : { id: 'foundation', name: 'Foundationのアプリ', foundation: true } } : {}),
     ...(value.kind === 'store' ? { store: value.input.fields } : {}) };
 }

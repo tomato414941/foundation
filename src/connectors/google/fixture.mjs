@@ -7,9 +7,10 @@ import { json } from '../../../test/helpers.mjs';
 export class FakeGoogle extends GoogleClient {
   constructor() {
     super({ clientId: 'test-google-client', clientSecret: 'test-google-secret' }, { fetcher: async (url, options) => this.fetch(url, options) });
-    this.calls = []; this.exchanges = 0; this.refreshes = 0; this.scopes = null; this.asked = []; this.granted = new Map();
+    this.calls = []; this.exchanges = 0; this.refreshes = 0; this.scopes = null; this.consent = { asked: [] }; this.granted = new Map();
   }
-  authorize(context) { this.asked = context.scopes; return super.authorize(context); }
+  // Shared with the copies made for someone's own app, which ask for consent through the same fake.
+  authorize(context) { this.consent.asked = context.scopes; return super.authorize(context); }
   account(code) { return code.replace(/-(readonly|metadata|read-send)$/, ''); }
   async fetch(url, options) {
     this.calls.push({ url: String(url), options });
@@ -20,7 +21,7 @@ export class FakeGoogle extends GoogleClient {
       if (exchange) this.exchanges++; else this.refreshes++;
       const handled = await (exchange ? this.exchangeHandler?.(params) : this.refreshHandler?.(params));
       if (handled) return handled;
-      if (exchange) this.granted.set(code, this.scopes ?? this.asked.join(' '));
+      if (exchange) this.granted.set(code, this.scopes ?? this.consent.asked.join(' '));
       const scope = this.scopes ?? this.granted.get(code) ?? 'openid';
       return json({ access_token: 'google-access-' + code + (this.refreshes && !exchange ? '-' + this.refreshes : ''), refresh_token: 'refresh-' + code,
         expires_in: 3600, scope, token_type: 'Bearer' });

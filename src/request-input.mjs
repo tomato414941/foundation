@@ -5,12 +5,17 @@ import { scopeList } from './scopes.mjs';
 export function requestInput(kind, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'invalid_request', '依頼内容を指定してください。');
   // Connecting: which service, optionally which existing connection, and the service's scopes the AI needs.
-  // With client, the holder's own OAuth app: the given grants that hold its ID and secret (and eBay's RuName).
-  if (kind === 'connect' && Object.keys(input).every(key => ['connector', 'connection_id', 'scopes', 'client'].includes(key)) && typeof input.connector === 'string'
+  // app: the app to connect through - one the holder may use, by id - or Foundation's own when left out.
+  if (kind === 'connect' && Object.keys(input).every(key => ['connector', 'connection_id', 'scopes', 'app'].includes(key)) && typeof input.connector === 'string'
     && (input.connection_id === undefined || (typeof input.connection_id === 'string' && /^[0-9a-f-]{36}$/.test(input.connection_id)))) {
-    const scopes = scopeList(input.scopes), client = clientReference(input.client);
+    const scopes = scopeList(input.scopes), app = appReference(input.app);
     return { connector: input.connector, ...(input.connection_id === undefined ? {} : { connection_id: input.connection_id }), ...(scopes.length ? { scopes } : {}),
-      ...(client ? { client } : {}) };
+      ...(app ? { app } : {}) };
+  }
+  // Registering an app: the holder types its ID and secret on the request page; the asker learns only its id.
+  if (kind === 'app' && Object.keys(input).every(key => ['connector', 'name'].includes(key)) && typeof input.connector === 'string'
+    && (input.name === undefined || typeof input.name === 'string')) {
+    return { connector: input.connector, ...(input.name === undefined ? {} : { name: holdingName(input.name) }) };
   }
   // Asking to act for someone: only what the asker wants to be called.
   if (kind === 'actor' && Object.keys(input).every(key => key === 'name') && typeof input.name === 'string' && input.name.trim() && input.name.length <= 80) return { name: input.name.trim() };
@@ -22,6 +27,7 @@ export function requestResult(kind, result) {
   if (kind === 'connect' && typeof result?.connection_id === 'string' && result.connection_id) return { connection_id: result.connection_id };
   if (kind === 'store' && Array.isArray(result?.names) && result.names.length) return { names: result.names.map(holdingName), replaced: (result.replaced ?? []).map(holdingName) };
   if (kind === 'actor' && typeof result?.principal_id === 'string' && result.principal_id) return { principal_id: result.principal_id };
+  if (kind === 'app' && typeof result?.app_id === 'string' && result.app_id) return { app_id: result.app_id };
   throw new Error('The result does not match the request');
 }
 
@@ -55,12 +61,9 @@ export function declaration(input) {
   return { name: holdingName(input.name), readable: input.readable === true, label: input.label.trim(), site: site?.href ?? '', multiline: input.multiline === true, replace: input.replace === true };
 }
 
-// Which given grants hold an OAuth app's ID and secret: each by the holder's name for it, or its id.
-export function clientReference(value) {
-  if (value === undefined || value === null) return undefined;
-  const reference = key => typeof value[key] === 'string' && value[key].length > 0 && value[key].length <= 200 && !/[\x00-\x1f\x7f]/.test(value[key]);
-  if (typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['client_id', 'client_secret', 'ru_name'].includes(key))
-    || !reference('client_id') || !reference('client_secret') || (value.ru_name !== undefined && !reference('ru_name')))
-    fail(400, 'invalid_client', 'アプリはclient_idとclient_secret（eBayはru_nameも）を、預けたものの名前で指定してください。');
-  return { client_id: value.client_id, client_secret: value.client_secret, ...(value.ru_name === undefined ? {} : { ru_name: value.ru_name }) };
+// Which app to connect through: Foundation's own ('foundation') or a held one, by id.
+export function appReference(value) {
+  if (value === undefined || value === null || value === 'foundation') return undefined;
+  if (typeof value !== 'string' || !/^[0-9a-f-]{36}$/.test(value)) fail(400, 'invalid_app', 'アプリはIDで指定してください（Foundationのアプリは foundation）。');
+  return value;
 }

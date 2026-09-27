@@ -5,18 +5,19 @@ import { json } from '../../../test/helpers.mjs';
 export class FakeGitHub extends GitHubClient {
   constructor() {
     super({ clientId: 'Iv1.fixture', clientSecret: 'fixture-secret' }, { fetcher: (url, options) => this.fetch(url, options) });
-    this.calls = []; this.revoked = new Set(); this.scopes = null; this.asked = []; this.granted = new Map();
+    this.calls = []; this.revoked = new Set(); this.scopes = null; this.consent = { asked: [] }; this.granted = new Map();
     this.users = { octo: { id: 1001, login: 'octo' }, other: { id: 2002, login: 'other' } };
   }
   // Like GitHub, grants what the consent screen asked for unless a test says otherwise.
-  authorize(context) { this.asked = context.scopes; return super.authorize(context); }
+  // Shared with the copies made for someone's own app, which ask for consent through the same fake.
+  authorize(context) { this.consent.asked = context.scopes; return super.authorize(context); }
   async fetch(url, options) {
     this.calls.push({ url, options });
     if (url === 'https://github.com/login/oauth/access_token' && options.method === 'POST') {
       const body = JSON.parse(options.body);
       if (body.client_secret !== 'fixture-secret' || !body.code_verifier) return json({ error: 'incorrect_client_credentials' });
       if (!this.users[body.code]) return json({ error: 'bad_verification_code' });
-      const scope = this.scopes ?? this.asked.join(', ');
+      const scope = this.scopes ?? this.consent.asked.join(', ');
       this.granted.set('gho_' + body.code, scope);
       return json({ access_token: 'gho_' + body.code, token_type: 'bearer', scope });
     }

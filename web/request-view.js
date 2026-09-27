@@ -2,6 +2,7 @@ const kinds = {
   actor: { done: 'アクセスを許可しました', denied: 'アクセスを許可しませんでした', href: '/principals', label: 'アクセス管理' },
   connect: { done: '接続しました', denied: '接続しませんでした', href: '/connections', label: '接続' },
   store: { done: '登録しました', denied: '登録しませんでした', href: '/credentials', label: '認証情報' },
+  app: { done: 'OAuthアプリを登録しました', denied: '登録しませんでした', href: '/connections', label: '接続' },
 };
 
 export function requestResultView(row, error = '') {

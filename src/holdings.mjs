@@ -3,8 +3,8 @@ import { fail } from './errors.mjs';
 // What it is to be held. Every holding has an id, a holder, a name the holder calls it by, lines drawn onto it
 // and records about it; it is listed, renamed and removed by the same rules. What a holding is - a grant the
 // holder made to Foundation, or an object the holder placed here - lives in a table of its own kind, keyed by
-// this id, and what is done with it belongs to that kind (grants.mjs, objects.mjs).
-export const KINDS = ['grant', 'object'];
+// this id, and what is done with it belongs to that kind (grants.mjs, objects.mjs, apps.mjs).
+export const KINDS = ['grant', 'object', 'app'];
 const COMMON = 'id,holder_id,kind,name,created_at,updated_at';
 const now = () => new Date().toISOString();
 

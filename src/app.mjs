@@ -10,13 +10,13 @@ import { Sessions, OAuthFlows } from './sessions.mjs';
 import { RequestActions } from './request-actions.mjs';
 import { requestDefinition, requestView } from './http-requests.mjs';
 import { fail, HttpError, nameValue } from './errors.mjs';
-import { Connectors, withOwnClient } from './connectors.mjs';
+import { Connectors } from './connectors.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { Requests } from './requests.mjs';
 import { Settings } from './settings.mjs';
 import { Records } from './records.mjs';
 import { scopeList, requestedScopes } from './scopes.mjs';
-import { clientReference } from './request-input.mjs';
+import { appReference } from './request-input.mjs';
 import { Grants, GRANT_MAX, GRANT_COUNT_MAX, GRANT_TOTAL_MAX, METHODS } from './grants.mjs';
 import { Objects, OBJECT_MAX } from './objects.mjs';
 import { Holdings, KINDS } from './holdings.mjs';
@@ -249,8 +249,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           if (!flow) fail(400, 'invalid_state', '接続をやり直してください。');
           if (flow.kind || flow.connector !== oauthCallback[1]) fail(400, 'invalid_state', '接続をやり直してください。');
           const connector = connectors.get(flow.connector);
-          // The same app that asked for consent exchanges the code: Foundation's, or the holder's own.
-          const active = flow.client ? withOwnClient(connector, grants.ownClient(user.id, flow.client).credentials) : connector;
+          // The same app that asked for consent exchanges the code: Foundation's, or one someone holds.
+          const active = flow.app ? grants.apps.connector(grants.apps.at(flow.app)) : connector;
           if (flow.requestId) {
             destination = '/requests/' + flow.requestId;
             requests.forTo(flow.requestId, user.id, true);
@@ -277,11 +277,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
                 grants.nextState(result);
                 const { credentials, ...kept } = result;
                 const state = flows.begin(session.id, { kind: 'confirmation', connector: connector.id, requestId: flow.requestId,
-                  requestedBy: flow.requestedBy, previous: flow.previous, result: kept, changes, scopes: flow.scopes ?? null, client: flow.client ?? null });
+                  requestedBy: flow.requestedBy, previous: flow.previous, result: kept, changes, scopes: flow.scopes ?? null, app: flow.app ?? null });
                 if (flow.requestId) requests.record(flow.requestId, 'connect_review', { connector: connector.id });
                 return { confirmation: state };
               }
-              requestActions.connect(flow.requestId, user.id, connector.id, result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, client: flow.client ?? null });
+              requestActions.connect(flow.requestId, user.id, connector.id, result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, app: flow.app ?? null });
             });
           if (completion?.confirmation) return redirect(connectionLocation('review') + '&state=' + completion.confirmation);
           return redirect(connectionLocation('connected'));
@@ -479,6 +479,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
             const input = await inputBody();
             return send(200, { request: viewRequest(requestActions.approve(id, subject.id, input.confirmation_code), origin) });
           }
+          if (pending.kind === 'app') {
+            if (!session) fail(401, 'login_required', 'ログインしてください。');
+            const input = await inputBody();
+            return send(200, { registered: true, ...requestActions.registerApp(id, subject.id, input) });
+          }
           fail(409, 'wrong_kind', 'この依頼はページから完了するものではありません。');
         }
         if (action === '/deny' && method === 'POST') {
@@ -624,10 +629,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       // Held things. Each has an id, and that is how lines, records and the calls below refer to it. A name is how
       // the holder calls one: a way to find or place a thing, not its identity. A grant says what it is and how it
       // came to be held; an object says its size and type. Neither says anything of its content here.
-      const shown = row => row.kind === 'grant' ? grants.view(grants.get(row.id), { owner: subject.id === row.holder_id }) : objects.view(objects.get(row.id));
+      const apps = grants.apps;
+      const shown = row => row.kind === 'grant' ? grants.view(grants.get(row.id), { owner: subject.id === row.holder_id })
+        : row.kind === 'app' ? apps.view(apps.get(row.id), { owner: subject.id === row.holder_id }) : objects.view(objects.get(row.id));
       const holdingKind = required => {
         const kind = url.searchParams.get('kind') ?? undefined;
-        if ((required && kind === undefined) || (kind !== undefined && !KINDS.includes(kind))) fail(400, 'invalid_kind', 'kind は grant / object のいずれかです。');
+        if ((required && kind === undefined) || (kind !== undefined && !KINDS.includes(kind))) fail(400, 'invalid_kind', 'kind は grant / object / app のいずれかです。');
         return kind;
       };
       if (path === '/v1/holdings' && method === 'GET') {
@@ -647,13 +654,26 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           rows.push(...grants.list(holderId, { method: wanted, prefix }).filter(row => subject.id === holderId || row.status !== 'disconnecting'));
         }
         if (kinds.includes('object')) { if (kind === 'object') objects.check(); if (objects.enabled) { limit('objects', 60); rows.push(...objects.list(holderId, prefix ?? '')); } }
-        return send(200, { holdings: rows.map(shown) });
+        if (kinds.includes('app')) rows.push(...apps.list(holderId), ...apps.lent(holderId));
+        // Apps are listed with those Foundation offers, which anyone may connect through and nobody holds.
+        return send(200, { holdings: [...rows.map(shown), ...(kind === 'app' ? apps.offeredAll() : [])] });
       }
       // Placing a thing by name: the holder's name for it. The same name, same kind, replaces what is there.
       // A grant placed this way is given: the holder hands the bytes over. Connections are made at /v1/connections.
       if (path === '/v1/holdings' && method === 'PUT') {
         const kind = holdingKind(true), name = url.searchParams.get('name');
         if (name === null) fail(400, 'invalid_name', '名前を指定してください。');
+        // An app is registered by its holder, as values: which service, its client ID and secret. The same name
+        // again gives it new values, and its connections go on through it.
+        if (kind === 'app') {
+          const existing = apps.find(holderId, name);
+          permit('write', 'app', existing?.id);
+          limit('apps', 30);
+          const input = await inputBody();
+          const saved = apps.put(holderId, { ...input, name });
+          records.write(subject.id, existing ? 'app.changed' : 'app.created', 'holding', saved.id, { connector: saved.connector });
+          return send(200, { holding: shown(saved) });
+        }
         const existing = kind === 'grant' ? grants.find(holderId, name) : (objects.check(), objects.find(holderId, name));
         permit('write', kind, existing?.id);
         limit(kind === 'grant' ? 'grants' : 'objects', kind === 'grant' ? 120 : 60);
@@ -682,6 +702,36 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       if (holdingRoute) {
         const held = holdings.at(holdingRoute[1]), part = holdingRoute[2];
         const grant = held.kind === 'grant' ? grants.get(held.id) : null, given = grant?.method === 'given';
+        // An app: renamed by its holder; given new values by its holder or an editor; removed by its holder, which stops
+        // the connections made through it. Its secret is never read back, by anyone.
+        if (held.kind === 'app') {
+          const app = apps.at(held.id);
+          if (part) fail(405, 'method_not_allowed', 'アプリの秘密は読み出せません。');
+          if (method === 'PATCH') {
+            const input = await inputBody();
+            const { name, ...values } = input;
+            let row = app;
+            if (name !== undefined) { permit('rename', 'app', app.id, app.holder_id); row = apps.rename(row, name); }
+            if (Object.keys(values).length) {
+              permit('write', 'app', app.id, app.holder_id);
+              row = apps.write(row, values);
+              records.write(subject.id, 'app.changed', 'holding', app.id, { connector: app.connector });
+            }
+            return send(200, { holding: shown(row) });
+          }
+          if (method === 'DELETE') {
+            permit('remove', 'app', app.id, app.holder_id);
+            const input = await inputBody(), dependents = apps.dependents(app);
+            // Removing an app stops what was connected through it; that is said, and agreed to, first.
+            if (dependents.length && input.confirm !== true) {
+              fail(409, 'app_in_use', `このアプリで作った接続が${dependents.length}件あります。削除すると、つなぎ直すまで使えなくなります。`,
+                { connections: dependents.length, yours: dependents.filter(row => row.holder_id === app.holder_id).map(row => ({ id: row.id, name: row.name })) });
+            }
+            apps.remove(app);
+            records.write(subject.id, 'app.removed', 'holding', app.id, { connector: app.connector, connections_stopped: dependents.length });
+            return send(200, { ok: true, connections_stopped: dependents.length });
+          }
+        }
         if (!part && method === 'GET') {
           permit('read', held.kind, held.id, held.holder_id);
           return send(200, { holding: { ...shown(held), ...(held.holder_id === subject.id ? { lines: principals.linesOnto(held.id) } : {}) } });
@@ -775,6 +825,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       if (path === '/v1/overview' && method === 'GET') {
         permit('read', 'overview');
         return send(200, { user: { id: subject.id, email: user?.email ?? null }, principal: self, grants: grants.list(holderId).map(row => grants.view(row, { owner: true })),
+          apps: [...grants.apps.list(holderId).map(row => grants.apps.view(row, { owner: true })), ...grants.apps.lent(holderId).map(row => grants.apps.view(row)), ...grants.apps.offeredAll()],
           principals: principals.owned(holderId), actors: principals.actorsOf(holderId), requests: requests.listTo(holderId, 'pending').map(row => viewRequest(row, origin)),
           functions: FUNCTIONS, connectors: connectors.ids().map(id => connectors.describe(id)), settings: settings.get(holderId) ?? null });
       }
@@ -805,7 +856,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         if (flow.requestId) requests.forTo(flow.requestId, holderId, true);
         if (method === 'GET') return send(200, { connection: grants.view(previous, { owner: true }), changes: flow.changes });
         still();
-        const saved = requestActions.connect(flow.requestId, holderId, flow.connector, flow.result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, client: flow.client ?? null });
+        const saved = requestActions.connect(flow.requestId, holderId, flow.connector, flow.result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, app: flow.app ?? null });
         flows.drop(session.id, state);
         return send(200, { connection: grants.view(saved, { owner: true }) });
       }
@@ -826,16 +877,21 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const previous = target === undefined ? undefined : grants.reconnection(holderId, connector.id, target);
         if (!session) fail(401, 'login_required', 'ログインしてください。');
         // The scopes and the app are the request's when there is one: what the holder saw is what happens.
-        // Reconnecting keeps the app the connection was made with unless another is named.
+        // Reconnecting keeps the app the connection was made through unless another is named.
         const previousState = previous ? grants.state(previous) : null;
         const asked = request ? requests.input(request).scopes ?? [] : scopeList(input.scopes);
         const scopes = requestedScopes(connector, asked, previousState);
-        const reference = request ? requests.input(request).client : clientReference(input.client);
-        const client = reference ? grants.ownClient(holderId, reference) : previousState?.client ? grants.ownClient(holderId, previousState.client) : null;
-        const active = client ? withOwnClient(connector, client.credentials) : connector;
+        const named = request ? requests.input(request).app : appReference(input.app);
+        const appId = named !== undefined ? named : previous?.app_id ?? null;
+        const app = appId ? grants.apps.at(appId) : null;
+        if (app) {
+          permit('use', 'app', app.id, app.holder_id);
+          if (app.connector !== connector.id) fail(400, 'app_mismatch', 'このアプリは別の接続先のものです。');
+        }
+        const active = app ? grants.apps.connector(app) : connector;
         still();
         const flow = { connector: connector.id, requestedBy, requestId: request?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null, scopes,
-          client: client?.ids ?? null };
+          app: app?.id ?? null };
         // A role is made by the holder in the service's own console, then named here; what Foundation must remember
         // meanwhile (the external ID it chose) travels in the flow, and the flow lasts until the answer is right.
         if (connector.authorization.kind === 'role') {
@@ -924,14 +980,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
     } catch (error) {
       if (!(error instanceof HttpError)) console.error(new Date().toISOString(), req.method, req.url, error);
       if (progressRequestId && error instanceof HttpError && !res.headersSent) requests.record(progressRequestId, 'connect_failed', { code: error.code, message: error.message });
-      if (!res.headersSent) send(error instanceof HttpError ? error.status : 500, { error: { code: error instanceof HttpError ? error.code : 'internal_error', message: error instanceof HttpError ? error.message : '処理を完了できませんでした。' } });
+      if (!res.headersSent) send(error instanceof HttpError ? error.status : 500, { error: { code: error instanceof HttpError ? error.code : 'internal_error', message: error instanceof HttpError ? error.message : '処理を完了できませんでした。',
+        ...(error instanceof HttpError && error.extra ? error.extra : {}) } });
       else res.end();
     }
   });
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   return {
-    server, store, holdings, grants, objects, principals, sessions, flows, requests, requestActions, settings, records,
+    server, store, holdings, grants, apps: grants.apps, objects, principals, sessions, flows, requests, requestActions, settings, records,
     async close() {
       clearInterval(timer);
       if (server.listening) await new Promise((resolve) => { server.close(resolve); server.closeIdleConnections(); });

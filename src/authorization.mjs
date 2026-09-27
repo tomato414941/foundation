@@ -24,6 +24,10 @@ const RULES = {
   grant: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], content: [SELF, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')],
     remove: [SELF, ACTOR], rename: [SELF], share: [SELF], connect: [SELF], disconnect: [SELF], browser: ['connect', 'disconnect'] },
   object: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')], remove: [SELF, ACTOR], rename: [SELF], link: [SELF, ACTOR], share: [SELF] },
+  // An app is seen by whoever acts for its holder, used to connect by its holder and anyone on a line to it, and given
+  // new values by its holder or an editor. Its secret is never read: there is no action for it.
+  app: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], use: [SELF, LINE('viewer'), LINE('editor')],
+    write: [SELF, LINE('editor')], remove: [SELF], rename: [SELF], share: [SELF] },
   usage: { read: [SELF, ACTOR, OWNER] },
   delivery: { create: [SELF, ACTOR] },
   function: { list: [SELF, ACTOR], invoke: [SELF, ACTOR] },

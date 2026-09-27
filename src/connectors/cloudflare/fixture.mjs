@@ -6,10 +6,11 @@ export class FakeCloudflare extends CloudflareClient {
     super({ clientId: 'test-cloudflare-client', clientSecret: 'test-cloudflare-secret' }, { fetcher: (url, options) => this.fetch(url, options) });
     this.calls = []; this.exchanges = 0; this.refreshes = 0; this.revoked = new Set();
     // Like Cloudflare, grants what the consent screen asked for unless a test says otherwise.
-    this.scopes = null; this.asked = [];
+    this.scopes = null; this.consent = { asked: [] };
     this.listedAccounts = [{ id: 'a'.repeat(32), name: 'Personal account' }];
   }
-  authorize(context) { this.asked = context.scopes; return super.authorize(context); }
+  // Shared with the copies made for someone's own app, which ask for consent through the same fake.
+  authorize(context) { this.consent.asked = context.scopes; return super.authorize(context); }
   async fetch(url, options) {
     this.calls.push({ url, options });
     if (url.startsWith(CLOUDFLARE_API + '/accounts?')) {
@@ -37,7 +38,7 @@ export class FakeCloudflare extends CloudflareClient {
       if (!exchange && this.revoked.has(options.body.get('refresh_token'))) return json({ error: 'invalid_grant' }, 400);
       const suffix = this.refreshes + (this.exchanges > 1 ? '-authorization-' + this.exchanges : '');
       return json({ access_token: 'cf-access-' + account + '-' + suffix, refresh_token: 'cf-refresh-' + account + '-' + suffix,
-        token_type: 'Bearer', expires_in: 3600, scope: this.scopes ?? this.asked.join(' ') });
+        token_type: 'Bearer', expires_in: 3600, scope: this.scopes ?? this.consent.asked.join(' ') });
     }
     throw new Error('Unexpected Cloudflare fixture request');
   }

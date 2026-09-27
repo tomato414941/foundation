@@ -78,7 +78,7 @@ test('今日動いている形からの移行は、秘密を渡された委任�
 
   const store = new Store(path, KEY);
   t.after(() => store.close());
-  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 24);
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 25);
   const { grants } = resources(store, [{ id: 'google.oauth', available: false, variables: [], authorization: { kind: 'oauth', begin() {}, complete() {} }, obtain() {} }]);
   const doc = grants.find(USER_A, 'doc');
   assert.equal(doc.method, 'given');
