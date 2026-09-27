@@ -350,6 +350,8 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 .home-card:hover { border-color: #b9c8bf; }
 .home-card h2 { margin: 0 0 4px; font-size: 17px; }
 .home-card p { margin: 0; font-size: 14px; color: var(--muted, #62716a); }
+.home-heading { align-items: center; }
+.start-message { margin: 22px 0 16px; line-height: 1.75; resize: none; overflow-wrap: anywhere; }
 
 .checkbox { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 15px; }
 .checkbox input { width: 18px; height: 18px; }

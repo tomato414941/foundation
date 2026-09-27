@@ -2,6 +2,32 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, USER_A } from './helpers.mjs';
 
+test('未ログインのAIに接続先・接続手順・利用可能なAPIを案内する', async t => {
+  const f = await fixture(t, { login: false });
+  const page = await f.request('/start', { anonymous: true, headers: { 'sec-fetch-site': 'cross-site' } });
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-type'), /^text\/plain; charset=utf-8$/);
+  assert.ok(page.text.includes('Server: ' + f.base));
+  assert.ok(page.text.includes('foundation connect ' + f.base));
+  assert.match(page.text, /npm install -g @tomato414941\/foundation/);
+  assert.match(page.text, /request\.verification_uri and request\.confirmation_code/);
+  assert.match(page.text, /foundation api GET \/v1\/principals\/me/);
+  assert.match(page.text, /GET \/v1\/holdings/);
+  assert.match(page.text, /gmail\.readonly/);
+});
+
+test('公開用の接続先を案内し、HEADでも案内の形式を確認できる', async t => {
+  const origin = 'https://foundation.example.test';
+  const f = await fixture(t, { login: false, publicOrigin: origin });
+  const page = await f.request('/start', { anonymous: true });
+  assert.equal(page.status, 200);
+  assert.ok(page.text.includes('foundation connect ' + origin));
+  const head = await f.request('/start', { method: 'HEAD', anonymous: true });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('content-type'), page.headers.get('content-type'));
+  assert.equal(head.text, '');
+});
+
 test('認証情報と接続の画面をそれぞれのURLから開く', async t => {
   const f = await fixture(t);
   for (const path of ['/credentials', '/connections']) {

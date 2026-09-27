@@ -210,6 +210,31 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         return res.end(content);
       }
       if (path === '/health' && method === 'GET') return send(200, { status: 'ok' });
+      if (path === '/start' && (method === 'GET' || method === 'HEAD')) {
+        const instructions = [
+          'CONNECT THIS AI TO FOUNDATION', '',
+          'Server: ' + origin,
+          'This is a public guide, not an access key or an approval. The owner approves access separately.', '',
+          'This quick start is for an AI that can run shell commands. Do the setup in your own environment.',
+          'If you cannot run commands, tell the owner; do not ask them to paste credentials into chat.', '',
+          '1. Use the existing foundation CLI, or install it with Node.js 24 or later:',
+          '   npm install -g @tomato414941/foundation',
+          '2. Connect with a name the owner will recognize:',
+          '   foundation connect ' + origin + ' --name "<your name>"',
+          '   An existing approved key is reused. If already approved, skip to step 4.',
+          '3. Show the owner the returned request.verification_uri and request.confirmation_code.',
+          '   Ask them to open the URL, check your name and permissions, and approve with the code.',
+          '   Never approve on their behalf. Do not print or copy the private key file into the conversation.',
+          '4. After they approve, check:',
+          '   foundation api GET /v1/principals/me',
+          '   Confirm acts_for contains the intended owner; if it does not, approval is not complete.',
+          '5. Read the API guide below and continue with the owner\'s actual task.',
+          '   Connecting alone does not authorize unrelated changes or access to external services.', '',
+          guide(connectors.ids().map(id => connectors.describe(id))),
+        ].join('\n');
+        res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        return res.end(method === 'HEAD' ? undefined : instructions);
+      }
       if (path === '/login/callback' && method === 'GET') return redirect('/?login=invalid');
       const oauthCallback = path.match(/^\/oauth\/([a-z][a-z0-9.-]{0,63})\/callback$/);
       if (oauthCallback && method === 'GET') {
