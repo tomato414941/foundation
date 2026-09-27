@@ -45,8 +45,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-functions-ui-') as key_dir, 
     page.get_by_role('button', name='ログイン', exact=True).click()
     page.wait_for_load_state('networkidle')
     page.get_by_label('確認コード', exact=True).fill(approval['confirmation_code'])
-    page.get_by_role('button', name='承認する', exact=True).click()
-    expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
+    page.get_by_role('button', name='許可する', exact=True).click()
+    expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
 
     # The page describes the operations available through the same API catalog.
     page.goto(args.base + '/functions', wait_until='networkidle')

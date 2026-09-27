@@ -489,10 +489,17 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         records.write(subject.id, 'principal.created', 'principal', made.id, { alias: alias ?? null, actor: input.actor === true, credential: issued ? 'key' : null });
         return send(201, { principal: { ...made, alias: alias ?? null, credentials: principals.credentials(made.id), acts_for: principals.actsFor(made.id) }, ...(issued ? { token: issued.token, credential: { id: issued.id, kind: 'key' } } : {}) });
       }
-      const principalRoute = path.match(/^\/v1\/principals\/([A-Za-z0-9-]{1,64})(?:\/(credentials|settings)(?:\/([a-f0-9-]{36}))?)?$/);
+      const principalRoute = path.match(/^\/v1\/principals\/([A-Za-z0-9-]{1,64})(?:\/(credentials|settings|access)(?:\/([a-f0-9-]{36}))?)?$/);
       if (principalRoute) {
         const id = principalRoute[1] === 'me' ? subject.id : principalRoute[1], part = principalRoute[2], credentialId = principalRoute[3];
         const target = principals.at(id);
+        if (part === 'access' && !credentialId && method === 'DELETE') {
+          permit('relate', 'principal', holderId);
+          if (id === holderId) fail(400, 'invalid_principal', '自分自身のアクセスは取り消せません。');
+          await inputBody();
+          requestActions.revokeAccess(holderId, id);
+          return send(200, { ok: true });
+        }
         if (!part) {
           if (method === 'GET') { permit('read', 'principal', id); return send(200, { principal: { ...target, credentials: principals.credentials(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id) } }); }
           if (method === 'PATCH') { permit('rename', 'principal', id); const input = await inputBody(); return send(200, { principal: principals.rename(id, nameValue(input.name)) }); }

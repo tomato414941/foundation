@@ -49,13 +49,14 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.wait_for_load_state('networkidle')
     # The key is approved first; the registration is a separate request with no code.
     page.get_by_label('確認コード', exact=True).fill(approval['confirmation_code'])
-    page.get_by_role('button', name='承認する', exact=True).click()
-    expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
+    page.get_by_role('button', name='許可する', exact=True).click()
+    expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
+    owner_id = cli('api', 'GET', '/v1/principals/me')['acts_for'][0]['id']
     request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'connector': 'openrouter.oauth'}, 'purpose': '接続したキーの情報を確認。モデルは実行しません。'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='OpenRouterで接続', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']
-    expect(page.get_by_role('button', name='承認する', exact=True)).to_have_count(0)
+    expect(page.get_by_role('button', name='許可する', exact=True)).to_have_count(0)
     review(page)
     authorization = {'deny': True, 'code': 'personal'}
 
@@ -96,13 +97,13 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
 
     page.goto(args.base + '/principals', wait_until='networkidle')
     runtime = page.locator('.agent-row').filter(has_text='laptop のAI')
-    runtime.get_by_role('button', name='失効', exact=True).click()
+    runtime.get_by_role('button', name='取り消す', exact=True).click()
     dialog = page.get_by_role('dialog')
     expect(dialog.get_by_text('取得済みの外部サービスの認証情報は、接続先で失効させてください。', exact=True)).to_be_visible()
     review(page)
-    dialog.get_by_role('button', name='失効させる', exact=True).click()
+    dialog.get_by_role('button', name='許可を取り消す', exact=True).click()
     expect(dialog).not_to_be_visible()
-    cli('api', 'GET', '/v1/holdings?kind=grant', success=False)
+    cli('api', 'GET', '/v1/holdings?kind=grant&as=' + owner_id, success=False)
 
     page.goto(args.base + '/connections', wait_until='networkidle')
     section.get_by_role('button', name='接続を解除', exact=True).click()

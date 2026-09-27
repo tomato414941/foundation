@@ -105,6 +105,15 @@ export class RequestActions {
     this.changed(row);
     return row;
   }
+  revokeAccess(holderId, fromId) {
+    const cancelled = this.store.transaction(() => {
+      const removed = this.principals.revokeAccess(fromId, holderId);
+      const rows = this.requests.cancelFrom(fromId, 'access_revoked', holderId);
+      if (removed || rows.length) this.records.write(holderId, 'access.revoked', 'principal', fromId, {});
+      return rows;
+    });
+    for (const row of cancelled) this.changed(row);
+  }
   // A principal removed by its owner takes its open requests with it. Whoever it acted for keeps everything.
   removePrincipal(ownerId, id) {
     const cancelled = this.store.transaction(() => {

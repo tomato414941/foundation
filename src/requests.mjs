@@ -80,8 +80,8 @@ export class Requests {
     this.db.prepare("UPDATE requests SET status='cancelled' WHERE id=?").run(row.id);
     return this.get(id);
   }
-  cancelFrom(fromId, reason = 'requester_revoked') {
-    const rows = this.db.prepare("SELECT * FROM requests WHERE from_id=? AND status='pending' AND expires_at>?").all(fromId, Date.now());
+  cancelFrom(fromId, reason = 'requester_revoked', toId = null) {
+    const rows = this.db.prepare("SELECT * FROM requests WHERE from_id=? AND status='pending' AND expires_at>? AND (? IS NULL OR to_id=?)").all(fromId, Date.now(), toId, toId);
     for (const row of rows) {
       this.db.prepare("UPDATE requests SET status='cancelled',reason=? WHERE id=?").run(reason, row.id);
       this.record(row.id, 'cancelled', { code: reason });

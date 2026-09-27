@@ -144,12 +144,34 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .approval-symbol svg { width: 25px; height: 25px; }
 .approval-eyebrow { color: var(--muted); font-size: 14px; }
 .approval-card h1 { font-size: 25px; letter-spacing: -.035em; }
+.access-account { margin-bottom: 24px; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+.access-approval .approval-heading { align-items: flex-start; }
+.access-requester { display: block; overflow-wrap: anywhere; }
+.access-question { display: block; font-size: 17px; font-weight: 500; margin-top: 6px; }
+.access-summary { margin: 24px 0; }
+.access-permissions { margin-top: 12px; font-size: 14px; }
+.access-permissions ul { padding-left: 20px; margin: 12px 0; }
+.access-permissions p { margin: 8px 0; color: var(--muted); }
+.request-message { margin: 20px 0; padding: 0 0 0 16px; border-left: 2px solid var(--line); overflow-wrap: anywhere; white-space: pre-wrap; }
+.request-message .muted { font-size: 14px; margin-bottom: 6px; }
+.integration-entry { display: flex; justify-content: flex-end; margin-top: 24px; }
+.principal-heading { display: flex; align-items: center; gap: 8px; padding-right: 32px; }
+.principal-heading h2 { padding-right: 0; overflow-wrap: anywhere; }
+.principal-heading .icon-button { flex-shrink: 0; }
+.principal-keys { margin-top: 24px; }
+.principal-keys .section-heading { padding: 0 0 12px; }
+.principal-keys h3 { font-size: 16px; }
+.credential-list { list-style: none; padding: 0; margin: 0; }
+.credential-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.credential-list p { font-size: 14px; color: var(--muted); }
+.principal-delete { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); }
 .approval-facts { margin: 26px 0; }
 .approval-facts dd { overflow-wrap: anywhere; }
-.approval-facts > div { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-top: 16px; }
+.approval-facts > div { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 24px; }
+.approval-facts dt { font-size: 15px; font-weight: 600; color: var(--ink); }
 #confirmation-code { font: 600 20px/1.4 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
-.ai-guidance { margin: 18px 0 20px; }
-.ai-guidance h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin-bottom: 10px; }
+.ai-guidance { margin: 24px 0 20px; }
+.ai-guidance h3 { font-size: 15px; color: var(--ink); font-weight: 600; margin-bottom: 8px; }
 .guidance-steps li { font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
 .guidance-steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
 .guidance-steps li { counter-increment: step; position: relative; padding-left: 36px; }

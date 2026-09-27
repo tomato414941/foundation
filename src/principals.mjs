@@ -66,6 +66,13 @@ export class Principals {
   unrelate(subjectId, relation, objectType, objectId) {
     return this.db.prepare('DELETE FROM relations WHERE subject_id=? AND relation=? AND object_type=? AND object_id=?').run(subjectId, relation, objectType, objectId).changes > 0;
   }
+  // Stop this principal's access to one holder, including direct sharing. Its identity and keys remain.
+  revokeAccess(subjectId, holderId) {
+    return this.db.prepare(`DELETE FROM relations WHERE subject_id=? AND (
+      (relation='actor' AND object_type='principal' AND object_id=?) OR
+      (relation IN ('viewer','editor') AND object_type='holding' AND object_id IN (SELECT id FROM holdings WHERE holder_id=?)))`)
+      .run(subjectId, holderId, holderId).changes;
+  }
   has(subjectId, relation, objectType, objectId) {
     return this.db.prepare('SELECT scope FROM relations WHERE subject_id=? AND relation=? AND object_type=? AND object_id=?').get(subjectId, relation, objectType, objectId);
   }
@@ -97,7 +104,7 @@ export class Principals {
   // Whom this principal acts for, and who acts for it.
   actsFor(id) { return this.db.prepare("SELECT object_id AS id, scope FROM relations WHERE subject_id=? AND relation='actor' AND object_type='principal'").all(id); }
   actorsOf(id) {
-    return this.db.prepare(`SELECT p.id, p.name, p.created_at, r.scope FROM relations r JOIN principals p ON p.id=r.subject_id
+    return this.db.prepare(`SELECT p.id, p.name, p.created_at, r.created_at AS approved_at, r.scope FROM relations r JOIN principals p ON p.id=r.subject_id
       WHERE r.relation='actor' AND r.object_type='principal' AND r.object_id=? ORDER BY r.created_at`).all(id).map(row => ({ ...row, credentials: this.credentials(row.id) }));
   }
 

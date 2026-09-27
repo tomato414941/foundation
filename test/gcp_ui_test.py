@@ -51,8 +51,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
     page.get_by_role('button', name='ログイン', exact=True).click()
     page.wait_for_load_state('networkidle')
     page.get_by_label('確認コード', exact=True).fill(approval['confirmation_code'])
-    page.get_by_role('button', name='承認する', exact=True).click()
-    expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
+    page.get_by_role('button', name='許可する', exact=True).click()
+    expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
 
     request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'connector': 'gcp.oauth'}, 'purpose': 'Google Cloudの設定を確認します。リソースの作成や変更はしません。'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')

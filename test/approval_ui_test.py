@@ -51,33 +51,39 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     callback = context.new_page()
     callback.goto(args.base + '/login/confirm?' + urlencode({'return_to': urlparse(request['verification_uri']).path}) + '#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
     callback.get_by_role('button', name='ログイン', exact=True).click()
-    expect(callback.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
+    expect(callback.get_by_role('heading', level=1)).to_contain_text('laptop のAI')
     assert callback.url == request['verification_uri']
     callback.close()
     page.bring_to_front()
     page.evaluate('window.dispatchEvent(new Event("focus"))')
-    expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', level=1)).to_contain_text('laptop のAI')
+    expect(page.get_by_text('owner@example.test', exact=True)).to_be_visible()
+    expect(page.get_by_text('今後追加するものも含め、取り消すまで有効です。', exact=True)).to_be_visible()
+    page.get_by_text('許可の詳細', exact=True).click()
+    expect(page.get_by_text('認証情報とオブジェクトの取得・追加・更新・削除', exact=True)).to_be_visible()
+    page.get_by_text('許可の詳細', exact=True).click()
     expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
     assert request['confirmation_code'] not in page.content()
     expect(page.get_by_role('button', name='Googleで接続', exact=True)).to_have_count(0)
-    expect(page.get_by_role('button', name='承認する', exact=True)).to_be_disabled()
+    expect(page.get_by_role('button', name='許可する', exact=True)).to_be_disabled()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
         if width in [1280, 390]:
             page.screenshot(path=str(shots / ('request-desktop.png' if width == 1280 else 'request-mobile.png')), full_page=True)
     page.get_by_label('確認コード', exact=True).fill('0000-0000')
-    page.get_by_role('button', name='承認する', exact=True).click()
+    page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('alert')).to_contain_text('確認コードを入力してください')
     assert cli('api', 'GET', '/v1/principals/me')['acts_for'] == []
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'].lower())
-    page.get_by_role('button', name='承認する', exact=True).click()
-    expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
-    expect(page.get_by_role('link', name='アクセスキー', exact=True)).to_have_attribute('href', '/principals')
-    page.get_by_role('link', name='アクセスキー', exact=True).click()
+    page.get_by_role('button', name='許可する', exact=True).click()
+    expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
+    expect(page.get_by_role('link', name='アクセス管理', exact=True)).to_have_attribute('href', '/principals')
+    page.get_by_role('link', name='アクセス管理', exact=True).click()
     expect(page).to_have_url(args.base + '/principals')
-    expect(page.get_by_role('heading', name='アクセスキー', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='アクセス管理', exact=True)).to_be_visible()
     review(page)
+    owner_id = cli('api', 'GET', '/v1/principals/me')['acts_for'][0]['id']
     assert cli('api', 'GET', '/v1/holdings?kind=grant')['holdings'] == []
 
     # 2. The approved key asks for a registration, on its own link and without a code.
@@ -121,31 +127,31 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', '--inputs', json.dumps([{'name': connection}]), '--', 'node', '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
-    # 3. Revoking the key stops it; its open registration link says so.
+    # 3. Revoking access stops use of this account and cancels its open registration requests.
     pending = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'connector': 'gmail.metadata'}, 'purpose': '件名を確認する'}))['request']
     page.goto(args.base + '/principals', wait_until='networkidle')
     runtime = page.locator('.agent-row').filter(has_text='laptop のAI')
-    runtime.get_by_role('button', name='失効', exact=True).click()
-    page.get_by_role('dialog').get_by_role('button', name='失効させる', exact=True).click()
+    runtime.get_by_role('button', name='取り消す', exact=True).click()
+    page.get_by_role('dialog').get_by_role('button', name='許可を取り消す', exact=True).click()
     expect(page.get_by_role('dialog')).not_to_be_visible()
-    cli('api', 'GET', '/v1/holdings?kind=grant', success=False)
+    cli('api', 'GET', '/v1/holdings?kind=grant&as=' + owner_id, success=False)
     page.goto(pending['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='依頼は取り消されました', exact=True)).to_be_visible()
 
-    # 4. The same key file is now unknown again: it may ask to be approved, and the owner may refuse.
+    # 4. The same identity and key remain: it may ask for access again, and the owner may refuse.
     request = cli('connect', '--name', 'laptop のAI')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_role('heading', name='このアクセスキーを承認しますか？', exact=True)).to_be_visible()
-    page.get_by_role('button', name='承認しない', exact=True).click()
-    expect(page.get_by_role('heading', name='承認しませんでした', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', level=1)).to_contain_text('laptop のAI')
+    page.get_by_role('button', name='許可しない', exact=True).click()
+    expect(page.get_by_role('heading', name='アクセスを許可しませんでした', exact=True)).to_be_visible()
     assert cli('api', 'GET', '/v1/principals/me')['acts_for'] == []
 
     # 5. Approved again, the key asks for a metadata-only Gmail credential: another kind, its own registration.
     request = cli('connect', '--name', 'laptop のAI')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
-    page.get_by_role('button', name='承認する', exact=True).click()
-    expect(page.get_by_role('heading', name='承認しました', exact=True)).to_be_visible()
+    page.get_by_role('button', name='許可する', exact=True).click()
+    expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
     request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'connector': 'gmail.metadata'}, 'purpose': '件名を確認する'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.locator('.approval-facts')).to_contain_text('件名・差出人などの読み取り')

@@ -7,7 +7,7 @@ const isLoginConfirmation = location.pathname === '/login/confirm';
 const loginLink = isLoginConfirmation ? new URLSearchParams(location.hash.slice(1)) : null;
 const loginReturn = isLoginConfirmation ? new URL(location.href).searchParams.get('return_to') || '/' : '/';
 if (isLoginConfirmation) history.replaceState(null, '', '/login/confirm');
-// A request page is either what an approved key asks for (/requests/…) or a new key asking to be approved (/keys/…).
+// Each request has its own URL, including a counterpart asking for access.
 const requestId = location.pathname.match(/^\/requests\/([A-Za-z0-9_-]{43})$/)?.[1];
 const requestApi = requestId && '/v1/requests/' + requestId;
 // Opened through another product's single-use link: there is no Foundation login, only that one request.
@@ -142,7 +142,7 @@ const icon = (name) => {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
 const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true">F</span>Foundation</a>';
-const nav = `<nav class="page-nav">${[['/credentials', 'credentials', '認証情報'], ['/connections', 'connections', '接続'], ['/objects', 'objects', 'オブジェクト'], ['/principals', 'principals', 'アクセスキー'], ['/functions', 'functions', 'ファンクション']]
+const nav = `<nav class="page-nav">${[['/credentials', 'credentials', '認証情報'], ['/connections', 'connections', '接続'], ['/objects', 'objects', 'オブジェクト'], ['/principals', 'principals', 'アクセス管理'], ['/functions', 'functions', 'ファンクション']]
   .map(([href, name, label]) => `<a href="${href}"${name === page ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
 function toast(text) {
@@ -330,7 +330,7 @@ function render() {
   if (page === 'account') {
     // The account itself: who this is, and the few things done to it rather than in it.
     app.innerHTML = shell(`<header class="page-heading"><h1>アカウント</h1><p>${esc(state.user.email)}</p></header>
-      <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">データのダウンロード</h2><p>認証情報の値、接続とアクセスキーの一覧が JSON ファイルで入ります。オブジェクトは入りません。</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ダウンロード</a></div></section>
+      <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">データのダウンロード</h2><p>認証情報の値、接続と登録した相手の一覧が JSON ファイルで入ります。オブジェクトは入りません。</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ダウンロード</a></div></section>
       <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">開発者</h2></div></div><a class="button secondary" href="/principals#apps">アプリの登録</a></div></section>`);
     return;
   }
@@ -344,20 +344,19 @@ function render() {
         ${card('/credentials', '認証情報', `${kept.length} 件`)}
         ${card('/connections', '接続', `${connections.length} 件${connections.length ? '（' + connections.map(item => item.label).join('、') + '）' : ''}`)}
         ${card('/objects', 'オブジェクト', space === undefined ? '…' : space?.available ? `${space.usage.count} 件・${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}` : '使えません')}
-        ${card('/principals', 'アクセスキー', keys.length ? `承認済み ${keys.length} 件${lastUsed ? '・最終利用 ' + new Date(lastUsed).toLocaleString('ja-JP') : ''}` : 'ありません')}
+        ${card('/principals', 'アクセス管理', keys.length ? `許可済み ${keys.length} 件${lastUsed ? '・最終利用 ' + new Date(lastUsed).toLocaleString('ja-JP') : ''}` : 'ありません')}
         ${card('/functions', 'ファンクション', `${state.functions?.length || 0} 種類`)}
       </div>`);
     return;
   }
   if (page === 'principals') {
-    // Those made here by this person: the keys that act for them, and the apps that hold users of their own.
-    const actors = state.actors || [], apps = (state.principals || []).filter(item => !actors.some(actor => actor.id === item.id));
+    const actors = state.actors || [], others = (state.principals || []).filter(item => !actors.some(actor => actor.id === item.id));
     const used = item => { const at = item.credentials.map(c => c.last_used_at).filter(Boolean).sort().at(-1); return at ? '最終利用 ' + esc(new Date(at).toLocaleString('ja-JP')) : 'まだ利用されていません'; };
-    app.innerHTML = shell(`<header class="page-heading"><h1>アクセスキー</h1></header>
-      <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><div><h2 id="access-title">承認済み</h2></div></div><button class="button secondary" data-action="add-key">${icon('plus')} アクセスキーを追加</button></div>
-      ${actors.length ? `<div class="agent-list">${actors.map(key => `<article class="agent-row"><div class="agent-name"><h3>${esc(key.name)}</h3><p>${used(key)}</p></div><div class="agent-permissions"><span class="muted">承認 ${esc(new Date(key.created_at).toLocaleDateString('ja-JP'))}</span></div><div class="agent-actions"><button class="text-button" data-action="rename-key" data-id="${esc(key.id)}">名前を変更</button><button class="text-button danger" data-action="remove-key" data-id="${esc(key.id)}">失効</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>承認したアクセスキーはありません。AIが依頼を作ると、承認後にここに登録されます。</p></div>'}</section>
-      <section class="resource-section" id="apps" aria-labelledby="integration-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="integration-title">アプリ</h2></div></div><button class="button secondary" data-action="add-integration">${icon('plus')} アプリを登録</button></div>
-      ${apps.length ? `<div class="agent-list">${apps.map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${used(item)}</p></div><div class="agent-permissions"><span class="muted">${esc(String(item.credentials.length))} 件のキー</span></div><div class="agent-actions"><button class="text-button danger" data-action="remove-integration" data-id="${esc(item.id)}">削除</button></div></article>`).join('')}</div>` : '<div class="access-empty"><p>登録したアプリはありません。</p></div>'}</section>`);
+    const row = (item, allowed) => `<article class="agent-row access-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${used(item)}</p></div><div class="agent-permissions"><span class="muted">${allowed ? '許可 ' + esc(new Date(item.approved_at).toLocaleDateString('ja-JP')) : '全体へのアクセス許可なし'}</span></div><div class="agent-actions"><button class="text-button" data-action="principal-details" data-id="${esc(item.id)}">詳細</button>${allowed ? `<button class="text-button danger" data-action="revoke-access" data-id="${esc(item.id)}">取り消す</button>` : ''}</div></article>`;
+    app.innerHTML = shell(`<header class="page-heading"><h1>アクセス管理</h1></header>
+      <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><h2 id="access-title">登録した相手</h2></div><button class="button secondary" data-action="add-key">${icon('plus')} 追加</button></div>
+      ${actors.length || others.length ? `<div class="agent-list">${actors.map(item => row(item, true)).join('')}${others.map(item => row(item, false)).join('')}</div>` : '<div class="access-empty"><p>登録した相手はいません。</p></div>'}</section>
+      <div class="integration-entry" id="apps"><button class="text-button" data-action="add-integration">アプリを登録</button></div>`);
     return;
   }
   if (page === 'connections') {
@@ -414,7 +413,7 @@ const siteLink = value => { try { const url = new URL(value); return `<a href="$
 const stepsBlock = steps => steps?.length ? `<section class="ai-guidance"><h3>手順</h3><ol class="guidance-steps">${steps.map(step => `<li>${esc(step)}</li>`).join('')}</ol></section>` : '';
 const codeComplete = form => /^[0-9a-fA-F]{8}$/.test((form.elements.confirmationCode?.value || '').replace(/[^0-9a-zA-Z]/g, ''));
 function codeField(enabled = true) {
-  return `<label for="confirmation-code">確認コード</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="0000-0000" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">AIとの会話に表示されたコードを入力してください。心当たりのない依頼は承認しないでください。</p>`;
+  return `<label for="confirmation-code">確認コード</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="0000-0000" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">依頼元から受け取ったコードを入力してください。</p>`;
 }
 // The link of a request shows the one screen its kind calls for:
 //   approve   a key not yet approved: the owner accepts it with the code. Nothing is registered here.
@@ -431,7 +430,7 @@ function renderRequest() {
     app.innerHTML = shell('<section class="approval-card approval-result"><span class="approval-symbol">' + icon(view.completed ? 'check' : 'lock') + '</span><h1>' + view.title + '</h1>' + (subject ? '<p>' + esc(subject) + '</p>' : '') + (view.description ? '<p>' + esc(view.description) + '</p>' : '') + link + '</section>');
     return;
   }
-  const expiry = `<p class="request-expiry">この依頼は ${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで有効です。</p>`;
+  const expiry = `<p class="request-expiry">${row.kind === 'actor' ? '承認期限：' : '依頼の期限：'}${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))}</p>`;
   if (row.kind === 'actor') { renderApproval(row, shell, expiry); return; }
   if (row.kind === 'store') { renderStore(row, shell, expiry); return; }
   if (!row.connector) {
@@ -464,7 +463,7 @@ function renderStore(row, shell, expiry) {
     ${stepsBlock(row.steps)}
     ${site ? `<a class="button secondary full setup-link" href="${esc(site)}" target="_blank" rel="noopener noreferrer"><span>${esc(new URL(site).host)} を開く ↗</span></a>` : ''}
     <form id="store-request-form">${asked.map((one, at) => `<div class="declared-field"><label for="stored-name-${at}">保存名</label><input id="stored-name-${at}" name="name-${at}" value="${esc(one.name)}" aria-describedby="stored-label-${at}" required maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">${one.replace ? `<p class="permission-note replace-note" id="replace-note-${at}" data-name="${esc(one.name)}">既存の「${esc(one.name)}」を置き換えます。</p>` : ''}<label id="stored-label-${at}" for="stored-${at}">${esc(one.label)}</label>${field(one, at)}</div>`).join('')}
-    <p class="permission-note">接続先での有効性や権限は確認しません。登録した値は、承認済みのAIが利用できます。</p>
+    <p class="permission-note">接続先での有効性や権限は確認しません。登録した値は、アクセスを許可した相手が利用できます。</p>
     <p class="form-error" role="alert"></p>
     <button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>
     <button class="text-button full" type="button" data-action="deny-request">登録しない</button>${expiry}</section>`);
@@ -481,13 +480,16 @@ function renderStore(row, shell, expiry) {
     await refresh(); toast('登録しました。');
   }, app);
 }
-// Approving a key: only who is asking, what the key will reach, and the code.
+const accessSummary = '保存データの取得・変更・削除と、接続済みサービスの利用を許可します。';
+const accessDetails = () => `<details class="access-permissions"><summary>許可の詳細</summary><ul><li>認証情報とオブジェクトの取得・追加・更新・削除</li><li>接続済みサービスの利用とファンクションの実行</li></ul><p>接続の追加・解除、他の相手への権限付与、アカウント管理は含みません。</p><p>依頼元の名前は自己申告です。</p></details>`;
+// The counterpart is what is accepted, not the individual credential it carries.
 function renderApproval(row, shell, expiry) {
-  app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">新しいアクセスキー</p><h1>このアクセスキーを承認しますか？</h1></div></header>
-    <dl class="approval-facts"><div><dt>依頼元</dt><dd>${esc(row.requester_name)}</dd></div><div><dt>使えるもの</dt><dd>保存した値・オブジェクト・接続したサービスのすべて</dd></div></dl>
+  app.innerHTML = shell(`<section class="approval-card access-approval"><p class="access-account">${esc(state.user.email)}</p><header class="approval-heading"><span class="approval-symbol">${icon('device')}</span><h1><span class="access-requester">${esc(row.requester_name)}</span><span class="access-question">にアクセスを許可しますか？</span></h1></header>
+    <div class="access-summary"><p>${accessSummary}</p><p class="permission-note">今後追加するものも含め、取り消すまで有効です。</p>${accessDetails()}</div>
+    ${row.purpose ? `<blockquote class="request-message"><p class="muted">依頼元からのメッセージ</p><p>${esc(row.purpose)}</p></blockquote>` : ''}
     <form id="access-request-form">${codeField()}
     <p class="form-error" role="alert"></p>
-    <button class="button primary full" type="submit" disabled>承認する ${icon('arrow')}</button><button class="text-button full" type="button" data-action="deny-request">承認しない</button></form>${expiry}</section>`);
+    <button class="button primary full" type="submit" disabled>許可する ${icon('arrow')}</button><button class="text-button full" type="button" data-action="deny-request">許可しない</button></form>${expiry}</section>`);
   const form = document.querySelector('#access-request-form'), submit = form.querySelector('[type="submit"]');
   const update = () => { submit.disabled = !codeComplete(form); };
   form.addEventListener('change', update); form.addEventListener('input', update);
@@ -526,7 +528,7 @@ function connect(connectorId, connectionId) {
   if (!connector?.available) return;
   const name = serviceName(connector);
   openDialog(`<h2 id="dialog-title">${esc(name)}に${connectionId ? '接続し直す' : '接続'}</h2><p>${esc(connector.intro)}</p><form>
-    <p class="permission-note">${esc(connector.access.name)}。${esc(connector.access.restrictions)} ${connectionId ? '' : '接続すると、承認済みのアクセスキーから使えるようになります。'}${connector.can_revoke ? '' : `停止は${esc(name)}で行います。`}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(connector.label)} ${icon('arrow')}</button></form>`);
+    <p class="permission-note">${esc(connector.access.name)}。${esc(connector.access.restrictions)} ${connectionId ? '' : '接続すると、アクセスを許可した相手が利用できます。'}${connector.can_revoke ? '' : `停止は${esc(name)}で行います。`}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(connector.label)} ${icon('arrow')}</button></form>`);
   bindForm(async () => {
     const result = await api('/v1/connections', { method: 'POST', data: { connector: connector.id, ...(connectionId ? { connection_id: connectionId } : {}) } });
     if (result.complete) { completeByHand(connector, result); return; }
@@ -564,16 +566,39 @@ function disconnect(connection) {
   });
 }
 function addKey() {
-  openDialog(`<h2 id="dialog-title">アクセスキーを追加</h2><p>AIの実行環境に置くキーを発行します。承認済みのキーと同じく、あなたが預けているものをすべて使えます。</p><form><label for="agent-name">アクセスキーの名前</label><input id="agent-name" name="name" placeholder="laptop など" required maxlength="80" autocomplete="off"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">アクセスキーを発行</button></form>`);
+  openDialog(`<h2 id="dialog-title">アクセスを許可する相手を追加</h2><p>${accessSummary}</p><form><label for="agent-name">名前</label><input id="agent-name" name="name" placeholder="laptop など" required maxlength="80" autocomplete="off"><p class="permission-note">今後追加するものも含め、取り消すまで有効です。</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加してキーを発行</button></form>`);
   bindForm(async (form) => {
     const result = await api('/v1/principals', { method: 'POST', data: { name: form.get('name'), actor: true, credential: 'key' } });
     await refresh(); if (!state) return;
     openDialog(`<h2 id="dialog-title">${esc(result.principal.name)} のアクセスキー</h2><p>キーは一度だけ表示します。AIを動かす環境の秘密情報として保管してください。</p><label for="agent-token">アクセスキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button><label for="api-url">接続先</label><input id="api-url" readonly value="${esc(location.origin)}/v1"><p class="permission-note">キーを会話や共有ファイルに貼り付けないでください。</p><button class="button primary full" data-action="close-dialog">閉じる</button>`);
   });
 }
-function renameKey(key) {
-  openDialog(`<h2 id="dialog-title">アクセスキーの名前を変更</h2><form><label for="agent-name">名前</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off" value="${esc(key.name)}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
-  bindForm(async (form) => { await api(`/v1/principals/${key.id}`, { method: 'PATCH', data: { name: form.get('name') } }); closeDialog(); await refresh(); toast('名前を変更しました。'); });
+const principalById = id => (state.actors || []).find(item => item.id === id) || (state.principals || []).find(item => item.id === id);
+async function principalDetails(id) {
+  const owned = (state.principals || []).some(item => item.id === id);
+  const item = owned ? (await api(`/v1/principals/${id}`)).principal : principalById(id);
+  if (!item) return;
+  const allowed = owned ? item.acts_for.some(holder => holder.id === state.user.id) : true;
+  const keys = item.credentials.filter(key => key.kind === 'key');
+  openDialog(`<div class="principal-heading"><h2 id="dialog-title">${esc(item.name)}</h2>${owned ? `<button class="icon-button" data-action="rename-principal" data-id="${esc(id)}" aria-label="名前を編集" title="名前を編集">${icon('edit')}</button>` : ''}</div>
+    <p>${allowed ? 'アクセス許可済み' : '全体へのアクセス許可なし'}</p>
+    ${allowed ? `<p>${accessSummary.replace('許可します。', '許可しています。')}</p>${accessDetails()}` : ''}
+    ${owned ? `<section class="principal-keys"><div class="section-heading"><h3>アクセスキー</h3><button class="text-button" data-action="issue-key" data-id="${esc(id)}">キーを発行</button></div>
+      ${keys.length ? `<ul class="credential-list">${keys.map(key => `<li><div><code>${esc(key.id.slice(0, 8))}</code><p>発行 ${esc(new Date(key.created_at).toLocaleString('ja-JP'))}</p></div><button class="text-button danger" data-action="revoke-key" data-id="${esc(id)}" data-credential="${esc(key.id)}">失効</button></li>`).join('')}</ul>` : '<p class="muted">キーはありません。</p>'}</section>
+      <div class="principal-delete"><button class="text-button danger" data-action="remove-principal" data-id="${esc(id)}">登録を削除</button></div>` : ''}`);
+}
+function renamePrincipal(item) {
+  openDialog(`<h2 id="dialog-title">名前を変更</h2><form><label for="agent-name">名前</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off" value="${esc(item.name)}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
+  bindForm(async (form) => { await api(`/v1/principals/${item.id}`, { method: 'PATCH', data: { name: form.get('name') } }); await refresh(); await principalDetails(item.id); });
+}
+async function issueKey(item) {
+  const result = await api(`/v1/principals/${item.id}/credentials`, { method: 'POST', data: { kind: 'key' } });
+  await refresh();
+  openDialog(`<h2 id="dialog-title">${esc(item.name)} のアクセスキー</h2><p>キーは一度だけ表示します。</p><label for="agent-token">アクセスキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button><button class="button primary full" data-action="principal-details" data-id="${esc(item.id)}">完了</button>`);
+}
+function revokeKey(item, credential) {
+  openDialog(`<h2 id="dialog-title">このキーを失効させますか？</h2><p>${esc(item.name)} · ${esc(credential.slice(0, 8))}</p><form><p>このキーは使えなくなります。他のキーとアクセス許可は残ります。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="principal-details" data-id="${esc(item.id)}">キャンセル</button><button type="submit" class="button destructive">失効させる</button></div></form>`);
+  bindForm(async () => { await api(`/v1/principals/${item.id}/credentials/${credential}`, { method: 'DELETE', data: {} }); await refresh(); await principalDetails(item.id); toast('キーを失効させました。'); });
 }
 function addIntegration() {
   openDialog(`<h2 id="dialog-title">アプリを登録</h2><form>
@@ -595,13 +620,13 @@ function addIntegration() {
       <button class="button primary full" data-action="close-dialog">閉じる</button>`);
   });
 }
-function removeIntegration(item) {
-  openDialog(`<h2 id="dialog-title">アプリの登録を削除しますか？</h2><p>${esc(item.name)}</p><form><p>アプリキーは使えなくなります。利用者のアカウントとアクセスキーは残ります。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">削除する</button></div></form>`);
-  bindForm(async () => { await api(`/v1/principals/${item.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('アプリの登録を削除しました。'); });
+function removePrincipal(item) {
+  openDialog(`<h2 id="dialog-title">登録を削除しますか？</h2><p>${esc(item.name)}</p><form><p>この相手の全キーと、この相手自身の保存データを削除します。他のアカウントへのアクセスも失われます。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="principal-details" data-id="${esc(item.id)}">キャンセル</button><button type="submit" class="button destructive">削除する</button></div></form>`);
+  bindForm(async () => { await api(`/v1/principals/${item.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('登録を削除しました。'); });
 }
-function removeKey(key) {
-  openDialog(`<h2 id="dialog-title">アクセスキーを失効させますか？</h2><p>${esc(key.name)}</p><form><p>このキーからFoundationを利用できなくなります。</p><p class="permission-note">取得済みの外部サービスの認証情報は、接続先で失効させてください。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">失効させる</button></div></form>`);
-  bindForm(async () => { await api(`/v1/principals/${key.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('アクセスキーを失効させました。'); });
+function revokeAccess(item) {
+  openDialog(`<h2 id="dialog-title">アクセス許可を取り消しますか？</h2><p>${esc(item.name)}</p><form><p>あなたのデータへのアクセスを停止し、あなた宛ての未完了の依頼を取り消します。</p><p class="permission-note">取得済みの外部サービスの認証情報は、接続先で失効させてください。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">許可を取り消す</button></div></form>`);
+  bindForm(async () => { await api(`/v1/principals/${item.id}/access`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('アクセス許可を取り消しました。'); });
 }
 // One confirmation, for removing something a key kept. Nothing here can be undone, and nothing reaches the service.
 // The name and the way it reaches a command, changed without the value ever being handed back.
@@ -837,10 +862,13 @@ document.addEventListener('click', async (event) => {
     }
     if (action === 'edit-grant') editGrant(given().find(item => item.name === target.dataset.name), target);
     if (action === 'add-key') addKey();
-    if (action === 'remove-key') removeKey(state.actors.find((key) => key.id === id));
+    if (action === 'revoke-access') revokeAccess(principalById(id));
+    if (action === 'principal-details') await principalDetails(id);
+    if (action === 'issue-key') { target.disabled = true; await issueKey(principalById(id)); }
+    if (action === 'revoke-key') revokeKey(principalById(id), target.dataset.credential);
     if (action === 'add-integration') addIntegration();
-    if (action === 'remove-integration') removeIntegration(state.principals.find((item) => item.id === id));
-    if (action === 'rename-key') renameKey(state.actors.find((key) => key.id === id));
+    if (action === 'remove-principal') removePrincipal(principalById(id));
+    if (action === 'rename-principal') renamePrincipal(principalById(id));
     if (action === 'copy-token') {
       const token = document.querySelector('#agent-token');
       try { await navigator.clipboard.writeText(token.value); toast('キーをコピーしました。'); }
