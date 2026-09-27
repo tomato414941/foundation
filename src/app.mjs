@@ -45,7 +45,6 @@ const PRINCIPAL_ID = /^[A-Za-z0-9-]{1,64}$/;
 const grantTag = row => '"' + digest(JSON.stringify([row.id, row.name, row.size, row.updated_at])) + '"';
 
 function returnPath(value = '/') {
-  if (value === '/grants') return '/credentials';
   if (!PAGES.includes(value) && (typeof value !== 'string' || !REQUEST_PAGE.test(value))) fail(400, 'invalid_return', '接続リンクを開き直してください。');
   return value;
 }
@@ -198,7 +197,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       const setNamedCookie = (name, value, age, cookiePath = '/') => res.appendHeader('Set-Cookie', `${name}=${value}; HttpOnly; SameSite=${cookiePath === '/' ? 'Lax' : 'Strict'}; Path=${cookiePath}; Max-Age=${age}${external ? '; Secure' : ''}`);
       const setCookie = (value, age) => setNamedCookie('fdn_session', value, age);
       const loginToken = readCookie(req, 'fdn_login');
-      if (path === '/grants' && method === 'GET') return redirect('/credentials' + url.search);
       if ((STATIC.has(path) || REQUEST_PAGE.test(path)) && method === 'GET') {
         if (REQUEST_PAGE.test(path)) requests.record(path.slice('/requests/'.length), 'page_opened');
         // The page and its script are the same for everyone, so a browser keeps them and only asks whether
@@ -659,8 +657,28 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           if (held.kind === 'object') return send(200, { holding: shown(objects.rename(objects.get(held.id), input.name)) });
           return send(200, { holding: shown(grants.rename(grant, input.name)) });
         }
+        // Removing a connected grant disconnects it: Foundation stops obtaining from it and, when asked, asks the
+        // service to revoke what it granted. Removing always succeeds; the revocation's outcome is reported.
+        if (!part && method === 'DELETE' && grant && !given) {
+          permit('disconnect', 'grant', held.id, held.holder_id);
+          const input = await inputBody();
+          if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
+          const connector = connectors.get(grant.connector);
+          if (disconnects.has(grant.id)) fail(409, 'disconnect_in_progress', '登録を解除しています。');
+          disconnects.add(grant.id);
+          try {
+            const previous = grants.disconnect(held.holder_id, grant.id);
+            let revoked = null;
+            if (input.revoke && typeof connector.revoke === 'function') {
+              try { await connector.revoke(grants.context(previous).privateState); revoked = true; }
+              catch { revoked = false; }
+            }
+            grants.remove(previous);
+            records.write(subject.id, 'connection.removed', 'grant', grant.id, { revoked });
+            return send(200, { ok: true, service_revoked: revoked });
+          } finally { disconnects.delete(grant.id); }
+        }
         if (!part && method === 'DELETE') {
-          if (grant && !given) fail(405, 'method_not_allowed', '接続の解除は /v1/connections から行います。');
           permit('remove', held.kind, held.id, held.holder_id);
           await inputBody();
           if (held.kind === 'grant') grants.remove(held); else { await objects.remove(objects.get(held.id)); still(); }
@@ -736,13 +754,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           'content-disposition': `attachment; filename="foundation-${new Date().toISOString().slice(0, 10)}.json"` });
         return res.end(JSON.stringify(value, null, 2));
       }
-      // Connections: services Foundation connected itself. The holder sees everything about them; whoever acts
-      // for them sees what they need to use one. Making one starts the service's own login; removing one may also revoke there.
-      if (path === '/v1/connections' && method === 'GET') {
-        permit('list', 'grant');
-        return send(200, { connections: subject.id === holderId ? grants.connections(holderId).map(row => grants.view(row, { owner: true }))
-          : grants.connections(holderId).filter(row => row.status !== 'disconnecting').map(row => grants.view(row)) });
-      }
+      // Connecting: making a grant by the service's own consent (or, for a role, by the holder's paste). The grant
+      // it makes is a holding like any other: listed and removed at /v1/holdings.
       if (path === '/v1/connections/confirmation' && ['GET', 'POST', 'DELETE'].includes(method)) {
         permit('connect', 'grant');
         if (!session) fail(401, 'login_required', 'ログインしてください。');
@@ -808,29 +821,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           result => requestActions.connect(flow.requestId, holderId, connector.id, result, { requestedBy: flow.requestedBy, previous }));
         flows.drop(session.id, input.state);
         return send(200, { connection: grants.view(saved, { owner: true }) });
-      }
-      const connectionRoute = path.match(/^\/v1\/connections\/(.+)$/);
-      if (connectionRoute && method === 'DELETE') {
-        permit('disconnect', 'grant', decodeURIComponent(connectionRoute[1]));
-        const connection = grants.connection(holderId, decodeURIComponent(connectionRoute[1]));
-        const input = await inputBody();
-        if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
-        const connector = connectors.get(connection.connector);
-        const canRevoke = typeof connector.revoke === 'function';
-        if (disconnects.has(connection.id)) fail(409, 'disconnect_in_progress', '登録を解除しています。');
-        disconnects.add(connection.id);
-        try {
-          // Removing it here always succeeds; asking the service to revoke is an attempt whose outcome is reported.
-          const previous = grants.disconnect(holderId, connection.id);
-          let revoked = null;
-          if (input.revoke && canRevoke) {
-            try { await connector.revoke(grants.context(previous).privateState); revoked = true; }
-            catch { revoked = false; }
-          }
-          grants.remove(previous);
-          records.write(subject.id, 'connection.removed', 'grant', connection.id, { revoked });
-          return send(200, { ok: true, service_revoked: revoked });
-        } finally { disconnects.delete(connection.id); }
       }
       // What this holder is using, and what they may use. Lending has a cost, so both sides can see it.
       if (path === '/v1/usage' && method === 'GET') {

@@ -22,7 +22,7 @@ async function register(f, overrides = {}, agent = null) {
 }
 const approve = (f, row, overrides = {}) => f.request('/v1/requests/' + row.id + '/done', { method: 'POST', data: { confirmation_code: row.confirmation_code, ...overrides } });
 // Once approved, a machine names the person it acts for on every call, as the CLI does.
-const usable = (f, token) => f.request('/v1/connections', { token, anonymous: true, as: USER_A });
+const usable = (f, token) => f.request('/v1/holdings?kind=grant&method=authorized', { token, anonymous: true, as: USER_A });
 const cancel = (f, token) => f.request('/v1/principals/me', { method: 'DELETE', token, anonymous: true, data: {} });
 const rowStatus = (f, id) => f.app.store.db.prepare('SELECT status FROM requests WHERE id=?').get(id)?.status;
 
@@ -35,7 +35,7 @@ test('A new key asks only to be approved: no access before approval, the same pr
   assert.doesNotMatch(JSON.stringify(row), /fdn_|token_hash|refresh_token/);
   assert.equal((await f.request('/requests/' + row.id, { anonymous: true, headers: { 'sec-fetch-site': 'cross-site' } })).status, 200);
   assert.equal((await f.request('/v1/requests/' + row.id, { anonymous: true })).status, 401);
-  assert.deepEqual((await f.request('/v1/connections', { token, anonymous: true })).json.connections, [], 'a key nobody has accepted holds nothing but itself');
+  assert.deepEqual((await f.request('/v1/holdings?kind=grant&method=authorized', { token, anonymous: true })).json.holdings, [], 'a key nobody has accepted holds nothing but itself');
   assert.equal((await cancel(f, row.id)).status, 401);
   assert.equal((await cancel(f, key())).status, 401);
   assert.equal((await f.request('/v1/principals/me', { token, anonymous: true })).json.requests[0].id, row.id, 'a runtime may read its own request');
@@ -46,8 +46,8 @@ test('A new key asks only to be approved: no access before approval, the same pr
   assert.equal(approved.json.request.status, 'done');
   assert.doesNotMatch(approved.text, /fdn_|google-access|refresh_token|token_hash/);
   const listed = await usable(f, token);
-  assert.deepEqual(listed.json.connections.map(a => a.id), [saved.id]);
-  assert.deepEqual(listed.json.connections[0].outputs, ['GOOGLE_OAUTH_ACCESS_TOKEN', 'GMAIL_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT']);
+  assert.deepEqual(listed.json.holdings.map(a => a.id), [saved.id]);
+  assert.deepEqual(listed.json.holdings[0].outputs, ['GOOGLE_OAUTH_ACCESS_TOKEN', 'GMAIL_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT']);
   const delivered = await f.deliver(saved, { token, anonymous: true, as: USER_A });
   assert.equal(delivered.status, 200);
   assert.equal(delivered.json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal-readonly');
@@ -124,7 +124,7 @@ test('A registration request stays with its owner, completes by registering, and
   await f.callback(flow, 'second-metadata', { headers: { cookie: ownerCookie } });
   const done = (await f.request('/v1/requests/' + row.id, { headers: { cookie: ownerCookie } })).json.request;
   assert.equal(done.status, 'done'); assert.equal(f.app.grants.held(USER_A, done.result.connection_id).subject, 'second@example.test');
-  assert.equal((await usable(f, runtime.token)).json.connections.length, 2);
+  assert.equal((await usable(f, runtime.token)).json.holdings.length, 2);
   const next = await create(f, runtime.token, {}, registration);
   f.app.requestActions.removePrincipal(USER_A, runtime.id);
   assert.equal((await usable(f, runtime.token)).status, 401);
@@ -186,9 +186,9 @@ test('What a key sees reflects a connection needing attention, one removed, and 
   const f = await fixture(t), saved = await f.credential(), { token, row } = await create(f);
   await approve(f, row);
   f.app.grants.reconnectRequired(f.app.grants.held(USER_A, saved.id));
-  assert.equal((await usable(f, token)).json.connections[0].status, 'reconnect_required');
+  assert.equal((await usable(f, token)).json.holdings[0].status, 'reconnect_required');
   f.app.grants.disconnect(USER_A, saved.id);
-  assert.deepEqual((await usable(f, token)).json.connections, []);
+  assert.deepEqual((await usable(f, token)).json.holdings, []);
   f.app.requestActions.removePrincipal(USER_A, f.app.principals.actorsOf(USER_A)[0].id);
   assert.equal((await usable(f, token)).status, 401);
 });
@@ -201,7 +201,7 @@ test('Unavailable services cannot register through a request; expired request re
   f.app.store.db.prepare('UPDATE requests SET expires_at=0 WHERE id=?').run(row.id);
   f.app.store.sweep();
   assert.equal(rowStatus(f, row.id), undefined);
-  assert.equal((await usable(f, token)).json.connections[0].id, saved.id);
+  assert.equal((await usable(f, token)).json.holdings[0].id, saved.id);
 });
 
 test('独自の接続も共通の依頼・認証・受け渡し・解除の動線を利用する', async t => {
@@ -234,7 +234,7 @@ test('独自の接続も共通の依頼・認証・受け渡し・解除の動�
   assert.equal(saved.connector, 'notes.oauth'); assert.equal(saved.subject, 'notes-user');
   const delivered = await f.deliver(saved, { token });
   assert.deepEqual(delivered.json.delivery.environment, { NOTES_TOKEN: 'notes-access' });
-  const listed = (await f.request('/v1/connections', { token })).json.connections[0];
+  const listed = (await f.request('/v1/holdings?kind=grant&method=authorized', { token })).json.holdings[0];
   assert.deepEqual(listed.outputs, ['NOTES_TOKEN']); assert.equal(listed.api.documentation_url, 'https://notes.example.test/docs');
 });
 
@@ -273,7 +273,7 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
   const me = await f.request('/v1/principals/me', { token, anonymous: true });
   assert.equal(me.status, 200, me.text);
   assert.equal(me.json.principal.name, 'laptop の claude');
-  assert.deepEqual((await usable(f, token)).json.connections.map(item => item.id), [saved.id]);
+  assert.deepEqual((await usable(f, token)).json.holdings.map(item => item.id), [saved.id]);
   assert.doesNotMatch(me.text, /token_hash|fdn_/);
   // A later request from the same key is shown under the registered name, whatever the runtime calls itself.
   const next = await create(f, token, { to: USER_A, name: 'laptop の Claude Code' }, registration);
@@ -290,7 +290,7 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
   assert.equal(f.app.principals.actorsOf(USER_A)[0].name, '作業用 Claude');
   // Leaving revokes the key but keeps the credentials.
   assert.equal((await f.request('/v1/principals/me', { method: 'DELETE', token, anonymous: true, data: {} })).status, 200);
-  assert.equal((await f.request('/v1/connections', { token, anonymous: true })).status, 401);
+  assert.equal((await f.request('/v1/holdings?kind=grant&method=authorized', { token, anonymous: true })).status, 401);
   assert.equal(f.app.principals.actorsOf(USER_A).length, 0);
   assert.equal(f.app.grants.connections(USER_A).length, 1);
 });

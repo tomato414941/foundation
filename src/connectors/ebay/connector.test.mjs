@@ -82,9 +82,9 @@ test('依頼を完了し、確認済みのアカウント情報とAPI用トー�
   const a = await f.connect('personal', { request_id: asked.json.request.id });
   const done = (await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token })).json.request;
   assert.equal(done.status, 'done'); assert.equal(done.result.connection_id, a.id);
-  const catalog = await f.request('/v1/connections', { token: agent.token });
-  assert.equal(catalog.json.connections[0].label, 'personal-seller');
-  assert.deepEqual(catalog.json.connections[0].facts.scopes, EBAY_SCOPES);
+  const catalog = await f.request('/v1/holdings?kind=grant&method=authorized', { token: agent.token });
+  assert.equal(catalog.json.holdings[0].label, 'personal-seller');
+  assert.deepEqual(catalog.json.holdings[0].facts.scopes, EBAY_SCOPES);
   assert.doesNotMatch(catalog.text, /ebay-access-|ebay-refresh-|test-ebay-secret/);
   const delivered = await f.deliver(a, { token: agent.token });
   assert.equal(delivered.status, 200, delivered.text);
@@ -103,16 +103,16 @@ test('アカウントを固定IDで区別し、名前の変更を反映して別
   assert.notEqual(a.id, b.id);
   assert.equal(a.subject, '1001'); assert.equal(b.subject, '1002');
   assert.match((await f.callback(await f.start(), 'personal')).headers.get('location'), /connection=connected/);
-  assert.equal((await f.request('/v1/connections')).json.connections.length, 3);
+  assert.equal((await f.request('/v1/holdings?kind=grant&method=authorized')).json.holdings.length, 3);
   assert.match((await f.callback(await f.start({ connection_id: a.id }), 'work')).headers.get('location'), /connection=wrong_account/);
   f.ebay.inspectHandler = () => json(inspected({ username: 'renamed-seller' }));
   const reconnected = await f.connect('personal', { connection_id: a.id });
   assert.equal(reconnected.id, a.id); assert.equal(reconnected.label, 'renamed-seller');
   await f.login('second@example.test');
   const stranger = await f.issueKey();
-  assert.deepEqual((await f.request('/v1/connections', { token: stranger.token })).json.connections, []);
+  assert.deepEqual((await f.request('/v1/holdings?kind=grant&method=authorized', { token: stranger.token })).json.holdings, []);
   assert.equal((await f.deliver(a, { token: stranger.token })).status, 404);
-  assert.equal((await f.request('/v1/connections/' + a.id, { method: 'DELETE', data: { revoke: true } })).status, 404);
+  assert.equal((await f.request('/v1/holdings/' + a.id, { method: 'DELETE', data: { revoke: true } })).status, 403);
 });
 
 test('eBayが報告した権限と有効期限を利用し、権限の不足や追加を返す', async t => {
@@ -226,8 +226,8 @@ test('不正な認証応答と別アプリ向けの認証情報を秘密値を�
 
 test('接続解除時にeBayへの取り消しを選べ、失敗した場合も解除結果を返す', async t => {
   const f = await ebayFixture(t), a = await f.connect(), b = await f.connect('work');
-  assert.equal((await f.request('/v1/connections/' + a.id, { method: 'DELETE', data: { revoke: true } })).json.service_revoked, true);
-  assert.equal((await f.request('/v1/connections/' + b.id, { method: 'DELETE', data: { revoke: false } })).json.service_revoked, null);
+  assert.equal((await f.request('/v1/holdings/' + a.id, { method: 'DELETE', data: { revoke: true } })).json.service_revoked, true);
+  assert.equal((await f.request('/v1/holdings/' + b.id, { method: 'DELETE', data: { revoke: false } })).json.service_revoked, null);
   const revokeCalls = f.ebay.calls.filter(call => call.url.endsWith('/revoke'));
   assert.equal(revokeCalls.length, 1);
   assert.equal(revokeCalls[0].url, EBAY_API + '/identity/v1/oauth2/token/revoke');
@@ -235,7 +235,7 @@ test('接続解除時にeBayへの取り消しを選べ、失敗した場合も�
   assert.equal(revokeCalls[0].options.body.get('token_type_hint'), 'refresh_token');
   const again = await f.connect();
   f.ebay.revokeHandler = () => json({ error: 'private-provider-error' }, 500);
-  const failed = await f.request('/v1/connections/' + again.id, { method: 'DELETE', data: { revoke: true } });
+  const failed = await f.request('/v1/holdings/' + again.id, { method: 'DELETE', data: { revoke: true } });
   assert.equal(failed.json.service_revoked, false);
   assert.deepEqual(await f.connections(), []);
   for (const call of f.ebay.calls) {

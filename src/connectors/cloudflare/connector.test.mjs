@@ -65,10 +65,10 @@ test('接続依頼を完了し、許可された権限と認証情報を分け�
   const completed = await f.request('/v1/requests/' + asked.json.request.id, { token });
   assert.equal(completed.json.request.status, 'done');
   assert.equal(completed.json.request.result.connection_id, connection.id);
-  const listed = await f.request('/v1/connections', { token });
-  assert.equal(listed.json.connections[0].label, 'personal@example.test');
-  assert.equal(listed.json.connections[0].facts.user_id, '1'.repeat(32));
-  assert.deepEqual(listed.json.connections[0].facts.scopes, CLOUDFLARE_SCOPES);
+  const listed = await f.request('/v1/holdings?kind=grant&method=authorized', { token });
+  assert.equal(listed.json.holdings[0].label, 'personal@example.test');
+  assert.equal(listed.json.holdings[0].facts.user_id, '1'.repeat(32));
+  assert.deepEqual(listed.json.holdings[0].facts.scopes, CLOUDFLARE_SCOPES);
   assert.doesNotMatch(listed.text, /cf-access-|cf-refresh-|test-cloudflare-secret/);
   const delivery = await f.deliver(connection, { token });
   assert.equal(delivery.status, 200, delivery.text);
@@ -217,7 +217,7 @@ test('再接続では新たな継続利用の許可と確認できる利用者�
 
 test('接続解除時にCloudflareの更新トークンとアクセストークンを取り消す', async t => {
   const f = await cloudflareFixture(t), connection = await f.connect(), secret = f.secret(connection);
-  const removed = await f.request('/v1/connections/' + connection.id, { method: 'DELETE', data: { revoke: true } });
+  const removed = await f.request('/v1/holdings/' + connection.id, { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.status, 200, removed.text);
   assert.equal(removed.json.service_revoked, true);
   assert.ok(f.cloudflare.revoked.has(secret.refresh_token));
@@ -228,7 +228,7 @@ test('接続解除時にCloudflareの更新トークンとアクセストーク�
 test('Cloudflareの取消処理が失敗してもFoundationの接続を解除し、取消結果を報告する', async t => {
   const f = await cloudflareFixture(t), connection = await f.connect();
   f.cloudflare.revokeHandler = () => json({ error: 'temporarily_unavailable' }, 503);
-  const removed = await f.request('/v1/connections/' + connection.id, { method: 'DELETE', data: { revoke: true } });
+  const removed = await f.request('/v1/holdings/' + connection.id, { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.status, 200, removed.text);
   assert.equal(removed.json.service_revoked, false);
   assert.deepEqual(await f.connections(), []);

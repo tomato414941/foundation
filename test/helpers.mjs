@@ -103,9 +103,9 @@ export async function fixture(t, options = {}) {
     return request('/v1/deliveries', { method: 'POST', data: { names: [{ name: connection.id }] }, ...options });
   }
   async function connectionFacts(connection, options = {}) {
-    const listed = await request('/v1/connections', options);
+    const listed = await request('/v1/holdings?kind=grant&method=authorized', options);
     assert.equal(listed.status, 200, listed.text);
-    const found = listed.json.connections.find(item => item.id === connection.id);
+    const found = listed.json.holdings.find(item => item.id === connection.id);
     assert.ok(found, '接続一覧から対象の接続を取得する');
     return found.facts;
   }

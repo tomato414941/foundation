@@ -82,7 +82,7 @@ test('Disconnecting revokes the grant at GitHub', async t => {
   const f = await githubFixture(t);
   await f.back(await f.start(), 'octo');
   const [connection] = await f.connections();
-  const removed = await f.request('/v1/connections/' + encodeURIComponent(connection.id), { method: 'DELETE', data: { revoke: true } });
+  const removed = await f.request('/v1/holdings/' + encodeURIComponent(connection.id), { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.status, 200, removed.text);
   assert.ok(f.github.revoked.has('gho_octo'));
   assert.deepEqual(await f.connections(), []);

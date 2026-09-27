@@ -71,13 +71,13 @@ with sync_playwright() as p:
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
     page.goto(args.base + '/connections', wait_until='networkidle')
     # A second authorization for the same user has its own local reference.
-    first_id = page.evaluate("async () => (await (await fetch('/v1/connections')).json()).connections[0].id")
+    first_id = page.evaluate("async () => (await (await fetch('/v1/holdings?kind=grant&method=authorized')).json()).holdings[0].id")
     page.get_by_role('button', name='Cloudflareで接続', exact=True).click()
     dialog.get_by_role('button', name='Cloudflareで接続', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
     page.goto(args.base + '/connections', wait_until='networkidle')
     expect(page.get_by_text('personal@example.test', exact=True)).to_have_count(2)
-    second_id = page.evaluate("async (first) => (await (await fetch('/v1/connections')).json()).connections.find(c => c.id !== first).id", first_id)
+    second_id = page.evaluate("async (first) => (await (await fetch('/v1/holdings?kind=grant&method=authorized')).json()).holdings.find(c => c.id !== first).id", first_id)
     row = page.locator('.connection-row').filter(has=page.locator('[data-id="' + first_id + '"]'))
 
     # The agent asks to reconnect the exact first connection; no real mail or service is used.
@@ -111,7 +111,7 @@ with sync_playwright() as p:
             page.screenshot(path=str(shots / ('cloudflare-review-' + str(width) + '.png')), full_page=True)
     dialog.get_by_role('button', name='この内容で更新', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
-    connections = page.evaluate("async () => (await (await fetch('/v1/connections')).json()).connections")
+    connections = page.evaluate("async () => (await (await fetch('/v1/holdings?kind=grant&method=authorized')).json()).holdings")
     assert len(connections) == 2
     assert next(c for c in connections if c['id'] == first_id)['facts']['observed_accounts']['items'][0]['name'] == 'Shared account'
     assert next(c for c in connections if c['id'] == second_id)['facts']['observed_accounts']['items'][0]['name'] == 'Personal account'

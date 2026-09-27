@@ -32,9 +32,9 @@ test('接続の失効・削除後も依頼の完了と結果を維持する', as
   const done = await read(), id = done.result.connection_id;
   assert.equal(done.status, 'done');
   f.app.grants.reconnectRequired(f.app.grants.held(USER_A, id));
-  assert.equal((await f.request('/v1/connections', { token: key.token })).json.connections[0].status, 'reconnect_required');
+  assert.equal((await f.request('/v1/holdings?kind=grant&method=authorized', { token: key.token })).json.holdings[0].status, 'reconnect_required');
   for (const remove of [false, true]) {
-    if (remove) await f.request('/v1/connections/' + id, { method: 'DELETE', data: { revoke: false } });
+    if (remove) await f.request('/v1/holdings/' + id, { method: 'DELETE', data: { revoke: false } });
     const current = await read();
     assert.equal(current.status, 'done');
     assert.deepEqual(current.result, done.result);
@@ -91,7 +91,7 @@ test('APIの認証成功をキーの最終利用として記録する', async t 
   const f = await fixture(t), key = await f.issueKey();
   assert.equal((await f.request('/v1/overview')).json.actors[0].credentials[0].last_used_at, null);
   const before = Date.now();
-  assert.equal((await f.request('/v1/connections', { token: key.token })).status, 200);
+  assert.equal((await f.request('/v1/holdings?kind=grant&method=authorized', { token: key.token })).status, 200);
   const current = (await f.request('/v1/overview')).json.actors[0].credentials[0];
   assert.ok(Date.parse(current.last_used_at) >= before);
   assert.ok(Date.parse(current.last_used_at) <= Date.now());

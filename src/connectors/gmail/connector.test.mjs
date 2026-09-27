@@ -52,7 +52,7 @@ test('読み取りと送信の依頼を完了し、同じアカウントの認�
   assert.match(done.headers.get('location'), /connection=connected/);
   const completed = await f.request('/v1/requests/' + request.json.request.id, { token: agent.token });
   assert.equal(completed.json.request.status, 'done');
-  const connection = (await f.request('/v1/connections', { token: agent.token })).json.connections.find(item => item.id === completed.json.request.result.connection_id);
+  const connection = (await f.request('/v1/holdings?kind=grant&method=authorized', { token: agent.token })).json.holdings.find(item => item.id === completed.json.request.result.connection_id);
   assert.deepEqual(connection.facts.scopes, [READONLY_SCOPE, SEND_SCOPE]);
   assert.deepEqual(connection.facts.missing_scopes, []);
   assert.deepEqual(connection.facts.additional_scopes, []);
@@ -71,7 +71,7 @@ test('送信を許可しなかった場合は接続一覧に不足する権限�
   const agent = await f.issueKey();
   const started = await f.start({ range: 'read-send' });
   await f.callback(started, 'personal-readonly');
-  const connection = (await f.request('/v1/connections', { token: agent.token })).json.connections[0];
+  const connection = (await f.request('/v1/holdings?kind=grant&method=authorized', { token: agent.token })).json.holdings[0];
   assert.deepEqual(connection.facts.missing_scopes, [SEND_SCOPE]);
   const delivered = await f.deliver(connection, { token: agent.token });
   assert.equal(delivered.status, 200, delivered.text);
@@ -104,7 +104,7 @@ test('不足するGmail権限を依頼元が接続一覧で確認し、認証情
   assert.match(done.headers.get('location'), /connection=connected/);
   const completed = await f.request('/v1/requests/' + request.json.request.id, { token: agent.token });
   assert.equal(completed.json.request.status, 'done');
-  const connection = (await f.request('/v1/connections', { token: agent.token })).json.connections[0];
+  const connection = (await f.request('/v1/holdings?kind=grant&method=authorized', { token: agent.token })).json.holdings[0];
   assert.deepEqual(connection.facts.missing_scopes, [READONLY_SCOPE]);
   assert.deepEqual(connection.facts.scopes, [METADATA_SCOPE]);
   const delivered = await f.deliver(connection, { token: agent.token });

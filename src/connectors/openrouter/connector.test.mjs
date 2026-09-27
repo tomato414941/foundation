@@ -65,7 +65,7 @@ test('OpenRouter callback cannot use another session, forged state, or a denied 
 
 test('承認したキーに認証情報と提供元の有効期限を渡し、失効後の取得を拒否する', async t => {
   const f = await openrouterFixture(t); let token = 'fdn_' + randomBytes(32).toString('base64url');
-  assert.equal((await f.request('/v1/connections', { token, anonymous: true })).status, 401, 'a key nobody knows is nobody');
+  assert.equal((await f.request('/v1/holdings?kind=grant&method=authorized', { token, anonymous: true })).status, 401, 'a key nobody knows is nobody');
   token = (await f.approveKey()).token;
   const created = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'connect', input: { connector: 'openrouter.oauth' }, purpose: 'キー情報を確認。モデルは実行しない。' } });
   const row = created.json.request;
@@ -75,8 +75,8 @@ test('承認したキーに認証情報と提供元の有効期限を渡し、�
   assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?connection=connected');
   const account = (await f.request('/v1/overview')).json.grants[0];
   assert.equal((await f.request('/v1/requests/' + row.id)).json.request.status, 'done', 'the request is complete');
-  const listed = await f.request('/v1/connections', { token });
-  assert.deepEqual(listed.json.connections[0].outputs, ['OPENROUTER_API_KEY']);
+  const listed = await f.request('/v1/holdings?kind=grant&method=authorized', { token });
+  assert.deepEqual(listed.json.holdings[0].outputs, ['OPENROUTER_API_KEY']);
   assert.doesNotMatch(listed.text, /sk-or-v1-/);
   const issued = await credential(f, account, token);
   assert.equal(issued.status, 200, issued.text);
@@ -98,7 +98,7 @@ test('OpenRouter keys are owner-separated, cannot silently replace connections, 
   assert.equal(replacement.json.error.code, 'new_connection_required');
   await f.login('other@example.test');
   assert.equal((await f.request('/v1/overview')).json.grants.length, 0);
-  assert.equal((await f.request('/v1/connections/' + encodeURIComponent(account.id), { method: 'DELETE', data: { revoke: false } })).status, 404);
+  assert.equal((await f.request('/v1/holdings/' + encodeURIComponent(account.id), { method: 'DELETE', data: { revoke: false } })).status, 403);
   const own = await f.openrouterAccount('other'), other = await f.issueKey();
   assert.equal((await credential(f, account, other.token)).status, 404);
   assert.equal((await credential(f, own, agent.token)).status, 404);
@@ -107,7 +107,7 @@ test('OpenRouter keys are owner-separated, cannot silently replace connections, 
 test('Local disconnect never pretends to delete OpenRouter key or calls a management endpoint', async t => {
   const f = await openrouterFixture(t), account = await f.openrouterAccount(), agent = await f.issueKey();
   assert.equal((await credential(f, account, agent.token)).status, 200);
-  const removed = await f.request('/v1/connections/' + encodeURIComponent(account.id), { method: 'DELETE', data: { revoke: true } });
+  const removed = await f.request('/v1/holdings/' + encodeURIComponent(account.id), { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.status, 200);
   assert.equal(removed.json.service_revoked, null, 'the key stays at OpenRouter, and nothing pretends otherwise');
   assert.equal((await credential(f, account, agent.token)).status, 404);
@@ -123,7 +123,7 @@ test('Provider expiry, revocation and budget updates are checked before every AP
   let issued = await credential(f, account, agent.token);
   assert.equal(issued.json.expires_at, Date.parse(f.openrouter.info.expires_at));
   assert.ok(issued.json.expires_in > 80_000, 'not replaced with a fictitious short lifetime');
-  const connection = (await f.request('/v1/connections', { token: agent.token })).json.connections[0];
+  const connection = (await f.request('/v1/holdings?kind=grant&method=authorized', { token: agent.token })).json.holdings[0];
   assert.equal(connection.label, account.label, 'what the key can see about it is on the connection, not the delivery');
   assert.equal(connection.facts.expires_at, Date.parse(f.openrouter.info.expires_at));
   assert.equal(connection.facts.key_info.limit, 10);

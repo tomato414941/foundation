@@ -63,7 +63,7 @@ test('AWSは鍵を預からず、持ち主が作った役割を外部IDつきで
   aws.roles.delete(arn);
   const gone = await f.deliver(done.json.connection, { token: key.token });
   assert.equal(gone.status, 409); assert.equal(gone.json.error.code, 'reconnect_required');
-  assert.equal((await f.request('/v1/connections')).json.connections[0].status, 'reconnect_required');
+  assert.equal((await f.request('/v1/holdings?kind=grant&method=delegated')).json.holdings[0].status, 'reconnect_required');
 });
 
 test('役割の流れは持ち主のブラウザーからだけ始まり、他人の流れを完了させることはできない', async t => {
@@ -74,7 +74,7 @@ test('役割の流れは持ち主のブラウザーからだけ始まり、他�
   await f.login('second@example.test');
   const foreign = await f.request('/v1/connections/complete', { method: 'POST', data: { state: started.json.state, fields: { role_arn: arn } } });
   assert.equal(foreign.status, 400); assert.equal(foreign.json.error.code, 'invalid_state');
-  assert.equal((await f.request('/v1/connections')).json.connections.length, 0);
+  assert.equal((await f.request('/v1/holdings?kind=grant&method=delegated')).json.holdings.length, 0);
 });
 
 test('接続方法の一覧にAWSが並び、設定がなければ利用できないと示す', () => {

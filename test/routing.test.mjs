@@ -13,15 +13,9 @@ test('認証情報と接続の画面をそれぞれのURLから開く', async t 
   }
 });
 
-test('以前のブックマークから認証情報の画面へ案内する', async t => {
-  const f = await fixture(t), page = await f.request('/grants', { anonymous: true });
-  assert.equal(page.status, 303);
-  assert.equal(page.headers.get('location'), '/credentials');
-});
-
 test('ログインを終えると開こうとしていた認証情報または接続の画面へ戻る', async t => {
   const f = await fixture(t);
-  for (const [path, destination] of [['/credentials', '/credentials'], ['/connections', '/connections'], ['/grants', '/credentials']]) {
+  for (const [path, destination] of [['/credentials', '/credentials'], ['/connections', '/connections']]) {
     const email = 'return-' + destination.slice(1) + '@example.test';
     await f.auth.sendLink(email, f.base + '/login/confirm');
     const result = await f.request('/v1/login/verify', { method: 'POST', data: { email, token_hash: f.auth.links.get(email).code, return_to: path } });
@@ -34,10 +28,10 @@ test('同じURLでCookieとBearerを受け付け、Bearerがある場合はそ�
   const f = await fixture(t), first = await f.credential(), key = await f.issueKey();
   await f.login('second@example.test');
   await f.credential('work');
-  const browser = await f.request('/v1/connections');
-  assert.equal(browser.json.connections[0].subject, 'work@example.test');
-  const agent = await f.request('/v1/connections', { token: key.token });
-  assert.deepEqual(agent.json.connections.map(item => item.id), [first.id]);
+  const browser = await f.request('/v1/holdings?kind=grant&method=authorized');
+  assert.equal(browser.json.holdings[0].subject, 'work@example.test');
+  const agent = await f.request('/v1/holdings?kind=grant&method=authorized', { token: key.token });
+  assert.deepEqual(agent.json.holdings.map(item => item.id), [first.id]);
   const anonymous = await f.request('/v1/connectors', { anonymous: true });
   assert.deepEqual(anonymous.json.connectors.map(item => item.id), ['gmail.readonly', 'gmail.metadata']);
 });
@@ -46,7 +40,7 @@ test('解釈できないAuthorizationが付いた要求をCookieで代用せず�
   const f = await fixture(t);
   await f.credential();
   for (const authorization of ['Basic invalid', 'Bearer', '', 'Bearer invalid token', 'Bearer not-an-approved-key']) {
-    const read = await f.request('/v1/connections', { headers: { authorization } });
+    const read = await f.request('/v1/holdings?kind=grant&method=authorized', { headers: { authorization } });
     assert.equal(read.status, 401, authorization || '(empty header)');
     const write = await f.request('/v1/holdings?kind=grant&name=must-not-write', { method: 'PUT', raw: 'untrusted', headers: { authorization } });
     assert.equal(write.status, 401, authorization || '(empty header)');

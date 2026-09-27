@@ -68,10 +68,10 @@ test('AIの依頼を完了し、接続の確認結果と短期トークンを分
   const done = await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token });
   assert.equal(done.json.request.status, 'done');
   assert.equal(done.json.request.result.connection_id, a.id);
-  const catalog = await f.request('/v1/connections', { token: agent.token });
-  assert.equal(catalog.json.connections[0].label, 'personal@example.test');
-  assert.deepEqual(catalog.json.connections[0].facts.scopes, GCP_SCOPES);
-  assert.equal(catalog.json.connections[0].facts.iam_checked, false);
+  const catalog = await f.request('/v1/holdings?kind=grant&method=authorized', { token: agent.token });
+  assert.equal(catalog.json.holdings[0].label, 'personal@example.test');
+  assert.deepEqual(catalog.json.holdings[0].facts.scopes, GCP_SCOPES);
+  assert.equal(catalog.json.holdings[0].facts.iam_checked, false);
   assert.doesNotMatch(catalog.text, /gcp-access-|gcp-refresh-|test-gcp-secret/);
   const delivered = await f.deliver(a, { token: agent.token });
   assert.equal(delivered.status, 200, delivered.text);
@@ -90,12 +90,12 @@ test('複数アカウントをGoogleの固定IDで識別し、別の所有者か
   assert.equal((await f.deliver(b, { token: agent.token })).json.delivery.environment.GOOGLE_CLOUD_ACCOUNT_EMAIL, 'work@example.test');
   const duplicate = await f.callback(await f.start(), 'personal');
   assert.match(duplicate.headers.get('location'), /connection=connected/);
-  assert.equal((await f.request('/v1/connections')).json.connections.length, 3);
+  assert.equal((await f.request('/v1/holdings?kind=grant&method=authorized')).json.holdings.length, 3);
   await f.login('second@example.test');
   const stranger = await f.issueKey();
-  assert.deepEqual((await f.request('/v1/connections', { token: stranger.token })).json.connections, []);
+  assert.deepEqual((await f.request('/v1/holdings?kind=grant&method=authorized', { token: stranger.token })).json.holdings, []);
   assert.equal((await f.deliver(a, { token: stranger.token })).status, 404);
-  assert.equal((await f.request('/v1/connections/' + a.id, { method: 'DELETE', data: { revoke: false } })).status, 404);
+  assert.equal((await f.request('/v1/holdings/' + a.id, { method: 'DELETE', data: { revoke: false } })).status, 403);
 });
 
 test('再接続は同じGoogle IDで行い、メールアドレスの変更を反映する', async t => {
@@ -200,13 +200,13 @@ test('不正な認証応答を秘密値を含まないエラーで返す', async
 test('接続の解除ではGoogleへの取り消しを選べ、送信する秘密値はPOST本文に収める', async t => {
   const f = await gcpFixture(t), a = await f.connect(), b = await f.connect('work');
   assert.match(a.revocation_note, /他のGoogle接続/);
-  const removed = await f.request('/v1/connections/' + a.id, { method: 'DELETE', data: { revoke: true } });
+  const removed = await f.request('/v1/holdings/' + a.id, { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.json.service_revoked, true);
   const revoke = f.gcp.calls.find(call => call.url.endsWith('/revoke'));
   assert.equal(revoke.url, 'https://oauth2.googleapis.com/revoke');
   assert.equal(revoke.options.method, 'POST');
   assert.equal(revoke.options.body.get('token'), 'gcp-refresh-personal');
-  assert.equal((await f.request('/v1/connections/' + b.id, { method: 'DELETE', data: { revoke: false } })).json.service_revoked, null);
+  assert.equal((await f.request('/v1/holdings/' + b.id, { method: 'DELETE', data: { revoke: false } })).json.service_revoked, null);
   assert.equal(f.gcp.calls.filter(call => call.url.endsWith('/revoke')).length, 1);
   f.gcp.revokeHandler = () => json({ error: 'invalid_token' }, 400);
   await f.gcp.revoke({ refresh_token: 'already-gone' });

@@ -86,7 +86,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-gcp-ui-') as private_dir, sy
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     review(page)
     connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['connection_id']
-    facts = next(row for row in cli('api', 'GET', '/v1/connections')['connections'] if row['id'] == connection)['facts']
+    facts = next(row for row in cli('api', 'GET', '/v1/holdings?kind=grant&method=authorized')['holdings'] if row['id'] == connection)['facts']
     assert facts['iam_checked'] is False
     assert facts['missing_scopes'] == []
     handed = subprocess.run(['node', 'cli/runtime.mjs', 'exec', '--inputs', json.dumps([{'name': connection}]), '--', 'node', '-e',
