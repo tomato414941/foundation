@@ -18,6 +18,8 @@ export function cloudflareOauth(client) {
     scopes: { base: CLOUDFLARE_BASE_SCOPES, documentationUrl: CLOUDFLARE_SCOPE_DOCS },
     ai: 'Use CLOUDFLARE_API_TOKEN as a Bearer token with Cloudflare v4 APIs. Ask for the scopes the work needs in input.scopes (the dot-delimited Cloudflare IDs, such as dns.write or email-routing-rule.write); facts.scopes, requested_scopes, missing_scopes and additional_scopes say what was granted. facts.user_id identifies the authorizing user; facts.client_id identifies the OAuth app. facts.observed_accounts is a dated /accounts snapshot, not the full consent policy; null means unknown. List /accounts when using the token and choose the target explicitly. The same user may have several connections; never infer the target or authorization identity from user_id. Reconnect by requesting input.connection_id; changes to observed accounts, scopes or the OAuth app require the owner to confirm. Domain registrations and renewals incur charges. Obtain credentials with POST /v1/deliveries and {"names":[{"name":"<connection id>"}]}; Foundation refreshes tokens when needed. CLOUDFLARE_OAUTH_EXPIRES_AT is Unix time in milliseconds. Revocation may affect other connections for the same app and is detected on refresh.',
     variables: ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_OAUTH_EXPIRES_AT'],
+    // The holder may bring their own OAuth app: the same connector, built around their client.
+    oauthClient: client, withClient: cloudflareOauth,
     authorization: {
       kind: 'oauth',
       changes: (result, previous) => client.changes(result.privateState, previous.privateState),

@@ -18,6 +18,8 @@ export function ebayOauth(client) {
     revocationNote: 'eBay側の許可を取り消すと、この接続で取得済みの認証情報も使えなくなる場合があります。',
     ai: 'Use EBAY_ACCESS_TOKEN as a Bearer token with production eBay APIs. Ask for the scopes the work needs in input.scopes (full eBay scope URLs, such as https://api.ebay.com/oauth/api_scope/sell.inventory); only scopes enabled for the application can be granted. facts.scopes, requested_scopes, missing_scopes and additional_scopes say what was granted. Obtain current credentials with POST /v1/deliveries and {"names":[{"name":"<connection id>"}]}; Foundation refreshes tokens when needed. EBAY_OAUTH_EXPIRES_AT is Unix time in milliseconds. Expired or revoked refresh tokens require reconnection. Taxonomy APIs may require a separate application token.',
     variables: ['EBAY_ACCESS_TOKEN', 'EBAY_ACCOUNT_ID', 'EBAY_USERNAME', 'EBAY_OAUTH_EXPIRES_AT'],
+    // The holder may bring their own OAuth app: the same connector, built around their client.
+    oauthClient: client, withClient: ebayOauth, clientFields: ['client_id', 'client_secret', 'ru_name'],
     authorization: {
       kind: 'oauth',
       begin: context => client.authorize(context),

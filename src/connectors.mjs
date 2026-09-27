@@ -32,6 +32,17 @@ export class Connectors {
       ...(connector.ai ? { ai: connector.ai } : {}), ...(connector.kind ? { kind: connector.kind } : {}), ...(connector.failureNote ? { failure_note: connector.failureNote } : {}),
       ...(connector.revocationNote ? { revocation_note: connector.revocationNote } : {}),
       can_reconnect: connector.canReconnect !== false, can_revoke: typeof connector.revoke === 'function', credential_type: connector.credentialType || 'unknown',
-      scopes: connector.scopes ? { base: connector.scopes.base, documentation_url: connector.scopes.documentationUrl || '' } : null };
+      scopes: connector.scopes ? { base: connector.scopes.base, documentation_url: connector.scopes.documentationUrl || '' } : null,
+      // What the holder's own app needs: the given grants to name when connecting with it.
+      own_client: typeof connector.withClient === 'function' ? { fields: connector.clientFields ?? ['client_id', 'client_secret'] } : null };
   }
+}
+
+// A holder's own OAuth app: the same connector, driven by their client instead of Foundation's. What Foundation
+// registered is then only a default; the holder decides which app, and so which scopes can be granted at all.
+export function withOwnClient(connector, { clientId, clientSecret, ruName }) {
+  if (typeof connector.withClient !== 'function' || !connector.oauthClient) fail(400, 'client_unsupported', 'この接続方法では自分のアプリを使えません。');
+  const base = connector.oauthClient;
+  const client = Object.assign(Object.create(Object.getPrototypeOf(base)), base, { clientId, clientSecret, ...(ruName ? { ruName } : {}), enabled: true });
+  return connector.withClient(client);
 }

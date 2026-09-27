@@ -48,8 +48,9 @@ with sync_playwright() as p:
     def consent(route):
         values = parse_qs(urlparse(route.request.url).query)
         assert values['redirect_uri'] == ['Test-Foundation-RuName']
+        # What the owner typed, with the one eBay requires of every authorization.
         assert values['scope'][0].split(' ') == [
-            'https://api.ebay.com/oauth/api_scope/sell.account',
+            'https://api.ebay.com/oauth/api_scope',
             'https://api.ebay.com/oauth/api_scope/sell.inventory',
         ]
         query = {'state': values['state'][0]}
@@ -57,11 +58,13 @@ with sync_playwright() as p:
         route.fulfill(status=302, headers={'location': args.base + '/oauth/ebay.oauth/callback?' + urlencode(query)}, body='')
 
     page.route('https://auth.ebay.com/oauth2/authorize?*', consent)
+    dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('https://api.ebay.com/oauth/api_scope/sell.inventory')
     dialog.get_by_role('button', name='eBayで接続', exact=True).click()
     expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
     authorization['deny'] = False
     page.goto(args.base + '/connections', wait_until='networkidle')
     page.get_by_role('button', name='eBayで接続', exact=True).click()
+    dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('https://api.ebay.com/oauth/api_scope/sell.inventory')
     dialog.get_by_role('button', name='eBayで接続', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
     page.goto(args.base + '/connections', wait_until='networkidle')

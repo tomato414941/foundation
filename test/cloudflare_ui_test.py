@@ -41,16 +41,19 @@ with sync_playwright() as p:
         assert values['redirect_uri'] == [args.base + '/oauth/cloudflare.oauth/callback']
         assert values['code_challenge_method'] == ['S256']
         assert 'offline_access' in values['scope'][0].split(' ')
+        assert 'account-settings.read' in values['scope'][0].split(' '), 'what the owner typed is asked for'
         query = {'state': values['state'][0]}
         query.update({'error': 'access_denied'} if authorization['deny'] else {'code': authorization['code']})
         route.fulfill(status=302, headers={'location': values['redirect_uri'][0] + '?' + urlencode(query)}, body='')
 
     page.route('https://dash.cloudflare.com/oauth2/auth?*', consent)
+    dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('account-settings.read')
     dialog.get_by_role('button', name='Cloudflareで接続', exact=True).click()
     expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
     authorization['deny'] = False
     page.goto(args.base + '/connections', wait_until='networkidle')
     page.get_by_role('button', name='Cloudflareで接続', exact=True).click()
+    dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('account-settings.read')
     dialog.get_by_role('button', name='Cloudflareで接続', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
     page.goto(args.base + '/connections', wait_until='networkidle')
@@ -73,6 +76,7 @@ with sync_playwright() as p:
     # A second authorization for the same user has its own local reference.
     first_id = page.evaluate("async () => (await (await fetch('/v1/holdings?kind=grant&method=authorized')).json()).holdings[0].id")
     page.get_by_role('button', name='Cloudflareで接続', exact=True).click()
+    dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('account-settings.read')
     dialog.get_by_role('button', name='Cloudflareで接続', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
     page.goto(args.base + '/connections', wait_until='networkidle')

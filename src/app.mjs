@@ -10,12 +10,13 @@ import { Sessions, OAuthFlows } from './sessions.mjs';
 import { RequestActions } from './request-actions.mjs';
 import { requestDefinition, requestView } from './http-requests.mjs';
 import { fail, HttpError, nameValue } from './errors.mjs';
-import { Connectors } from './connectors.mjs';
+import { Connectors, withOwnClient } from './connectors.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { Requests } from './requests.mjs';
 import { Settings } from './settings.mjs';
 import { Records } from './records.mjs';
 import { scopeList, requestedScopes } from './scopes.mjs';
+import { clientReference } from './request-input.mjs';
 import { Grants, GRANT_MAX, GRANT_COUNT_MAX, GRANT_TOTAL_MAX, METHODS } from './grants.mjs';
 import { Objects, OBJECT_MAX } from './objects.mjs';
 import { Holdings, KINDS } from './holdings.mjs';
@@ -248,6 +249,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           if (!flow) fail(400, 'invalid_state', '接続をやり直してください。');
           if (flow.kind || flow.connector !== oauthCallback[1]) fail(400, 'invalid_state', '接続をやり直してください。');
           const connector = connectors.get(flow.connector);
+          // The same app that asked for consent exchanges the code: Foundation's, or the holder's own.
+          const active = flow.client ? withOwnClient(connector, grants.ownClient(user.id, flow.client).credentials) : connector;
           if (flow.requestId) {
             destination = '/requests/' + flow.requestId;
             requests.forTo(flow.requestId, user.id, true);
@@ -264,9 +267,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           if (flow.requestId) requests.forTo(flow.requestId, user.id, true);
           const previousContext = grants.context(previous);
           const completion = await verifyConnection(req, session,
-            () => connector.authorization.complete({ code, verifier: flow.verifier, redirectUri: flow.redirectUri }, previousContext),
+            () => active.authorization.complete({ code, verifier: flow.verifier, redirectUri: flow.redirectUri }, previousContext),
             result => {
-              const changes = previous ? connector.authorization.changes?.(result, previousContext) : undefined;
+              const changes = previous ? active.authorization.changes?.(result, previousContext) : undefined;
               if (changes?.length) {
                 if (flow.requestId) requests.forTo(flow.requestId, user.id, true);
                 const current = grants.reconnection(user.id, connector.id, previous.id);
@@ -274,11 +277,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
                 grants.nextState(result);
                 const { credentials, ...kept } = result;
                 const state = flows.begin(session.id, { kind: 'confirmation', connector: connector.id, requestId: flow.requestId,
-                  requestedBy: flow.requestedBy, previous: flow.previous, result: kept, changes, scopes: flow.scopes ?? null });
+                  requestedBy: flow.requestedBy, previous: flow.previous, result: kept, changes, scopes: flow.scopes ?? null, client: flow.client ?? null });
                 if (flow.requestId) requests.record(flow.requestId, 'connect_review', { connector: connector.id });
                 return { confirmation: state };
               }
-              requestActions.connect(flow.requestId, user.id, connector.id, result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null });
+              requestActions.connect(flow.requestId, user.id, connector.id, result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, client: flow.client ?? null });
             });
           if (completion?.confirmation) return redirect(connectionLocation('review') + '&state=' + completion.confirmation);
           return redirect(connectionLocation('connected'));
@@ -696,7 +699,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           permit('disconnect', 'grant', held.id, held.holder_id);
           const input = await inputBody();
           if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', '接続先の許可を取り消すか選んでください。');
-          const connector = connectors.get(grant.connector);
+          const connector = grants.connectorFor(grant);
           if (disconnects.has(grant.id)) fail(409, 'disconnect_in_progress', '登録を解除しています。');
           disconnects.add(grant.id);
           try {
@@ -802,7 +805,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         if (flow.requestId) requests.forTo(flow.requestId, holderId, true);
         if (method === 'GET') return send(200, { connection: grants.view(previous, { owner: true }), changes: flow.changes });
         still();
-        const saved = requestActions.connect(flow.requestId, holderId, flow.connector, flow.result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null });
+        const saved = requestActions.connect(flow.requestId, holderId, flow.connector, flow.result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, client: flow.client ?? null });
         flows.drop(session.id, state);
         return send(200, { connection: grants.view(saved, { owner: true }) });
       }
@@ -822,15 +825,21 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         if (request && input.connection_id !== undefined && input.connection_id !== target) fail(409, 'connection_changed', '依頼された接続を選んでください。');
         const previous = target === undefined ? undefined : grants.reconnection(holderId, connector.id, target);
         if (!session) fail(401, 'login_required', 'ログインしてください。');
-        // The scopes are the request's when there is one: what the holder saw is what the service is asked for.
+        // The scopes and the app are the request's when there is one: what the holder saw is what happens.
+        // Reconnecting keeps the app the connection was made with unless another is named.
+        const previousState = previous ? grants.state(previous) : null;
         const asked = request ? requests.input(request).scopes ?? [] : scopeList(input.scopes);
-        const scopes = requestedScopes(connector, asked, previous ? grants.state(previous) : null);
+        const scopes = requestedScopes(connector, asked, previousState);
+        const reference = request ? requests.input(request).client : clientReference(input.client);
+        const client = reference ? grants.ownClient(holderId, reference) : previousState?.client ? grants.ownClient(holderId, previousState.client) : null;
+        const active = client ? withOwnClient(connector, client.credentials) : connector;
         still();
-        const flow = { connector: connector.id, requestedBy, requestId: request?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null, scopes };
+        const flow = { connector: connector.id, requestedBy, requestId: request?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null, scopes,
+          client: client?.ids ?? null };
         // A role is made by the holder in the service's own console, then named here; what Foundation must remember
         // meanwhile (the external ID it chose) travels in the flow, and the flow lasts until the answer is right.
         if (connector.authorization.kind === 'role') {
-          const started = await connector.authorization.begin({ origin }, grants.context(previous));
+          const started = await active.authorization.begin({ origin }, grants.context(previous));
           still();
           const state = flows.begin(session.id, { ...flow, kind: 'role', memo: started.memo ?? null });
           return send(200, { url: started.url, state, complete: { fields: started.fields ?? [] } });
@@ -838,7 +847,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const verifier = randomBytes(32).toString('base64url');
         const redirectUri = origin + '/oauth/' + connector.id + '/callback';
         const state = flows.begin(session.id, { ...flow, verifier, redirectUri });
-        return send(200, { url: await connector.authorization.begin({ state, verifier, redirectUri, scopes }, grants.context(previous)) });
+        return send(200, { url: await active.authorization.begin({ state, verifier, redirectUri, scopes }, grants.context(previous)) });
       }
       if (path === '/v1/connections/complete' && method === 'POST') {
         permit('connect', 'grant');

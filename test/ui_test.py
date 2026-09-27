@@ -88,7 +88,7 @@ with sync_playwright() as p:
     page.goto(args.base, wait_until="networkidle")
     expect(page.get_by_role("heading", name="Foundation", exact=True)).to_be_visible()
     page.goto(args.base + "/connections", wait_until="networkidle")
-    expect(page.get_by_role("button", name="メールの読み取り", exact=True)).to_be_enabled()
+    expect(page.get_by_role("button", name="Googleで接続", exact=True)).to_be_enabled()
     page.goto(args.base + "/principals", wait_until="networkidle")
     expect(page.get_by_role("button", name="追加", exact=True)).to_be_enabled()
     assert page.evaluate("localStorage.length === 0 && sessionStorage.length === 0")
@@ -96,24 +96,27 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "empty.png"), full_page=True)
 
     # Replace only Google's authorization page with a redirect. No Google login/network traffic.
-    authorization = {"code": "personal-readonly", "deny": False}
+    authorization = {"code": "personal-readonly", "deny": False, "scope": "openid"}
     def google_consent(route):
         query = parse_qs(urlparse(route.request.url).query)
         assert query["code_challenge_method"] == ["S256"]
         assert query["access_type"] == ["offline"]
+        assert authorization["scope"] in query["scope"][0].split(" "), query["scope"]
         params = {"state": query["state"][0]}
         params.update({"error": "access_denied"} if authorization["deny"] else {"code": authorization["code"]})
         route.fulfill(status=302, headers={"location": query["redirect_uri"][0] + "?" + urlencode(params)}, body="")
     page.route("https://accounts.google.com/o/oauth2/v2/auth?*", google_consent)
     dialog = page.get_by_role("dialog")
 
-    # Each read range is its own connection; the owner starts the one they want.
+    # The owner decides what to give: here, a Gmail scope typed into the connect dialog.
     def connect(code, metadata=False):
         authorization["code"] = code
+        authorization["scope"] = "https://www.googleapis.com/auth/gmail." + ("metadata" if metadata else "readonly")
         if "/connections" not in page.url:
             page.goto(args.base + "/connections", wait_until="networkidle")
-        page.locator(".agent-row").filter(has_text="Gmail").get_by_role("button", name="件名・差出人などの読み取り" if metadata else "メールの読み取り", exact=True).click()
+        page.locator(".agent-row").filter(has_text="Google").get_by_role("button", name="Googleで接続", exact=True).click()
         expect(dialog).to_be_visible()
+        dialog.get_by_label("許可する権限（1行に1つ）", exact=True).fill(authorization["scope"])
         check_display(page)
         if not metadata:
             page.screenshot(path=str(shots / "connect.png"), full_page=True)
@@ -129,10 +132,10 @@ with sync_playwright() as p:
     # Connections are listed independently of saved values.
     page.goto(args.base + "/connections", wait_until="networkidle")
     gmail = page.locator('[aria-labelledby="connections-title"]')
-    expect(gmail.get_by_role("heading", name="Gmail", exact=True)).to_have_count(2)
+    expect(gmail.get_by_role("heading", name="Google", exact=True)).to_have_count(2)
     expect(gmail.get_by_text("personal@example.test", exact=True)).to_be_visible()
     expect(gmail.get_by_text("work@example.test", exact=True)).to_be_visible()
-    expect(gmail.get_by_text("件名・差出人などの読み取り", exact=True)).to_be_visible()
+    expect(gmail.locator("code", has_text="https://www.googleapis.com/auth/gmail.metadata")).to_have_count(1)
     page.locator('.page-nav').get_by_role('link', name='認証情報', exact=True).click()
     expect(page).to_have_url(args.base + '/credentials')
     expect(page.get_by_role('heading', name='認証情報', exact=True)).to_be_visible()
@@ -153,7 +156,7 @@ with sync_playwright() as p:
         page.screenshot(path=str(shots / ('credentials-' + str(width) + '.png')), full_page=True)
     page.locator('.page-nav').get_by_role('link', name='接続', exact=True).click()
     expect(page).to_have_url(args.base + '/connections')
-    expect(gmail.get_by_role('heading', name='Gmail', exact=True)).to_have_count(2)
+    expect(gmail.get_by_role('heading', name='Google', exact=True)).to_have_count(2)
     page.get_by_role('link', name='Foundation ホーム', exact=True).click()
     expect(page.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()
     cards = page.locator('.home-cards')
@@ -208,6 +211,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "mobile.png"), full_page=True)
     # Cancellation returns a useful message without disclosing provider errors.
     authorization["deny"] = True
+    authorization["scope"] = "openid"
     page.goto(args.base + "/connections", wait_until="networkidle")
     gmail.get_by_role("button", name="接続し直す", exact=True).first.click()
     dialog.locator("button[type=submit]").click()
@@ -230,7 +234,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "disconnect-mobile.png"), full_page=True)
     dialog.get_by_role("button", name="接続を解除", exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(gmail.get_by_role("heading", name="Gmail", exact=True)).to_have_count(1)
+    expect(gmail.get_by_role("heading", name="Google", exact=True)).to_have_count(1)
     expect(gmail.get_by_text("work@example.test", exact=True)).to_be_visible()
     assert deliver(connection_id, token_b).status == 404, "processing requires a connected account"
     page.get_by_role("button", name="ログアウト", exact=True).click()

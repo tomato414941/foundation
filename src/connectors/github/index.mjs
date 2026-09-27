@@ -16,6 +16,8 @@ export function githubOauth(client) {
     scopes: { base: GITHUB_BASE_SCOPES, documentationUrl: GITHUB_SCOPE_DOCS },
     ai: 'gh and most tools read it directly. For git push/pull, run gh auth setup-git inside the exec, then use git. Ask for the scopes the work needs in input.scopes (GitHub OAuth scopes such as repo, workflow, read:org, gist). facts.scopes, requested_scopes, missing_scopes and additional_scopes say what was granted.',
     variables: ['GH_TOKEN', 'GITHUB_TOKEN'],
+    // The holder may bring their own OAuth app: the same connector, built around their client.
+    oauthClient: client, withClient: githubOauth,
     authorization: {
       kind: 'oauth',
       begin: context => client.authorize(context),

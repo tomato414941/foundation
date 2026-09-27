@@ -277,14 +277,22 @@ function connectionRow(connection) {
   const warning = connection.status !== 'usable';
   const until = connection.expiry_known === false ? '有効期限は不明です' : connection.expires_at ? '認証情報の有効期限 ' + esc(new Date(connection.expires_at).toLocaleString('ja-JP')) : '';
   return `<article class="agent-row connection-row"><div class="connection-identity">${serviceLogo(connection.service)}<div class="agent-name"><h3>${esc(connection.service.name)}</h3><p class="connection-account">${esc(connection.label)}</p></div></div>
-    <div class="connection-details"><p class="connection-status${warning ? ' warning-text' : ''}">${esc(statusName(connection.status))}</p><p class="muted">${esc(connection.access?.name || '')}</p>${cloudflareDetails(connection)}${until ? `<p class="muted">${until}</p>` : ''}</div>
-    <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}" data-connector="${esc(connection.connector)}" ${connection.available ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
+    <div class="connection-details"><p class="connection-status${warning ? ' warning-text' : ''}">${esc(statusName(connection.status))}</p><p class="muted">${esc(connection.access?.name || '')}${connection.own_client ? '（自分のアプリ）' : ''}</p>${cloudflareDetails(connection)}${scopeDetails(connection.facts)}${until ? `<p class="muted">${until}</p>` : ''}</div>
+    <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}" data-connector="${esc(connection.connector)}" ${connection.available || connection.own_client ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
 }
 function cloudflareDetails(connection) {
   if (connection.connector !== 'cloudflare.oauth') return '';
   const accounts = connection.facts.observed_accounts;
   const names = accounts ? accounts.items.map(item => item.name).join('、') || 'なし' : '未確認';
-  return `<p class="muted">確認できたアカウント：${esc(names)}${accounts && !accounts.complete ? '（一部）' : ''}</p><p class="muted">権限：${esc((connection.facts.scopes || []).filter(scope => scope !== 'offline_access').join('、'))}</p>`;
+  return `<p class="muted">確認できたアカウント：${esc(names)}${accounts && !accounts.complete ? '（一部）' : ''}</p>`;
+}
+// What the holder gave: the scopes the service granted, and any asked for but not granted.
+function scopeDetails(facts) {
+  const granted = facts?.scopes || [], missing = facts?.missing_scopes || [];
+  if (!granted.length && !missing.length) return '';
+  const list = scopes => `<ul class="scope-list">${scopes.map(scope => `<li><code>${esc(scope)}</code></li>`).join('')}</ul>`;
+  return `<details class="scope-details"><summary>許可している権限（${granted.length}件）</summary>${list(granted)}</details>`
+    + (missing.length ? `<details class="scope-details"><summary class="warning-text">許可されなかった権限（${missing.length}件）</summary>${list(missing)}</details>` : '');
 }
 function grantRow(entry) {
   return `<article class="grant-row" aria-label="${esc(entry.name)}"><div class="grant-field"><span class="grant-field-label">名前</span><div class="agent-name grant-title"><h3>${esc(entry.name)}</h3><button class="icon-button" data-action="copy-name" data-name="${esc(entry.name)}" aria-label="名前をコピー" title="名前をコピー">${icon('copy')}</button><button class="icon-button" data-action="edit-grant" data-name="${esc(entry.name)}" aria-label="名前を編集" title="名前を編集">${icon('edit')}</button></div></div>
@@ -293,7 +301,7 @@ function grantRow(entry) {
 }
 const grantMeta = entry => `<span>${esc(kiloBytes(entry.size))}</span><span>更新 ${esc(keptWhen(entry.updated_at))}</span>`;
 function connectSection() {
-  const available = state.connectors.filter(connector => connector.available);
+  const available = state.connectors.filter(connector => connector.available || connector.own_client);
   if (!available.length) return '';
   const services = new Map();
   for (const connector of available) {
@@ -442,14 +450,21 @@ function renderRequest() {
   const connector = row.connector, name = serviceName(connector);
   const reconnecting = Boolean(row.input.connection_id), title = reconnecting ? name + 'に接続し直す' : connector.label;
   const unavailable = `<p class="form-error" role="status">現在${esc(name)}に接続できません。</p>`;
-  const body = reconnecting && !row.connection ? '<p class="form-error" role="status">更新する接続が見つかりません。</p>' : !connector.available ? unavailable
+  const body = reconnecting && !row.connection ? '<p class="form-error" role="status">更新する接続が見つかりません。</p>' : !connector.available && !row.input.client ? unavailable
     : `<button class="button primary full request-connect" type="button" data-action="request-connect">${esc(title)} ${icon('arrow')}</button>
       ${connector.failure_note && ['failed', 'scope', 'retry', 'changed'].includes(resultCode) ? `<p class="permission-note">${esc(connector.failure_note.text)}<a href="${esc(connector.failure_note.href)}" target="_blank" rel="noopener noreferrer">${esc(connector.failure_note.link)} ↗</a></p>` : ''}`;
   app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, title)}
-    <dl class="approval-facts">${requestPurpose(row)}${row.connection ? `<div><dt>更新する接続</dt><dd>${esc(row.connection.label)}${cloudflareDetails(row.connection)}</dd></div>` : ''}<div><dt>権限</dt><dd>${esc(connector.access.name)}${connector.access.restrictions ? `<small class="muted block">${esc(connector.access.restrictions)}</small>` : ''}</dd></div></dl>
+    <dl class="approval-facts">${requestPurpose(row)}${row.connection ? `<div><dt>更新する接続</dt><dd>${esc(row.connection.label)}${cloudflareDetails(row.connection)}</dd></div>` : ''}<div><dt>権限</dt><dd>${esc(connector.access.name)}${connector.access.restrictions ? `<small class="muted block">${esc(connector.access.restrictions)}</small>` : ''}${requestedScopesView(row, connector)}</dd></div>${row.input.client ? `<div><dt>使うアプリ</dt><dd>あなたのOAuthアプリ<small class="muted block">${esc(row.input.client.client_id)}</small></dd></div>` : ''}</dl>
     ${stepsBlock(row.steps)}
     <div class="register-body">${body}</div>
     <button class="text-button full" type="button" data-action="deny-request">接続しない</button>${expiry}</section>`);
+}
+// The scopes a request asks the service for, as the service names them; the holder sees each before agreeing.
+function requestedScopesView(row, connector) {
+  const asked = row.input.scopes || [];
+  if (!connector.scopes) return '';
+  if (!asked.length) return `<small class="muted block">${row.input.connection_id ? '今許可している権限のまま接続し直します。' : '本人確認のための権限だけを頼みます。'}</small>`;
+  return `<small class="muted block">${row.input.connection_id ? '今の権限に加えて、' : ''}次の権限を頼みます。</small><ul class="scope-list">${asked.map(scope => `<li><code>${esc(scope)}</code></li>`).join('')}</ul>`;
 }
 // The owner puts something into storage for a key. Everything specific to the service is the AI's words;
 // Foundation shows only where it will go and how it will be handed over.
@@ -529,14 +544,36 @@ function bindForm(handler, container = dialog) {
   });
 }
 // Starting a connection Foundation performs itself. There is nothing to fill in: the service decides who it is.
+// What the holder decides when connecting: which of the service's scopes to give, and whether to use an OAuth app
+// of their own (kept here as values they handed over) instead of the one Foundation registered.
+const CLIENT_FIELDS = { client_id: 'アプリのID（Client ID）', client_secret: 'アプリの秘密（Client Secret）', ru_name: 'RuName' };
+function connectChoices(connector, connectionId) {
+  const reconnecting = connectionId ? connected().find(item => item.id === connectionId) : null;
+  const scopes = connector.scopes ? `<label for="connect-scopes">${reconnecting ? '追加で許可する権限' : '許可する権限'}（1行に1つ）</label>
+    <textarea id="connect-scopes" name="scopes" rows="3" autocomplete="off" spellcheck="false" placeholder="${esc(serviceName(connector))}の権限名"></textarea>
+    <p class="permission-note">${reconnecting ? '今許可している権限はそのまま残ります。' : ''}本人確認のため${connector.scopes.base.length ? esc(connector.scopes.base.join('、')) + 'も頼みます。' : '追加で頼む権限はありません。'}${connector.scopes.documentation_url ? `<a href="${esc(connector.scopes.documentation_url)}" target="_blank" rel="noopener noreferrer">権限の一覧 ↗</a>` : ''}</p>` : '';
+  if (!connector.own_client) return scopes;
+  const kept = given(), required = !connector.available;
+  const options = `<option value="">預けたものから選ぶ</option>${kept.map(entry => `<option value="${esc(entry.name)}">${esc(entry.name)}</option>`).join('')}`;
+  return scopes + `<label class="checkbox"><input type="checkbox" name="own" ${required ? 'checked disabled' : ''}> 自分のOAuthアプリで接続する</label>
+    <div class="own-client"${required ? '' : ' hidden'}>${connector.own_client.fields.map(field => `<label for="client-${field}">${CLIENT_FIELDS[field] || field}</label><select id="client-${field}" name="client-${field}">${options}</select>`).join('')}
+    <p class="permission-note">アプリのIDと秘密を先に預けておき、ここで選びます。アプリの戻り先には <code>${esc(location.origin + '/oauth/' + connector.id + '/callback')}</code> を登録してください。</p></div>`;
+}
 function connect(connectorId, connectionId) {
   const connector = state.connectors.find(item => item.id === connectorId);
-  if (!connector?.available) return;
+  if (!connector || (!connector.available && !connector.own_client)) return;
   const name = serviceName(connector);
   openDialog(`<h2 id="dialog-title">${esc(name)}に${connectionId ? '接続し直す' : '接続'}</h2><p>${esc(connector.intro)}</p><form>
-    <p class="permission-note">${esc(connector.access.name)}。${esc(connector.access.restrictions)} ${connectionId ? '' : '接続すると、アクセスを許可した相手が利用できます。'}${connector.can_revoke ? '' : `停止は${esc(name)}で行います。`}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(connector.label)} ${icon('arrow')}</button></form>`);
-  bindForm(async () => {
-    const result = await api('/v1/connections', { method: 'POST', data: { connector: connector.id, ...(connectionId ? { connection_id: connectionId } : {}) } });
+    <p class="permission-note">${esc(connector.access.name)}。${esc(connector.access.restrictions)} ${connectionId ? '' : '接続すると、アクセスを許可した相手が利用できます。'}${connector.can_revoke ? '' : `停止は${esc(name)}で行います。`}</p>
+    ${connectChoices(connector, connectionId)}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(connector.label)} ${icon('arrow')}</button></form>`);
+  const own = dialog.querySelector('input[name="own"]');
+  own?.addEventListener('change', () => { dialog.querySelector('.own-client').hidden = !own.checked; });
+  bindForm(async (form) => {
+    const scopes = String(form.get('scopes') || '').split(/\s+/).filter(Boolean);
+    const client = own && (own.checked || own.disabled) ? Object.fromEntries(connector.own_client.fields.map(field => [field, String(form.get('client-' + field) || '')])) : null;
+    if (client && Object.values(client).some(value => !value)) throw new Error('アプリのIDと秘密を、預けたものから選んでください。');
+    const result = await api('/v1/connections', { method: 'POST', data: { connector: connector.id, ...(connectionId ? { connection_id: connectionId } : {}),
+      ...(scopes.length ? { scopes } : {}), ...(client ? { client } : {}) } });
     if (result.complete) { completeByHand(connector, result); return; }
     location.assign(result.url);
   });
@@ -546,7 +583,7 @@ function connect(connectorId, connectionId) {
 function completeByHand(connector, started) {
   const name = serviceName(connector);
   openDialog(`<h2 id="dialog-title">${esc(name)}でIAMロールを作る</h2>
-    <ol class="guidance-steps"><li><a class="button secondary" href="${esc(started.url)}" target="_blank" rel="noopener noreferrer">${esc(name)}の画面を開く ↗</a><p class="permission-note">内容を確認して「作成」を押します。1分ほどで終わります。</p></li>
+    <ol class="guidance-steps"><li><a class="button secondary" href="${esc(started.url)}" target="_blank" rel="noopener noreferrer">${esc(name)}の画面を開く ↗</a><p class="permission-note">付ける権限をPoliciesで選び、内容を確認して「作成」を押します。1分ほどで終わります。</p></li>
     <li>できあがった値を貼り付けます。</li></ol>
     <form>${started.complete.fields.map(field => `<label for="complete-${esc(field.name)}">${esc(field.label)}</label><input id="complete-${esc(field.name)}" name="${esc(field.name)}" required autocomplete="off" spellcheck="false" placeholder="${esc(field.placeholder || '')}">`).join('')}
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">接続する ${icon('arrow')}</button></form>`);

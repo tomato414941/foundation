@@ -129,7 +129,8 @@ export class CloudflareClient {
     }
     const ids = accounts => accounts?.complete ? accounts.items.map(item => item.id).sort() : null;
     const before = ids(previous.accounts), after = ids(secret.accounts);
-    if (before === null || after === null || JSON.stringify(before) !== JSON.stringify(after)) {
+    // Unknown both times says nothing about a change; known on one side only, or different, is one.
+    if ((before === null) !== (after === null) || (before !== null && JSON.stringify(before) !== JSON.stringify(after))) {
       const names = accounts => accounts?.complete ? accounts.items.map(item => item.name + ' (' + item.id + ')') : ['未確認'];
       changes.push({ label: '確認できたアカウント', before: names(previous.accounts), after: names(secret.accounts) });
     }

@@ -41,7 +41,7 @@ test('OpenRouter exchanges only PKCE code, preserves real expiry and zero budget
   assert.equal(account.expires_at, null);
   assert.match(account.label, /^キー [a-f0-9]{12}$/);
   assert.match(account.facts.management_url, /^https:\/\/openrouter.ai\/keys\/[a-f0-9]{64}$/);
-  assert.doesNotMatch(response.text, /sk-or-v1-|"access_token":|refresh_token|client_secret/);
+  assert.doesNotMatch(response.text, /sk-or-v1-|"access_token":|refresh_token|"client_secret":/);
   assert.equal(f.openrouter.calls.length, 2);
   const body = JSON.parse(f.openrouter.calls[0].options.body);
   assert.deepEqual(Object.keys(body).sort(), ['code', 'code_challenge_method', 'code_verifier']);

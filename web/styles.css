@@ -353,3 +353,7 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 
 .checkbox { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 15px; }
 .checkbox input { width: 18px; height: 18px; }
+.scope-list { margin: 4px 0 0; padding-left: 18px; font-size: 14px; }
+.scope-list code { font-size: 14px; overflow-wrap: anywhere; }
+.scope-details { margin-top: 4px; font-size: 14px; }
+.own-client { margin-top: 4px; }

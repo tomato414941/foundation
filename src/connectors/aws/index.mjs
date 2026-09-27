@@ -20,9 +20,9 @@ export function awsRole(client) {
   return {
     id: 'aws.role', service, label: 'AWSでIAMロールを作る', register: 'role', credentialType: 'sts_temporary_credentials', available: client.enabled,
     intro: 'AWSの画面でFoundation用のIAMロールを作ります。鍵は預かりません。',
-    access: { name: 'AWSアカウントの操作', description: 'IAMロールに付けた権限 (管理者、または読み取りのみ) の範囲で、AWSのリソースを扱えます。', restrictions: 'IAMロールを消せば止まります。Foundationが鍵を持つことはありません。' },
+    access: { name: 'AWSアカウントの操作', description: 'IAMロールに付けた権限の範囲で、AWSのリソースを扱えます。付ける権限は、作成画面のPoliciesで選べます (既定は管理者)。', restrictions: 'IAMロールを消せば止まります。Foundationが鍵を持つことはありません。' },
     revocationNote: 'AWS側で CloudFormation のスタック foundation-connection を削除すると、この接続は使えなくなります。',
-    ai: 'Delivered as AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN (valid for an hour) plus AWS_DEFAULT_REGION; the AWS CLI and SDKs read them directly. Deliver again for fresh ones. facts.account and facts.role say whose role it is.',
+    ai: 'Delivered as AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN (valid for an hour) plus AWS_DEFAULT_REGION; the AWS CLI and SDKs read them directly. Deliver again for fresh ones. facts.account and facts.role say whose role it is. What the role may do is the choice of IAM policies the owner made when they create it (Policies; AdministratorAccess unless changed); ask them for what the work needs.',
     variables: ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION', 'AWS_REGION'],
     authorization: {
       kind: 'role',

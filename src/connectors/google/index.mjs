@@ -19,6 +19,8 @@ export function googleOauth(client) {
     scopes: { base: GOOGLE_BASE_SCOPES, documentationUrl: GOOGLE_SCOPE_DOCS },
     ai: 'Ask for the scopes the work needs in input.scopes (full Google scope URLs, such as https://www.googleapis.com/auth/gmail.readonly or https://www.googleapis.com/auth/cloud-platform). facts.scopes, requested_scopes, missing_scopes and additional_scopes say what was granted. GOOGLE_OAUTH_ACCESS_TOKEN is a Bearer token for Google APIs; the same token is CLOUDSDK_AUTH_ACCESS_TOKEN for gcloud. Choose a Google Cloud --project explicitly. Obtain current credentials with POST /v1/deliveries and {"names":[{"name":"<connection id>"}]}; Foundation refreshes tokens when needed.',
     variables: ['GOOGLE_OAUTH_ACCESS_TOKEN', 'CLOUDSDK_AUTH_ACCESS_TOKEN', 'GOOGLE_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT'],
+    // The holder may bring their own OAuth app: the same connector, built around their client.
+    oauthClient: client, withClient: googleOauth,
     authorization: {
       kind: 'oauth',
       begin: (context, previous) => client.authorize({ ...context, email: previous?.subject }),

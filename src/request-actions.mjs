@@ -54,7 +54,7 @@ export class RequestActions {
     this.changed(done);
     return JSON.parse(done.result);
   }
-  connect(id, holderId, connector, result, { requestedBy = '', previous, scopes } = {}) {
+  connect(id, holderId, connector, result, { requestedBy = '', previous, scopes, client } = {}) {
     const saved = this.store.transaction(() => {
       if (id) {
         const row = this.requests.forTo(id, holderId, true);
@@ -62,7 +62,7 @@ export class RequestActions {
         if (row.kind !== 'connect' || input.connector !== connector) fail(409, 'wrong_kind', '依頼された接続方法で登録してください。');
         if (input.connection_id !== previous?.id) fail(409, 'connection_changed', '依頼された接続を選んでください。');
       }
-      const saved = this.grants.save(holderId, connector, result, { previous, scopes });
+      const saved = this.grants.save(holderId, connector, result, { previous, scopes, client });
       this.records.write(holderId, previous ? 'connection.renewed' : 'connection.created', 'grant', saved.id, { connector, requested_by: requestedBy || null, request: id || null });
       if (id) {
         this.requests.done(id, holderId, { connection_id: saved.id });

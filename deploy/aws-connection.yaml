@@ -11,11 +11,10 @@ Parameters:
     MinLength: 16
     MaxLength: 128
     NoEcho: true
-  Access:
-    Type: String
-    Description: What Foundation may do here.
-    Default: AdministratorAccess
-    AllowedValues: [AdministratorAccess, ReadOnlyAccess]
+  Policies:
+    Type: CommaDelimitedList
+    Description: "What Foundation may do here: the ARNs of the IAM policies to attach, separated by commas. AWS managed ones (arn:aws:iam::aws:policy/ReadOnlyAccess, .../AmazonS3FullAccess, ...) or your own. Up to 10."
+    Default: arn:aws:iam::aws:policy/AdministratorAccess
 Resources:
   FoundationRole:
     Type: AWS::IAM::Role
@@ -30,8 +29,7 @@ Resources:
             Action: sts:AssumeRole
             Condition:
               StringEquals: { 'sts:ExternalId': !Ref ExternalId }
-      ManagedPolicyArns:
-        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/${Access}'
+      ManagedPolicyArns: !Ref Policies
 Outputs:
   RoleArn:
     Description: Paste this into Foundation to finish connecting.

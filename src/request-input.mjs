@@ -5,10 +5,12 @@ import { scopeList } from './scopes.mjs';
 export function requestInput(kind, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'invalid_request', '依頼内容を指定してください。');
   // Connecting: which service, optionally which existing connection, and the service's scopes the AI needs.
-  if (kind === 'connect' && Object.keys(input).every(key => ['connector', 'connection_id', 'scopes'].includes(key)) && typeof input.connector === 'string'
+  // With client, the holder's own OAuth app: the given grants that hold its ID and secret (and eBay's RuName).
+  if (kind === 'connect' && Object.keys(input).every(key => ['connector', 'connection_id', 'scopes', 'client'].includes(key)) && typeof input.connector === 'string'
     && (input.connection_id === undefined || (typeof input.connection_id === 'string' && /^[0-9a-f-]{36}$/.test(input.connection_id)))) {
-    const scopes = scopeList(input.scopes);
-    return { connector: input.connector, ...(input.connection_id === undefined ? {} : { connection_id: input.connection_id }), ...(scopes.length ? { scopes } : {}) };
+    const scopes = scopeList(input.scopes), client = clientReference(input.client);
+    return { connector: input.connector, ...(input.connection_id === undefined ? {} : { connection_id: input.connection_id }), ...(scopes.length ? { scopes } : {}),
+      ...(client ? { client } : {}) };
   }
   // Asking to act for someone: only what the asker wants to be called.
   if (kind === 'actor' && Object.keys(input).every(key => key === 'name') && typeof input.name === 'string' && input.name.trim() && input.name.length <= 80) return { name: input.name.trim() };
@@ -51,4 +53,14 @@ export function declaration(input) {
   // Replacing is a property of the request, declared up front, so the owner sees it before deciding.
   if (input.replace !== undefined && typeof input.replace !== 'boolean') fail(400, 'invalid_declaration', '置き換えかどうかは true か false で指定してください。');
   return { name: holdingName(input.name), readable: input.readable === true, label: input.label.trim(), site: site?.href ?? '', multiline: input.multiline === true, replace: input.replace === true };
+}
+
+// Which given grants hold an OAuth app's ID and secret: each by the holder's name for it, or its id.
+export function clientReference(value) {
+  if (value === undefined || value === null) return undefined;
+  const reference = key => typeof value[key] === 'string' && value[key].length > 0 && value[key].length <= 200 && !/[\x00-\x1f\x7f]/.test(value[key]);
+  if (typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['client_id', 'client_secret', 'ru_name'].includes(key))
+    || !reference('client_id') || !reference('client_secret') || (value.ru_name !== undefined && !reference('ru_name')))
+    fail(400, 'invalid_client', 'アプリはclient_idとclient_secret（eBayはru_nameも）を、預けたものの名前で指定してください。');
+  return { client_id: value.client_id, client_secret: value.client_secret, ...(value.ru_name === undefined ? {} : { ru_name: value.ru_name }) };
 }

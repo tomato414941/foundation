@@ -226,7 +226,7 @@ test('独自の接続も共通の依頼・認証・受け渡し・解除の動�
   const catalog = (await f.request('/v1/connectors', { anonymous: true })).json.connectors;
   const listedNotes = catalog.find(item => item.id === 'notes.oauth');
   assert.equal(listedNotes.access.name, 'ノートの読み取り'); assert.deepEqual(listedNotes.variables, ['NOTES_TOKEN']);
-  assert.ok(!JSON.stringify(catalog).includes('client'));
+  assert.doesNotMatch(JSON.stringify(catalog), /test-google-client|test-google-secret|"client_secret":/);
   const { row, token } = await register(f, { input: { connector: 'notes.oauth' } });
   assert.equal(row.connector.label, 'Notesで接続');
   assert.equal(row.connector.service.name, 'Notes');
