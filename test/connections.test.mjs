@@ -8,14 +8,12 @@ import { Holdings } from '../src/holdings.mjs';
 import { Grants } from '../src/grants.mjs';
 import { Connectors } from '../src/connectors.mjs';
 import { builtins } from '../src/connectors/index.mjs';
-import { gmailReadonly } from '../src/connectors/gmail/index.mjs';
-import { gcpOauth } from '../src/connectors/gcp/index.mjs';
+import { googleOauth } from '../src/connectors/google/index.mjs';
 import { githubOauth } from '../src/connectors/github/index.mjs';
 import { openrouterOauth } from '../src/connectors/openrouter/index.mjs';
-import { FakeGcp } from '../src/connectors/gcp/fixture.mjs';
 import { FakeGitHub } from '../src/connectors/github/fixture.mjs';
 import { FakeOpenRouter } from '../src/connectors/openrouter/fixture.mjs';
-import { fixture, FakeGmail, KEY, USER_A } from './helpers.mjs';
+import { fixture, FakeGoogle, KEY, USER_A } from './helpers.mjs';
 import { fail } from '../src/errors.mjs';
 
 const value = (subject, state = 'opaque-0') => ({ subject, privateState: state, facts: { label: subject }, expiresAt: null,
@@ -30,11 +28,11 @@ function setup(t, obtain) {
 }
 
 test('各接続の設定を個別に読み込み、利用可否と出力を公開する', () => {
-  const registry = new Connectors(builtins({ FOUNDATION_GCP_CLIENT_ID: 'test-id', FOUNDATION_GCP_CLIENT_SECRET: 'test-secret' }));
-  assert.deepEqual(registry.ids(), ['github.oauth', 'openrouter.oauth', 'gcp.oauth', 'gmail.readonly', 'gmail.metadata', 'gmail.read-send', 'ebay.oauth', 'cloudflare.oauth', 'aws.role']);
+  const registry = new Connectors(builtins({ FOUNDATION_GOOGLE_CLIENT_ID: 'test-id', FOUNDATION_GOOGLE_CLIENT_SECRET: 'test-secret' }));
+  assert.deepEqual(registry.ids(), ['github.oauth', 'openrouter.oauth', 'google.oauth', 'ebay.oauth', 'cloudflare.oauth', 'aws.role']);
   const catalog = registry.ids().map(id => registry.describe(id));
-  assert.equal(catalog.find(item => item.id === 'gcp.oauth').available, true);
-  assert.equal(catalog.find(item => item.id === 'gmail.readonly').available, false);
+  assert.equal(catalog.find(item => item.id === 'google.oauth').available, true);
+  assert.equal(catalog.find(item => item.id === 'github.oauth').available, false);
   assert.equal(catalog.find(item => item.id === 'openrouter.oauth').can_revoke, false);
   assert.deepEqual(catalog.find(item => item.id === 'github.oauth').variables, ['GH_TOKEN', 'GITHUB_TOKEN']);
   assert.doesNotMatch(JSON.stringify(catalog), /test-secret|test-id/);
@@ -112,12 +110,12 @@ test('取得中に再接続した場合は新しい認証状態を維持する',
   assert.equal(connections.state(current).private_state, 'reconnected');
 });
 
-test('既存の4サービスの暗号化状態・接続ID・保存名を再起動後も利用する', async t => {
+test('各サービスの暗号化状態・接続ID・保存名を再起動後も利用する', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-connection-compat-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const makeConnectors = () => [gmailReadonly(new FakeGmail()), gcpOauth(new FakeGcp()), githubOauth(new FakeGitHub()), openrouterOauth(new FakeOpenRouter())];
+  const makeConnectors = () => [googleOauth(new FakeGoogle()), githubOauth(new FakeGitHub()), openrouterOauth(new FakeOpenRouter())];
   const database = join(directory, 'state.sqlite'), first = await fixture(t, { database, connectors: makeConnectors() });
-  const specs = [ ['gmail.readonly', 'personal-readonly', 'GOOGLE_OAUTH_ACCESS_TOKEN'], ['gcp.oauth', 'personal', 'CLOUDSDK_AUTH_ACCESS_TOKEN'],
+  const specs = [ ['google.oauth', 'personal-readonly', 'GOOGLE_OAUTH_ACCESS_TOKEN'],
     ['github.oauth', 'octo', 'GH_TOKEN'], ['openrouter.oauth', 'personal', 'OPENROUTER_API_KEY'] ];
   const identities = [];
   for (const [connector, code, output] of specs) {

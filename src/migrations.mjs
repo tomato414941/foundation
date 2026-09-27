@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 23;
+export const SCHEMA_VERSION = 24;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -7,7 +7,26 @@ export const STEPS = {
   22: migrateGrantsAndObjects,
   // A grant is told apart by its name and its method; no provider or tags are kept about it.
   23: 'DROP TABLE grant_tags; ALTER TABLE grants DROP COLUMN provider;',
+  24: migrateGoogleConnections,
 };
+
+// Gmail (one connector per read range) and Google Cloud were Google connections under fixed scopes. Now there is
+// one Google connection, asking for the scopes the holder chose, and naming the account by its address. Each old
+// connection keeps its id and asks for what it had, plus what names the account; its tokens cannot say who the
+// account is (or came from another OAuth client), so the holder connects it again once.
+function migrateGoogleConnections(store) {
+  const db = store.db, vault = store.vault, base = ['openid', 'https://www.googleapis.com/auth/userinfo.email'];
+  const rows = db.prepare("SELECT g.holding_id, g.connector, g.subject, g.state, h.holder_id FROM grants g JOIN holdings h ON h.id=g.holding_id WHERE g.connector IN ('gmail.readonly','gmail.metadata','gmail.read-send','gcp.oauth')").all();
+  const update = db.prepare("UPDATE grants SET connector='google.oauth', subject=?, state=?, status=CASE status WHEN 'disconnecting' THEN status ELSE 'reconnect_required' END, generation=generation+1 WHERE holding_id=?");
+  for (const row of rows) {
+    const binding = `grant:${row.holder_id}:${row.holding_id}`, state = vault.open(row.state, binding);
+    const granted = Array.isArray(state.facts?.scopes) ? state.facts.scopes : [];
+    state.requested_scopes = [...new Set([...base, ...granted.map(scope => scope === 'email' ? base[1] : scope)])].sort();
+    // Google Cloud named the account by its Google ID; its address was its label.
+    const email = row.connector === 'gcp.oauth' ? String(state.facts?.label || '').toLowerCase() : row.subject;
+    update.run(/^[^\s@]+@[^\s@]+$/.test(email) ? email : row.subject, vault.seal(state, binding), row.holding_id);
+  }
+}
 
 // A held thing was one row for every kind, with the columns of each kind side by side. Now the row says only
 // that it is held; what it is (a grant, or an object) has a table of its own. A secret becomes a grant given

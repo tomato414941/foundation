@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { GitHubClient } from './client.mjs';
 import { FakeGitHub } from './fixture.mjs';
 import { githubOauth } from './index.mjs';
-import { gmailReadonly, gmailMetadata } from '../gmail/index.mjs';
-import { FakeGmail, fixture } from '../../../test/helpers.mjs';
+import { googleOauth } from '../google/index.mjs';
+import { FakeGoogle, fixture } from '../../../test/helpers.mjs';
 
 async function githubFixture(t, github = new FakeGitHub()) {
-  const gmail = new FakeGmail(), f = await fixture(t, { gmail, connectors: [githubOauth(github), gmailReadonly(gmail), gmailMetadata(gmail)] });
+  const google = new FakeGoogle(), f = await fixture(t, { google, connectors: [githubOauth(github), googleOauth(google)] });
   async function start(extra = {}) {
     const result = await f.request('/v1/connections', { method: 'POST', data: { connector: 'github.oauth', name: '', ...extra } });
     assert.equal(result.status, 200, result.text);
@@ -18,11 +18,12 @@ async function githubFixture(t, github = new FakeGitHub()) {
   return { ...f, github, start, back, connections };
 }
 
-test('GitHub authorization asks for the repository scopes with state and PKCE', async t => {
-  const f = await githubFixture(t), url = await f.start();
+test('GitHubには、頼まれた権限だけをstateとPKCE付きで要求する', async t => {
+  const f = await githubFixture(t), url = await f.start({ scopes: ['workflow', 'repo'] });
   assert.equal(url.origin + url.pathname, 'https://github.com/login/oauth/authorize');
   assert.equal(url.searchParams.get('client_id'), 'Iv1.fixture');
-  assert.equal(url.searchParams.get('scope'), 'gist read:org repo workflow');
+  assert.equal(url.searchParams.get('scope'), 'repo workflow');
+  assert.equal((await f.start()).searchParams.get('scope'), '');
   assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
   assert.ok(url.searchParams.get('state') && url.searchParams.get('code_challenge'));
   assert.equal(url.searchParams.has('client_secret'), false);
@@ -43,10 +44,10 @@ test('A connected GitHub account is named by its login and delivered to an appro
   assert.deepEqual(delivered.json.delivery.environment, { GH_TOKEN: 'gho_octo', GITHUB_TOKEN: 'gho_octo' });
 });
 
-test('不足・追加されたGitHub権限を接続一覧で確認し、認証情報を取得する', async t => {
+test('頼んだGitHub権限に対する不足と追加を接続一覧で確認し、認証情報を取得する', async t => {
   const f = await githubFixture(t);
   f.github.scopes = 'read:org, admin:org';
-  const done = await f.back(await f.start(), 'octo');
+  const done = await f.back(await f.start({ scopes: ['gist', 'read:org', 'repo', 'workflow'] }), 'octo');
   assert.match(done.headers.get('location'), /connection=connected/);
   const agent = await f.issueKey(), [connection] = await f.connections();
   const result = await f.deliver(connection, { token: agent.token });
@@ -90,7 +91,7 @@ test('Disconnecting revokes the grant at GitHub', async t => {
 });
 
 test('Without a client ID and secret GitHub is offered as unavailable', async t => {
-  const gmail = new FakeGmail(), f = await fixture(t, { gmail, connectors: [githubOauth(new GitHubClient()), gmailReadonly(gmail), gmailMetadata(gmail)] });
+  const google = new FakeGoogle(), f = await fixture(t, { google, connectors: [githubOauth(new GitHubClient()), googleOauth(google)] });
   const adapter = (await f.request('/v1/overview')).json.connectors.find(item => item.id === 'github.oauth');
   assert.equal(adapter.available, false);
   assert.equal((await f.request('/v1/connections', { method: 'POST', data: { connector: 'github.oauth' } })).status, 503);

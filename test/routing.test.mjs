@@ -59,7 +59,7 @@ test('同じURLでCookieとBearerを受け付け、Bearerがある場合はそ�
   const agent = await f.request('/v1/holdings?kind=grant&method=authorized', { token: key.token });
   assert.deepEqual(agent.json.holdings.map(item => item.id), [first.id]);
   const anonymous = await f.request('/v1/connectors', { anonymous: true });
-  assert.deepEqual(anonymous.json.connectors.map(item => item.id), ['gmail.readonly', 'gmail.metadata']);
+  assert.deepEqual(anonymous.json.connectors.map(item => item.id), ['google.oauth']);
 });
 
 test('解釈できないAuthorizationが付いた要求をCookieで代用せず拒否する', async t => {

@@ -21,7 +21,7 @@ async function storedInputs(f) {
     const saved = await f.request('/v1/holdings?kind=grant&name=' + encodeURIComponent(name), { method: 'PUT', raw: value });
     assert.equal(saved.status, 200, saved.text);
   }
-  return ['GOOGLE_OAUTH_ACCESS_TOKEN=first input', 'GMAIL_ACCOUNT_EMAIL=second=入力:1'];
+  return ['GOOGLE_OAUTH_ACCESS_TOKEN=first input', 'GOOGLE_ACCOUNT_EMAIL=second=入力:1'];
 }
 
 async function outputFixture(t) {
@@ -183,7 +183,7 @@ test('The runtime hands what is kept to the selected process only', async (t) =>
   const dir = await mkdtemp(join(tmpdir(), 'foundation-runtime-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'runtime-key'); await writeFile(keyPath, runtime.token, { mode: 0o600 });
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
-  const run = await execute(['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal-readonly"||process.env.GMAIL_ACCOUNT_EMAIL!=="personal@example.test"||process.env.FOUNDATION_RUNTIME_KEY_FILE) process.exit(2);console.log("runtime-ready")'], env);
+  const run = await execute(['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal-readonly"||process.env.GOOGLE_ACCOUNT_EMAIL!=="personal@example.test"||process.env.FOUNDATION_RUNTIME_KEY_FILE) process.exit(2);console.log("runtime-ready")'], env);
   assert.equal(run.code, 0, run.err);
   assert.equal(run.out.trim(), 'runtime-ready');
   assert.doesNotMatch(run.out + run.err, /google-access|refresh_token|fdn_/);
@@ -268,7 +268,7 @@ test('--help lists the commands; guide describes the API, and when a server is r
   assert.doesNotMatch(offline.out, /gmail/);
   const online = await execute(['guide'], { FOUNDATION_URL: f.base });
   assert.equal(online.code, 0, online.err);
-  assert.match(online.out, /gmail.readonly  Gmail \/ メールの読み取り  outputs: GOOGLE_OAUTH_ACCESS_TOKEN/);
+  assert.match(online.out, /google.oauth  Google \/ Googleアカウントの操作  outputs: GOOGLE_OAUTH_ACCESS_TOKEN/);
 });
 
 test('The CLI installs from its npm package, and connect <url> remembers the server for every later command', async t => {
@@ -295,7 +295,7 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   assert.match(connected.out, /confirmation_code/);
   assert.deepEqual(JSON.parse(await readFile(join(dir, 'config', 'foundation', 'config.json'), 'utf8')), { url: f.base });
   const help = await run(foundation, ['guide'], env);
-  assert.match(help.out, /gmail.readonly/);
+  assert.match(help.out, /google.oauth/);
   const waiting = await run(foundation, ['api', 'GET', '/v1/principals/me'], env);
   assert.match(waiting.out, /"status":"pending"/); assert.doesNotMatch(waiting.out, /fdn_/);
   const request = JSON.parse(connected.out.split('\n\nKey file')[0]).request;
@@ -304,7 +304,7 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   const me = await run(foundation, ['api', 'GET', '/v1/principals/me'], env);
   assert.equal(me.code, 0, me.out + me.err);
   const inputs = await storedInputs(f);
-  const delivered = await run(foundation, ['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal-readonly"||process.env.GMAIL_ACCOUNT_EMAIL!=="personal@example.test")process.exit(2);console.log("package-ready")'], env);
+  const delivered = await run(foundation, ['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal-readonly"||process.env.GOOGLE_ACCOUNT_EMAIL!=="personal@example.test")process.exit(2);console.log("package-ready")'], env);
   assert.equal(delivered.code, 0, delivered.err);
   assert.equal(delivered.out.trim(), 'package-ready');
   const output = { name: 'installed login', as: 'NPM_CONFIG_USERCONFIG', filename: 'npmrc' };
@@ -320,7 +320,7 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   assert.equal((await f.read('grant', 'installed login')).text, '//registry.npmjs.org/:_authToken=fake-install-token\n');
   assert.doesNotMatch(saved.out + saved.err, /fake-install-token/);
   const moved = await run(foundation, ['guide'], { ...env, FOUNDATION_URL: 'http://127.0.0.1:9' });
-  assert.doesNotMatch(moved.out, /gmail.readonly/, 'FOUNDATION_URL wins over the remembered server');
+  assert.doesNotMatch(moved.out, /google.oauth/, 'FOUNDATION_URL wins over the remembered server');
 });
 
 test('connect on a key already approved only remembers the server', async t => {

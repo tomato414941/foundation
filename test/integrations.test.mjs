@@ -122,7 +122,7 @@ test('A link is made only for the app\'s own users\' open store requests, and ex
   const token = new URLSearchParams(new URL(made.json.url).hash.slice(1)).get('link');
   f.app.store.db.prepare("UPDATE credentials SET expires_at=0 WHERE kind='link'").run();
   assert.equal((await visitor()('/v1/credentials/exchange', { method: 'POST', data: { request_id: request.id, link: token } })).status, 410);
-  const connect = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { kind: 'connect', input: { connector: 'gmail.readonly' }, purpose: '確認' } });
+  const connect = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { kind: 'connect', input: { connector: 'google.oauth' }, purpose: '確認' } });
   assert.equal((await link(user, connect.json.request.id)).json.error.code, 'link_unsupported');
 });
 

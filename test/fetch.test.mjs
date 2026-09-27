@@ -155,7 +155,7 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
   const input = await f.request('/v1/holdings?kind=grant&name=' + encodeURIComponent(inputName) + '', { method: 'PUT', token: key.token, raw: TOKEN });
   assert.equal(input.status, 200);
   f.expire(connection.id);
-  const calls = f.gmail.calls.length;
+  const calls = f.google.calls.length;
   const saved = await f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: {
     url: 'https://api.example.test/echo', headers: { authorization: 'Bearer {{foundation:chosen}}' },
     bindings: { chosen: inputName }, save: outputName,
@@ -167,7 +167,7 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
   assert.equal(saved.json.response.body, undefined);
   const body = await f.read('grant', (outputName));
   assert.equal(JSON.parse(body.text).authorization, 'Bearer [redacted]');
-  assert.equal(f.gmail.calls.length, calls, 'using a saved value does not process any connection');
+  assert.equal(f.google.calls.length, calls, 'using a saved value does not process any connection');
   assert.equal((await f.read('grant', (outputName), { token: key.token })).status, 403);
   assert.doesNotMatch(saved.text, new RegExp(TOKEN));
 

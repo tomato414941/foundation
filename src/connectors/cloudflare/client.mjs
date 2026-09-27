@@ -4,8 +4,10 @@ import { fail } from '../../errors.mjs';
 export const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
 export const CLOUDFLARE_DOCS = 'https://developers.cloudflare.com/api/';
 export const CLOUDFLARE_SETTINGS = 'https://dash.cloudflare.com/?to=/profile/access-management/authorization';
-// Cloudflare's self-managed clients use the dot-delimited IDs from GET /oauth/scopes.
-export const CLOUDFLARE_SCOPES = ['user-details.read', 'account-settings.read', 'zone.read', 'dns.write', 'zone-settings.read', 'registrar-domains.admin', 'email-routing-address.write', 'email-routing-rule.write', 'offline_access'].sort();
+// Cloudflare's self-managed clients use the dot-delimited IDs from GET /oauth/scopes. Foundation itself needs only to
+// know who authorized and to keep the grant renewable; the rest is whatever the holder chose to give.
+export const CLOUDFLARE_BASE_SCOPES = ['offline_access', 'user-details.read'];
+export const CLOUDFLARE_SCOPE_DOCS = 'https://developers.cloudflare.com/fundamentals/oauth/';
 const OAUTH = 'https://dash.cloudflare.com/oauth2';
 const validToken = value => typeof value === 'string' && value.length > 0 && value.length <= 8192 && !/[^\x21-\x7e]/.test(value);
 const invalidResponse = () => fail(502, 'service_response', 'Cloudflareからの認証応答を確認できませんでした。');
@@ -18,11 +20,11 @@ export class CloudflareClient {
     this.clientId = clientId; this.clientSecret = clientSecret; this.fetcher = fetcher;
   }
   check() { if (!this.enabled) fail(503, 'cloudflare_unavailable', '現在Cloudflareに接続できません。'); }
-  authorize({ state, verifier, redirectUri }) {
+  authorize({ state, verifier, redirectUri, scopes }) {
     this.check();
     const url = new URL(OAUTH + '/auth');
     url.search = new URLSearchParams({ client_id: this.clientId, redirect_uri: redirectUri, response_type: 'code',
-      scope: CLOUDFLARE_SCOPES.join(' '), state, prompt: 'consent',
+      scope: scopes.join(' '), state, prompt: 'consent',
       code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' }).toString();
     return url.href;
   }
@@ -117,10 +119,7 @@ export class CloudflareClient {
   }
   facts(secret) {
     return { label: secret.identity.email, user_id: secret.identity.user_id, client_id: secret.client_id, scopes: secret.scopes,
-      observed_accounts: secret.accounts ?? null,
-      missing_scopes: CLOUDFLARE_SCOPES.filter(scope => !secret.scopes.includes(scope)),
-      additional_scopes: secret.scopes.filter(scope => !CLOUDFLARE_SCOPES.includes(scope)),
-      checked_at: secret.identity.checked_at };
+      observed_accounts: secret.accounts ?? null, checked_at: secret.identity.checked_at };
   }
   changes(secret, previous) {
     const changes = [];

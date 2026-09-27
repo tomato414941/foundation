@@ -13,7 +13,9 @@ export class Connectors {
         || !['oauth', 'role'].includes(connector.authorization?.kind) || typeof connector.obtain !== 'function' || typeof connector.authorization?.begin !== 'function'
         || typeof connector.authorization?.complete !== 'function'
         || (connector.authorization.changes !== undefined && typeof connector.authorization.changes !== 'function')
-        || (connector.revoke !== undefined && typeof connector.revoke !== 'function')) throw new Error('Invalid connector contract: ' + connector.id);
+        || (connector.revoke !== undefined && typeof connector.revoke !== 'function')
+        || (connector.scopes !== undefined && (connector.authorization.kind !== 'oauth' || !Array.isArray(connector.scopes.base)
+          || connector.scopes.base.some(scope => typeof scope !== 'string' || !scope)))) throw new Error('Invalid connector contract: ' + connector.id);
       this.connectors.set(connector.id, connector);
     }
   }
@@ -29,6 +31,7 @@ export class Connectors {
       intro: connector.intro || '', access: connector.access, variables: connector.variables,
       ...(connector.ai ? { ai: connector.ai } : {}), ...(connector.kind ? { kind: connector.kind } : {}), ...(connector.failureNote ? { failure_note: connector.failureNote } : {}),
       ...(connector.revocationNote ? { revocation_note: connector.revocationNote } : {}),
-      can_reconnect: connector.canReconnect !== false, can_revoke: typeof connector.revoke === 'function', credential_type: connector.credentialType || 'unknown' };
+      can_reconnect: connector.canReconnect !== false, can_revoke: typeof connector.revoke === 'function', credential_type: connector.credentialType || 'unknown',
+      scopes: connector.scopes ? { base: connector.scopes.base, documentation_url: connector.scopes.documentationUrl || '' } : null };
   }
 }

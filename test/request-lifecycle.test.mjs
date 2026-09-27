@@ -12,21 +12,21 @@ async function ask(f, token, kind, input) {
 
 test('依頼の種類と内容を保存し、同じ依頼を二度出しても一つとして扱う', async t => {
   const f = await fixture(t), key = await f.issueKey();
-  const request = await ask(f, key.token, 'connect', { connector: 'gmail.readonly' });
-  const again = await f.request('/v1/requests', { method: 'POST', token: key.token, data: { kind: 'connect', input: { connector: 'gmail.readonly' } } });
+  const request = await ask(f, key.token, 'connect', { connector: 'google.oauth' });
+  const again = await f.request('/v1/requests', { method: 'POST', token: key.token, data: { kind: 'connect', input: { connector: 'google.oauth' } } });
   assert.equal(again.json.request.id, request.id);
   assert.equal(request.kind, 'connect');
-  assert.deepEqual(request.input, { connector: 'gmail.readonly' });
+  assert.deepEqual(request.input, { connector: 'google.oauth' });
   for (const data of [
     { kind: 'other', input: {} }, { kind: 'connect', input: { fields: [] } },
-    { kind: 'store', input: { connector: 'gmail.readonly' } }, { connector: 'gmail.readonly' },
+    { kind: 'store', input: { connector: 'google.oauth' } }, { connector: 'google.oauth' },
   ]) assert.equal((await f.request('/v1/requests', { method: 'POST', token: key.token, data })).status, 400);
 });
 
 test('接続の失効・削除後も依頼の完了と結果を維持する', async t => {
   const f = await fixture(t), key = await f.issueKey();
-  const request = await ask(f, key.token, 'connect', { connector: 'gmail.readonly' });
-  const start = await f.request('/v1/connections', { method: 'POST', data: { connector: 'gmail.readonly', request_id: request.id } });
+  const request = await ask(f, key.token, 'connect', { connector: 'google.oauth' });
+  const start = await f.request('/v1/connections', { method: 'POST', data: { connector: 'google.oauth', request_id: request.id } });
   await f.callback(new URL(start.json.url));
   const read = async () => (await f.request('/v1/requests/' + request.id, { token: key.token })).json.request;
   const done = await read(), id = done.result.connection_id;
@@ -40,7 +40,7 @@ test('接続の失効・削除後も依頼の完了と結果を維持する', as
     assert.deepEqual(current.result, done.result);
     assert.equal((await f.request('/v1/requests?status=done', { token: key.token })).json.requests[0].status, 'done');
   }
-  f.app.grants.connectors.connectors.delete('gmail.readonly');
+  f.app.grants.connectors.connectors.delete('google.oauth');
   assert.deepEqual((await read()).result, done.result);
 });
 
@@ -60,7 +60,7 @@ test('キー失効時に未完了の依頼を取り消し、同じトークン�
   const f = await fixture(t), key = await f.issueKey();
   const doneRequest = await ask(f, key.token, 'store', { fields: [{ name: 'kept', label: 'トークン' }] });
   await f.request('/v1/requests/' + doneRequest.id + '/done', { method: 'POST', data: { entries: [{ name: 'kept', content: 'fixture-secret' }] } });
-  const pending = await ask(f, key.token, 'connect', { connector: 'gmail.readonly' });
+  const pending = await ask(f, key.token, 'connect', { connector: 'google.oauth' });
   await f.request('/v1/principals/' + key.id, { method: 'DELETE', data: {} });
   const cancelled = (await f.request('/v1/requests/' + pending.id)).json.request;
   assert.equal(cancelled.status, 'cancelled');

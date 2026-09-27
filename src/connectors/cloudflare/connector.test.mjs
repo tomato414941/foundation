@@ -1,15 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { CloudflareClient, CLOUDFLARE_SCOPES } from './client.mjs';
+import { CloudflareClient, CLOUDFLARE_BASE_SCOPES } from './client.mjs';
 import { cloudflareOauth, configuration } from './index.mjs';
 import { FakeCloudflare } from './fixture.mjs';
 import { fixture, json, USER_A } from '../../../test/helpers.mjs';
 
+// What these tests ask Cloudflare for, and what that asks the consent screen for with Foundation's own base.
+const ASKED = ['account-settings.read', 'dns.write', 'zone.read'];
+const GRANTED = [...new Set([...CLOUDFLARE_BASE_SCOPES, ...ASKED])].sort();
+
 async function cloudflareFixture(t, cloudflare = new FakeCloudflare()) {
   const f = await fixture(t, { connectors: [cloudflareOauth(cloudflare)] });
   async function start(input = {}) {
-    const result = await f.request('/v1/connections', { method: 'POST', data: { connector: 'cloudflare.oauth', ...input } });
+    const result = await f.request('/v1/connections', { method: 'POST', data: { connector: 'cloudflare.oauth', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
@@ -33,12 +37,12 @@ test('Cloudflareの設定を読み込み、未設定なら利用不可として�
   assert.equal((await f.request('/v1/connections', { method: 'POST', data: { connector: 'cloudflare.oauth' } })).status, 503);
 });
 
-test('Cloudflareの認可をstate・PKCE・継続利用の権限付きで要求し、同じセッションで完了する', async t => {
+test('Cloudflareの認可を、頼まれた権限と継続利用・本人確認の権限、state・PKCE付きで要求し、同じセッションで完了する', async t => {
   const f = await cloudflareFixture(t), url = await f.start();
   assert.equal(url.origin + url.pathname, 'https://dash.cloudflare.com/oauth2/auth');
   assert.equal(url.searchParams.get('client_id'), 'test-cloudflare-client');
   assert.equal(url.searchParams.get('redirect_uri'), f.base + '/oauth/cloudflare.oauth/callback');
-  assert.deepEqual(url.searchParams.get('scope').split(' '), CLOUDFLARE_SCOPES);
+  assert.deepEqual(url.searchParams.get('scope').split(' '), GRANTED);
   assert.equal(url.searchParams.get('prompt'), 'consent');
   assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
   assert.ok(url.searchParams.get('state'));
@@ -59,7 +63,7 @@ test('Cloudflareの認可をstate・PKCE・継続利用の権限付きで要求�
 test('接続依頼を完了し、許可された権限と認証情報を分けて返す', async t => {
   const f = await cloudflareFixture(t), { token } = await f.issueKey();
   const asked = await f.request('/v1/requests', { method: 'POST', token, data: {
-    kind: 'connect', input: { connector: 'cloudflare.oauth' }, purpose: 'ドメインとDNSを管理します。' } });
+    kind: 'connect', input: { connector: 'cloudflare.oauth', scopes: ASKED }, purpose: 'ドメインとDNSを管理します。' } });
   assert.equal(asked.status, 201, asked.text);
   const connection = await f.connect('personal', { request_id: asked.json.request.id });
   const completed = await f.request('/v1/requests/' + asked.json.request.id, { token });
@@ -68,7 +72,8 @@ test('接続依頼を完了し、許可された権限と認証情報を分け�
   const listed = await f.request('/v1/holdings?kind=grant&method=authorized', { token });
   assert.equal(listed.json.holdings[0].label, 'personal@example.test');
   assert.equal(listed.json.holdings[0].facts.user_id, '1'.repeat(32));
-  assert.deepEqual(listed.json.holdings[0].facts.scopes, CLOUDFLARE_SCOPES);
+  assert.deepEqual(listed.json.holdings[0].facts.scopes, GRANTED);
+  assert.deepEqual(listed.json.holdings[0].facts.requested_scopes, GRANTED);
   assert.doesNotMatch(listed.text, /cf-access-|cf-refresh-|test-cloudflare-secret/);
   const delivery = await f.deliver(connection, { token });
   assert.equal(delivery.status, 200, delivery.text);
@@ -105,13 +110,13 @@ test('Cloudflareで拒否された認可を依頼の結果に反映する', asyn
   assert.ok(request.events.some(event => event.event === 'connect_failed' && event.code === 'authorization_denied'));
 });
 
-test('権限の不足と追加をCloudflareの応答に従って報告する', async t => {
+test('頼んだ権限に対する不足と追加を、Cloudflareの応答に従って報告する', async t => {
   const f = await cloudflareFixture(t);
   f.cloudflare.scopes = 'user-details.read offline_access workers-r2.read';
   const connection = await f.connect(), delivered = await f.deliver(connection);
   assert.equal(delivered.status, 200);
   const facts = await f.connectionFacts(connection);
-  assert.deepEqual(facts.missing_scopes, ['account-settings.read', 'dns.write', 'email-routing-address.write', 'email-routing-rule.write', 'registrar-domains.admin', 'zone-settings.read', 'zone.read']);
+  assert.deepEqual(facts.missing_scopes, ASKED);
   assert.deepEqual(facts.additional_scopes, ['workers-r2.read']);
 });
 
@@ -137,7 +142,7 @@ test('更新応答で省略された権限と更新トークンを元の認可�
   const delivered = await f.deliver(connection);
   assert.equal(delivered.status, 200, delivered.text);
   assert.equal(f.secret(connection).refresh_token, 'cf-refresh-personal-0');
-  assert.deepEqual((await f.connectionFacts(connection)).scopes, CLOUDFLARE_SCOPES);
+  assert.deepEqual((await f.connectionFacts(connection)).scopes, GRANTED);
 });
 
 test('複数の同時要求を一回の更新にまとめ、後続の取得でも更新済みの認証情報を渡す', async t => {
@@ -205,7 +210,7 @@ test('Cloudflareの認証応答を検証し、不正な値を安全なエラー�
 
 test('再接続では新たな継続利用の許可と確認できる利用者情報を要求する', async t => {
   const f = await cloudflareFixture(t), connection = await f.connect();
-  f.cloudflare.exchangeHandler = () => json({ access_token: 'cf-access-work-0', token_type: 'Bearer', expires_in: 3600, scope: CLOUDFLARE_SCOPES.join(' ') });
+  f.cloudflare.exchangeHandler = () => json({ access_token: 'cf-access-work-0', token_type: 'Bearer', expires_in: 3600, scope: GRANTED.join(' ') });
   assert.match((await f.callback(await f.start({ connection_id: connection.id }), 'work')).headers.get('location'), /connection=retry/);
   assert.equal(f.secret(connection).identity.user_id, '1'.repeat(32));
   f.cloudflare.exchangeHandler = undefined;
@@ -244,7 +249,7 @@ test('同じユーザーが異なるアカウントへの許可を追加し、�
   assert.equal(second.facts.client_id, 'test-cloudflare-client');
   assert.deepEqual(second.facts.observed_accounts.items, f.cloudflare.listedAccounts);
   assert.deepEqual((await f.connectionFacts(first)).observed_accounts.items, [{ id: 'a'.repeat(32), name: 'Personal account' }]);
-  assert.deepEqual((await f.connectionFacts(first)).scopes, CLOUDFLARE_SCOPES);
+  assert.deepEqual((await f.connectionFacts(first)).scopes, GRANTED);
   assert.equal((await f.deliver(first)).status, 200);
   assert.equal((await f.deliver(second)).status, 200);
 });

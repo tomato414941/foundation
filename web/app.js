@@ -116,7 +116,7 @@ function paging(total, showing) {
 // The service a connection reaches.
 const serviceName = connector => connector.service?.name || connector.label;
 const serviceLogo = service => {
-  const name = { Cloudflare: 'cloudflare', GitHub: 'github', Gmail: 'gmail', 'Google Cloud': 'googlecloud', OpenRouter: 'openrouter', eBay: 'ebay' }[service?.name];
+  const name = { Cloudflare: 'cloudflare', GitHub: 'github', Google: 'google', OpenRouter: 'openrouter', eBay: 'ebay' }[service?.name];
   return name ? `<svg viewBox="0 0 24 24" aria-hidden="true"><use href="/service-logos.svg#${name}"/></svg>` : icon(service?.icon || 'key');
 };
 const icon = (name) => {

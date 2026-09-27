@@ -2,7 +2,9 @@ import { fail } from '../../errors.mjs';
 
 export const EBAY_API = 'https://api.ebay.com';
 export const EBAY_DOCS = 'https://developer.ebay.com/develop/guides/sell/authorization';
-export const EBAY_SCOPES = ['https://api.ebay.com/oauth/api_scope/sell.account', 'https://api.ebay.com/oauth/api_scope/sell.inventory'];
+// Identity comes from token introspection; eBay requires at least one scope, and its public one says nothing more.
+export const EBAY_BASE_SCOPES = ['https://api.ebay.com/oauth/api_scope'];
+export const EBAY_SCOPE_DOCS = 'https://developer.ebay.com/api-docs/static/oauth-scopes.html';
 const TOKEN_URL = EBAY_API + '/identity/v1/oauth2/token';
 const validToken = value => typeof value === 'string' && value.length > 0 && value.length <= 8192 && !/[^\x21-\x7e]/.test(value);
 const validText = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value);
@@ -25,11 +27,11 @@ export class EbayClient {
     this.clientId = clientId; this.clientSecret = clientSecret; this.ruName = ruName; this.fetcher = fetcher;
   }
   check() { if (!this.enabled) fail(503, 'ebay_unavailable', '現在eBayに接続できません。'); }
-  authorize({ state }) {
+  authorize({ state, scopes }) {
     this.check();
     const url = new URL('https://auth.ebay.com/oauth2/authorize');
     url.search = new URLSearchParams({ client_id: this.clientId, redirect_uri: this.ruName, response_type: 'code',
-      scope: EBAY_SCOPES.join(' '), state, prompt: 'login' }).toString();
+      scope: scopes.join(' '), state, prompt: 'login' }).toString();
     return url.href;
   }
   async call(path, values) {
@@ -101,9 +103,7 @@ export class EbayClient {
   }
   facts(secret) {
     return { label: secret.identity.username || secret.identity.subject, account_id: secret.identity.subject, username: secret.identity.username,
-      scopes: secret.scopes, missing_scopes: EBAY_SCOPES.filter(scope => !secret.scopes.includes(scope)),
-      additional_scopes: secret.scopes.filter(scope => !EBAY_SCOPES.includes(scope)),
-      refresh_expires_at: secret.refresh_expires_at, checked_at: secret.identity.checked_at };
+      scopes: secret.scopes, refresh_expires_at: secret.refresh_expires_at, checked_at: secret.identity.checked_at };
   }
   async revoke(privateState) {
     this.check();

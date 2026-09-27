@@ -4,7 +4,11 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { EbayClient, EBAY_API, EBAY_SCOPES } from './client.mjs';
+import { EbayClient, EBAY_API, EBAY_BASE_SCOPES } from './client.mjs';
+
+// What these tests ask eBay for, and what that asks the consent screen for with Foundation's own base.
+const ASKED = ['https://api.ebay.com/oauth/api_scope/sell.account', 'https://api.ebay.com/oauth/api_scope/sell.inventory'];
+const GRANTED = [...new Set([...EBAY_BASE_SCOPES, ...ASKED])].sort();
 import { ebayOauth, configuration } from './index.mjs';
 import { FakeEbay } from './fixture.mjs';
 import { Connectors } from '../../connectors.mjs';
@@ -13,14 +17,14 @@ import { fixture, json, USER_A } from '../../../test/helpers.mjs';
 
 const grant = (change = {}) => ({ access_token: 'ebay-access-personal-0', refresh_token: 'ebay-refresh-personal',
   expires_in: 7200, refresh_token_expires_in: 47304000, token_type: 'User Access Token', ...change });
-const inspected = (change = {}) => ({ active: true, sub: '1001', username: 'personal-seller', scope: EBAY_SCOPES.join(' '),
+const inspected = (change = {}) => ({ active: true, sub: '1001', username: 'personal-seller', scope: GRANTED.join(' '),
   client_id: 'test-ebay-client', exp: Math.floor(Date.now() / 1000) + 7200, token_type: 'Bearer', ...change });
 
 async function ebayFixture(t, ebay = new FakeEbay()) {
   const f = await fixture(t, { connectors: [ebayOauth(ebay)] });
   const connections = async () => (await f.request('/v1/overview')).json.grants;
   async function start(input = {}) {
-    const result = await f.request('/v1/connections', { method: 'POST', data: { connector: 'ebay.oauth', ...input } });
+    const result = await f.request('/v1/connections', { method: 'POST', data: { connector: 'ebay.oauth', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
@@ -55,7 +59,7 @@ test('RuNameとstateで同意を開始し、同じセッションで一度だけ
   assert.equal(url.searchParams.get('redirect_uri'), 'Test-Foundation-RuName');
   assert.equal(url.searchParams.get('response_type'), 'code');
   assert.equal(url.searchParams.get('prompt'), 'login');
-  assert.deepEqual(url.searchParams.get('scope').split(' '), EBAY_SCOPES);
+  assert.deepEqual(url.searchParams.get('scope').split(' '), GRANTED);
   assert.ok(url.searchParams.get('state'));
   assert.match((await f.callback(url, 'personal', { anonymous: true })).headers.get('location'), /connection=expired/);
   assert.match((await f.callback(url, 'personal', {}, { state: 'wrong' })).headers.get('location'), /connection=expired/);
@@ -77,14 +81,14 @@ test('RuNameとstateで同意を開始し、同じセッションで一度だけ
 
 test('依頼を完了し、確認済みのアカウント情報とAPI用トークンを分けて渡す', async t => {
   const f = await ebayFixture(t), agent = await f.issueKey();
-  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { kind: 'connect', input: { connector: 'ebay.oauth' }, purpose: '出品情報を管理します。' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { kind: 'connect', input: { connector: 'ebay.oauth', scopes: ASKED }, purpose: '出品情報を管理します。' } });
   assert.equal(asked.status, 201);
   const a = await f.connect('personal', { request_id: asked.json.request.id });
   const done = (await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token })).json.request;
   assert.equal(done.status, 'done'); assert.equal(done.result.connection_id, a.id);
   const catalog = await f.request('/v1/holdings?kind=grant&method=authorized', { token: agent.token });
   assert.equal(catalog.json.holdings[0].label, 'personal-seller');
-  assert.deepEqual(catalog.json.holdings[0].facts.scopes, EBAY_SCOPES);
+  assert.deepEqual(catalog.json.holdings[0].facts.scopes, GRANTED);
   assert.doesNotMatch(catalog.text, /ebay-access-|ebay-refresh-|test-ebay-secret/);
   const delivered = await f.deliver(a, { token: agent.token });
   assert.equal(delivered.status, 200, delivered.text);
@@ -115,20 +119,20 @@ test('アカウントを固定IDで区別し、名前の変更を反映して別
   assert.equal((await f.request('/v1/holdings/' + a.id, { method: 'DELETE', data: { revoke: true } })).status, 403);
 });
 
-test('eBayが報告した権限と有効期限を利用し、権限の不足や追加を返す', async t => {
+test('eBayが報告した権限と有効期限を利用し、頼んだ権限に対する不足や追加を返す', async t => {
   const f = await ebayFixture(t), agent = await f.issueKey();
   const exp = Math.floor(Date.now() / 1000) + 300, extra = 'https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly';
-  f.ebay.inspectHandler = () => json(inspected({ username: undefined, exp, scope: EBAY_SCOPES[0] + ' ' + extra }));
+  f.ebay.inspectHandler = () => json(inspected({ username: undefined, exp, scope: ASKED[0] + ' ' + extra }));
   const a = await f.connect(), delivered = await f.deliver(a, { token: agent.token });
   assert.equal(a.label, '1001');
   assert.equal(delivered.json.expires_at, exp * 1000);
   const facts = await f.connectionFacts(a, { token: agent.token });
-  assert.deepEqual(facts.missing_scopes, [EBAY_SCOPES[1]]);
+  assert.deepEqual(facts.missing_scopes, [EBAY_BASE_SCOPES[0], ASKED[1]]);
   assert.deepEqual(facts.additional_scopes, [extra]);
   f.ebay.inspectHandler = () => json(inspected({ scope: '' }));
   const updated = await f.deliver(a, { token: agent.token });
   assert.equal(updated.status, 200, updated.text);
-  assert.deepEqual((await f.connectionFacts(a, { token: agent.token })).missing_scopes, EBAY_SCOPES);
+  assert.deepEqual((await f.connectionFacts(a, { token: agent.token })).missing_scopes, GRANTED);
 });
 
 test('同時取得をまとめて期限切れトークンを更新し、更新用トークンの元の期限を保持する', async t => {

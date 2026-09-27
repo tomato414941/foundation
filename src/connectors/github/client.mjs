@@ -4,8 +4,9 @@ import { fail } from '../../errors.mjs';
 export const GITHUB_API = 'https://api.github.com';
 export const GITHUB_DOCS = 'https://docs.github.com/rest';
 export const GITHUB_SETTINGS = 'https://github.com/settings/applications';
-// What `gh auth login` asks for, and workflow so that pushes touching Actions are not refused.
-export const GITHUB_SCOPES = ['gist', 'read:org', 'repo', 'workflow'];
+// GitHub needs no scope to say who the user is; every scope is the holder's choice.
+export const GITHUB_BASE_SCOPES = [];
+export const GITHUB_SCOPE_DOCS = 'https://docs.github.com/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps';
 const hash = value => createHash('sha256').update(value).digest('hex');
 const invalidResponse = () => fail(502, 'service_response', 'GitHubからの応答を確認できませんでした。');
 
@@ -18,10 +19,10 @@ export class GitHubClient {
     this.clientId = clientId; this.clientSecret = clientSecret; this.fetcher = fetcher;
   }
   check() { if (!this.enabled) fail(503, 'github_unavailable', '現在GitHubに接続できません。'); }
-  authorize({ state, verifier, redirectUri }) {
+  authorize({ state, verifier, redirectUri, scopes }) {
     this.check();
     const url = new URL('https://github.com/login/oauth/authorize');
-    url.search = new URLSearchParams({ client_id: this.clientId, redirect_uri: redirectUri, scope: GITHUB_SCOPES.join(' '), state, allow_signup: 'false',
+    url.search = new URLSearchParams({ client_id: this.clientId, redirect_uri: redirectUri, scope: scopes.join(' '), state, allow_signup: 'false',
       code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' }).toString();
     return url.href;
   }
@@ -73,9 +74,7 @@ export class GitHubClient {
     return this.secret(existing.access_token, identity);
   }
   facts(secret) {
-    return { label: secret.details.login, credential_type: 'oauth2_access_token', expires_at: null, expiry_known: true, management_url: GITHUB_SETTINGS + '/' + this.clientId, scopes: secret.scopes,
-      missing_scopes: GITHUB_SCOPES.filter(scope => !secret.scopes.includes(scope)),
-      additional_scopes: secret.scopes.filter(scope => !GITHUB_SCOPES.includes(scope)) };
+    return { label: secret.details.login, credential_type: 'oauth2_access_token', expires_at: null, expiry_known: true, management_url: GITHUB_SETTINGS + '/' + this.clientId, scopes: secret.scopes };
   }
   // Deleting the grant revokes every token this app holds for the owner.
   async revoke(secret) {

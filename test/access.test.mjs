@@ -5,7 +5,7 @@ import { fixture, USER_A, USER_B } from './helpers.mjs';
 
 const revoke = (f, id, options = {}) => f.request(`/v1/principals/${id}/access`, { method: 'DELETE', data: {}, ...options });
 async function ask(f, agent, to, kind = 'store') {
-  const input = kind === 'store' ? { fields: [{ name: 'requested', label: '値', readable: true }] } : { connector: 'gmail.readonly' };
+  const input = kind === 'store' ? { fields: [{ name: 'requested', label: '値', readable: true }] } : { connector: 'google.oauth' };
   const result = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { kind, input, to } });
   assert.equal(result.status, 201, result.text);
   return result.json.request;
@@ -131,7 +131,7 @@ test('認証情報の更新中にアクセスを取り消すと受け渡しを�
   f.expire(connection.id);
   let began, release;
   const started = new Promise(resolve => began = resolve);
-  f.gmail.refreshHandler = () => { began(); return new Promise(resolve => release = resolve); };
+  f.google.refreshHandler = () => { began(); return new Promise(resolve => release = resolve); };
   const delivering = f.deliver(connection, { token: agent.token });
   await started;
   await revoke(f, agent.id);
@@ -164,11 +164,11 @@ test('アップロード中にアクセスを取り消すと保存を拒否し�
 test('接続認証の完了前にアクセスを取り消すと、取消済みの依頼として完了を拒否する', async t => {
   const f = await fixture(t), agent = await f.issueKey();
   const asked = await ask(f, agent, USER_A, 'connect');
-  const started = await f.request('/v1/connections', { method: 'POST', data: { connector: 'gmail.readonly', request_id: asked.id } });
+  const started = await f.request('/v1/connections', { method: 'POST', data: { connector: 'google.oauth', request_id: asked.id } });
   assert.equal(started.status, 200);
   let began, release;
   const exchanging = new Promise(resolve => began = resolve);
-  f.gmail.exchangeHandler = () => { began(); return new Promise(resolve => release = resolve); };
+  f.google.exchangeHandler = () => { began(); return new Promise(resolve => release = resolve); };
   const returning = f.callback(new URL(started.json.url));
   await exchanging;
   await revoke(f, agent.id);

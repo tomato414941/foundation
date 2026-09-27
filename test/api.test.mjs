@@ -24,28 +24,28 @@ test('OAuth uses state, PKCE, offline consent, native Google URL; callback is on
   assert.equal(url.searchParams.get('access_type'), 'offline');
   assert.equal(url.searchParams.get('include_granted_scopes'), 'false');
   assert.ok(url.searchParams.get('prompt').includes('consent'));
-  assert.equal(url.searchParams.get('redirect_uri'), f.base + '/oauth/gmail.readonly/callback');
+  assert.equal(url.searchParams.get('redirect_uri'), f.base + '/oauth/google.oauth/callback');
   const complete = await f.callback(url, 'personal-readonly', { headers: { 'sec-fetch-site': 'cross-site' } });
-  assert.equal(complete.headers.get('location'), '/connections?connection=connected&connector=gmail.readonly');
-  assert.equal((await f.callback(url)).headers.get('location'), '/connections?connection=expired&connector=gmail.readonly');
-  assert.equal(f.gmail.exchangeCount, 1);
+  assert.equal(complete.headers.get('location'), '/connections?connection=connected&connector=google.oauth');
+  assert.equal((await f.callback(url)).headers.get('location'), '/connections?connection=expired&connector=google.oauth');
+  assert.equal(f.google.exchanges, 1);
   assert.equal((await f.request('/v1/overview')).json.grants.filter(row => row.method !== 'given').length, 1);
 });
 
 test('OAuth state is browser-bound and expires; cancel and forged callbacks cannot connect', async (t) => {
   const f = await fixture(t);
   const url = await f.start();
-  assert.equal((await f.callback(url, 'personal-readonly', { anonymous: true })).headers.get('location'), '/connections?connection=expired&connector=gmail.readonly');
+  assert.equal((await f.callback(url, 'personal-readonly', { anonymous: true })).headers.get('location'), '/connections?connection=expired&connector=google.oauth');
   await f.login('second@example.test');
-  assert.equal((await f.callback(url)).headers.get('location'), '/connections?connection=expired&connector=gmail.readonly');
+  assert.equal((await f.callback(url)).headers.get('location'), '/connections?connection=expired&connector=google.oauth');
   const second = await f.start();
   f.app.store.db.prepare('UPDATE oauth_flows SET expires_at=0').run();
-  assert.equal((await f.callback(second)).headers.get('location'), '/connections?connection=expired&connector=gmail.readonly');
+  assert.equal((await f.callback(second)).headers.get('location'), '/connections?connection=expired&connector=google.oauth');
   const cancel = await f.start();
-  const cancelled = await f.request('/oauth/gmail.readonly/callback?state=' + cancel.searchParams.get('state') + '&error=access_denied&error_description=secret-provider-value');
-  assert.equal(cancelled.headers.get('location'), '/connections?connection=denied&connector=gmail.readonly');
+  const cancelled = await f.request('/oauth/google.oauth/callback?state=' + cancel.searchParams.get('state') + '&error=access_denied&error_description=secret-provider-value');
+  assert.equal(cancelled.headers.get('location'), '/connections?connection=denied&connector=google.oauth');
   assert.doesNotMatch(cancelled.text, /secret-provider/);
-  assert.equal(f.gmail.exchangeCount, 0);
+  assert.equal(f.google.exchanges, 0);
 });
 
 test('Connections expose explicit credential outputs independently of saved names', async (t) => {
@@ -60,20 +60,20 @@ test('Connections expose explicit credential outputs independently of saved name
   assert.deepEqual((await f.request('/v1/holdings?kind=grant', { token: agent.token })).json.holdings.map(row => row.method), ['given', 'authorized', 'authorized'], 'connections are grants too');
   const connections = await f.request('/v1/holdings?kind=grant&method=authorized', { token: agent.token });
   assert.deepEqual(connections.json.holdings.map(item => item.id), [a.id, b.id]);
-  assert.equal(connections.json.holdings[0].service.api.base_url, 'https://gmail.googleapis.com/gmail/v1');
+  assert.equal(connections.json.holdings[0].service.api.base_url, 'https://www.googleapis.com');
   assert.doesNotMatch(connections.text, /refresh_token|google-access-|"state":/);
 
   const result = await f.deliver(a, { token: agent.token });
   assert.equal(result.status, 200, result.text);
   assert.equal(result.json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal-readonly');
-  assert.equal(result.json.delivery.environment.GMAIL_ACCOUNT_EMAIL, 'personal@example.test');
+  assert.equal(result.json.delivery.environment.GOOGLE_ACCOUNT_EMAIL, 'personal@example.test');
   assert.ok(result.json.expires_in > 3500);
   assert.doesNotMatch(result.text, /refresh_token/);
   assert.equal((await f.deliver(b, { token: agent.token })).json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-work-metadata');
 
   // Credential processing leaves existing saved values unchanged.
   assert.equal((await f.read('grant', 'gmail/personal-example-test')).text, 'independent-value');
-  assert.ok(!f.gmail.calls.some((call) => call.url.includes('/messages')));
+  assert.ok(!f.google.calls.some((call) => call.url.includes('/messages')));
 });
 
 test('Owners cannot see, disconnect or reach each other\'s connections', async (t) => {
@@ -94,15 +94,14 @@ test('Owners cannot see, disconnect or reach each other\'s connections', async (
   assert.equal((await f.request('/v1/overview')).json.grants.filter(row => row.method !== 'given').length, 1);
 });
 
-test('Connecting again pins the Google account and stays within the same adapter', async (t) => {
+test('Connecting again pins the Google account', async (t) => {
   const f = await fixture(t), a = await f.credential('personal', 'metadata'), agent = await f.issueKey();
-  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { connector: 'gmail.readonly', connection_id: a.id } })).json.error.code, 'invalid_connector');
   let flow = await f.start({ range: 'metadata', connection_id: a.id });
   assert.equal(flow.searchParams.get('login_hint'), 'personal@example.test');
-  assert.equal((await f.callback(flow, 'work-metadata')).headers.get('location'), '/connections?connection=wrong_account&connector=gmail.metadata');
+  assert.equal((await f.callback(flow, 'work-metadata')).headers.get('location'), '/connections?connection=wrong_account&connector=google.oauth');
   assert.equal((await f.request('/v1/holdings?kind=grant&method=authorized', { token: agent.token })).json.holdings.length, 1);
   flow = await f.start({ range: 'metadata', connection_id: a.id });
-  assert.equal((await f.callback(flow, 'personal-metadata')).headers.get('location'), '/connections?connection=connected&connector=gmail.metadata');
+  assert.equal((await f.callback(flow, 'personal-metadata')).headers.get('location'), '/connections?connection=connected&connector=google.oauth');
   const seen = (await f.request('/v1/holdings?kind=grant&method=authorized', { token: agent.token })).json.holdings;
   assert.equal(seen.length, 1); assert.equal(seen[0].id, a.id);
 });
@@ -110,7 +109,7 @@ test('Connecting again pins the Google account and stays within the same adapter
 test('同じGmailユーザーの新たな認可を別の接続として保存する', async (t) => {
   const f = await fixture(t), a = await f.credential(), agent = await f.issueKey();
   const flow = await f.start();
-  assert.equal((await f.callback(flow, 'personal-readonly')).headers.get('location'), '/connections?connection=connected&connector=gmail.readonly');
+  assert.equal((await f.callback(flow, 'personal-readonly')).headers.get('location'), '/connections?connection=connected&connector=google.oauth');
   assert.equal((await f.request('/v1/overview')).json.grants.filter(row => row.method !== 'given')[0].id, a.id);
   const connections = (await f.request('/v1/holdings?kind=grant&method=authorized', { token: agent.token })).json.holdings;
   assert.equal(connections.length, 2);
@@ -121,7 +120,7 @@ for (const change of ['agent', 'account']) test('In-flight token withheld after 
   const f = await fixture(t), a = await f.credential(), runtime = await f.issueKey(); f.expire(a.id);
   let began, finish;
   const started = new Promise((resolve) => { began = resolve; });
-  f.gmail.refreshHandler = () => { began(); return new Promise((resolve) => { finish = resolve; }); };
+  f.google.refreshHandler = () => { began(); return new Promise((resolve) => { finish = resolve; }); };
   const pending = f.deliver(a, { token: runtime.token });
   await started;
   if (change === 'agent') await f.request('/v1/principals/' + runtime.id, { method: 'DELETE', data: {} });
@@ -135,13 +134,13 @@ for (const change of ['agent', 'account']) test('In-flight token withheld after 
 test('Refreshing is coalesced, and an invalid grant asks the owner to connect again', async (t) => {
   const f = await fixture(t), a = await f.credential(), agent = await f.issueKey(); f.expire(a.id);
   let calls = 0, finish;
-  f.gmail.refreshHandler = () => { calls++; return new Promise((resolve) => { finish = resolve; }); };
+  f.google.refreshHandler = () => { calls++; return new Promise((resolve) => { finish = resolve; }); };
   const one = f.deliver(a, { token: agent.token }), two = f.deliver(a, { token: agent.token });
   while (!finish) await new Promise((resolve) => setTimeout(resolve, 5));
   await new Promise((resolve) => setTimeout(resolve, 20)); finish();
   assert.equal((await one).status, 200); assert.equal((await two).status, 200); assert.equal(calls, 1);
   f.expire(a.id);
-  f.gmail.refreshHandler = () => new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'secret-provider-detail' }), { status: 400 });
+  f.google.refreshHandler = () => new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'secret-provider-detail' }), { status: 400 });
   const response = await f.deliver(a, { token: agent.token });
   assert.equal(response.status, 409);
   assert.doesNotMatch(response.text, /secret-provider/);
@@ -151,7 +150,7 @@ test('Refreshing is coalesced, and an invalid grant asks the owner to connect ag
 test('Disconnecting preserves saved values even when service revocation fails, and reports the failure', async (t) => {
   const f = await fixture(t), a = await f.credential(), agent = await f.issueKey();
   await f.request('/v1/holdings?kind=grant&name=gmail%2Fpersonal-example-test%2Ftoken', { method: 'PUT', raw: 'independent-copy' });
-  f.gmail.revokeHandler = () => new Response('{}', { status: 503 });
+  f.google.revokeHandler = () => new Response('{}', { status: 503 });
   const removed = await f.request('/v1/holdings/' + encodeURIComponent(a.id), { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.status, 200);
   assert.equal(removed.json.service_revoked, false, 'the owner learns the grant is still at Google');

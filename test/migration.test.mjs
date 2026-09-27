@@ -58,7 +58,7 @@ const SCHEMA_20 = `
   PRAGMA user_version = 20;
 `;
 
-test('今日動いている形からの移行は、秘密を渡された委任に、接続を許可された委任に移し、中身をそのまま保つ', async t => {
+test('今日動いている形からの移行は、秘密を渡された委任に、接続を許可されたGoogleの委任に移し、中身と頼んでいた権限を保つ', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), db = new DatabaseSync(path), vault = new Vault(KEY);
@@ -68,20 +68,30 @@ test('今日動いている形からの移行は、秘密を渡された委任�
   db.prepare('INSERT INTO principals VALUES (?,?,?)').run(USER_A, '', stamp);
   const content = Buffer.from('kept-bytes');
   db.prepare("INSERT INTO holdings (id,holder_id,kind,name,size,content,created_at,updated_at) VALUES ('secret-1',?,'secret','doc',?,?,?,?)").run(USER_A, content.length, vault.sealBytes(content, `entry:${USER_A}:secret-1`), stamp, stamp);
-  const state = { private_state: { token: 'x' }, facts: { label: 'me@example.test' }, expires_at: null };
+  const GMAIL = 'https://www.googleapis.com/auth/gmail.readonly', CLOUD = 'https://www.googleapis.com/auth/cloud-platform';
+  const EMAIL = 'https://www.googleapis.com/auth/userinfo.email';
+  const state = { private_state: { token: 'x' }, facts: { label: 'me@example.test', scopes: [GMAIL] }, expires_at: null };
   db.prepare("INSERT INTO holdings (id,holder_id,kind,name,content,connector,subject,status,generation,kept_by,created_at,updated_at) VALUES ('connection-1',?,'connection','me@example.test',?,'gmail.readonly','me@example.test','connected',3,'dev',?,?)").run(USER_A, vault.seal(state, `connection:${USER_A}:connection-1`), stamp, stamp);
+  const cloud = { private_state: { token: 'y' }, facts: { label: 'Me@Example.test', scopes: [CLOUD, EMAIL, 'openid'] }, expires_at: null };
+  db.prepare("INSERT INTO holdings (id,holder_id,kind,name,content,connector,subject,status,generation,kept_by,created_at,updated_at) VALUES ('connection-2',?,'connection','Me@Example.test',?,'gcp.oauth','1001','connected',1,'dev',?,?)").run(USER_A, vault.seal(cloud, `connection:${USER_A}:connection-2`), stamp, stamp);
   db.close();
 
   const store = new Store(path, KEY);
   t.after(() => store.close());
-  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 23);
-  const { grants } = resources(store, [{ id: 'gmail.readonly', available: false, variables: [], authorization: { kind: 'oauth', begin() {}, complete() {} }, obtain() {} }]);
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 24);
+  const { grants } = resources(store, [{ id: 'google.oauth', available: false, variables: [], authorization: { kind: 'oauth', begin() {}, complete() {} }, obtain() {} }]);
   const doc = grants.find(USER_A, 'doc');
   assert.equal(doc.method, 'given');
   assert.deepEqual(grants.content(doc), content);
   const connection = grants.held(USER_A, 'connection-1');
-  assert.equal(connection.method, 'authorized'); assert.equal(connection.status, 'usable');
-  assert.equal(connection.generation, 3); assert.deepEqual(grants.state(connection), state);
+  assert.equal(connection.method, 'authorized'); assert.equal(connection.connector, 'google.oauth');
+  assert.equal(connection.subject, 'me@example.test'); assert.equal(connection.status, 'reconnect_required');
+  assert.deepEqual(grants.state(connection), { ...state, requested_scopes: [GMAIL, EMAIL, 'openid'].sort() });
+  const moved = grants.held(USER_A, 'connection-2');
+  assert.equal(moved.connector, 'google.oauth'); assert.equal(moved.subject, 'me@example.test', 'named by its address, as Google connections are');
+  assert.equal(moved.status, 'reconnect_required');
+  assert.deepEqual(grants.state(moved).requested_scopes, [CLOUD, EMAIL, 'openid'].sort());
+  assert.deepEqual(grants.state(moved).private_state, cloud.private_state);
 });
 
 test('もう誰も動かしていない形の データベースは、移行せずに断る', async t => {

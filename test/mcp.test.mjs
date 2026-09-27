@@ -61,7 +61,7 @@ test('MCP delivers what a connected grant yields, and never its renewal state', 
   const catalog = await call('GET', '/v1/functions');
   assert.deepEqual(catalog.json.result.structuredContent.functions.map(fn => fn.id), ['http.request']);
   const delivered = await call('POST', '/v1/deliveries', { names: [{ name: connection.id }] });
-  assert.equal(delivered.json.result.structuredContent.delivery.environment.GMAIL_ACCOUNT_EMAIL, 'personal@example.test');
+  assert.equal(delivered.json.result.structuredContent.delivery.environment.GOOGLE_ACCOUNT_EMAIL, 'personal@example.test');
   assert.doesNotMatch(delivered.text, /refresh-personal/);
   const content = await call('GET', '/v1/holdings/' + connection.id + '/content');
   assert.equal(content.json.result.structuredContent.error.code, 'method_not_allowed');

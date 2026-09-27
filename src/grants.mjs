@@ -1,4 +1,5 @@
 import { fail, HttpError } from './errors.mjs';
+import { scopeFacts } from './scopes.mjs';
 import { randomUUID } from 'node:crypto';
 import { validEnvName } from '../cli/env-name.mjs';
 import { holdingName } from './holdings.mjs';
@@ -124,12 +125,13 @@ export class Grants {
   // Authorized and delegated: what a connector left with Foundation, and what it says about the account.
   state(row) { return this.vault.open(this.db.prepare('SELECT state FROM grants WHERE holding_id=?').get(row.id).state, this.binding(row)); }
   context(row) { return row ? { subject: row.subject, privateState: this.state(row).private_state } : undefined; }
-  nextState(result) {
+  // requested: the scopes this connection asked the service for (null for a connector without scopes).
+  nextState(result, requested) {
     if (!result || typeof result.subject !== 'string' || !result.subject || result.subject.length > 512
       || !Object.hasOwn(result, 'privateState') || result.privateState === undefined
       || !result.facts || typeof result.facts !== 'object' || Array.isArray(result.facts)
       || (result.expiresAt !== null && !(Number.isFinite(result.expiresAt) && result.expiresAt > Date.now()))) invalidResult();
-    return { private_state: result.privateState, facts: result.facts, expires_at: result.expiresAt };
+    return { private_state: result.privateState, facts: result.facts, expires_at: result.expiresAt, ...(requested ? { requested_scopes: requested } : {}) };
   }
   connections(holderId) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE h.holder_id=? AND g.method<>'given' ORDER BY h.created_at, h.id`).all(holderId); }
   connection(holderId, id) {
@@ -145,9 +147,9 @@ export class Grants {
     if (row.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
     return row;
   }
-  save(holderId, connectorId, result, { previous } = {}) {
+  save(holderId, connectorId, result, { previous, scopes } = {}) {
     const connector = this.connectors.get(connectorId);
-    const state = this.nextState(result);
+    const state = this.nextState(result, scopes);
     const label = String(state.facts.label || result.subject).slice(0, 80);
     const method = connector.authorization?.kind === 'role' ? 'delegated' : 'authorized';
     return this.writeConnection(holderId, { connector: connectorId, method, subject: result.subject, label, state }, previous);
@@ -230,8 +232,10 @@ export class Grants {
   async obtainCurrent(row) {
     const connector = this.connectors.get(row.connector);
     try {
+      // Read before asking the service: the grant may be removed while the service answers.
+      const requested = this.state(row).requested_scopes;
       const result = await connector.obtain(this.context(row));
-      const state = this.nextState(result);
+      const state = this.nextState(result, requested);
       this.saveState(row, state, result.subject);
       return { state, values: this.outputs(connector, result.credentials) };
     } catch (error) {
@@ -245,7 +249,7 @@ export class Grants {
   async derive(row) {
     if (row.method === 'given') return { values: new Map([[null, { content: this.content(row) }]]), expires_at: null };
     const result = await this.obtain(row);
-    return { values: result.values, expires_at: result.state.expires_at, facts: result.state.facts };
+    return { values: result.values, expires_at: result.state.expires_at, facts: { ...result.state.facts, ...scopeFacts(result.state) } };
   }
   // Each input and delivery destination is explicit. A given grant needs `as`; a connector's outputs have names
   // of their own, and `as` may rename the one output of a connector that has exactly one.
@@ -303,7 +307,7 @@ export class Grants {
     const base = { ...this.holdings.view(row), method: row.method, status: row.status };
     if (row.method === 'given') return { ...base, size: row.size };
     const connector = this.connectors.get(row.connector), state = this.state(row);
-    const shared = { connector: row.connector, service: connector.service, label: state.facts.label || row.name, facts: state.facts,
+    const shared = { connector: row.connector, service: connector.service, label: state.facts.label || row.name, facts: { ...state.facts, ...scopeFacts(state) },
       access: connector.access, api: connector.service?.api || { base_url: '', documentation_url: '' }, outputs: connector.variables };
     if (!owner) return { ...base, ...shared };
     return { ...base, ...shared, subject: row.subject, generation: row.generation, expires_at: state.expires_at,

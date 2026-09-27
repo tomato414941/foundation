@@ -1,4 +1,4 @@
-import { GitHubClient, GITHUB_API, GITHUB_DOCS, GITHUB_SETTINGS } from './client.mjs';
+import { GitHubClient, GITHUB_API, GITHUB_DOCS, GITHUB_SETTINGS, GITHUB_BASE_SCOPES, GITHUB_SCOPE_DOCS } from './client.mjs';
 
 export const configuration = env => ({ clientId: env.FOUNDATION_GITHUB_CLIENT_ID || '', clientSecret: env.FOUNDATION_GITHUB_CLIENT_SECRET || '' });
 export const create = env => [githubOauth(new GitHubClient(configuration(env)))];
@@ -12,8 +12,9 @@ export function githubOauth(client) {
   return {
     id: 'github.oauth', service: GITHUB, label: 'GitHubで接続', register: 'oauth', credentialType: 'oauth2_access_token', available: client.enabled,
     intro: 'GitHubでログインし、リポジトリへのアクセスを許可します。',
-    access: { name: 'リポジトリの読み書き', description: 'あなたがアクセスできるすべてのリポジトリ (非公開を含む) の読み書き、Actions のワークフローの変更、Gist の作成、組織の閲覧', restrictions: 'リポジトリや組織の削除・管理者設定の変更は要求しません。GitHub側の許可は解除時に取り消せます。' },
-    ai: 'gh and most tools read it directly. For git push/pull, run gh auth setup-git inside the exec, then use git. Requested scopes: repo, workflow, read:org, gist. Inspect facts.scopes, missing_scopes and additional_scopes; differences are reported, not blocked.',
+    access: { name: 'GitHubアカウントの操作', description: '接続のときに許可した権限の範囲で、GitHubのリポジトリや組織を操作できます。', restrictions: 'GitHub側の許可は解除時に取り消せます。' },
+    scopes: { base: GITHUB_BASE_SCOPES, documentationUrl: GITHUB_SCOPE_DOCS },
+    ai: 'gh and most tools read it directly. For git push/pull, run gh auth setup-git inside the exec, then use git. Ask for the scopes the work needs in input.scopes (GitHub OAuth scopes such as repo, workflow, read:org, gist). facts.scopes, requested_scopes, missing_scopes and additional_scopes say what was granted.',
     variables: ['GH_TOKEN', 'GITHUB_TOKEN'],
     authorization: {
       kind: 'oauth',

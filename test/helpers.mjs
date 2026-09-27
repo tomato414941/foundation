@@ -2,14 +2,18 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createApp } from '../src/app.mjs';
 import { fail } from '../src/errors.mjs';
-import { FakeGmail } from '../src/connectors/gmail/fixture.mjs';
-export { FakeGmail } from '../src/connectors/gmail/fixture.mjs';
+import { FakeGoogle } from '../src/connectors/google/fixture.mjs';
+export { FakeGoogle } from '../src/connectors/google/fixture.mjs';
 import { Connectors } from '../src/connectors.mjs';
-import { gmailReadonly, gmailMetadata } from '../src/connectors/gmail/index.mjs';
+import { googleOauth } from '../src/connectors/google/index.mjs';
 import { Grants } from '../src/grants.mjs';
 import { Holdings } from '../src/holdings.mjs';
 import { Principals } from '../src/principals.mjs';
 import { Sessions, OAuthFlows } from '../src/sessions.mjs';
+
+// The Gmail scopes the tests ask Google for, by what the connection is for.
+const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.';
+export const GMAIL = { readonly: [GMAIL_SCOPE + 'readonly'], metadata: [GMAIL_SCOPE + 'metadata'], 'read-send': [GMAIL_SCOPE + 'readonly', GMAIL_SCOPE + 'send'] };
 
 export function resources(store, connectors = []) {
   const holdings = new Holdings(store);
@@ -52,7 +56,7 @@ export function acquired(store, connectors, connectorId, { subject, secret }) {
   return { grants, row, run, state };
 }
 export async function fixture(t, options = {}) {
-  const { gmail = new FakeGmail(), connectors = [gmailReadonly(gmail), gmailMetadata(gmail)], ...rest } = options, auth = options.auth || new FakeAuth();
+  const { google = new FakeGoogle(), connectors = [googleOauth(google)], ...rest } = options, auth = options.auth || new FakeAuth();
   const app = createApp({ encryptionKey: KEY, ...rest, auth, connectors });
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   let closed = false;
@@ -81,9 +85,9 @@ export async function fixture(t, options = {}) {
     cookie = response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
     return response;
   }
-  // Gmail's read range is its connector: gmail.readonly or gmail.metadata.
-  async function start({ range = 'readonly', connection_id } = {}) {
-    const result = await request('/v1/connections', { method: 'POST', data: { connector: 'gmail.' + range, connection_id } });
+  // A Google connection, asking for the Gmail scopes of a range unless scopes are given.
+  async function start({ range = 'readonly', connection_id, scopes = GMAIL[range] } = {}) {
+    const result = await request('/v1/connections', { method: 'POST', data: { connector: 'google.oauth', connection_id, scopes } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
@@ -91,11 +95,11 @@ export async function fixture(t, options = {}) {
   async function callback(url, code = 'personal-readonly', extra = {}) {
     return request(new URL(url.searchParams.get('redirect_uri')).pathname + '?state=' + url.searchParams.get('state') + '&code=' + code, extra);
   }
-  // Connects one Gmail account and returns its independent connection.
+  // Connects one Google account for a Gmail range and returns its independent connection.
   async function credential(code = 'personal', range = 'readonly') {
     const url = await start({ range });
     const response = await callback(url, code + '-' + range);
-    assert.equal(response.headers.get('location'), '/connections?connection=connected&connector=gmail.' + range, response.text);
+    assert.equal(response.headers.get('location'), '/connections?connection=connected&connector=google.oauth', response.text);
     return (await request('/v1/overview')).json.grants.find((item) => item.subject === code + '@example.test');
   }
   // Delivering a connected grant derives what it yields now; nothing else reaches the provider.
@@ -150,5 +154,5 @@ export async function fixture(t, options = {}) {
     app.grants.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
   }
   if (options.login !== false) await login();
-  return { app, auth, gmail, base, request, lookup, read, keep, drop, become, login, start, callback, credential, deliver, connectionFacts, issueKey, approveKey, expire, close, cookie: () => cookie };
+  return { app, auth, google, base, request, lookup, read, keep, drop, become, login, start, callback, credential, deliver, connectionFacts, issueKey, approveKey, expire, close, cookie: () => cookie };
 }

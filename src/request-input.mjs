@@ -1,11 +1,14 @@
 import { fail } from './errors.mjs';
 import { holdingName } from './holdings.mjs';
+import { scopeList } from './scopes.mjs';
 
 export function requestInput(kind, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'invalid_request', '依頼内容を指定してください。');
-  if (kind === 'connect' && Object.keys(input).every(key => ['connector', 'connection_id'].includes(key)) && typeof input.connector === 'string'
+  // Connecting: which service, optionally which existing connection, and the service's scopes the AI needs.
+  if (kind === 'connect' && Object.keys(input).every(key => ['connector', 'connection_id', 'scopes'].includes(key)) && typeof input.connector === 'string'
     && (input.connection_id === undefined || (typeof input.connection_id === 'string' && /^[0-9a-f-]{36}$/.test(input.connection_id)))) {
-    return { connector: input.connector, ...(input.connection_id === undefined ? {} : { connection_id: input.connection_id }) };
+    const scopes = scopeList(input.scopes);
+    return { connector: input.connector, ...(input.connection_id === undefined ? {} : { connection_id: input.connection_id }), ...(scopes.length ? { scopes } : {}) };
   }
   // Asking to act for someone: only what the asker wants to be called.
   if (kind === 'actor' && Object.keys(input).every(key => key === 'name') && typeof input.name === 'string' && input.name.trim() && input.name.length <= 80) return { name: input.name.trim() };

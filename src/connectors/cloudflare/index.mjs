@@ -1,4 +1,4 @@
-import { CloudflareClient, CLOUDFLARE_API, CLOUDFLARE_DOCS, CLOUDFLARE_SETTINGS } from './client.mjs';
+import { CloudflareClient, CLOUDFLARE_API, CLOUDFLARE_DOCS, CLOUDFLARE_SETTINGS, CLOUDFLARE_BASE_SCOPES, CLOUDFLARE_SCOPE_DOCS } from './client.mjs';
 
 export const configuration = env => ({ clientId: env.FOUNDATION_CLOUDFLARE_CLIENT_ID || '', clientSecret: env.FOUNDATION_CLOUDFLARE_CLIENT_SECRET || '' });
 export const create = env => [cloudflareOauth(new CloudflareClient(configuration(env)))];
@@ -13,9 +13,10 @@ export function cloudflareOauth(client) {
     id: 'cloudflare.oauth', service, label: 'Cloudflareで接続', register: 'oauth', credentialType: 'oauth2_access_token', available: client.enabled,
     intro: 'Cloudflareで対象のアカウントを選び、アクセスを許可します。',
     revocationNote: 'Cloudflare側の取り消しは、同じアプリへの他の接続にも影響する場合があります。',
-    access: { name: 'ドメインとDNSの管理', description: 'アカウント情報の読み取り、ゾーン設定の読み取り、DNSレコードの編集、ドメインの登録・更新、メールの転送設定などの管理を行えます。',
-      restrictions: '選択したアカウントのドメインが対象です。ドメインの登録・更新には料金がかかります。' },
-    ai: 'Use CLOUDFLARE_API_TOKEN as a Bearer token with Cloudflare v4 APIs. Inspect scopes, missing_scopes and additional_scopes in facts from GET /v1/holdings?kind=grant. facts.user_id identifies the authorizing user; facts.client_id identifies the OAuth app. facts.observed_accounts is a dated /accounts snapshot, not the full consent policy; null means unknown. List /accounts when using the token and choose the target explicitly. The same user may have several connections; never infer the target or authorization identity from user_id. Reconnect by requesting input.connection_id; changes to observed accounts, scopes or the OAuth app require the owner to confirm. Domain registrations and renewals incur charges. Obtain credentials with POST /v1/deliveries and {"names":[{"name":"<connection id>"}]}; Foundation refreshes tokens when needed. CLOUDFLARE_OAUTH_EXPIRES_AT is Unix time in milliseconds. Revocation may affect other connections for the same app and is detected on refresh.',
+    access: { name: 'Cloudflareアカウントの操作', description: '接続のときに許可した権限の範囲で、Cloudflareのアカウントを操作できます。',
+      restrictions: '選択したアカウントが対象です。ドメインの登録・更新には料金がかかります。' },
+    scopes: { base: CLOUDFLARE_BASE_SCOPES, documentationUrl: CLOUDFLARE_SCOPE_DOCS },
+    ai: 'Use CLOUDFLARE_API_TOKEN as a Bearer token with Cloudflare v4 APIs. Ask for the scopes the work needs in input.scopes (the dot-delimited Cloudflare IDs, such as dns.write or email-routing-rule.write); facts.scopes, requested_scopes, missing_scopes and additional_scopes say what was granted. facts.user_id identifies the authorizing user; facts.client_id identifies the OAuth app. facts.observed_accounts is a dated /accounts snapshot, not the full consent policy; null means unknown. List /accounts when using the token and choose the target explicitly. The same user may have several connections; never infer the target or authorization identity from user_id. Reconnect by requesting input.connection_id; changes to observed accounts, scopes or the OAuth app require the owner to confirm. Domain registrations and renewals incur charges. Obtain credentials with POST /v1/deliveries and {"names":[{"name":"<connection id>"}]}; Foundation refreshes tokens when needed. CLOUDFLARE_OAUTH_EXPIRES_AT is Unix time in milliseconds. Revocation may affect other connections for the same app and is detected on refresh.',
     variables: ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_OAUTH_EXPIRES_AT'],
     authorization: {
       kind: 'oauth',
