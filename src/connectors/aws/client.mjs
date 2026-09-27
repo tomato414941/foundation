@@ -45,7 +45,7 @@ export class AwsClient {
   }
   parseRole(value) {
     const match = typeof value === 'string' ? ROLE_ARN.exec(value.trim()) : null;
-    if (!match) fail(400, 'invalid_role', '役割のARN (arn:aws:iam::123456789012:role/...) を貼り付けてください。');
+    if (!match) fail(400, 'invalid_role', 'IAMロールのARN (arn:aws:iam::123456789012:role/...) を貼り付けてください。');
     return { arn: value.trim(), partition: match[1], account: match[2], name: match[3] };
   }
   // Assuming the role is both the check that it was made for Foundation and the way credentials are obtained.
@@ -60,7 +60,7 @@ export class AwsClient {
       response = await this.fetcher(request.url, { method: 'POST', headers: request.headers, body, redirect: 'error', signal: AbortSignal.timeout(20_000) });
       text = await response.text();
     } catch { fail(502, 'service_unavailable', 'AWSに接続できませんでした。時間をおいて再度お試しください。'); }
-    if (response.status === 403 || /AccessDenied|InvalidClientTokenId/.test(text)) fail(409, 'reconnect_required', 'AWSがこの役割の利用を認めませんでした。役割がFoundation向けに作られているか確認してください。');
+    if (response.status === 403 || /AccessDenied|InvalidClientTokenId/.test(text)) fail(409, 'reconnect_required', 'AWSがこのIAMロールの利用を認めませんでした。IAMロールがFoundation向けに作られているか確認してください。');
     if (!response.ok) invalidResponse();
     const accessKeyId = tag(text, 'AccessKeyId'), secretAccessKey = tag(text, 'SecretAccessKey'), sessionToken = tag(text, 'SessionToken'), expiration = Date.parse(tag(text, 'Expiration') ?? '');
     if (!accessKeyId || !secretAccessKey || !sessionToken || !Number.isFinite(expiration)) invalidResponse();

@@ -35,14 +35,14 @@ with sync_playwright() as p:
     page.wait_for_url(args.base + '/connections')
     page.wait_for_load_state('networkidle')
     expect(page.get_by_role('heading', name='AWS', exact=True)).to_be_visible()
-    page.get_by_role('button', name='AWSで役割を作る', exact=True).click()
+    page.get_by_role('button', name='AWSでIAMロールを作る', exact=True).click()
     dialog = page.get_by_role('dialog')
     expect(dialog.get_by_role('heading', name='AWSに接続', exact=True)).to_be_visible()
     expect(dialog.get_by_text('鍵は預かりません。', exact=False)).to_be_visible()
-    dialog.get_by_role('button', name='AWSで役割を作る', exact=True).click()
+    dialog.get_by_role('button', name='AWSでIAMロールを作る', exact=True).click()
 
     # The console opens in another tab; here the owner pastes the role's name. A wrong paste is answered in place.
-    expect(dialog.get_by_role('heading', name='AWSで役割を作る', exact=True)).to_be_visible()
+    expect(dialog.get_by_role('heading', name='AWSでIAMロールを作る', exact=True)).to_be_visible()
     link = dialog.get_by_role('link', name='AWSの画面を開く ↗', exact=True)
     href = link.get_attribute('href')
     assert href.startswith('https://console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/create/review?'), href
@@ -52,10 +52,10 @@ with sync_playwright() as p:
     assert link.get_attribute('target') == '_blank'
     if shots:
         page.screenshot(path=str(shots / 'aws-role.png'), full_page=True)
-    dialog.get_by_label('作成された役割のARN', exact=True).fill('not an arn')
+    dialog.get_by_label('作成されたIAMロールのARN', exact=True).fill('not an arn')
     dialog.get_by_role('button', name='接続する', exact=True).click()
-    expect(dialog.get_by_role('alert')).to_contain_text('役割のARN')
-    dialog.get_by_label('作成された役割のARN', exact=True).fill(ROLE)
+    expect(dialog.get_by_role('alert')).to_contain_text('IAMロールのARN')
+    dialog.get_by_label('作成されたIAMロールのARN', exact=True).fill(ROLE)
     dialog.get_by_role('button', name='接続する', exact=True).click()
     expect(page.get_by_text('AWSに接続しました。', exact=True)).to_be_visible()
     expect(dialog).not_to_be_visible()
@@ -77,4 +77,4 @@ with sync_playwright() as p:
     expect(page.get_by_text('222222222222 / foundation-connection-FoundationRole-ABC', exact=True)).to_have_count(0)
     assert not errors, errors
     browser.close()
-    print('AWS: 役割の作成リンク・誤った貼り付け・接続・解除と、PC・スマートフォンの表示を確認しました。')
+    print('AWS: IAMロールの作成リンク・誤った貼り付け・接続・解除と、PC・スマートフォンの表示を確認しました。')

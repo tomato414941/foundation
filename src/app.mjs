@@ -83,7 +83,7 @@ async function raw(req, max) {
   return Buffer.concat(chunks);
 }
 function purposeValue(value = '') {
-  if (typeof value !== 'string' || value.length > 240 || /[\x00-\x1f]/.test(value)) fail(400, 'invalid_purpose', '用途は240文字以内で入力してください。');
+  if (typeof value !== 'string' || value.length > 240 || /[\x00-\x1f]/.test(value)) fail(400, 'invalid_purpose', '目的は240文字以内で入力してください。');
   return value.trim();
 }
 function principalId(value) {

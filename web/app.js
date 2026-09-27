@@ -411,7 +411,7 @@ function bindObjects() {
 const siteLink = value => { try { const url = new URL(value); return `<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer"><strong>${esc(url.host)}</strong>${esc(url.pathname === '/' ? '' : url.pathname)} ↗</a>`; } catch { return esc(value); } };
 // Guidance the requesting AI wrote for its owner. Framed as the AI's words; line breaks kept, nothing else interpreted.
 // The steps the requesting AI wrote for the owner to follow, shown as the numbered list they are.
-const stepsBlock = steps => steps?.length ? `<section class="ai-guidance"><h3>依頼元のAIからの案内</h3><ol class="guidance-steps">${steps.map(step => `<li>${esc(step)}</li>`).join('')}</ol></section>` : '';
+const stepsBlock = steps => steps?.length ? `<section class="ai-guidance"><h3>手順</h3><ol class="guidance-steps">${steps.map(step => `<li>${esc(step)}</li>`).join('')}</ol></section>` : '';
 const codeComplete = form => /^[0-9a-fA-F]{8}$/.test((form.elements.confirmationCode?.value || '').replace(/[^0-9a-zA-Z]/g, ''));
 function codeField(enabled = true) {
   return `<label for="confirmation-code">確認コード</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="0000-0000" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">AIとの会話に表示されたコードを入力してください。心当たりのない依頼は承認しないでください。</p>`;
@@ -445,7 +445,7 @@ function renderRequest() {
     : `<button class="button primary full request-connect" type="button" data-action="request-connect">${esc(title)} ${icon('arrow')}</button>
       ${connector.failure_note && ['failed', 'scope', 'retry', 'changed'].includes(resultCode) ? `<p class="permission-note">${esc(connector.failure_note.text)}<a href="${esc(connector.failure_note.href)}" target="_blank" rel="noopener noreferrer">${esc(connector.failure_note.link)} ↗</a></p>` : ''}`;
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(title)}</h1></div></header>
-    <dl class="approval-facts">${row.connection ? `<div><dt>更新する接続</dt><dd>${esc(row.connection.label)}${cloudflareDetails(row.connection)}</dd></div>` : ''}${row.purpose ? `<div class="approval-purpose"><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}<div><dt>届く範囲</dt><dd>${esc(connector.access.name)}${connector.access.restrictions ? `<small class="muted block">${esc(connector.access.restrictions)}</small>` : ''}</dd></div></dl>
+    <dl class="approval-facts">${row.connection ? `<div><dt>更新する接続</dt><dd>${esc(row.connection.label)}${cloudflareDetails(row.connection)}</dd></div>` : ''}${row.purpose ? `<div class="approval-purpose"><dt>目的</dt><dd>${esc(row.purpose)}</dd></div>` : ''}<div><dt>権限</dt><dd>${esc(connector.access.name)}${connector.access.restrictions ? `<small class="muted block">${esc(connector.access.restrictions)}</small>` : ''}</dd></div></dl>
     ${stepsBlock(row.steps)}
     <div class="register-body">${body}</div>
     <button class="text-button full" type="button" data-action="deny-request">接続しない</button>${expiry}</section>`);
@@ -460,7 +460,7 @@ function renderStore(row, shell, expiry) {
     ? `<textarea id="stored-${at}" name="value-${at}" rows="6" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>`
     : `<input id="stored-${at}" name="value-${at}" type="${one.readable ? 'text' : 'password'}" required maxlength="16384" autocomplete="off" spellcheck="false">`;
   app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${title}</h1></div></header>
-    <dl class="approval-facts">${row.purpose ? `<div class="approval-purpose"><dt>用途</dt><dd>${esc(row.purpose)}</dd></div>` : ''}</dl>
+    <dl class="approval-facts">${row.purpose ? `<div class="approval-purpose"><dt>目的</dt><dd>${esc(row.purpose)}</dd></div>` : ''}</dl>
     ${stepsBlock(row.steps)}
     ${site ? `<a class="button secondary full setup-link" href="${esc(site)}" target="_blank" rel="noopener noreferrer"><span>${esc(new URL(site).host)} を開く ↗</span></a>` : ''}
     <form id="store-request-form">${asked.map((one, at) => `<div class="declared-field"><label for="stored-name-${at}">保存名</label><input id="stored-name-${at}" name="name-${at}" value="${esc(one.name)}" aria-describedby="stored-label-${at}" required maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">${one.replace ? `<p class="permission-note replace-note" id="replace-note-${at}" data-name="${esc(one.name)}">既存の「${esc(one.name)}」を置き換えます。</p>` : ''}<label id="stored-label-${at}" for="stored-${at}">${esc(one.label)}</label>${field(one, at)}</div>`).join('')}
@@ -537,7 +537,7 @@ function connect(connectorId, connectionId) {
 // pastes back the one thing Foundation needs to find it. A wrong paste is answered here; the flow is not lost.
 function completeByHand(connector, started) {
   const name = serviceName(connector);
-  openDialog(`<h2 id="dialog-title">${esc(name)}で役割を作る</h2>
+  openDialog(`<h2 id="dialog-title">${esc(name)}でIAMロールを作る</h2>
     <ol class="guidance-steps"><li><a class="button secondary" href="${esc(started.url)}" target="_blank" rel="noopener noreferrer">${esc(name)}の画面を開く ↗</a><p class="permission-note">内容を確認して「作成」を押します。1分ほどで終わります。</p></li>
     <li>できあがった値を貼り付けます。</li></ol>
     <form>${started.complete.fields.map(field => `<label for="complete-${esc(field.name)}">${esc(field.label)}</label><input id="complete-${esc(field.name)}" name="${esc(field.name)}" required autocomplete="off" spellcheck="false" placeholder="${esc(field.placeholder || '')}">`).join('')}
@@ -865,7 +865,7 @@ else {
 }
 // What came back from an OAuth round trip, in words that hold for any service.
 const resultMessages = { connected: '接続しました。', denied: '接続をキャンセルしました。', expired: '接続の手続きが切れました。もう一度お試しください。',
-  wrong_account: '更新する接続と同じユーザーや役割を選んでください。', scope: '求めた範囲とサービスの許可が一致しません。',
+  wrong_account: '更新する接続と同じユーザーやIAMロールを選んでください。', scope: '要求した権限と許可された権限が一致しません。',
   retry: '継続利用の許可を取得できませんでした。もう一度接続してください。', changed: '接続の状態が変わりました。もう一度お試しください。', failed: '接続できませんでした。もう一度お試しください。' };
 if (resultCode === 'review') {
   try {

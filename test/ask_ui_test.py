@@ -19,7 +19,7 @@ SECRET = 'cf-ask-ui-fixture-token'
 
 def review(page):
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'horizontal overflow'
-    purpose = page.get_by_text('用途', exact=True)
+    purpose = page.get_by_text('目的', exact=True)
     if purpose.count():
         label = purpose.bounding_box()
         body = purpose.locator('..').locator('dd').bounding_box()
