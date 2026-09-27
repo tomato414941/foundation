@@ -35,9 +35,26 @@ with sync_playwright() as p:
     callback = args.base + '/login/confirm?' + urlencode({'return_to': '/requests/' + asked['id']})
     page.goto(callback + '#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
     page.get_by_role('button', name='ログイン', exact=True).click()
-    expect(page.get_by_role('heading', level=1)).to_contain_text('laptop の作業用AI')
+    expect(page.get_by_role('heading', name='アクセスを許可する', exact=True)).to_be_visible()
+    expect(page.get_by_text('laptop の作業用AIの依頼', exact=True)).to_be_visible()
     expect(page.get_by_text('owner@example.test', exact=True)).to_be_visible()
     expect(page.get_by_text('保存した認証情報を使って接続を確認します。', exact=True)).to_be_visible()
+    for width in [1280, 390, 320]:
+        page.set_viewport_size({'width': width, 'height': 1000})
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        expect(page.get_by_text('認証情報とオブジェクトの取得・追加・更新・削除', exact=True)).to_be_visible()
+        expect(page.get_by_text('接続済みサービスの利用とファンクションの実行', exact=True)).to_be_visible()
+        expect(page.get_by_text('接続の追加・解除、他の相手への権限付与、アカウント管理は含みません。', exact=True)).to_be_visible()
+        expect(page.get_by_text('今後追加するものも含め、取り消すまで有効です。', exact=True)).to_be_visible()
+        label_box = page.get_by_text('目的', exact=True).bounding_box()
+        purpose_box = page.get_by_text('保存した認証情報を使って接続を確認します。', exact=True).bounding_box()
+        permissions_box = page.get_by_text('権限', exact=True).bounding_box()
+        assert purpose_box['y'] >= label_box['y'] + label_box['height'] + 3, 'purpose appears below its label'
+        assert abs(purpose_box['x'] - label_box['x']) < 1, 'purpose aligns with its label'
+        assert permissions_box['y'] >= purpose_box['y'] + purpose_box['height'], 'purpose appears before permissions'
+        if width != 320:
+            page.screenshot(path=str(shots / f'approval-{width}.png'), full_page=True)
+    page.set_viewport_size({'width': 1280, 'height': 1000})
     page.get_by_label('確認コード', exact=True).fill(asked['confirmation_code'])
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()

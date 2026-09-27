@@ -140,20 +140,16 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .approval-main { width: min(100%, 620px); margin: 40px auto 0; }
 .approval-card { padding: 32px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: 0 10px 30px #24382f05; }
 .approval-heading { display: flex; align-items: center; gap: 16px; }
+.approval-heading > div { min-width: 0; }
 .approval-symbol { display: grid; place-items: center; width: 48px; height: 48px; flex-shrink: 0; border-radius: 13px; background: var(--selected); color: var(--accent); }
 .approval-symbol svg { width: 25px; height: 25px; }
-.approval-eyebrow { color: var(--muted); font-size: 14px; }
+.approval-eyebrow { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
 .approval-card h1 { font-size: 25px; letter-spacing: -.035em; }
-.access-account { margin-bottom: 24px; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
-.access-approval .approval-heading { align-items: flex-start; }
-.access-requester { display: block; overflow-wrap: anywhere; }
-.access-question { display: block; font-size: 17px; font-weight: 500; margin-top: 6px; }
-.access-summary { margin: 24px 0; }
+.request-account { margin-bottom: 24px; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+.access-scope { margin: 0 0 8px; padding-left: 20px; }
 .access-permissions { margin-top: 12px; font-size: 14px; }
 .access-permissions ul { padding-left: 20px; margin: 12px 0; }
 .access-permissions p { margin: 8px 0; color: var(--muted); }
-.request-message { margin: 20px 0; padding: 0 0 0 16px; border-left: 2px solid var(--line); overflow-wrap: anywhere; white-space: pre-wrap; }
-.request-message .muted { font-size: 14px; margin-bottom: 6px; }
 .integration-entry { display: flex; justify-content: flex-end; margin-top: 24px; }
 .principal-heading { display: flex; align-items: center; gap: 8px; padding-right: 32px; }
 .principal-heading h2 { padding-right: 0; overflow-wrap: anywhere; }
@@ -167,6 +163,7 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .principal-delete { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); }
 .approval-facts { margin: 26px 0; }
 .approval-facts dd { overflow-wrap: anywhere; }
+.approval-purpose dd { white-space: pre-wrap; }
 .approval-facts > div { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 24px; }
 .approval-facts dt { font-size: 15px; font-weight: 600; color: var(--ink); }
 #confirmation-code { font: 600 20px/1.4 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }

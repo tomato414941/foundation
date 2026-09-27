@@ -411,6 +411,8 @@ const siteLink = value => { try { const url = new URL(value); return `<a href="$
 // Guidance the requesting AI wrote for its owner. Framed as the AI's words; line breaks kept, nothing else interpreted.
 // The steps the requesting AI wrote for the owner to follow, shown as the numbered list they are.
 const stepsBlock = steps => steps?.length ? `<section class="ai-guidance"><h3>手順</h3><ol class="guidance-steps">${steps.map(step => `<li>${esc(step)}</li>`).join('')}</ol></section>` : '';
+const requestHeading = (row, title, symbol = 'lock') => `${state?.user?.email ? `<p class="request-account">${esc(state.user.email)}</p>` : ''}<header class="approval-heading"><span class="approval-symbol">${icon(symbol)}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(title)}</h1></div></header>`;
+const requestPurpose = row => row.purpose ? `<div class="approval-purpose"><dt>目的</dt><dd>${esc(row.purpose)}</dd></div>` : '';
 const codeComplete = form => /^[0-9a-fA-F]{8}$/.test((form.elements.confirmationCode?.value || '').replace(/[^0-9a-zA-Z]/g, ''));
 function codeField(enabled = true) {
   return `<label for="confirmation-code">確認コード</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="0000-0000" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">依頼元から受け取ったコードを入力してください。</p>`;
@@ -443,8 +445,8 @@ function renderRequest() {
   const body = reconnecting && !row.connection ? '<p class="form-error" role="status">更新する接続が見つかりません。</p>' : !connector.available ? unavailable
     : `<button class="button primary full request-connect" type="button" data-action="request-connect">${esc(title)} ${icon('arrow')}</button>
       ${connector.failure_note && ['failed', 'scope', 'retry', 'changed'].includes(resultCode) ? `<p class="permission-note">${esc(connector.failure_note.text)}<a href="${esc(connector.failure_note.href)}" target="_blank" rel="noopener noreferrer">${esc(connector.failure_note.link)} ↗</a></p>` : ''}`;
-  app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(title)}</h1></div></header>
-    <dl class="approval-facts">${row.connection ? `<div><dt>更新する接続</dt><dd>${esc(row.connection.label)}${cloudflareDetails(row.connection)}</dd></div>` : ''}${row.purpose ? `<div class="approval-purpose"><dt>目的</dt><dd>${esc(row.purpose)}</dd></div>` : ''}<div><dt>権限</dt><dd>${esc(connector.access.name)}${connector.access.restrictions ? `<small class="muted block">${esc(connector.access.restrictions)}</small>` : ''}</dd></div></dl>
+  app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, title)}
+    <dl class="approval-facts">${requestPurpose(row)}${row.connection ? `<div><dt>更新する接続</dt><dd>${esc(row.connection.label)}${cloudflareDetails(row.connection)}</dd></div>` : ''}<div><dt>権限</dt><dd>${esc(connector.access.name)}${connector.access.restrictions ? `<small class="muted block">${esc(connector.access.restrictions)}</small>` : ''}</dd></div></dl>
     ${stepsBlock(row.steps)}
     <div class="register-body">${body}</div>
     <button class="text-button full" type="button" data-action="deny-request">接続しない</button>${expiry}</section>`);
@@ -453,13 +455,13 @@ function renderRequest() {
 // Foundation shows only where it will go and how it will be handed over.
 function renderStore(row, shell, expiry) {
   const asked = row.input.fields, replacing = asked.some(one => one.replace);
-  const title = asked.length === 1 ? `${esc(asked[0].label)}を${replacing ? '置き換える' : '登録する'}` : `${asked.length}件を${replacing ? '置き換える' : '登録する'}`;
+  const title = asked.length === 1 ? `${asked[0].label}を${replacing ? '置き換える' : '登録する'}` : `${asked.length}件を${replacing ? '置き換える' : '登録する'}`;
   const site = asked.find(one => one.site)?.site;
   const field = (one, at) => one.multiline
     ? `<textarea id="stored-${at}" name="value-${at}" rows="6" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>`
     : `<input id="stored-${at}" name="value-${at}" type="${one.readable ? 'text' : 'password'}" required maxlength="16384" autocomplete="off" spellcheck="false">`;
-  app.innerHTML = shell(`<section class="approval-card"><header class="approval-heading"><span class="approval-symbol">${icon('lock')}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${title}</h1></div></header>
-    <dl class="approval-facts">${row.purpose ? `<div class="approval-purpose"><dt>目的</dt><dd>${esc(row.purpose)}</dd></div>` : ''}</dl>
+  app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, title)}
+    <dl class="approval-facts">${requestPurpose(row)}</dl>
     ${stepsBlock(row.steps)}
     ${site ? `<a class="button secondary full setup-link" href="${esc(site)}" target="_blank" rel="noopener noreferrer"><span>${esc(new URL(site).host)} を開く ↗</span></a>` : ''}
     <form id="store-request-form">${asked.map((one, at) => `<div class="declared-field"><label for="stored-name-${at}">保存名</label><input id="stored-name-${at}" name="name-${at}" value="${esc(one.name)}" aria-describedby="stored-label-${at}" required maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">${one.replace ? `<p class="permission-note replace-note" id="replace-note-${at}" data-name="${esc(one.name)}">既存の「${esc(one.name)}」を置き換えます。</p>` : ''}<label id="stored-label-${at}" for="stored-${at}">${esc(one.label)}</label>${field(one, at)}</div>`).join('')}
@@ -481,15 +483,19 @@ function renderStore(row, shell, expiry) {
   }, app);
 }
 const accessSummary = '保存データの取得・変更・削除と、接続済みサービスの利用を許可します。';
-const accessDetails = () => `<details class="access-permissions"><summary>許可の詳細</summary><ul><li>認証情報とオブジェクトの取得・追加・更新・削除</li><li>接続済みサービスの利用とファンクションの実行</li></ul><p>接続の追加・解除、他の相手への権限付与、アカウント管理は含みません。</p><p>依頼元の名前は自己申告です。</p></details>`;
+const accessScope = '<ul class="access-scope"><li>認証情報とオブジェクトの取得・追加・更新・削除</li><li>接続済みサービスの利用とファンクションの実行</li></ul>';
+const accessExclusions = '接続の追加・解除、他の相手への権限付与、アカウント管理は含みません。';
+const accessDetails = () => `<details class="access-permissions"><summary>許可の詳細</summary>${accessScope}<p>${accessExclusions}</p><p>依頼元の名前は自己申告です。</p></details>`;
 // The counterpart is what is accepted, not the individual credential it carries.
 function renderApproval(row, shell, expiry) {
-  app.innerHTML = shell(`<section class="approval-card access-approval"><p class="access-account">${esc(state.user.email)}</p><header class="approval-heading"><span class="approval-symbol">${icon('device')}</span><h1><span class="access-requester">${esc(row.requester_name)}</span><span class="access-question">にアクセスを許可しますか？</span></h1></header>
-    <div class="access-summary"><p>${accessSummary}</p><p class="permission-note">今後追加するものも含め、取り消すまで有効です。</p>${accessDetails()}</div>
-    ${row.purpose ? `<blockquote class="request-message"><p class="muted">依頼元からのメッセージ</p><p>${esc(row.purpose)}</p></blockquote>` : ''}
+  app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, 'アクセスを許可する', 'device')}
+    <dl class="approval-facts">${requestPurpose(row)}<div><dt>権限</dt><dd>${accessScope}<small class="muted block">${accessExclusions}</small></dd></div>
+    <div><dt>対象・期間</dt><dd>今後追加するものも含め、取り消すまで有効です。</dd></div></dl>
+    <p class="permission-note">依頼元の名前は自己申告です。</p>
     <form id="access-request-form">${codeField()}
     <p class="form-error" role="alert"></p>
-    <button class="button primary full" type="submit" disabled>許可する ${icon('arrow')}</button><button class="text-button full" type="button" data-action="deny-request">許可しない</button></form>${expiry}</section>`);
+    <button class="button primary full" type="submit" disabled>許可する ${icon('arrow')}</button></form>
+    <button class="text-button full" type="button" data-action="deny-request">許可しない</button>${expiry}</section>`);
   const form = document.querySelector('#access-request-form'), submit = form.querySelector('[type="submit"]');
   const update = () => { submit.disabled = !codeComplete(form); };
   form.addEventListener('change', update); form.addEventListener('input', update);

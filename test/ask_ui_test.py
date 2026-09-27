@@ -74,6 +74,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
         'purpose': purpose}))['request']
     page.goto(npm_request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='npmアクセストークンを登録する', exact=True)).to_be_visible()
+    expect(page.get_by_text('laptop のAIの依頼', exact=True)).to_be_visible()
+    expect(page.get_by_text('owner@example.test', exact=True)).to_be_visible()
     expect(page.get_by_text(purpose, exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})

@@ -51,17 +51,19 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     callback = context.new_page()
     callback.goto(args.base + '/login/confirm?' + urlencode({'return_to': urlparse(request['verification_uri']).path}) + '#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
     callback.get_by_role('button', name='ログイン', exact=True).click()
-    expect(callback.get_by_role('heading', level=1)).to_contain_text('laptop のAI')
+    expect(callback.get_by_role('heading', name='アクセスを許可する', exact=True)).to_be_visible()
+    expect(callback.get_by_text('laptop のAIの依頼', exact=True)).to_be_visible()
     assert callback.url == request['verification_uri']
     callback.close()
     page.bring_to_front()
     page.evaluate('window.dispatchEvent(new Event("focus"))')
-    expect(page.get_by_role('heading', level=1)).to_contain_text('laptop のAI')
+    expect(page.get_by_role('heading', name='アクセスを許可する', exact=True)).to_be_visible()
+    expect(page.get_by_text('laptop のAIの依頼', exact=True)).to_be_visible()
     expect(page.get_by_text('owner@example.test', exact=True)).to_be_visible()
     expect(page.get_by_text('今後追加するものも含め、取り消すまで有効です。', exact=True)).to_be_visible()
-    page.get_by_text('許可の詳細', exact=True).click()
     expect(page.get_by_text('認証情報とオブジェクトの取得・追加・更新・削除', exact=True)).to_be_visible()
-    page.get_by_text('許可の詳細', exact=True).click()
+    expect(page.get_by_text('接続済みサービスの利用とファンクションの実行', exact=True)).to_be_visible()
+    expect(page.get_by_text('接続の追加・解除、他の相手への権限付与、アカウント管理は含みません。', exact=True)).to_be_visible()
     expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
     assert request['confirmation_code'] not in page.content()
     expect(page.get_by_role('button', name='Googleで接続', exact=True)).to_have_count(0)
@@ -91,10 +93,20 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     assert request['kind'] == 'connect' and 'confirmation_code' not in request
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
+    expect(page.get_by_text('laptop のAIの依頼', exact=True)).to_be_visible()
+    expect(page.get_by_text('owner@example.test', exact=True)).to_be_visible()
+    expect(page.get_by_text('目的', exact=True)).to_be_visible()
+    expect(page.get_by_text('届いたメールを確認する', exact=True)).to_be_visible()
     expect(page.locator('.approval-facts')).to_contain_text('メールの読み取り')
     expect(page.get_by_label('確認コード', exact=True)).to_have_count(0)
-    review(page)
-    page.screenshot(path=str(shots / 'request-before-connection.png'), full_page=True)
+    for width in [1280, 390, 320]:
+        page.set_viewport_size({'width': width, 'height': 1050})
+        review(page)
+        purpose_box = page.get_by_text('届いたメールを確認する', exact=True).bounding_box()
+        permissions_box = page.get_by_text('権限', exact=True).bounding_box()
+        assert permissions_box['y'] >= purpose_box['y'] + purpose_box['height'], 'purpose appears before permissions'
+        if width != 320:
+            page.screenshot(path=str(shots / f'connection-{width}.png'), full_page=True)
     authorization = {'deny': True}
 
     def consent(route):
@@ -141,7 +153,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     # 4. The same identity and key remain: it may ask for access again, and the owner may refuse.
     request = cli('connect', '--name', 'laptop のAI')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_role('heading', level=1)).to_contain_text('laptop のAI')
+    expect(page.get_by_role('heading', name='アクセスを許可する', exact=True)).to_be_visible()
+    expect(page.get_by_text('laptop のAIの依頼', exact=True)).to_be_visible()
     page.get_by_role('button', name='許可しない', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しませんでした', exact=True)).to_be_visible()
     assert cli('api', 'GET', '/v1/principals/me')['acts_for'] == []
