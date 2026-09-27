@@ -109,7 +109,7 @@ Commands:
                                        Run a command with saved values in its environment.
   exec --inputs '<json>' -- <command>  The same, with files, structured inputs, or a connected grant by id.
   exec --output '<json>' -- <command>  Also save a file the command writes.
-  guide                                The API guide: what Foundation keeps, and how to ask it for things.
+  guide                                Read the server's API guide (bundled reference when offline).
   version                              Print the version.
 
 Environment:
@@ -126,15 +126,18 @@ async function main() {
   const configured = process.env.FOUNDATION_URL || await savedUrl();
   if (action === '--help' || action === '-h' || action === 'help' || !action) { console.log(HELP); return; }
   if (action === 'guide') {
-    let connectors;
     if (configured) {
       try {
-        const response = await fetch(new URL('/v1/connectors', configured), { redirect: 'error', signal: AbortSignal.timeout(5_000) });
-        const catalog = await response.json();
-        if (response.ok && Array.isArray(catalog.connectors)) connectors = catalog.connectors;
+        const response = await fetch(new URL('/start', serverUrl(configured)), { redirect: 'error', signal: AbortSignal.timeout(5_000) });
+        if (!response.ok || response.headers.get('content-type')?.split(';')[0].trim() !== 'text/plain') throw new Error('Guide unavailable');
+        const instructions = await response.text();
+        if (!instructions.trim()) throw new Error('Empty guide');
+        console.log(instructions.trimEnd());
+        return;
       } catch {}
     }
-    console.log(guide(connectors));
+    console.error(`${configured ? 'Could not read the server guide.' : 'No Foundation server configured.'} Using the bundled reference from CLI ${VERSION}; it may differ from your server.`);
+    console.log(guide());
     return;
   }
   const separatorAt = args.indexOf('--'), command = separatorAt >= 0 ? args.slice(separatorAt + 1) : [];

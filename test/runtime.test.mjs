@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
 import { mkdtemp, writeFile, readFile, readdir, stat, rm, chmod, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -255,7 +256,7 @@ test('A denied request is indistinguishable from waiting, and asking again still
   assert.equal(after.code, 0, after.err); assert.equal(after.out.trim(), 'ready');
 });
 
-test('--help lists the commands; guide describes the API, and when a server is reachable, what it can obtain itself', async t => {
+test('--helpでコマンドを案内し、guideで接続先の公開ガイドを読む', async t => {
   const f = await fixture(t);
   const help = await execute(['--help'], { FOUNDATION_URL: '' });
   assert.equal(help.code, 0, help.err);
@@ -263,12 +264,46 @@ test('--help lists the commands; guide describes the API, and when a server is r
   assert.doesNotMatch(help.out, /\/v1\//, 'the API belongs to the guide');
   const offline = await execute(['guide'], { FOUNDATION_URL: '', XDG_CONFIG_HOME: join(tmpdir(), 'foundation-no-config') });
   assert.equal(offline.code, 0, offline.err);
+  assert.match(offline.err, /No Foundation server configured.*bundled reference from CLI/);
   assert.match(offline.out, /GET \/v1\/connectors lists what this server can obtain itself/);
   assert.match(offline.out, /Nothing here needs a shell/);
   assert.doesNotMatch(offline.out, /gmail/);
   const online = await execute(['guide'], { FOUNDATION_URL: f.base });
   assert.equal(online.code, 0, online.err);
+  const published = await f.request('/start', { anonymous: true });
+  assert.equal(online.out, published.text.trimEnd() + '\n');
   assert.match(online.out, /google.oauth  Google \/ Googleアカウントの操作  outputs: GOOGLE_OAUTH_ACCESS_TOKEN/);
+});
+
+test('CLIを更新せずに接続先の新しいガイドを読み、取得できない場合は同梱版と明示する', async t => {
+  let content = 'Guide from this server, revision 1', status = 200, type = 'text/plain; charset=utf-8';
+  const server = createServer((req, res) => {
+    assert.equal(req.url, '/start');
+    assert.equal(req.headers.authorization, undefined, '公開ガイドの取得には認証情報を送らない');
+    res.writeHead(status, { 'content-type': type });
+    res.end(content);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const env = { FOUNDATION_URL: `http://127.0.0.1:${server.address().port}` };
+  for (const revision of [1, 2]) {
+    content = 'Guide from this server, revision ' + revision;
+    const result = await execute(['guide'], env);
+    assert.equal(result.code, 0, result.err);
+    assert.equal(result.out, content + '\n');
+    assert.equal(result.err, '');
+  }
+  for (const failure of [
+    { status: 503, type: 'text/plain', content: 'Service unavailable' },
+    { status: 200, type: 'text/html', content: '<h1>Login</h1>' },
+    { status: 200, type: 'text/plain', content: '' },
+  ]) {
+    ({ status, type, content } = failure);
+    const result = await execute(['guide'], env);
+    assert.equal(result.code, 0, result.err);
+    assert.match(result.err, /Could not read the server guide.*bundled reference from CLI/);
+    assert.match(result.out, /POST \/v1\/principals/);
+  }
 });
 
 test('The CLI installs from its npm package, and connect <url> remembers the server for every later command', async t => {

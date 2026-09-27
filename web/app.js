@@ -1,6 +1,7 @@
 import { requestResultView, knownRequestKind } from './request-view.js';
 
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
+const publicInfo = document.querySelector('#public-info');
 let state = null, toastTimer, loginTimer, revision = 0;
 const isLoginConfirmation = location.pathname === '/login/confirm';
 // A fragment is not sent in HTTP requests. Keep the emailed key only in this page's memory.
@@ -197,6 +198,7 @@ async function showLogin({ email = '', message = loginNotice } = {}) {
     <form id="login-form">${pending ? '' : `<label for="login-email">メールアドレス</label><input id="login-email" name="email" type="email" autocomplete="email" required maxlength="254" value="${esc(email)}" ${config.available ? '' : 'disabled'}>`}
     <p class="form-error" role="alert">${config.available ? esc(message) : '現在ログインを利用できません。'}</p><button class="button ${pending ? 'secondary' : 'primary'} full" type="submit" ${pending ? 'id="resend-link" disabled' : config.available ? '' : 'disabled'}>${pending ? 'メールを再送信' : 'ログインメールを送信'} ${pending ? '' : icon('arrow')}</button></form>
     ${pending ? '<p class="login-help login-delivery">届かない場合は、迷惑メールフォルダもご確認ください。</p><div class="login-actions"><button class="text-button" type="button" id="change-email">メールアドレスを変更</button></div>' : config.available ? '<p class="login-help login-footer">初めての方も、このまま始められます。</p>' : ''}</main></div>`;
+  if (!requestId && !pending && publicInfo) app.querySelector('.login-main').append(publicInfo);
   const form = document.querySelector('#login-form');
   let busy = false;
   function setBusy(value) {

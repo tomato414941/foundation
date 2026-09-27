@@ -2,6 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, USER_A } from './helpers.mjs';
 
+test('公開入口のHTMLからFoundationの説明とAPIガイドを読めるようにする', async t => {
+  const f = await fixture(t, { login: false });
+  const page = await f.request('/', { anonymous: true });
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-type'), /^text\/html/);
+  assert.match(page.text, /人・AI・アプリが使う認証情報やファイルを保管し、権限を決めて共有できます。/);
+  const link = page.text.match(/<a href="([^"]+)">APIガイド<\/a>/);
+  assert.ok(link, 'HTMLのリンクからガイドへ進める');
+  const guide = await f.request(link[1], { anonymous: true });
+  assert.equal(guide.status, 200);
+  assert.match(guide.text, /POST \/v1\/principals/);
+});
+
 test('未ログインのAIに接続先・接続手順・利用可能なAPIを案内する', async t => {
   const f = await fixture(t, { login: false });
   const page = await f.request('/start', { anonymous: true, headers: { 'sec-fetch-site': 'cross-site' } });

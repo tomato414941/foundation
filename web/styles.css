@@ -193,6 +193,8 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .login-address { margin-top: 5px; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
 .login-help { margin-top: 9px; }
 .login-footer { margin-top: 20px; text-align: center; }
+.public-info { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+.public-info a { display: inline-block; margin-top: 8px; text-decoration: underline; text-underline-offset: 3px; }
 .login-delivery { margin-top: 20px; }
 .login-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 12px; margin-top: 5px; }
 .login-actions button:disabled { background: none; }
