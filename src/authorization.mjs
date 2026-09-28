@@ -22,9 +22,10 @@ const RULES = {
     pass: [SELF, OWNER, ACTOR], limit: [OWNER], relate: [SELF, OWNER], settings: [SELF, OWNER],
   },
   // A credential is read (what it is) by whoever acts for the holder; a secret's content only along a line. Using
-  // one - deriving what it yields for a command - is an injection. Connecting and disconnecting need a browser.
+  // one - deriving what it yields for a command - is an injection. Registering an existing token is the same
+  // operation for any client. A service's interactive authorization and disconnecting still need the holder.
   credential: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], content: [SELF, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')],
-    remove: [SELF, ACTOR], rename: [SELF], share: [SELF], connect: [SELF], disconnect: [SELF], browser: ['connect', 'disconnect'] },
+    remove: [SELF, ACTOR], rename: [SELF], share: [SELF], 'register-token': [SELF, ACTOR], connect: [SELF], disconnect: [SELF], browser: ['connect', 'disconnect'] },
   object: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')], remove: [SELF, ACTOR], rename: [SELF], link: [SELF, ACTOR], share: [SELF] },
   // An app is seen by whoever acts for its holder, used to connect by its holder and anyone on a line to it, and given
   // new values by its holder or an editor. Its secret is never read: there is no action for it.

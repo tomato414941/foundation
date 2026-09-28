@@ -103,7 +103,7 @@ export class Credentials {
       if (bytes - (existing?.size ?? 0) + content.length > SECRET_TOTAL_MAX) fail(409, 'storage_full', '預けられる合計は20MBまでです。使わないものを消してください。');
       const id = existing?.id ?? randomUUID(), sealed = this.vault.sealBytes(content, `credential:${holderId}:${id}`);
       if (existing) {
-        this.db.prepare('UPDATE credentials SET size=?,state=? WHERE resource_id=?').run(content.length, sealed, id);
+        this.db.prepare('UPDATE credentials SET size=?,state=?,generation=generation+1 WHERE resource_id=?').run(content.length, sealed, id);
         this.resources.touch(id);
       } else {
         this.resources.insert(id, holderId, 'credential', name);
@@ -119,7 +119,7 @@ export class Credentials {
     return this.store.transaction(() => {
       const { bytes } = this.usage(row.holder_id);
       if (bytes - row.size + content.length > SECRET_TOTAL_MAX) fail(409, 'storage_full', '預けられる合計は20MBまでです。使わないものを消してください。');
-      this.db.prepare('UPDATE credentials SET size=?,state=? WHERE resource_id=?').run(content.length, this.vault.sealBytes(content, this.binding(row)), row.id);
+      this.db.prepare('UPDATE credentials SET size=?,state=?,generation=generation+1 WHERE resource_id=?').run(content.length, this.vault.sealBytes(content, this.binding(row)), row.id);
       this.resources.touch(row.id);
       return this.get(row.id);
     });

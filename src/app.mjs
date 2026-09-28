@@ -1010,9 +1010,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         return send(200, { credential: credentials.view(saved, { owner: true }) });
       }
       if (path === '/v1/credentials' && method === 'POST') {
-        permit('connect', 'credential');
+        permit('list', 'credential');
         const input = await inputBody();
         limit('connect', 10);
+        // Answering someone's request remains the holder's decision, even when it asks for a token.
+        if (input.request_id !== undefined) permit('connect', 'credential');
         const request = input.request_id === undefined ? null : requests.forTo(input.request_id, holderId, true);
         progressRequestId = request?.id || null;
         const asked = request ? requests.input(request) : null;
@@ -1022,16 +1024,16 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         const { ref, definition } = services.get(asked ? asked.service : input.service, holderId, principals);
         const schemeId = asked ? asked.auth_scheme : input.auth_scheme ?? Object.keys(definition.auth_schemes)[0];
         if (request && input.service !== undefined && input.service !== ref) fail(400, 'scope_mismatch', '依頼されたサービスで接続してください。');
+        if (!request) permit(schemeId === 'token' ? 'register-token' : 'connect', 'credential');
         const scheme = services.scheme(ref, schemeId);
         if (request) requests.record(request.id, 'connect_started', { service: ref });
         // Who asked for it, as they were called then. One started from the page was asked by no one.
-        const requestedBy = request ? principals.get(request.from_id)?.name ?? '' : '';
+        const requestedBy = request ? principals.get(request.from_id)?.name ?? '' : subject.id === holderId ? '' : self.name;
         const target = asked ? asked.credential_id : input.credential_id;
         if (request && input.credential_id !== undefined && input.credential_id !== target) fail(409, 'credential_changed', '依頼された接続を選んでください。');
         // A secret the holder kept may become the token of a service: it keeps its id and name.
         const adopting = !request && schemeId === 'token' && target !== undefined && isSecret(credentials.held(holderId, target) ?? { service: '' });
         const previous = target === undefined ? undefined : adopting ? credentials.held(holderId, target) : credentials.reconnection(holderId, ref, schemeId, target);
-        if (!session) fail(401, 'login_required', 'ログインしてください。');
         if (schemeId === 'token') {
           const fields = input.fields && typeof input.fields === 'object' && !Array.isArray(input.fields) ? { ...input.fields } : {};
           // Adopting: the secret's bytes fill the scheme's one sealed field.
@@ -1040,11 +1042,18 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
             if (sealed.length !== 1) fail(400, 'invalid_fields', 'このサービスのトークンには、預けた値をそのまま使えません。');
             fields[sealed[0].name] = credentials.content(previous).toString('utf8');
           }
-          const saved = await verifyConnection(req, session,
-            () => scheme.authorization.complete({ fields }, adopting ? undefined : credentials.context(previous)),
-            result => requestActions.connect(request?.id, holderId, ref, schemeId, result, { requestedBy, previous }));
-          return send(200, { credential: credentials.view(saved, { owner: true }) });
+          const result = await scheme.authorization.complete({ fields }, adopting ? undefined : credentials.context(previous));
+          // A remote check can outlive this key, session, permission, or service definition. No client may commit
+          // a result checked under a different authorization or against a different service.
+          still();
+          if (req.aborted || req.socket.destroyed) fail(409, 'request_interrupted', '接続が中断されました。もう一度お試しください。');
+          if (JSON.stringify(services.get(ref, holderId, principals).definition) !== JSON.stringify(definition)) {
+            fail(409, 'service_changed', 'サービスの設定が変わりました。もう一度お試しください。');
+          }
+          const saved = requestActions.connect(request?.id, holderId, ref, schemeId, result, { requestedBy, previous });
+          return send(200, { credential: credentials.view(saved, { owner: subject.id === holderId }) });
         }
+        if (!session) fail(401, 'login_required', 'ログインしてください。');
         const previousState = previous ? credentials.state(previous) : null;
         const scopes = requestedScopes(scheme, asked ? asked.scopes ?? [] : scopeList(input.scopes), previousState);
         // Reconnecting keeps the app the credential was made through unless another is named.
