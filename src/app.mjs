@@ -20,6 +20,7 @@ import { Apps, FOUNDATION_APP, takesApps } from './apps.mjs';
 import { Credentials, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX, isSecret } from './credentials.mjs';
 import { Services } from './services.mjs';
 import { Objects, OBJECT_MAX } from './objects.mjs';
+import { Environments } from './environments.mjs';
 import { Resources, KINDS } from './resources.mjs';
 import { respond } from './mcp.mjs';
 import { FETCH_BODY_MAX } from './fetch.mjs';
@@ -99,7 +100,7 @@ function principalId(value) {
   return value;
 }
 
-export function createApp({ database = ':memory:', encryptionKey, auth, services: catalog, serviceFetcher, space: spaceBackend = null, publicOrigin, owners: ownerList = [], loginClock, trustedProxies = [], outbound = {} }) {
+export function createApp({ database = ':memory:', encryptionKey, auth, services: catalog, serviceFetcher, space: spaceBackend = null, publicOrigin, owners: ownerList = [], loginClock, trustedProxies = [], outbound = {}, runner = null, compute = {} }) {
   if (!auth || !Array.isArray(catalog)) throw new Error('Authentication and services are required');
   let external;
   if (publicOrigin) {
@@ -125,6 +126,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   const principals = new Principals(store), sessions = new Sessions(store), flows = new OAuthFlows(store);
   const requests = new Requests(store), settings = new Settings(store, principals), auditLog = new AuditLog(store);
   const authorization = new Authorization(principals);
+  const environments = new Environments({ store, resources, principals, runner, limits: compute });
   const functions = new Functions({ credentials, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
   const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, credentials, apps }, row, origin, options);
@@ -135,6 +137,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   const timer = setInterval(() => {
     store.sweep();
     principals.sweep();
+    void environments.sweep().catch(error => console.error(new Date().toISOString(), 'environment sweep', error));
     logins.sweep();
     for (const [key, value] of limits) if (value.until <= Date.now()) limits.delete(key);
   }, 60_000).unref();
@@ -409,7 +412,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         return send(201, { principal: made.principal, token: made.issued.token, key: { id: made.issued.id } });
       }
       if (!browser && !known) notApproved();
-      if (!browser) subject = { id: known.principal.id, via: { kind: 'key', id: known.key.id } };
+      if (!browser) subject = { id: known.principal.id, via: { kind: 'key', id: known.key.id, ...(known.key.environment ? { environment: known.key.environment } : {}) } };
       else {
         const linked = requestRoute?.[1] ? principals.authenticateLink(readCookie(req, 'fdn_link'), requestRoute[1]) : undefined;
         if (linked) subject = { id: linked.principal.id, via: { kind: 'link', ...linked.link } };
@@ -511,11 +514,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       if (subject.via.kind === 'link') fail(401, 'login_required', 'ログインしてください。');
       // Principals: oneself, and those one owns.
       if (path === '/v1/principals/me') {
-        if (method === 'GET') return send(200, { principal: self, acts_for: actsFor, owners: principals.ownersOf(subject.id), keys: principals.keys(subject.id), requests: requests.list(subject.id, 'pending').map(row => viewRequest(row, origin, { code: true })) });
+        if (method === 'GET') return send(200, { principal: self, ...(subject.via.kind === 'key' ? { key: { id: subject.via.id, ...(subject.via.environment ? { environment: subject.via.environment } : {}) } } : {}), acts_for: actsFor, owners: principals.ownersOf(subject.id), keys: principals.keys(subject.id), requests: requests.list(subject.id, 'pending').map(row => viewRequest(row, origin, { code: true })) });
         if (method === 'PATCH') { const input = await inputBody(); return send(200, { principal: principals.rename(subject.id, nameValue(input.name)) }); }
         // Leaving: a principal takes itself away, its open requests with it. What it acted for stays where it was.
         if (method === 'DELETE') {
           await inputBody();
+          await environments.removeAll(subject.id);
           const cancelled = store.transaction(() => { const rows = requests.cancelFrom(subject.id, 'requester_left'); resources.removeAll(subject.id); principals.remove(subject.id); return rows; });
           for (const row of cancelled) requestActions.changed(row);
           return send(200, { ok: true });
@@ -536,7 +540,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         auditLog.write(subject.id, 'principal.created', 'principal', made.id, { alias: alias ?? null, actor: input.actor === true, key: Boolean(issued) });
         return send(201, { principal: { ...made, alias: alias ?? null, keys: principals.keys(made.id), acts_for: principals.actsFor(made.id) }, ...(issued ? { token: issued.token, key: { id: issued.id, kind: 'key' } } : {}) });
       }
-      const principalRoute = path.match(/^\/v1\/principals\/([A-Za-z0-9-]{1,64})(?:\/(keys|links|settings|access)(?:\/([a-f0-9-]{36}))?)?$/);
+      const principalRoute = path.match(/^\/v1\/principals\/([A-Za-z0-9-]{1,64})(?:\/(keys|links|settings|access|compute)(?:\/([a-f0-9-]{36}))?)?$/);
       if (principalRoute) {
         const id = principalRoute[1] === 'me' ? subject.id : principalRoute[1], part = principalRoute[2], keyId = principalRoute[3];
         const target = principals.at(id);
@@ -555,6 +559,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
             await inputBody();
             requestActions.removePrincipal(subject.id, id);
             if (objects.enabled) for (const row of objects.list(id)) await objects.remove(row);
+            await environments.removeAll(id);
             resources.removeAll(id);
             return send(200, { ok: true });
           }
@@ -589,6 +594,17 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           const made = principals.issueLink(id, row.id, LINK_TTL);
           auditLog.write(subject.id, 'link.issued', 'principal', id, { request: row.id });
           return send(201, { link: { id: made.id, request_id: made.request_id, expires_at: made.expires_at }, url: origin + '/requests/' + row.id + '#link=' + made.token, expires_at: made.expires_at });
+        }
+        // Computing this principal spent this month and may spend; its owner bounds it.
+        if (part === 'compute' && !keyId) {
+          if (method === 'GET') { permit('read', 'principal', id); return send(200, { compute: environments.usage(id) }); }
+          if (method === 'PUT') {
+            permit('limit', 'principal', id);
+            const input = await inputBody();
+            const made = environments.setLimit(id, input.monthly_seconds);
+            auditLog.write(subject.id, 'compute.limited', 'principal', id, { monthly_seconds: input.monthly_seconds });
+            return send(200, { compute: made });
+          }
         }
         if (part === 'settings' && !keyId) {
           permit('settings', 'principal', id);
@@ -640,15 +656,77 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
+      // Lent machines. An environment is a resource: opened by the holder or whoever acts for them, reached by its id,
+      // shared along lines, and able to reach nothing of Foundation's unless given an identity it may act as.
+      const passable = identity => {
+        if (identity === undefined || identity === null) return null;
+        const id = principalId(identity);
+        principals.at(id);
+        permit('pass', 'principal', id);
+        return id;
+      };
+      if (path === '/v1/environments' && method === 'GET') { permit('list', 'environment'); return send(200, { environments: environments.list(holderId).map(row => environments.view(row)) }); }
+      if ((path === '/v1/environments' || path === '/v1/runs') && method === 'POST') {
+        permit('open', 'environment');
+        environments.check();
+        limit('environments', 20);
+        const input = await inputBody(1024 * 1024 + 20_000);
+        const identity = passable(input.identity);
+        const run = path === '/v1/runs';
+        const opened = await environments.open(holderId, { ...input, identity, ...(run ? { lifetime: { ...(input.lifetime ?? {}), end: 'exit' } } : {}) }, origin);
+        auditLog.write(subject.id, 'environment.opened', 'resource', opened.id, { identity, size: opened.size, lifetime: opened.lifetime });
+        if (!run) return send(201, { environment: environments.view(opened) });
+        const started = environments.run(opened, subject.id, input);
+        auditLog.write(subject.id, 'environment.command', 'resource', opened.id, { command: String(input.command?.[0] ?? '').slice(0, 100) });
+        const answered = await environments.answer(opened.id, started.id, 20_000);
+        return send(answered.status === 'running' ? 202 : 200, { environment: environments.view(environments.get(opened.id)), command: answered });
+      }
+      const environmentRoute = path.match(/^\/v1\/(environments|resources)\/([a-f0-9-]{36})(?:\/commands(?:\/([a-f0-9-]{36}))?)?$/);
+      const environmentHeld = environmentRoute && (environmentRoute[1] === 'environments' || (!path.includes('/commands') && resources.get(environmentRoute[2])?.kind === 'environment'))
+        ? environments.at(environmentRoute[2]) : null;
+      if (environmentHeld && (environmentRoute[1] === 'environments' || method === 'DELETE')) {
+        const held = environmentHeld, commands = path.endsWith('/commands') || Boolean(environmentRoute[3]);
+        if (!commands && method === 'GET') { permit('read', 'environment', held.id, held.holder_id); return send(200, { environment: environments.view(held) }); }
+        if (!commands && method === 'PATCH') {
+          permit('identity', 'environment', held.id, held.holder_id);
+          const input = await inputBody();
+          if (!Object.hasOwn(input, 'identity')) fail(400, 'invalid_identity', 'identity を指定してください（外すときは null）。');
+          const identity = passable(input.identity);
+          const changed = identity ? await environments.attach(held, identity) : await environments.detach(held);
+          auditLog.write(subject.id, identity ? 'environment.identity' : 'environment.identity_removed', 'resource', held.id, { identity });
+          return send(200, { environment: environments.view(changed) });
+        }
+        if (!commands && method === 'DELETE') {
+          permit('remove', 'environment', held.id, held.holder_id);
+          await inputBody();
+          await environments.remove(held);
+          auditLog.write(subject.id, 'environment.closed', 'resource', held.id, {});
+          return send(200, { ok: true });
+        }
+        if (commands && !environmentRoute[3] && method === 'POST') {
+          permit('exec', 'environment', held.id, held.holder_id);
+          const input = await inputBody(1024 * 1024 + 20_000);
+          const started = environments.run(held, subject.id, input);
+          auditLog.write(subject.id, 'environment.command', 'resource', held.id, { command: String(input.command?.[0] ?? '').slice(0, 100) });
+          const answered = await environments.answer(held.id, started.id, 20_000);
+          return send(answered.status === 'running' ? 202 : 200, { command: answered });
+        }
+        if (commands && environmentRoute[3] && method === 'GET') {
+          permit('read', 'environment', held.id, held.holder_id);
+          return send(200, { command: environments.command(held.id, environmentRoute[3]) });
+        }
+        fail(405, 'method_not_allowed', 'この操作は利用できません。');
+      }
       // Resources. Each has an id, and that is how lines, the audit log and the calls below refer to it. A name is
       // how the holder calls one: a way to find or place a thing, not its identity. A credential says what it is
       // and where it works; an object says its size and type; neither says anything of its content here.
       const shown = row => row.kind === 'credential' ? credentials.view(credentials.get(row.id), { owner: subject.id === row.holder_id })
         : row.kind === 'app' ? apps.view(apps.get(row.id), { owner: subject.id === row.holder_id })
-        : row.kind === 'service' ? services.view(services.row(row.id), { owner: subject.id === row.holder_id }) : objects.view(objects.get(row.id));
+        : row.kind === 'service' ? services.view(services.row(row.id), { owner: subject.id === row.holder_id })
+        : row.kind === 'environment' ? environments.view(environments.get(row.id)) : objects.view(objects.get(row.id));
       const resourceKind = required => {
         const kind = url.searchParams.get('kind') ?? undefined;
-        if ((required && kind === undefined) || (kind !== undefined && !KINDS.includes(kind))) fail(400, 'invalid_kind', 'kind は credential / object / app / service のいずれかです。');
+        if ((required && kind === undefined) || (kind !== undefined && !KINDS.includes(kind))) fail(400, 'invalid_kind', 'kind は credential / object / app / service / environment のいずれかです。');
         return kind;
       };
       if (path === '/v1/resources' && method === 'GET') {
@@ -672,6 +750,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         if (kinds.includes('object')) { if (kind === 'object') objects.check(); if (objects.enabled) { limit('objects', 60); rows.push(...objects.list(holderId, prefix ?? '')); } }
         if (kinds.includes('app')) rows.push(...apps.list(holderId), ...apps.lent(holderId));
         if (kinds.includes('service')) rows.push(...services.list(holderId), ...services.lent(holderId));
+        if (kinds.includes('environment')) rows.push(...environments.list(holderId));
         // Apps are listed with those Foundation offers, which anyone may connect through and nobody holds.
         return send(200, { resources: [...rows.map(shown), ...(kind === 'app' ? apps.offeredAll() : [])] });
       }
@@ -1025,6 +1104,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         const names = Array.isArray(input.names) ? input.names : [];
         const { injection, expires_at } = await credentials.inject(holderId, names);
         still();
+        // Handed into a lent machine: what it prints is cleaned of these.
+        if (subject.via.environment) environments.reveal(subject.via.environment, [...Object.values(injection.environment), ...injection.files.map(file => Buffer.from(file.content, 'base64').toString('utf8'))]);
         auditLog.write(subject.id, 'injection', 'principal', holderId, { names: names.map(item => typeof item === 'string' ? item : item?.name).filter(Boolean) });
         return send(200, { injection, expires_at, expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
       }
@@ -1072,7 +1153,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   return {
-    server, store, resources, services, credentials, apps, objects, principals, sessions, flows, requests, requestActions, settings, auditLog,
+    server, store, resources, services, credentials, apps, objects, environments, principals, sessions, flows, requests, requestActions, settings, auditLog,
     async close() {
       clearInterval(timer);
       if (server.listening) await new Promise((resolve) => { server.close(resolve); server.closeIdleConnections(); });

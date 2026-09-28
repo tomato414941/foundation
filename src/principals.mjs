@@ -108,28 +108,31 @@ export class Principals {
       WHERE r.relation='actor' AND r.object_type='principal' AND r.object_id=? ORDER BY r.created_at`).all(id).map(row => ({ ...row, keys: this.keys(row.id) }));
   }
 
-  // Access keys: what a machine (an AI, an app) shows to be a principal, for as long as it is one. Reaches whatever
-  // the principal may reach. Only a hash of it is kept.
+  // Access keys: what a machine (an AI, an app, a lent environment) shows to be a principal. Reaches whatever the
+  // principal may reach. A key made for an environment names it and lives no longer than it. Only a hash is kept.
   keys(principalId) {
-    return this.db.prepare('SELECT id,created_at,last_used_at FROM access_keys WHERE principal_id=? ORDER BY created_at,id').all(principalId);
+    return this.db.prepare('SELECT id,created_at,last_used_at,expires_at,environment_id FROM access_keys WHERE principal_id=? AND (expires_at IS NULL OR expires_at>?) ORDER BY created_at,id')
+      .all(principalId, Date.now()).map(({ expires_at, environment_id, ...row }) => ({ ...row, ...(environment_id ? { expires_at, environment_id } : {}) }));
   }
-  hasKey(principalId, keyId) { return Boolean(this.db.prepare('SELECT 1 FROM access_keys WHERE principal_id=? AND id=?').get(principalId, keyId)); }
-  issueKey(principalId) {
-    if (this.keys(principalId).length >= KEYS_MAX) fail(409, 'key_limit', `登録できるキーは${KEYS_MAX}件までです。`);
+  hasKey(principalId, keyId) { return Boolean(this.db.prepare('SELECT 1 FROM access_keys WHERE principal_id=? AND id=? AND (expires_at IS NULL OR expires_at>?)').get(principalId, keyId, Date.now())); }
+  issueKey(principalId, { expiresAt = null, environmentId = null } = {}) {
+    if (!environmentId && this.keys(principalId).filter(row => !row.environment_id).length >= KEYS_MAX) fail(409, 'key_limit', `登録できるキーは${KEYS_MAX}件までです。`);
     const token = 'fdn_' + randomBytes(32).toString('base64url'), id = randomUUID(), at = now();
-    this.db.prepare('INSERT INTO access_keys (id,hash,principal_id,created_at) VALUES (?,?,?,?)').run(id, digest(token), principalId, at);
+    this.db.prepare('INSERT INTO access_keys (id,hash,principal_id,created_at,expires_at,environment_id) VALUES (?,?,?,?,?,?)').run(id, digest(token), principalId, at, expiresAt, environmentId);
     return { id, created_at: at, token };
   }
+  // The keys an environment was given go with it.
+  revokeEnvironmentKeys(environmentId) { return this.db.prepare('DELETE FROM access_keys WHERE environment_id=?').run(environmentId).changes; }
   revokeKey(principalId, keyId) {
     return this.db.prepare('DELETE FROM access_keys WHERE principal_id=? AND id=?').run(principalId, keyId).changes > 0;
   }
   // Who a key speaks for. Nothing is said about what they may do.
   authenticateKey(token) {
     if (typeof token !== 'string' || !KEY.test(token)) return;
-    const row = this.db.prepare('SELECT id,principal_id FROM access_keys WHERE hash=?').get(digest(token));
+    const row = this.db.prepare('SELECT id,principal_id,environment_id FROM access_keys WHERE hash=? AND (expires_at IS NULL OR expires_at>?)').get(digest(token), Date.now());
     if (!row) return;
     this.db.prepare('UPDATE access_keys SET last_used_at=? WHERE id=?').run(now(), row.id);
-    return { principal: this.get(row.principal_id), key: { id: row.id } };
+    return { principal: this.get(row.principal_id), key: { id: row.id, ...(row.environment_id ? { environment: row.environment_id } : {}) } };
   }
 
   // Request links: what a person is handed to answer one request without logging in. Short-lived, spent when
@@ -158,5 +161,8 @@ export class Principals {
       return { principal_id: found.principal_id, ...this.issueLink(found.principal_id, found.request_id, ttl) };
     });
   }
-  sweep() { this.db.prepare('DELETE FROM request_links WHERE expires_at<=?').run(Date.now()); }
+  sweep() {
+    this.db.prepare('DELETE FROM request_links WHERE expires_at<=?').run(Date.now());
+    this.db.prepare('DELETE FROM access_keys WHERE expires_at IS NOT NULL AND expires_at<=?').run(Date.now());
+  }
 }

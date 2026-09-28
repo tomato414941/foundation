@@ -7,7 +7,8 @@ import { fail } from './errors.mjs';
 //   object      a file the holder placed here (objects.mjs)
 //   app         an OAuth app, the name a service knows Foundation by (apps.mjs)
 //   service     a service the holder described, for one the catalog does not know (services.mjs)
-export const KINDS = ['credential', 'object', 'app', 'service'];
+//   environment a machine lent to the holder, with a shell, files and the network (environments.mjs)
+export const KINDS = ['credential', 'object', 'app', 'service', 'environment'];
 const COMMON = 'id,holder_id,kind,name,created_at,updated_at';
 const now = () => new Date().toISOString();
 

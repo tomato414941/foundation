@@ -19,7 +19,11 @@ export class Store {
     const behind = !empty && version >= 1 && version < SCHEMA_VERSION && [...Array(SCHEMA_VERSION - version)].every((_, step) => STEPS[version + step + 1]);
     const mine = version === SCHEMA_VERSION && !empty, fresh = version === 0 && empty;
     if (!mine && !fresh && !behind) { this.db.close(); throw new Error('This database was not created by this version of Foundation. Start from a new database file.'); }
+    // A step that rebuilds a table others refer to runs with foreign keys off, as SQLite asks, and every reference is
+    // checked before it commits.
+    const rebuilds = behind && Object.entries(STEPS).some(([at, step]) => Number(at) > version && step.rebuilds);
     try {
+      if (rebuilds) this.db.exec('PRAGMA foreign_keys=OFF');
       this.transaction(() => {
         if (fresh) this.db.exec(SCHEMA);
         if (behind) {
@@ -27,12 +31,14 @@ export class Store {
             const step = STEPS[next];
             if (typeof step === 'function') step(this); else this.db.exec(step);
           }
+          if (rebuilds && this.db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('A migration left a broken reference.');
           this.db.exec('PRAGMA user_version = ' + SCHEMA_VERSION);
         }
         const check = this.db.prepare("SELECT value FROM metadata WHERE name='key_check'").get();
         if (check) this.vault.open(check.value, 'key_check');
         else this.db.prepare('INSERT INTO metadata VALUES (?, ?)').run('key_check', this.vault.seal(true, 'key_check'));
       });
+      if (rebuilds) this.db.exec('PRAGMA foreign_keys=ON');
       this.sweep();
     } catch (error) { this.db.close(); throw error; }
   }
@@ -47,6 +53,7 @@ export class Store {
   sweep() {
     this.db.prepare('DELETE FROM oauth_flows WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM request_links WHERE expires_at<=?').run(Date.now());
+    this.db.prepare('DELETE FROM access_keys WHERE expires_at IS NOT NULL AND expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM requests WHERE expires_at<=?').run(Date.now());
   }

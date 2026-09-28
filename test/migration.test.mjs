@@ -10,15 +10,20 @@ import { Principals } from '../src/principals.mjs';
 import { KEY, USER_A } from './helpers.mjs';
 
 // The schema a running Foundation is on today, fixed here so the step is tested against what it will meet.
-const SCHEMA_27 = `
+const SCHEMA_28 = `
 
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE principals (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
   CREATE TABLE access_keys (
     id TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK(kind IN ('key','link')), scope TEXT, expires_at INTEGER, created_at TEXT NOT NULL, last_used_at TEXT
+    created_at TEXT NOT NULL, last_used_at TEXT
   );
   CREATE INDEX access_keys_principal ON access_keys(principal_id);
+  CREATE TABLE request_links (
+    id TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+    request_id TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at TEXT NOT NULL
+  );
+  CREATE INDEX request_links_principal ON request_links(principal_id);
   CREATE TABLE relations (
     subject_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, relation TEXT NOT NULL CHECK(relation IN ('owner','actor','viewer','editor')),
     object_type TEXT NOT NULL CHECK(object_type IN ('principal','resource')), object_id TEXT NOT NULL,
@@ -74,29 +79,33 @@ const SCHEMA_27 = `
   );
   CREATE INDEX audit_log_actor ON audit_log(actor_id, at);
   CREATE INDEX audit_log_object ON audit_log(object_type, object_id, at);
-  PRAGMA user_version = 27;
+  PRAGMA user_version = 28;
 `;
 
-test('27版のデータベースから、アクセスキーはそのまま使え、依頼のリンクは依頼リンクとして開ける', async t => {
+test('28版のデータベースを、リソースもそれにつながる行も失わずに移し、環境を置けるようにする', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), db = new DatabaseSync(path), vault = new Vault(KEY);
-  db.exec(SCHEMA_27);
-  const stamp = '2026-01-01T00:00:00.000Z', key = 'fdn_' + 'k'.repeat(43), link = 'l'.repeat(43), requestId = 'r'.repeat(43);
+  db.exec(SCHEMA_28);
+  const stamp = '2026-01-01T00:00:00.000Z', key = 'fdn_' + 'k'.repeat(43);
   db.prepare('INSERT INTO metadata VALUES (?,?)').run('key_check', vault.seal(true, 'key_check'));
   db.prepare('INSERT INTO principals VALUES (?,?,?)').run(USER_A, 'someone', stamp);
-  db.prepare("INSERT INTO access_keys (id,hash,principal_id,kind,scope,expires_at,created_at,last_used_at) VALUES ('key-1',?,?,'key',NULL,NULL,?,?)").run(digest(key), USER_A, stamp, stamp);
-  db.prepare("INSERT INTO access_keys (id,hash,principal_id,kind,scope,expires_at,created_at) VALUES ('link-1',?,?,'link',?,?,?)").run(digest(link), USER_A, 'request:' + requestId, Date.now() + 600_000, stamp);
+  db.prepare('INSERT INTO access_keys (id,hash,principal_id,created_at) VALUES (?,?,?,?)').run('key-1', digest(key), USER_A, stamp);
+  db.prepare("INSERT INTO resources (id,holder_id,kind,name,created_at,updated_at) VALUES ('object-1',?,'object','report.pdf',?,?)").run(USER_A, stamp, stamp);
+  db.prepare("INSERT INTO objects (resource_id,size,type) VALUES ('object-1',14,'application/pdf')").run();
+  db.prepare("INSERT INTO relations (subject_id,relation,object_type,object_id,created_at) VALUES (?,'viewer','resource','object-1',?)").run(USER_A, stamp);
   db.close();
 
   const store = new Store(path, KEY);
   t.after(() => store.close());
-  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 28);
-  const principals = new Principals(store);
-  assert.deepEqual(principals.authenticateKey(key)?.key, { id: 'key-1' });
-  assert.deepEqual(principals.keys(USER_A).map(row => row.id), ['key-1']);
-  assert.deepEqual(principals.authenticateLink(link, requestId)?.link, { id: 'link-1', request: requestId });
-  assert.equal(principals.authenticateKey(link), undefined);
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 29);
+  assert.deepEqual({ ...store.db.prepare("SELECT size,type FROM objects WHERE resource_id='object-1'").get() }, { size: 14, type: 'application/pdf' }, 'what hangs off a resource stays');
+  assert.equal(store.db.prepare("SELECT count(*) n FROM relations WHERE object_id='object-1'").get().n, 1);
+  assert.deepEqual(new Principals(store).authenticateKey(key)?.key, { id: 'key-1' });
+  store.db.prepare("INSERT INTO resources (id,holder_id,kind,name,created_at,updated_at) VALUES ('machine-1',?,'environment','scratch',?,?)").run(USER_A, stamp, stamp);
+  assert.equal(store.db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1, 'references are checked again after the step');
+  store.db.prepare("DELETE FROM resources WHERE id='object-1'").run();
+  assert.equal(store.db.prepare("SELECT count(*) n FROM objects").get().n, 0, 'and still follow what they refer to');
 });
 
 test('もう誰も動かしていない形のデータベースは、移行せずに断る', async t => {

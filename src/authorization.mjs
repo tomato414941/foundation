@@ -17,7 +17,9 @@ const RULES = {
   export: { read: [SELF], browser: true },
   principal: {
     read: [SELF, OWNER], rename: [SELF, OWNER], remove: [OWNER], list: [SELF],
-    'issue-key': [SELF, OWNER], 'revoke-key': [SELF, OWNER], 'issue-link': [SELF, OWNER], relate: [SELF, OWNER], settings: [SELF, OWNER],
+    'issue-key': [SELF, OWNER], 'revoke-key': [SELF, OWNER], 'issue-link': [SELF, OWNER],
+    // Giving a machine this principal's identity: whoever may act as it. Bounding what it may compute: its owner.
+    pass: [SELF, OWNER, ACTOR], limit: [OWNER], relate: [SELF, OWNER], settings: [SELF, OWNER],
   },
   // A credential is read (what it is) by whoever acts for the holder; a secret's content only along a line. Using
   // one - deriving what it yields for a command - is an injection. Connecting and disconnecting need a browser.
@@ -31,6 +33,10 @@ const RULES = {
   // A service a holder described: seen and changed by whoever acts for the holder - it holds nothing secret - and
   // used by anyone on a line to it.
   service: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')], remove: [SELF, ACTOR], rename: [SELF], share: [SELF] },
+  // A lent machine: opened and used by the holder or whoever acts for them, and by anyone on an editor line; watched
+  // along a viewer line too. Its identity is changed by the holder or whoever acts for them.
+  environment: { list: [SELF, ACTOR], open: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], exec: [SELF, ACTOR, LINE('editor')],
+    identity: [SELF, ACTOR], remove: [SELF, ACTOR], rename: [SELF], share: [SELF] },
   usage: { read: [SELF, ACTOR, OWNER] },
   injection: { create: [SELF, ACTOR] },
   function: { list: [SELF, ACTOR], invoke: [SELF, ACTOR] },

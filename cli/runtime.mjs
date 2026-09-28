@@ -233,11 +233,15 @@ async function main() {
   // Nothing runs before someone has accepted this key: a key that acts for nobody reaches only its own empty resources,
   // and the person it asked has yet to answer.
   const current = await send('/v1/principals/me', undefined, { method: 'GET' });
-  if (!current.acts_for?.length) throw new Error('Foundation request failed (401, not_approved). This key acts for nobody yet' + (current.requests?.[0] ? '; it is waiting for approval at ' + current.requests[0].verification_uri : '') + '.');
-  // Whose resources a run reaches: the one this key acts for, or the one named when it acts for several.
-  const holder = process.env.FOUNDATION_AS || (current.acts_for.length === 1 ? current.acts_for[0].id : null);
-  if (!holder) throw new Error('This key acts for several principals. Set FOUNDATION_AS=<principal id> to say which one this run is for.');
-  const forHolder = target => target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(holder);
+  // A key given to a lent machine acts as its principal's own self. Any other key acts for someone once approved;
+  // until then, whether waiting or refused, it has nothing to run with.
+  const own = Boolean(current.key?.environment);
+  if (!own && !current.acts_for?.length) throw new Error('Foundation request failed (401, not_approved). This key acts for nobody yet' + (current.requests?.[0] ? '; it is waiting for approval at ' + current.requests[0].verification_uri : '') + '.');
+  // Whose resources a run reaches: the one this key acts for, the one named when it acts for several, or its own.
+  const acting = current.acts_for ?? [];
+  const holder = process.env.FOUNDATION_AS || (acting.length === 1 ? acting[0].id : null);
+  if (!holder && acting.length > 1) throw new Error('This key acts for several principals. Set FOUNDATION_AS=<principal id> to say which one this run is for.');
+  const forHolder = target => holder ? target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(holder) : target;
   let injection;
   if (names.length) ({ injection } = await send(forHolder('/v1/injections'), { names }));
   else injection = { environment: {}, files: [] };
