@@ -1,5 +1,5 @@
 export const pages = { '/': 'Foundation', '/services': 'サービス', '/secrets': 'シークレット', '/objects': 'オブジェクト', '/principals': 'アクセス管理', '/functions': 'ファンクション', '/account': 'アカウント' };
-export const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true">F</span>Foundation</a>';
+export const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 48 48" fill="currentColor"><path d="M11 37V11H37M11 24H24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" opacity=".6"/><circle cx="37" cy="24" r="3" opacity=".3"/><circle cx="24" cy="37" r="3" opacity=".3"/><circle cx="37" cy="37" r="3" opacity=".3"/><circle cx="11" cy="11" r="4"/><circle cx="24" cy="11" r="4"/><circle cx="37" cy="11" r="4"/><circle cx="11" cy="24" r="4"/><circle cx="24" cy="24" r="4"/><circle cx="11" cy="37" r="4"/></svg></span>Foundation</a>';
 export const loading = '<div class="content-loading" role="status" aria-label="読み込み中"><span></span><span></span><span></span></div>';
 export const pageTitle = path => path === '/' || !Object.hasOwn(pages, path) ? 'Foundation' : pages[path] + ' · Foundation';
 

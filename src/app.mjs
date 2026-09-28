@@ -698,7 +698,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           const existing = services.find(holderId, name);
           permit('write', 'service', existing?.id);
           limit('services', 30);
-          const saved = services.put(holderId, name, await inputBody());
+          const input = await inputBody();
+          const saved = store.transaction(() => {
+            if (req.headers['if-none-match'] === '*' && services.find(holderId, name)) fail(412, 'name_taken', '同じ名前のサービスがあります。一覧から選んでください。');
+            return services.put(holderId, name, input);
+          });
           auditLog.write(subject.id, existing ? 'service.changed' : 'service.created', 'resource', saved.id, {});
           return send(200, { resource: shown(saved) });
         }
@@ -772,8 +776,18 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
             return send(200, { resource: shown(saved) });
           }
           if (method === 'PATCH') {
-            permit('rename', 'service', row.id, row.holder_id);
-            return send(200, { resource: shown(services.rename(row, (await inputBody()).name)) });
+            const input = await inputBody();
+            if (Object.keys(input).some(key => !['name', 'auth_schemes'].includes(key)) || !Object.keys(input).length) fail(400, 'invalid_fields', '変更する項目を確認してください。');
+            if (input.name !== undefined) permit('rename', 'service', row.id, row.holder_id);
+            if (input.auth_schemes !== undefined) permit('write', 'service', row.id, row.holder_id);
+            const saved = store.transaction(() => {
+              let current = services.row(row.id);
+              if (input.name !== undefined) current = services.rename(current, input.name);
+              if (input.auth_schemes !== undefined) current = services.addSchemes(current, input.auth_schemes);
+              return current;
+            });
+            if (input.auth_schemes !== undefined) auditLog.write(subject.id, 'service.changed', 'resource', row.id, {});
+            return send(200, { resource: shown(saved) });
           }
           if (method === 'DELETE') {
             permit('remove', 'service', row.id, row.holder_id);

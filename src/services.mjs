@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { fail } from './errors.mjs';
 import { resourceName } from './resources.mjs';
 import { definitionInput } from './service-definition.mjs';
@@ -59,6 +60,7 @@ export class Services {
   }
   scheme(ref, id) {
     const scheme = this.schemes(ref)[id];
+    if (id === undefined) fail(409, 'auth_scheme_required', '接続方法を追加してください。');
     if (!scheme) fail(400, 'invalid_auth_scheme', 'このサービスでは、その方法で接続できません。');
     return scheme;
   }
@@ -80,7 +82,7 @@ export class Services {
         app_fields: takesApps(scheme) ? appFieldsOf(scheme).map(({ leading, ...field }) => field) : [],
         scopes: scheme.scopes ? { base: scheme.scopes.base, documentation_url: scheme.scopes.documentationUrl || '' } : null,
         can_revoke: typeof scheme.revoke === 'function', can_reconnect: scheme.canReconnect !== false };
-      if (id === 'token') described.token = { ...common, fields: scheme.fields.map(({ pattern, ...field }) => field) };
+      if (id === 'token') described.token = { ...common, verifies_token: scheme.verifiesToken, fields: scheme.fields.map(({ pattern, ...field }) => field) };
       if (id === 'role') described.role = { ...common, available: scheme.available };
     }
     return { id: ref, name: definition.name, ...(definition.logo ? { logo: definition.logo } : {}), catalog,
@@ -104,10 +106,26 @@ export class Services {
         this.resources.insert(id, holderId, 'service', name);
         this.db.prepare('INSERT INTO services (resource_id,definition) VALUES (?,?)').run(id, JSON.stringify(definition));
       }
+      this.built.delete(id);
       return this.row(id);
     });
   }
   write(row, input) { return this.put(row.holder_id, row.name, input); }
+  // Adding a method does not replace a definition read earlier, or alter an existing method.
+  addSchemes(row, added) {
+    return this.store.transaction(() => {
+      const current = this.row(row.id);
+      if (!current) fail(404, 'not_found', 'サービスが見つかりません。');
+      const definition = JSON.parse(current.definition);
+      const checked = definitionInput({ version: 1, name: definition.name, auth_schemes: added });
+      for (const [id, spec] of Object.entries(checked.auth_schemes)) {
+        if (definition.auth_schemes[id] && !isDeepStrictEqual(definition.auth_schemes[id], spec)) {
+          fail(409, 'auth_scheme_exists', 'この接続方法はすでに設定されています。開き直して確認してください。');
+        }
+      }
+      return this.write(current, { ...definition, auth_schemes: { ...definition.auth_schemes, ...checked.auth_schemes } });
+    });
+  }
   rename(row, name) {
     resourceName(name);
     if (name !== row.name && this.find(row.holder_id, name)) fail(409, 'name_taken', 'その名前はすでに使われています。');

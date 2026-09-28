@@ -42,10 +42,16 @@ with sync_playwright() as p:
     page.wait_for_load_state('networkidle')
     dialog = page.get_by_role('dialog')
 
-    # A service Foundation does not know: the owner says where it asks for consent and hands out tokens.
+    # 名前だけで登録したサービスに、後からOAuthの接続先を設定する。
     page.get_by_role('button', name='サービスを追加', exact=True).click()
     dialog.get_by_role('button', name='一覧にないサービスを追加', exact=True).click()
     dialog.get_by_label('サービス名', exact=True).fill('Notes')
+    dialog.get_by_role('button', name='追加', exact=True).click()
+    expect(dialog).not_to_be_visible()
+    registered = page.get_by_role('article', name='Notes', exact=True)
+    expect(registered.get_by_text('未接続', exact=True)).to_be_visible()
+    registered.get_by_role('button', name='接続を追加', exact=True).click()
+    dialog.get_by_role('button', name='ログインして許可する').click()
     dialog.get_by_label('認可エンドポイントのURL', exact=True).fill('https://service.example/oauth/authorize')
     dialog.get_by_label('トークンエンドポイントのURL', exact=True).fill('http://service.example/oauth/token')
     dialog.get_by_label('利用者情報のURL（任意）', exact=True).fill('https://service.example/api/me')
@@ -99,7 +105,7 @@ with sync_playwright() as p:
     expect(dialog.get_by_label('Notes側の許可も取り消す')).to_be_checked()
     dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(connections.get_by_text('接続はありません。', exact=True)).to_be_visible()
+    expect(registered.get_by_text('未接続', exact=True)).to_be_visible()
     assert not errors, errors
     browser.close()
     print('一覧にないサービス: 定義・アプリの追加・権限を選んだ接続・取り消し付きの解除と、PC・スマートフォンの表示を確認しました。')

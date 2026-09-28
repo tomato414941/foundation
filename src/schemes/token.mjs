@@ -11,6 +11,7 @@ const refused = () => fail(400, 'token_refused', '接続先がこのトークン
 
 export function tokenScheme(definition, { fetcher = publicFetch } = {}) {
   const spec = definition.auth_schemes.token;
+  const verifiesToken = spec.identity?.from !== 'fields' && Boolean(spec.identity?.url);
   const values = input => {
     const given = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
     const fields = {};
@@ -42,10 +43,10 @@ export function tokenScheme(definition, { fetcher = publicFetch } = {}) {
     return { id: id.map(String).join(':'), label: label || id.map(String).join(':') };
   }
   const result = (subject, fields, who) => ({ subject, privateState: { fields, identity: who }, expiresAt: null,
-    facts: { label: who?.label || definition.name, account: who?.id ?? null, checked_at: who ? Date.now() : null },
+    facts: { label: who?.label || definition.name, account: who?.id ?? null, checked_at: who && verifiesToken ? Date.now() : null },
     credentials: { environment: inject(spec.injection, { ...fields, account: who?.id }) } });
   return {
-    kind: 'token', available: true, variables: Object.keys(spec.injection), fields: spec.fields,
+    kind: 'token', available: true, variables: Object.keys(spec.injection), fields: spec.fields, verifiesToken,
     authorization: {
       // The holder's fields, checked with the service when it can say whose they are. Handing over a new token for
       // the same account keeps the connection; one for another account is refused.

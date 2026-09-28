@@ -7,7 +7,7 @@ import { destination } from './fetch.mjs';
 // scheme that connects - and nothing else may be in it. The catalog alone may name code (an adapter) for a scheme
 // that data cannot describe.
 //
-//   { version: 1, id?, name, logo?, api?, docs?, console?, auth_schemes: { oauth?, token?, role? } }
+//   { version: 1, id?, name, logo?, api?, docs?, console?, auth_schemes?: { oauth?, token?, role? } }
 //
 // id and logo are the catalog's; a holder's service is known by its resource id. console is where an app or a
 // token for the service is made. The schemes are described in schemes/oauth.mjs and schemes/token.mjs.
@@ -139,9 +139,9 @@ export function checkDefinition(value, { catalog = false } = {}) {
   text(value.name, 'definition.name', 80);
   if (value.logo !== undefined && !/^[a-z0-9-]{1,40}$/.test(value.logo)) bad('must be a logo name', 'definition.logo');
   for (const key of ['api', 'docs', 'console']) if (value[key] !== undefined) link(value[key], 'definition.' + key);
+  value = { ...value, auth_schemes: value.auth_schemes === undefined ? {} : value.auth_schemes };
   object(value.auth_schemes, 'definition.auth_schemes');
   only(value.auth_schemes, SCHEMES, 'definition.auth_schemes');
-  if (!Object.keys(value.auth_schemes).length) bad('needs a scheme', 'definition.auth_schemes');
   if (value.auth_schemes.oauth !== undefined) oauth(value.auth_schemes.oauth, 'definition.auth_schemes.oauth', { catalog });
   if (value.auth_schemes.token !== undefined) token(value.auth_schemes.token, 'definition.auth_schemes.token');
   if (value.auth_schemes.role !== undefined) role(value.auth_schemes.role, 'definition.auth_schemes.role', { catalog });

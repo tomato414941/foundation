@@ -149,9 +149,9 @@ function toast(text) {
   clearTimeout(toastTimer); notice.textContent = text; notice.hidden = false;
   toastTimer = setTimeout(() => { notice.hidden = true; }, 5500);
 }
-async function api(path, { method = 'GET', data, signal } = {}) {
+async function api(path, { method = 'GET', data, signal, headers = {} } = {}) {
   let response;
-  try { response = await fetch(path, { method, signal, credentials: 'same-origin', cache: 'no-store', headers: data !== undefined ? { 'content-type': 'application/json' } : {}, ...(data !== undefined ? { body: JSON.stringify(data) } : {}) }); }
+  try { response = await fetch(path, { method, signal, credentials: 'same-origin', cache: 'no-store', headers: { ...(data !== undefined ? { 'content-type': 'application/json' } : {}), ...headers }, ...(data !== undefined ? { body: JSON.stringify(data) } : {}) }); }
   catch (error) { if (signal?.aborted) throw error; throw new Error('接続できませんでした。通信状況を確認してください。'); }
   const result = await response.json();
   signal?.throwIfAborted();
@@ -370,6 +370,13 @@ const connected = () => (state.credentials || []).filter(item => item.service);
 // Every service the holder can connect: those Foundation knows, and those they (or someone for them) described.
 const allServices = () => [...(state.catalog || []), ...(state.services || []).map(row => row.service)];
 const serviceById = id => allServices().find(item => item.id === id);
+const ownService = id => (state.services || []).find(row => row.id === id && row.holder_id === state.user.id);
+const unconnectedServices = () => (state.services || []).filter(row => !connected().some(connection => connection.service.id === row.id));
+function rememberService(row) {
+  state.services = [...(state.services || []).filter(item => item.id !== row.id), row];
+  refreshDeferred = true;
+  return row.service;
+}
 const keptWhen = value => new Date(value).toLocaleString('ja-JP');
 const kiloBytes = size => size < 1024 ? size + ' バイト' : size < 1024 * 1024 ? Math.round(size / 1024) + ' KB'
   : size < 1024 * 1024 * 1024 ? Math.round(size / (1024 * 1024)) + ' MB' : (size / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
@@ -377,10 +384,12 @@ const statusName = status => ({ usable: '利用できます', reconnect_required
 // One credential for a service: which service, which account, and what is wrong when something is.
 function connectionRow(connection) {
   const warning = connection.status !== 'usable';
+  const account = connection.auth_scheme === 'token' && !connection.facts?.account ? connection.name || connection.label : connection.label;
   const app = connection.app === null ? '<p class="muted warning-text">使っていたOAuthアプリが削除されました</p>'
     : connection.app && !connection.app.foundation ? `<p class="muted">OAuthアプリ：${esc(connection.app.name)}</p>` : '';
-  const way = connection.auth_scheme === 'token' ? '<p class="muted">トークン</p>' : connection.auth_scheme === 'role' ? '<p class="muted">IAMロール</p>' : '';
-  return `<article class="agent-row connection-row"><div class="connection-identity">${serviceLogo(connection.service)}<div class="agent-name"><h3>${esc(connection.service.name)}</h3><p class="connection-account">${esc(connection.label)}</p></div></div>
+  const verified = serviceById(connection.service.id)?.auth_schemes.token?.verifies_token && connection.facts?.checked_at;
+  const way = connection.auth_scheme === 'token' ? `<p class="muted">トークン${verified ? '' : '・未検証'}</p>` : connection.auth_scheme === 'role' ? '<p class="muted">IAMロール</p>' : '';
+  return `<article class="agent-row connection-row"><div class="connection-identity">${serviceLogo(connection.service)}<div class="agent-name"><h3>${esc(connection.service.name)}</h3>${account && account !== connection.service.name ? `<p class="connection-account">${esc(account)}</p>` : ''}</div></div>
     <div class="connection-details">${warning ? `<p class="connection-status warning-text">${esc(statusName(connection.status))}</p>` : ''}${way}${app}${cloudflareDetails(connection)}${scopeDetails(connection.facts)}</div>
     <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}">接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
 }
@@ -450,7 +459,7 @@ function render() {
     const lastUsed = keys.flatMap(key => key.keys.map(item => item.last_used_at)).filter(Boolean).sort().at(-1);
     shell(`<header class="page-heading"><h1>Foundation</h1></header>
       <div class="home-cards">
-        ${card('/services', 'サービス', `${connections.length} 件`)}
+        ${card('/services', 'サービス', `${connections.length + unconnectedServices().length} 件`)}
         ${card('/secrets', 'シークレット', `${kept.length} 件`)}
         ${card('/objects', 'オブジェクト', spaceSummary(space))}
         ${card('/principals', 'アクセス管理', keys.length ? `許可済み ${keys.length} 件${lastUsed ? '・最終利用 ' + new Date(lastUsed).toLocaleString('ja-JP') : ''}` : 'ありません')}
@@ -471,10 +480,14 @@ function render() {
   if (page === 'services') {
     // The services the holder's AI may use, by service. Adding one is a way in, not the page itself; the OAuth apps
     // connections go through are there when needed, folded away.
-    const connections = connected().sort((a, b) => a.service.name.localeCompare(b.service.name, 'ja') || a.label.localeCompare(b.label, 'ja'));
+    const connections = connected(), waiting = unconnectedServices();
+    const rows = [...connections.map(connection => ({ name: connection.service.name, label: connection.label, html: connectionRow(connection) })),
+      ...waiting.map(row => ({ name: row.service.name, label: '', html: `<article class="agent-row connection-row" aria-label="${esc(row.service.name)}"><div class="connection-identity">${serviceLogo(row.service)}<div class="agent-name"><h3>${esc(row.service.name)}</h3></div></div>
+        <div class="connection-details"><p class="muted">未接続</p></div><div class="agent-actions"><button class="text-button" data-action="choose-service" data-id="${esc(row.id)}">接続を追加</button>${ownService(row.id) ? `<button class="text-button danger" data-action="remove-service" data-id="${esc(row.id)}">削除</button>` : ''}</div></article>` }))]
+      .sort((a, b) => a.name.localeCompare(b.name, 'ja') || a.label.localeCompare(b.label, 'ja'));
     shell(`<header class="page-heading page-heading-actions"><h1>サービス</h1><button class="button secondary" data-action="add-service">${icon('plus')} サービスを追加</button></header>
       <section class="resource-section" aria-label="サービス">
-        ${connections.length ? `<div class="agent-list">${connections.map(connectionRow).join('')}</div>` : '<div class="access-empty"><p>接続はありません。</p></div>'}</section>
+        ${rows.length ? `<div class="agent-list">${rows.map(row => row.html).join('')}</div>` : '<div class="access-empty"><p>接続はありません。</p></div>'}</section>
       ${appsSection()}`);
     app.querySelector('#oauth-apps').addEventListener('toggle', event => { appsOpen = event.currentTarget.open; });
     return;
@@ -613,7 +626,7 @@ function renderRequest() {
   let body;
   if (reconnecting && !row.credential) body = '<p class="form-error" role="status">更新する接続が見つかりません。</p>';
   else if (way === 'token') body = `${service.console ? `<a class="button secondary full setup-link" href="${esc(service.console)}" target="_blank" rel="noopener noreferrer"><span>${esc(new URL(service.console).host)} を開く ↗</span></a>` : ''}
-    <form id="token-request-form">${tokenFields(service, 'request-token')}<p class="permission-note">入力したトークンが使えるかを${esc(name)}に確かめてから預かります。</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">預ける ${icon('arrow')}</button></form>`;
+    <form id="token-request-form">${tokenFields(service, 'request-token')}<p class="permission-note">${tokenNotice(service)}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">預ける ${icon('arrow')}</button></form>`;
   else if (row.app === null) body = '<p class="form-error" role="status">使うOAuthアプリが見つかりません。</p>';
   else if (!scheme.available && (way !== 'oauth' || row.app?.foundation || !scheme.takes_apps)) body = `<p class="form-error" role="status">現在${esc(name)}に接続できません。</p>`;
   else body = `<button class="button primary full request-connect" type="button" data-action="request-connect">${esc(way === 'role' ? 'IAMロールを作る' : name + 'の画面へ')} ${icon('arrow')}</button>`;
@@ -811,22 +824,28 @@ function removeApp(app) {
 }
 // Adding a service: find it among those Foundation knows and those the holder described, or describe one it does not.
 let serviceFilter = '';
-function addService() {
-  const services = allServices().sort((a, b) => a.name.localeCompare(b.name, 'ja'));
-  openDialog(`<h2 id="dialog-title">サービスを追加</h2>
-    <input id="service-filter" type="search" aria-label="サービスを探す" placeholder="サービスを探す" value="${esc(serviceFilter)}" autocomplete="off">
-    <div class="service-grid">${services.map(service => `<button class="service-choice" data-action="choose-service" data-id="${esc(service.id)}" data-name="${esc(service.name.toLowerCase())}">${serviceLogo(service)}<span>${esc(service.name)}</span></button>`).join('')}</div>
+function servicePicker({ title, services, query = '', choose, create, filtered = () => {} }) {
+  const sorted = [...services].sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+  openDialog(`<h2 id="dialog-title">${esc(title)}</h2>
+    <input id="service-filter" type="search" aria-label="サービスを探す" placeholder="サービスを探す" value="${esc(query)}" autocomplete="off">
+    <div class="service-grid">${sorted.map(service => `<button class="service-choice" data-id="${esc(service.id)}" data-name="${esc(service.name.toLowerCase())}">${serviceLogo(service)}<span>${esc(service.name)}</span></button>`).join('')}</div>
     <p class="permission-note" id="service-none" hidden>見つかりません。</p>
-    <button class="text-button" data-action="define-service">一覧にないサービスを追加</button>`);
+    <button class="text-button" id="create-service">一覧にないサービスを追加</button>`);
   const filter = dialog.querySelector('#service-filter');
   const apply = () => {
-    const word = serviceFilter.trim().toLowerCase();
+    const word = filter.value.trim().toLowerCase();
     let shown = 0;
     dialog.querySelectorAll('.service-choice').forEach(choice => { choice.hidden = Boolean(word) && !choice.dataset.name.includes(word); if (!choice.hidden) shown++; });
     dialog.querySelector('#service-none').hidden = shown > 0;
   };
-  filter.addEventListener('input', () => { serviceFilter = filter.value; apply(); });
+  filter.addEventListener('input', () => { filtered(filter.value); apply(); });
+  dialog.querySelectorAll('.service-choice').forEach(button => button.addEventListener('click', () => choose(serviceById(button.dataset.id))));
+  dialog.querySelector('#create-service').addEventListener('click', () => create(filter.value.trim()));
   apply(); filter.focus();
+}
+function addService() {
+  servicePicker({ title: 'サービスを追加', services: allServices(), query: serviceFilter,
+    filtered: value => { serviceFilter = value; }, choose: service => chooseService(service.id), create: name => defineService({ name }) });
 }
 // How to connect a service, when it offers more than one way. The words say what the holder does, not the protocol.
 const WAYS = { oauth: ['ログインして許可する', 'サービスの画面で許可します。'], token: ['トークンを入力する', 'サービスで作ったトークンを預けます。'], role: ['IAMロールを作る', 'AWSの画面でFoundation用のロールを作ります。'] };
@@ -834,12 +853,15 @@ function chooseService(serviceId) {
   const service = serviceById(serviceId);
   if (!service) return;
   const ways = Object.keys(service.auth_schemes);
-  if (ways.length === 1) { connectBy(service, ways[0]); return; }
-  openDialog(`<h2 id="dialog-title">${esc(service.name)}を追加</h2>
-    <div class="way-list">${ways.map(way => `<button class="way-choice" data-action="choose-way" data-id="${esc(service.id)}" data-way="${way}"><strong>${WAYS[way][0]}</strong><span>${WAYS[way][1]}${way === 'oauth' && !oauthUsable(service) ? '先にOAuthアプリの登録が要ります。' : ''}</span></button>`).join('')}</div>`);
+  if (ownService(service.id)) {
+    for (const way of ['token', 'oauth']) if (!ways.includes(way)) ways.push(way);
+  } else if (ways.length === 1) { connectBy(service, ways[0]); return; }
+  openDialog(`<h2 id="dialog-title">${esc(service.name)}に接続</h2>
+    ${ways.length ? `<div class="way-list">${ways.map(way => `<button class="way-choice" data-action="choose-way" data-id="${esc(service.id)}" data-way="${way}"><strong>${WAYS[way][0]}</strong><span>${way === 'oauth' && !service.auth_schemes.oauth ? 'OAuth 2.0の接続先とアプリを設定します。' : WAYS[way][1] + (way === 'oauth' && !oauthUsable(service) ? '先にOAuthアプリの登録が要ります。' : '')}</span></button>`).join('')}</div>` : '<p>接続方法が未設定です。</p>'}`);
 }
 function connectBy(service, way, credentialId) {
   if (way === 'token') connectToken(service, credentialId);
+  else if (way === 'oauth' && !service.auth_schemes.oauth && ownService(service.id)) configureOAuth(service);
   else connect(service.id, credentialId);
 }
 // Starting a connection Foundation performs itself: the service decides who it is.
@@ -857,14 +879,24 @@ function connect(serviceId, credentialId, appId) {
     location.assign(result.url);
   });
 }
-// A token the holder makes at the service and types here; Foundation checks it with the service before keeping it.
+// A token may have a service-specific check; a generic token is kept without claiming verification.
+const defaultToken = { fields: [{ name: 'token', label: 'トークン', secret: true }], injection: { API_TOKEN: '{token}' } };
+const withToken = service => service.auth_schemes.token ? service : { ...service, auth_schemes: { ...service.auth_schemes, token: { fields: defaultToken.fields, verifies_token: false } } };
+const tokenNotice = service => service.auth_schemes.token.verifies_token ? '接続先でトークンの有効性を確認します。' : '接続先での有効性の確認は行いません。';
+async function addServiceScheme(service, way, definition) {
+  const result = await api('/v1/resources/' + service.id, { method: 'PATCH', data: { auth_schemes: { [way]: definition } } });
+  return rememberService(result.resource);
+}
+const ensureToken = service => service.auth_schemes.token ? Promise.resolve(service) : addServiceScheme(service, 'token', defaultToken);
 const tokenFields = (service, prefix = 'token') => service.auth_schemes.token.fields.map(field => `<label for="${prefix}-${field.name}">${esc(field.label)}</label><input id="${prefix}-${field.name}" name="${field.name}" required autocomplete="off" spellcheck="false"${field.secret ? ' type="password"' : ''}${field.placeholder ? ` placeholder="${esc(field.placeholder)}"` : ''}>`).join('');
 function connectToken(service, credentialId) {
+  const preview = withToken(service);
   openDialog(`<h2 id="dialog-title">${esc(service.name)}のトークンを${credentialId ? '入れ直す' : '入力'}</h2>
     ${service.console ? `<a class="button secondary full setup-link" href="${esc(service.console)}" target="_blank" rel="noopener noreferrer"><span>${esc(new URL(service.console).host)} を開く ↗</span></a>` : ''}
-    <form>${tokenFields(service)}<p class="permission-note">入力したトークンが使えるかを${esc(service.name)}に確かめてから預かります。</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">預ける</button></form>`);
+    <form>${tokenFields(preview)}<p class="permission-note">${tokenNotice(preview)}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">預ける</button></form>`);
   bindForm(async (form) => {
-    const fields = Object.fromEntries(service.auth_schemes.token.fields.map(field => [field.name, String(form.get(field.name) || '')]));
+    const fields = Object.fromEntries(preview.auth_schemes.token.fields.map(field => [field.name, String(form.get(field.name) || '')]));
+    service = await ensureToken(service);
     await api('/v1/credentials', { method: 'POST', data: { service: service.id, auth_scheme: 'token', fields, ...(credentialId ? { credential_id: credentialId } : {}) } });
     closeDialog(); await refresh(); toast(service.name + 'に接続しました。');
   });
@@ -887,25 +919,35 @@ function completeByHand(service, started) {
     closeDialog(); await refresh(); toast(service.name + 'に接続しました。');
   });
 }
-// A service Foundation does not know: the holder says where it asks for consent and hands out tokens. It becomes a
-// service of theirs, and connecting it starts with their app.
-function defineService() {
-  openDialog(`<h2 id="dialog-title">一覧にないサービスを追加</h2><p>OAuth 2.0に対応したサービスなら、自分のOAuthアプリを通して接続できます。</p>
-    <form><label for="define-name">サービス名</label><input id="define-name" name="name" required maxlength="80" autocomplete="off" placeholder="例: Notes">
+// Registering the service and choosing how to connect it are separate steps.
+function defineService({ name = '', created } = {}) {
+  openDialog(`<h2 id="dialog-title">サービスを追加</h2><form>
+    <label for="define-name">サービス名</label><input id="define-name" name="name" required maxlength="80" autocomplete="off" placeholder="例: Notes" value="${esc(name)}">
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加</button></form>`);
+  bindForm(async (form) => {
+    const name = String(form.get('name') || '').trim();
+    const result = await api('/v1/resources?kind=service&name=' + encodeURIComponent(name), {
+      method: 'PUT', headers: { 'if-none-match': '*' }, data: { version: 1, name },
+    });
+    const service = rememberService(result.resource);
+    if (created) { created(service); return; }
+    closeDialog(); await refresh(); toast(name + ' を追加しました。');
+  });
+}
+function configureOAuth(service) {
+  openDialog(`<h2 id="dialog-title">${esc(service.name)}のOAuth設定</h2><form>
     <label for="define-authorize">認可エンドポイントのURL</label><input id="define-authorize" name="authorize" required autocomplete="off" spellcheck="false" placeholder="https://example.com/oauth/authorize">
     <label for="define-token">トークンエンドポイントのURL</label><input id="define-token" name="token" required autocomplete="off" spellcheck="false" placeholder="https://example.com/oauth/token">
     <label for="define-identity">利用者情報のURL（任意）</label><input id="define-identity" name="identity" autocomplete="off" spellcheck="false"><p class="permission-note">入れると、接続したアカウントを確かめ、一覧に名前を出します。</p>
     <label for="define-revoke">取り消しのURL（任意）</label><input id="define-revoke" name="revoke" autocomplete="off" spellcheck="false"><p class="permission-note">入れると、接続の解除のときにサービス側の許可も取り消せます。</p>
-    <label for="define-api">APIのURL（任意）</label><input id="define-api" name="api" autocomplete="off" spellcheck="false">
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">次へ ${icon('arrow')}</button></form>`);
   bindForm(async (form) => {
-    const value = name => String(form.get(name) || '').trim(), name = value('name');
+    const value = name => String(form.get(name) || '').trim();
     const oauth = { authorize: value('authorize'), token: value('token'), scopes: { base: [] },
       ...(value('identity') ? { identity: { url: value('identity') } } : {}), ...(value('revoke') ? { revoke: { url: value('revoke'), style: 'rfc7009' } } : {}),
       injection: { OAUTH_ACCESS_TOKEN: '{access_token}', OAUTH_EXPIRES_AT: '{expires_at}' } };
-    const made = await api('/v1/resources?kind=service&name=' + encodeURIComponent(name), { method: 'PUT', data: { version: 1, name, ...(value('api') ? { api: value('api') } : {}), auth_schemes: { oauth } } });
-    closeDialog(); await refresh();
-    addApp(made.resource.id, id => connect(id));
+    await addServiceScheme(service, 'oauth', oauth);
+    addApp(service.id, id => connect(id));
   });
 }
 // Disconnect only this credential; secrets kept by hand remain.
@@ -923,21 +965,22 @@ function disconnect(connection) {
     toast(result.service_revoked === false ? '解除しました。サービス側の許可は取り消せませんでした。' : '解除しました。');
   });
 }
-// A secret kept by hand that is in fact a service's token: it becomes that service's, keeping its name, once the
-// service confirms it.
-const adoptable = () => allServices().filter(service => service.auth_schemes.token?.fields.filter(field => field.secret).length === 1);
+// Adopting a secret keeps its identity and value; a new service can be registered along the way.
+const adoptable = () => allServices().filter(service => service.auth_schemes.token
+  ? service.auth_schemes.token.fields.filter(field => field.secret).length === 1 : Boolean(ownService(service.id)));
 function adoptSecret(entry) {
-  const services = adoptable().sort((a, b) => a.name.localeCompare(b.name, 'ja'));
-  const others = service => service.auth_schemes.token.fields.filter(field => !field.secret);
-  const body = service => others(service).map(field => `<label for="adopt-${field.name}">${esc(field.label)}</label><input id="adopt-${field.name}" name="${field.name}" required autocomplete="off" spellcheck="false"${field.placeholder ? ` placeholder="${esc(field.placeholder)}"` : ''}>`).join('');
-  openDialog(`<h2 id="dialog-title">${esc(entry.name)} をサービスのトークンにする</h2><p>サービスに確かめてから、そのサービスの接続として扱います。名前はそのまま残ります。</p>
-    <form><label for="adopt-service">サービス</label><select id="adopt-service" name="service">${services.map(service => `<option value="${esc(service.id)}">${esc(service.name)}</option>`).join('')}</select>
-    <div class="adopt-body">${body(services[0])}</div><p class="form-error" role="alert"></p><button class="button primary full" type="submit">確かめて移す</button></form>`);
-  const choice = dialog.querySelector('#adopt-service');
-  choice.addEventListener('change', () => { dialog.querySelector('.adopt-body').innerHTML = body(services.find(service => service.id === choice.value)); });
+  servicePicker({ title: entry.name + ' をサービスのトークンにする', services: adoptable(),
+    choose: service => adoptIntoService(entry, service), create: name => defineService({ name, created: service => adoptIntoService(entry, service) }) });
+}
+function adoptIntoService(entry, service) {
+  const preview = withToken(service), others = preview.auth_schemes.token.fields.filter(field => !field.secret);
+  openDialog(`<h2 id="dialog-title">${esc(service.name)}のトークンにする</h2><p>${esc(entry.name)}</p>
+    <form>${others.map(field => `<label for="adopt-${field.name}">${esc(field.label)}</label><input id="adopt-${field.name}" name="${field.name}" required autocomplete="off" spellcheck="false"${field.placeholder ? ` placeholder="${esc(field.placeholder)}"` : ''}>`).join('')}
+    <p class="permission-note">${tokenNotice(preview)}</p><p class="form-error" role="alert"></p>
+    <button class="button primary full" type="submit">${preview.auth_schemes.token.verifies_token ? '確かめて移す' : '移す'}</button></form>`);
   bindForm(async (form) => {
-    const service = services.find(item => item.id === form.get('service'));
-    const fields = Object.fromEntries(others(service).map(field => [field.name, String(form.get(field.name) || '')]));
+    const fields = Object.fromEntries(others.map(field => [field.name, String(form.get(field.name) || '')]));
+    service = await ensureToken(service);
     await api('/v1/credentials', { method: 'POST', data: { service: service.id, auth_scheme: 'token', credential_id: entry.id, fields } });
     closeDialog(); await refresh(); toast(entry.name + ' を' + service.name + 'の接続にしました。');
   });
@@ -1198,7 +1241,10 @@ document.addEventListener('click', async (event) => {
     if (action === 'add-service') addService();
     if (action === 'choose-service') chooseService(id);
     if (action === 'choose-way') connectBy(serviceById(id), target.dataset.way);
-    if (action === 'define-service') defineService();
+    if (action === 'remove-service') {
+      const entry = ownService(id);
+      if (entry) confirmRemoval(entry.service.name + ' を削除しますか？', 'サービスの登録を削除します。', () => api('/v1/resources/' + entry.id, { method: 'DELETE', data: {} }));
+    }
     if (action === 'reconnect') {
       const connection = connected().find(item => item.id === id);
       connectBy(serviceById(connection.service.id), connection.auth_scheme, connection.id);
