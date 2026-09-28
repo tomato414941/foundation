@@ -597,7 +597,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         }
         // Computing this principal spent this month and may spend; its owner bounds it.
         if (part === 'compute' && !keyId) {
-          if (method === 'GET') { permit('read', 'principal', id); return send(200, { compute: environments.usage(id) }); }
+          if (method === 'GET') { permit('read', 'usage', undefined, id); return send(200, { compute: environments.usage(id) }); }
           if (method === 'PUT') {
             permit('limit', 'principal', id);
             const input = await inputBody();

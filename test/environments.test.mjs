@@ -93,6 +93,7 @@ test('計算時間は使った分だけ減り、持ち主が決めた上限を�
   f.app.store.db.prepare('UPDATE environments SET started_at=started_at-40000 WHERE resource_id=?').run(opened.id);
   assert.equal((await f.request('/v1/environments/' + opened.id, { method: 'DELETE', anonymous: true, token, data: {} })).status, 200);
   const used = (await f.request('/v1/principals/' + worker + '/compute')).json.compute;
+  assert.equal((await f.request('/v1/principals/' + worker + '/compute', { anonymous: true, token })).status, 200, 'it may see its own use');
   assert.ok(used.used_seconds >= 80, 'a medium machine spends twice its time');
   const refused = await f.request('/v1/environments', { method: 'POST', anonymous: true, token, data: {} });
   assert.equal(refused.status, 429); assert.equal(refused.json.error.code, 'compute_limit');
