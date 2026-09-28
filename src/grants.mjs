@@ -309,14 +309,19 @@ export class Grants {
 
   // What is said of a grant. The holder sees everything but the sealed state; whoever acts for them sees what
   // they need to use it.
+  // Whether disconnecting can also take the grant back at the service: as the app it was made through can.
+  revocable(row) {
+    try { return typeof this.connectorFor(row).revoke === 'function'; } catch { return false; }
+  }
   view(row, { owner = false } = {}) {
     const base = { ...this.holdings.view(row), method: row.method, status: row.status };
     if (row.method === 'given') return { ...base, size: row.size };
     const connector = this.connectors.get(row.connector), state = this.state(row);
-    const shared = { connector: row.connector, service: connector.service, label: state.facts.label || row.name, facts: { ...state.facts, ...scopeFacts(state) }, ...(takesApps(connector) ? { app: this.apps.reference(row.app_id) } : {}),
-      access: connector.access, api: connector.service?.api || { base_url: '', documentation_url: '' }, outputs: connector.variables };
+    const service = this.apps.service(row.connector, row.app_id);
+    const shared = { connector: row.connector, service, label: state.facts.label || row.name, facts: { ...state.facts, ...scopeFacts(state) }, ...(takesApps(connector) ? { app: this.apps.reference(row.app_id) } : {}),
+      access: connector.access, api: service?.api || { base_url: '', documentation_url: '' }, outputs: connector.variables };
     if (!owner) return { ...base, ...shared };
     return { ...base, ...shared, subject: row.subject, generation: row.generation, expires_at: state.expires_at,
-      ...(connector.revocationNote ? { revocation_note: connector.revocationNote } : {}), can_reconnect: connector.canReconnect !== false, can_revoke: typeof connector.revoke === 'function', available: connector.available };
+      ...(connector.revocationNote ? { revocation_note: connector.revocationNote } : {}), can_reconnect: connector.canReconnect !== false, can_revoke: this.revocable(row), available: connector.available };
   }
 }

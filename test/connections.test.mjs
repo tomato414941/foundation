@@ -27,7 +27,7 @@ function setup(t, obtain) {
 
 test('各接続の設定を個別に読み込み、利用可否と出力を公開する', () => {
   const registry = new Connectors(builtins({ FOUNDATION_GOOGLE_CLIENT_ID: 'test-id', FOUNDATION_GOOGLE_CLIENT_SECRET: 'test-secret' }));
-  assert.deepEqual(registry.ids(), ['github.oauth', 'openrouter.oauth', 'google.oauth', 'ebay.oauth', 'cloudflare.oauth', 'aws.role']);
+  assert.deepEqual(registry.ids(), ['github.oauth', 'openrouter.oauth', 'google.oauth', 'ebay.oauth', 'cloudflare.oauth', 'aws.role', 'oauth2']);
   const catalog = registry.ids().map(id => registry.describe(id));
   assert.equal(catalog.find(item => item.id === 'google.oauth').available, true);
   assert.equal(catalog.find(item => item.id === 'github.oauth').available, false);

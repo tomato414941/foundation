@@ -25,6 +25,12 @@ const COLUMNS = 'h.id,h.holder_id,h.kind,h.name,h.created_at,h.updated_at,a.conn
 const FROM = 'FROM holdings h JOIN apps a ON a.holding_id=h.id';
 const camel = name => name.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 
+// What an app of a connector holds, in the order it is asked for: what the service is (when the app says so), the
+// client, then the rest.
+export function appFieldsOf(connector) {
+  const own = connector.appFields ?? [];
+  return [...own.filter(field => field.leading), ...APP_FIELDS, ...own.filter(field => !field.leading)];
+}
 // Whether a connector's service is authorized through apps, and so whether someone may bring their own.
 export const takesApps = connector => typeof connector.withClient === 'function' && Boolean(connector.oauthClient);
 // The connector as it speaks through an app: the same connector, built around a client with that app's values.
@@ -60,7 +66,7 @@ export class Apps {
   // What an app of this connector holds.
   fields(connector) {
     if (!takesApps(connector)) fail(400, 'app_unsupported', 'この接続先では自分のアプリを使えません。');
-    return [...APP_FIELDS, ...(connector.appFields ?? [])];
+    return appFieldsOf(connector);
   }
   // The values given for an app, each checked: said values in the clear, sealed ones kept apart.
   values(connector, input) {
@@ -138,9 +144,14 @@ export class Apps {
     const row = appId ? this.get(appId) : undefined;
     return row ? { id: row.id, name: row.name, foundation: false } : null;
   }
+  // The service an app is for: the connector's, or - for a connector that knows services only through their apps -
+  // the one the app names.
+  service(connectorId, appId) {
+    const connector = this.connectors.get(connectorId), row = appId && appId !== FOUNDATION_APP ? this.get(appId) : undefined;
+    return row && typeof connector.serviceFor === 'function' ? connector.serviceFor(JSON.parse(row.settings)) : connector.service;
+  }
   view(row, { owner = false } = {}) {
-    const connector = this.connectors.get(row.connector);
-    return { ...this.holdings.view(row), connector: row.connector, service: connector.service, client_id: row.client_id, settings: JSON.parse(row.settings),
+    return { ...this.holdings.view(row), connector: row.connector, service: this.service(row.connector, row.id), client_id: row.client_id, settings: JSON.parse(row.settings),
       foundation: false, ...(owner ? { connections: this.dependents(row).length } : {}) };
   }
 }

@@ -1,5 +1,5 @@
 import { fail } from './errors.mjs';
-import { APP_FIELDS, takesApps } from './apps.mjs';
+import { appFieldsOf, takesApps } from './apps.mjs';
 
 // A connector supplies authorization, obtains credentials, and may support revocation.
 // It sees values only: { subject, privateState }, never a database row or storage handle.
@@ -36,6 +36,8 @@ export class Connectors {
       scopes: connector.scopes ? { base: connector.scopes.base, documentation_url: connector.scopes.documentationUrl || '' } : null,
       // Whether the service is authorized through apps: what registering one asks for, and whether Foundation offers
       // its own. available says whether Foundation's own side is set up (its app, or for a role, its role).
-      apps: takesApps(connector) ? { fields: [...APP_FIELDS, ...(connector.appFields ?? [])].map(({ check, ...field }) => field), foundation: Boolean(connector.oauthClient.enabled) } : null };
+      // A connector that knows services only through their apps (generic OAuth 2.0) names each service by its app.
+      apps: takesApps(connector) ? { fields: appFieldsOf(connector).map(({ check, leading, ...field }) => field), foundation: Boolean(connector.oauthClient.enabled),
+        service_from_app: typeof connector.serviceFor === 'function' } : null };
   }
 }

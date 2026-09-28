@@ -12,6 +12,8 @@ import { cloudflareOauth } from '../src/connectors/cloudflare/index.mjs';
 import { FakeCloudflare } from '../src/connectors/cloudflare/fixture.mjs';
 import { awsRole } from '../src/connectors/aws/index.mjs';
 import { FakeAws } from '../src/connectors/aws/fixture.mjs';
+import { oauth2 } from '../src/connectors/oauth2/index.mjs';
+import { FakeOAuth2Service } from '../src/connectors/oauth2/fixture.mjs';
 
 // A bucket that lives in memory, so the lent space can be seen and used in the browser tests.
 const bucket = new Map();
@@ -45,6 +47,7 @@ const connectors = process.env.FOUNDATION_TEST_AWS === '1' ? [awsRole(aws), ...g
   : process.env.FOUNDATION_TEST_CLOUDFLARE === '1' ? [cloudflareOauth(new FakeCloudflare()), ...googleOnly()]
   : process.env.FOUNDATION_TEST_EBAY === '1' ? [ebayOauth(new FakeEbay()), ...googleOnly()]
   : process.env.FOUNDATION_TEST_GITHUB === '1' ? [githubOauth(new FakeGitHub()), ...googleOnly()]
+  : process.env.FOUNDATION_TEST_OAUTH2 === '1' ? [oauth2(new FakeOAuth2Service().client()), ...googleOnly()]
   : process.env.FOUNDATION_TEST_OPENROUTER === '1' ? [openrouterOauth(new FakeOpenRouter()), ...googleOnly()]
   : undefined;
 const app = createApp({ encryptionKey: KEY, auth, space, connectors: connectors || [googleOauth(google)] });
