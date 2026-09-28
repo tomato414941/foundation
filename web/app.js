@@ -455,7 +455,7 @@ function render() {
     shell(`<header class="page-heading"><h1>Foundation</h1></header>
       <div class="home-cards">
         ${card('/credentials', '認証情報', `${kept.length} 件`)}
-        ${card('/connections', '接続', `${connections.length} 件${connections.length ? '（' + connections.map(item => item.label).join('、') + '）' : ''}`)}
+        ${card('/connections', '接続', `${connections.length} 件`)}
         ${card('/objects', 'オブジェクト', spaceSummary(space))}
         ${card('/principals', 'アクセス管理', keys.length ? `許可済み ${keys.length} 件${lastUsed ? '・最終利用 ' + new Date(lastUsed).toLocaleString('ja-JP') : ''}` : 'ありません')}
         ${card('/functions', 'ファンクション', `${state.functions?.length || 0} 種類`)}
