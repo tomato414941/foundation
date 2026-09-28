@@ -10,7 +10,7 @@ test('答えは subject・action・resource から decision だけを返し、�
   const person = principals.ensure('person'), key = principals.create(person.id, { name: 'key' }), other = principals.ensure('other');
   principals.relate(key.id, 'actor', 'principal', person.id);
   const ask = (subject, name, resource) => authorization.allowed({ subject, action: { name }, resource }).decision;
-  const me = { id: person.id, key: { kind: 'session' } }, actor = { id: key.id, key: { kind: 'key' } }, stranger = { id: other.id, key: { kind: 'key' } };
+  const me = { id: person.id, via: { kind: 'session' } }, actor = { id: key.id, via: { kind: 'key' } }, stranger = { id: other.id, via: { kind: 'key' } };
   assert.equal(ask(me, 'content', { type: 'credential', id: 'x', holder: person.id }), true, 'the holder');
   assert.equal(ask(actor, 'list', { type: 'credential', holder: person.id }), true, 'one who acts for the holder reaches their things');
   assert.equal(ask(actor, 'read', { type: 'credential', id: 'x', holder: person.id }), true, 'and sees what each is');
@@ -26,7 +26,7 @@ test('答えは subject・action・resource から decision だけを返し、�
   assert.equal(ask(actor, 'rename', { type: 'principal', id: key.id }), true, 'oneself, for a name');
   assert.equal(ask(actor, 'connect', { type: 'credential', holder: person.id }), false, 'a browser is needed for a service\'s consent screen');
   assert.equal(ask(me, 'connect', { type: 'credential', holder: person.id }), true);
-  const linked = { id: person.id, key: { kind: 'link', scope: 'request:r1' } };
+  const linked = { id: person.id, via: { kind: 'link', request: 'r1' } };
   assert.equal(ask(linked, 'done', { type: 'request', id: 'r1', holder: person.id }), true, 'the one request a link reaches');
   assert.equal(ask(linked, 'read', { type: 'request', id: 'r2', holder: person.id }), false);
   assert.equal(ask(linked, 'list', { type: 'credential', holder: person.id }), false, 'and nothing else');

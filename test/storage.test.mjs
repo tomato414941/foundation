@@ -57,8 +57,8 @@ test('A new database is created in the current shape; a database of any other sh
   live.principals.ensure(USER_A);
   const runtime = live.principals.create(USER_A, { name: 'runtime' });
   live.principals.relate(runtime.id, 'actor', 'principal', USER_A);
-  const agent = { ...runtime, ...live.principals.issue(runtime.id, { kind: 'key' }) };
-  live.principals.authenticate(agent.token);
+  const agent = { ...runtime, ...live.principals.issueKey(runtime.id) };
+  live.principals.authenticateKey(agent.token);
   const lastUsed = live.principals.keys(runtime.id)[0].last_used_at;
   created.close();
   const reopened = new Store(path, KEY); t.after(() => reopened.close());

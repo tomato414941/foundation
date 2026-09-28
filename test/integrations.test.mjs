@@ -11,7 +11,7 @@ async function setup(t) {
   assert.equal(made.status, 201, made.text);
   const app = made.json.principal;
   assert.equal((await f.request('/v1/principals/' + app.id + '/settings', { method: 'PUT', data: { return_url: 'https://simplicity.example.test/foundation' } })).status, 200);
-  const issued = await f.request('/v1/principals/' + app.id + '/keys', { method: 'POST', data: { kind: 'key' } });
+  const issued = await f.request('/v1/principals/' + app.id + '/keys', { method: 'POST', data: {} });
   assert.equal(issued.status, 201, issued.text);
   const product = issued.json.token;
   const call = (path, options = {}) => f.request('/v1' + path, { anonymous: true, token: product, ...options });
@@ -19,7 +19,7 @@ async function setup(t) {
   const account = async external => {
     const ensured = await call('/principals', { method: 'POST', data: { alias: external } });
     assert.equal(ensured.status, 201, ensured.text);
-    const key = await call('/principals/' + ensured.json.principal.id + '/keys', { method: 'POST', data: { kind: 'key' } });
+    const key = await call('/principals/' + ensured.json.principal.id + '/keys', { method: 'POST', data: {} });
     assert.equal(key.status, 201, key.text);
     return { account: ensured.json.principal, key: { id: key.json.key.id, token: key.json.token } };
   };
@@ -28,7 +28,7 @@ async function setup(t) {
     assert.equal(asked.status, 201, asked.text);
     return asked.json.request;
   };
-  const link = (account, requestId) => call('/principals/' + account.id + '/keys', { method: 'POST', data: { kind: 'link', request_id: requestId } });
+  const link = (account, requestId) => call('/principals/' + account.id + '/links', { method: 'POST', data: { request_id: requestId } });
   // A browser with no Foundation login: it carries only what the link leaves behind.
   const visitor = () => {
     let cookie = '';
@@ -68,7 +68,7 @@ test('An app makes one principal per user, and each keeps to itself', async t =>
 test('Replacing a key revokes the one it replaces, and an app revokes only its own users\' keys', async t => {
   const { f, call, account } = await setup(t);
   const { account: user, key } = await account('user-1');
-  const next = await call('/principals/' + user.id + '/keys', { method: 'POST', data: { kind: 'key', replaces: key.id } });
+  const next = await call('/principals/' + user.id + '/keys', { method: 'POST', data: { replaces: key.id } });
   assert.equal(next.status, 201, next.text);
   assert.equal((await f.request('/v1/principals/me', { anonymous: true, token: key.token })).status, 401);
   assert.equal((await f.request('/v1/principals/me', { anonymous: true, token: next.json.token })).status, 200);
@@ -112,7 +112,7 @@ test('A link is made only for the app\'s own users\' open store requests, and ex
   const { account: user, key } = await account('user-1');
   const ownKey = await f.issueKey();
   const outside = await ask(ownKey);
-  assert.equal((await call('/principals/' + USER_A + '/keys', { method: 'POST', data: { kind: 'link', request_id: outside.id } })).status, 403, 'not for a principal the app does not own');
+  assert.equal((await call('/principals/' + USER_A + '/links', { method: 'POST', data: { request_id: outside.id } })).status, 403, 'not for a principal the app does not own');
   const theirs = await ask(key);
   const another = await account('user-2');
   assert.equal((await link(another.account, theirs.id)).status, 404, 'not for another of its users');
@@ -120,7 +120,7 @@ test('A link is made only for the app\'s own users\' open store requests, and ex
   const request = await ask(key);
   const made = await link(user, request.id);
   const token = new URLSearchParams(new URL(made.json.url).hash.slice(1)).get('link');
-  f.app.store.db.prepare("UPDATE access_keys SET expires_at=0 WHERE kind='link'").run();
+  f.app.store.db.prepare('UPDATE request_links SET expires_at=0').run();
   assert.equal((await visitor()('/v1/links/exchange', { method: 'POST', data: { request_id: request.id, link: token } })).status, 410);
   const connect = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { kind: 'connect', input: { service: 'google' }, purpose: '確認' } });
   assert.equal((await link(user, connect.json.request.id)).json.error.code, 'link_unsupported');
@@ -177,10 +177,10 @@ test('As with Stripe, an app gives a return page, a refresh page and a signed we
     refresh_url: 'https://simplicity.example.test/foundation/again', webhook_url: 'https://hook.example.test/foundation' })).json.settings;
   assert.match(settings.webhook_secret, /^whsec_/);
   assert.doesNotMatch(JSON.stringify((await f.request('/v1/overview')).json), /whsec_|fdn_/);
-  const product = (await f.request('/v1/principals/' + app.id + '/keys', { method: 'POST', data: { kind: 'key' } })).json.token;
+  const product = (await f.request('/v1/principals/' + app.id + '/keys', { method: 'POST', data: {} })).json.token;
   const call = (path, options = {}) => f.request('/v1' + path, { anonymous: true, token: product, ...options });
   const user = (await call('/principals', { method: 'POST', data: { alias: 'user-1' } })).json.principal;
-  const key = (await call('/principals/' + user.id + '/keys', { method: 'POST', data: { kind: 'key' } })).json;
+  const key = (await call('/principals/' + user.id + '/keys', { method: 'POST', data: {} })).json;
   const ask = async (name = 'npm-token') => (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { kind: 'store', input: { fields: { name, label: 'npm' } }, purpose: 'p', steps: [] } })).json.request;
   const first = await ask();
   const back = (await f.request('/v1/requests/' + first.id + '/return', { anonymous: true })).json.back;
@@ -191,7 +191,7 @@ test('As with Stripe, an app gives a return page, a refresh page and a signed we
   const unheld = (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: own.token, data: { kind: 'store', input: { fields: { name: 'x', label: 'x' } }, purpose: 'p' } })).json.request;
   assert.equal((await f.request('/v1/requests/' + unheld.id + '/return', { anonymous: true })).status, 404, 'no way back for a request no app handles');
   // Done and cancelled: each is told to the app, signed with the secret it was given.
-  const made = (await call('/principals/' + user.id + '/keys', { method: 'POST', data: { kind: 'link', request_id: first.id } })).json;
+  const made = (await call('/principals/' + user.id + '/links', { method: 'POST', data: { request_id: first.id } })).json;
   const link = new URLSearchParams(new URL(made.url).hash.slice(1)).get('link');
   const claimed = await fetch(f.base + '/v1/links/exchange', { method: 'POST', headers: { 'content-type': 'application/json', origin: f.base }, body: JSON.stringify({ request_id: first.id, link }) });
   const cookie = claimed.headers.getSetCookie()[0].split(';')[0];

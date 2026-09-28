@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { Store } from './store.mjs';
 import { digest } from './crypto.mjs';
-import { Principals, LINK } from './principals.mjs';
+import { Principals } from './principals.mjs';
 import { Sessions, OAuthFlows } from './sessions.mjs';
 import { RequestActions } from './request-actions.mjs';
 import { requestDefinition, requestView } from './http-requests.mjs';
@@ -383,22 +383,20 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         if (!back) fail(404, 'not_found', '戻り先はありません。');
         return send(200, { back });
       }
-      // Spending a single-use link: the one in the URL is gone, and a short key for the browser takes its place,
+      // Spending a single-use link: the one in the URL is gone, and a short link for the browser takes its place,
       // sent as a cookie that reaches that one request's routes and nothing else.
       if (path === '/v1/links/exchange' && method === 'POST') {
         const input = await body(req);
         rateLimit('link:' + clientAddress(req), 20, 600_000);
-        const made = principals.exchange(input.link);
-        const requestId = made.scope?.startsWith('request:') ? made.scope.slice('request:'.length) : null;
-        if (!requestId || requestId !== input.request_id) fail(410, 'link_expired', 'このリンクは使えません。元の画面から開き直してください。');
-        requests.record(requestId, 'link_opened');
-        setNamedCookie('fdn_link', made.token, LINKED_TTL / 1000, '/v1/requests/' + requestId);
+        const made = principals.exchangeLink(input.link, input.request_id, LINKED_TTL);
+        requests.record(made.request_id, 'link_opened');
+        setNamedCookie('fdn_link', made.token, LINKED_TTL / 1000, '/v1/requests/' + made.request_id);
         return send(200, { ok: true });
       }
-      // Who is asking. A token names a principal by its access key; a browser is the person who logged in, or the
-      // one a link handed to a single request.
+      // Who is asking, and what they came in by (via). A token is an access key; a browser is the person who logged in,
+      // or the one a request link handed to a single request.
       let subject, session = null, user = null;
-      const known = browser ? undefined : principals.authenticate(token);
+      const known = browser ? undefined : principals.authenticateKey(token);
       // Anyone may become a principal: one row and one key, issued here and shown once. It reaches nothing until
       // someone draws it a line; what it may do never comes from the making, only from the lines.
       if (becoming) {
@@ -406,20 +404,19 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
         const made = store.transaction(() => {
           const principal = principals.ensure(randomUUID(), nameValue(input.name, '相手'));
-          return { principal, issued: principals.issue(principal.id, { kind: 'key' }) };
+          return { principal, issued: principals.issueKey(principal.id) };
         });
-        return send(201, { principal: made.principal, token: made.issued.token, key: { id: made.issued.id, kind: 'key' } });
+        return send(201, { principal: made.principal, token: made.issued.token, key: { id: made.issued.id } });
       }
       if (!browser && !known) notApproved();
-      if (!browser) subject = { id: known.principal.id, key: known.key };
+      if (!browser) subject = { id: known.principal.id, via: { kind: 'key', id: known.key.id } };
       else {
-        const linkToken = requestRoute?.[1] ? readCookie(req, 'fdn_link') : undefined;
-        const linked = linkToken && LINK.test(linkToken) ? principals.authenticate(linkToken) : undefined;
-        if (linked?.key.scope === 'request:' + requestRoute?.[1]) subject = { id: linked.principal.id, key: linked.key };
+        const linked = requestRoute?.[1] ? principals.authenticateLink(readCookie(req, 'fdn_link'), requestRoute[1]) : undefined;
+        if (linked) subject = { id: linked.principal.id, via: { kind: 'link', ...linked.link } };
         else {
           ({ user, session } = await loggedIn(req));
           principals.ensure(user.id);
-          subject = { id: user.id, key: { kind: 'session', id: session.id } };
+          subject = { id: user.id, via: { kind: 'session', id: session.id } };
         }
       }
       const self = principals.get(subject.id);
@@ -432,15 +429,16 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       const permit = (name, type, id, holder = type === 'principal' ? id : holderId) => {
         asked_ = { subject, action: { name }, resource: { type, ...(id === undefined ? {} : { id }), holder } };
         if (authorization.allowed(asked_).decision) return;
-        if (subject.key.kind === 'link') fail(401, 'login_required', 'ログインしてください。');
-        if (subject.key.kind === 'key' && holder !== subject.id && !principals.relationsOf(subject.id).length) notApproved();
+        if (subject.via.kind === 'link') fail(401, 'login_required', 'ログインしてください。');
+        if (subject.via.kind === 'key' && holder !== subject.id && !principals.relationsOf(subject.id).length) notApproved();
         fail(403, 'forbidden', 'この操作は許可されていません。');
       };
-      // Reading an upload may outlive its authorization. Recheck before committing any change: the key, and the
-      // same question the route asked before reading.
+      // Reading an upload may outlive its authorization. Recheck before committing any change: what the subject came in
+      // by, and the same question the route asked before reading.
       const still = () => {
-        if (subject.key.kind === 'session') { if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。'); }
-        else if (!principals.keys(subject.id).some(row => row.id === subject.key.id)) fail(401, 'not_approved', 'このキーは失効しています。');
+        if (subject.via.kind === 'session') { if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。'); }
+        else if (subject.via.kind === 'link') { if (!principals.hasLink(subject.id, subject.via.id)) fail(401, 'login_required', 'このリンクは使えません。元の画面から開き直してください。'); }
+        else if (!principals.hasKey(subject.id, subject.via.id)) fail(401, 'not_approved', 'このキーは失効しています。');
         if (asked_ && !authorization.allowed(asked_).decision) fail(401, 'not_approved', 'この相手の代わりには動けません。');
       };
       const inputBody = async max => { const input = await body(req, max); still(); return input; };
@@ -510,7 +508,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
-      if (subject.key.kind === 'link') fail(401, 'login_required', 'ログインしてください。');
+      if (subject.via.kind === 'link') fail(401, 'login_required', 'ログインしてください。');
       // Principals: oneself, and those one owns.
       if (path === '/v1/principals/me') {
         if (method === 'GET') return send(200, { principal: self, acts_for: actsFor, owners: principals.ownersOf(subject.id), keys: principals.keys(subject.id), requests: requests.list(subject.id, 'pending').map(row => viewRequest(row, origin, { code: true })) });
@@ -532,13 +530,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         const { made, issued } = store.transaction(() => {
           const made = principals.create(subject.id, { name: input.name === undefined ? (alias ?? '相手') : nameValue(input.name), alias });
           if (input.actor === true) principals.relate(made.id, 'actor', 'principal', subject.id);
-          const issued = input.key === true ? principals.issue(made.id, { kind: 'key' }) : null;
+          const issued = input.key === true ? principals.issueKey(made.id) : null;
           return { made, issued };
         });
         auditLog.write(subject.id, 'principal.created', 'principal', made.id, { alias: alias ?? null, actor: input.actor === true, key: Boolean(issued) });
         return send(201, { principal: { ...made, alias: alias ?? null, keys: principals.keys(made.id), acts_for: principals.actsFor(made.id) }, ...(issued ? { token: issued.token, key: { id: issued.id, kind: 'key' } } : {}) });
       }
-      const principalRoute = path.match(/^\/v1\/principals\/([A-Za-z0-9-]{1,64})(?:\/(keys|settings|access)(?:\/([a-f0-9-]{36}))?)?$/);
+      const principalRoute = path.match(/^\/v1\/principals\/([A-Za-z0-9-]{1,64})(?:\/(keys|links|settings|access)(?:\/([a-f0-9-]{36}))?)?$/);
       if (principalRoute) {
         const id = principalRoute[1] === 'me' ? subject.id : principalRoute[1], part = principalRoute[2], keyId = principalRoute[3];
         const target = principals.at(id);
@@ -566,30 +564,31 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           if (!keyId && method === 'POST') {
             permit('issue-key', 'principal', id);
             const input = await inputBody();
-            const kind = input.kind ?? 'key';
-            if (kind === 'link') {
-              // A link reaches one request, and only one the principal is asked to answer.
-              if (typeof input.request_id !== 'string') fail(400, 'invalid_scope', 'リンクにする依頼を指定してください。');
-              const row = requests.forTo(input.request_id, id, true);
-              if (row.kind !== 'store') fail(409, 'link_unsupported', '接続の依頼はまだリンクで引き渡せません。');
-              const made = principals.issue(id, { kind: 'link', scope: 'request:' + row.id, expiresIn: LINK_TTL });
-              auditLog.write(subject.id, 'key.issued', 'principal', id, { kind: 'link', request: row.id });
-              return send(201, { key: { id: made.id, kind: made.kind, scope: made.scope, expires_at: made.expires_at }, url: origin + '/requests/' + row.id + '#link=' + made.token, expires_at: made.expires_at });
-            }
             const made = store.transaction(() => {
-              if (input.replaces !== undefined && !principals.revoke(id, input.replaces)) fail(404, 'not_found', '置き換えるキーが見つかりません。');
-              return principals.issue(id, { kind: 'key' });
+              if (input.replaces !== undefined && !principals.revokeKey(id, input.replaces)) fail(404, 'not_found', '置き換えるキーが見つかりません。');
+              return principals.issueKey(id);
             });
-            auditLog.write(subject.id, 'key.issued', 'principal', id, { kind: 'key', replaced: input.replaces ?? null });
-            return send(201, { key: { id: made.id, kind: made.kind, created_at: made.created_at }, token: made.token });
+            auditLog.write(subject.id, 'key.issued', 'principal', id, { replaced: input.replaces ?? null });
+            return send(201, { key: { id: made.id, created_at: made.created_at }, token: made.token });
           }
           if (keyId && method === 'DELETE') {
             permit('revoke-key', 'principal', id);
             await inputBody();
-            if (!principals.revoke(id, keyId)) fail(404, 'not_found', 'キーが見つかりません。');
+            if (!principals.revokeKey(id, keyId)) fail(404, 'not_found', 'キーが見つかりません。');
             auditLog.write(subject.id, 'key.revoked', 'principal', id, { key: keyId });
             return send(200, { ok: true });
           }
+        }
+        // A request link: handed to the principal asked, to answer that one request without a login.
+        if (part === 'links' && !keyId && method === 'POST') {
+          permit('issue-link', 'principal', id);
+          const input = await inputBody();
+          if (typeof input.request_id !== 'string') fail(400, 'invalid_request', 'リンクにする依頼を指定してください。');
+          const row = requests.forTo(input.request_id, id, true);
+          if (row.kind !== 'store') fail(409, 'link_unsupported', '接続の依頼はまだリンクで引き渡せません。');
+          const made = principals.issueLink(id, row.id, LINK_TTL);
+          auditLog.write(subject.id, 'link.issued', 'principal', id, { request: row.id });
+          return send(201, { link: { id: made.id, request_id: made.request_id, expires_at: made.expires_at }, url: origin + '/requests/' + row.id + '#link=' + made.token, expires_at: made.expires_at });
         }
         if (part === 'settings' && !keyId) {
           permit('settings', 'principal', id);

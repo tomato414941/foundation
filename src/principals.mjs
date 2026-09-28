@@ -108,43 +108,55 @@ export class Principals {
       WHERE r.relation='actor' AND r.object_type='principal' AND r.object_id=? ORDER BY r.created_at`).all(id).map(row => ({ ...row, keys: this.keys(row.id) }));
   }
 
-  // Access keys: how a principal proves it is itself. A key is long-lived and reaches everything the principal
-  // may reach; a link is short-lived and reaches one request. The secret is never stored, only its hash.
+  // Access keys: what a machine (an AI, an app) shows to be a principal, for as long as it is one. Reaches whatever
+  // the principal may reach. Only a hash of it is kept.
   keys(principalId) {
-    return this.db.prepare('SELECT id,kind,scope,expires_at,created_at,last_used_at FROM access_keys WHERE principal_id=? AND (expires_at IS NULL OR expires_at>?) ORDER BY created_at,id').all(principalId, Date.now());
+    return this.db.prepare('SELECT id,created_at,last_used_at FROM access_keys WHERE principal_id=? ORDER BY created_at,id').all(principalId);
   }
-  issue(principalId, { kind = 'key', scope = null, expiresIn = null, token } = {}) {
-    if (!['key', 'link'].includes(kind)) fail(400, 'invalid_key', 'キーの種類を確認してください。');
-    const secret = token ?? (kind === 'key' ? 'fdn_' + randomBytes(32).toString('base64url') : randomBytes(32).toString('base64url'));
-    if (!(kind === 'key' ? KEY : LINK).test(secret)) fail(400, 'invalid_token', 'キーの形式が無効です。');
-    if (kind === 'key' && this.keys(principalId).filter(row => row.kind === 'key').length >= KEYS_MAX) fail(409, 'key_limit', `登録できるキーは${KEYS_MAX}件までです。`);
-    const id = randomUUID(), at = now();
-    this.db.prepare('INSERT INTO access_keys (id,hash,principal_id,kind,scope,expires_at,created_at) VALUES (?,?,?,?,?,?,?)')
-      .run(id, digest(secret), principalId, kind, scope, expiresIn === null ? null : Date.now() + expiresIn, at);
-    return { id, kind, scope, expires_at: expiresIn === null ? null : Date.now() + expiresIn, created_at: at, token: secret };
+  hasKey(principalId, keyId) { return Boolean(this.db.prepare('SELECT 1 FROM access_keys WHERE principal_id=? AND id=?').get(principalId, keyId)); }
+  issueKey(principalId) {
+    if (this.keys(principalId).length >= KEYS_MAX) fail(409, 'key_limit', `登録できるキーは${KEYS_MAX}件までです。`);
+    const token = 'fdn_' + randomBytes(32).toString('base64url'), id = randomUUID(), at = now();
+    this.db.prepare('INSERT INTO access_keys (id,hash,principal_id,created_at) VALUES (?,?,?,?)').run(id, digest(token), principalId, at);
+    return { id, created_at: at, token };
   }
-  revoke(principalId, keyId) {
+  revokeKey(principalId, keyId) {
     return this.db.prepare('DELETE FROM access_keys WHERE principal_id=? AND id=?').run(principalId, keyId).changes > 0;
   }
-  byHash(hash) {
-    return this.db.prepare('SELECT k.id,k.kind,k.scope,k.expires_at,k.principal_id FROM access_keys k WHERE k.hash=? AND (k.expires_at IS NULL OR k.expires_at>?)').get(hash, Date.now());
+  // Who a key speaks for. Nothing is said about what they may do.
+  authenticateKey(token) {
+    if (typeof token !== 'string' || !KEY.test(token)) return;
+    const row = this.db.prepare('SELECT id,principal_id FROM access_keys WHERE hash=?').get(digest(token));
+    if (!row) return;
+    this.db.prepare('UPDATE access_keys SET last_used_at=? WHERE id=?').run(now(), row.id);
+    return { principal: this.get(row.principal_id), key: { id: row.id } };
   }
-  // Who a token speaks for. Nothing is said about what they may do.
-  authenticate(token) {
-    if (typeof token !== 'string' || !(KEY.test(token) || LINK.test(token))) return;
-    const key = this.byHash(digest(token));
-    if (!key) return;
-    this.db.prepare('UPDATE access_keys SET last_used_at=? WHERE id=?').run(now(), key.id);
-    return { principal: this.get(key.principal_id), key: { id: key.id, kind: key.kind, scope: key.scope } };
+
+  // Request links: what a person is handed to answer one request without logging in. Short-lived, spent when
+  // opened, and good for that one request only. Only a hash of it is kept.
+  issueLink(principalId, requestId, ttl) {
+    const token = randomBytes(32).toString('base64url'), id = randomUUID(), at = now(), expiresAt = Date.now() + ttl;
+    this.db.prepare('INSERT INTO request_links (id,hash,principal_id,request_id,expires_at,created_at) VALUES (?,?,?,?,?,?)').run(id, digest(token), principalId, requestId, expiresAt, at);
+    return { id, request_id: requestId, expires_at: expiresAt, token };
   }
-  // Spending a link: the one in the URL is gone, and a short one for the browser takes its place.
-  exchange(token) {
+  findLink(token, requestId) {
+    if (typeof token !== 'string' || !LINK.test(token) || typeof requestId !== 'string') return;
+    return this.db.prepare('SELECT id,principal_id,request_id FROM request_links WHERE hash=? AND request_id=? AND expires_at>?').get(digest(token), requestId, Date.now());
+  }
+  hasLink(principalId, linkId) { return Boolean(this.db.prepare('SELECT 1 FROM request_links WHERE principal_id=? AND id=? AND expires_at>?').get(principalId, linkId, Date.now())); }
+  // Who a link speaks for, and the one request it reaches.
+  authenticateLink(token, requestId) {
+    const row = this.findLink(token, requestId);
+    return row ? { principal: this.get(row.principal_id), link: { id: row.id, request: row.request_id } } : undefined;
+  }
+  // Opening a link spends it: the one in the URL is gone, and a short one for the browser takes its place.
+  exchangeLink(token, requestId, ttl) {
     return this.store.transaction(() => {
-      const found = this.byHash(digest(String(token ?? '')));
-      if (!found || found.kind !== 'link') fail(410, 'link_expired', 'このリンクは使えません。元の画面から開き直してください。');
-      this.db.prepare('DELETE FROM access_keys WHERE id=?').run(found.id);
-      return { principal_id: found.principal_id, scope: found.scope, ...this.issue(found.principal_id, { kind: 'link', scope: found.scope, expiresIn: 30 * 60_000 }) };
+      const found = this.findLink(token, requestId);
+      if (!found) fail(410, 'link_expired', 'このリンクは使えません。元の画面から開き直してください。');
+      this.db.prepare('DELETE FROM request_links WHERE id=?').run(found.id);
+      return { principal_id: found.principal_id, ...this.issueLink(found.principal_id, found.request_id, ttl) };
     });
   }
-  sweep() { this.db.prepare('DELETE FROM access_keys WHERE expires_at IS NOT NULL AND expires_at<=?').run(Date.now()); }
+  sweep() { this.db.prepare('DELETE FROM request_links WHERE expires_at<=?').run(Date.now()); }
 }

@@ -67,10 +67,10 @@ with sync_playwright() as p:
 
     # The product makes its user's account and key; the user's AI asks for something to keep.
     user = call('/v1/principals', product, 'POST', {'alias': 'user-1'})['principal']
-    key = call('/v1/principals/' + user['id'] + '/keys', product, 'POST', {'kind': 'key'})['token']
+    key = call('/v1/principals/' + user['id'] + '/keys', product, 'POST', {})['token']
     asked = call('/v1/requests', key, 'POST', {'kind': 'store', 'input': {'fields': {'name': 'npm-token', 'label': 'npm のアクセストークン', 'site': 'https://www.npmjs.com/'}},
                                              'purpose': 'パッケージの公開に使います。', 'steps': ['npmjs.com でアクセストークンを作ります。', '表示されたトークンをここに貼ります。']})['request']
-    link = call('/v1/principals/' + user['id'] + '/keys', product, 'POST', {'kind': 'link', 'request_id': asked['id']})['url']
+    link = call('/v1/principals/' + user['id'] + '/links', product, 'POST', {'request_id': asked['id']})['url']
 
     # The user, who has never signed up for Foundation, opens the link the product handed them.
     context = browser.new_context(viewport={'width': 1280, 'height': 1000})

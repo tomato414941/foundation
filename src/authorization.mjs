@@ -1,10 +1,10 @@
 // Who may do what, answered in one place, in the AuthZEN shape: a subject, an action and a resource go in,
 // a decision comes out. Routes ask this and nothing else.
 //
-// The subject is a principal and the access key it came in with. The resource is one a holder holds (with its
-// holder), a principal, or a request. The answer comes from the lines between principals: the holder itself,
-// whoever acts for the holder, whoever owns a principal, or a line drawn onto the resource. A key scoped to one
-// request reaches that request and nothing else. Lines onto a resource point at its id.
+// The subject is a principal and what it came in by (via): an access key, a login session, or a request link. The
+// resource is one a holder holds (with its holder), a principal, or a request. The answer comes from the lines
+// between principals: the holder itself, whoever acts for the holder, whoever owns a principal, or a line drawn onto
+// the resource. A request link reaches its one request and nothing else. Lines onto a resource point at its id.
 const SELF = (subject, resource) => subject.id === resource.holder;
 const ACTOR = (subject, resource, principals) => Boolean(principals.has(subject.id, 'actor', 'principal', resource.holder));
 const OWNER = (subject, resource, principals) => Boolean(principals.has(subject.id, 'owner', 'principal', resource.holder));
@@ -17,7 +17,7 @@ const RULES = {
   export: { read: [SELF], browser: true },
   principal: {
     read: [SELF, OWNER], rename: [SELF, OWNER], remove: [OWNER], list: [SELF],
-    'issue-key': [SELF, OWNER], 'revoke-key': [SELF, OWNER], relate: [SELF, OWNER], settings: [SELF, OWNER],
+    'issue-key': [SELF, OWNER], 'revoke-key': [SELF, OWNER], 'issue-link': [SELF, OWNER], relate: [SELF, OWNER], settings: [SELF, OWNER],
   },
   // A credential is read (what it is) by whoever acts for the holder; a secret's content only along a line. Using
   // one - deriving what it yields for a command - is an injection. Connecting and disconnecting need a browser.
@@ -43,13 +43,13 @@ export class Authorization {
   constructor(principals) { this.principals = principals; }
   allowed({ subject, action, resource }) {
     if (!subject?.id || !action?.name || !resource?.type) return { decision: false };
-    const scope = subject.key?.scope;
-    if (scope) return { decision: scope === 'request:' + resource.id && resource.type === 'request' };
+    // A request link reaches the one request it was made for, and nothing else.
+    if (subject.via?.kind === 'link') return { decision: resource.type === 'request' && resource.id === subject.via.request };
     const rules = RULES[resource.type];
     const grounds = rules?.[action.name];
     if (!grounds) return { decision: false };
     const browserOnly = rules.browser === true || (Array.isArray(rules.browser) && rules.browser.includes(action.name));
-    if (browserOnly && !BROWSER.includes(subject.key?.kind)) return { decision: false };
+    if (browserOnly && !BROWSER.includes(subject.via?.kind)) return { decision: false };
     const holder = resource.holder ?? (resource.type === 'principal' ? resource.id : undefined);
     if (holder === undefined) return { decision: false };
     return { decision: grounds.some(ground => ground(subject, { ...resource, holder }, this.principals)) };

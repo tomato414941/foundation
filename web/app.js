@@ -956,7 +956,7 @@ async function principalDetails(id) {
   const item = owned ? (await api(`/v1/principals/${id}`)).principal : principalById(id);
   if (!item) return;
   const allowed = owned ? item.acts_for.some(holder => holder.id === state.user.id) : true;
-  const keys = item.keys.filter(key => key.kind === 'key');
+  const keys = item.keys;
   openDialog(`<div class="principal-heading"><h2 id="dialog-title">${esc(item.name)}</h2>${owned ? `<button class="icon-button" data-action="rename-principal" data-id="${esc(id)}" aria-label="名前を編集" title="名前を編集">${icon('edit')}</button>` : ''}</div>
     <p>${allowed ? 'アクセス許可済み' : '全体へのアクセス許可なし'}</p>
     ${allowed ? `<p>${accessSummary.replace('許可します。', '許可しています。')}</p>${accessDetails()}` : ''}
@@ -969,7 +969,7 @@ function renamePrincipal(item) {
   bindForm(async (form) => { await api(`/v1/principals/${item.id}`, { method: 'PATCH', data: { name: form.get('name') } }); await refresh(); await principalDetails(item.id); });
 }
 async function issueKey(item) {
-  const result = await api(`/v1/principals/${item.id}/keys`, { method: 'POST', data: { kind: 'key' } });
+  const result = await api(`/v1/principals/${item.id}/keys`, { method: 'POST', data: {} });
   await refresh();
   openDialog(`<h2 id="dialog-title">${esc(item.name)} のアクセスキー</h2><p>キーは一度だけ表示します。</p><label for="agent-token">アクセスキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button><button class="button primary full" data-action="principal-details" data-id="${esc(item.id)}">完了</button>`);
 }
@@ -989,7 +989,7 @@ function addIntegration() {
     // An app is a principal of this person's making, with settings for handing its users back, and a key of its own.
     const made = (await api('/v1/principals', { method: 'POST', data: { name: form.get('name') } })).principal;
     const settings = (await api(`/v1/principals/${made.id}/settings`, { method: 'PUT', data: { return_url: form.get('return_url'), refresh_url: form.get('refresh_url') || undefined, webhook_url: form.get('webhook_url') || undefined } })).settings;
-    const issued = await api(`/v1/principals/${made.id}/keys`, { method: 'POST', data: { kind: 'key' } });
+    const issued = await api(`/v1/principals/${made.id}/keys`, { method: 'POST', data: {} });
     const result = { ...made, token: issued.token, webhook_secret: settings.webhook_secret };
     await refresh(); if (!state) return;
     openDialog(`<h2 id="dialog-title">${esc(result.name)} のアプリキー</h2><p>キーは一度だけ表示します。</p><label for="agent-token">アプリキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button>
