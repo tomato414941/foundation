@@ -12,6 +12,7 @@ import { Services } from '../src/services.mjs';
 import { Apps } from '../src/apps.mjs';
 import { Resources } from '../src/resources.mjs';
 import { Principals } from '../src/principals.mjs';
+import { Authorization } from '../src/authorization.mjs';
 import { Sessions, OAuthFlows } from '../src/sessions.mjs';
 
 // Gmail scopes the tests ask Google for.
@@ -20,8 +21,9 @@ export const GMAIL = { readonly: [GMAIL_SCOPE + 'readonly'], metadata: [GMAIL_SC
 
 // The modules a server is made of, over one store, with the services given (each an entry of the catalog).
 export function modules(store, entries = []) {
-  const resources = new Resources(store), services = new Services(store, resources, entries), apps = new Apps(store, resources, services);
-  return { resources, services, apps, credentials: new Credentials(store, resources, services, apps), principals: new Principals(store), sessions: new Sessions(store), flows: new OAuthFlows(store) };
+  const principals = new Principals(store), authorization = new Authorization(principals);
+  const resources = new Resources(store), services = new Services(store, resources, entries, { authorization }), apps = new Apps(store, resources, services);
+  return { resources, services, apps, credentials: new Credentials(store, resources, services, apps), principals, authorization, sessions: new Sessions(store), flows: new OAuthFlows(store) };
 }
 
 export const KEY = Buffer.alloc(32, 7);

@@ -26,7 +26,7 @@ import { respond } from './mcp.mjs';
 import { FETCH_BODY_MAX } from './fetch.mjs';
 import { FUNCTIONS, Functions } from './functions.mjs';
 import { guide } from '../cli/guide.mjs';
-import { Authorization, isAction } from './authorization.mjs';
+import { Authorization, reaches } from './authorization.mjs';
 import { pages, pageTitle, workspaceView, pendingView } from '../web/workspace-view.js';
 
 const VERSION = createRequire(import.meta.url)('../package.json').version;
@@ -120,12 +120,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
     return forwarded.at(-1) || socket;
   };
   const resources = new Resources(store);
-  const services = new Services(store, resources, catalog, serviceFetcher ? { fetcher: serviceFetcher } : {});
+  const principals = new Principals(store), sessions = new Sessions(store), flows = new OAuthFlows(store);
+  const authorization = new Authorization(principals);
+  const services = new Services(store, resources, catalog, { authorization, ...(serviceFetcher ? { fetcher: serviceFetcher } : {}) });
   const apps = new Apps(store, resources, services), credentials = new Credentials(store, resources, services, apps);
   const objects = new Objects(spaceBackend, resources, store);
-  const principals = new Principals(store), sessions = new Sessions(store), flows = new OAuthFlows(store);
   const requests = new Requests(store), settings = new Settings(store, principals), auditLog = new AuditLog(store);
-  const authorization = new Authorization(principals);
   const environments = new Environments({ store, resources, principals, runner, limits: compute });
   const functions = new Functions({ credentials, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
@@ -619,74 +619,30 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
-      // Lines between principals, and onto resources. One may draw a line onto oneself or onto what one owns, and
-      // never one that gives more than one has.
+      // Lines: the one record of what a principal was given. A line names a role or one action and points at a
+      // principal or a resource. It is drawn by one who may give lines there and may take there all it reaches; it is
+      // taken back by one who may give lines there, or given up by the one it was drawn to. Owning is never drawn.
       if (path === '/v1/relations') {
         if (method === 'GET') return send(200, { relations: principals.relationsOf(subject.id) });
+        if (method !== 'POST' && method !== 'DELETE') fail(405, 'method_not_allowed', 'この操作は利用できません。');
         const input = await inputBody();
         const subjectId = input.subject === undefined ? subject.id : principalId(input.subject);
-        if (typeof input.relation !== 'string' || typeof input.object_type !== 'string' || typeof input.object_id !== 'string') fail(400, 'invalid_relation', '関係の指定を確認してください。');
-        // Ownership comes from making or approving, never from a line drawn here. Onto a resource the holder draws
-        // viewer or editor, to anyone; between principals one draws actor, for oneself or for what one owns.
-        // Anyone may step off a line they are on themselves.
-        const declining = method === 'DELETE' && subjectId === subject.id;
-        if (input.object_type === 'principal') {
-          if (input.relation !== 'actor') fail(400, 'invalid_relation', '関係の種類を確認してください。');
-          if (!declining) {
-            if (subjectId !== subject.id && !principals.has(subject.id, 'owner', 'principal', subjectId)) fail(403, 'forbidden', 'この操作は許可されていません。');
-            permit('relate', 'principal', input.object_id);
-          }
-        } else if (input.object_type === 'resource') {
-          if (!['viewer', 'editor'].includes(input.relation)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
-          if (!declining) {
-            const held = resources.at(input.object_id);
-            permit('share', held.kind, held.id, held.holder_id);
-            principals.at(subjectId);
-          }
-        } else fail(400, 'invalid_relation', '関係の種類を確認してください。');
+        if (typeof input.relation !== 'string' || !['principal', 'resource'].includes(input.object_type) || typeof input.object_id !== 'string') fail(400, 'invalid_relation', '関係の指定を確認してください。');
+        const object = input.object_type === 'principal' ? { id: principals.at(input.object_id).id } : resources.at(input.object_id);
+        if (!reaches(input.relation, input.object_type, object.kind)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
+        principals.at(subjectId);
         if (method === 'POST') {
-          principals.relate(subjectId, input.relation, input.object_type, input.object_id, { scope: input.scope === undefined ? undefined : String(input.scope) });
+          if (!authorization.mayGive(subject.id, input.relation, input.object_type, object)) fail(403, 'forbidden', 'この操作は許可されていません。');
+          principals.relate(subjectId, input.relation, input.object_type, input.object_id);
           auditLog.write(subject.id, 'relation.added', input.object_type, input.object_id, { subject: subjectId, relation: input.relation });
           return send(201, { ok: true });
         }
-        if (method === 'DELETE') {
-          principals.unrelate(subjectId, input.relation, input.object_type, input.object_id);
-          auditLog.write(subject.id, 'relation.removed', input.object_type, input.object_id, { subject: subjectId, relation: input.relation });
-          return send(200, { ok: true });
+        if (subjectId !== subject.id) {
+          if (input.object_type === 'principal') permit('relate', 'principal', object.id);
+          else permit('share', object.kind, object.id, object.holder_id);
         }
-        fail(405, 'method_not_allowed', 'この操作は利用できません。');
-      }
-      // One action given on its own, over all a holder has or over one resource. Only one who may give lines there
-      // gives it, and only an action they may take there themselves: nothing gives more than it has. Anyone may give
-      // up one they were given.
-      if (path === '/v1/permissions') {
-        if (method === 'GET') return send(200, { permissions: principals.permissionsOf(subject.id) });
-        if (method !== 'POST' && method !== 'DELETE') fail(405, 'method_not_allowed', 'この操作は利用できません。');
-        const input = await inputBody();
-        if (!isAction(input.action) || !['principal', 'resource'].includes(input.object_type) || typeof input.object_id !== 'string') {
-          fail(400, 'invalid_permission', '権限の指定を確認してください。');
-        }
-        const subjectId = principalId(input.subject);
-        const cut = input.action.indexOf('.'), type = input.action.slice(0, cut), name = input.action.slice(cut + 1);
-        if (!(method === 'DELETE' && subjectId === subject.id)) {
-          if (input.object_type === 'principal') {
-            principals.at(input.object_id);
-            permit('relate', 'principal', input.object_id);
-            permit(name, type, type === 'principal' ? input.object_id : undefined, input.object_id);
-          } else {
-            const held = resources.at(input.object_id);
-            if (held.kind !== type) fail(400, 'invalid_permission', '権限の種類と対象が合いません。');
-            permit('share', held.kind, held.id, held.holder_id);
-            permit(name, type, held.id, held.holder_id);
-          }
-        }
-        if (method === 'POST') {
-          principals.permit(subjectId, input.action, input.object_type, input.object_id, subject.id);
-          auditLog.write(subject.id, 'permission.given', input.object_type, input.object_id, { subject: subjectId, action: input.action });
-          return send(201, { ok: true });
-        }
-        principals.unpermit(subjectId, input.action, input.object_type, input.object_id);
-        auditLog.write(subject.id, 'permission.removed', input.object_type, input.object_id, { subject: subjectId, action: input.action });
+        principals.unrelate(subjectId, input.relation, input.object_type, input.object_id);
+        auditLog.write(subject.id, 'relation.removed', input.object_type, input.object_id, { subject: subjectId, relation: input.relation });
         return send(200, { ok: true });
       }
       // Lent machines. An environment is a resource: opened by the holder or whoever acts for them, reached by its id,
@@ -800,7 +756,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           permit('write', 'app', existing?.id);
           limit('apps', 30);
           const input = await inputBody();
-          services.get(input.service, holderId, principals);
+          services.get(input.service, holderId);
           const saved = apps.put(holderId, { ...input, name });
           auditLog.write(subject.id, existing ? 'app.changed' : 'app.created', 'resource', saved.id, { service: saved.service });
           return send(200, { resource: shown(saved) });
@@ -1054,7 +1010,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         if (request && request.kind !== 'connect') fail(409, 'approval_only', 'この依頼は接続の依頼ではありません。');
         // The service, the scheme, the scopes and the app are the request's when there is one: what the holder saw is
         // what happens.
-        const { ref, definition } = services.get(asked ? asked.service : input.service, holderId, principals);
+        const { ref, definition } = services.get(asked ? asked.service : input.service, holderId);
         const schemeId = asked ? asked.auth_scheme : input.auth_scheme ?? Object.keys(definition.auth_schemes)[0];
         if (request && input.service !== undefined && input.service !== ref) fail(400, 'scope_mismatch', '依頼されたサービスで接続してください。');
         if (!request) permit(schemeId === 'token' ? 'register-token' : 'connect', 'credential');
@@ -1080,7 +1036,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           // a result checked under a different authorization or against a different service.
           still();
           if (req.aborted || req.socket.destroyed) fail(409, 'request_interrupted', '接続が中断されました。もう一度お試しください。');
-          if (JSON.stringify(services.get(ref, holderId, principals).definition) !== JSON.stringify(definition)) {
+          if (JSON.stringify(services.get(ref, holderId).definition) !== JSON.stringify(definition)) {
             fail(409, 'service_changed', 'サービスの設定が変わりました。もう一度お試しください。');
           }
           const saved = requestActions.connect(request?.id, holderId, ref, schemeId, result, { requestedBy, previous });

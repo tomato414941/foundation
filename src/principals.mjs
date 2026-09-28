@@ -7,7 +7,9 @@ import { fail } from './errors.mjs';
 // lines between principals (relations) and from the access key it came in with.
 export const KEY = /^fdn_[A-Za-z0-9_-]{43}$/;
 export const LINK = /^[A-Za-z0-9_-]{43}$/;
-export const RELATIONS = ['owner', 'actor', 'viewer', 'editor'];
+// A line names a role, a named set of actions, or one action written as the rules name it (credential.disconnect).
+export const ROLES = ['owner', 'actor', 'viewer', 'editor'];
+export const ACTION = /^[a-z_]+\.[a-z-]+$/;
 export const OBJECT_TYPES = ['principal', 'resource'];
 const OWNED_MAX = 100_000, KEYS_MAX = 50;
 const now = () => new Date().toISOString();
@@ -51,57 +53,34 @@ export class Principals {
     return this.store.transaction(() => {
       this.db.prepare('DELETE FROM sessions WHERE owner_id=?').run(id);
       this.db.prepare('DELETE FROM relations WHERE object_type=? AND object_id=?').run('principal', id);
-      this.db.prepare("DELETE FROM permissions WHERE object_type='principal' AND object_id=?").run(id);
       return this.db.prepare('DELETE FROM principals WHERE id=?').run(id).changes > 0;
     });
   }
 
   // Lines between principals, and from principals onto resources. A resource is pointed at by its id.
-  relate(subjectId, relation, objectType, objectId, { alias, scope } = {}) {
-    if (!RELATIONS.includes(relation) || !OBJECT_TYPES.includes(objectType)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
-    if (objectType === 'principal' && !this.get(objectId)) fail(404, 'not_found', '相手が見つかりません。');
+  relate(subjectId, relation, objectType, objectId, { alias } = {}) {
+    if (!(ROLES.includes(relation) || ACTION.test(relation)) || !OBJECT_TYPES.includes(objectType)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
+    if (!this.get(subjectId) || (objectType === 'principal' && !this.get(objectId))) fail(404, 'not_found', '相手が見つかりません。');
     if (subjectId === objectId && objectType === 'principal') fail(400, 'invalid_relation', '自分自身との関係は引けません。');
-    this.db.prepare('INSERT OR REPLACE INTO relations (subject_id,relation,object_type,object_id,alias,scope,created_at) VALUES (?,?,?,?,?,?,?)')
-      .run(subjectId, relation, objectType, objectId, alias ?? null, scope ?? null, now());
+    this.db.prepare('INSERT OR REPLACE INTO relations (subject_id,relation,object_type,object_id,alias,created_at) VALUES (?,?,?,?,?,?)')
+      .run(subjectId, relation, objectType, objectId, alias ?? null, now());
   }
   unrelate(subjectId, relation, objectType, objectId) {
     return this.db.prepare('DELETE FROM relations WHERE subject_id=? AND relation=? AND object_type=? AND object_id=?').run(subjectId, relation, objectType, objectId).changes > 0;
   }
-  // Stop this principal's access to one holder, including direct sharing. Its identity and keys remain.
+  // Stop this principal's access to one holder: every line onto the holder, but the holder's ownership of it, and
+  // onto what the holder has. Its identity and keys remain.
   revokeAccess(subjectId, holderId) {
-    return this.store.transaction(() => this.db.prepare(`DELETE FROM relations WHERE subject_id=? AND (
-      (relation='actor' AND object_type='principal' AND object_id=?) OR
-      (relation IN ('viewer','editor') AND object_type='resource' AND object_id IN (SELECT id FROM resources WHERE holder_id=?)))`)
-      .run(subjectId, holderId, holderId).changes + this.db.prepare(`DELETE FROM permissions WHERE subject_id=? AND (
+    return this.db.prepare(`DELETE FROM relations WHERE subject_id=? AND relation<>'owner' AND (
       (object_type='principal' AND object_id=?) OR (object_type='resource' AND object_id IN (SELECT id FROM resources WHERE holder_id=?)))`)
-      .run(subjectId, holderId, holderId).changes);
-  }
-  // One action given on its own: over everything a holder has (the holder principal) or over one resource. action
-  // is written as the rule names it, such as credential.disconnect.
-  permit(subjectId, action, objectType, objectId, grantedBy) {
-    if (!OBJECT_TYPES.includes(objectType)) fail(400, 'invalid_permission', '権限の対象を確認してください。');
-    if (objectType === 'principal' && !this.get(objectId)) fail(404, 'not_found', '相手が見つかりません。');
-    if (!this.get(subjectId)) fail(404, 'not_found', '相手が見つかりません。');
-    this.db.prepare('INSERT OR REPLACE INTO permissions (subject_id,action,object_type,object_id,granted_by,created_at) VALUES (?,?,?,?,?,?)')
-      .run(subjectId, action, objectType, objectId, grantedBy, now());
-  }
-  unpermit(subjectId, action, objectType, objectId) {
-    return this.db.prepare('DELETE FROM permissions WHERE subject_id=? AND action=? AND object_type=? AND object_id=?').run(subjectId, action, objectType, objectId).changes > 0;
-  }
-  permitted(subjectId, action, holderId, resourceId) {
-    return Boolean(this.db.prepare(`SELECT 1 FROM permissions WHERE subject_id=? AND action=? AND
-      ((object_type='principal' AND object_id=?) OR (object_type='resource' AND object_id=?))`).get(subjectId, action, holderId ?? '', resourceId ?? ''));
-  }
-  // Every permission a principal was given or gave.
-  permissionsOf(id) {
-    return this.db.prepare('SELECT subject_id,action,object_type,object_id,granted_by,created_at FROM permissions WHERE subject_id=? OR granted_by=? ORDER BY created_at').all(id, id);
+      .run(subjectId, holderId, holderId).changes;
   }
   has(subjectId, relation, objectType, objectId) {
-    return this.db.prepare('SELECT scope FROM relations WHERE subject_id=? AND relation=? AND object_type=? AND object_id=?').get(subjectId, relation, objectType, objectId);
+    return Boolean(this.db.prepare('SELECT 1 FROM relations WHERE subject_id=? AND relation=? AND object_type=? AND object_id=?').get(subjectId, relation, objectType, objectId));
   }
   // Every line a principal is on, either end.
   relationsOf(id) {
-    return this.db.prepare('SELECT subject_id,relation,object_type,object_id,alias,scope,created_at FROM relations WHERE subject_id=? OR (object_type=? AND object_id=?) ORDER BY created_at').all(id, 'principal', id);
+    return this.db.prepare('SELECT subject_id,relation,object_type,object_id,alias,created_at FROM relations WHERE subject_id=? OR (object_type=? AND object_id=?) ORDER BY created_at').all(id, 'principal', id);
   }
   // Lines onto one resource: who may see or change it.
   linesOnto(resourceId) {
@@ -125,9 +104,9 @@ export class Principals {
     return found ? this.get(found.object_id) : undefined;
   }
   // Whom this principal acts for, and who acts for it.
-  actsFor(id) { return this.db.prepare("SELECT object_id AS id, scope FROM relations WHERE subject_id=? AND relation='actor' AND object_type='principal'").all(id); }
+  actsFor(id) { return this.db.prepare("SELECT object_id AS id FROM relations WHERE subject_id=? AND relation='actor' AND object_type='principal'").all(id); }
   actorsOf(id) {
-    return this.db.prepare(`SELECT p.id, p.name, p.created_at, r.created_at AS approved_at, r.scope FROM relations r JOIN principals p ON p.id=r.subject_id
+    return this.db.prepare(`SELECT p.id, p.name, p.created_at, r.created_at AS approved_at FROM relations r JOIN principals p ON p.id=r.subject_id
       WHERE r.relation='actor' AND r.object_type='principal' AND r.object_id=? ORDER BY r.created_at`).all(id).map(row => ({ ...row, keys: this.keys(row.id) }));
   }
 

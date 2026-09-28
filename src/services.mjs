@@ -18,7 +18,8 @@ export const SERVICES_MAX = 100;
 export class Services {
   // entries: the catalog as it runs, each { definition, schemes } (catalog.mjs). fetcher: the network for services
   // holders describe, replaced in tests.
-  constructor(store, resources, entries, { fetcher } = {}) {
+  constructor(store, resources, entries, { fetcher, authorization } = {}) {
+    this.authorization = authorization;
     this.store = store; this.db = store.db; this.resources = resources; this.fetcher = fetcher;
     this.catalog = new Map(entries.map(entry => [entry.definition.id, entry]));
     this.built = new Map();
@@ -27,23 +28,21 @@ export class Services {
   row(id) { return typeof id === 'string' && UUID.test(id) ? this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.id=?`).get(id) : undefined; }
   find(holderId, name) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.holder_id=? AND r.name=?`).get(holderId, resourceName(name)); }
   list(holderId) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.holder_id=? ORDER BY r.name, r.id`).all(holderId); }
+  // Those others hold that a line reaches, where the rules let this principal read them.
   lent(principalId) {
     return this.db.prepare(`SELECT DISTINCT ${COLUMNS} ${FROM} JOIN relations l ON l.object_type='resource' AND l.object_id=r.id
-      WHERE l.subject_id=? AND l.relation IN ('viewer','editor') AND r.holder_id<>? ORDER BY r.name, r.id`).all(principalId, principalId);
+      WHERE l.subject_id=? AND r.holder_id<>? ORDER BY r.name, r.id`).all(principalId, principalId)
+      .filter(row => this.authorization.can(principalId, 'read', 'service', { id: row.id, holder: row.holder_id }));
   }
   // A service by reference: the catalog's id, or a described service's resource id. principalId, when given, must
-  // be able to use a described one - its holder, whoever acts for the holder, or someone drawn a line to it.
-  get(ref, principalId, principals) {
+  // be one the rules let read a described one.
+  get(ref, principalId) {
     if (typeof ref !== 'string' || !ref) fail(400, 'invalid_service', 'サービスを指定してください。');
     const entry = this.catalog.get(ref);
     if (entry) return { ref, definition: entry.definition, catalog: true };
     const row = this.row(ref);
-    if (!row || (principalId !== undefined && !this.usableBy(principalId, row, principals))) fail(404, 'not_found', 'サービスが見つかりません。');
+    if (!row || (principalId !== undefined && !this.authorization.can(principalId, 'read', 'service', { id: row.id, holder: row.holder_id }))) fail(404, 'not_found', 'サービスが見つかりません。');
     return { ref, definition: JSON.parse(row.definition), catalog: false, row };
-  }
-  usableBy(principalId, row, principals) {
-    return row.holder_id === principalId || this.lent(principalId).some(item => item.id === row.id)
-      || Boolean(principals?.has(principalId, 'actor', 'principal', row.holder_id));
   }
   // The schemes of a service as they run. A described service's are built from its definition and kept until it
   // changes.

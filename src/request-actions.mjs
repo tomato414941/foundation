@@ -17,9 +17,9 @@ export class RequestActions {
   ask(fromId, { kind, input, toId, ...rest }) {
     const definition = requestInput(kind, input);
     if (kind === 'store') for (const field of definition.fields) this.placement(toId, field, field.name);
-    if (kind === 'app') this.apps.fields(this.services.get(definition.service, toId, this.principals).ref);
+    if (kind === 'app') this.apps.fields(this.services.get(definition.service, toId).ref);
     if (kind === 'connect') {
-      const { ref, definition: service } = this.services.get(definition.service, toId, this.principals);
+      const { ref, definition: service } = this.services.get(definition.service, toId);
       definition.auth_scheme ??= Object.keys(service.auth_schemes)[0];
       const scheme = this.services.scheme(ref, definition.auth_scheme);
       if (definition.scopes && !scheme.scopes) fail(400, 'scopes_unsupported', 'この接続方法では権限を指定できません。');
@@ -147,13 +147,13 @@ export class RequestActions {
     });
     for (const row of cancelled) this.changed(row);
   }
-  // A principal removed by its owner takes its open requests with it. Whoever it acted for keeps everything.
-  removePrincipal(ownerId, id) {
+  // A principal removed takes its open requests with it. Whoever it acted for keeps everything. Who may remove it is
+  // the route's question.
+  removePrincipal(byId, id) {
     const cancelled = this.store.transaction(() => {
-      if (!this.principals.has(ownerId, 'owner', 'principal', id)) fail(404, 'not_found', '相手が見つかりません。');
       const cancelled = this.requests.cancelFrom(id);
       this.principals.remove(id);
-      this.auditLog.write(ownerId, 'principal.removed', 'principal', id, {});
+      this.auditLog.write(byId, 'principal.removed', 'principal', id, {});
       return cancelled;
     });
     for (const row of cancelled) this.changed(row);

@@ -54,12 +54,13 @@ export class Apps {
   list(holderId) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.holder_id=? ORDER BY a.service, r.name, r.id`).all(holderId); }
   lent(principalId) {
     return this.db.prepare(`SELECT DISTINCT ${COLUMNS} ${FROM} JOIN relations l ON l.object_type='resource' AND l.object_id=r.id
-      WHERE l.subject_id=? AND l.relation IN ('viewer','editor') AND r.holder_id<>? ORDER BY a.service, r.name, r.id`).all(principalId, principalId);
+      WHERE l.subject_id=? AND r.holder_id<>? ORDER BY a.service, r.name, r.id`).all(principalId, principalId)
+      .filter(row => this.services.authorization.can(principalId, 'read', 'app', { id: row.id, holder: row.holder_id }));
   }
-  // Whether a principal may connect through an app: its own, or one it was drawn a line to.
+  // Whether a principal may connect through an app: whether the rules let it use it.
   usableBy(principalId, id) {
     const row = this.get(id);
-    return Boolean(row && (row.holder_id === principalId || this.lent(principalId).some(item => item.id === id)));
+    return Boolean(row && this.services.authorization.can(principalId, 'use', 'app', { id: row.id, holder: row.holder_id }));
   }
 
   // What an app of this service holds.

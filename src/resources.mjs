@@ -43,14 +43,12 @@ export class Resources {
     this.store.transaction(() => {
       this.db.prepare('DELETE FROM resources WHERE id=?').run(row.id);
       this.db.prepare("DELETE FROM relations WHERE object_type='resource' AND object_id=?").run(row.id);
-      this.db.prepare("DELETE FROM permissions WHERE object_type='resource' AND object_id=?").run(row.id);
     });
   }
   // Everything a holder has, when the holder goes.
   removeAll(holderId) {
     this.store.transaction(() => {
       this.db.prepare("DELETE FROM relations WHERE object_type='resource' AND object_id IN (SELECT id FROM resources WHERE holder_id=?)").run(holderId);
-      this.db.prepare("DELETE FROM permissions WHERE object_type='resource' AND object_id IN (SELECT id FROM resources WHERE holder_id=?)").run(holderId);
       this.db.prepare('DELETE FROM resources WHERE holder_id=?').run(holderId);
     });
   }
