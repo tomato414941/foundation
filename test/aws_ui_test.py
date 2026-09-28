@@ -2,6 +2,7 @@ import argparse
 import hashlib
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from ui_flows import start_connect
 from playwright.sync_api import sync_playwright, expect
 
 parser = argparse.ArgumentParser()
@@ -26,20 +27,16 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={'width': 1280, 'height': 1000})
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/services', wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='ログインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    page.goto(args.base + '/login/confirm?return_to=%2Fconnections#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    page.goto(args.base + '/login/confirm?return_to=%2Fservices#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
     page.get_by_role('button', name='ログイン', exact=True).click()
-    page.wait_for_url(args.base + '/connections')
+    page.wait_for_url(args.base + '/services')
     page.wait_for_load_state('networkidle')
-    expect(page.get_by_role('heading', name='AWS', exact=True)).to_be_visible()
-    page.get_by_role('button', name='AWSでIAMロールを作る', exact=True).click()
-    dialog = page.get_by_role('dialog')
-    expect(dialog.get_by_role('heading', name='AWSに接続', exact=True)).to_be_visible()
-    expect(dialog.get_by_text('鍵は預かりません。', exact=False)).to_be_visible()
-    dialog.get_by_role('button', name='AWSでIAMロールを作る', exact=True).click()
+    dialog = start_connect(page, 'AWS')
+    expect(dialog.get_by_text('Foundationは鍵を預かりません。', exact=False)).to_be_visible()
 
     # The console opens in another tab; here the owner pastes the role's name. A wrong paste is answered in place.
     expect(dialog.get_by_role('heading', name='AWSでIAMロールを作る', exact=True)).to_be_visible()
@@ -61,7 +58,7 @@ with sync_playwright() as p:
     expect(dialog).not_to_be_visible()
     row = page.locator('.agent-row').filter(has=page.get_by_text('222222222222 / foundation-connection-FoundationRole-ABC', exact=True))
     expect(row).to_be_visible()
-    expect(row.get_by_text('利用できます', exact=True)).to_be_visible()
+    expect(row.get_by_text('IAMロール', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
         review(page)
@@ -71,7 +68,7 @@ with sync_playwright() as p:
     # Disconnecting removes the grant here; the role itself is the owner's to delete at AWS, and the screen says so.
     page.set_viewport_size({'width': 1280, 'height': 1000})
     row.get_by_role('button', name='接続を解除', exact=True).click()
-    expect(dialog.get_by_text('foundation-connection', exact=False)).to_be_visible()
+    expect(dialog.get_by_text('AWS側のIAMロールは残ります。', exact=False)).to_be_visible()
     dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(page.get_by_text('解除しました。', exact=True)).to_be_visible()
     expect(page.get_by_text('222222222222 / foundation-connection-FoundationRole-ABC', exact=True)).to_have_count(0)

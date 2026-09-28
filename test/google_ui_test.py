@@ -9,6 +9,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
+from ui_flows import start_connect
 from playwright.sync_api import sync_playwright, expect
 
 parser = argparse.ArgumentParser()
@@ -54,11 +55,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-google-ui-') as private_dir,
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
 
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'connector': 'google.oauth', 'scopes': ['https://www.googleapis.com/auth/cloud-platform']}, 'purpose': 'Google Cloudの設定を確認します。リソースの作成や変更はしません。'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'service': 'google', 'scopes': ['https://www.googleapis.com/auth/cloud-platform']}, 'purpose': 'Google Cloudの設定を確認します。リソースの作成や変更はしません。'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_role('heading', name='Googleで接続', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='Googleに接続', exact=True)).to_be_visible()
     expect(page.locator('.approval-facts')).to_contain_text('https://www.googleapis.com/auth/cloud-platform')
-    expect(page.get_by_text('操作により料金が発生するサービスがあります。', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
         review(page)
@@ -73,20 +73,20 @@ with tempfile.TemporaryDirectory(prefix='foundation-google-ui-') as private_dir,
         assert values['access_type'] == ['offline']
         assert 'https://www.googleapis.com/auth/cloud-platform' in values['scope'][0]
         redirect = values['redirect_uri'][0]
-        assert redirect == args.base + '/oauth/google.oauth/callback'
+        assert redirect == args.base + '/oauth/callback'
         query = {'state': values['state'][0]}
         query.update({'error': 'access_denied'} if authorization['deny'] else {'code': authorization['account']})
         route.fulfill(status=302, headers={'location': redirect + '?' + urlencode(query)}, body='')
 
     page.route('https://accounts.google.com/o/oauth2/v2/auth?*', consent)
-    page.get_by_role('button', name='Googleで接続', exact=True).click()
+    page.get_by_role('button', name='Googleの画面へ', exact=True).click()
     expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
     authorization['deny'] = False
-    page.get_by_role('button', name='Googleで接続', exact=True).click()
+    page.get_by_role('button', name='Googleの画面へ', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     review(page)
-    connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['connection_id']
-    facts = next(row for row in cli('api', 'GET', '/v1/holdings?kind=grant&method=authorized')['holdings'] if row['id'] == connection)['facts']
+    connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['credential_id']
+    facts = next(row for row in cli('api', 'GET', '/v1/resources?kind=credential&secret=false')['resources'] if row['id'] == connection)['facts']
     assert facts['missing_scopes'] == []
     handed = subprocess.run(['node', 'cli/runtime.mjs', 'exec', '--inputs', json.dumps([{'name': connection}]), '--', 'node', '-e',
                              'if(!process.env.CLOUDSDK_AUTH_ACCESS_TOKEN||!process.env.GOOGLE_ACCOUNT_EMAIL)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=30)
@@ -130,17 +130,14 @@ with tempfile.TemporaryDirectory(prefix='foundation-google-ui-') as private_dir,
             cloud.server_close()
             thread.join()
 
-    page.goto(args.base + '/connections', wait_until='networkidle')
-    add = page.locator('.agent-row').filter(has=page.get_by_role('heading', name='Google', exact=True))
-    add.get_by_role('button', name='Googleで接続', exact=True).click()
-    dialog = page.get_by_role('dialog')
-    expect(dialog.get_by_text('操作により料金が発生するサービスがあります。', exact=False)).to_be_visible()
+    page.goto(args.base + '/services', wait_until='networkidle')
+    dialog = start_connect(page, 'Google')
     dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('https://www.googleapis.com/auth/cloud-platform')
     review(page)
     authorization['account'] = 'work'
-    dialog.get_by_role('button', name='Googleで接続', exact=True).click()
+    dialog.get_by_role('button', name='Googleの画面へ', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/services', wait_until='networkidle')
     expect(page.get_by_text('personal@example.test', exact=True)).to_be_visible()
     expect(page.get_by_text('work@example.test', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
@@ -152,18 +149,17 @@ with tempfile.TemporaryDirectory(prefix='foundation-google-ui-') as private_dir,
     row = page.locator('.agent-row').filter(has=page.get_by_text('personal@example.test', exact=True))
     row.get_by_role('button', name='接続し直す', exact=True).click()
     authorization['account'] = 'personal'
-    dialog.get_by_role('button', name='Googleで接続', exact=True).click()
+    dialog.get_by_role('button', name='Googleの画面へ', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/services', wait_until='networkidle')
     row.get_by_role('button', name='接続を解除', exact=True).click()
-    expect(dialog.get_by_text('他のGoogle接続も使えなくなる場合があります。', exact=False)).to_be_visible()
     review(page)
     dialog.get_by_label('Google側の許可も取り消す').uncheck()
     dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(page.get_by_text('work@example.test', exact=True)).to_be_visible()
-    page.goto(args.base + '/connections', wait_until='networkidle')
-    expect(page.get_by_role('heading', name='接続', exact=True)).to_be_visible()
+    page.goto(args.base + '/services', wait_until='networkidle')
+    expect(page.get_by_role('heading', name='サービス', exact=True)).to_be_visible()
     review(page)
     assert not errors, errors
     context.close()

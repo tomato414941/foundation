@@ -2,6 +2,7 @@ import argparse
 import hashlib
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
+from ui_flows import start_connect
 from playwright.sync_api import sync_playwright, expect
 
 parser = argparse.ArgumentParser()
@@ -26,19 +27,16 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={'width': 1280, 'height': 1000})
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/services', wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='ログインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    page.goto(args.base + '/login/confirm?return_to=%2Fconnections#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    page.goto(args.base + '/login/confirm?return_to=%2Fservices#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
     page.get_by_role('button', name='ログイン', exact=True).click()
-    page.wait_for_url(args.base + '/connections')
+    page.wait_for_url(args.base + '/services')
     page.wait_for_load_state('networkidle')
-    expect(page.get_by_role('heading', name='eBay', exact=True)).to_be_visible()
-    page.get_by_role('button', name='eBayで接続', exact=True).click()
-    dialog = page.get_by_role('dialog')
+    dialog = start_connect(page, 'eBay')
     expect(dialog.get_by_role('heading', name='eBayに接続', exact=True)).to_be_visible()
-    expect(dialog.get_by_text('出品の公開や変更で料金が発生する場合があります。', exact=False)).to_be_visible()
     review(page)
     if shots:
         page.screenshot(path=str(shots / 'ebay-consent.png'), full_page=True)
@@ -55,19 +53,19 @@ with sync_playwright() as p:
         ]
         query = {'state': values['state'][0]}
         query.update({'error': 'access_denied'} if authorization['deny'] else {'code': authorization['account']})
-        route.fulfill(status=302, headers={'location': args.base + '/oauth/ebay.oauth/callback?' + urlencode(query)}, body='')
+        route.fulfill(status=302, headers={'location': args.base + '/oauth/callback?' + urlencode(query)}, body='')
 
     page.route('https://auth.ebay.com/oauth2/authorize?*', consent)
     dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('https://api.ebay.com/oauth/api_scope/sell.inventory')
-    dialog.get_by_role('button', name='eBayで接続', exact=True).click()
+    dialog.get_by_role('button', name='eBayの画面へ', exact=True).click()
     expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
     authorization['deny'] = False
-    page.goto(args.base + '/connections', wait_until='networkidle')
-    page.get_by_role('button', name='eBayで接続', exact=True).click()
+    page.goto(args.base + '/services', wait_until='networkidle')
+    start_connect(page, 'eBay')
     dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('https://api.ebay.com/oauth/api_scope/sell.inventory')
-    dialog.get_by_role('button', name='eBayで接続', exact=True).click()
+    dialog.get_by_role('button', name='eBayの画面へ', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/services', wait_until='networkidle')
     expect(page.get_by_text('personal-seller', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
@@ -78,9 +76,9 @@ with sync_playwright() as p:
     row = page.locator('.agent-row').filter(has=page.get_by_text('personal-seller', exact=True))
     row.get_by_role('button', name='接続し直す', exact=True).click()
     expect(dialog.get_by_role('heading', name='eBayに接続し直す', exact=True)).to_be_visible()
-    dialog.get_by_role('button', name='eBayで接続', exact=True).click()
+    dialog.get_by_role('button', name='eBayの画面へ', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/services', wait_until='networkidle')
     row.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog.get_by_label('eBay側の許可も取り消す', exact=True)).to_be_checked()
     review(page)

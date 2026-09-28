@@ -13,7 +13,7 @@ shots = Path(args.screenshots)
 shots.mkdir(parents=True, exist_ok=True)
 email = 'mobile+login@example.test'
 key = hashlib.sha256(email.encode()).hexdigest()
-link = args.base + '/login/confirm?return_to=%2Fcredentials#' + urlencode({'token_hash': key, 'email': email})
+link = args.base + '/login/confirm?return_to=%2Fsecrets#' + urlencode({'token_hash': key, 'email': email})
 
 with sync_playwright() as p:
     browser = getattr(p, args.engine).launch(headless=True)
@@ -48,7 +48,7 @@ with sync_playwright() as p:
     expect(page.get_by_text('メールに届いたリンクを開き直してください。', exact=True)).to_be_visible()
     page.goto(link, wait_until='networkidle')
     page.get_by_role('button', name='ログイン', exact=True).click()
-    page.wait_for_url(args.base + '/credentials')
+    page.wait_for_url(args.base + '/secrets')
     page.wait_for_load_state('networkidle')
     assert receiver.request.get(args.base + '/v1/overview').json()['user']['email'] == email
     assert len(calls) == 1

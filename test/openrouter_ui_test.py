@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
+from ui_flows import start_connect
 from playwright.sync_api import sync_playwright, expect
 
 parser = argparse.ArgumentParser()
@@ -52,9 +53,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
     owner_id = cli('api', 'GET', '/v1/principals/me')['acts_for'][0]['id']
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'connector': 'openrouter.oauth'}, 'purpose': '接続したキーの情報を確認。モデルは実行しません。'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'service': 'openrouter'}, 'purpose': '接続したキーの情報を確認。モデルは実行しません。'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_role('heading', name='OpenRouterで接続', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='OpenRouterに接続', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']
     expect(page.get_by_role('button', name='許可する', exact=True)).to_have_count(0)
     review(page)
@@ -70,23 +71,23 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
         route.fulfill(status=302, headers={'location': callback + '&' + urlencode(params)}, body='')
 
     page.route('https://openrouter.ai/auth?*', consent)
-    page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
+    page.get_by_role('button', name='OpenRouterの画面へ', exact=True).click()
     expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
-    assert cli('api', 'GET', '/v1/holdings?kind=grant')['holdings'] == []
+    assert cli('api', 'GET', '/v1/resources?kind=credential')['resources'] == []
     authorization['deny'] = False
-    page.get_by_role('button', name='OpenRouterで接続', exact=True).click()
+    page.get_by_role('button', name='OpenRouterの画面へ', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
         if width != 320:
             page.screenshot(path=str(shots / ('approval-desktop.png' if width == 1280 else 'approval-mobile.png')), full_page=True)
-    connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['connection_id']
+    connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['credential_id']
     command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'OPENROUTER_API_KEY=' + connection, '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
-    page.goto(args.base + '/connections', wait_until='networkidle')
-    section = page.locator('[aria-labelledby="connections-title"]')
+    page.goto(args.base + '/services', wait_until='networkidle')
+    section = page.locator('[aria-label="サービス"]')
     assert 'Gmail' not in section.inner_text() and 'メール' not in section.inner_text()
     expect(section.get_by_role('button', name='接続し直す', exact=True)).to_have_count(0)
     for width in [1280, 390, 320]:
@@ -103,23 +104,23 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     review(page)
     dialog.get_by_role('button', name='許可を取り消す', exact=True).click()
     expect(dialog).not_to_be_visible()
-    cli('api', 'GET', '/v1/holdings?kind=grant&as=' + owner_id, success=False)
+    cli('api', 'GET', '/v1/resources?kind=credential&as=' + owner_id, success=False)
 
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/services', wait_until='networkidle')
     section.get_by_role('button', name='接続を解除', exact=True).click()
-    expect(dialog.get_by_text('OpenRouter側のキーは残ります。', exact=False)).to_be_visible()
+    expect(dialog.get_by_text('OpenRouter側の許可は残ります。', exact=False)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'disconnect-mobile.png'), full_page=True)
     dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(page.get_by_text('接続済みのサービスはありません。', exact=True)).to_be_visible()
+    expect(page.get_by_text('接続はありません。', exact=True)).to_be_visible()
 
     # Starting one from the dashboard uses the same flow, and asks for nothing the service decides.
-    page.goto(args.base + '/connections', wait_until='networkidle')
-    page.get_by_role('button', name='OpenRouterで接続', exact=True).first.click()
+    page.goto(args.base + '/services', wait_until='networkidle')
+    dialog = start_connect(page, 'OpenRouter')
     review(page)
     authorization['code'] = 'second'
-    dialog.get_by_role('button', name='OpenRouterで接続', exact=True).click()
+    dialog.get_by_role('button', name='OpenRouterの画面へ', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
     review(page)
     assert not errors, errors

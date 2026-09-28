@@ -44,7 +44,7 @@ with sync_playwright() as p:
     owner.get_by_role('link', name='アカウント', exact=True).click()
     owner.wait_for_url('**/account')
     owner.get_by_role('link', name='アプリの登録', exact=True).click()
-    owner.wait_for_url('**/principals')
+    owner.wait_for_url('**/principals#apps')
     expect(owner.get_by_role('heading', name='アクセス管理', exact=True)).to_be_visible()
     owner.get_by_role('button', name='アプリを登録').click()
     dialog = owner.get_by_role('dialog')
@@ -67,10 +67,10 @@ with sync_playwright() as p:
 
     # The product makes its user's account and key; the user's AI asks for something to keep.
     user = call('/v1/principals', product, 'POST', {'alias': 'user-1'})['principal']
-    key = call('/v1/principals/' + user['id'] + '/credentials', product, 'POST', {'kind': 'key'})['token']
+    key = call('/v1/principals/' + user['id'] + '/keys', product, 'POST', {'kind': 'key'})['token']
     asked = call('/v1/requests', key, 'POST', {'kind': 'store', 'input': {'fields': {'name': 'npm-token', 'label': 'npm のアクセストークン', 'site': 'https://www.npmjs.com/'}},
                                              'purpose': 'パッケージの公開に使います。', 'steps': ['npmjs.com でアクセストークンを作ります。', '表示されたトークンをここに貼ります。']})['request']
-    link = call('/v1/principals/' + user['id'] + '/credentials', product, 'POST', {'kind': 'link', 'request_id': asked['id']})['url']
+    link = call('/v1/principals/' + user['id'] + '/keys', product, 'POST', {'kind': 'link', 'request_id': asked['id']})['url']
 
     # The user, who has never signed up for Foundation, opens the link the product handed them.
     context = browser.new_context(viewport={'width': 1280, 'height': 1000})
@@ -94,8 +94,8 @@ with sync_playwright() as p:
     review(page)
     page.screenshot(path=str(shots / 'link-done.png'), full_page=True)
     assert call('/v1/requests/' + asked['id'], key)['request']['result']['names'] == ['npm-api-token']
-    delivered = call('/v1/deliveries', key, 'POST', {'names': [{'name': 'npm-api-token', 'as': 'NPM_TOKEN'}]})
-    assert delivered['delivery']['environment']['NPM_TOKEN'] == SECRET
+    delivered = call('/v1/injections', key, 'POST', {'names': [{'name': 'npm-api-token', 'as': 'NPM_TOKEN'}]})
+    assert delivered['injection']['environment']['NPM_TOKEN'] == SECRET
 
     # The same link opened again reaches nothing.
     again = browser.new_context().new_page()

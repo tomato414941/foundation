@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
+from ui_flows import start_connect
 from playwright.sync_api import sync_playwright, expect
 
 # OAuth apps on the connections page, against the fixture server with FOUNDATION_TEST_CLOUDFLARE=1: adding one,
@@ -33,25 +34,27 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={'width': 1280, 'height': 1000})
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/services', wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='ログインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    page.goto(args.base + '/login/confirm?return_to=%2Fconnections#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    page.goto(args.base + '/login/confirm?return_to=%2Fservices#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
     page.get_by_role('button', name='ログイン', exact=True).click()
-    page.wait_for_url(args.base + '/connections')
+    page.wait_for_url(args.base + '/services')
     page.wait_for_load_state('networkidle')
     dialog = page.get_by_role('dialog')
-    apps = page.locator('[aria-labelledby="oauth-apps-title"]')
+    apps = page.locator('#oauth-apps')
+    # OAuth apps are folded away until they are needed.
+    apps.locator('summary').click()
     expect(apps.get_by_role('heading', name='Foundationのアプリ', exact=True).first).to_be_visible()
 
     # Adding an app: the service, a name, its client ID and secret, and the redirect URL to register there.
     apps.get_by_role('button', name='OAuthアプリを追加', exact=True).click()
-    dialog.get_by_label('接続先', exact=True).select_option('cloudflare.oauth')
+    dialog.get_by_label('サービス', exact=True).select_option('cloudflare')
     dialog.get_by_label('名前', exact=True).fill('仕事用')
     dialog.get_by_label('クライアントID', exact=True).fill('work-app-id')
     dialog.get_by_label('クライアントシークレット', exact=True).fill('work-app-secret')
-    expect(dialog.get_by_text(args.base + '/oauth/cloudflare.oauth/callback', exact=True)).to_be_visible()
+    expect(dialog.get_by_text(args.base + '/oauth/callback', exact=True)).to_be_visible()
     review(page)
     if shots:
         page.screenshot(path=str(shots / 'add-app.png'), full_page=True)
@@ -69,17 +72,18 @@ with sync_playwright() as p:
         route.fulfill(status=302, headers={'location': values['redirect_uri'][0] + '?' + urlencode(query)}, body='')
 
     page.route('https://dash.cloudflare.com/oauth2/auth?*', consent)
-    page.get_by_role('button', name='Cloudflareで接続', exact=True).click()
+    start_connect(page, 'Cloudflare', 'ログインして許可する')
     dialog.get_by_label('OAuthアプリ', exact=True).select_option(label='仕事用')
     review(page)
     if shots:
         page.screenshot(path=str(shots / 'connect-through-app.png'), full_page=True)
-    dialog.get_by_role('button', name='Cloudflareで接続', exact=True).click()
+    dialog.get_by_role('button', name='Cloudflareの画面へ', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
     assert asked['client_id'] == 'work-app-id', asked
-    page.goto(args.base + '/connections', wait_until='networkidle')
-    connections = page.locator('[aria-labelledby="connections-title"]')
+    page.goto(args.base + '/services', wait_until='networkidle')
+    connections = page.locator('[aria-label="サービス"]')
     expect(connections.get_by_text('OAuthアプリ：仕事用', exact=True)).to_be_visible()
+    apps.locator('summary').click()
     expect(apps.get_by_text('クライアントID work-app-id・接続 1件', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
@@ -109,10 +113,10 @@ with sync_playwright() as p:
     # An AI asks for an app to be registered; the owner types its values, and the AI learns only its id.
     request = page.evaluate("""async () => {
       const key = await (await fetch('/v1/principals', {method: 'POST', headers: {'content-type': 'application/json'},
-        body: JSON.stringify({name: 'UI test agent', actor: true, credential: 'key'})})).json();
+        body: JSON.stringify({name: 'UI test agent', actor: true, key: true})})).json();
       const owner = key.principal.acts_for[0].id;
       const made = await (await fetch('/v1/requests?as=' + owner, {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
-        body: JSON.stringify({kind: 'app', input: {connector: 'cloudflare.oauth', name: 'メール用'}, purpose: 'メールの転送を設定できるアプリを使います。',
+        body: JSON.stringify({kind: 'app', input: {service: 'cloudflare', name: 'メール用'}, purpose: 'メールの転送を設定できるアプリを使います。',
           steps: ['CloudflareのOAuth clientsでアプリを作ります。']})})).json();
       return {path: '/requests/' + made.request.id, id: made.request.id, token: key.token, owner};
     }""")

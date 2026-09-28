@@ -67,7 +67,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         if width != 320:
             page.screenshot(path=str(shots / f'home-{width}.png'), full_page=True)
-        for title, path in [('認証情報', '/credentials'), ('接続', '/connections'),
+        for title, path in [('シークレット', '/secrets'), ('サービス', '/services'),
                             ('オブジェクト', '/objects'), ('アクセス管理', '/principals'),
                             ('ファンクション', '/functions')]:
             page.get_by_role('main').get_by_role('link', name=re.compile('^' + title)).click()
@@ -77,21 +77,21 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
             expect(page.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()
     page.set_viewport_size({'width': 1280, 'height': 800})
 
-    # ホームは接続の件数を要約し、接続画面へ案内する。
+    # ホームはサービスとの接続の件数を要約し、サービスの画面へ案内する。
     overview = page.request.get(args.base + '/v1/overview').json()
     for count in [0, 1, 40]:
-        summary = {**overview, 'grants': [
-            {'method': 'oauth', 'label': f'複数の用途で利用する接続先のアカウント {number}@example.test'}
+        summary = {**overview, 'credentials': [
+            {'service': {'id': 'google', 'name': 'Google'}, 'auth_scheme': 'oauth', 'label': f'複数の用途で利用する接続先のアカウント {number}@example.test'}
             for number in range(count)
         ]}
         page.route('**/v1/overview', lambda route: route.fulfill(json=summary))
         for width in [1280, 390]:
             page.set_viewport_size({'width': width, 'height': 844})
             page.reload(wait_until='networkidle')
-            card = page.get_by_role('main').get_by_role('link', name=f'接続 {count} 件', exact=True)
+            card = page.get_by_role('main').get_by_role('link', name=f'サービス {count} 件', exact=True)
             expect(card).to_be_visible()
-            expect(card).to_have_attribute('href', '/connections')
-            expect(card).to_have_text(f'接続{count} 件')
+            expect(card).to_have_attribute('href', '/services')
+            expect(card).to_have_text(f'サービス{count} 件')
             if count == 40:
                 page.screenshot(path=str(shots / f'home-connections-{width}.png'), full_page=True)
         page.unroute('**/v1/overview')
@@ -122,7 +122,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     assert approved.returncode == 0, approved.stderr
     assert len(json.loads(approved.stdout)['acts_for']) == 1
 
-    page.goto(args.base + '/credentials', wait_until='networkidle')
+    page.goto(args.base + '/secrets', wait_until='networkidle')
     page.get_by_role('button', name='追加', exact=True).click()
     form = page.get_by_role('dialog')
     form.get_by_label('名前', exact=True).fill('onboarding-demo')

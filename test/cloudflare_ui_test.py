@@ -2,6 +2,7 @@ import argparse
 import hashlib
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
+from ui_flows import start_connect
 from playwright.sync_api import sync_playwright, expect
 
 parser = argparse.ArgumentParser()
@@ -18,19 +19,16 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={'width': 1280, 'height': 1000})
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/services', wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='ログインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    page.goto(args.base + '/login/confirm?return_to=%2Fconnections#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    page.goto(args.base + '/login/confirm?return_to=%2Fservices#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
     page.get_by_role('button', name='ログイン', exact=True).click()
-    page.wait_for_url(args.base + '/connections')
+    page.wait_for_url(args.base + '/services')
     page.wait_for_load_state('networkidle')
-    expect(page.get_by_role('heading', name='Cloudflare', exact=True)).to_be_visible()
-    page.get_by_role('button', name='Cloudflareで接続', exact=True).click()
-    dialog = page.get_by_role('dialog')
+    dialog = start_connect(page, 'Cloudflare', 'ログインして許可する')
     expect(dialog.get_by_role('heading', name='Cloudflareに接続', exact=True)).to_be_visible()
-    expect(dialog.get_by_text('ドメインの登録・更新には料金がかかります。', exact=False)).to_be_visible()
     if shots:
         page.screenshot(path=str(shots / 'cloudflare-consent.png'), full_page=True)
 
@@ -38,7 +36,7 @@ with sync_playwright() as p:
 
     def consent(route):
         values = parse_qs(urlparse(route.request.url).query)
-        assert values['redirect_uri'] == [args.base + '/oauth/cloudflare.oauth/callback']
+        assert values['redirect_uri'] == [args.base + '/oauth/callback']
         assert values['code_challenge_method'] == ['S256']
         assert 'offline_access' in values['scope'][0].split(' ')
         assert 'account-settings.read' in values['scope'][0].split(' '), 'what the owner typed is asked for'
@@ -48,15 +46,15 @@ with sync_playwright() as p:
 
     page.route('https://dash.cloudflare.com/oauth2/auth?*', consent)
     dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('account-settings.read')
-    dialog.get_by_role('button', name='Cloudflareで接続', exact=True).click()
+    dialog.get_by_role('button', name='Cloudflareの画面へ', exact=True).click()
     expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
     authorization['deny'] = False
-    page.goto(args.base + '/connections', wait_until='networkidle')
-    page.get_by_role('button', name='Cloudflareで接続', exact=True).click()
+    page.goto(args.base + '/services', wait_until='networkidle')
+    start_connect(page, 'Cloudflare', 'ログインして許可する')
     dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('account-settings.read')
-    dialog.get_by_role('button', name='Cloudflareで接続', exact=True).click()
+    dialog.get_by_role('button', name='Cloudflareの画面へ', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/services', wait_until='networkidle')
     expect(page.get_by_text('personal@example.test', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
@@ -70,27 +68,27 @@ with sync_playwright() as p:
     row = page.locator('.agent-row').filter(has=page.get_by_text('personal@example.test', exact=True))
     row.get_by_role('button', name='接続し直す', exact=True).click()
     expect(dialog.get_by_role('heading', name='Cloudflareに接続し直す', exact=True)).to_be_visible()
-    dialog.get_by_role('button', name='Cloudflareで接続', exact=True).click()
+    dialog.get_by_role('button', name='Cloudflareの画面へ', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/services', wait_until='networkidle')
     # A second authorization for the same user has its own local reference.
-    first_id = page.evaluate("async () => (await (await fetch('/v1/holdings?kind=grant&method=authorized')).json()).holdings[0].id")
-    page.get_by_role('button', name='Cloudflareで接続', exact=True).click()
+    first_id = page.evaluate("async () => (await (await fetch('/v1/resources?kind=credential&secret=false')).json()).resources[0].id")
+    start_connect(page, 'Cloudflare', 'ログインして許可する')
     dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('account-settings.read')
-    dialog.get_by_role('button', name='Cloudflareで接続', exact=True).click()
+    dialog.get_by_role('button', name='Cloudflareの画面へ', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/services', wait_until='networkidle')
     expect(page.get_by_text('personal@example.test', exact=True)).to_have_count(2)
-    second_id = page.evaluate("async (first) => (await (await fetch('/v1/holdings?kind=grant&method=authorized')).json()).holdings.find(c => c.id !== first).id", first_id)
+    second_id = page.evaluate("async (first) => (await (await fetch('/v1/resources?kind=credential&secret=false')).json()).resources.find(c => c.id !== first).id", first_id)
     row = page.locator('.connection-row').filter(has=page.locator('[data-id="' + first_id + '"]'))
 
     # The agent asks to reconnect the exact first connection; no real mail or service is used.
     request_path = page.evaluate("""async (id) => {
       const key = await (await fetch('/v1/principals', {method: 'POST', headers: {'content-type': 'application/json'},
-        body: JSON.stringify({name: 'UI test agent', actor: true, credential: 'key'})})).json();
+        body: JSON.stringify({name: 'UI test agent', actor: true, key: true})})).json();
       const owner = key.principal.acts_for[0].id;
       const response = await fetch('/v1/requests?as=' + owner, {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
-        body: JSON.stringify({kind: 'connect', input: {connector: 'cloudflare.oauth', connection_id: id}, purpose: '共有アカウントへの接続を更新'})});
+        body: JSON.stringify({kind: 'connect', input: {service: 'cloudflare', credential_id: id}, purpose: '共有アカウントへの接続を更新'})});
       if (response.status !== 201) throw new Error(await response.text());
       return '/requests/' + (await response.json()).request.id;
     }""", first_id)
@@ -101,7 +99,7 @@ with sync_playwright() as p:
     expect(page.locator('.approval-facts')).to_contain_text('personal@example.test')
     if shots:
         page.screenshot(path=str(shots / 'cloudflare-reconnect-request.png'), full_page=True)
-    page.get_by_role('button', name='Cloudflareに接続し直す', exact=True).click()
+    page.get_by_role('button', name='Cloudflareの画面へ', exact=True).click()
     expect(dialog.get_by_role('heading', name='接続の変更を確認', exact=True)).to_be_visible()
     expect(dialog.get_by_text('変更前：Personal account', exact=False)).to_be_visible()
     expect(dialog.get_by_text('変更後：Shared account', exact=False)).to_be_visible()
@@ -115,16 +113,16 @@ with sync_playwright() as p:
             page.screenshot(path=str(shots / ('cloudflare-review-' + str(width) + '.png')), full_page=True)
     dialog.get_by_role('button', name='この内容で更新', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
-    connections = page.evaluate("async () => (await (await fetch('/v1/holdings?kind=grant&method=authorized')).json()).holdings")
+    connections = page.evaluate("async () => (await (await fetch('/v1/resources?kind=credential&secret=false')).json()).resources")
     assert len(connections) == 2
     assert next(c for c in connections if c['id'] == first_id)['facts']['observed_accounts']['items'][0]['name'] == 'Shared account'
     assert next(c for c in connections if c['id'] == second_id)['facts']['observed_accounts']['items'][0]['name'] == 'Personal account'
-    page.goto(args.base + '/connections', wait_until='networkidle')
+    page.goto(args.base + '/services', wait_until='networkidle')
     row.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog.get_by_label('Cloudflare側の許可も取り消す', exact=True)).to_be_checked()
     dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(page.get_by_text('解除しました。', exact=True)).to_be_visible()
-    expect(page.get_by_role('heading', name='Cloudflare', exact=True)).to_have_count(2)
+    expect(page.get_by_role('heading', name='Cloudflare', exact=True)).to_have_count(1)
     assert not errors, errors
     browser.close()
     print('Cloudflare: 接続・同意拒否・再接続・解除と、PC・スマートフォンの表示を確認しました。')

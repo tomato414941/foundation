@@ -1,21 +1,20 @@
 import { createApp } from '../src/app.mjs';
 import { FakeAuth, FakeGoogle, KEY } from './helpers.mjs';
 import { createHash } from 'node:crypto';
-import { FakeOpenRouter } from '../src/connectors/openrouter/fixture.mjs';
-import { googleOauth } from '../src/connectors/google/index.mjs';
-import { openrouterOauth } from '../src/connectors/openrouter/index.mjs';
-import { githubOauth } from '../src/connectors/github/index.mjs';
-import { FakeGitHub } from '../src/connectors/github/fixture.mjs';
-import { ebayOauth } from '../src/connectors/ebay/index.mjs';
-import { FakeEbay } from '../src/connectors/ebay/fixture.mjs';
-import { cloudflareOauth } from '../src/connectors/cloudflare/index.mjs';
-import { FakeCloudflare } from '../src/connectors/cloudflare/fixture.mjs';
-import { awsRole } from '../src/connectors/aws/index.mjs';
-import { FakeAws } from '../src/connectors/aws/fixture.mjs';
-import { oauth2 } from '../src/connectors/oauth2/index.mjs';
-import { FakeOAuth2Service } from '../src/connectors/oauth2/fixture.mjs';
-import { FakeSlack } from '../src/connectors/services/fixture.mjs';
-import { create as services } from '../src/connectors/services/index.mjs';
+import { FakeOpenRouter } from '../src/adapters/openrouter/fixture.mjs';
+import { googleOauth } from '../src/adapters/google/index.mjs';
+import { openrouterOauth } from '../src/adapters/openrouter/index.mjs';
+import { githubOauth } from '../src/adapters/github/index.mjs';
+import { FakeGitHub } from '../src/adapters/github/fixture.mjs';
+import { ebayOauth } from '../src/adapters/ebay/index.mjs';
+import { FakeEbay } from '../src/adapters/ebay/fixture.mjs';
+import { cloudflareOauth } from '../src/adapters/cloudflare/index.mjs';
+import { FakeCloudflare } from '../src/adapters/cloudflare/fixture.mjs';
+import { awsRole } from '../src/adapters/aws/index.mjs';
+import { FakeAws } from '../src/adapters/aws/fixture.mjs';
+import { FakeOAuth2Service } from '../src/schemes/oauth.fixture.mjs';
+import { FakeSlack } from './slack-fixture.mjs';
+import { builtins, entry } from '../src/catalog.mjs';
 
 // A bucket that lives in memory, so the lent space can be seen and used in the browser tests.
 const bucket = new Map();
@@ -41,22 +40,23 @@ const auth = new FakeAuth(), google = new FakeGoogle();
 // The browser test can simulate opening a delivered link without any real email.
 auth.codeFactory = email => createHash('sha256').update(email).digest('hex');
 if (process.env.FOUNDATION_TEST_EMPTY_CONFIG === '1') { auth.enabled = false; google.enabled = false; }
-const googleOnly = () => [googleOauth(google)];
+const withGoogle = entries => [...entries, entry('google', { oauth: googleOauth(google) })];
 // The AWS fixture knows one role, made with the external ID the test reads from the link it is handed.
 export const aws = new FakeAws();
 aws.lenient = true;
-const connectors = process.env.FOUNDATION_TEST_AWS === '1' ? [awsRole(aws), ...googleOnly()]
-  : process.env.FOUNDATION_TEST_CLOUDFLARE === '1' ? [cloudflareOauth(new FakeCloudflare()), ...googleOnly()]
-  : process.env.FOUNDATION_TEST_EBAY === '1' ? [ebayOauth(new FakeEbay()), ...googleOnly()]
-  : process.env.FOUNDATION_TEST_GITHUB === '1' ? [githubOauth(new FakeGitHub()), ...googleOnly()]
-  : process.env.FOUNDATION_TEST_OAUTH2 === '1' ? [oauth2(new FakeOAuth2Service().client()), ...googleOnly()]
-  // Like production today: Foundation has no Slack app of its own, so the holder brings theirs.
-  : process.env.FOUNDATION_TEST_SLACK === '1' ? [new FakeSlack({ configured: false }).connector(), ...googleOnly()]
-  // Every service Foundation knows by name, none with an app of Foundation's own: what a new deployment shows.
-  : process.env.FOUNDATION_TEST_SERVICES === '1' ? [...googleOnly(), ...services({})]
-  : process.env.FOUNDATION_TEST_OPENROUTER === '1' ? [openrouterOauth(new FakeOpenRouter()), ...googleOnly()]
-  : undefined;
-const app = createApp({ encryptionKey: KEY, auth, space, connectors: connectors || [googleOauth(google)] });
+// A service no one knows but its holder, answering plain OAuth 2.0 at service.example.
+const described = new FakeOAuth2Service();
+const services = process.env.FOUNDATION_TEST_AWS === '1' ? withGoogle([entry('aws', { role: awsRole(aws) })])
+  : process.env.FOUNDATION_TEST_CLOUDFLARE === '1' ? withGoogle([entry('cloudflare', { oauth: cloudflareOauth(new FakeCloudflare()) })])
+  : process.env.FOUNDATION_TEST_EBAY === '1' ? withGoogle([entry('ebay', { oauth: ebayOauth(new FakeEbay()) })])
+  : process.env.FOUNDATION_TEST_GITHUB === '1' ? withGoogle([entry('github', { oauth: githubOauth(new FakeGitHub()) })])
+  // Like production today: Foundation has no Slack app of its own, so the holder brings theirs or a token.
+  : process.env.FOUNDATION_TEST_SLACK === '1' ? withGoogle([new FakeSlack({ configured: false }).entry()])
+  // Every service Foundation knows, none with an app of Foundation's own but Google: what a new deployment shows.
+  : process.env.FOUNDATION_TEST_SERVICES === '1' ? [...builtins({}).filter(item => item.definition.id !== 'google'), entry('google', { oauth: googleOauth(google) })]
+  : process.env.FOUNDATION_TEST_OPENROUTER === '1' ? withGoogle([entry('openrouter', { oauth: openrouterOauth(new FakeOpenRouter()) })])
+  : withGoogle([]);
+const app = createApp({ encryptionKey: KEY, auth, space, services, serviceFetcher: described.fetch });
 const port = Number(process.env.FOUNDATION_TEST_PORT || 3418);
 app.server.listen(port, '127.0.0.1', () => console.log('Test fixture: http://127.0.0.1:' + port));
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, async () => { await app.close(); process.exit(0); });
