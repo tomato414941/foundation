@@ -142,7 +142,7 @@ test('不正な入力と外部への戻り先を拒否し、許可されたペ�
   await send(f, 'new@example.test', undefined, '/secrets');
   const link = f.auth.links.get('new@example.test');
   assert.equal(new URL(link.url).searchParams.get('return_to'), '/secrets');
-  for (const changes of [{ email: '' }, { email: 'not-an-email' }, { token_hash: 'short' }, { token_hash: ['ambiguous'] }, { return_to: 'https://evil.example' }, { return_to: '//evil.example' }, { return_to: '/login/confirm' }]) {
+  for (const changes of [{ email: '' }, { email: 'not-an-email' }, { token_hash: 'short' }, { token_hash: ['ambiguous'] }, { return_to: 'https://evil.example' }, { return_to: '//evil.example' }, { return_to: '/\\evil.example' }, { return_to: '/objects?redirect=https://evil.example' }, { return_to: '/services?prefix=private' }, { return_to: '/login/confirm' }]) {
     const result = await f.request('/v1/login/verify', { method: 'POST', data: { email: link.email, token_hash: link.code, ...changes } });
     assert.equal(result.status, 400, result.text);
   }

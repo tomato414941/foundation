@@ -26,16 +26,17 @@ import { FETCH_BODY_MAX } from './fetch.mjs';
 import { FUNCTIONS, Functions } from './functions.mjs';
 import { guide } from '../cli/guide.mjs';
 import { Authorization } from './authorization.mjs';
+import { pages, pageTitle, workspaceView, pendingView } from '../web/workspace-view.js';
 
 const VERSION = createRequire(import.meta.url)('../package.json').version;
 
 const PUBLIC = new URL('../web/', import.meta.url);
-// The owner's pages. Each is the same shell; the script decides what to show from the path.
-const PAGES = ['/', '/services', '/secrets', '/objects', '/principals', '/functions', '/account'];
+const PAGES = Object.keys(pages);
 const STATIC = new Map(PAGES.map(page => [page, ['index.html', 'text/html; charset=utf-8']]));
 STATIC.set('/login/confirm', ['index.html', 'text/html; charset=utf-8']);
 STATIC.set('/app.js', ['app.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/request-view.js', ['request-view.js', 'text/javascript; charset=utf-8']);
+STATIC.set('/workspace-view.js', ['workspace-view.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/styles.css', ['styles.css', 'text/css; charset=utf-8']);
 STATIC.set('/service-logos.svg', ['service-logos.svg', 'image/svg+xml']);
 const MAX_BODY = 12_000;
@@ -48,8 +49,12 @@ const PRINCIPAL_ID = /^[A-Za-z0-9-]{1,64}$/;
 const secretTag = row => '"' + digest(JSON.stringify([row.id, row.name, row.size, row.updated_at])) + '"';
 
 function returnPath(value = '/') {
-  if (!PAGES.includes(value) && (typeof value !== 'string' || !REQUEST_PAGE.test(value))) fail(400, 'invalid_return', 'リンクを開き直してください。');
-  return value;
+  const invalid = () => fail(400, 'invalid_return', 'リンクを開き直してください。');
+  if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//') || /[\\\s]/.test(value)) invalid();
+  const url = new URL(value, 'https://foundation.invalid');
+  if (url.origin !== 'https://foundation.invalid' || (!PAGES.includes(url.pathname) && !REQUEST_PAGE.test(url.pathname))) invalid();
+  if ([...url.searchParams.keys()].some(key => url.pathname !== '/objects' || key !== 'prefix')) invalid();
+  return url.pathname + url.search + url.hash;
 }
 
 function loginEmail(value) {
@@ -202,11 +207,20 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       const loginToken = readCookie(req, 'fdn_login');
       if ((STATIC.has(path) || REQUEST_PAGE.test(path)) && method === 'GET') {
         if (REQUEST_PAGE.test(path)) requests.record(path.slice('/requests/'.length), 'page_opened');
-        // The page and its script are the same for everyone, so a browser keeps them and only asks whether
-        // they changed. What the API answers stays no-store.
         const [filename, type] = STATIC.get(STATIC.has(path) ? path : '/');
-        const content = await readFile(fileURLToPath(new URL(filename, PUBLIC))), tag = '"' + digest(content).slice(0, 32) + '"';
-        res.setHeader('Cache-Control', path === LOGIN_CONFIRM ? 'no-store' : 'no-cache');
+        let content = await readFile(fileURLToPath(new URL(filename, PUBLIC)));
+        if (filename === 'index.html') {
+          const ownerFrame = PAGES.includes(path) && Boolean(sessions.get(cookieToken(req)));
+          if (ownerFrame || path !== '/') {
+            content = content.toString().replace(/<div id="app">[\s\S]*?<div id="notice"/, () => `<div id="app">${ownerFrame ? workspaceView(path, { pending: true }) : pendingView(path)}</div>\n  <div id="notice"`)
+              .replace('<title>Foundation</title>', `<title>${pageTitle(path)}</title>`);
+          }
+          res.setHeader('Cache-Control', path === LOGIN_CONFIRM ? 'no-store' : 'private, no-store');
+          res.writeHead(200, { 'content-type': type });
+          return res.end(content);
+        }
+        const tag = '"' + digest(content).slice(0, 32) + '"';
+        res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('ETag', tag);
         if (req.headers['if-none-match'] === tag) { res.writeHead(304); return res.end(); }
         res.writeHead(200, { 'content-type': type });

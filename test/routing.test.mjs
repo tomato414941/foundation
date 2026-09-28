@@ -48,18 +48,44 @@ test('認証情報と接続の画面をそれぞれのURLから開く', async t 
     assert.equal(page.status, 200, path);
     assert.match(page.headers.get('content-type'), /^text\/html/);
     assert.match(page.text, /src="\/app\.js"/);
-    assert.equal(page.headers.get('cache-control'), 'no-cache');
+    assert.equal(page.headers.get('cache-control'), 'private, no-store');
+  }
+});
+
+test('ログイン済みの初回HTMLで行き先の見出しとメニューを表示し、データは認証済みAPIから取得する', async t => {
+  const f = await fixture(t);
+  await f.request('/v1/resources?kind=credential&name=private-test-name', { method: 'PUT', raw: 'private-test-value' });
+  const page = await f.request('/secrets');
+  assert.match(page.text, /<h1>シークレット<\/h1>/);
+  assert.match(page.text, /href="\/secrets" aria-current="page"/);
+  assert.match(page.text, /role="status" aria-label="読み込み中"/);
+  assert.equal(page.headers.get('cache-control'), 'private, no-store');
+  for (const privateValue of ['private-test-name', 'private-test-value', 'owner@example.test']) assert.ok(!page.text.includes(privateValue));
+  const records = await f.request('/v1/resources?kind=credential&secret=true');
+  assert.equal(records.json.resources[0].name, 'private-test-name');
+  const denied = await f.request('/v1/resources?kind=credential', { headers: { cookie: 'fdn_session=unverified' } });
+  assert.equal(denied.status, 401);
+});
+
+test('公開アセットの更新確認と再利用を行う', async t => {
+  const f = await fixture(t);
+  for (const path of ['/app.js', '/workspace-view.js', '/styles.css']) {
+    const asset = await f.request(path, { anonymous: true });
+    assert.equal(asset.status, 200);
+    assert.equal(asset.headers.get('cache-control'), 'no-cache');
+    const again = await f.request(path, { anonymous: true, headers: { 'if-none-match': asset.headers.get('etag') } });
+    assert.equal(again.status, 304);
   }
 });
 
 test('ログインを終えると開こうとしていた認証情報または接続の画面へ戻る', async t => {
   const f = await fixture(t);
-  for (const [path, destination] of [['/secrets', '/secrets'], ['/services', '/services']]) {
-    const email = 'return-' + destination.slice(1) + '@example.test';
+  for (const [at, path] of ['/secrets', '/services', '/objects?prefix=reports%2F', '/objects?prefix=%E8%B3%87%E6%96%99+%23%3F%2F', '/principals#apps'].entries()) {
+    const email = 'return-' + at + '@example.test';
     await f.auth.sendLink(email, f.base + '/login/confirm');
     const result = await f.request('/v1/login/verify', { method: 'POST', data: { email, token_hash: f.auth.links.get(email).code, return_to: path } });
     assert.equal(result.status, 200, result.text);
-    assert.equal(result.json.return_to, destination);
+    assert.equal(result.json.return_to, path);
   }
 });
 

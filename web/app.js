@@ -1,8 +1,9 @@
 import { requestResultView, knownRequestKind } from './request-view.js';
+import { pages, brand, pageTitle, workspaceView, pendingView } from './workspace-view.js';
 
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
 const publicInfo = document.querySelector('#public-info');
-let state = null, toastTimer, loginTimer, revision = 0, refreshController;
+let state = null, toastTimer, loginTimer, revision = 0, refreshController, refreshDeferred = false;
 const isLoginConfirmation = location.pathname === '/login/confirm';
 // A fragment is not sent in HTTP requests. Keep the emailed key only in this page's memory.
 const loginLink = isLoginConfirmation ? new URLSearchParams(location.hash.slice(1)) : null;
@@ -17,7 +18,6 @@ let linked = false, back = null;
 // Back to the product: its return page with how the request ended, or its refresh page when the link was no good.
 const backTo = row => { if (!row) return back.refresh_url; const url = new URL(back.return_url); url.searchParams.set('foundation_status', row.status); return url.href; };
 try { linked = Boolean(requestId) && sessionStorage.getItem('linked:' + requestId) === '1'; } catch {}
-const pages = { '/': 'Foundation', '/services': 'サービス', '/secrets': 'シークレット', '/objects': 'オブジェクト', '/principals': 'アクセス管理', '/functions': 'ファンクション', '/account': 'アカウント' };
 let page = Object.hasOwn(pages, location.pathname) ? location.pathname.slice(1) || 'home' : 'home';
 let pagePath = requestId ? location.pathname : page === 'home' ? '/' : '/' + page;
 let accessRequest = null, requestError = '';
@@ -33,7 +33,10 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':
 // The lent space, laid out the way an object browser is: a prefix acts as a folder, the list is a table
 // you can sort and select in, and everything acts on the level you are looking at. The keys only look
 // like paths, so the levels are worked out from the keys themselves rather than fetched one at a time.
-let objectPrefix = '', objectFilter = '', objectLimit = 100, objectSort = 'updated', objectDescending = true, objectSearchPrefix = false;
+const prefixOf = url => url.pathname === '/objects' ? url.searchParams.get('prefix') || '' : '';
+const objectsHref = prefix => '/objects' + (prefix ? '?' + new URLSearchParams({ prefix }) : '');
+const returnTo = () => (page === 'objects' ? objectsHref(objectPrefix) : pagePath) + location.hash;
+let objectPrefix = prefixOf(new URL(location.href)), objectFilter = '', objectLimit = 100, objectSort = 'updated', objectDescending = true, objectSearchPrefix = false;
 let objectChosen = new Set();
 function levelOf(objects) {
   const folders = new Map(), files = [];
@@ -52,12 +55,12 @@ function levelOf(objects) {
 function crumbs() {
   const parts = objectPrefix.split('/').filter(Boolean);
   if (!parts.length) return '';
-  const links = ['<button class="text-button" data-action="go-prefix" data-prefix="">すべて</button>'];
+  const links = ['<a class="text-button" href="/objects">すべて</a>'];
   let walked = '';
   for (const [at, part] of parts.entries()) {
     walked += part + '/';
     links.push(at === parts.length - 1 ? `<span aria-current="location">${esc(part)}</span>`
-      : `<button class="text-button" data-action="go-prefix" data-prefix="${esc(walked)}">${esc(part)}</button>`);
+      : `<a class="text-button" href="${esc(objectsHref(walked))}">${esc(part)}</a>`);
   }
   return `<nav class="crumbs" aria-label="パス">${links.join('<span aria-hidden="true">›</span>')}</nav>`;
 }
@@ -81,7 +84,7 @@ function spaceSection() {
   const allChosen = here.length > 0 && here.every(key => objectChosen.has(key));
   const column = (key, label) => `<button class="column-head" data-action="sort-objects" data-sort="${key}">${label}${objectSort === key ? (objectDescending ? ' ↓' : ' ↑') : ''}</button>`;
   const rows = folders.map(item => `<tr><td><input type="checkbox" data-action="choose-object" data-key="${esc(objectPrefix + item.name)}" ${objectChosen.has(objectPrefix + item.name) ? 'checked' : ''} aria-label="${esc(item.name)} を選ぶ"></td>
-      <td class="object-name"><span class="object-mark" aria-hidden="true">${icon('folder')}</span><button class="link-button" data-action="go-prefix" data-prefix="${esc(objectPrefix + item.name)}">${esc(item.name.slice(0, -1))}</button></td>
+      <td class="object-name"><span class="object-mark" aria-hidden="true">${icon('folder')}</span><a class="link-button" href="${esc(objectsHref(objectPrefix + item.name))}">${esc(item.name.slice(0, -1))}</a></td>
       <td>フォルダ</td><td>${esc(kiloBytes(item.bytes))}</td><td>${item.count} 件</td></tr>`).join('')
     + shown.map(item => `<tr><td><input type="checkbox" data-action="choose-object" data-key="${esc(item.key)}" ${objectChosen.has(item.key) ? 'checked' : ''} aria-label="${esc(item.name)} を選ぶ"></td>
       <td class="object-name"><span class="object-mark" aria-hidden="true">${icon('note')}</span><a href="/v1/resources/${esc(item.id)}/content" download>${esc(item.name)}</a></td>
@@ -97,7 +100,7 @@ function spaceSection() {
     <button class="text-button" data-action="toggle-search">${objectSearchPrefix ? '部分一致にする' : '接頭辞で探す'}</button>
     <button class="button secondary" data-action="copy-url" ${chosen.length === 1 && !chosen[0].endsWith('/') ? '' : 'disabled'}>URLをコピー</button>
     <button class="button secondary danger" data-action="drop-chosen" ${chosen.length ? '' : 'disabled'}>削除${chosen.length ? `（${chosen.length}）` : ''}</button></div>`;
-  return `<section class="resource-section object-browser" aria-label="置いてあるもの"><div class="object-count">オブジェクト（${space.usage?.count ?? space.objects.length}）</div>${crumbs()}${tools}${body}</section>`;
+  return `<section class="resource-section object-browser" aria-label="置いてあるもの"><div class="object-location"><div class="object-count">オブジェクト（${space.usage?.count ?? space.objects.length}）</div>${crumbs()}</div>${tools}<div class="object-results">${body}</div></section>`;
 }
 // A folder chosen means everything under it.
 function chosenKeys() {
@@ -141,9 +144,6 @@ const icon = (name) => {
   };
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
-const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true">F</span>Foundation</a>';
-const nav = `<nav class="page-nav">${Object.entries(pages).filter(([href]) => href !== '/' && href !== '/account')
-  .map(([href, label]) => `<a href="${href}">${label}</a>`).join('')}</nav>`;
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
 function toast(text) {
   clearTimeout(toastTimer); notice.textContent = text; notice.hidden = false;
@@ -189,10 +189,12 @@ function showLoginConfirmation() {
 async function showLogin({ email = '', message = loginNotice } = {}) {
   clearInterval(loginTimer);
   refreshController?.abort();
-  const current = ++revision; state = null; closeDialog();
+  const current = ++revision; state = null; refreshDeferred = false; closeDialog();
   document.title = 'Foundation';
+  app.innerHTML = pendingView('/');
   let config = { available: false, pending: null };
-  try { config = await api('/v1/login'); } catch {}
+  try { config = await api('/v1/login'); }
+  catch (error) { if (current === revision) showRefreshError(error, 'retry-login'); return; }
   if (current !== revision) return;
   const pending = config.available ? config.pending : null;
   app.innerHTML = `<div class="workspace login-shell"><header class="topbar">${brand}</header><main class="login-main"><div class="login-symbol" aria-hidden="true">${icon('mail')}</div>${requestId ? '<p class="login-context">依頼の確認</p>' : ''}<h1>${pending ? 'メールを確認' : 'ログイン'}</h1>
@@ -229,7 +231,7 @@ async function showLogin({ email = '', message = loginNotice } = {}) {
     if (busy || !config.available || (pending && Date.now() < pending.resend_at)) return;
     setBusy(true); loginNotice = ''; form.querySelector('.form-error').textContent = '';
     try {
-      await api('/v1/login', { method: 'POST', data: { email: pending?.email || form.elements.email.value.trim(), return_to: pagePath } });
+      await api('/v1/login', { method: 'POST', data: { email: pending?.email || form.elements.email.value.trim(), return_to: returnTo() } });
       await showLogin();
     } catch (error) {
       if (!form.isConnected) return;
@@ -240,14 +242,30 @@ async function showLogin({ email = '', message = loginNotice } = {}) {
 window.addEventListener('focus', () => { if (document.querySelector('#email-sent')) void refresh().catch(() => {}); });
 // The owner's objects: every page of the listing, and how much of the space they use.
 async function loadSpace(signal) {
-  try {
-    const [listing, usage] = await Promise.all([api('/v1/resources?kind=object', { signal }), api('/v1/usage', { signal })]);
-    const objects = listing.resources.map(item => ({ ...item, key: item.name, updated_at: Date.parse(item.updated_at) }));
-    return { available: true, objects, usage: usage.objects };
-  } catch { return null; }
+  const [listing, usage] = await Promise.all([api('/v1/resources?kind=object', { signal }), api('/v1/usage', { signal })]);
+  const objects = listing.resources.map(item => ({ ...item, key: item.name, updated_at: Date.parse(item.updated_at) }));
+  return { available: true, objects, usage: usage.objects };
 }
-const editingPage = () => dialog.open || Boolean(app.querySelector('main')?.contains(document.activeElement)
-  && document.activeElement.matches('input, textarea, select, [contenteditable="true"]'));
+// These elements live for the whole edit/operation, including blur, network waits and failed saves.
+const editingPage = () => dialog.open || Boolean(app.querySelector('.secret-name-editor, .secret-value-panel.editing, .secret-value-panel[aria-busy="true"], [data-uploading]'));
+function resumeRefresh() {
+  const current = revision;
+  queueMicrotask(() => {
+    if (!refreshDeferred || !state || current !== revision || editingPage()) return;
+    refreshDeferred = false;
+    void refresh({ background: true }).catch(() => {});
+  });
+}
+function showRefreshError(error, action = 'retry-page') {
+  if (!state && !app.querySelector('main[aria-busy]')) app.innerHTML = pendingView(pagePath);
+  const main = app.querySelector('main');
+  main.removeAttribute('aria-busy');
+  main.querySelector('.content-loading')?.remove();
+  main.querySelector('.object-browser[aria-busy]')?.removeAttribute('aria-busy');
+  let alert = app.querySelector('.page-error');
+  if (!alert) { alert = document.createElement('div'); alert.className = 'page-error'; main.before(alert); }
+  alert.innerHTML = `<p role="alert">${esc(error.message)}</p><button class="text-button" data-action="${action}">再読み込み</button>`;
+}
 async function refresh({ background = false } = {}) {
   if (linked) {
     try { back = back || (await api('/v1/requests/' + requestId + '/return')).back; } catch {}
@@ -259,7 +277,7 @@ async function refresh({ background = false } = {}) {
   }
   refreshController?.abort();
   const controller = refreshController = new AbortController(), { signal } = controller;
-  const current = ++revision, loading = ['home', 'objects'].includes(page) ? loadSpace(signal) : null;
+  const current = ++revision, loading = ['home', 'objects'].includes(page) ? loadSpace(signal).then(value => ({ value }), error => ({ error })) : null;
   try {
     const result = await api('/v1/overview', { signal });
     if (requestId && current === revision) {
@@ -271,17 +289,24 @@ async function refresh({ background = false } = {}) {
     }
     if (current !== revision || signal.aborted) return;
     const sameOwner = state?.user.id === result.user.id;
-    // Keep the displayed snapshot consistent while the holder edits it. Their next save or navigation refreshes it.
-    if (background && sameOwner && editingPage()) return;
+    app.querySelector('.page-error')?.remove();
+    // Refresh from the server after the last edit ends, never from a stale pre-save snapshot.
+    if (sameOwner && editingPage()) { refreshDeferred = true; return; }
+    refreshDeferred = false;
     const changed = !state || Object.entries(result).some(([key, value]) => JSON.stringify(state[key]) !== JSON.stringify(value));
     const space = sameOwner ? state.space : undefined;
-    if (!sameOwner) closeDialog();
+    if (!sameOwner) { closeDialog(); objectChosen.clear(); }
     state = { ...result, space };
     if (!background || changed) render();
     if (loading) {
-      const loaded = await loading;
+      const { value: loaded, error } = await loading;
       if (current !== revision || signal.aborted) return;
-      if (background && editingPage()) return;
+      if (editingPage()) { refreshDeferred = true; return; }
+      if (error) {
+        if (state.space === undefined) { state.space = null; render(); }
+        if (page !== 'objects' || state.space) showRefreshError(error);
+        return;
+      }
       const changed = JSON.stringify(state.space) !== JSON.stringify(loaded);
       state.space = loaded;
       if (page === 'objects' && changed) render();
@@ -292,7 +317,7 @@ async function refresh({ background = false } = {}) {
     }
   } catch (error) {
     if (signal.aborted || current !== revision) return;
-    if (page === 'objects' && state && state.space === undefined) { state.space = null; render(); }
+    showRefreshError(error);
     throw error;
   }
 }
@@ -310,13 +335,15 @@ function navigate(url, { restore = false, position } = {}) {
     history.replaceState({ ...history.state, scroll: [scrollX, scrollY] }, '', location.href);
     history.pushState({ scroll: [0, 0] }, '', url);
   }
-  const changed = pagePath !== url.pathname;
+  const nextPrefix = prefixOf(url), changed = pagePath !== url.pathname || objectPrefix !== nextPrefix;
+  if (changed) { objectPrefix = nextPrefix; objectFilter = ''; objectLimit = 100; objectChosen.clear(); }
   pagePath = url.pathname; page = pagePath.slice(1) || 'home';
   if (changed) {
-    closeDialog(); clearTimeout(toastTimer); notice.hidden = true;
+    refreshDeferred = false; closeDialog(); clearTimeout(toastTimer); notice.hidden = true;
+    app.querySelector('.page-error')?.remove();
     render();
     app.querySelector('main')?.focus({ preventScroll: true });
-    void refresh({ background: true }).catch(error => { if (error.status !== 401) toast(error.message); });
+    void refresh({ background: true }).catch(() => {});
   }
   scrollToPage(position);
 }
@@ -325,7 +352,8 @@ document.addEventListener('click', event => {
   const link = event.target.closest('a[href]');
   if (!link || link.hasAttribute('download') || (link.target && link.target !== '_self')) return;
   const url = new URL(link.href);
-  if (url.origin !== location.origin || !Object.hasOwn(pages, url.pathname) || url.search) return;
+  if (url.origin !== location.origin || !Object.hasOwn(pages, url.pathname)
+    || [...url.searchParams.keys()].some(key => url.pathname !== '/objects' || key !== 'prefix')) return;
   event.preventDefault();
   if (url.href !== location.href) navigate(url);
 });
@@ -380,19 +408,23 @@ function render() {
   if (!state) return;
   if (requestId) { renderRequest(); return; }
   const shell = inner => {
-    if (!app.querySelector('.page-nav')) app.innerHTML = `<div class="workspace"><header class="topbar">${brand}${nav}<div class="user-menu"><a href="/account">アカウント</a><button class="text-button" data-action="logout">ログアウト</button></div></header><main tabindex="-1"></main></div>`;
+    if (!app.querySelector('.page-nav')) app.innerHTML = workspaceView(pagePath);
     app.querySelector('.topbar').querySelectorAll('a').forEach(link => {
       if (link.getAttribute('href') === pagePath) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     });
-    document.title = page === 'home' ? 'Foundation' : pages[pagePath] + ' · Foundation';
+    document.title = pageTitle(pagePath);
+    app.querySelector('[data-action="logout"]').disabled = false;
+    app.querySelector('main').removeAttribute('aria-busy');
     app.querySelector('main').innerHTML = inner;
   };
   if (page === 'objects') {
-    const usage = state.space?.usage;
-    shell(`<header class="page-heading page-heading-actions"><div><h1>オブジェクト</h1>${usage ? `<p>${esc(kiloBytes(usage.bytes))} / ${esc(kiloBytes(usage.bytes_max))}・${usage.count} / ${usage.count_max} 件</p>` : ''}</div>
-      <label class="button secondary" for="space-upload">${icon('plus')} 追加</label><input id="space-upload" type="file" ${state.space === undefined ? 'disabled' : ''} hidden></header>${spaceSection()}`);
-    bindObjects();
+    if (!app.querySelector('#space-upload')) {
+      shell(`<header class="page-heading page-heading-actions"><div><h1>オブジェクト</h1><p id="object-usage"></p></div>
+        <button class="button secondary" type="button" data-action="upload-object">${icon('plus')} 追加</button><input id="space-upload" type="file" hidden></header>${spaceSection()}`);
+      bindObjects();
+    }
+    updateObjects();
     return;
   }
   if (page === 'functions') {
@@ -448,43 +480,96 @@ function render() {
     return;
   }
   if (page === 'secrets') {
+    const focused = document.activeElement, focusedRow = focused.closest('.secret-row')?.getAttribute('aria-label');
+    const focusedAction = focused.getAttribute('aria-label') || focused.dataset.action;
     const kept = secrets();
     shell(`<header class="page-heading page-heading-actions"><h1>シークレット</h1>
       <button class="button secondary" data-action="add-secret">${icon('plus')} 追加</button></header>
       <section class="resource-section" aria-label="シークレット">
         ${kept.length ? `<div class="agent-list">${kept.map(secretRow).join('')}</div>` : '<div class="access-empty"><p>シークレットはありません。</p></div>'}</section>`);
     app.querySelectorAll('.secret-row').forEach(row => bindSecretValue(kept.find(item => item.name === row.getAttribute('aria-label')), row));
+    if (focusedRow && focusedAction && !focused.isConnected) {
+      const row = [...app.querySelectorAll('.secret-row')].find(item => item.getAttribute('aria-label') === focusedRow);
+      [...(row?.querySelectorAll('button') || [])].find(button => (button.getAttribute('aria-label') || button.dataset.action) === focusedAction)?.focus({ preventScroll: true });
+    }
+  }
+}
+function updateObjectSelection() {
+  const boxes = [...app.querySelectorAll('[data-action="choose-object"]')];
+  for (const box of boxes) box.checked = objectChosen.has(box.dataset.key);
+  const all = app.querySelector('[data-action="choose-all"]');
+  if (all) {
+    const count = boxes.filter(box => box.checked).length;
+    all.checked = boxes.length > 0 && count === boxes.length;
+    all.indeterminate = count > 0 && count < boxes.length;
+  }
+  const chosen = chosenKeys(), copy = app.querySelector('[data-action="copy-url"]'), drop = app.querySelector('[data-action="drop-chosen"]');
+  if (copy) copy.disabled = chosen.length !== 1 || chosen[0].endsWith('/');
+  if (drop) { drop.disabled = chosen.length === 0; drop.textContent = '削除' + (chosen.length ? `（${chosen.length}）` : ''); }
+}
+function updateObjects() {
+  const usage = state.space?.usage, description = app.querySelector('#object-usage');
+  description.textContent = usage ? `${kiloBytes(usage.bytes)} / ${kiloBytes(usage.bytes_max)}・${usage.count} / ${usage.count_max} 件` : '';
+  description.hidden = !usage;
+  const upload = app.querySelector('#space-upload');
+  upload.disabled = state.space === undefined || upload.hasAttribute('data-uploading');
+  app.querySelector('[data-action="upload-object"]').disabled = upload.disabled;
+  const section = app.querySelector('.object-browser'), template = document.createElement('template');
+  template.innerHTML = spaceSection();
+  const next = template.content.firstElementChild, focus = document.activeElement;
+  const identity = focus?.dataset.key !== undefined ? ['data-key', focus.dataset.key]
+    : focus?.dataset.sort ? ['data-sort', focus.dataset.sort]
+    : focus?.dataset.action ? ['data-action', focus.dataset.action]
+    : focus?.getAttribute('href') ? ['href', focus.getAttribute('href')] : null;
+  if (section.querySelector('.object-results') && next.querySelector('.object-results')) {
+    section.querySelector('.object-location').innerHTML = next.querySelector('.object-location').innerHTML;
+    section.querySelector('.object-results').innerHTML = next.querySelector('.object-results').innerHTML;
+  } else section.replaceWith(next);
+  const filter = app.querySelector('#object-filter');
+  if (filter) {
+    if (filter.value !== objectFilter) filter.value = objectFilter;
+    filter.placeholder = objectSearchPrefix ? 'この場所を接頭辞で探す' : '名前で絞り込む';
+    filter.oninput = () => { objectFilter = filter.value; objectLimit = 100; updateObjects(); };
+    app.querySelector('[data-action="toggle-search"]').textContent = objectSearchPrefix ? '部分一致にする' : '接頭辞で探す';
+  }
+  updateObjectSelection();
+  if (identity && !focus.isConnected) {
+    const [attribute, value] = identity;
+    [...app.querySelectorAll('.object-browser [' + attribute + ']')].find(node => node.getAttribute(attribute) === value)?.focus({ preventScroll: true });
   }
 }
 function bindObjects() {
-  const filter = document.querySelector('#object-filter');
-  if (filter) {
-    filter.addEventListener('input', () => {
-      objectFilter = filter.value; objectLimit = 50;
-      const at = filter.selectionStart;
-      render();
-      const again = document.querySelector('#object-filter');
-      if (again) { again.focus(); again.setSelectionRange(at, at); }
-    });
-  }
   const upload = document.querySelector('#space-upload');
   if (upload) upload.addEventListener('change', async () => {
     const file = upload.files?.[0];
     if (!file) return;
-    if ((state.space?.objects || []).some(item => item.key === objectPrefix + file.name)) {
-      const go = await new Promise(resolve => confirmRemoval(file.name + ' を置き換えますか？', '同じ名前のものが置かれています。前のものは戻せません。', async () => resolve(true), () => resolve(false)));
-      if (!go) { upload.value = ''; return; }
-    }
+    const key = objectPrefix + file.name;
+    upload.setAttribute('data-uploading', '');
     upload.disabled = true;
+    app.querySelector('[data-action="upload-object"]').disabled = true;
     try {
-      const key = objectPrefix + file.name;
+      if ((state.space?.objects || []).some(item => item.key === key)) {
+        const go = await new Promise(resolve => {
+          openDialog(`<h2 id="dialog-title">${esc(file.name)} を置き換えますか？</h2><form><p>同じ名前のものが置かれています。前のものは戻せません。</p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button primary">置き換える</button></div></form>`);
+          const cancelled = () => resolve(false);
+          dialog.addEventListener('close', cancelled, { once: true });
+          dialog.querySelector('form').onsubmit = event => { event.preventDefault(); dialog.removeEventListener('close', cancelled); resolve(true); closeDialog(); };
+        });
+        if (!go) return;
+      }
       const response = await fetch('/v1/resources?' + new URLSearchParams({ kind: 'object', name: key }), { method: 'PUT', credentials: 'same-origin',
         headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
       const result = await response.json();
+      if (response.status === 401) await showLogin();
       if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
       toast(file.name + ' を追加しました。');
-      await refresh();
-    } catch (error) { toast(error.message); upload.disabled = false; }
+      refreshDeferred = true;
+    } catch (error) { toast(error.message); }
+    finally {
+      upload.removeAttribute('data-uploading'); upload.value = ''; upload.disabled = false;
+      if (upload.isConnected) app.querySelector('[data-action="upload-object"]').disabled = false;
+      resumeRefresh();
+    }
   });
 }
 const siteLink = value => { try { const url = new URL(value); return `<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer"><strong>${esc(url.host)}</strong>${esc(url.pathname === '/' ? '' : url.pathname)} ↗</a>`; } catch { return esc(value); } };
@@ -634,6 +719,7 @@ function openDialog(content) {
 function closeDialog() {
   if (dialog.open) dialog.close();
   dialog.innerHTML = '';
+  resumeRefresh();
 }
 dialog.addEventListener('cancel', (event) => { event.preventDefault(); closeDialog(); });
 function bindForm(handler, container = dialog) {
@@ -954,6 +1040,7 @@ function editSecret(entry, trigger) {
     form.remove(); heading.hidden = false; row.classList.remove('renaming');
     actions.forEach(button => { button.disabled = false; });
     trigger.hidden = false; trigger.focus();
+    resumeRefresh();
   };
   cancel.addEventListener('click', close);
   form.addEventListener('keydown', event => {
@@ -974,6 +1061,7 @@ function editSecret(entry, trigger) {
       row.replaceWith(next); bindSecretValue(saved, next);
       next.querySelector('[data-action="edit-secret"]').focus();
       toast('名前を変更しました。');
+      resumeRefresh();
     } catch (failure) { if (form.isConnected) { error.textContent = failure.message; input.focus(); } }
     finally {
       saving = false; save.disabled = false; cancel.disabled = false; input.readOnly = false;
@@ -999,6 +1087,7 @@ function bindSecretValue(entry, row) {
     panel.querySelectorAll('button').forEach(button => { button.disabled = true; });
     try {
       const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
+      if (response.status === 401) await showLogin();
       if (!response.ok) throw new Error('値を取得できませんでした。');
       const bytes = new Uint8Array(await response.arrayBuffer());
       if (!panel.isConnected) return false;
@@ -1022,14 +1111,16 @@ function bindSecretValue(entry, row) {
       if (busy) return;
       const action = button.dataset.valueAction;
       if (action === 'reveal' && revealed) { clear(); show('reveal'); return; }
-      if (!await load()) return;
-      if (action === 'edit') { edit(); return; }
-      if (action === 'reveal') { revealed = !binary; show(binary ? 'edit' : 'reveal'); return; }
-      if (binary) { clear(); show('edit'); return; }
-      const copied = text;
-      if (!revealed) clear();
-      try { await navigator.clipboard.writeText(copied); toast('コピーしました。'); }
-      catch { if (panel.isConnected) panel.querySelector('[role="alert"]').textContent = 'コピーできませんでした。'; }
+      try {
+        if (!await load()) return;
+        if (action === 'edit') { edit(); return; }
+        if (action === 'reveal') { revealed = !binary; show(binary ? 'edit' : 'reveal'); return; }
+        if (binary) { clear(); show('edit'); return; }
+        const copied = text;
+        if (!revealed) clear();
+        try { await navigator.clipboard.writeText(copied); toast('コピーしました。'); }
+        catch { if (panel.isConnected) panel.querySelector('[role="alert"]').textContent = 'コピーできませんでした。'; }
+      } finally { resumeRefresh(); }
     }));
     if (focus) panel.querySelector(`[data-value-action="${focus}"]`)?.focus();
   };
@@ -1043,7 +1134,7 @@ function bindSecretValue(entry, row) {
     if (!binary) input.value = text;
     const initial = input.value;
     let saving = false;
-    const cancelEdit = () => { if (!saving) { clear(); panel.classList.remove('editing'); show('edit'); } };
+    const cancelEdit = () => { if (!saving) { clear(); panel.classList.remove('editing'); show('edit'); resumeRefresh(); } };
     cancel.addEventListener('click', cancelEdit);
     form.addEventListener('keydown', event => {
       if (event.key === 'Escape' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); cancelEdit(); }
@@ -1064,12 +1155,13 @@ function bindSecretValue(entry, row) {
         const response = await fetch(path, { method: 'PUT', credentials: 'same-origin', cache: 'no-store',
           headers: { 'content-type': 'application/octet-stream', 'if-match': etag }, body: bytes });
         const result = await response.json();
+        if (response.status === 401) await showLogin();
         if (!response.ok) throw new Error(result.error?.message || '保存できませんでした。');
         binary = decode(bytes) === null; entry = result.resource; clear();
         state.credentials = state.credentials.map(item => item.id === entry.id ? entry : item);
         if (!panel.isConnected) return;
         row.querySelector('.secret-meta').innerHTML = secretMeta(entry); panel.classList.remove('editing');
-        show('edit'); toast('保存しました。');
+        show('edit'); toast('保存しました。'); resumeRefresh();
       } catch (failure) { if (form.isConnected) error.textContent = failure instanceof TypeError ? '接続できませんでした。' : failure.message; }
       finally {
         saving = false; save.disabled = false; cancel.disabled = false; input.disabled = false;
@@ -1089,7 +1181,8 @@ document.addEventListener('click', async (event) => {
   const { action, id } = target.dataset;
   try {
     if (action === 'close-dialog') closeDialog();
-    if (action === 'retry-page') { target.disabled = true; await refresh(); }
+    if (action === 'retry-page') { target.disabled = true; try { await refresh(); } finally { if (target.isConnected) target.disabled = false; } }
+    if (action === 'retry-login') { target.disabled = true; await showLogin(); }
     if (action === 'logout') { target.disabled = true; await api('/v1/session', { method: 'DELETE', data: {} }); await showLogin(); }
     if (action === 'request-connect') {
       target.disabled = true;
@@ -1118,7 +1211,7 @@ document.addEventListener('click', async (event) => {
       const name = target.dataset.name, entry = secrets().find(item => item.name === name);
       confirmRemoval(name + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/v1/resources/' + entry.id, { method: 'DELETE', data: {} }));
     }
-    if (action === 'go-prefix') { objectPrefix = target.dataset.prefix; objectFilter = ''; objectLimit = 100; objectChosen = new Set(); render(); }
+    if (action === 'upload-object') app.querySelector('#space-upload').click();
     if (action === 'more-objects') { objectLimit += 100; render(); }
     if (action === 'less-objects') { objectLimit = 100; render(); }
     if (action === 'toggle-search') { objectSearchPrefix = !objectSearchPrefix; render(); }
@@ -1129,12 +1222,12 @@ document.addEventListener('click', async (event) => {
     }
     if (action === 'choose-object') {
       if (target.checked) objectChosen.add(target.dataset.key); else objectChosen.delete(target.dataset.key);
-      render();
+      updateObjectSelection();
     }
     if (action === 'choose-all') {
       const boxes = [...document.querySelectorAll('tbody [data-action="choose-object"]')];
       for (const box of boxes) { if (target.checked) objectChosen.add(box.dataset.key); else objectChosen.delete(box.dataset.key); }
-      render();
+      updateObjectSelection();
     }
     if (action === 'copy-url') {
       const key = chosenKeys()[0];
@@ -1188,8 +1281,13 @@ if (linkToken) {
 }
 if (isLoginConfirmation) showLoginConfirmation();
 else {
-  if ((location.search || linkToken) && resultCode !== 'review') history.replaceState(null, '', pagePath + (linkToken ? '' : location.hash));
-  try { await refresh(); } catch (error) { if (error.status !== 401) { await showLogin(); toast(error.message); } }
+  if ((location.search || linkToken) && resultCode !== 'review') {
+    const url = new URL(location.href);
+    for (const key of ['login', 'result', 'state']) url.searchParams.delete(key);
+    if (linkToken) url.hash = '';
+    history.replaceState(history.state, '', url);
+  }
+  try { await refresh(); } catch {}
   if (state && !requestId) scrollToPage(history.state?.scroll);
 }
 // What came back from an OAuth round trip, in words that hold for any service.
