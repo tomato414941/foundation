@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "gitlab",
+  "name": "GitLab",
+  "api": "https://gitlab.com/api/v4",
+  "docs": "https://docs.gitlab.com/api/rest/",
+  "console": "https://gitlab.com/-/user_settings/applications",
+  "auth_schemes": {
+    "oauth": {
+      "authorize": "https://gitlab.com/oauth/authorize",
+      "token": "https://gitlab.com/oauth/token",
+      "client_auth": "body",
+      "identity": {
+        "url": "https://gitlab.com/api/v4/user",
+        "id": "id",
+        "label": [
+          "username",
+          "email"
+        ]
+      },
+      "revoke": {
+        "url": "https://gitlab.com/oauth/revoke",
+        "style": "rfc7009"
+      },
+      "scopes": {
+        "base": [
+          "read_user"
+        ],
+        "docs": "https://docs.gitlab.com/integration/oauth_provider/#view-all-authorized-applications"
+      },
+      "injection": {
+        "GITLAB_ACCESS_TOKEN": "{access_token}",
+        "GITLAB_TOKEN_EXPIRES_AT": "{expires_at}"
+      }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Personal access token",
+          "secret": true
+        }
+      ],
+      "identity": {
+        "url": "https://gitlab.com/api/v4/user",
+        "headers": {
+          "authorization": "Bearer {token}"
+        },
+        "id": "id",
+        "label": "username"
+      },
+      "injection": {
+        "GITLAB_TOKEN": "{token}"
+      }
+    }
+  }
+}

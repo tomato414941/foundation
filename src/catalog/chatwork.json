@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "id": "chatwork",
+  "name": "Chatwork",
+  "api": "https://api.chatwork.com/v2",
+  "docs": "https://developer.chatwork.com/reference",
+  "console": "https://www.chatwork.com/service/packages/chatwork/subpackages/oauth/client_list.php",
+  "auth_schemes": {
+    "oauth": {
+      "authorize": "https://www.chatwork.com/packages/oauth2/login.php",
+      "token": "https://oauth.chatwork.com/token",
+      "identity": {
+        "url": "https://api.chatwork.com/v2/me",
+        "id": "account_id",
+        "label": [
+          "name",
+          "chatwork_id"
+        ]
+      },
+      "scopes": {
+        "base": [
+          "users.profile.me:read",
+          "offline_access"
+        ],
+        "docs": "https://developer.chatwork.com/docs/oauth"
+      },
+      "injection": {
+        "CHATWORK_ACCESS_TOKEN": "{access_token}",
+        "CHATWORK_TOKEN_EXPIRES_AT": "{expires_at}"
+      }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "APIトークン",
+          "secret": true
+        }
+      ],
+      "identity": {
+        "url": "https://api.chatwork.com/v2/me",
+        "headers": {
+          "x-chatworktoken": "{token}"
+        },
+        "id": "account_id",
+        "label": "name"
+      },
+      "injection": {
+        "CHATWORK_API_TOKEN": "{token}"
+      },
+      "hint": "Send the token in the \"X-ChatWorkToken\" header."
+    }
+  }
+}

@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { FakeOAuth2Service, SERVICE } from '../src/schemes/oauth.fixture.mjs';
 import { fixture, FakeGoogle, USER_A, USER_B } from './helpers.mjs';
-import { googleOauth } from '../src/connectors/google/index.mjs';
+import { googleOauth } from '../src/adapters/google/index.mjs';
 const READONLY = 'https://www.googleapis.com/auth/gmail.readonly', SEND = 'https://www.googleapis.com/auth/gmail.send';
 
 const key = () => 'fdn_' + randomBytes(32).toString('base64url');
 // A key nobody knows asks to act for whoever opens its request; a key that acts for someone asks them for a registration.
 const asking = { kind: 'actor', input: { name: 'laptop のAI' } };
-const registration = { kind: 'connect', input: { connector: 'google.oauth' }, purpose: '届いたメールの確認' };
+const registration = { kind: 'connect', input: { service: 'google' }, purpose: '届いたメールの確認' };
 const askingWith = ({ name, ...rest } = {}) => ({ ...asking, ...(name === undefined ? {} : { input: { name } }), ...rest });
 async function create(f, token = null, overrides = {}, base = asking) {
   token ??= (await f.become(overrides.name ?? 'laptop のAI')).token;
@@ -23,7 +24,7 @@ async function register(f, overrides = {}, agent = null) {
 }
 const approve = (f, row, overrides = {}) => f.request('/v1/requests/' + row.id + '/done', { method: 'POST', data: { confirmation_code: row.confirmation_code, ...overrides } });
 // Once approved, a machine names the person it acts for on every call, as the CLI does.
-const usable = (f, token) => f.request('/v1/holdings?kind=grant&method=authorized', { token, anonymous: true, as: USER_A });
+const usable = (f, token) => f.request('/v1/resources?kind=credential&secret=false', { token, anonymous: true, as: USER_A });
 const cancel = (f, token) => f.request('/v1/principals/me', { method: 'DELETE', token, anonymous: true, data: {} });
 const rowStatus = (f, id) => f.app.store.db.prepare('SELECT status FROM requests WHERE id=?').get(id)?.status;
 
@@ -36,7 +37,7 @@ test('A new key asks only to be approved: no access before approval, the same pr
   assert.doesNotMatch(JSON.stringify(row), /fdn_|token_hash|refresh_token/);
   assert.equal((await f.request('/requests/' + row.id, { anonymous: true, headers: { 'sec-fetch-site': 'cross-site' } })).status, 200);
   assert.equal((await f.request('/v1/requests/' + row.id, { anonymous: true })).status, 401);
-  assert.deepEqual((await f.request('/v1/holdings?kind=grant&method=authorized', { token, anonymous: true })).json.holdings, [], 'a key nobody has accepted holds nothing but itself');
+  assert.deepEqual((await f.request('/v1/resources?kind=credential&secret=false', { token, anonymous: true })).json.resources, [], 'a key nobody has accepted holds nothing but itself');
   assert.equal((await cancel(f, row.id)).status, 401);
   assert.equal((await cancel(f, key())).status, 401);
   assert.equal((await f.request('/v1/principals/me', { token, anonymous: true })).json.requests[0].id, row.id, 'a runtime may read its own request');
@@ -47,11 +48,11 @@ test('A new key asks only to be approved: no access before approval, the same pr
   assert.equal(approved.json.request.status, 'done');
   assert.doesNotMatch(approved.text, /fdn_|google-access|refresh_token|token_hash/);
   const listed = await usable(f, token);
-  assert.deepEqual(listed.json.holdings.map(a => a.id), [saved.id]);
-  assert.deepEqual(listed.json.holdings[0].outputs, ['GOOGLE_OAUTH_ACCESS_TOKEN', 'CLOUDSDK_AUTH_ACCESS_TOKEN', 'GOOGLE_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT']);
-  const delivered = await f.deliver(saved, { token, anonymous: true, as: USER_A });
+  assert.deepEqual(listed.json.resources.map(a => a.id), [saved.id]);
+  assert.deepEqual(listed.json.resources[0].variables, ['GOOGLE_OAUTH_ACCESS_TOKEN', 'CLOUDSDK_AUTH_ACCESS_TOKEN', 'GOOGLE_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT']);
+  const delivered = await f.inject(saved, { token, anonymous: true, as: USER_A });
   assert.equal(delivered.status, 200);
-  assert.equal(delivered.json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal');
+  assert.equal(delivered.json.injection.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal');
 
   assert.equal((await approve(f, row)).status, 409);
   assert.equal(f.app.principals.actorsOf(USER_A).length, 1);
@@ -63,9 +64,9 @@ test('A key not yet approved cannot ask for a registration, an approval request 
   const refused = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key(), data: registration });
   assert.equal(refused.status, 401); assert.equal(refused.json.error.code, 'not_approved');
   const { row } = await create(f);
-  const attempt = await f.request('/v1/connections', { method: 'POST', data: { connector: 'google.oauth', request_id: row.id } });
+  const attempt = await f.request('/v1/credentials', { method: 'POST', data: { service: 'google', request_id: row.id } });
   assert.equal(attempt.status, 409); assert.equal(attempt.json.error.code, 'approval_only');
-  assert.equal(f.app.grants.connections(USER_A).length, 0);
+  assert.equal(f.app.credentials.forServices(USER_A).length, 0);
   const approved = await f.issueKey();
   const bare = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: approved.token, data: { purpose: '何もない' } });
   assert.equal(bare.status, 400); assert.equal(bare.json.error.code, 'nothing_requested');
@@ -80,9 +81,9 @@ test('Request creation is idempotent, and asking for something else makes a new 
   assert.equal((await f.request('/v1/requests', { method: 'POST', token, data: askingWith({ name: 'someone else' }) })).status, 409);
   const first = await register(f);
   assert.equal((await create(f, first.token, {}, registration)).row.id, first.row.id);
-  const changed = await f.request('/v1/requests', { method: 'POST', token: first.token, data: { ...registration, input: { connector: 'google.oauth', scopes: [SEND] } } });
+  const changed = await f.request('/v1/requests', { method: 'POST', token: first.token, data: { ...registration, input: { service: 'google', scopes: [SEND] } } });
   assert.equal(changed.status, 201); assert.notEqual(changed.json.request.id, first.row.id);
-  assert.deepEqual((await f.request('/v1/requests/' + first.row.id, { token: first.token })).json.request.input, registration.input);
+  assert.deepEqual((await f.request('/v1/requests/' + first.row.id, { token: first.token })).json.request.input, { ...registration.input, auth_scheme: 'oauth' });
 });
 
 test('メール認証後は依頼のページへ戻し、外部への転送を拒否する', async t => {
@@ -106,9 +107,9 @@ test('Approval requires the confirmation code; a registration asks the service f
   const f = await fixture(t);
   const { row } = await create(f);
   assert.equal((await approve(f, row, { confirmation_code: '' })).status, 400);
-  const asked = await register(f, { input: { connector: 'google.oauth', scopes: [READONLY] } });
+  const asked = await register(f, { input: { service: 'google', scopes: [READONLY] } });
   assert.equal(asked.row.kind, 'connect'); assert.equal(asked.row.confirmation_code, undefined);
-  const escalation = await f.request('/v1/connections', { method: 'POST', data: { connector: 'google.oauth', request_id: asked.row.id, scopes: [SEND] } });
+  const escalation = await f.request('/v1/credentials', { method: 'POST', data: { service: 'google', request_id: asked.row.id, scopes: [SEND] } });
   assert.equal(escalation.status, 200, escalation.text);
   const scope = new URL(escalation.json.url).searchParams.get('scope').split(' ');
   assert.ok(scope.includes(READONLY)); assert.ok(!scope.includes(SEND), 'the page asks for what the request showed, not more');
@@ -118,25 +119,25 @@ test('Approval requires the confirmation code; a registration asks the service f
 test('A registration request stays with its owner, completes by registering, and a revoked key cannot be revived through it', async t => {
   const f = await fixture(t);
   await f.credential();
-  const { row, agent: runtime } = await register(f, { input: { connector: 'google.oauth' } });
+  const { row, agent: runtime } = await register(f, { input: { service: 'google' } });
   assert.equal(row.requester_name, 'laptop');
   const ownerCookie = 'fdn_session=' + f.app.sessions.create(f.auth.value());
   await f.login('other@example.test');
   assert.equal((await f.request('/v1/requests/' + row.id)).status, 404);
-  const flow = new URL((await f.request('/v1/connections', { method: 'POST', headers: { cookie: ownerCookie }, data: { connector: 'google.oauth', request_id: row.id } })).json.url);
+  const flow = new URL((await f.request('/v1/credentials', { method: 'POST', headers: { cookie: ownerCookie }, data: { service: 'google', request_id: row.id } })).json.url);
   await f.callback(flow, 'second', { headers: { cookie: ownerCookie } });
   const done = (await f.request('/v1/requests/' + row.id, { headers: { cookie: ownerCookie } })).json.request;
-  assert.equal(done.status, 'done'); assert.equal(f.app.grants.held(USER_A, done.result.connection_id).subject, 'second@example.test');
-  assert.equal((await usable(f, runtime.token)).json.holdings.length, 2);
+  assert.equal(done.status, 'done'); assert.equal(f.app.credentials.held(USER_A, done.result.credential_id).subject, 'second@example.test');
+  assert.equal((await usable(f, runtime.token)).json.resources.length, 2);
   const next = await create(f, runtime.token, {}, registration);
   f.app.requestActions.removePrincipal(USER_A, runtime.id);
   assert.equal((await usable(f, runtime.token)).status, 401);
   assert.equal((await f.request('/v1/requests/' + next.row.id, { headers: { cookie: ownerCookie } })).json.request.status, 'cancelled');
-  const blocked = await f.request('/v1/connections', { method: 'POST', headers: { cookie: ownerCookie }, data: { connector: 'google.oauth', request_id: next.row.id } });
+  const blocked = await f.request('/v1/credentials', { method: 'POST', headers: { cookie: ownerCookie }, data: { service: 'google', request_id: next.row.id } });
   assert.equal(blocked.status, 409);
   assert.equal(f.app.principals.actorsOf(USER_A).length, 0);
   assert.equal(f.app.principals.actorsOf(USER_B).length, 0);
-  assert.equal(f.app.grants.connections(USER_A).length, 2);
+  assert.equal(f.app.credentials.forServices(USER_A).length, 2);
 });
 
 test('An approval request belongs to the owner who approves it', async t => {
@@ -154,7 +155,7 @@ for (const end of ['deny', 'cancel', 'expire']) test(`A ${end} registration requ
   let entered, release;
   const started = new Promise(resolve => { entered = resolve; });
   f.google.exchangeHandler = () => { entered(); return new Promise(resolve => { release = resolve; }); };
-  const start = await f.request('/v1/connections', { method: 'POST', data: { connector: 'google.oauth', request_id: row.id } });
+  const start = await f.request('/v1/credentials', { method: 'POST', data: { service: 'google', request_id: row.id } });
   const callback = f.callback(new URL(start.json.url), 'new');
   await started;
   if (end === 'deny') assert.equal((await f.request('/v1/requests/' + row.id + '/deny', { method: 'POST', data: {} })).status, 200);
@@ -162,8 +163,8 @@ for (const end of ['deny', 'cancel', 'expire']) test(`A ${end} registration requ
   if (end === 'expire') f.app.store.db.prepare('UPDATE requests SET expires_at=0 WHERE id=?').run(row.id);
   release();
   const result = await callback;
-  assert.equal(result.headers.get('location'), '/requests/' + row.id + '?connection=failed');
-  assert.equal(f.app.grants.connections(USER_A).length, 1);
+  assert.equal(result.headers.get('location'), '/requests/' + row.id + '?result=failed');
+  assert.equal(f.app.credentials.forServices(USER_A).length, 1);
   if (end === 'expire') {
     assert.equal(rowStatus(f, row.id), 'pending');
     f.app.store.sweep();
@@ -188,10 +189,10 @@ test('Cross-site creation, invalid names and cross-origin approval are rejected'
 test('What a key sees reflects a connection needing attention, one removed, and its own key revoked', async t => {
   const f = await fixture(t), saved = await f.credential(), { token, row } = await create(f);
   await approve(f, row);
-  f.app.grants.reconnectRequired(f.app.grants.held(USER_A, saved.id));
-  assert.equal((await usable(f, token)).json.holdings[0].status, 'reconnect_required');
-  f.app.grants.disconnect(USER_A, saved.id);
-  assert.deepEqual((await usable(f, token)).json.holdings, []);
+  f.app.credentials.reconnectRequired(f.app.credentials.held(USER_A, saved.id));
+  assert.equal((await usable(f, token)).json.resources[0].status, 'reconnect_required');
+  f.app.credentials.disconnect(USER_A, saved.id);
+  assert.deepEqual((await usable(f, token)).json.resources, []);
   f.app.requestActions.removePrincipal(USER_A, f.app.principals.actorsOf(USER_A)[0].id);
   assert.equal((await usable(f, token)).status, 401);
 });
@@ -199,47 +200,35 @@ test('What a key sees reflects a connection needing attention, one removed, and 
 test('Unavailable services cannot register through a request; expired request records are deleted without revoking the key', async t => {
   const f = await fixture(t), saved = await f.credential(), { token, row } = await register(f);
   f.google.enabled = false;
-  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { connector: 'google.oauth', request_id: row.id } })).status, 503);
+  assert.equal((await f.request('/v1/credentials', { method: 'POST', data: { service: 'google', request_id: row.id } })).status, 503);
   f.google.enabled = true;
   f.app.store.db.prepare('UPDATE requests SET expires_at=0 WHERE id=?').run(row.id);
   f.app.store.sweep();
   assert.equal(rowStatus(f, row.id), undefined);
-  assert.equal((await usable(f, token)).json.holdings[0].id, saved.id);
+  assert.equal((await usable(f, token)).json.resources[0].id, saved.id);
 });
 
-test('独自の接続も共通の依頼・認証・受け渡し・解除の動線を利用する', async t => {
-  const google = new FakeGoogle();
-  const notes = {
-    id: 'notes.oauth', service: { name: 'Notes', icon: 'key', management_url: 'https://notes.example.test/keys', api: { base_url: 'https://notes.example.test/api', documentation_url: 'https://notes.example.test/docs' } },
-    label: 'Notesで接続', register: 'oauth', available: true,
-    access: { name: 'ノートの読み取り', description: '保存済みノート', restrictions: '変更は許可しません。' },
-    variables: ['NOTES_TOKEN'],
-    authorization: { kind: 'oauth', begin: ({ state, redirectUri }) => 'https://notes.example.test/auth?' + new URLSearchParams({ state, redirect_uri: redirectUri }),
-      async complete() { return { subject: 'notes-user', privateState: 'notes-private', facts: { scopes: ['notes.read'] }, expiresAt: null }; },
-    },
-    async obtain({ subject, privateState }) {
-      assert.equal(privateState, 'notes-private');
-      return { subject, privateState, facts: { scopes: ['notes.read'] }, expiresAt: null, credentials: { environment: { NOTES_TOKEN: 'notes-access' } } };
-    },
-  };
-  const f = await fixture(t, { google, connectors: [googleOauth(google), notes] });
-  const catalog = (await f.request('/v1/connectors', { anonymous: true })).json.connectors;
-  const listedNotes = catalog.find(item => item.id === 'notes.oauth');
-  assert.equal(listedNotes.access.name, 'ノートの読み取り'); assert.deepEqual(listedNotes.variables, ['NOTES_TOKEN']);
-  assert.doesNotMatch(JSON.stringify(catalog), /test-google-client|test-google-secret|"client_secret":/);
-  const { row, token } = await register(f, { input: { connector: 'notes.oauth' } });
-  assert.equal(row.connector.label, 'Notesで接続');
-  assert.equal(row.connector.service.name, 'Notes');
-  const start = await f.request('/v1/connections', { method: 'POST', data: { connector: 'notes.oauth', request_id: row.id } });
+test('利用者が定義したサービスも、共通の依頼・認証・受け渡しの動線を利用する', async t => {
+  const notes = new FakeOAuth2Service();
+  const f = await fixture(t, { serviceFetcher: notes.fetch });
+  const defined = await f.request('/v1/resources?kind=service&name=Notes', { method: 'PUT', data: { version: 1, name: 'Notes', api: 'https://service.example/api',
+    auth_schemes: { oauth: { authorize: SERVICE.authorize_url, token: SERVICE.token_url, identity: { url: SERVICE.userinfo_url }, injection: { NOTES_TOKEN: '{access_token}' } } } } });
+  assert.equal(defined.status, 200, defined.text);
+  const service = defined.json.resource.id;
+  const app = (await f.request('/v1/resources?kind=app&name=' + encodeURIComponent('Notesのアプリ'), { method: 'PUT', data: { service, client_id: 'notes-client', client_secret: 'notes-secret' } })).json.resource;
+  const { row, token } = await register(f, { input: { service, app: app.id } });
+  assert.equal(row.service.name, 'Notes');
+  assert.deepEqual(row.app, { id: app.id, name: 'Notesのアプリ', foundation: false });
+  const start = await f.request('/v1/credentials', { method: 'POST', data: { request_id: row.id } });
   assert.equal(start.status, 200, start.text);
-  const callback = await f.request('/oauth/notes.oauth/callback?state=' + new URL(start.json.url).searchParams.get('state') + '&code=notes-code');
-  assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?connection=connected');
-  const saved = f.app.grants.connections(USER_A)[0];
-  assert.equal(saved.connector, 'notes.oauth'); assert.equal(saved.subject, 'notes-user');
-  const delivered = await f.deliver(saved, { token });
-  assert.deepEqual(delivered.json.delivery.environment, { NOTES_TOKEN: 'notes-access' });
-  const listed = (await f.request('/v1/holdings?kind=grant&method=authorized', { token })).json.holdings[0];
-  assert.deepEqual(listed.outputs, ['NOTES_TOKEN']); assert.equal(listed.api.documentation_url, 'https://notes.example.test/docs');
+  const callback = await f.callback(new URL(start.json.url), 'personal');
+  assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?result=connected');
+  const saved = f.app.credentials.forServices(USER_A)[0];
+  assert.equal(saved.service, service); assert.equal(saved.subject, 'user:id-personal');
+  const injected = await f.inject(saved, { token });
+  assert.deepEqual(injected.json.injection.environment, { NOTES_TOKEN: 'access-personal-0' });
+  const listed = (await f.request('/v1/resources?kind=credential&secret=false', { token })).json.resources[0];
+  assert.deepEqual(listed.variables, ['NOTES_TOKEN']); assert.equal(listed.service.name, 'Notes');
 });
 
 test('The approval page never receives the confirmation code; entry is normalized and locked after repeated mistakes', async t => {
@@ -277,7 +266,7 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
   const me = await f.request('/v1/principals/me', { token, anonymous: true });
   assert.equal(me.status, 200, me.text);
   assert.equal(me.json.principal.name, 'laptop の claude');
-  assert.deepEqual((await usable(f, token)).json.holdings.map(item => item.id), [saved.id]);
+  assert.deepEqual((await usable(f, token)).json.resources.map(item => item.id), [saved.id]);
   assert.doesNotMatch(me.text, /token_hash|fdn_/);
   // A later request from the same key is shown under the registered name, whatever the runtime calls itself.
   const next = await create(f, token, { to: USER_A, name: 'laptop の Claude Code' }, registration);
@@ -294,9 +283,9 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
   assert.equal(f.app.principals.actorsOf(USER_A)[0].name, '作業用 Claude');
   // Leaving revokes the key but keeps the credentials.
   assert.equal((await f.request('/v1/principals/me', { method: 'DELETE', token, anonymous: true, data: {} })).status, 200);
-  assert.equal((await f.request('/v1/holdings?kind=grant&method=authorized', { token, anonymous: true })).status, 401);
+  assert.equal((await f.request('/v1/resources?kind=credential&secret=false', { token, anonymous: true })).status, 401);
   assert.equal(f.app.principals.actorsOf(USER_A).length, 0);
-  assert.equal(f.app.grants.connections(USER_A).length, 1);
+  assert.equal(f.app.credentials.forServices(USER_A).length, 1);
 });
 
 test('依頼元が認証失敗と再試行の経過を機密入力なしで確認する', async t => {
@@ -316,21 +305,21 @@ test('依頼元が認証失敗と再試行の経過を機密入力なしで確�
   const asked = await create(f, token, { to: USER_A }, registration);
   const view = async (id = asked.row.id, as = token) => (await f.request('/v1/requests/' + id, { token: as, anonymous: true })).json.request;
   await f.request('/v1/requests/' + asked.row.id);
-  const start = await f.request('/v1/connections', { method: 'POST', data: { connector: 'google.oauth', request_id: asked.row.id } });
+  const start = await f.request('/v1/credentials', { method: 'POST', data: { service: 'google', request_id: asked.row.id } });
   const authorization = new URL(start.json.url), callback = new URL(authorization.searchParams.get('redirect_uri'));
   await f.request(callback.pathname + '?state=' + authorization.searchParams.get('state') + '&error=access_denied');
-  const again = await f.request('/v1/connections', { method: 'POST', data: { connector: 'google.oauth', request_id: asked.row.id } });
+  const again = await f.request('/v1/credentials', { method: 'POST', data: { service: 'google', request_id: asked.row.id } });
   await f.callback(new URL(again.json.url), 'personal');
   events = (await view()).events;
   assert.deepEqual(events.map(item => item.event), ['page_viewed', 'connect_started', 'connect_failed', 'connect_started', 'connected']);
-  assert.equal(events[2].code, 'authorization_denied'); assert.match(events[2].message, /認証は許可されません/); assert.equal(events[2].connector, 'google.oauth');
+  assert.equal(events[2].code, 'authorization_denied'); assert.match(events[2].message, /認証は許可されません/); assert.equal(events[2].service, 'google');
   assert.ok(events.every(item => Number.isFinite(item.at)));
   assert.doesNotMatch(JSON.stringify(events), /headers|personal-example|google-access|refresh_token|fdn_|ZZZZ/);
   assert.equal((await view()).status, 'done');
   // Another key never sees this request; a cancelled request records it.
   const other = await f.issueKey('other');
   assert.equal((await f.request('/v1/requests/' + asked.row.id, { token: other.token, anonymous: true })).status, 404);
-  const next = await create(f, token, { kind: 'connect', input: { connector: 'google.oauth' } }, registration);
+  const next = await create(f, token, { kind: 'connect', input: { service: 'google' } }, registration);
   assert.equal((await f.request('/v1/requests/' + next.row.id, { method: 'DELETE', token, anonymous: true, data: {} })).status, 200);
   assert.deepEqual((await view(next.row.id)).events.map(item => item.event), ['cancelled']);
 });
@@ -362,17 +351,17 @@ test('A key may have several requests open at once, each at its own address, and
   const f = await fixture(t), issued = await f.issueKey(), other = await f.issueKey('other');
   const asks = [];
   for (const scopes of [[READONLY], [SEND]]) {
-    const made = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { kind: 'connect', input: { connector: 'google.oauth', scopes }, purpose: scopes[0] } });
+    const made = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { kind: 'connect', input: { service: 'google', scopes }, purpose: scopes[0] } });
     assert.equal(made.status, 201, made.text); asks.push(made.json.request);
   }
   assert.notEqual(asks[0].id, asks[1].id);
   assert.equal(asks[1].verification_uri, f.base + '/requests/' + asks[1].id);
-  const again = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { kind: 'connect', input: { connector: 'google.oauth', scopes: [READONLY] }, purpose: READONLY } });
+  const again = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { kind: 'connect', input: { service: 'google', scopes: [READONLY] }, purpose: READONLY } });
   assert.equal(again.json.request.id, asks[0].id, 'asking again for the same thing is the same request');
   assert.deepEqual((await f.request('/v1/requests?status=pending', { token: issued.token })).json.requests.map(row => row.id), asks.map(row => row.id));
   assert.deepEqual((await f.request('/v1/requests', { token: other.token })).json.requests, []);
-  for (let n = 2; n < 10; n++) assert.equal((await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { kind: 'connect', input: { connector: 'google.oauth' }, purpose: 'more ' + n } })).status, 201);
-  const full = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { kind: 'connect', input: { connector: 'google.oauth' }, purpose: 'one too many' } });
+  for (let n = 2; n < 10; n++) assert.equal((await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { kind: 'connect', input: { service: 'google' }, purpose: 'more ' + n } })).status, 201);
+  const full = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { kind: 'connect', input: { service: 'google' }, purpose: 'one too many' } });
   assert.equal(full.status, 409); assert.equal(full.json.error.code, 'too_many_pending');
   assert.equal((await f.request('/v1/requests?status=nope', { token: issued.token })).json.error.code, 'invalid_status');
 });

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { configuration } from '../src/config.mjs';
 import { Store } from '../src/store.mjs';
 import { Vault, digest } from '../src/crypto.mjs';
-import { fixture, resources, KEY, USER_A } from './helpers.mjs';
+import { fixture, modules, KEY, USER_A } from './helpers.mjs';
 
 async function directory(t) { const path = await mkdtemp(join(tmpdir(), 'foundation-auth-test-')); t.after(() => rm(path, { recursive: true, force: true })); return path; }
 
@@ -19,12 +19,12 @@ test('Gmail and Supabase secrets are encrypted; keys and cookies never persist i
   const contents = await readFile(database);
   for (const value of ['google-access-personal', 'refresh-personal', 'supabase-access-owner', 'supabase-refresh-owner', agent.token, cookie.slice(12)]) assert.ok(!contents.includes(Buffer.from(value)), value);
   const second = new Store(database, KEY); t.after(() => second.close());
-  const persisted = resources(second);
-  assert.equal(persisted.grants.state(persisted.grants.held(USER_A, account.id)).private_state.refresh_token, 'refresh-personal');
+  const persisted = modules(second);
+  assert.equal(persisted.credentials.state(persisted.credentials.held(USER_A, account.id)).private_state.refresh_token, 'refresh-personal');
   assert.ok(persisted.sessions.get(cookie.slice(12)));
-  assert.equal(persisted.principals.actsFor(second.db.prepare('SELECT principal_id FROM credentials WHERE hash=?').get(digest(agent.token)).principal_id)[0].id, USER_A);
+  assert.equal(persisted.principals.actsFor(second.db.prepare('SELECT principal_id FROM access_keys WHERE hash=?').get(digest(agent.token)).principal_id)[0].id, USER_A);
   const tables = second.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((item) => item.name);
-  assert.ok(!tables.some((name) => /mail|message|log|body/.test(name)));
+  assert.ok(!tables.some((name) => name !== 'audit_log' && /mail|message|log|body/.test(name)), 'nothing of an email is kept');
   assert.equal((await stat(database)).mode & 0o777, 0o600);
 });
 
@@ -51,21 +51,21 @@ test('Configuration creates a private encryption key; losing the key fails close
 
 test('A new database is created in the current shape; a database of any other shape is refused and left unchanged', async (t) => {
   const dir = await directory(t), path = join(dir, 'state.sqlite');
-  const created = new Store(path, KEY), live = resources(created);
-  const connection = live.grants.writeConnection(USER_A, { connector: 'google.oauth', method: 'authorized', subject: 'kept@example.test', label: 'kept', state: { private_state: { refresh_token: 'keep-private' }, facts: {}, expires_at: null } });
-  live.grants.put(USER_A, { name: 'gmail/kept/access-token', content: Buffer.from('google-access') });
+  const created = new Store(path, KEY), live = modules(created);
+  const connection = live.credentials.keep(USER_A, { service: 'google', scheme: 'oauth', subject: 'kept@example.test', label: 'kept', state: { private_state: { refresh_token: 'keep-private' }, facts: {}, expires_at: null } });
+  live.credentials.put(USER_A, { name: 'gmail/kept/access-token', content: Buffer.from('google-access') });
   live.principals.ensure(USER_A);
   const runtime = live.principals.create(USER_A, { name: 'runtime' });
   live.principals.relate(runtime.id, 'actor', 'principal', USER_A);
   const agent = { ...runtime, ...live.principals.issue(runtime.id, { kind: 'key' }) };
   live.principals.authenticate(agent.token);
-  const lastUsed = live.principals.credentials(runtime.id)[0].last_used_at;
+  const lastUsed = live.principals.keys(runtime.id)[0].last_used_at;
   created.close();
   const reopened = new Store(path, KEY); t.after(() => reopened.close());
-  const persisted = resources(reopened);
-  assert.equal(persisted.grants.state(persisted.grants.held(USER_A, connection.id)).private_state.refresh_token, 'keep-private');
-  assert.deepEqual(persisted.grants.list(USER_A, { method: 'given' }).map(row => row.name), ['gmail/kept/access-token']);
-  assert.equal(reopened.db.prepare('SELECT last_used_at FROM credentials WHERE hash=?').get(digest(agent.token)).last_used_at, lastUsed);
+  const persisted = modules(reopened);
+  assert.equal(persisted.credentials.state(persisted.credentials.held(USER_A, connection.id)).private_state.refresh_token, 'keep-private');
+  assert.deepEqual(persisted.credentials.list(USER_A, { secret: true }).map(row => row.name), ['gmail/kept/access-token']);
+  assert.equal(reopened.db.prepare('SELECT last_used_at FROM access_keys WHERE hash=?').get(digest(agent.token)).last_used_at, lastUsed);
   for (const shape of ['CREATE TABLE accounts(id TEXT); INSERT INTO accounts VALUES (\'existing\');', 'CREATE TABLE accounts(id TEXT); PRAGMA user_version=999;', 'PRAGMA user_version=1;', 'CREATE TABLE entries(id TEXT);']) {
     const other = join(dir, 'other-' + Math.random().toString(36).slice(2) + '.sqlite'), db = new DatabaseSync(other);
     db.exec(shape); db.close();

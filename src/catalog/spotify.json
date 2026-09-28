@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "spotify",
+  "name": "Spotify",
+  "api": "https://api.spotify.com/v1",
+  "docs": "https://developer.spotify.com/documentation/web-api",
+  "console": "https://developer.spotify.com/dashboard",
+  "auth_schemes": {
+    "oauth": {
+      "authorize": "https://accounts.spotify.com/authorize",
+      "token": "https://accounts.spotify.com/api/token",
+      "identity": {
+        "url": "https://api.spotify.com/v1/me",
+        "id": "id",
+        "label": [
+          "email",
+          "display_name"
+        ]
+      },
+      "scopes": {
+        "base": [],
+        "docs": "https://developer.spotify.com/documentation/web-api/concepts/scopes"
+      },
+      "injection": {
+        "SPOTIFY_ACCESS_TOKEN": "{access_token}",
+        "SPOTIFY_TOKEN_EXPIRES_AT": "{expires_at}"
+      }
+    }
+  }
+}

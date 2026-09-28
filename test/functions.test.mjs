@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, USER_A, json } from './helpers.mjs';
 
-const route = name => '/v1/holdings?kind=grant&name=' + encodeURIComponent(name);
-const own = name => '/v1/holdings?kind=grant&name=' + encodeURIComponent(name);
+const route = name => '/v1/resources?kind=credential&name=' + encodeURIComponent(name);
+const own = name => '/v1/resources?kind=credential&name=' + encodeURIComponent(name);
 
 test('Every accepted name round-trips literally through HTTP, including Unicode, separators and dot segments', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
@@ -11,16 +11,16 @@ test('Every accepted name round-trips literally through HTTP, including Unicode,
   for (const [index, name] of names.entries()) {
     const content = 'value-' + index;
     const put = await f.request(route(name), { method: 'PUT', token, raw: content });
-    assert.equal(put.status, 200, put.text); assert.equal(put.json.holding.name, name);
-    assert.equal((await f.read('grant', name, { token })).text, content);
-    assert.equal((await f.read('grant', name)).text, content);
+    assert.equal(put.status, 200, put.text); assert.equal(put.json.resource.name, name);
+    assert.equal((await f.read('credential', name, { token })).text, content);
+    assert.equal((await f.read('credential', name)).text, content);
   }
-  assert.deepEqual(new Set((await f.request('/v1/holdings?kind=grant', { token })).json.holdings.map(row => row.name)), new Set(names));
-  const renamed = await f.request('/v1/holdings/' + (await f.lookup('grant', '..')).json.holding.id, { method: 'PATCH', data: { name: ' ../新しい名=, ' } });
-  assert.equal(renamed.status, 200); assert.equal(renamed.json.holding.name, ' ../新しい名=, ');
-  assert.equal((await f.read('grant', ' ../新しい名=, ', { token })).text, 'value-3');
-  assert.equal((await f.drop('grant', ' ../新しい名=, ', { token })).status, 200);
-  assert.equal((await f.read('grant', ' ../新しい名=, ', { token })).status, 404);
+  assert.deepEqual(new Set((await f.request('/v1/resources?kind=credential', { token })).json.resources.map(row => row.name)), new Set(names));
+  const renamed = await f.request('/v1/resources/' + (await f.lookup('credential', '..')).json.resource.id, { method: 'PATCH', data: { name: ' ../新しい名=, ' } });
+  assert.equal(renamed.status, 200); assert.equal(renamed.json.resource.name, ' ../新しい名=, ');
+  assert.equal((await f.read('credential', ' ../新しい名=, ', { token })).text, 'value-3');
+  assert.equal((await f.drop('credential', ' ../新しい名=, ', { token })).status, 200);
+  assert.equal((await f.read('credential', ' ../新しい名=, ', { token })).status, 404);
 });
 
 test('Name prefix filtering uses literal, case-sensitive text rather than wildcard or directory semantics', async t => {
@@ -28,8 +28,8 @@ test('Name prefix filtering uses literal, case-sensitive text rather than wildca
   const names = ['a', 'a_', 'a_2', 'a%', 'ab', 'ab/c', 'A_', 'a/?'];
   for (const name of names) await f.request(route(name), { method: 'PUT', token, raw: 'x' });
   for (const [prefix, expected] of [['a_', ['a_', 'a_2']], ['a%', ['a%']], ['A', ['A_']], ['ab', ['ab', 'ab/c']]]) {
-    const listed = await f.request('/v1/holdings?kind=grant&prefix=' + encodeURIComponent(prefix), { token });
-    assert.deepEqual(listed.json.holdings.map(row => row.name), expected);
+    const listed = await f.request('/v1/resources?kind=credential&prefix=' + encodeURIComponent(prefix), { token });
+    assert.deepEqual(listed.json.resources.map(row => row.name), expected);
   }
 });
 
@@ -53,5 +53,5 @@ test('A storage request preserves comma and punctuation names in its completion 
   assert.equal(complete.status, 200, complete.text);
   const done = await f.request('/v1/requests/' + asked.json.request.id, { token });
   assert.deepEqual(done.json.request.result.names, names);
-  for (const name of names) assert.equal((await f.read('grant', name)).text, 'value-' + name);
+  for (const name of names) assert.equal((await f.read('credential', name)).text, 'value-' + name);
 });

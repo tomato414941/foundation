@@ -25,8 +25,8 @@ test('未ログインのAIに接続先・接続手順・利用可能なAPIを案
   assert.match(page.text, /npm install -g @tomato414941\/foundation/);
   assert.match(page.text, /request\.verification_uri and request\.confirmation_code/);
   assert.match(page.text, /foundation api GET \/v1\/principals\/me/);
-  assert.match(page.text, /GET \/v1\/holdings/);
-  assert.match(page.text, /gmail\.readonly/);
+  assert.match(page.text, /GET \/v1\/resources/);
+  assert.match(page.text, /google  Google  oauth/);
 });
 
 test('公開用の接続先を案内し、HEADでも案内の形式を確認できる', async t => {
@@ -43,7 +43,7 @@ test('公開用の接続先を案内し、HEADでも案内の形式を確認で�
 
 test('認証情報と接続の画面をそれぞれのURLから開く', async t => {
   const f = await fixture(t);
-  for (const path of ['/credentials', '/connections']) {
+  for (const path of ['/secrets', '/services']) {
     const page = await f.request(path, { anonymous: true });
     assert.equal(page.status, 200, path);
     assert.match(page.headers.get('content-type'), /^text\/html/);
@@ -54,7 +54,7 @@ test('認証情報と接続の画面をそれぞれのURLから開く', async t 
 
 test('ログインを終えると開こうとしていた認証情報または接続の画面へ戻る', async t => {
   const f = await fixture(t);
-  for (const [path, destination] of [['/credentials', '/credentials'], ['/connections', '/connections']]) {
+  for (const [path, destination] of [['/secrets', '/secrets'], ['/services', '/services']]) {
     const email = 'return-' + destination.slice(1) + '@example.test';
     await f.auth.sendLink(email, f.base + '/login/confirm');
     const result = await f.request('/v1/login/verify', { method: 'POST', data: { email, token_hash: f.auth.links.get(email).code, return_to: path } });
@@ -67,28 +67,28 @@ test('同じURLでCookieとBearerを受け付け、Bearerがある場合はそ�
   const f = await fixture(t), first = await f.credential(), key = await f.issueKey();
   await f.login('second@example.test');
   await f.credential('work');
-  const browser = await f.request('/v1/holdings?kind=grant&method=authorized');
-  assert.equal(browser.json.holdings[0].subject, 'work@example.test');
-  const agent = await f.request('/v1/holdings?kind=grant&method=authorized', { token: key.token });
-  assert.deepEqual(agent.json.holdings.map(item => item.id), [first.id]);
-  const anonymous = await f.request('/v1/connectors', { anonymous: true });
-  assert.deepEqual(anonymous.json.connectors.map(item => item.id), ['google.oauth']);
+  const browser = await f.request('/v1/resources?kind=credential&secret=false');
+  assert.equal(browser.json.resources[0].subject, 'work@example.test');
+  const agent = await f.request('/v1/resources?kind=credential&secret=false', { token: key.token });
+  assert.deepEqual(agent.json.resources.map(item => item.id), [first.id]);
+  const anonymous = await f.request('/v1/services', { anonymous: true });
+  assert.deepEqual(anonymous.json.services.map(item => item.id), ['google']);
 });
 
 test('解釈できないAuthorizationが付いた要求をCookieで代用せず拒否する', async t => {
   const f = await fixture(t);
   await f.credential();
   for (const authorization of ['Basic invalid', 'Bearer', '', 'Bearer invalid token', 'Bearer not-an-approved-key']) {
-    const read = await f.request('/v1/holdings?kind=grant&method=authorized', { headers: { authorization } });
+    const read = await f.request('/v1/resources?kind=credential&secret=false', { headers: { authorization } });
     assert.equal(read.status, 401, authorization || '(empty header)');
-    const write = await f.request('/v1/holdings?kind=grant&name=must-not-write', { method: 'PUT', raw: 'untrusted', headers: { authorization } });
+    const write = await f.request('/v1/resources?kind=credential&name=must-not-write', { method: 'PUT', raw: 'untrusted', headers: { authorization } });
     assert.equal(write.status, 401, authorization || '(empty header)');
   }
-  assert.deepEqual((await f.request('/v1/holdings?kind=grant&method=given')).json.holdings, []);
+  assert.deepEqual((await f.request('/v1/resources?kind=credential&secret=true')).json.resources, []);
 });
 
 test('Cookieによる更新は同一Originに限定し、CLIのBearerではOriginなしで更新する', async t => {
-  const f = await fixture(t), key = await f.issueKey(), path = '/v1/holdings?kind=grant&name=url-review&as=' + USER_A;
+  const f = await fixture(t), key = await f.issueKey(), path = '/v1/resources?kind=credential&name=url-review&as=' + USER_A;
   const request = async headers => {
     const response = await fetch(f.base + path, { method: 'PUT', headers: { 'content-type': 'application/octet-stream', ...headers }, body: 'fixture-value' });
     await response.arrayBuffer();
@@ -98,5 +98,5 @@ test('Cookieによる更新は同一Originに限定し、CLIのBearerではOrigi
   assert.equal(await request({ cookie: f.cookie(), origin: 'https://elsewhere.example' }), 403);
   assert.equal(await request({ authorization: 'Bearer ' + key.token, origin: 'https://elsewhere.example' }), 403);
   assert.equal(await request({ authorization: 'Bearer ' + key.token }), 200);
-  assert.equal((await f.read('grant', 'url-review')).text, 'fixture-value');
+  assert.equal((await f.read('credential', 'url-review')).text, 'fixture-value');
 });

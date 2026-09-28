@@ -139,17 +139,17 @@ test('外部サイトからの送信・検証・送信画面の変更を拒否�
 
 test('不正な入力と外部への戻り先を拒否し、許可されたページへ戻す', async t => {
   const f = await fixture(t, { login: false });
-  await send(f, 'new@example.test', undefined, '/credentials');
+  await send(f, 'new@example.test', undefined, '/secrets');
   const link = f.auth.links.get('new@example.test');
-  assert.equal(new URL(link.url).searchParams.get('return_to'), '/credentials');
+  assert.equal(new URL(link.url).searchParams.get('return_to'), '/secrets');
   for (const changes of [{ email: '' }, { email: 'not-an-email' }, { token_hash: 'short' }, { token_hash: ['ambiguous'] }, { return_to: 'https://evil.example' }, { return_to: '//evil.example' }, { return_to: '/login/confirm' }]) {
     const result = await f.request('/v1/login/verify', { method: 'POST', data: { email: link.email, token_hash: link.code, ...changes } });
     assert.equal(result.status, 400, result.text);
   }
   assert.equal((await f.request('/v1/login/verify', { method: 'POST', raw: 'token_hash=' + link.code, type: 'application/x-www-form-urlencoded' })).status, 415);
-  const result = await f.request('/v1/login/verify', { method: 'POST', data: { email: link.email, token_hash: link.code, return_to: '/credentials' } });
+  const result = await f.request('/v1/login/verify', { method: 'POST', data: { email: link.email, token_hash: link.code, return_to: '/secrets' } });
   assert.equal(result.status, 200);
-  assert.equal(result.json.return_to, '/credentials');
+  assert.equal(result.json.return_to, '/secrets');
 });
 
 test('再送を1分待ち、再送後は最新のメールの鍵でログインする', async t => {

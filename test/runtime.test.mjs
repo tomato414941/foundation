@@ -19,7 +19,7 @@ const execute = (args, env) => new Promise((resolve, reject) => {
 // Everything else it does over HTTP, with the key in that file.
 async function storedInputs(f) {
   for (const [name, value] of [['first input', 'google-access-personal'], ['second=入力:1', 'personal@example.test']]) {
-    const saved = await f.request('/v1/holdings?kind=grant&name=' + encodeURIComponent(name), { method: 'PUT', raw: value });
+    const saved = await f.request('/v1/resources?kind=credential&name=' + encodeURIComponent(name), { method: 'PUT', raw: value });
     assert.equal(saved.status, 200, saved.text);
   }
   return ['GOOGLE_OAUTH_ACCESS_TOKEN=first input', 'GOOGLE_ACCOUNT_EMAIL=second=入力:1'];
@@ -48,11 +48,11 @@ test('コマンドが作った非公開ファイルを名前どおりに保存�
   assert.equal(run.code, 0, run.err);
   assert.match(run.err, /Saved output as/);
   await assert.rejects(stat(dirname(run.out.trim())), { code: 'ENOENT' });
-  const direct = await f.read('grant', (output.name), { token: f.runtime.token });
+  const direct = await f.read('credential', (output.name), { token: f.runtime.token });
   assert.equal(direct.status, 403); assert.equal(direct.json.error.code, 'forbidden');
-  const owner = await f.read('grant', output.name);
+  const owner = await f.read('credential', output.name);
   assert.equal(owner.status, 200);
-  assert.deepEqual(f.app.grants.content(f.app.grants.find(USER_A, output.name)), content);
+  assert.deepEqual(f.app.credentials.content(f.app.credentials.find(USER_A, output.name)), content);
   const used = await execute(['exec', '--inputs', JSON.stringify([output]), '--', process.execPath, '-e', `
     const fs = require('node:fs');
     if (!fs.readFileSync(process.env.AUTH_FILE).equals(Buffer.from('${content.toString('base64')}', 'base64'))) process.exit(2);
@@ -65,7 +65,7 @@ test('コマンドが作った非公開ファイルを名前どおりに保存�
 
 test('入力ファイルと出力ファイルを別々に渡し、成功した出力で指定した値を置き換える', async t => {
   const f = await outputFixture(t);
-  await f.request('/v1/holdings?kind=grant&name=login%20config', { method: 'PUT', raw: 'previous-secret' });
+  await f.request('/v1/resources?kind=credential&name=login%20config', { method: 'PUT', raw: 'previous-secret' });
   const input = { name: outputSpec.name, as: 'INPUT_FILE', filename: outputSpec.filename };
   const run = await execute(['exec', '--inputs', JSON.stringify([input]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
     const fs = require('node:fs');
@@ -75,7 +75,7 @@ test('入力ファイルと出力ファイルを別々に渡し、成功した�
   `], f.env);
   assert.equal(run.code, 0, run.err);
   for (const path of JSON.parse(run.out)) await assert.rejects(stat(dirname(path)), { code: 'ENOENT' });
-  const saved = await f.read('grant', 'login config');
+  const saved = await f.read('credential', 'login config');
   assert.equal(saved.text, 'replacement-secret');
   assert.doesNotMatch(run.out + run.err, /previous-secret|replacement-secret/);
 });
@@ -96,7 +96,7 @@ test('出力指定とFoundationの承認を確認してからコマンドを実�
 
 test('コマンドが失敗すると一時ファイルを片づけて既存の保存値を維持する', async t => {
   const f = await outputFixture(t);
-  await f.request('/v1/holdings?kind=grant&name=login%20config', { method: 'PUT', raw: 'previous-secret' });
+  await f.request('/v1/resources?kind=credential&name=login%20config', { method: 'PUT', raw: 'previous-secret' });
   const input = { name: outputSpec.name, as: 'INPUT_FILE', filename: 'input' };
   const run = await execute(['exec', '--inputs', JSON.stringify([input]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
     require('node:fs').writeFileSync(process.env.AUTH_FILE, 'partial-secret');
@@ -105,7 +105,7 @@ test('コマンドが失敗すると一時ファイルを片づけて既存の�
   `], f.env);
   assert.equal(run.code, 7);
   for (const path of JSON.parse(run.out)) await assert.rejects(stat(dirname(path)), { code: 'ENOENT' });
-  assert.equal((await f.read('grant', 'login config')).text, 'previous-secret');
+  assert.equal((await f.read('credential', 'login config')).text, 'previous-secret');
   assert.doesNotMatch(run.out + run.err, /partial-secret|previous-secret/);
 });
 
@@ -127,7 +127,7 @@ test('空・過大・公開・リンク・特殊ファイルの出力を安全�
     const run = await execute(['exec', '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `const fs = require('node:fs'), p = process.env.AUTH_FILE; console.log(p); ${script}`], f.env);
     assert.equal(run.code, 1, run.err); assert.match(run.err, expected);
     await assert.rejects(stat(dirname(run.out.trim())), { code: 'ENOENT' });
-    assert.equal((await f.read('grant', 'login config')).status, 404);
+    assert.equal((await f.read('credential', 'login config')).status, 404);
     assert.doesNotMatch(run.out + run.err, /outside-secret|public-secret/);
   }
   assert.equal(await readFile(outside, 'utf8'), 'outside-secret');
@@ -135,15 +135,15 @@ test('空・過大・公開・リンク・特殊ファイルの出力を安全�
 
 test('保存に失敗したときだけ復旧用の非公開出力を残し、入力は片づける', async t => {
   const f = await outputFixture(t);
-  await f.request('/v1/holdings?kind=grant&name=input', { method: 'PUT', raw: 'input-secret' });
-  const put = f.app.grants.put;
-  f.app.grants.put = () => fail(503, 'storage_unavailable', 'generated-secret');
+  await f.request('/v1/resources?kind=credential&name=input', { method: 'PUT', raw: 'input-secret' });
+  const put = f.app.credentials.put;
+  f.app.credentials.put = () => fail(503, 'storage_unavailable', 'generated-secret');
   const run = await execute(['exec', '--inputs', JSON.stringify([{ name: 'input', as: 'INPUT_FILE', filename: 'input' }]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
     require('node:fs').writeFileSync(process.env.AUTH_FILE, 'generated-secret');
     require('node:fs').writeFileSync(require('node:path').join(require('node:path').dirname(process.env.AUTH_FILE), 'unneeded-cache'), 'cache');
     console.log(JSON.stringify([process.env.INPUT_FILE, process.env.AUTH_FILE]));
   `], f.env);
-  f.app.grants.put = put;
+  f.app.credentials.put = put;
   assert.equal(run.code, 1); assert.match(run.err, /retained for recovery/);
   const [inputPath, outputPath] = JSON.parse(run.out);
   assert.ok(run.err.includes(outputPath));
@@ -152,10 +152,10 @@ test('保存に失敗したときだけ復旧用の非公開出力を残し、�
   assert.equal((await stat(outputPath)).mode & 0o777, 0o600);
   assert.deepEqual(await readdir(dirname(outputPath)), [outputSpec.filename]);
   assert.equal(await readFile(outputPath, 'utf8'), 'generated-secret');
-  assert.equal((await f.read('grant', 'login config')).status, 404);
-  const retried = await execute(['api', 'PUT', '/v1/holdings?kind=grant&name=login%20config', '--from', outputPath], f.env);
+  assert.equal((await f.read('credential', 'login config')).status, 404);
+  const retried = await execute(['api', 'PUT', '/v1/resources?kind=credential&name=login%20config', '--from', outputPath], f.env);
   assert.equal(retried.code, 0, retried.err);
-  assert.equal((await f.read('grant', 'login config')).text, 'generated-secret');
+  assert.equal((await f.read('credential', 'login config')).text, 'generated-secret');
   assert.doesNotMatch(run.out + run.err + retried.out + retried.err, /generated-secret|input-secret/);
 });
 
@@ -176,7 +176,7 @@ test('中断を子プロセスに伝えて一時ファイルを片づけ、途�
   assert.equal(await done, 1);
   assert.match(err, /interrupted/);
   await assert.rejects(stat(dirname(out.trim())), { code: 'ENOENT' });
-  assert.equal((await f.read('grant', 'login config')).status, 404);
+  assert.equal((await f.read('credential', 'login config')).status, 404);
 });
 
 test('The runtime hands what is kept to the selected process only', async (t) => {
@@ -265,14 +265,14 @@ test('--helpでコマンドを案内し、guideで接続先の公開ガイドを
   const offline = await execute(['guide'], { FOUNDATION_URL: '', XDG_CONFIG_HOME: join(tmpdir(), 'foundation-no-config') });
   assert.equal(offline.code, 0, offline.err);
   assert.match(offline.err, /No Foundation server configured.*bundled reference from CLI/);
-  assert.match(offline.out, /GET \/v1\/connectors lists what this server can obtain itself/);
+  assert.match(offline.out, /GET \/v1\/services lists the services this server knows/);
   assert.match(offline.out, /Nothing here needs a shell/);
   assert.doesNotMatch(offline.out, /gmail/);
   const online = await execute(['guide'], { FOUNDATION_URL: f.base });
   assert.equal(online.code, 0, online.err);
   const published = await f.request('/start', { anonymous: true });
   assert.equal(online.out, published.text.trimEnd() + '\n');
-  assert.match(online.out, /google.oauth  Google \/ Googleアカウントの操作  outputs: GOOGLE_OAUTH_ACCESS_TOKEN/);
+  assert.match(online.out, /google  Google  oauth \(Foundation's app\)/);
 });
 
 test('CLIを更新せずに接続先の新しいガイドを読み、取得できない場合は同梱版と明示する', async t => {
@@ -330,7 +330,7 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   assert.match(connected.out, /confirmation_code/);
   assert.deepEqual(JSON.parse(await readFile(join(dir, 'config', 'foundation', 'config.json'), 'utf8')), { url: f.base });
   const help = await run(foundation, ['guide'], env);
-  assert.match(help.out, /google.oauth/);
+  assert.match(help.out, /google  Google  oauth/);
   const waiting = await run(foundation, ['api', 'GET', '/v1/principals/me'], env);
   assert.match(waiting.out, /"status":"pending"/); assert.doesNotMatch(waiting.out, /fdn_/);
   const request = JSON.parse(connected.out.split('\n\nKey file')[0]).request;
@@ -352,10 +352,10 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   `], env);
   assert.equal(saved.code, 0, saved.err);
   assert.equal(saved.out.trim(), 'output-ready');
-  assert.equal((await f.read('grant', 'installed login')).text, '//registry.npmjs.org/:_authToken=fake-install-token\n');
+  assert.equal((await f.read('credential', 'installed login')).text, '//registry.npmjs.org/:_authToken=fake-install-token\n');
   assert.doesNotMatch(saved.out + saved.err, /fake-install-token/);
   const moved = await run(foundation, ['guide'], { ...env, FOUNDATION_URL: 'http://127.0.0.1:9' });
-  assert.doesNotMatch(moved.out, /google.oauth/, 'FOUNDATION_URL wins over the remembered server');
+  assert.doesNotMatch(moved.out, /google  Google  oauth/, 'FOUNDATION_URL wins over the remembered server');
 });
 
 test('connect on a key already approved only remembers the server', async t => {

@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "atlassian",
+  "name": "Atlassian",
+  "api": "https://api.atlassian.com",
+  "docs": "https://developer.atlassian.com/cloud/",
+  "console": "https://developer.atlassian.com/console/myapps/",
+  "auth_schemes": {
+    "oauth": {
+      "authorize": "https://auth.atlassian.com/authorize",
+      "token": "https://auth.atlassian.com/oauth/token",
+      "authorize_params": {
+        "audience": "api.atlassian.com",
+        "prompt": "consent"
+      },
+      "client_auth": "body",
+      "token_format": "json",
+      "identity": {
+        "url": "https://api.atlassian.com/me",
+        "id": "account_id",
+        "label": [
+          "email",
+          "name"
+        ]
+      },
+      "scopes": {
+        "base": [
+          "offline_access",
+          "read:me"
+        ],
+        "docs": "https://developer.atlassian.com/cloud/jira/platform/scopes-for-oauth-2-3LO-and-forge-apps/"
+      },
+      "injection": {
+        "ATLASSIAN_ACCESS_TOKEN": "{access_token}",
+        "ATLASSIAN_TOKEN_EXPIRES_AT": "{expires_at}"
+      },
+      "hint": "Find the site (cloud ID) with GET https://api.atlassian.com/oauth/token/accessible-resources, then call https://api.atlassian.com/ex/jira/<cloudid>/... or /ex/confluence/<cloudid>/..."
+    }
+  }
+}

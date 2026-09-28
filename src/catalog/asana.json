@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "asana",
+  "name": "Asana",
+  "api": "https://app.asana.com/api/1.0",
+  "docs": "https://developers.asana.com/reference/rest-api-reference",
+  "console": "https://app.asana.com/0/my-apps",
+  "auth_schemes": {
+    "oauth": {
+      "authorize": "https://app.asana.com/-/oauth_authorize",
+      "token": "https://app.asana.com/-/oauth_token",
+      "client_auth": "body",
+      "identity": {
+        "url": "https://app.asana.com/api/1.0/users/me",
+        "id": "data.gid",
+        "label": [
+          "data.email",
+          "data.name"
+        ]
+      },
+      "revoke": {
+        "url": "https://app.asana.com/-/oauth_revoke",
+        "style": "rfc7009"
+      },
+      "scopes": {
+        "base": [],
+        "docs": "https://developers.asana.com/docs/oauth-scopes"
+      },
+      "injection": {
+        "ASANA_ACCESS_TOKEN": "{access_token}",
+        "ASANA_TOKEN_EXPIRES_AT": "{expires_at}"
+      }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Personal access token",
+          "secret": true
+        }
+      ],
+      "identity": {
+        "url": "https://app.asana.com/api/1.0/users/me",
+        "headers": {
+          "authorization": "Bearer {token}"
+        },
+        "id": "data.gid",
+        "label": [
+          "data.email",
+          "data.name"
+        ]
+      },
+      "injection": {
+        "ASANA_TOKEN": "{token}"
+      }
+    }
+  }
+}

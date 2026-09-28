@@ -1,144 +1,156 @@
-export const SCHEMA_VERSION = 26;
+import { randomUUID } from 'node:crypto';
+
+export const SCHEMA_VERSION = 27;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
-  // Who asked for a connection is a record, not a column on the connection.
-  21: 'ALTER TABLE holdings DROP COLUMN kept_by;',
-  22: migrateGrantsAndObjects,
-  // A grant is told apart by its name and its method; no provider or tags are kept about it.
-  23: 'DROP TABLE grant_tags; ALTER TABLE grants DROP COLUMN provider;',
-  24: migrateGoogleConnections,
-  25: holdAppsAsTheirOwnKind,
-  26: nameEveryConnectionsAppAndScopes,
+  27: holdByService,
 };
 
-// Every connection names the app it was made through - Foundation's, until now - and records the scopes it asked
-// for - what it was granted, for those made before scopes were asked for. An app says what is not secret apart
-// from what is sealed.
-function nameEveryConnectionsAppAndScopes(store) {
-  const db = store.db, vault = store.vault, throughApps = ['github.oauth', 'google.oauth', 'cloudflare.oauth', 'ebay.oauth'];
-  db.exec("ALTER TABLE apps ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'");
-  const marks = throughApps.map(() => '?').join(',');
-  db.prepare(`UPDATE grants SET app_id='foundation' WHERE app_id IS NULL AND method='authorized' AND connector IN (${marks})`).run(...throughApps);
-  const rows = db.prepare(`SELECT g.holding_id, g.state, h.holder_id FROM grants g JOIN holdings h ON h.id=g.holding_id WHERE g.method='authorized' AND g.connector IN (${marks})`).all(...throughApps);
-  const update = db.prepare('UPDATE grants SET state=? WHERE holding_id=?');
-  for (const row of rows) {
-    const binding = `grant:${row.holder_id}:${row.holding_id}`, state = vault.open(row.state, binding);
-    if (state.requested_scopes || !Array.isArray(state.facts?.scopes)) continue;
-    state.requested_scopes = [...new Set(state.facts.scopes)].sort();
-    update.run(vault.seal(state, binding), row.holding_id);
-  }
-}
-
-// An OAuth app becomes a holding of its own kind, and a connection says which app it was made through. SQLite
-// changes a CHECK only by making the table again: the children of holdings move to new tables first, so dropping
-// the old ones never cascades into data. Nothing else refers to requests.
-function holdAppsAsTheirOwnKind(store) {
-  store.db.exec(`
-    CREATE TABLE holdings_next (
-      id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('grant','object','app')), name TEXT NOT NULL,
+// The names for what is kept became those of the rest of the field, and a credential says the service it works at
+// and the scheme it came by, where a connector said both in one name:
+//   holdings -> resources      grants -> credentials (a given grant is a secret: no service)
+//   credentials (of principals) -> access_keys      records -> audit_log      lines onto 'holding' -> 'resource'
+// A generic OAuth 2.0 app named its service in its own settings; that service becomes a service its holder
+// described, and the app and its credentials point at it. Each credential's state is sealed again under its new
+// binding. Flows in progress named connectors, and are dropped: whoever was connecting starts again.
+function holdByService(store) {
+  const db = store.db, vault = store.vault;
+  const serviceOf = connector => {
+    if (connector === 'aws.role') return ['aws', 'role'];
+    const match = /^([a-z][a-z0-9-]*)\.oauth$/.exec(connector ?? '');
+    if (!match) throw new Error('Migration cannot place connector ' + connector);
+    return [match[1], 'oauth'];
+  };
+  const rename = value => value === undefined || value === null ? value : value === 'oauth2' ? 'oauth2' : serviceOf(value)[0];
+  const grants = db.prepare('SELECT g.*, h.holder_id FROM grants g JOIN holdings h ON h.id=g.holding_id').all();
+  const apps = db.prepare('SELECT a.*, h.holder_id, h.name, h.created_at, h.updated_at FROM apps a JOIN holdings h ON h.id=a.holding_id').all();
+  db.exec(`
+    ALTER TABLE credentials RENAME TO access_keys;
+    DROP INDEX IF EXISTS credentials_principal; CREATE INDEX access_keys_principal ON access_keys(principal_id);
+    CREATE TABLE resources (
+      id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('credential','object','app','service')), name TEXT NOT NULL,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
-    INSERT INTO holdings_next SELECT id, holder_id, kind, name, created_at, updated_at FROM holdings;
-    CREATE TABLE grants_next (
-      holding_id TEXT PRIMARY KEY REFERENCES holdings_next(id) ON DELETE CASCADE,
-      method TEXT NOT NULL CHECK(method IN ('given','authorized','delegated')),
-      connector TEXT, app_id TEXT, subject TEXT, status TEXT NOT NULL DEFAULT 'usable' CHECK(status IN ('usable','reconnect_required','disconnecting')),
-      generation INTEGER NOT NULL DEFAULT 1, size INTEGER NOT NULL DEFAULT 0, state BLOB
+    CREATE TABLE credentials (
+      resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+      service TEXT, auth_scheme TEXT CHECK(auth_scheme IN ('oauth','token','role')),
+      app_id TEXT, subject TEXT, status TEXT NOT NULL DEFAULT 'usable' CHECK(status IN ('usable','reconnect_required','disconnecting')),
+      generation INTEGER NOT NULL DEFAULT 1, size INTEGER NOT NULL DEFAULT 0, state BLOB,
+      CHECK((service IS NULL) = (auth_scheme IS NULL))
     );
-    INSERT INTO grants_next (holding_id, method, connector, subject, status, generation, size, state)
-      SELECT holding_id, method, connector, subject, status, generation, size, state FROM grants;
-    CREATE TABLE objects_next (holding_id TEXT PRIMARY KEY REFERENCES holdings_next(id) ON DELETE CASCADE, size INTEGER NOT NULL DEFAULT 0, type TEXT);
+    CREATE TABLE objects_next (resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE, size INTEGER NOT NULL DEFAULT 0, type TEXT);
+    CREATE TABLE apps_next (
+      resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+      service TEXT NOT NULL, client_id TEXT NOT NULL, secret BLOB NOT NULL, settings TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE TABLE services (resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE, definition TEXT NOT NULL);
+    INSERT INTO resources SELECT id, holder_id, CASE kind WHEN 'grant' THEN 'credential' ELSE kind END, name, created_at, updated_at FROM holdings;
     INSERT INTO objects_next SELECT holding_id, size, type FROM objects;
-    CREATE TABLE apps (
-      holding_id TEXT PRIMARY KEY REFERENCES holdings_next(id) ON DELETE CASCADE,
-      connector TEXT NOT NULL, client_id TEXT NOT NULL, secret BLOB NOT NULL
-    );
-    DROP TABLE grants; DROP TABLE objects; DROP TABLE holdings;
-    ALTER TABLE holdings_next RENAME TO holdings; ALTER TABLE grants_next RENAME TO grants; ALTER TABLE objects_next RENAME TO objects;
-    CREATE INDEX holdings_holder ON holdings(holder_id, kind, name);
-    CREATE UNIQUE INDEX holdings_object_name ON holdings(holder_id, name) WHERE kind='object';
-    CREATE UNIQUE INDEX holdings_app_name ON holdings(holder_id, name) WHERE kind='app';
-    CREATE INDEX grants_app ON grants(app_id) WHERE app_id IS NOT NULL;
-    CREATE TABLE requests_next (
-      id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,
-      kind TEXT NOT NULL CHECK(kind IN ('actor','store','connect','app')), input TEXT NOT NULL,
-      purpose TEXT NOT NULL, steps TEXT NOT NULL, code TEXT, attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, result TEXT, reason TEXT,
-      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','denied','cancelled')),
-      created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
-    );
-    INSERT INTO requests_next SELECT id, from_id, to_id, kind, input, purpose, steps, code, attempts, progress, result, reason, status, created_at, expires_at FROM requests;
-    DROP TABLE requests; ALTER TABLE requests_next RENAME TO requests;
-    CREATE INDEX requests_from ON requests(from_id, created_at);
-    CREATE INDEX requests_to ON requests(to_id, created_at);
   `);
-}
-
-// Gmail (one connector per read range) and Google Cloud were Google connections under fixed scopes. Now there is
-// one Google connection, asking for the scopes the holder chose, and naming the account by its address. Each old
-// connection keeps its id and asks for what it had, plus what names the account; its tokens cannot say who the
-// account is (or came from another OAuth client), so the holder connects it again once.
-function migrateGoogleConnections(store) {
-  const db = store.db, vault = store.vault, base = ['openid', 'https://www.googleapis.com/auth/userinfo.email'];
-  const rows = db.prepare("SELECT g.holding_id, g.connector, g.subject, g.state, h.holder_id FROM grants g JOIN holdings h ON h.id=g.holding_id WHERE g.connector IN ('gmail.readonly','gmail.metadata','gmail.read-send','gcp.oauth')").all();
-  const update = db.prepare("UPDATE grants SET connector='google.oauth', subject=?, state=?, status=CASE status WHEN 'disconnecting' THEN status ELSE 'reconnect_required' END, generation=generation+1 WHERE holding_id=?");
-  for (const row of rows) {
-    const binding = `grant:${row.holder_id}:${row.holding_id}`, state = vault.open(row.state, binding);
-    const granted = Array.isArray(state.facts?.scopes) ? state.facts.scopes : [];
-    state.requested_scopes = [...new Set([...base, ...granted.map(scope => scope === 'email' ? base[1] : scope)])].sort();
-    // Google Cloud named the account by its Google ID; its address was its label.
-    const email = row.connector === 'gcp.oauth' ? String(state.facts?.label || '').toLowerCase() : row.subject;
-    update.run(/^[^\s@]+@[^\s@]+$/.test(email) ? email : row.subject, vault.seal(state, binding), row.holding_id);
+  // A generic app's service, described by its holder under the app's own name.
+  const described = new Map();
+  const insertResource = db.prepare('INSERT INTO resources (id,holder_id,kind,name,created_at,updated_at) VALUES (?,?,?,?,?,?)');
+  const insertService = db.prepare('INSERT INTO services (resource_id,definition) VALUES (?,?)');
+  const insertApp = db.prepare('INSERT INTO apps_next (resource_id,service,client_id,secret,settings) VALUES (?,?,?,?,?)');
+  for (const app of apps) {
+    if (app.connector !== 'oauth2') { insertApp.run(app.holding_id, serviceOf(app.connector)[0], app.client_id, app.secret, app.settings); continue; }
+    const settings = JSON.parse(app.settings), id = randomUUID();
+    const definition = { version: 1, name: settings.service_name, ...(settings.api_base_url ? { api: settings.api_base_url } : {}), auth_schemes: { oauth: {
+      authorize: settings.authorize_url, token: settings.token_url,
+      ...(settings.userinfo_url ? { identity: { url: settings.userinfo_url } } : {}), ...(settings.revoke_url ? { revoke: { url: settings.revoke_url, style: 'rfc7009' } } : {}),
+      injection: { OAUTH_ACCESS_TOKEN: '{access_token}', OAUTH_EXPIRES_AT: '{expires_at}' } } } };
+    insertResource.run(id, app.holder_id, 'service', app.name, app.created_at, app.updated_at);
+    insertService.run(id, JSON.stringify(definition));
+    insertApp.run(app.holding_id, id, app.client_id, app.secret, '{}');
+    described.set(app.holding_id, id);
   }
-}
-
-// A held thing was one row for every kind, with the columns of each kind side by side. Now the row says only
-// that it is held; what it is (a grant, or an object) has a table of its own. A secret becomes a grant given
-// by hand; a connection becomes a grant the service authorized; an object stays an object. The sealed content
-// is opened under the binding it had and sealed again under the grant's.
-function migrateGrantsAndObjects(store) {
-  const db = store.db, vault = store.vault;
-  const rows = db.prepare('SELECT * FROM holdings').all();
+  const insertCredential = db.prepare('INSERT INTO credentials (resource_id,service,auth_scheme,app_id,subject,status,generation,size,state) VALUES (?,?,?,?,?,?,?,?,?)');
+  for (const grant of grants) {
+    const from = `grant:${grant.holder_id}:${grant.holding_id}`, to = `credential:${grant.holder_id}:${grant.holding_id}`;
+    if (grant.method === 'given') {
+      insertCredential.run(grant.holding_id, null, null, null, null, grant.status, grant.generation, grant.size, vault.sealBytes(vault.openBytes(grant.state, from), to));
+      continue;
+    }
+    const [service, scheme] = grant.connector === 'oauth2' ? [described.get(grant.app_id), 'oauth'] : serviceOf(grant.connector);
+    if (!service) throw new Error('Migration cannot place a generic connection without its app: ' + grant.holding_id);
+    insertCredential.run(grant.holding_id, service, scheme, grant.app_id, grant.subject, grant.status, grant.generation, grant.size, vault.seal(vault.open(grant.state, from), to));
+  }
+  // Lines onto what is held point at resources; the audit log speaks of credentials, keys and injections.
   db.exec(`
-    DROP INDEX IF EXISTS holdings_holder; DROP INDEX IF EXISTS holdings_name;
-    ALTER TABLE holdings RENAME TO holdings_old;
-    CREATE TABLE holdings (id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('grant','object')), name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-    CREATE INDEX holdings_holder ON holdings(holder_id, kind, name);
-    CREATE UNIQUE INDEX holdings_object_name ON holdings(holder_id, name) WHERE kind='object';
-    CREATE TABLE grants (
-      holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE,
-      method TEXT NOT NULL CHECK(method IN ('given','authorized','delegated')), provider TEXT,
-      connector TEXT, subject TEXT, status TEXT NOT NULL DEFAULT 'usable' CHECK(status IN ('usable','reconnect_required','disconnecting')),
-      generation INTEGER NOT NULL DEFAULT 1, size INTEGER NOT NULL DEFAULT 0, state BLOB
+    DROP TABLE grants; DROP TABLE objects; DROP TABLE apps; DROP TABLE holdings;
+    ALTER TABLE objects_next RENAME TO objects; ALTER TABLE apps_next RENAME TO apps;
+    CREATE INDEX resources_holder ON resources(holder_id, kind, name);
+    CREATE UNIQUE INDEX resources_object_name ON resources(holder_id, name) WHERE kind='object';
+    CREATE UNIQUE INDEX resources_app_name ON resources(holder_id, name) WHERE kind='app';
+    CREATE UNIQUE INDEX resources_service_name ON resources(holder_id, name) WHERE kind='service';
+    CREATE INDEX credentials_app ON credentials(app_id) WHERE app_id IS NOT NULL;
+    CREATE TABLE relations_next (
+      subject_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, relation TEXT NOT NULL CHECK(relation IN ('owner','actor','viewer','editor')),
+      object_type TEXT NOT NULL CHECK(object_type IN ('principal','resource')), object_id TEXT NOT NULL,
+      alias TEXT, scope TEXT, created_at TEXT NOT NULL,
+      PRIMARY KEY (subject_id, relation, object_type, object_id)
     );
-    CREATE TABLE grant_tags (holding_id TEXT NOT NULL REFERENCES holdings(id) ON DELETE CASCADE, tag TEXT NOT NULL, PRIMARY KEY (holding_id, tag));
-    CREATE TABLE objects (holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE, size INTEGER NOT NULL DEFAULT 0, type TEXT);
+    INSERT INTO relations_next SELECT subject_id, relation, CASE object_type WHEN 'holding' THEN 'resource' ELSE object_type END, object_id, alias, scope, created_at FROM relations;
+    DROP TABLE relations; ALTER TABLE relations_next RENAME TO relations;
+    CREATE INDEX relations_object ON relations(object_type, object_id, relation);
+    CREATE UNIQUE INDEX relations_alias ON relations(subject_id, relation, alias) WHERE alias IS NOT NULL;
+    CREATE TABLE audit_log (
+      id TEXT PRIMARY KEY, at TEXT NOT NULL, actor_id TEXT NOT NULL, action TEXT NOT NULL,
+      object_type TEXT NOT NULL, object_id TEXT NOT NULL, detail TEXT NOT NULL
+    );
+    CREATE INDEX audit_log_actor ON audit_log(actor_id, at);
+    CREATE INDEX audit_log_object ON audit_log(object_type, object_id, at);
+    DELETE FROM oauth_flows;
   `);
-  const holding = db.prepare('INSERT INTO holdings (id,holder_id,kind,name,created_at,updated_at) VALUES (?,?,?,?,?,?)');
-  const given = db.prepare("INSERT INTO grants (holding_id,method,size,state) VALUES (?,'given',?,?)");
-  const authorized = db.prepare("INSERT INTO grants (holding_id,method,provider,connector,subject,status,generation,state) VALUES (?,'authorized',?,?,?,?,?,?)");
-  const object = db.prepare('INSERT INTO objects (holding_id,size,type) VALUES (?,?,?)');
-  for (const row of rows) {
-    holding.run(row.id, row.holder_id, row.kind === 'object' ? 'object' : 'grant', row.name, row.created_at, row.updated_at);
-    const binding = `grant:${row.holder_id}:${row.id}`;
-    if (row.kind === 'secret') given.run(row.id, row.size, vault.sealBytes(vault.openBytes(row.content, `entry:${row.holder_id}:${row.id}`), binding));
-    else if (row.kind === 'connection') authorized.run(row.id, row.connector.split('.')[0], row.connector, row.subject, row.status === 'connected' ? 'usable' : row.status, row.generation, vault.seal(vault.open(row.content, `connection:${row.holder_id}:${row.id}`), binding));
-    else object.run(row.id, row.size, row.type);
+  const ACTIONS = { 'connection.created': 'credential.created', 'connection.renewed': 'credential.renewed', 'connection.removed': 'credential.removed',
+    delivery: 'injection', 'credential.issued': 'key.issued', 'credential.revoked': 'key.revoked' };
+  const TYPES = { holding: 'resource', grant: 'credential' };
+  // A detail that named a connector names its service; one that named a principal's credential names its key.
+  const detail = (action, value) => {
+    const next = { ...value };
+    if ('connector' in next) { next.service = rename(next.connector); delete next.connector; }
+    if (action === 'credential.revoked' && 'credential' in next) { next.key = next.credential; delete next.credential; }
+    if ('connections_stopped' in next) { next.credentials_stopped = next.connections_stopped; delete next.connections_stopped; }
+    return next;
+  };
+  const insertEntry = db.prepare('INSERT INTO audit_log (id,at,actor_id,action,object_type,object_id,detail) VALUES (?,?,?,?,?,?,?)');
+  for (const row of db.prepare('SELECT * FROM records').all()) {
+    insertEntry.run(row.id, row.at, row.actor_id, ACTIONS[row.action] ?? row.action, TYPES[row.object_type] ?? row.object_type, row.object_id, JSON.stringify(detail(row.action, JSON.parse(row.detail))));
   }
-  db.exec('DROP TABLE holdings_old;');
+  db.exec('DROP TABLE records;');
+  // Requests to connect or to register an app named a connector and a connection; they name a service, a scheme and
+  // a credential. What happened to them names services.
+  const renamed = value => {
+    if (Array.isArray(value)) return value.map(renamed);
+    if (!value || typeof value !== 'object') return value;
+    const next = {};
+    for (const [key, one] of Object.entries(value)) {
+      if (key === 'connector') next.service = rename(one);
+      else if (key === 'connection_id') next.credential_id = one;
+      else next[key] = renamed(one);
+    }
+    return next;
+  };
+  const update = db.prepare('UPDATE requests SET input=?, result=?, progress=? WHERE id=?');
+  for (const row of db.prepare("SELECT id, kind, input, result, progress FROM requests WHERE kind IN ('connect','app') OR progress LIKE '%connector%'").all()) {
+    const input = renamed(JSON.parse(row.input));
+    if (row.kind === 'connect' && input.service !== undefined && input.auth_scheme === undefined) input.auth_scheme = input.service === 'aws' ? 'role' : 'oauth';
+    update.run(JSON.stringify(input), row.result === null ? null : JSON.stringify(renamed(JSON.parse(row.result))), row.progress === null ? null : JSON.stringify(renamed(JSON.parse(row.progress))), row.id);
+  }
 }
 
 export const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE principals (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
-  CREATE TABLE credentials (
+  CREATE TABLE access_keys (
     id TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
     kind TEXT NOT NULL CHECK(kind IN ('key','link')), scope TEXT, expires_at INTEGER, created_at TEXT NOT NULL, last_used_at TEXT
   );
-  CREATE INDEX credentials_principal ON credentials(principal_id);
+  CREATE INDEX access_keys_principal ON access_keys(principal_id);
   CREATE TABLE relations (
     subject_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, relation TEXT NOT NULL CHECK(relation IN ('owner','actor','viewer','editor')),
-    object_type TEXT NOT NULL CHECK(object_type IN ('principal','holding')), object_id TEXT NOT NULL,
+    object_type TEXT NOT NULL CHECK(object_type IN ('principal','resource')), object_id TEXT NOT NULL,
     alias TEXT, scope TEXT, created_at TEXT NOT NULL,
     PRIMARY KEY (subject_id, relation, object_type, object_id)
   );
@@ -159,31 +171,37 @@ export const SCHEMA = `
   );
   CREATE INDEX requests_from ON requests(from_id, created_at);
   CREATE INDEX requests_to ON requests(to_id, created_at);
-  CREATE TABLE holdings (
-    id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('grant','object','app')), name TEXT NOT NULL,
+  -- What a holder holds: one row each, and a row in the table of its kind.
+  CREATE TABLE resources (
+    id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('credential','object','app','service')), name TEXT NOT NULL,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   );
-  CREATE INDEX holdings_holder ON holdings(holder_id, kind, name);
-  CREATE UNIQUE INDEX holdings_object_name ON holdings(holder_id, name) WHERE kind='object';
-  CREATE UNIQUE INDEX holdings_app_name ON holdings(holder_id, name) WHERE kind='app';
-  CREATE TABLE grants (
-    holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE,
-    method TEXT NOT NULL CHECK(method IN ('given','authorized','delegated')),
-    connector TEXT, app_id TEXT, subject TEXT, status TEXT NOT NULL DEFAULT 'usable' CHECK(status IN ('usable','reconnect_required','disconnecting')),
-    generation INTEGER NOT NULL DEFAULT 1, size INTEGER NOT NULL DEFAULT 0, state BLOB
+  CREATE INDEX resources_holder ON resources(holder_id, kind, name);
+  CREATE UNIQUE INDEX resources_object_name ON resources(holder_id, name) WHERE kind='object';
+  CREATE UNIQUE INDEX resources_app_name ON resources(holder_id, name) WHERE kind='app';
+  CREATE UNIQUE INDEX resources_service_name ON resources(holder_id, name) WHERE kind='service';
+  -- A credential for a service (by the scheme it came by), or a secret (no service).
+  CREATE TABLE credentials (
+    resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+    service TEXT, auth_scheme TEXT CHECK(auth_scheme IN ('oauth','token','role')),
+    app_id TEXT, subject TEXT, status TEXT NOT NULL DEFAULT 'usable' CHECK(status IN ('usable','reconnect_required','disconnecting')),
+    generation INTEGER NOT NULL DEFAULT 1, size INTEGER NOT NULL DEFAULT 0, state BLOB,
+    CHECK((service IS NULL) = (auth_scheme IS NULL))
   );
-  CREATE INDEX grants_app ON grants(app_id) WHERE app_id IS NOT NULL;
-  CREATE TABLE objects (holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE, size INTEGER NOT NULL DEFAULT 0, type TEXT);
-  -- An OAuth app someone holds: which service it is for, its client ID, and its sealed secret (and eBay's RuName).
+  CREATE INDEX credentials_app ON credentials(app_id) WHERE app_id IS NOT NULL;
+  CREATE TABLE objects (resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE, size INTEGER NOT NULL DEFAULT 0, type TEXT);
+  -- An OAuth app someone holds: which service it is for, its client ID, what else is said of it, and its sealed secret.
   CREATE TABLE apps (
-    holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE,
-    connector TEXT NOT NULL, client_id TEXT NOT NULL, secret BLOB NOT NULL, settings TEXT NOT NULL DEFAULT '{}'
+    resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+    service TEXT NOT NULL, client_id TEXT NOT NULL, secret BLOB NOT NULL, settings TEXT NOT NULL DEFAULT '{}'
   );
-  CREATE TABLE records (
+  -- A service a holder described, for one Foundation's catalog does not know.
+  CREATE TABLE services (resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE, definition TEXT NOT NULL);
+  CREATE TABLE audit_log (
     id TEXT PRIMARY KEY, at TEXT NOT NULL, actor_id TEXT NOT NULL, action TEXT NOT NULL,
     object_type TEXT NOT NULL, object_id TEXT NOT NULL, detail TEXT NOT NULL
   );
-  CREATE INDEX records_actor ON records(actor_id, at);
-  CREATE INDEX records_object ON records(object_type, object_id, at);
+  CREATE INDEX audit_log_actor ON audit_log(actor_id, at);
+  CREATE INDEX audit_log_object ON audit_log(object_type, object_id, at);
   PRAGMA user_version = ${SCHEMA_VERSION};
 `;

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "aws",
+  "name": "AWS",
+  "api": "https://aws.amazon.com/",
+  "docs": "https://docs.aws.amazon.com/",
+  "console": "https://console.aws.amazon.com/",
+  "auth_schemes": {
+    "role": {
+      "adapter": "aws",
+      "hint": "Delivered as AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN (valid for an hour) plus AWS_DEFAULT_REGION; the AWS CLI and SDKs read them directly. Inject again for fresh ones. What the role may do is the IAM policies the owner chose when creating it (AdministratorAccess unless changed)."
+    }
+  }
+}

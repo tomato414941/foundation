@@ -11,7 +11,7 @@ export function validity(minutes) {
 // Temporary feedback to the requesting AI. Values entered by the owner never belong here.
 export function progress(previous, event, detail = {}) {
   const entry = { at: Date.now(), event: String(event).slice(0, 40) };
-  for (const name of ['connector', 'code']) if (detail[name] != null) entry[name] = String(detail[name]).slice(0, 64);
+  for (const name of ['service', 'code']) if (detail[name] != null) entry[name] = String(detail[name]).slice(0, 64);
   if (detail.message != null) entry.message = String(detail.message).slice(0, 300);
   return JSON.stringify([...events(previous), entry].slice(-40));
 }

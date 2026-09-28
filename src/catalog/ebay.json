@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "id": "ebay",
+  "name": "eBay",
+  "logo": "ebay",
+  "api": "https://api.ebay.com",
+  "docs": "https://developer.ebay.com/develop/apis",
+  "console": "https://developer.ebay.com/my/keys",
+  "auth_schemes": {
+    "oauth": {
+      "adapter": "ebay",
+      "hint": "Use EBAY_ACCESS_TOKEN as a Bearer token with production eBay APIs. Scopes are full eBay scope URLs, such as https://api.ebay.com/oauth/api_scope/sell.inventory; only scopes enabled for the application can be granted. Taxonomy APIs may require a separate application token."
+    }
+  }
+}

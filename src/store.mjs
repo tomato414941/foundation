@@ -46,7 +46,7 @@ export class Store {
   }
   sweep() {
     this.db.prepare('DELETE FROM oauth_flows WHERE expires_at<=?').run(Date.now());
-    this.db.prepare('DELETE FROM credentials WHERE expires_at IS NOT NULL AND expires_at<=?').run(Date.now());
+    this.db.prepare('DELETE FROM access_keys WHERE expires_at IS NOT NULL AND expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM requests WHERE expires_at<=?').run(Date.now());
   }

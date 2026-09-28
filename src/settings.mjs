@@ -4,7 +4,7 @@ import { prepare as prepareFetch, send as sendFetch } from './fetch.mjs';
 
 // What a principal that hands its own users to Foundation needs to say about itself: where its page is
 // (return), where to send a user when a link is no good (refresh), and where it hears that a request finished
-// (webhook, signed). As with Stripe. Nothing here is a holding or a line; it is the principal's own setup.
+// (webhook, signed). As with Stripe. Nothing here is a resource or a line; it is the principal's own setup.
 const now = () => new Date().toISOString();
 const token = prefix => prefix + randomBytes(32).toString('base64url');
 

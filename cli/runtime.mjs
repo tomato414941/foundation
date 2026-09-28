@@ -107,7 +107,7 @@ Commands:
                                        Send one request to the Foundation API with the key attached.
   exec <ENV>=<name> [...] -- <command> [args...]
                                        Run a command with saved values in its environment.
-  exec --inputs '<json>' -- <command>  The same, with files, structured inputs, or a connected grant by id.
+  exec --inputs '<json>' -- <command>  The same, with files, structured inputs, or a credential for a service by id.
   exec --output '<json>' -- <command>  Also save a file the command writes.
   guide                                Read the server's API guide (bundled reference when offline).
   version                              Print the version.
@@ -141,7 +141,7 @@ async function main() {
     return;
   }
   const separatorAt = args.indexOf('--'), command = separatorAt >= 0 ? args.slice(separatorAt + 1) : [];
-  // Names remain literal. Inputs deliver bytes; an optional output saves one generated file.
+  // Names remain literal. Inputs inject bytes; an optional output saves one generated file.
   let names = [], output;
   if (action === 'exec' && separatorAt > 0) {
     const parsed = parseArgs({ args: args.slice(0, separatorAt), options: { inputs: { type: 'string' }, output: { type: 'string' } }, strict: true, allowPositionals: true });
@@ -153,7 +153,7 @@ async function main() {
       if (at < 1) throw new Error('Specify the environment variable explicitly: ENV=name');
       return { name: value.slice(at + 1), as: value.slice(0, at) };
     });
-    // A connected grant names its own variables, so an input may leave `as` out; a given one must say where it goes.
+    // A credential for a service names its own variables, so an input may leave `as` out; a secret must say where it goes.
     if (!Array.isArray(names) || names.length > 16 || names.some(item => !item || typeof item.name !== 'string' || !item.name || (item.as !== undefined && !validEnvName(item.as)))) throw new Error('Each input needs a name and, when given, a non-reserved environment variable in as.');
     const chosen = names.map(item => item.as).filter(value => value !== undefined);
     if (new Set(chosen).size !== chosen.length) throw new Error('Each input needs a different environment variable.');
@@ -230,18 +230,18 @@ async function main() {
     console.log('\nKey file: ' + keyPath + '\nServer: ' + url.origin + (connectTo !== undefined ? ' (saved to ' + configPath() + ')' : '') + '\nEverything else is HTTP: Authorization: Bearer <the contents of that file>');
     return;
   }
-  // Nothing runs before someone has accepted this key: a key that acts for nobody reaches only its own empty holdings,
+  // Nothing runs before someone has accepted this key: a key that acts for nobody reaches only its own empty resources,
   // and the person it asked has yet to answer.
   const current = await send('/v1/principals/me', undefined, { method: 'GET' });
   if (!current.acts_for?.length) throw new Error('Foundation request failed (401, not_approved). This key acts for nobody yet' + (current.requests?.[0] ? '; it is waiting for approval at ' + current.requests[0].verification_uri : '') + '.');
-  // Whose holdings a run reaches: the one this key acts for, or the one named when it acts for several.
+  // Whose resources a run reaches: the one this key acts for, or the one named when it acts for several.
   const holder = process.env.FOUNDATION_AS || (current.acts_for.length === 1 ? current.acts_for[0].id : null);
   if (!holder) throw new Error('This key acts for several principals. Set FOUNDATION_AS=<principal id> to say which one this run is for.');
   const forHolder = target => target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(holder);
-  let delivery;
-  if (names.length) ({ delivery } = await send(forHolder('/v1/deliveries'), { names }));
-  else delivery = { environment: {}, files: [] };
-  if (!delivery || typeof delivery.environment !== 'object' || !Array.isArray(delivery.files)) throw new Error('Foundation returned an invalid delivery.');
+  let injection;
+  if (names.length) ({ injection } = await send(forHolder('/v1/injections'), { names }));
+  else injection = { environment: {}, files: [] };
+  if (!injection || typeof injection.environment !== 'object' || !Array.isArray(injection.files)) throw new Error('Foundation returned an invalid injection.');
   // What each of them sets is the server's to say; this applies it and refuses anything it may not set.
   const environment = { ...process.env };
   delete environment.FOUNDATION_RUNTIME_KEY_FILE;
@@ -250,15 +250,15 @@ async function main() {
     if (typeof value !== 'string' || /[\x00\r\n]/.test(value) || value.length > 16384) throw new Error('Foundation returned an invalid value for ' + name + '.');
     environment[name] = value;
   };
-  for (const [name, value] of Object.entries(delivery.environment)) assign(name, value);
-  const fileNames = new Set(), variables = new Set(Object.keys(delivery.environment));
-  for (const file of delivery.files) {
+  for (const [name, value] of Object.entries(injection.environment)) assign(name, value);
+  const fileNames = new Set(), variables = new Set(Object.keys(injection.environment));
+  for (const file of injection.files) {
     if (typeof file.env !== 'string' || typeof file.content !== 'string' || !validFilename(file.filename) || !validEnvName(file.env) || fileNames.has(file.filename) || variables.has(file.env)) throw new Error('Foundation described an invalid file.');
     fileNames.add(file.filename); variables.add(file.env);
   }
   if (output && variables.has(output.as)) throw new Error('Output needs a different environment variable from every input.');
   environment.FOUNDATION_NAMES = JSON.stringify(names.map(item => item.name));
-  // Delivered inputs are always cleaned up. A completed output survives only an unconfirmed upload.
+  // Injected inputs are always cleaned up. A completed output survives only an unconfirmed upload.
   let secretDir, outputDir, outputPath, child, interrupted = false, retainOutput = false;
   const cleanup = () => {
     if (secretDir) rmSync(secretDir, { recursive: true, force: true });
@@ -269,7 +269,7 @@ async function main() {
       }
     }
   };
-  const recovery = () => 'Foundation could not confirm the output was saved. The private output file is retained for recovery: ' + outputPath + '\nRetry with foundation api PUT "/v1/holdings?kind=grant&name=<URL-encoded-name>" --from <file>, then remove that recovery file.';
+  const recovery = () => 'Foundation could not confirm the output was saved. The private output file is retained for recovery: ' + outputPath + '\nRetry with foundation api PUT "/v1/resources?kind=credential&name=<URL-encoded-name>" --from <file>, then remove that recovery file.';
   process.once('exit', cleanup);
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => {
     interrupted = true;
@@ -287,9 +287,9 @@ async function main() {
       await chmod(directory, 0o700);
       return directory;
     };
-    if (delivery.files.length) {
+    if (injection.files.length) {
       secretDir = await temporaryDirectory();
-      for (const file of delivery.files) {
+      for (const file of injection.files) {
         const target = join(secretDir, file.filename);
         await writeFile(target, file.encoding === 'base64' ? Buffer.from(file.content, 'base64') : file.content, { mode: 0o600, flag: 'wx' });
         assign(file.env, target);
@@ -308,9 +308,9 @@ async function main() {
       retainOutput = true;
       // The command wrote it; the agent never saw it, and keeps it that way: the line drawn for the one who kept it is declined.
       let saved;
-      try { saved = await send(forHolder('/v1/holdings?kind=grant&name=' + encodeURIComponent(output.name)), bytes, { method: 'PUT', type: 'application/octet-stream' }); }
+      try { saved = await send(forHolder('/v1/resources?kind=credential&name=' + encodeURIComponent(output.name)), bytes, { method: 'PUT', type: 'application/octet-stream' }); }
       catch { throw new Error(recovery()); }
-      try { await send('/v1/relations', { relation: 'editor', object_type: 'holding', object_id: saved.holding.id }, { method: 'DELETE' }); } catch {}
+      try { await send('/v1/relations', { relation: 'editor', object_type: 'resource', object_id: saved.resource.id }, { method: 'DELETE' }); } catch {}
       retainOutput = false;
       console.error('Saved output as ' + JSON.stringify(output.name) + '.');
     }

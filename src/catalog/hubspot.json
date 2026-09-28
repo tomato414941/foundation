@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "hubspot",
+  "name": "HubSpot",
+  "api": "https://api.hubapi.com",
+  "docs": "https://developers.hubspot.com/docs/api-reference/overview",
+  "console": "https://app.hubspot.com/developer",
+  "auth_schemes": {
+    "oauth": {
+      "authorize": "https://app.hubspot.com/oauth/authorize",
+      "token": "https://api.hubapi.com/oauth/v1/token",
+      "client_auth": "body",
+      "identity": {
+        "url": "https://api.hubapi.com/oauth/v1/access-tokens/{access_token}",
+        "id": [
+          "hub_id",
+          "user_id"
+        ],
+        "label": [
+          "user",
+          "hub_domain"
+        ]
+      },
+      "revoke": {
+        "url": "https://api.hubapi.com/oauth/v1/refresh-tokens/{refresh_token}",
+        "style": "delete"
+      },
+      "scopes": {
+        "base": [
+          "oauth"
+        ],
+        "docs": "https://developers.hubspot.com/docs/apps/legacy-apps/authentication/scopes"
+      },
+      "injection": {
+        "HUBSPOT_ACCESS_TOKEN": "{access_token}",
+        "HUBSPOT_TOKEN_EXPIRES_AT": "{expires_at}"
+      }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Private app access token",
+          "secret": true
+        }
+      ],
+      "injection": {
+        "HUBSPOT_ACCESS_TOKEN": "{token}"
+      }
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "cloudflare",
+  "name": "Cloudflare",
+  "logo": "cloudflare",
+  "api": "https://api.cloudflare.com/client/v4",
+  "docs": "https://developers.cloudflare.com/api/",
+  "auth_schemes": {
+    "oauth": {
+      "adapter": "cloudflare",
+      "hint": "Use CLOUDFLARE_API_TOKEN as a Bearer token with Cloudflare v4 APIs. Scopes are the dot-delimited Cloudflare IDs, such as dns.write or email-routing-rule.write. facts.observed_accounts is a dated /accounts snapshot, not the full consent policy; null means unknown. List /accounts when using the token and choose the target explicitly. Domain registrations and renewals incur charges."
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "APIトークン",
+          "secret": true
+        }
+      ],
+      "identity": {
+        "url": "https://api.cloudflare.com/client/v4/user/tokens/verify",
+        "headers": {
+          "authorization": "Bearer {token}"
+        },
+        "id": "result.id"
+      },
+      "subject_prefix": "token:",
+      "injection": {
+        "CLOUDFLARE_API_TOKEN": "{token}"
+      }
+    }
+  }
+}

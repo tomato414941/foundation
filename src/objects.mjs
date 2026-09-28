@@ -9,8 +9,8 @@ import { presignAws, serverCredentials, signAws } from './aws-sigv4.mjs';
 // bytes end up there or, later, in a bucket of the owner's own. What an agent calls does not change
 // when that moves; only where the space points does.
 //
-// Each object is a holding: its name, size and type are a row, and its bytes sit in the space under the
-// holding's id. So an object has an id like everything held, a line can be drawn onto it, and moving the
+// Each object is a resource: its name, size and type are a row, and its bytes sit in the space under the
+// resource's id. So an object has an id like every resource, a line can be drawn onto it, and moving the
 // bytes elsewhere later changes nothing an owner or agent sees.
 export const OBJECT_MAX = 25 * 1024 * 1024;
 export const OBJECT_COUNT_MAX = 1000;
@@ -85,12 +85,12 @@ export class S3Space {
   }
 }
 
-// The holder-facing space. Every call names a holding; where the bytes live is the space's business.
-const ROOM = 'holdings/';
+// The holder-facing space. Every call names a resource; where the bytes live is the space's business.
+const ROOM = 'resources/';
 const COLUMNS = 'h.id,h.holder_id,h.kind,h.name,h.created_at,h.updated_at,o.size,o.type';
-const FROM = 'FROM holdings h JOIN objects o ON o.holding_id=h.id';
+const FROM = 'FROM resources h JOIN objects o ON o.resource_id=h.id';
 export class Objects {
-  constructor(space, holdings, store) { this.space = space; this.holdings = holdings; this.store = store; this.db = store.db; }
+  constructor(space, resources, store) { this.space = space; this.resources = resources; this.store = store; this.db = store.db; }
   get enabled() { return Boolean(this.space?.enabled); }
   check() { if (!this.enabled) fail(503, 'space_unavailable', '置き場は現在使えません。'); }
   minutes(value = LINK_MINUTES) {
@@ -128,8 +128,8 @@ export class Objects {
     const id = existing?.id ?? randomUUID();
     await this.space.put(ROOM, id, content, type);
     return this.store.transaction(() => {
-      if (existing) { this.db.prepare('UPDATE objects SET size=?,type=? WHERE holding_id=?').run(content.length, type, id); this.holdings.touch(id); }
-      else { this.holdings.insert(id, holderId, 'object', key); this.db.prepare('INSERT INTO objects (holding_id,size,type) VALUES (?,?,?)').run(id, content.length, type); }
+      if (existing) { this.db.prepare('UPDATE objects SET size=?,type=? WHERE resource_id=?').run(content.length, type, id); this.resources.touch(id); }
+      else { this.resources.insert(id, holderId, 'object', key); this.db.prepare('INSERT INTO objects (resource_id,size,type) VALUES (?,?,?)').run(id, content.length, type); }
       return this.get(id);
     });
   }
@@ -140,8 +140,8 @@ export class Objects {
     const { bytes } = this.usage(row.holder_id);
     if (bytes - row.size + content.length > OBJECT_TOTAL_MAX) fail(409, 'space_full', '置き場の合計が上限に達しました。使わないものを消してください。');
     await this.space.put(ROOM, row.id, content, type);
-    this.db.prepare('UPDATE objects SET size=?,type=? WHERE holding_id=?').run(content.length, type, row.id);
-    this.holdings.touch(row.id);
+    this.db.prepare('UPDATE objects SET size=?,type=? WHERE resource_id=?').run(content.length, type, row.id);
+    this.resources.touch(row.id);
     return this.get(row.id);
   }
   async read(row) {
@@ -152,18 +152,18 @@ export class Objects {
   rename(row, key) {
     const wanted = objectKey(key);
     if (wanted !== row.name && this.find(row.holder_id, wanted)) fail(409, 'name_taken', 'その名前はすでに使われています。');
-    return this.get(this.holdings.rename(row, wanted).id);
+    return this.get(this.resources.rename(row, wanted).id);
   }
-  // The bytes go from the space, then the holding goes with its lines.
+  // The bytes go from the space, then the resource goes with its lines.
   async remove(row) {
     this.check();
     await this.space.remove(ROOM, row.id);
-    this.holdings.remove(row);
+    this.resources.remove(row);
   }
   async link(row, minutes) {
     this.check();
     const seconds = this.minutes(minutes) * 60;
     return { id: row.id, name: row.name, url: await this.space.link(ROOM, row.id, seconds), url_expires_at: Date.now() + seconds * 1000 };
   }
-  view(row) { return { ...this.holdings.view(row), size: row.size, type: row.type ?? null }; }
+  view(row) { return { ...this.resources.view(row), size: row.size, type: row.type ?? null }; }
 }

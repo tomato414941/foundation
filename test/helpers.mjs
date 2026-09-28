@@ -2,13 +2,15 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createApp } from '../src/app.mjs';
 import { fail } from '../src/errors.mjs';
-import { FakeGoogle } from '../src/connectors/google/fixture.mjs';
-export { FakeGoogle } from '../src/connectors/google/fixture.mjs';
-import { Connectors } from '../src/connectors.mjs';
-import { googleOauth } from '../src/connectors/google/index.mjs';
-import { Grants } from '../src/grants.mjs';
+import { FakeGoogle } from '../src/adapters/google/fixture.mjs';
+export { FakeGoogle } from '../src/adapters/google/fixture.mjs';
+import { googleOauth } from '../src/adapters/google/index.mjs';
+import { entry } from '../src/catalog.mjs';
+export { entry } from '../src/catalog.mjs';
+import { Credentials } from '../src/credentials.mjs';
+import { Services } from '../src/services.mjs';
 import { Apps } from '../src/apps.mjs';
-import { Holdings } from '../src/holdings.mjs';
+import { Resources } from '../src/resources.mjs';
 import { Principals } from '../src/principals.mjs';
 import { Sessions, OAuthFlows } from '../src/sessions.mjs';
 
@@ -16,9 +18,10 @@ import { Sessions, OAuthFlows } from '../src/sessions.mjs';
 const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.';
 export const GMAIL = { readonly: [GMAIL_SCOPE + 'readonly'], metadata: [GMAIL_SCOPE + 'metadata'], 'read-send': [GMAIL_SCOPE + 'readonly', GMAIL_SCOPE + 'send'] };
 
-export function resources(store, connectors = []) {
-  const holdings = new Holdings(store), registry = new Connectors(connectors), apps = new Apps(store, holdings, registry);
-  return { holdings, apps, grants: new Grants(store, holdings, registry, apps), principals: new Principals(store), sessions: new Sessions(store), flows: new OAuthFlows(store) };
+// The modules a server is made of, over one store, with the services given (each an entry of the catalog).
+export function modules(store, entries = []) {
+  const resources = new Resources(store), services = new Services(store, resources, entries), apps = new Apps(store, resources, services);
+  return { resources, services, apps, credentials: new Credentials(store, resources, services, apps), principals: new Principals(store), sessions: new Sessions(store), flows: new OAuthFlows(store) };
 }
 
 export const KEY = Buffer.alloc(32, 7);
@@ -46,19 +49,19 @@ export class FakeAuth {
   async logout() {}
 }
 
-// Seed a stored credential, including already-expired fixture tokens.
-export function acquired(store, connectors, connectorId, { subject, secret }) {
-  const { grants } = resources(store, connectors);
-  const saved = grants.writeConnection(USER_A, { connector: connectorId, method: 'authorized', subject, label: subject,
+// Seed a credential for a service, including already-expired fixture tokens.
+export function acquired(store, entries, service, { subject, secret }, scheme = 'oauth') {
+  const { credentials } = modules(store, entries);
+  const saved = credentials.keep(USER_A, { service, scheme, subject, label: subject,
     state: { private_state: secret, facts: {}, expires_at: secret.expires_at } });
-  const row = () => grants.held(USER_A, saved.id);
-  const state = () => grants.state(row());
-  const run = () => grants.obtain(row());
-  return { grants, row, run, state };
+  const row = () => credentials.held(USER_A, saved.id);
+  const state = () => credentials.state(row());
+  const run = () => credentials.obtain(row());
+  return { credentials, row, run, state };
 }
 export async function fixture(t, options = {}) {
-  const { google = new FakeGoogle(), connectors = [googleOauth(google)], ...rest } = options, auth = options.auth || new FakeAuth();
-  const app = createApp({ encryptionKey: KEY, ...rest, auth, connectors });
+  const { google = new FakeGoogle(), services = [entry('google', { oauth: googleOauth(google) })], ...rest } = options, auth = options.auth || new FakeAuth();
+  const app = createApp({ encryptionKey: KEY, ...rest, auth, services });
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   let closed = false;
   const close = async () => { if (!closed) { closed = true; await app.close(); } };
@@ -86,9 +89,9 @@ export async function fixture(t, options = {}) {
     cookie = response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
     return response;
   }
-  // A Google connection, asking to read Gmail unless other scopes are given.
-  async function start({ connection_id, scopes = GMAIL.readonly } = {}) {
-    const result = await request('/v1/connections', { method: 'POST', data: { connector: 'google.oauth', connection_id, scopes } });
+  // Connecting Google, asking to read Gmail unless other scopes are given.
+  async function start({ credential_id, scopes = GMAIL.readonly } = {}) {
+    const result = await request('/v1/credentials', { method: 'POST', data: { service: 'google', credential_id, scopes } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
@@ -96,22 +99,22 @@ export async function fixture(t, options = {}) {
   async function callback(url, code = 'personal', extra = {}) {
     return request(new URL(url.searchParams.get('redirect_uri')).pathname + '?state=' + url.searchParams.get('state') + '&code=' + code, extra);
   }
-  // Connects one Google account, named by the code, and returns its independent connection.
+  // Connects one Google account, named by the code, and returns its own credential.
   async function credential(code = 'personal', scopes = GMAIL.readonly) {
     const url = await start({ scopes });
     const response = await callback(url, code);
-    assert.equal(response.headers.get('location'), '/connections?connection=connected&connector=google.oauth', response.text);
-    return (await request('/v1/overview')).json.grants.find((item) => item.subject === code + '@example.test');
+    assert.equal(response.headers.get('location'), '/services?result=connected&service=google', response.text);
+    return (await request('/v1/overview')).json.credentials.find((item) => item.subject === code + '@example.test');
   }
-  // Delivering a connected grant derives what it yields now; nothing else reaches the provider.
-  async function deliver(connection, options = {}) {
-    return request('/v1/deliveries', { method: 'POST', data: { names: [{ name: connection.id }] }, ...options });
+  // Injecting a credential for a service derives what it yields now; nothing else reaches the service.
+  async function inject(credential, options = {}) {
+    return request('/v1/injections', { method: 'POST', data: { names: [{ name: credential.id }] }, ...options });
   }
-  async function connectionFacts(connection, options = {}) {
-    const listed = await request('/v1/holdings?kind=grant&method=authorized', options);
+  async function credentialFacts(credential, options = {}) {
+    const listed = await request('/v1/resources?kind=credential&secret=false', options);
     assert.equal(listed.status, 200, listed.text);
-    const found = listed.json.holdings.find(item => item.id === connection.id);
-    assert.ok(found, '接続一覧から対象の接続を取得する');
+    const found = listed.json.resources.find(item => item.id === credential.id);
+    assert.ok(found, '接続の一覧から対象を取得する');
     return found.facts;
   }
   // Makes a key known to the owner: the key asks to act for whoever opens its request, and the owner types its code.
@@ -131,29 +134,29 @@ export async function fixture(t, options = {}) {
     return { ...asked.json.request, token: made.token, principal_id: made.id };
   }
   // A key the owner makes from the dashboard: a principal that acts for them, carrying a key.
-  // Held things by name: the holder's name finds the id, and the id reaches the thing.
-  const lookup = (kind, name, options = {}) => request('/v1/holdings?' + new URLSearchParams({ kind, name }), options);
+  // Resources by name: the holder's name finds the id, and the id reaches the thing.
+  const lookup = (kind, name, options = {}) => request('/v1/resources?' + new URLSearchParams({ kind, name }), options);
   async function read(kind, name, options = {}) {
     const found = await lookup(kind, name, options);
-    return found.status === 200 ? request('/v1/holdings/' + found.json.holding.id + '/content', options) : found;
+    return found.status === 200 ? request('/v1/resources/' + found.json.resource.id + '/content', options) : found;
   }
-  const keep = (kind, name, raw, options = {}) => request('/v1/holdings?' + new URLSearchParams({ kind, name }), { method: 'PUT', raw, type: 'text/plain', ...options });
+  const keep = (kind, name, raw, options = {}) => request('/v1/resources?' + new URLSearchParams({ kind, name }), { method: 'PUT', raw, type: 'text/plain', ...options });
   async function drop(kind, name, options = {}) {
     const found = await lookup(kind, name, options);
-    return found.status === 200 ? request('/v1/holdings/' + found.json.holding.id, { method: 'DELETE', data: {}, ...options }) : found;
+    return found.status === 200 ? request('/v1/resources/' + found.json.resource.id, { method: 'DELETE', data: {}, ...options }) : found;
   }
   async function issueKey(name = 'laptop') {
-    const result = await request('/v1/principals', { method: 'POST', data: { name, actor: true, credential: 'key' } });
+    const result = await request('/v1/principals', { method: 'POST', data: { name, actor: true, key: true } });
     assert.equal(result.status, 201, result.text);
     actsFor.set(result.json.token, result.json.principal.acts_for[0].id);
-    return { ...result.json.principal, token: result.json.token, credential_id: result.json.credential.id };
+    return { ...result.json.principal, token: result.json.token, key_id: result.json.key.id };
   }
-  // Ages a connection past its expiry in both the envelope and the connector's private state.
+  // Ages a credential past its expiry in both the envelope and the scheme's private state.
   function expire(id, owner = USER_A) {
-    const connection = app.grants.held(owner, id);
-    const state = app.grants.state(connection), expires_at = Date.now() - 1;
-    app.grants.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
+    const credential = app.credentials.held(owner, id);
+    const state = app.credentials.state(credential), expires_at = Date.now() - 1;
+    app.credentials.saveState(credential, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
   }
   if (options.login !== false) await login();
-  return { app, auth, google, base, request, lookup, read, keep, drop, become, login, start, callback, credential, deliver, connectionFacts, issueKey, approveKey, expire, close, cookie: () => cookie };
+  return { app, auth, google, base, request, lookup, read, keep, drop, become, login, start, callback, credential, inject, credentialFacts, issueKey, approveKey, expire, close, cookie: () => cookie };
 }

@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "kintone",
+  "name": "kintone",
+  "docs": "https://cybozu.dev/ja/kintone/docs/rest-api/",
+  "auth_schemes": {
+    "oauth": {
+      "authorize": "https://{domain}/oauth2/authorization",
+      "token": "https://{domain}/oauth2/token",
+      "client_auth": "body",
+      "scopes": {
+        "base": [],
+        "docs": "https://cybozu.dev/ja/common/docs/oauth-client/"
+      },
+      "app_fields": [
+        {
+          "name": "domain",
+          "label": "kintoneのドメイン",
+          "required": true,
+          "leading": true,
+          "placeholder": "example.cybozu.com",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.(cybozu\\.com|kintone\\.com|cybozu\\.cn)$"
+        }
+      ],
+      "injection": {
+        "KINTONE_ACCESS_TOKEN": "{access_token}",
+        "KINTONE_DOMAIN": "{domain}",
+        "KINTONE_TOKEN_EXPIRES_AT": "{expires_at}"
+      },
+      "hint": "KINTONE_DOMAIN is the kintone domain (https://<KINTONE_DOMAIN>/k/v1/...)."
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "domain",
+          "label": "kintoneのドメイン",
+          "placeholder": "example.cybozu.com",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.(cybozu\\.com|kintone\\.com|cybozu\\.cn)$"
+        },
+        {
+          "name": "token",
+          "label": "APIトークン",
+          "secret": true
+        }
+      ],
+      "injection": {
+        "KINTONE_DOMAIN": "{domain}",
+        "KINTONE_API_TOKEN": "{token}"
+      },
+      "hint": "Send the token in the \"X-Cybozu-API-Token\" header to https://<KINTONE_DOMAIN>/k/v1/..."
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "id": "linear",
+  "name": "Linear",
+  "api": "https://api.linear.app/graphql",
+  "docs": "https://linear.app/developers/graphql",
+  "console": "https://linear.app/settings/api",
+  "auth_schemes": {
+    "oauth": {
+      "authorize": "https://linear.app/oauth/authorize",
+      "token": "https://api.linear.app/oauth/token",
+      "scope_separator": ",",
+      "client_auth": "body",
+      "identity": {
+        "url": "https://api.linear.app/graphql",
+        "method": "POST",
+        "json": {
+          "query": "{ viewer { id name email } }"
+        },
+        "id": "data.viewer.id",
+        "label": [
+          "data.viewer.email",
+          "data.viewer.name"
+        ]
+      },
+      "revoke": {
+        "url": "https://api.linear.app/oauth/revoke",
+        "style": "bearer"
+      },
+      "scopes": {
+        "base": [
+          "read"
+        ],
+        "docs": "https://linear.app/developers/oauth-2-0-authentication"
+      },
+      "injection": {
+        "LINEAR_ACCESS_TOKEN": "{access_token}",
+        "LINEAR_TOKEN_EXPIRES_AT": "{expires_at}"
+      },
+      "hint": "The access token is sent as \"Authorization: Bearer <token>\" to the GraphQL endpoint."
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Personal API key",
+          "secret": true
+        }
+      ],
+      "identity": {
+        "url": "https://api.linear.app/graphql",
+        "method": "POST",
+        "headers": {
+          "authorization": "{token}"
+        },
+        "json": {
+          "query": "{ viewer { id name email } }"
+        },
+        "id": "data.viewer.id",
+        "label": [
+          "data.viewer.email",
+          "data.viewer.name"
+        ]
+      },
+      "injection": {
+        "LINEAR_API_KEY": "{token}"
+      },
+      "hint": "Send LINEAR_API_KEY as the Authorization header itself, without \"Bearer\"."
+    }
+  }
+}

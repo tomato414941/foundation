@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "id": "netlify",
+  "name": "Netlify",
+  "api": "https://api.netlify.com/api/v1",
+  "docs": "https://docs.netlify.com/api/get-started/",
+  "console": "https://app.netlify.com/user/applications",
+  "auth_schemes": {
+    "oauth": {
+      "authorize": "https://app.netlify.com/authorize",
+      "token": "https://api.netlify.com/oauth/token",
+      "client_auth": "body",
+      "identity": {
+        "url": "https://api.netlify.com/api/v1/user",
+        "id": "id",
+        "label": [
+          "email",
+          "full_name"
+        ]
+      },
+      "injection": {
+        "NETLIFY_ACCESS_TOKEN": "{access_token}",
+        "NETLIFY_TOKEN_EXPIRES_AT": "{expires_at}"
+      }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Personal access token",
+          "secret": true
+        }
+      ],
+      "identity": {
+        "url": "https://api.netlify.com/api/v1/user",
+        "headers": {
+          "authorization": "Bearer {token}"
+        },
+        "id": "id",
+        "label": [
+          "email",
+          "full_name"
+        ]
+      },
+      "injection": {
+        "NETLIFY_AUTH_TOKEN": "{token}"
+      }
+    }
+  }
+}

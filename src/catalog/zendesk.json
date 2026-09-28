@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "id": "zendesk",
+  "name": "Zendesk",
+  "docs": "https://developer.zendesk.com/api-reference/",
+  "auth_schemes": {
+    "oauth": {
+      "authorize": "https://{subdomain}.zendesk.com/oauth/authorizations/new",
+      "token": "https://{subdomain}.zendesk.com/oauth/tokens",
+      "client_auth": "body",
+      "identity": {
+        "url": "https://{subdomain}.zendesk.com/api/v2/users/me.json",
+        "id": "user.id",
+        "label": [
+          "user.email",
+          "user.name"
+        ]
+      },
+      "scopes": {
+        "base": [
+          "read"
+        ],
+        "docs": "https://developer.zendesk.com/api-reference/ticketing/oauth/oauth_tokens/"
+      },
+      "app_fields": [
+        {
+          "name": "subdomain",
+          "label": "サブドメイン",
+          "required": true,
+          "leading": true,
+          "placeholder": "example（example.zendesk.com の場合）",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        }
+      ],
+      "injection": {
+        "ZENDESK_ACCESS_TOKEN": "{access_token}",
+        "ZENDESK_SUBDOMAIN": "{subdomain}",
+        "ZENDESK_TOKEN_EXPIRES_AT": "{expires_at}"
+      },
+      "hint": "ZENDESK_SUBDOMAIN is the Zendesk subdomain (https://<ZENDESK_SUBDOMAIN>.zendesk.com/api/v2/...)."
+    }
+  }
+}
