@@ -82,7 +82,7 @@ const SCHEMA_28 = `
   PRAGMA user_version = 28;
 `;
 
-test('28版のデータベースを、リソースもそれにつながる行も失わずに移し、環境を置けるようにする', async t => {
+test('28版のデータベースを、リソースもそれにつながる行も失わずに移し、環境を置き、権限を渡せるようにする', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), db = new DatabaseSync(path), vault = new Vault(KEY);
@@ -98,7 +98,8 @@ test('28版のデータベースを、リソースもそれにつながる行も
 
   const store = new Store(path, KEY);
   t.after(() => store.close());
-  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 29);
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 30);
+  assert.equal(store.db.prepare("SELECT count(*) n FROM permissions").get().n, 0, 'and one action may now be given on its own');
   assert.deepEqual({ ...store.db.prepare("SELECT size,type FROM objects WHERE resource_id='object-1'").get() }, { size: 14, type: 'application/pdf' }, 'what hangs off a resource stays');
   assert.equal(store.db.prepare("SELECT count(*) n FROM relations WHERE object_id='object-1'").get().n, 1);
   assert.deepEqual(new Principals(store).authenticateKey(key)?.key, { id: 'key-1' });

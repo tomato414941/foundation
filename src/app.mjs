@@ -26,7 +26,7 @@ import { respond } from './mcp.mjs';
 import { FETCH_BODY_MAX } from './fetch.mjs';
 import { FUNCTIONS, Functions } from './functions.mjs';
 import { guide } from '../cli/guide.mjs';
-import { Authorization } from './authorization.mjs';
+import { Authorization, isAction } from './authorization.mjs';
 import { pages, pageTitle, workspaceView, pendingView } from '../web/workspace-view.js';
 
 const VERSION = createRequire(import.meta.url)('../package.json').version;
@@ -655,6 +655,39 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           return send(200, { ok: true });
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
+      }
+      // One action given on its own, over all a holder has or over one resource. Only one who may give lines there
+      // gives it, and only an action they may take there themselves: nothing gives more than it has. Anyone may give
+      // up one they were given.
+      if (path === '/v1/permissions') {
+        if (method === 'GET') return send(200, { permissions: principals.permissionsOf(subject.id) });
+        if (method !== 'POST' && method !== 'DELETE') fail(405, 'method_not_allowed', 'この操作は利用できません。');
+        const input = await inputBody();
+        if (!isAction(input.action) || !['principal', 'resource'].includes(input.object_type) || typeof input.object_id !== 'string') {
+          fail(400, 'invalid_permission', '権限の指定を確認してください。');
+        }
+        const subjectId = principalId(input.subject);
+        const cut = input.action.indexOf('.'), type = input.action.slice(0, cut), name = input.action.slice(cut + 1);
+        if (!(method === 'DELETE' && subjectId === subject.id)) {
+          if (input.object_type === 'principal') {
+            principals.at(input.object_id);
+            permit('relate', 'principal', input.object_id);
+            permit(name, type, type === 'principal' ? input.object_id : undefined, input.object_id);
+          } else {
+            const held = resources.at(input.object_id);
+            if (held.kind !== type) fail(400, 'invalid_permission', '権限の種類と対象が合いません。');
+            permit('share', held.kind, held.id, held.holder_id);
+            permit(name, type, held.id, held.holder_id);
+          }
+        }
+        if (method === 'POST') {
+          principals.permit(subjectId, input.action, input.object_type, input.object_id, subject.id);
+          auditLog.write(subject.id, 'permission.given', input.object_type, input.object_id, { subject: subjectId, action: input.action });
+          return send(201, { ok: true });
+        }
+        principals.unpermit(subjectId, input.action, input.object_type, input.object_id);
+        auditLog.write(subject.id, 'permission.removed', input.object_type, input.object_id, { subject: subjectId, action: input.action });
+        return send(200, { ok: true });
       }
       // Lent machines. An environment is a resource: opened by the holder or whoever acts for them, reached by its id,
       // shared along lines, and able to reach nothing of Foundation's unless given an identity it may act as.
