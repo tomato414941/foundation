@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
-import { fixture, USER_A } from './helpers.mjs';
+import { fixture, USER_A, GMAIL } from './helpers.mjs';
 
 test('Login gives a private state behind a safe session cookie', async (t) => {
   const f = await fixture(t);
@@ -25,7 +25,7 @@ test('OAuth uses state, PKCE, offline consent, native Google URL; callback is on
   assert.equal(url.searchParams.get('include_granted_scopes'), 'false');
   assert.ok(url.searchParams.get('prompt').includes('consent'));
   assert.equal(url.searchParams.get('redirect_uri'), f.base + '/oauth/google.oauth/callback');
-  const complete = await f.callback(url, 'personal-readonly', { headers: { 'sec-fetch-site': 'cross-site' } });
+  const complete = await f.callback(url, 'personal', { headers: { 'sec-fetch-site': 'cross-site' } });
   assert.equal(complete.headers.get('location'), '/connections?connection=connected&connector=google.oauth');
   assert.equal((await f.callback(url)).headers.get('location'), '/connections?connection=expired&connector=google.oauth');
   assert.equal(f.google.exchanges, 1);
@@ -35,7 +35,7 @@ test('OAuth uses state, PKCE, offline consent, native Google URL; callback is on
 test('OAuth state is browser-bound and expires; cancel and forged callbacks cannot connect', async (t) => {
   const f = await fixture(t);
   const url = await f.start();
-  assert.equal((await f.callback(url, 'personal-readonly', { anonymous: true })).headers.get('location'), '/connections?connection=expired&connector=google.oauth');
+  assert.equal((await f.callback(url, 'personal', { anonymous: true })).headers.get('location'), '/connections?connection=expired&connector=google.oauth');
   await f.login('second@example.test');
   assert.equal((await f.callback(url)).headers.get('location'), '/connections?connection=expired&connector=google.oauth');
   const second = await f.start();
@@ -49,7 +49,7 @@ test('OAuth state is browser-bound and expires; cancel and forged callbacks cann
 });
 
 test('Connections expose explicit credential outputs independently of saved names', async (t) => {
-  const f = await fixture(t), a = await f.credential(), b = await f.credential('work', 'metadata');
+  const f = await fixture(t), a = await f.credential(), b = await f.credential('work', GMAIL.metadata);
   const agent = await f.issueKey();
   assert.notEqual(a.id, b.id);
   assert.equal(a.label, 'personal@example.test');
@@ -65,11 +65,11 @@ test('Connections expose explicit credential outputs independently of saved name
 
   const result = await f.deliver(a, { token: agent.token });
   assert.equal(result.status, 200, result.text);
-  assert.equal(result.json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal-readonly');
+  assert.equal(result.json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal');
   assert.equal(result.json.delivery.environment.GOOGLE_ACCOUNT_EMAIL, 'personal@example.test');
   assert.ok(result.json.expires_in > 3500);
   assert.doesNotMatch(result.text, /refresh_token/);
-  assert.equal((await f.deliver(b, { token: agent.token })).json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-work-metadata');
+  assert.equal((await f.deliver(b, { token: agent.token })).json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-work');
 
   // Credential processing leaves existing saved values unchanged.
   assert.equal((await f.read('grant', 'gmail/personal-example-test')).text, 'independent-value');
@@ -95,13 +95,13 @@ test('Owners cannot see, disconnect or reach each other\'s connections', async (
 });
 
 test('Connecting again pins the Google account', async (t) => {
-  const f = await fixture(t), a = await f.credential('personal', 'metadata'), agent = await f.issueKey();
-  let flow = await f.start({ range: 'metadata', connection_id: a.id });
+  const f = await fixture(t), a = await f.credential('personal', GMAIL.metadata), agent = await f.issueKey();
+  let flow = await f.start({ scopes: GMAIL.metadata, connection_id: a.id });
   assert.equal(flow.searchParams.get('login_hint'), 'personal@example.test');
-  assert.equal((await f.callback(flow, 'work-metadata')).headers.get('location'), '/connections?connection=wrong_account&connector=google.oauth');
+  assert.equal((await f.callback(flow, 'work')).headers.get('location'), '/connections?connection=wrong_account&connector=google.oauth');
   assert.equal((await f.request('/v1/holdings?kind=grant&method=authorized', { token: agent.token })).json.holdings.length, 1);
-  flow = await f.start({ range: 'metadata', connection_id: a.id });
-  assert.equal((await f.callback(flow, 'personal-metadata')).headers.get('location'), '/connections?connection=connected&connector=google.oauth');
+  flow = await f.start({ scopes: GMAIL.metadata, connection_id: a.id });
+  assert.equal((await f.callback(flow, 'personal')).headers.get('location'), '/connections?connection=connected&connector=google.oauth');
   const seen = (await f.request('/v1/holdings?kind=grant&method=authorized', { token: agent.token })).json.holdings;
   assert.equal(seen.length, 1); assert.equal(seen[0].id, a.id);
 });
@@ -109,7 +109,7 @@ test('Connecting again pins the Google account', async (t) => {
 test('同じGmailユーザーの新たな認可を別の接続として保存する', async (t) => {
   const f = await fixture(t), a = await f.credential(), agent = await f.issueKey();
   const flow = await f.start();
-  assert.equal((await f.callback(flow, 'personal-readonly')).headers.get('location'), '/connections?connection=connected&connector=google.oauth');
+  assert.equal((await f.callback(flow, 'personal')).headers.get('location'), '/connections?connection=connected&connector=google.oauth');
   assert.equal((await f.request('/v1/overview')).json.grants.filter(row => row.method !== 'given')[0].id, a.id);
   const connections = (await f.request('/v1/holdings?kind=grant&method=authorized', { token: agent.token })).json.holdings;
   assert.equal(connections.length, 2);

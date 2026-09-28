@@ -1,9 +1,8 @@
 import { GoogleClient } from './client.mjs';
 import { json } from '../../../test/helpers.mjs';
 
-// Answers as Google would. The authorization code names the account: 'personal-readonly' and 'personal' are the
-// same person (a trailing -readonly, -metadata or -read-send only tells authorizations apart). Google grants what
-// the consent screen asked for unless a test sets `scopes`. Handlers may answer instead, by returning a Response.
+// Answers as Google would. The authorization code names the account, and Google grants what the consent screen
+// asked for unless a test sets `scopes`. Handlers may answer instead, by returning a Response.
 export class FakeGoogle extends GoogleClient {
   constructor() {
     super({ clientId: 'test-google-client', clientSecret: 'test-google-secret' }, { fetcher: async (url, options) => this.fetch(url, options) });
@@ -11,7 +10,6 @@ export class FakeGoogle extends GoogleClient {
   }
   // Shared with the copies made for someone's own app, which ask for consent through the same fake.
   authorize(context) { this.consent.asked = context.scopes; return super.authorize(context); }
-  account(code) { return code.replace(/-(readonly|metadata|read-send)$/, ''); }
   async fetch(url, options) {
     this.calls.push({ url: String(url), options });
     if (String(url).endsWith('/revoke')) return await this.revokeHandler?.() || new Response('', { status: 200 });
@@ -27,7 +25,7 @@ export class FakeGoogle extends GoogleClient {
         expires_in: 3600, scope, token_type: 'Bearer' });
     }
     if (String(url).includes('/userinfo')) {
-      const code = options.headers.authorization.replace(/^Bearer google-access-/, '').replace(/-\d+$/, ''), account = this.account(code);
+      const account = options.headers.authorization.replace(/^Bearer google-access-/, '').replace(/-\d+$/, '');
       return await this.userinfoHandler?.(account) || json({ sub: 'sub-' + account, email: account + '@example.test', email_verified: true });
     }
     throw new Error('Unexpected provider request');

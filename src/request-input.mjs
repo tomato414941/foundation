@@ -63,7 +63,8 @@ export function declaration(input) {
 
 // Which app to connect through: Foundation's own ('foundation') or a held one, by id.
 export function appReference(value) {
-  if (value === undefined || value === null || value === 'foundation') return undefined;
+  if (value === undefined || value === null) return undefined;
+  if (value === 'foundation') return value;
   if (typeof value !== 'string' || !/^[0-9a-f-]{36}$/.test(value)) fail(400, 'invalid_app', 'アプリはIDで指定してください（Foundationのアプリは foundation）。');
   return value;
 }

@@ -96,7 +96,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / "empty.png"), full_page=True)
 
     # Replace only Google's authorization page with a redirect. No Google login/network traffic.
-    authorization = {"code": "personal-readonly", "deny": False, "scope": "openid"}
+    authorization = {"code": "personal", "deny": False, "scope": "openid"}
     def google_consent(route):
         query = parse_qs(urlparse(route.request.url).query)
         assert query["code_challenge_method"] == ["S256"]
@@ -127,8 +127,8 @@ with sync_playwright() as p:
         page.wait_for_load_state("networkidle")
         assert "code=" not in page.url and "state=" not in page.url
 
-    connect("personal-readonly")
-    connect("work-metadata", True)
+    connect("personal")
+    connect("work", True)
     # Connections are listed independently of saved values.
     page.goto(args.base + "/connections", wait_until="networkidle")
     gmail = page.locator('[aria-labelledby="connections-title"]')

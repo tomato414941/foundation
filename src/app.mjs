@@ -17,6 +17,7 @@ import { Settings } from './settings.mjs';
 import { Records } from './records.mjs';
 import { scopeList, requestedScopes } from './scopes.mjs';
 import { appReference } from './request-input.mjs';
+import { Apps, FOUNDATION_APP, takesApps } from './apps.mjs';
 import { Grants, GRANT_MAX, GRANT_COUNT_MAX, GRANT_TOTAL_MAX, METHODS } from './grants.mjs';
 import { Objects, OBJECT_MAX } from './objects.mjs';
 import { Holdings, KINDS } from './holdings.mjs';
@@ -114,15 +115,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
   };
   const connectors = new Connectors(connectorList);
   const holdings = new Holdings(store);
-  const grants = new Grants(store, holdings, connectors);
+  const apps = new Apps(store, holdings, connectors), grants = new Grants(store, holdings, connectors, apps);
   const objects = new Objects(spaceBackend, holdings, store);
   const principals = new Principals(store), sessions = new Sessions(store), flows = new OAuthFlows(store);
   const requests = new Requests(store), settings = new Settings(store, principals), records = new Records(store);
   const authorization = new Authorization(principals);
   const functions = new Functions({ grants, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
-  const viewRequest = (row, origin, options) => requestView({ requests, connectors, principals, settings, grants }, row, origin, options);
-  const requestActions = new RequestActions({ store, requests, grants, principals, records,
+  const viewRequest = (row, origin, options) => requestView({ requests, connectors, principals, settings, grants, apps }, row, origin, options);
+  const requestActions = new RequestActions({ store, requests, grants, apps, principals, records,
     changed: row => { if (row.to_id) void settings.notify(row.to_id, 'request.' + row.status, { request: viewRequest(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() }); } });
   const logins = new EmailLogins({ now: loginClock });
   const refreshing = new Map(), limits = new Map(), disconnects = new Set();
@@ -251,7 +252,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
           if (flow.kind || flow.connector !== oauthCallback[1]) fail(400, 'invalid_state', '接続をやり直してください。');
           const connector = connectors.get(flow.connector);
           // The same app that asked for consent exchanges the code: Foundation's, or one someone holds.
-          const active = flow.app ? grants.apps.connector(grants.apps.at(flow.app)) : connector;
+          const active = apps.connector(connector.id, flow.app);
           if (flow.requestId) {
             destination = '/requests/' + flow.requestId;
             requests.forTo(flow.requestId, user.id, true);
@@ -630,7 +631,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       // Held things. Each has an id, and that is how lines, records and the calls below refer to it. A name is how
       // the holder calls one: a way to find or place a thing, not its identity. A grant says what it is and how it
       // came to be held; an object says its size and type. Neither says anything of its content here.
-      const apps = grants.apps;
       const shown = row => row.kind === 'grant' ? grants.view(grants.get(row.id), { owner: subject.id === row.holder_id })
         : row.kind === 'app' ? apps.view(apps.get(row.id), { owner: subject.id === row.holder_id }) : objects.view(objects.get(row.id));
       const holdingKind = required => {
@@ -826,7 +826,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
       if (path === '/v1/overview' && method === 'GET') {
         permit('read', 'overview');
         return send(200, { user: { id: subject.id, email: user?.email ?? null }, principal: self, grants: grants.list(holderId).map(row => grants.view(row, { owner: true })),
-          apps: [...grants.apps.list(holderId).map(row => grants.apps.view(row, { owner: true })), ...grants.apps.lent(holderId).map(row => grants.apps.view(row)), ...grants.apps.offeredAll()],
+          apps: [...apps.list(holderId).map(row => apps.view(row, { owner: true })), ...apps.lent(holderId).map(row => apps.view(row)), ...apps.offeredAll()],
           principals: principals.owned(holderId), actors: principals.actorsOf(holderId), requests: requests.listTo(holderId, 'pending').map(row => viewRequest(row, origin)),
           functions: FUNCTIONS, connectors: connectors.ids().map(id => connectors.describe(id)), settings: settings.get(holderId) ?? null });
       }
@@ -883,16 +883,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
         const asked = request ? requests.input(request).scopes ?? [] : scopeList(input.scopes);
         const scopes = requestedScopes(connector, asked, previousState);
         const named = request ? requests.input(request).app : appReference(input.app);
-        const appId = named !== undefined ? named : previous?.app_id ?? null;
-        const app = appId ? grants.apps.at(appId) : null;
-        if (app) {
-          permit('use', 'app', app.id, app.holder_id);
-          if (app.connector !== connector.id) fail(400, 'app_mismatch', 'このアプリは別の接続先のものです。');
-        }
-        const active = app ? grants.apps.connector(app) : connector;
+        if (named !== undefined && !takesApps(connector)) fail(400, 'app_unsupported', 'この接続先はアプリを通して接続しません。');
+        const appId = takesApps(connector) ? named ?? previous?.app_id ?? FOUNDATION_APP : null;
+        if (appId && appId !== FOUNDATION_APP) permit('use', 'app', appId, apps.at(appId).holder_id);
+        const active = apps.connector(connector.id, appId);
         still();
         const flow = { connector: connector.id, requestedBy, requestId: request?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null, scopes,
-          app: app?.id ?? null };
+          app: appId };
         // A role is made by the holder in the service's own console, then named here; what Foundation must remember
         // meanwhile (the external ID it chose) travels in the flow, and the flow lasts until the answer is right.
         if (connector.authorization.kind === 'role') {
@@ -989,7 +986,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, connecto
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   return {
-    server, store, holdings, grants, apps: grants.apps, objects, principals, sessions, flows, requests, requestActions, settings, records,
+    server, store, holdings, grants, apps, objects, principals, sessions, flows, requests, requestActions, settings, records,
     async close() {
       clearInterval(timer);
       if (server.listening) await new Promise((resolve) => { server.close(resolve); server.closeIdleConnections(); });

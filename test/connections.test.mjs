@@ -4,8 +4,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
-import { Holdings } from '../src/holdings.mjs';
-import { Grants } from '../src/grants.mjs';
 import { Connectors } from '../src/connectors.mjs';
 import { builtins } from '../src/connectors/index.mjs';
 import { googleOauth } from '../src/connectors/google/index.mjs';
@@ -13,7 +11,7 @@ import { githubOauth } from '../src/connectors/github/index.mjs';
 import { openrouterOauth } from '../src/connectors/openrouter/index.mjs';
 import { FakeGitHub } from '../src/connectors/github/fixture.mjs';
 import { FakeOpenRouter } from '../src/connectors/openrouter/fixture.mjs';
-import { fixture, FakeGoogle, KEY, USER_A } from './helpers.mjs';
+import { fixture, FakeGoogle, KEY, USER_A, resources } from './helpers.mjs';
 import { fail } from '../src/errors.mjs';
 
 const value = (subject, state = 'opaque-0') => ({ subject, privateState: state, facts: { label: subject }, expiresAt: null,
@@ -21,7 +19,7 @@ const value = (subject, state = 'opaque-0') => ({ subject, privateState: state, 
 const example = obtain => ({ id: 'example.authorization', available: true, variables: ['EXAMPLE_KEY'],
   authorization: { kind: 'oauth', begin() {}, complete() {} }, obtain });
 function setup(t, obtain) {
-  const store = new Store(':memory:', KEY), connections = new Grants(store, new Holdings(store), new Connectors([example(obtain)]));
+  const store = new Store(':memory:', KEY), { grants: connections } = resources(store, [example(obtain)]);
   t.after(() => store.close());
   const row = connections.save(USER_A, 'example.authorization', value('account-one'));
   return { store, connections, row };
@@ -115,7 +113,7 @@ test('各サービスの暗号化状態・接続ID・保存名を再起動後も
   t.after(() => rm(directory, { recursive: true, force: true }));
   const makeConnectors = () => [googleOauth(new FakeGoogle()), githubOauth(new FakeGitHub()), openrouterOauth(new FakeOpenRouter())];
   const database = join(directory, 'state.sqlite'), first = await fixture(t, { database, connectors: makeConnectors() });
-  const specs = [ ['google.oauth', 'personal-readonly', 'GOOGLE_OAUTH_ACCESS_TOKEN'],
+  const specs = [ ['google.oauth', 'personal', 'GOOGLE_OAUTH_ACCESS_TOKEN'],
     ['github.oauth', 'octo', 'GH_TOKEN'], ['openrouter.oauth', 'personal', 'OPENROUTER_API_KEY'] ];
   const identities = [];
   for (const [connector, code, output] of specs) {

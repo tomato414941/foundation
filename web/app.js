@@ -279,7 +279,7 @@ function connectionRow(connection) {
   const warning = connection.status !== 'usable';
   const until = connection.expiry_known === false ? '有効期限は不明です' : connection.expires_at ? '認証情報の有効期限 ' + esc(new Date(connection.expires_at).toLocaleString('ja-JP')) : '';
   return `<article class="agent-row connection-row"><div class="connection-identity">${serviceLogo(connection.service)}<div class="agent-name"><h3>${esc(connection.service.name)}</h3><p class="connection-account">${esc(connection.label)}</p></div></div>
-    <div class="connection-details"><p class="connection-status${warning ? ' warning-text' : ''}">${esc(statusName(connection.status))}</p><p class="muted">${esc(connection.access?.name || '')}</p>${connection.app ? `<p class="muted">OAuthアプリ：${esc(connection.app.name)}</p>` : ''}${cloudflareDetails(connection)}${scopeDetails(connection.facts)}${until ? `<p class="muted">${until}</p>` : ''}</div>
+    <div class="connection-details"><p class="connection-status${warning ? ' warning-text' : ''}">${esc(statusName(connection.status))}</p><p class="muted">${esc(connection.access?.name || '')}</p>${connection.app !== undefined ? `<p class="muted">OAuthアプリ：${connection.app ? esc(connection.app.name) : 'なし（削除されました）'}</p>` : ''}${cloudflareDetails(connection)}${scopeDetails(connection.facts)}${until ? `<p class="muted">${until}</p>` : ''}</div>
     <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}" data-connector="${esc(connection.connector)}" ${connectorUsable(state.connectors.find(item => item.id === connection.connector)) ? '' : 'disabled'}>接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
 }
 function cloudflareDetails(connection) {
@@ -303,19 +303,13 @@ function grantRow(entry) {
 }
 const grantMeta = entry => `<span>${esc(kiloBytes(entry.size))}</span><span>更新 ${esc(keptWhen(entry.updated_at))}</span>`;
 function connectSection() {
-  const available = state.connectors.filter(connector => connector.available || connector.apps);
-  if (!available.length) return '';
-  const services = new Map();
-  for (const connector of available) {
-    const name = connector.service?.name || connector.label;
-    if (!services.has(name)) services.set(name, { name, icon: connector.service?.icon || 'key', connectors: [] });
-    services.get(name).connectors.push(connector);
-  }
-  const row = service => `<article class="agent-row"><div class="connection-identity">${serviceLogo(service)}<div class="agent-name"><h3>${esc(service.name)}</h3><p>${esc(service.connectors.map(connector => connector.kind || connector.access.name).join(' / '))}</p></div></div>
-    <div class="agent-permissions"><span class="muted">${esc(service.connectors[0].intro)}</span></div>
-    <div class="agent-actions">${service.connectors.map(connector => `<button class="button secondary" data-action="add-connector" data-connector="${esc(connector.id)}">${icon('plus')} ${esc(service.connectors.length > 1 ? connector.kind || connector.access.name : connector.label)}</button>`).join('')}</div></article>`;
+  const listed = state.connectors.filter(connector => connector.available || connector.apps);
+  if (!listed.length) return '';
+  const row = connector => `<article class="agent-row"><div class="connection-identity">${serviceLogo(connector.service)}<div class="agent-name"><h3>${esc(serviceName(connector))}</h3><p>${esc(connector.access.name)}</p></div></div>
+    <div class="agent-permissions"><span class="muted">${esc(connector.intro)}</span></div>
+    <div class="agent-actions"><button class="button secondary" data-action="add-connector" data-connector="${esc(connector.id)}">${icon('plus')} ${esc(connector.label)}</button></div></article>`;
   return `<section class="resource-section" aria-labelledby="connect-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('lock')}</span><div><h2 id="connect-title">接続を追加</h2><p>接続先の画面で認証します</p></div></div></div>
-    <div class="agent-list">${[...services.values()].map(row).join('')}</div></section>`;
+    <div class="agent-list">${listed.map(row).join('')}</div></section>`;
 }
 function render() {
   if (!state) return;
@@ -483,7 +477,7 @@ function renderAppRequest(row, shell, expiry) {
       ${appFields(connector, 'request-app')}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>
     <button class="text-button full" type="button" data-action="deny-request">登録しない</button>${expiry}</section>`);
   bindForm(async (form) => {
-    const values = Object.fromEntries(connector.apps.fields.map(field => [field, String(form.get(field) || '')]));
+    const values = Object.fromEntries(connector.apps.fields.map(({ name }) => [name, String(form.get(name) || '')]));
     await api('/v1/requests/' + row.id + '/done', { method: 'POST', data: { name: String(form.get('name') || ''), ...values } });
     await refresh();
   }, app);
@@ -567,7 +561,6 @@ function bindForm(handler, container = dialog) {
 }
 // What the holder decides when connecting: which of the service's scopes to give, and which OAuth app to connect
 // through - Foundation's, one of their own, or one someone lent them.
-const APP_FIELDS = { client_id: 'クライアントID', client_secret: 'クライアントシークレット', ru_name: 'RuName' };
 const appsFor = connector => (state.apps || []).filter(app => app.connector === connector.id);
 const connectorUsable = connector => Boolean(connector && (connector.available || appsFor(connector).length));
 function connectChoices(connector, connectionId) {
@@ -599,7 +592,7 @@ function appsSection() {
     ${apps.length ? `<div class="agent-list">${apps.map(row).join('')}</div>` : '<div class="access-empty"><p>OAuthアプリはありません。</p></div>'}</section>`;
 }
 // The fields an app of this service needs, and where its registration at the service must send people back.
-const appFields = (connector, prefix = 'app') => `${connector.apps.fields.map(field => `<label for="${prefix}-${field}">${APP_FIELDS[field] || field}</label><input id="${prefix}-${field}" name="${field}" required autocomplete="off" spellcheck="false"${field === 'client_secret' ? ' type="password"' : ''}>`).join('')}
+const appFields = (connector, prefix = 'app') => `${connector.apps.fields.map(field => `<label for="${prefix}-${field.name}">${esc(field.label)}${field.required ? '' : '（任意）'}</label><input id="${prefix}-${field.name}" name="${field.name}"${field.required ? ' required' : ''} autocomplete="off" spellcheck="false"${field.sealed ? ' type="password"' : ''}${field.placeholder ? ` placeholder="${esc(field.placeholder)}"` : ''}>${field.note ? `<p class="permission-note">${esc(field.note)}</p>` : ''}`).join('')}
   <p class="permission-note">${esc(serviceName(connector))}でアプリを作るとき、リダイレクトURLに <code>${esc(location.origin + '/oauth/' + connector.id + '/callback')}</code> を登録してください。</p>`;
 function addApp(connectorId) {
   const accepting = state.connectors.filter(connector => connector.apps);
@@ -613,7 +606,7 @@ function addApp(connectorId) {
   service.addEventListener('change', () => { dialog.querySelector('.app-body').innerHTML = body(accepting.find(connector => connector.id === service.value)); });
   bindForm(async (form) => {
     const connector = accepting.find(item => item.id === form.get('connector')), name = String(form.get('name') || '');
-    const values = Object.fromEntries(connector.apps.fields.map(field => [field, String(form.get(field) || '')]));
+    const values = Object.fromEntries(connector.apps.fields.map(({ name }) => [name, String(form.get(name) || '')]));
     await api('/v1/holdings?kind=app&name=' + encodeURIComponent(name), { method: 'PUT', data: { connector: connector.id, ...values } });
     closeDialog(); await refresh(); toast(name + ' を追加しました。');
   });
@@ -624,7 +617,7 @@ function changeApp(app) {
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">変更</button></form>`);
   dialog.querySelector('#change-client_id').value = app.client_id;
   bindForm(async (form) => {
-    await api('/v1/holdings/' + app.id, { method: 'PATCH', data: Object.fromEntries(connector.apps.fields.map(field => [field, String(form.get(field) || '')])) });
+    await api('/v1/holdings/' + app.id, { method: 'PATCH', data: Object.fromEntries(connector.apps.fields.map(({ name }) => [name, String(form.get(name) || '')])) });
     closeDialog(); await refresh(); toast('変更しました。');
   });
 }

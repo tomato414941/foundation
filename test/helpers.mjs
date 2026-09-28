@@ -7,17 +7,18 @@ export { FakeGoogle } from '../src/connectors/google/fixture.mjs';
 import { Connectors } from '../src/connectors.mjs';
 import { googleOauth } from '../src/connectors/google/index.mjs';
 import { Grants } from '../src/grants.mjs';
+import { Apps } from '../src/apps.mjs';
 import { Holdings } from '../src/holdings.mjs';
 import { Principals } from '../src/principals.mjs';
 import { Sessions, OAuthFlows } from '../src/sessions.mjs';
 
-// The Gmail scopes the tests ask Google for, by what the connection is for.
+// Gmail scopes the tests ask Google for.
 const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.';
 export const GMAIL = { readonly: [GMAIL_SCOPE + 'readonly'], metadata: [GMAIL_SCOPE + 'metadata'], 'read-send': [GMAIL_SCOPE + 'readonly', GMAIL_SCOPE + 'send'] };
 
 export function resources(store, connectors = []) {
-  const holdings = new Holdings(store);
-  return { holdings, grants: new Grants(store, holdings, new Connectors(connectors)), principals: new Principals(store), sessions: new Sessions(store), flows: new OAuthFlows(store) };
+  const holdings = new Holdings(store), registry = new Connectors(connectors), apps = new Apps(store, holdings, registry);
+  return { holdings, apps, grants: new Grants(store, holdings, registry, apps), principals: new Principals(store), sessions: new Sessions(store), flows: new OAuthFlows(store) };
 }
 
 export const KEY = Buffer.alloc(32, 7);
@@ -47,7 +48,7 @@ export class FakeAuth {
 
 // Seed a stored credential, including already-expired fixture tokens.
 export function acquired(store, connectors, connectorId, { subject, secret }) {
-  const grants = new Grants(store, new Holdings(store), new Connectors(connectors));
+  const { grants } = resources(store, connectors);
   const saved = grants.writeConnection(USER_A, { connector: connectorId, method: 'authorized', subject, label: subject,
     state: { private_state: secret, facts: {}, expires_at: secret.expires_at } });
   const row = () => grants.held(USER_A, saved.id);
@@ -85,20 +86,20 @@ export async function fixture(t, options = {}) {
     cookie = response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
     return response;
   }
-  // A Google connection, asking for the Gmail scopes of a range unless scopes are given.
-  async function start({ range = 'readonly', connection_id, scopes = GMAIL[range] } = {}) {
+  // A Google connection, asking to read Gmail unless other scopes are given.
+  async function start({ connection_id, scopes = GMAIL.readonly } = {}) {
     const result = await request('/v1/connections', { method: 'POST', data: { connector: 'google.oauth', connection_id, scopes } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
   // Returns to the callback the authorization named, as Google would.
-  async function callback(url, code = 'personal-readonly', extra = {}) {
+  async function callback(url, code = 'personal', extra = {}) {
     return request(new URL(url.searchParams.get('redirect_uri')).pathname + '?state=' + url.searchParams.get('state') + '&code=' + code, extra);
   }
-  // Connects one Google account for a Gmail range and returns its independent connection.
-  async function credential(code = 'personal', range = 'readonly') {
-    const url = await start({ range });
-    const response = await callback(url, code + '-' + range);
+  // Connects one Google account, named by the code, and returns its independent connection.
+  async function credential(code = 'personal', scopes = GMAIL.readonly) {
+    const url = await start({ scopes });
+    const response = await callback(url, code);
     assert.equal(response.headers.get('location'), '/connections?connection=connected&connector=google.oauth', response.text);
     return (await request('/v1/overview')).json.grants.find((item) => item.subject === code + '@example.test');
   }

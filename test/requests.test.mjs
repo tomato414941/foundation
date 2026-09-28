@@ -51,7 +51,7 @@ test('A new key asks only to be approved: no access before approval, the same pr
   assert.deepEqual(listed.json.holdings[0].outputs, ['GOOGLE_OAUTH_ACCESS_TOKEN', 'CLOUDSDK_AUTH_ACCESS_TOKEN', 'GOOGLE_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT']);
   const delivered = await f.deliver(saved, { token, anonymous: true, as: USER_A });
   assert.equal(delivered.status, 200);
-  assert.equal(delivered.json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal-readonly');
+  assert.equal(delivered.json.delivery.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal');
 
   assert.equal((await approve(f, row)).status, 409);
   assert.equal(f.app.principals.actorsOf(USER_A).length, 1);
@@ -124,7 +124,7 @@ test('A registration request stays with its owner, completes by registering, and
   await f.login('other@example.test');
   assert.equal((await f.request('/v1/requests/' + row.id)).status, 404);
   const flow = new URL((await f.request('/v1/connections', { method: 'POST', headers: { cookie: ownerCookie }, data: { connector: 'google.oauth', request_id: row.id } })).json.url);
-  await f.callback(flow, 'second-metadata', { headers: { cookie: ownerCookie } });
+  await f.callback(flow, 'second', { headers: { cookie: ownerCookie } });
   const done = (await f.request('/v1/requests/' + row.id, { headers: { cookie: ownerCookie } })).json.request;
   assert.equal(done.status, 'done'); assert.equal(f.app.grants.held(USER_A, done.result.connection_id).subject, 'second@example.test');
   assert.equal((await usable(f, runtime.token)).json.holdings.length, 2);
@@ -155,7 +155,7 @@ for (const end of ['deny', 'cancel', 'expire']) test(`A ${end} registration requ
   const started = new Promise(resolve => { entered = resolve; });
   f.google.exchangeHandler = () => { entered(); return new Promise(resolve => { release = resolve; }); };
   const start = await f.request('/v1/connections', { method: 'POST', data: { connector: 'google.oauth', request_id: row.id } });
-  const callback = f.callback(new URL(start.json.url), 'new-readonly');
+  const callback = f.callback(new URL(start.json.url), 'new');
   await started;
   if (end === 'deny') assert.equal((await f.request('/v1/requests/' + row.id + '/deny', { method: 'POST', data: {} })).status, 200);
   if (end === 'cancel') assert.equal((await f.request('/v1/requests/' + row.id, { method: 'DELETE', token, data: {} })).status, 200);
@@ -320,12 +320,12 @@ test('依頼元が認証失敗と再試行の経過を機密入力なしで確�
   const authorization = new URL(start.json.url), callback = new URL(authorization.searchParams.get('redirect_uri'));
   await f.request(callback.pathname + '?state=' + authorization.searchParams.get('state') + '&error=access_denied');
   const again = await f.request('/v1/connections', { method: 'POST', data: { connector: 'google.oauth', request_id: asked.row.id } });
-  await f.callback(new URL(again.json.url), 'personal-readonly');
+  await f.callback(new URL(again.json.url), 'personal');
   events = (await view()).events;
   assert.deepEqual(events.map(item => item.event), ['page_viewed', 'connect_started', 'connect_failed', 'connect_started', 'connected']);
   assert.equal(events[2].code, 'authorization_denied'); assert.match(events[2].message, /認証は許可されません/); assert.equal(events[2].connector, 'google.oauth');
   assert.ok(events.every(item => Number.isFinite(item.at)));
-  assert.doesNotMatch(JSON.stringify(events), /headers-metadata|personal-readonly|google-access|refresh_token|fdn_|ZZZZ/);
+  assert.doesNotMatch(JSON.stringify(events), /headers|personal-example|google-access|refresh_token|fdn_|ZZZZ/);
   assert.equal((await view()).status, 'done');
   // Another key never sees this request; a cancelled request records it.
   const other = await f.issueKey('other');

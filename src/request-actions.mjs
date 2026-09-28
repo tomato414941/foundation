@@ -5,8 +5,8 @@ import { requestInput } from './request-input.mjs';
 // Operations crossing resource boundaries. Each local result and its request completion
 // commit together; notifications run only after the transaction has committed.
 export class RequestActions {
-  constructor({ store, requests, grants, principals, records, changed = () => {} }) {
-    Object.assign(this, { store, requests, grants, principals, records, changed });
+  constructor({ store, requests, grants, apps, principals, records, changed = () => {} }) {
+    Object.assign(this, { store, requests, grants, apps, principals, records, changed });
   }
   // A store request is checked against what is kept when it is made, so a mismatch reaches the requester
   // and never the one asked: a name already in use must be declared a replacement, and a replacement must
@@ -14,12 +14,12 @@ export class RequestActions {
   ask(fromId, { kind, input, toId, ...rest }) {
     const definition = requestInput(kind, input);
     if (kind === 'store') for (const field of definition.fields) this.placement(toId, field, field.name);
-    if (kind === 'app') this.grants.apps.fields(this.grants.connectors.get(definition.connector));
+    if (kind === 'app') this.apps.fields(this.grants.connectors.get(definition.connector));
     if (kind === 'connect') {
       this.grants.connectors.get(definition.connector);
-      if (definition.app !== undefined) {
-        const app = this.grants.apps.get(definition.app);
-        if (!app || !this.grants.apps.usableBy(toId, app.id)) fail(404, 'not_found', 'アプリが見つかりません。');
+      if (definition.app !== undefined && definition.app !== 'foundation') {
+        const app = this.apps.get(definition.app);
+        if (!app || !this.apps.usableBy(toId, app.id)) fail(404, 'not_found', 'アプリが見つかりません。');
         if (app.connector !== definition.connector) fail(400, 'app_mismatch', 'このアプリは別の接続先のものです。');
       }
       if (definition.connection_id !== undefined) this.grants.reconnection(toId, definition.connector, definition.connection_id);
@@ -66,8 +66,8 @@ export class RequestActions {
       const row = this.requests.forTo(id, toId, true);
       if (row.kind !== 'app') fail(409, 'wrong_kind', 'この依頼はアプリの登録の依頼ではありません。');
       const asked = this.requests.input(row);
-      if (this.grants.apps.find(toId, input?.name ?? '')) fail(409, 'name_taken', 'その名前のアプリはすでにあります。別の名前を入力してください。');
-      const app = this.grants.apps.put(toId, { ...input, connector: asked.connector });
+      if (this.apps.find(toId, input?.name ?? '')) fail(409, 'name_taken', 'その名前のアプリはすでにあります。別の名前を入力してください。');
+      const app = this.apps.put(toId, { ...input, connector: asked.connector });
       this.records.write(toId, 'app.created', 'holding', app.id, { connector: asked.connector, request: id });
       this.requests.done(id, toId, { app_id: app.id });
       this.requests.record(id, 'registered', { connector: asked.connector });

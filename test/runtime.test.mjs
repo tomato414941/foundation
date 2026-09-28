@@ -18,7 +18,7 @@ const execute = (args, env) => new Promise((resolve, reject) => {
 // The runtime is only what the agent cannot do for itself: make the key, and put what is kept into a command.
 // Everything else it does over HTTP, with the key in that file.
 async function storedInputs(f) {
-  for (const [name, value] of [['first input', 'google-access-personal-readonly'], ['second=入力:1', 'personal@example.test']]) {
+  for (const [name, value] of [['first input', 'google-access-personal'], ['second=入力:1', 'personal@example.test']]) {
     const saved = await f.request('/v1/holdings?kind=grant&name=' + encodeURIComponent(name), { method: 'PUT', raw: value });
     assert.equal(saved.status, 200, saved.text);
   }
@@ -184,7 +184,7 @@ test('The runtime hands what is kept to the selected process only', async (t) =>
   const dir = await mkdtemp(join(tmpdir(), 'foundation-runtime-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'runtime-key'); await writeFile(keyPath, runtime.token, { mode: 0o600 });
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
-  const run = await execute(['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal-readonly"||process.env.GOOGLE_ACCOUNT_EMAIL!=="personal@example.test"||process.env.FOUNDATION_RUNTIME_KEY_FILE) process.exit(2);console.log("runtime-ready")'], env);
+  const run = await execute(['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal"||process.env.GOOGLE_ACCOUNT_EMAIL!=="personal@example.test"||process.env.FOUNDATION_RUNTIME_KEY_FILE) process.exit(2);console.log("runtime-ready")'], env);
   assert.equal(run.code, 0, run.err);
   assert.equal(run.out.trim(), 'runtime-ready');
   assert.doesNotMatch(run.out + run.err, /google-access|refresh_token|fdn_/);
@@ -339,7 +339,7 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   const me = await run(foundation, ['api', 'GET', '/v1/principals/me'], env);
   assert.equal(me.code, 0, me.out + me.err);
   const inputs = await storedInputs(f);
-  const delivered = await run(foundation, ['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal-readonly"||process.env.GOOGLE_ACCOUNT_EMAIL!=="personal@example.test")process.exit(2);console.log("package-ready")'], env);
+  const delivered = await run(foundation, ['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal"||process.env.GOOGLE_ACCOUNT_EMAIL!=="personal@example.test")process.exit(2);console.log("package-ready")'], env);
   assert.equal(delivered.code, 0, delivered.err);
   assert.equal(delivered.out.trim(), 'package-ready');
   const output = { name: 'installed login', as: 'NPM_CONFIG_USERCONFIG', filename: 'npmrc' };

@@ -78,6 +78,7 @@ test('アプリを消すと、そのアプリの接続は権限を保ったま�
   assert.equal(removed.json.connections_stopped, 1);
   const stopped = (await f.request('/v1/overview')).json.grants.find(item => item.id === connection.id);
   assert.equal(stopped.status, 'reconnect_required');
+  assert.equal(stopped.app, null, 'it names no app, rather than one it was not made through');
   assert.deepEqual(stopped.facts.requested_scopes, ['dns.write', 'offline_access', 'user-details.read']);
   assert.equal((await f.deliver(connection)).status, 409);
   const other = (await f.register('個人用', { ...WORK, client_id: 'personal-app-id' })).json.holding;
@@ -120,7 +121,7 @@ test('AIはアプリの登録を依頼でき、持ち主が秘密を入力し、
   const f = await withApps(t), { token } = await f.issueKey();
   const asked = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'app', input: { connector: 'cloudflare.oauth' }, purpose: 'メール転送を設定できるアプリを使います。' } });
   assert.equal(asked.status, 201, asked.text);
-  assert.deepEqual(asked.json.request.connector.apps, { fields: ['client_id', 'client_secret'] });
+  assert.deepEqual(asked.json.request.connector.apps.fields.map(field => [field.name, Boolean(field.sealed)]), [['client_id', false], ['client_secret', true]]);
   const done = await f.request('/v1/requests/' + asked.json.request.id + '/done', { method: 'POST', data: { name: 'メール用', client_id: 'mail-app-id', client_secret: 'mail-app-secret' } });
   assert.equal(done.status, 200, done.text);
   const result = (await f.request('/v1/requests/' + asked.json.request.id, { token })).json.request;

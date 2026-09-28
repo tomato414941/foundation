@@ -1,6 +1,6 @@
 import { fail, HttpError } from './errors.mjs';
 import { scopeFacts } from './scopes.mjs';
-import { Apps } from './apps.mjs';
+import { FOUNDATION_APP, takesApps } from './apps.mjs';
 import { randomUUID } from 'node:crypto';
 import { validEnvName } from '../cli/env-name.mjs';
 import { holdingName } from './holdings.mjs';
@@ -46,13 +46,12 @@ export function deliverable(content, { env, filename }) {
 }
 
 export class Grants {
-  constructor(store, holdings, connectors) {
-    this.store = store; this.db = store.db; this.vault = store.vault; this.holdings = holdings; this.connectors = connectors; this.pending = new Map();
-    // The apps connections are made through (apps.mjs). A connection with none was made through Foundation's own.
-    this.apps = new Apps(store, holdings, connectors);
+  // apps: the apps connections are made through (apps.mjs), a kind of holding beside grants.
+  constructor(store, holdings, connectors, apps) {
+    this.store = store; this.db = store.db; this.vault = store.vault; this.holdings = holdings; this.connectors = connectors; this.apps = apps; this.pending = new Map();
   }
   // The connector as it speaks for this connection: through the app it was made with.
-  connectorFor(row) { return row.app_id ? this.apps.connector(this.apps.at(row.app_id)) : this.connectors.get(row.connector); }
+  connectorFor(row) { return this.apps.connector(row.connector, row.app_id); }
   binding(row) { return `grant:${row.holder_id}:${row.id}`; }
 
   // Finding. A name finds a given grant: the holder's word for what they handed over. The others are found by id.
@@ -152,13 +151,14 @@ export class Grants {
     if (row.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
     return row;
   }
-  // app: the holding id of the app the connection was made through, or null for Foundation's own.
-  save(holderId, connectorId, result, { previous, scopes, app = null } = {}) {
+  // app: the app the connection was made through - a held app's id, or Foundation's - for a service authorized
+  // through apps; none otherwise.
+  save(holderId, connectorId, result, { previous, scopes, app = FOUNDATION_APP } = {}) {
     const connector = this.connectors.get(connectorId);
     const state = this.nextState(result, { requested: scopes });
     const label = String(state.facts.label || result.subject).slice(0, 80);
     const method = connector.authorization?.kind === 'role' ? 'delegated' : 'authorized';
-    return this.writeConnection(holderId, { connector: connectorId, app, method, subject: result.subject, label, state }, previous);
+    return this.writeConnection(holderId, { connector: connectorId, app: takesApps(connector) ? app : null, method, subject: result.subject, label, state }, previous);
   }
   // Identity and renewal state belong to the grant, independently of saved values or requests.
   writeConnection(holderId, { connector, app = null, method, subject, label, state }, previous) {
@@ -307,19 +307,13 @@ export class Grants {
     return chosen.content;
   }
 
-  // Which app a connection was made through, as anyone who may see the connection may see it.
-  appView(row) {
-    if (row.method !== 'authorized' || typeof this.connectors.get(row.connector).withClient !== 'function') return null;
-    const app = row.app_id ? this.apps.get(row.app_id) : null;
-    return app ? { id: app.id, name: app.name, foundation: false } : { id: 'foundation', name: 'Foundationのアプリ', foundation: true };
-  }
   // What is said of a grant. The holder sees everything but the sealed state; whoever acts for them sees what
   // they need to use it.
   view(row, { owner = false } = {}) {
     const base = { ...this.holdings.view(row), method: row.method, status: row.status };
     if (row.method === 'given') return { ...base, size: row.size };
     const connector = this.connectors.get(row.connector), state = this.state(row);
-    const shared = { connector: row.connector, service: connector.service, label: state.facts.label || row.name, facts: { ...state.facts, ...scopeFacts(state) }, app: this.appView(row),
+    const shared = { connector: row.connector, service: connector.service, label: state.facts.label || row.name, facts: { ...state.facts, ...scopeFacts(state) }, ...(takesApps(connector) ? { app: this.apps.reference(row.app_id) } : {}),
       access: connector.access, api: connector.service?.api || { base_url: '', documentation_url: '' }, outputs: connector.variables };
     if (!owner) return { ...base, ...shared };
     return { ...base, ...shared, subject: row.subject, generation: row.generation, expires_at: state.expires_at,

@@ -14,23 +14,22 @@ export function scopeList(value) {
   return [...new Set(value)].sort();
 }
 
-// What a connection asks the service for: its base, what it already asked for (or was granted, for one made
-// before scopes were asked for), and what is asked now. Reconnecting never silently drops a scope.
+// What a connection asks the service for: its base, what it already asked for, and what is asked now.
+// Reconnecting never silently drops a scope.
 export function requestedScopes(connector, asked, previousState) {
   if (!connector.scopes) {
     if (asked.length) fail(400, 'scopes_unsupported', 'この接続方法では権限を指定できません。');
     return null;
   }
-  const kept = previousState ? previousState.requested_scopes ?? previousState.facts?.scopes ?? [] : [];
+  const kept = previousState?.requested_scopes ?? [];
   return [...new Set([...connector.scopes.base, ...kept, ...asked])].sort();
 }
 
 // What is said about a connection's scopes: those granted (as the service reports them), those asked for, and the
 // difference either way. Services may grant fewer than asked, or more.
 export function scopeFacts(state) {
-  const granted = state.facts?.scopes;
-  if (!Array.isArray(granted)) return {};
-  const requested = state.requested_scopes ?? granted;
+  const granted = state.facts?.scopes, requested = state.requested_scopes;
+  if (!Array.isArray(granted) || !Array.isArray(requested)) return {};
   return { requested_scopes: requested, missing_scopes: requested.filter(scope => !granted.includes(scope)),
     additional_scopes: granted.filter(scope => !requested.includes(scope)) };
 }

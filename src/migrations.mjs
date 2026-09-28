@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 25;
+export const SCHEMA_VERSION = 26;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -9,7 +9,26 @@ export const STEPS = {
   23: 'DROP TABLE grant_tags; ALTER TABLE grants DROP COLUMN provider;',
   24: migrateGoogleConnections,
   25: holdAppsAsTheirOwnKind,
+  26: nameEveryConnectionsAppAndScopes,
 };
+
+// Every connection names the app it was made through - Foundation's, until now - and records the scopes it asked
+// for - what it was granted, for those made before scopes were asked for. An app says what is not secret apart
+// from what is sealed.
+function nameEveryConnectionsAppAndScopes(store) {
+  const db = store.db, vault = store.vault, throughApps = ['github.oauth', 'google.oauth', 'cloudflare.oauth', 'ebay.oauth'];
+  db.exec("ALTER TABLE apps ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'");
+  const marks = throughApps.map(() => '?').join(',');
+  db.prepare(`UPDATE grants SET app_id='foundation' WHERE app_id IS NULL AND method='authorized' AND connector IN (${marks})`).run(...throughApps);
+  const rows = db.prepare(`SELECT g.holding_id, g.state, h.holder_id FROM grants g JOIN holdings h ON h.id=g.holding_id WHERE g.method='authorized' AND g.connector IN (${marks})`).all(...throughApps);
+  const update = db.prepare('UPDATE grants SET state=? WHERE holding_id=?');
+  for (const row of rows) {
+    const binding = `grant:${row.holder_id}:${row.holding_id}`, state = vault.open(row.state, binding);
+    if (state.requested_scopes || !Array.isArray(state.facts?.scopes)) continue;
+    state.requested_scopes = [...new Set(state.facts.scopes)].sort();
+    update.run(vault.seal(state, binding), row.holding_id);
+  }
+}
 
 // An OAuth app becomes a holding of its own kind, and a connection says which app it was made through. SQLite
 // changes a CHECK only by making the table again: the children of holdings move to new tables first, so dropping
@@ -158,7 +177,7 @@ export const SCHEMA = `
   -- An OAuth app someone holds: which service it is for, its client ID, and its sealed secret (and eBay's RuName).
   CREATE TABLE apps (
     holding_id TEXT PRIMARY KEY REFERENCES holdings(id) ON DELETE CASCADE,
-    connector TEXT NOT NULL, client_id TEXT NOT NULL, secret BLOB NOT NULL
+    connector TEXT NOT NULL, client_id TEXT NOT NULL, secret BLOB NOT NULL, settings TEXT NOT NULL DEFAULT '{}'
   );
   CREATE TABLE records (
     id TEXT PRIMARY KEY, at TEXT NOT NULL, actor_id TEXT NOT NULL, action TEXT NOT NULL,

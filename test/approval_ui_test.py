@@ -114,7 +114,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
         assert query['code_challenge_method'] == ['S256']
         params = {'state': query['state'][0]}
         metadata = 'gmail.metadata' in query['scope'][0]
-        params.update({'error': 'access_denied'} if authorization['deny'] else {'code': 'headers-metadata' if metadata else 'personal-readonly'})
+        params.update({'error': 'access_denied'} if authorization['deny'] else {'code': 'headers' if metadata else 'personal'})
         route.fulfill(status=302, headers={'location': query['redirect_uri'][0] + '?' + urlencode(params)}, body='')
 
     page.route('https://accounts.google.com/o/oauth2/v2/auth?*', consent)

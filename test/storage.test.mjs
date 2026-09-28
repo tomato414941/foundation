@@ -20,7 +20,7 @@ test('Gmail and Supabase secrets are encrypted; keys and cookies never persist i
   for (const value of ['google-access-personal', 'refresh-personal', 'supabase-access-owner', 'supabase-refresh-owner', agent.token, cookie.slice(12)]) assert.ok(!contents.includes(Buffer.from(value)), value);
   const second = new Store(database, KEY); t.after(() => second.close());
   const persisted = resources(second);
-  assert.equal(persisted.grants.state(persisted.grants.held(USER_A, account.id)).private_state.refresh_token, 'refresh-personal-readonly');
+  assert.equal(persisted.grants.state(persisted.grants.held(USER_A, account.id)).private_state.refresh_token, 'refresh-personal');
   assert.ok(persisted.sessions.get(cookie.slice(12)));
   assert.equal(persisted.principals.actsFor(second.db.prepare('SELECT principal_id FROM credentials WHERE hash=?').get(digest(agent.token)).principal_id)[0].id, USER_A);
   const tables = second.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((item) => item.name);

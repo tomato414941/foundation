@@ -78,7 +78,7 @@ test('今日動いている形からの移行は、秘密を渡された委任�
 
   const store = new Store(path, KEY);
   t.after(() => store.close());
-  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 25);
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 26);
   const { grants } = resources(store, [{ id: 'google.oauth', available: false, variables: [], authorization: { kind: 'oauth', begin() {}, complete() {} }, obtain() {} }]);
   const doc = grants.find(USER_A, 'doc');
   assert.equal(doc.method, 'given');
@@ -90,6 +90,7 @@ test('今日動いている形からの移行は、秘密を渡された委任�
   const moved = grants.held(USER_A, 'connection-2');
   assert.equal(moved.connector, 'google.oauth'); assert.equal(moved.subject, 'me@example.test', 'named by its address, as Google connections are');
   assert.equal(moved.status, 'reconnect_required');
+  assert.equal(moved.app_id, 'foundation', 'made through Foundation\'s app, and saying so');
   assert.deepEqual(grants.state(moved).requested_scopes, [CLOUD, EMAIL, 'openid'].sort());
   assert.deepEqual(grants.state(moved).private_state, cloud.private_state);
 });
