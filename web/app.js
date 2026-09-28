@@ -751,11 +751,12 @@ function connectChoices(service, credentialId, appId) {
 // Whether the holder opened the apps; kept while the page is drawn again.
 let appsOpen = false;
 function appsSection() {
-  const apps = state.apps || [];
+  // By service, so a service's own app and Foundation's for it sit side by side; Foundation's comes first.
+  const apps = [...(state.apps || [])].sort((a, b) => (a.service?.name || '').localeCompare(b.service?.name || '', 'ja') || Number(b.foundation) - Number(a.foundation) || a.name.localeCompare(b.name, 'ja'));
   const row = app => {
     const mine = !app.foundation && app.holder_id === state.principal?.id;
-    const detail = app.foundation ? 'Foundationが用意したアプリ。誰でも使えます。' : mine ? `クライアントID ${esc(app.client_id)}・接続 ${esc(String(app.credentials ?? 0))}件` : 'ほかの人から使うことを許可されたアプリ';
-    return `<article class="agent-row"><div class="connection-identity">${serviceLogo(app.service)}<div class="agent-name"><h3>${esc(app.name)}</h3><p>${esc(app.service?.name || '')}</p></div></div>
+    const detail = app.foundation ? '誰でも使えます。' : mine ? `クライアントID ${esc(app.client_id)}・接続 ${esc(String(app.credentials ?? 0))}件` : 'ほかの人から使うことを許可されたアプリ';
+    return `<article class="agent-row"><div class="connection-identity">${serviceLogo(app.service)}<div class="agent-name"><h3>${esc(app.service?.name || '')}</h3><p>${esc(app.name)}</p></div></div>
       <div class="agent-permissions"><span class="muted">${detail}</span></div>
       <div class="agent-actions">${mine ? `<button class="text-button" data-action="change-app" data-id="${esc(app.id)}">シークレットを変更</button><button class="text-button danger" data-action="remove-app" data-id="${esc(app.id)}">削除</button>` : ''}</div></article>`;
   };

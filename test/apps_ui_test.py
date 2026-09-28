@@ -46,7 +46,7 @@ with sync_playwright() as p:
     apps = page.locator('#oauth-apps')
     # OAuth apps are folded away until they are needed.
     apps.locator('summary').click()
-    expect(apps.get_by_role('heading', name='Foundationのアプリ', exact=True).first).to_be_visible()
+    expect(apps.get_by_text('Foundationのアプリ', exact=True).first).to_be_visible()
 
     # Adding an app: the service, a name, its client ID and secret, and the redirect URL to register there.
     apps.get_by_role('button', name='OAuthアプリを追加', exact=True).click()
@@ -60,7 +60,8 @@ with sync_playwright() as p:
         page.screenshot(path=str(shots / 'add-app.png'), full_page=True)
     dialog.get_by_role('button', name='追加', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(apps.get_by_role('heading', name='仕事用', exact=True)).to_be_visible()
+    # Each app is listed under its service, by the name its holder gave it.
+    expect(apps.locator('.agent-row').filter(has=page.get_by_text('仕事用', exact=True)).get_by_role('heading', name='Cloudflare', exact=True)).to_be_visible()
 
     # Connecting through it: the app is chosen in the dialog, and the consent screen is asked by that app.
     asked = {}
@@ -93,7 +94,7 @@ with sync_playwright() as p:
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # A new secret keeps the connection going.
-    row = apps.locator('.agent-row').filter(has=page.get_by_role('heading', name='仕事用', exact=True))
+    row = apps.locator('.agent-row').filter(has=page.get_by_text('仕事用', exact=True))
     row.get_by_role('button', name='シークレットを変更', exact=True).click()
     expect(dialog.get_by_label('クライアントID', exact=True)).to_have_value('work-app-id')
     dialog.get_by_label('クライアントシークレット', exact=True).fill('rotated-secret')
