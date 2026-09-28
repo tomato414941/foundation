@@ -42,8 +42,10 @@ with sync_playwright() as p:
     page.wait_for_load_state('networkidle')
     dialog = page.get_by_role('dialog')
     connect = page.locator('[aria-labelledby="connect-title"]')
-    expect(connect.get_by_role('heading', name='Slack', exact=True)).to_be_visible()
-    connect.get_by_role('button', name='Slackで接続', exact=True).click()
+    # Without an app, Slack waits among the other services, found by searching.
+    connect.get_by_text('ほかのサービス（1件）', exact=True).click()
+    connect.get_by_label('サービスを探す', exact=True).fill('sla')
+    connect.get_by_role('button', name='Slack', exact=True).click()
     review(page)
     if shots:
         page.screenshot(path=str(shots / 'slack-add-app.png'), full_page=True)
@@ -67,6 +69,8 @@ with sync_playwright() as p:
         route.fulfill(status=302, headers={'location': values['redirect_uri'][0] + '?' + urlencode(query)}, body='')
 
     page.route('https://slack.com/oauth/v2/authorize?*', consent)
+    # With an app of the owner's own, Slack is ready to connect.
+    expect(connect.get_by_role('heading', name='Slack', exact=True)).to_be_visible()
     connect.get_by_role('button', name='Slackで接続', exact=True).click()
     expect(dialog.get_by_label('OAuthアプリ', exact=True)).to_have_value(page.evaluate("async () => (await (await fetch('/v1/holdings?kind=app')).json()).holdings.find(app => !app.foundation).id"))
     dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('channels:read\nchat:write')

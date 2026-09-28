@@ -14,8 +14,8 @@ import { awsRole } from '../src/connectors/aws/index.mjs';
 import { FakeAws } from '../src/connectors/aws/fixture.mjs';
 import { oauth2 } from '../src/connectors/oauth2/index.mjs';
 import { FakeOAuth2Service } from '../src/connectors/oauth2/fixture.mjs';
-import { slackOauth } from '../src/connectors/slack/index.mjs';
-import { FakeSlack } from '../src/connectors/slack/fixture.mjs';
+import { FakeSlack } from '../src/connectors/services/fixture.mjs';
+import { create as services } from '../src/connectors/services/index.mjs';
 
 // A bucket that lives in memory, so the lent space can be seen and used in the browser tests.
 const bucket = new Map();
@@ -51,7 +51,9 @@ const connectors = process.env.FOUNDATION_TEST_AWS === '1' ? [awsRole(aws), ...g
   : process.env.FOUNDATION_TEST_GITHUB === '1' ? [githubOauth(new FakeGitHub()), ...googleOnly()]
   : process.env.FOUNDATION_TEST_OAUTH2 === '1' ? [oauth2(new FakeOAuth2Service().client()), ...googleOnly()]
   // Like production today: Foundation has no Slack app of its own, so the holder brings theirs.
-  : process.env.FOUNDATION_TEST_SLACK === '1' ? [slackOauth(Object.assign(new FakeSlack(), { enabled: false })), ...googleOnly()]
+  : process.env.FOUNDATION_TEST_SLACK === '1' ? [new FakeSlack({ configured: false }).connector(), ...googleOnly()]
+  // Every service Foundation knows by name, none with an app of Foundation's own: what a new deployment shows.
+  : process.env.FOUNDATION_TEST_SERVICES === '1' ? [...googleOnly(), ...services({})]
   : process.env.FOUNDATION_TEST_OPENROUTER === '1' ? [openrouterOauth(new FakeOpenRouter()), ...googleOnly()]
   : undefined;
 const app = createApp({ encryptionKey: KEY, auth, space, connectors: connectors || [googleOauth(google)] });

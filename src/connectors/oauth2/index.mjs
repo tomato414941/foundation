@@ -1,7 +1,11 @@
 import { OAuth2Client, OAUTH2_DOCS, httpsUrl } from './client.mjs';
 
+// A service Foundation does not know speaks as the standard says, at the addresses its app names.
+const standard = app => ({ authorize: app.authorizeUrl, token: app.tokenUrl, clientAuth: 'basic',
+  identity: app.userinfoUrl ? { url: app.userinfoUrl } : null, revoke: app.revokeUrl ? { url: app.revokeUrl, style: 'rfc7009' } : null });
 // No configuration: Foundation holds no app of its own for services it does not know. Whoever connects brings one.
-export const create = () => [oauth2(new OAuth2Client())];
+export const create = () => [oauth2(new OAuth2Client({}, { profile: standard }))];
+export const genericClient = fetcher => new OAuth2Client({}, { fetcher, profile: standard });
 
 // A service known only through the app registered for it: named, and pointed at, by that app.
 const serviceFor = settings => ({ name: settings.service_name || 'OAuth 2.0', icon: 'key', management_url: settings.management_url || '',
@@ -36,6 +40,6 @@ export function oauth2(client) {
     },
     obtain: async ({ subject, privateState }) => result({ subject, secret: await client.token(privateState, { subject }) }),
     // Only an app with a revocation URL can take a grant back at the service.
-    ...(client.revokeUrl ? { revoke: privateState => client.revoke(privateState) } : {}),
+    ...(client.revocable ? { revoke: privateState => client.revoke(privateState) } : {}),
   };
 }

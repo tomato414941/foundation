@@ -1,4 +1,4 @@
-import { OAuth2Client } from './client.mjs';
+import { genericClient } from './index.mjs';
 
 // A service that speaks plain OAuth 2.0, at https://service.example. The authorization code names the account; tokens
 // carry a counter so refreshes can be told apart. Handlers may answer instead, by returning { status, body }.
@@ -10,7 +10,7 @@ export class FakeOAuth2Service {
     this.calls = []; this.refreshes = 0; this.revoked = new Set(); this.expiresIn = 3600; this.scope = undefined;
     this.fetch = async (url, options = {}) => this.answer(url, options);
   }
-  client() { return new OAuth2Client({}, { fetcher: this.fetch }); }
+  client() { return genericClient(this.fetch); }
   reply(status, body) { return { ok: status >= 200 && status < 300, status, text: typeof body === 'string' ? body : JSON.stringify(body) }; }
   async answer(url, options) {
     this.calls.push({ url, options });

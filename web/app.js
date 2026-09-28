@@ -118,7 +118,9 @@ function paging(total, showing) {
 const serviceName = connector => connector.service?.name || connector.label;
 const serviceLogo = service => {
   const name = { Cloudflare: 'cloudflare', GitHub: 'github', Google: 'google', OpenRouter: 'openrouter', eBay: 'ebay', Slack: 'slack' }[service?.name];
-  return name ? `<svg viewBox="0 0 24 24" aria-hidden="true"><use href="/service-logos.svg#${name}"/></svg>` : icon(service?.icon || 'key');
+  if (name) return `<svg viewBox="0 0 24 24" aria-hidden="true"><use href="/service-logos.svg#${name}"/></svg>`;
+  // A named service without a logo here is marked by its initial; one known only by its app keeps a plain key.
+  return service?.icon === 'network' && service.name ? `<span class="service-letter" aria-hidden="true">${esc([...service.name][0].toUpperCase())}</span>` : icon(service?.icon || 'key');
 };
 const icon = (name) => {
   const paths = {
@@ -302,19 +304,42 @@ function grantRow(entry) {
     <footer class="grant-footer"><p class="grant-meta">${grantMeta(entry)}</p><button class="text-button danger" data-action="drop-grant" data-name="${esc(entry.name)}">削除</button></footer></article>`;
 }
 const grantMeta = entry => `<span>${esc(kiloBytes(entry.size))}</span><span>更新 ${esc(keptWhen(entry.updated_at))}</span>`;
+// Services ready to connect are listed; the rest - those that need the holder's own OAuth app first - wait below,
+// searchable, so a long catalog does not bury the ones in use.
+let otherServicesOpen = false, serviceFilter = '';
 function connectSection() {
   const listed = state.connectors.filter(connector => connector.available || connector.apps);
   if (!listed.length) return '';
   const row = (service, intro, action) => `<article class="agent-row"><div class="connection-identity">${serviceLogo(service)}<div class="agent-name"><h3>${esc(service.name)}</h3><p>${esc(intro)}</p></div></div>
     <div class="agent-actions">${action}</div></article>`;
   const button = (label, data) => `<button class="button secondary" ${data}>${icon('plus')} ${esc(label)}</button>`;
+  const ready = connector => connector.available || appsFor(connector).length;
   // A service known through its app is listed as that service, once per app; another can be added.
-  const rows = listed.flatMap(connector => connector.apps?.service_from_app
+  const rows = listed.filter(connector => connector.apps?.service_from_app || ready(connector)).flatMap(connector => connector.apps?.service_from_app
     ? [...appsFor(connector).map(app => row(app.service, `OAuthアプリ「${app.name}」を通して接続します`, button(app.service.name + 'に接続', `data-action="add-connector" data-connector="${esc(connector.id)}" data-app="${esc(app.id)}"`))),
       row({ name: 'OAuth 2.0に対応したサービス', icon: 'key' }, connector.intro, button('OAuthアプリを追加', `data-action="add-app" data-connector="${esc(connector.id)}"`))]
     : [row(connector.service, connector.intro, button(connector.label, `data-action="add-connector" data-connector="${esc(connector.id)}"`))]);
+  const others = listed.filter(connector => !connector.apps?.service_from_app && !ready(connector)).sort((a, b) => serviceName(a).localeCompare(serviceName(b), 'ja'));
+  const more = others.length ? `<details class="other-services"${otherServicesOpen ? ' open' : ''}><summary>ほかのサービス（${others.length}件）</summary>
+    <p class="permission-note">自分で作ったOAuthアプリを通して接続します。選ぶと、アプリの登録から始まります。</p>
+    <input id="service-filter" type="search" aria-label="サービスを探す" placeholder="サービスを探す" value="${esc(serviceFilter)}" autocomplete="off">
+    <div class="service-grid">${others.map(connector => `<button class="service-choice" data-action="add-connector" data-connector="${esc(connector.id)}" data-name="${esc(serviceName(connector).toLowerCase())}">${serviceLogo(connector.service)}<span>${esc(serviceName(connector))}</span></button>`).join('')}</div>
+    <p class="permission-note" id="service-none" hidden>見つかりません。OAuth 2.0に対応したサービスなら、OAuthアプリを追加して接続できます。</p></details>` : '';
   return `<section class="resource-section" aria-labelledby="connect-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('lock')}</span><div><h2 id="connect-title">接続を追加</h2><p>接続先の画面で認証します</p></div></div></div>
-    <div class="agent-list">${rows.join('')}</div></section>`;
+    <div class="agent-list">${rows.join('')}</div>${more}</section>`;
+}
+function bindConnect() {
+  const details = document.querySelector('.other-services'), filter = document.querySelector('#service-filter');
+  if (!details) return;
+  details.addEventListener('toggle', () => { otherServicesOpen = details.open; });
+  const apply = () => {
+    const word = serviceFilter.trim().toLowerCase();
+    let shown = 0;
+    details.querySelectorAll('.service-choice').forEach(choice => { choice.hidden = Boolean(word) && !choice.dataset.name.includes(word); if (!choice.hidden) shown++; });
+    details.querySelector('#service-none').hidden = shown > 0;
+  };
+  filter.addEventListener('input', () => { serviceFilter = filter.value; apply(); });
+  apply();
 }
 function render() {
   if (!state) return;
@@ -374,6 +399,7 @@ function render() {
       <section class="resource-section" aria-labelledby="connections-title"><div class="section-heading"><h2 id="connections-title">接続済み</h2></div>
         ${connections.length ? `<div class="agent-list">${connections.map(connectionRow).join('')}</div>` : '<div class="access-empty"><p>接続済みのサービスはありません。</p></div>'}</section>
       ${connectSection()}${appsSection()}`);
+    bindConnect();
     return;
   }
   if (page === 'credentials') {

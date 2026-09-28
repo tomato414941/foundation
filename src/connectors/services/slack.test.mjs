@@ -1,14 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SlackClient } from './client.mjs';
-import { slackOauth, configuration } from './index.mjs';
-import { FakeSlack } from './fixture.mjs';
-import { fixture, json, USER_A } from '../../../test/helpers.mjs';
+import { serviceClient, configuration } from './index.mjs';
+import { FakeSlack, definitionOf } from './fixture.mjs';
+import { fixture, USER_A } from '../../../test/helpers.mjs';
 
 const ASKED = ['channels:read', 'chat:write'];
 
 async function slackFixture(t, slack = new FakeSlack()) {
-  const f = await fixture(t, { connectors: [slackOauth(slack)] });
+  const f = await fixture(t, { connectors: [slack.connector()] });
   async function start(input = {}) {
     const result = await f.request('/v1/connections', { method: 'POST', data: { connector: 'slack.oauth', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
     assert.equal(result.status, 200, result.text);
@@ -26,9 +25,9 @@ async function slackFixture(t, slack = new FakeSlack()) {
 }
 
 test('Slackの設定を読み込み、未設定なら運営のアプリなしとして案内する', async t => {
-  assert.deepEqual(configuration({ FOUNDATION_SLACK_CLIENT_ID: 'id', FOUNDATION_SLACK_CLIENT_SECRET: 'secret' }), { clientId: 'id', clientSecret: 'secret' });
-  for (const config of [{ clientId: 'id' }, { clientSecret: 'secret' }]) assert.throws(() => new SlackClient(config), /Both Foundation Slack/);
-  const f = await slackFixture(t, new SlackClient());
+  assert.deepEqual(configuration(definitionOf('slack'), { FOUNDATION_SLACK_CLIENT_ID: 'id', FOUNDATION_SLACK_CLIENT_SECRET: 'secret' }), { clientId: 'id', clientSecret: 'secret' });
+  for (const config of [{ clientId: 'id' }, { clientSecret: 'secret' }]) assert.throws(() => serviceClient(definitionOf('slack'), config), /Both Foundation Slack/);
+  const f = await slackFixture(t, new FakeSlack({ configured: false }));
   const listed = (await f.request('/v1/connectors')).json.connectors[0];
   assert.equal(listed.available, false);
   assert.equal(listed.apps.foundation, false);
@@ -42,16 +41,16 @@ test('頼まれたBotの権限をカンマ区切りでSlackに求め、ワーク
   assert.equal(url.searchParams.get('scope'), 'channels:read,chat:write');
   assert.equal(url.searchParams.get('redirect_uri'), f.base + '/oauth/slack.oauth/callback');
   assert.match((await f.callback(url, 'personal')).headers.get('location'), /connection=connected/);
-  const exchange = f.slack.calls.find(call => call.url.endsWith('/oauth.v2.access')).options.body;
+  const exchange = new URLSearchParams(f.slack.calls.find(call => call.url.endsWith('/oauth.v2.access')).options.body);
   assert.equal(exchange.get('client_secret'), 'test-slack-secret');
   assert.equal(exchange.get('code'), 'personal');
   const [connection] = await f.connections();
   assert.equal(connection.label, '個人のワークスペース');
-  assert.equal(connection.facts.team_id, 'T0PERSONAL');
+  assert.equal(connection.facts.account, 'T0PERSONAL');
   assert.deepEqual(connection.facts.scopes, ASKED);
   assert.deepEqual(connection.facts.requested_scopes, ASKED);
   assert.deepEqual(connection.facts.missing_scopes, []);
-  assert.equal(connection.facts.rotating, false);
+  assert.equal(connection.facts.expiry_known, false);
   const delivery = await f.deliver(connection);
   assert.equal(delivery.status, 200, delivery.text);
   assert.deepEqual(delivery.json.delivery.environment, { SLACK_BOT_TOKEN: 'xoxb-personal-1-0', SLACK_TEAM_ID: 'T0PERSONAL' });
@@ -63,7 +62,7 @@ test('頼まれたBotの権限をカンマ区切りでSlackに求め、ワーク
 
 test('Slackが許可しなかった権限を不足として報告する', async t => {
   const f = await slackFixture(t);
-  f.slack.tokenHandler = body => json({ ok: true, access_token: 'xoxb-personal-x', scope: 'channels:read', team: { id: 'T0PERSONAL' } });
+  f.slack.tokenHandler = () => ({ ok: true, access_token: 'xoxb-personal-x', scope: 'channels:read', team: { id: 'T0PERSONAL' } });
   const connection = await f.connect();
   assert.deepEqual(connection.facts.missing_scopes, ['chat:write']);
 });
@@ -72,13 +71,13 @@ test('ローテーションするトークンは期限前に更新し、しな�
   const f = await slackFixture(t);
   f.slack.rotating = true;
   const connection = await f.connect();
-  assert.equal(connection.facts.rotating, true);
+  assert.equal(connection.facts.expiry_known, true);
   f.expire(connection.id);
   const delivery = await f.deliver(connection);
   assert.equal(delivery.status, 200, delivery.text);
   assert.equal(delivery.json.delivery.environment.SLACK_BOT_TOKEN, 'xoxb-personal-1-1');
   assert.ok(Number(delivery.json.delivery.environment.SLACK_TOKEN_EXPIRES_AT) > Date.now());
-  const refresh = f.slack.calls.filter(call => call.url.endsWith('/oauth.v2.access')).at(-1).options.body;
+  const refresh = new URLSearchParams(f.slack.calls.filter(call => call.url.endsWith('/oauth.v2.access')).at(-1).options.body);
   assert.equal(refresh.get('grant_type'), 'refresh_token');
   assert.equal(refresh.get('refresh_token'), 'xoxe-refresh-personal-1-0');
   assert.deepEqual(f.secret(connection).scopes, ASKED, 'scopes carry over when a refresh does not name them');
@@ -113,7 +112,7 @@ test('接続解除時にSlackのトークンを取り消し、取り消しに失
   assert.equal(removed.json.service_revoked, true);
   assert.ok(f.slack.revoked.has('xoxb-personal-1-0'));
   const second = await f.connect('work');
-  f.slack.revokeHandler = () => json({ ok: false, error: 'fatal_error' });
+  f.slack.revokeHandler = () => ({ ok: false, error: 'fatal_error' });
   const failed = await f.request('/v1/holdings/' + second.id, { method: 'DELETE', data: { revoke: true } });
   assert.equal(failed.status, 200, failed.text);
   assert.equal(failed.json.service_revoked, false);
@@ -122,7 +121,7 @@ test('接続解除時にSlackのトークンを取り消し、取り消しに失
 
 test('Slackの不正な応答とクライアント認証の失敗を安全なエラーとして返す', async t => {
   const f = await slackFixture(t);
-  for (const answer of [json({ ok: true, access_token: 'has space' }), new Response('<html>'), json({ ok: false, error: 'bad_client_secret' })]) {
+  for (const answer of [{ ok: true, access_token: 'has\nnewline' }, '<html>', { ok: false, error: 'bad_client_secret' }]) {
     f.slack.tokenHandler = () => answer;
     const done = await f.callback(await f.start(), 'personal');
     assert.match(done.headers.get('location'), /connection=failed/);
@@ -131,12 +130,11 @@ test('Slackの不正な応答とクライアント認証の失敗を安全なエ
 });
 
 test('利用者自身のSlackアプリで接続し、そのアプリのクライアントで交換する', async t => {
-  const slack = new FakeSlack(); slack.enabled = false;
-  const f = await slackFixture(t, slack);
+  const f = await slackFixture(t, new FakeSlack({ configured: false }));
   const app = (await f.request('/v1/holdings?kind=app&name=' + encodeURIComponent('自分のBot'), { method: 'PUT', data: { connector: 'slack.oauth', client_id: 'own-id', client_secret: 'own-secret' } })).json.holding;
   const connection = await f.connect('personal', { app: app.id });
   assert.deepEqual(connection.app, { id: app.id, name: '自分のBot', foundation: false });
-  const exchange = f.slack.calls.find(call => call.url.endsWith('/oauth.v2.access')).options.body;
+  const exchange = new URLSearchParams(f.slack.calls.find(call => call.url.endsWith('/oauth.v2.access')).options.body);
   assert.equal(exchange.get('client_id'), 'own-id');
   assert.equal(exchange.get('client_secret'), 'own-secret');
 });

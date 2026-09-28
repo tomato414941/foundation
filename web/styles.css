@@ -102,6 +102,18 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .connection-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .connection-identity > svg { width: 28px; height: 28px; flex: 0 0 28px; }
 .connection-identity .agent-name { min-width: 0; }
+.service-letter { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 28px; border-radius: 7px; background: var(--selected); color: var(--accent); font-weight: 700; font-size: 15px; line-height: 1; }
+.other-services { border-top: 1px solid var(--line); padding: 12px 20px 18px; }
+.other-services summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.other-services[open] summary { margin-bottom: 6px; }
+.other-services input[type="search"] { width: 100%; max-width: 360px; margin: 10px 0 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.service-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.service-choice { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); text-align: left; font-size: 14px; }
+.service-choice:hover { border-color: var(--accent); }
+.service-choice[hidden] { display: none; }
+.service-choice svg { width: 22px; height: 22px; flex: 0 0 22px; }
+.service-choice .service-letter { width: 22px; height: 22px; flex-basis: 22px; font-size: 13px; }
+.service-choice span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connection-account { overflow-wrap: anywhere; }
 .connection-details { font-size: 14px; overflow-wrap: anywhere; }
 .connection-status { font-weight: 500; margin-bottom: 3px; }
