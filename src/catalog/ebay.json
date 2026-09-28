@@ -2,7 +2,6 @@
   "version": 1,
   "id": "ebay",
   "name": "eBay",
-  "logo": "ebay",
   "api": "https://api.ebay.com",
   "docs": "https://developer.ebay.com/develop/apis",
   "console": "https://developer.ebay.com/my/keys",

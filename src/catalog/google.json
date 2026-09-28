@@ -2,7 +2,6 @@
   "version": 1,
   "id": "google",
   "name": "Google",
-  "logo": "google",
   "api": "https://www.googleapis.com",
   "docs": "https://developers.google.com/apis-explorer",
   "console": "https://console.cloud.google.com/apis/credentials",

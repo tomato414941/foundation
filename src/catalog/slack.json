@@ -59,6 +59,5 @@
         "SLACK_TEAM_ID": "{account}"
       }
     }
-  },
-  "logo": "slack"
+  }
 }

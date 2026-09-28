@@ -2,6 +2,7 @@
   "version": 1,
   "id": "dropbox",
   "name": "Dropbox",
+  "logo": "dropbox",
   "api": "https://api.dropboxapi.com/2",
   "docs": "https://www.dropbox.com/developers/documentation/http/documentation",
   "console": "https://www.dropbox.com/developers/apps",

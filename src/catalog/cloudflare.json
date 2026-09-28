@@ -2,7 +2,6 @@
   "version": 1,
   "id": "cloudflare",
   "name": "Cloudflare",
-  "logo": "cloudflare",
   "api": "https://api.cloudflare.com/client/v4",
   "docs": "https://developers.cloudflare.com/api/",
   "auth_schemes": {

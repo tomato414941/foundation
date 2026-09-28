@@ -60,7 +60,7 @@ test('Connections expose explicit credential outputs independently of saved name
   assert.deepEqual((await f.request('/v1/resources?kind=credential', { token: agent.token })).json.resources.map(row => row.auth_scheme), [null, 'oauth', 'oauth'], 'secrets and credentials for services are listed together');
   const connections = await f.request('/v1/resources?kind=credential&secret=false', { token: agent.token });
   assert.deepEqual(connections.json.resources.map(item => item.id), [a.id, b.id]);
-  assert.deepEqual(connections.json.resources[0].service, { id: 'google', name: 'Google', logo: 'google', catalog: true });
+  assert.deepEqual(connections.json.resources[0].service, { id: 'google', name: 'Google', catalog: true });
   assert.doesNotMatch(connections.text, /refresh_token|google-access-|"state":/);
 
   const result = await f.inject(a, { token: agent.token });
