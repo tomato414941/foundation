@@ -2,7 +2,7 @@ import { requestResultView, knownRequestKind } from './request-view.js';
 
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
 const publicInfo = document.querySelector('#public-info');
-let state = null, toastTimer, loginTimer, revision = 0;
+let state = null, toastTimer, loginTimer, revision = 0, refreshController;
 const isLoginConfirmation = location.pathname === '/login/confirm';
 // A fragment is not sent in HTTP requests. Keep the emailed key only in this page's memory.
 const loginLink = isLoginConfirmation ? new URLSearchParams(location.hash.slice(1)) : null;
@@ -17,8 +17,9 @@ let linked = false, back = null;
 // Back to the product: its return page with how the request ended, or its refresh page when the link was no good.
 const backTo = row => { if (!row) return back.refresh_url; const url = new URL(back.return_url); url.searchParams.set('foundation_status', row.status); return url.href; };
 try { linked = Boolean(requestId) && sessionStorage.getItem('linked:' + requestId) === '1'; } catch {}
-const page = location.pathname === '/objects' ? 'objects' : location.pathname === '/credentials' ? 'credentials' : location.pathname === '/connections' ? 'connections' : location.pathname === '/functions' ? 'functions' : location.pathname === '/account' ? 'account' : location.pathname === '/principals' ? 'principals' : 'home';
-const pagePath = requestId ? location.pathname : page === 'home' ? '/' : '/' + page;
+const pages = { '/': 'Foundation', '/credentials': '認証情報', '/connections': '接続', '/objects': 'オブジェクト', '/principals': 'アクセス管理', '/functions': 'ファンクション', '/account': 'アカウント' };
+let page = Object.hasOwn(pages, location.pathname) ? location.pathname.slice(1) || 'home' : 'home';
+let pagePath = requestId ? location.pathname : page === 'home' ? '/' : '/' + page;
 let accessRequest = null, requestError = '';
 const loginMessages = {
   expired: '有効期限が切れています。もう一度ログインメールを送信してください。',
@@ -67,7 +68,8 @@ function sortFiles(files) {
 }
 function spaceSection() {
   const space = state.space;
-  if (!space || !space.available) return '<section class="resource-section object-browser"><div class="access-empty"><p>置き場は現在使えません。</p></div></section>';
+  if (space === undefined) return '<section class="resource-section object-browser" aria-busy="true"><div class="content-loading" role="status" aria-label="読み込み中"><span></span><span></span><span></span></div></section>';
+  if (!space || !space.available) return '<section class="resource-section object-browser"><div class="access-empty"><p>置き場は現在使えません。</p><button class="text-button" data-action="retry-page">再読み込み</button></div></section>';
   const needle = objectFilter.trim().toLowerCase();
   const matching = !needle ? space.objects
     : objectSearchPrefix ? space.objects.filter(item => item.key.slice(objectPrefix.length).toLowerCase().startsWith(needle))
@@ -145,8 +147,8 @@ const icon = (name) => {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
 const brand = '<a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true">F</span>Foundation</a>';
-const nav = `<nav class="page-nav">${[['/credentials', 'credentials', '認証情報'], ['/connections', 'connections', '接続'], ['/objects', 'objects', 'オブジェクト'], ['/principals', 'principals', 'アクセス管理'], ['/functions', 'functions', 'ファンクション']]
-  .map(([href, name, label]) => `<a href="${href}"${name === page ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
+const nav = `<nav class="page-nav">${Object.entries(pages).filter(([href]) => href !== '/' && href !== '/account')
+  .map(([href, label]) => `<a href="${href}">${label}</a>`).join('')}</nav>`;
 const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
 function toast(text) {
   clearTimeout(toastTimer); notice.textContent = text; notice.hidden = false;
@@ -155,8 +157,9 @@ function toast(text) {
 async function api(path, { method = 'GET', data, signal } = {}) {
   let response;
   try { response = await fetch(path, { method, signal, credentials: 'same-origin', cache: 'no-store', headers: data !== undefined ? { 'content-type': 'application/json' } : {}, ...(data !== undefined ? { body: JSON.stringify(data) } : {}) }); }
-  catch { throw new Error('接続できませんでした。通信状況を確認してください。'); }
+  catch (error) { if (signal?.aborted) throw error; throw new Error('接続できませんでした。通信状況を確認してください。'); }
   const result = await response.json();
+  signal?.throwIfAborted();
   if (!response.ok) {
     const error = new Error(result.error?.message || '処理を完了できませんでした。'); error.status = response.status; error.code = result.error?.code; error.details = result.error;
     if (response.status === 401 && !linked && path !== '/v1/session' && !path.startsWith('/v1/login')) await showLogin();
@@ -190,7 +193,9 @@ function showLoginConfirmation() {
 }
 async function showLogin({ email = '', message = loginNotice } = {}) {
   clearInterval(loginTimer);
+  refreshController?.abort();
   const current = ++revision; state = null; closeDialog();
+  document.title = 'Foundation';
   let config = { available: false, pending: null };
   try { config = await api('/v1/login'); } catch {}
   if (current !== revision) return;
@@ -239,13 +244,16 @@ async function showLogin({ email = '', message = loginNotice } = {}) {
 }
 window.addEventListener('focus', () => { if (document.querySelector('#email-sent')) void refresh().catch(() => {}); });
 // The owner's objects: every page of the listing, and how much of the space they use.
-async function loadSpace() {
+async function loadSpace(signal) {
   try {
-    const objects = (await api('/v1/holdings?kind=object')).holdings.map(item => ({ ...item, key: item.name, updated_at: Date.parse(item.updated_at) }));
-    return { available: true, objects, usage: (await api('/v1/usage')).objects };
+    const [listing, usage] = await Promise.all([api('/v1/holdings?kind=object', { signal }), api('/v1/usage', { signal })]);
+    const objects = listing.holdings.map(item => ({ ...item, key: item.name, updated_at: Date.parse(item.updated_at) }));
+    return { available: true, objects, usage: usage.objects };
   } catch { return null; }
 }
-async function refresh() {
+const editingPage = () => dialog.open || Boolean(app.querySelector('main')?.contains(document.activeElement)
+  && document.activeElement.matches('input, textarea, select, [contenteditable="true"]'));
+async function refresh({ background = false } = {}) {
   if (linked) {
     try { back = back || (await api('/v1/requests/' + requestId + '/return')).back; } catch {}
     try { accessRequest = (await api(requestApi)).request; requestError = ''; }
@@ -254,21 +262,84 @@ async function refresh() {
     render();
     return;
   }
-  // The home is drawn as soon as the state is here; the objects' count, which asks the storage, fills in after.
-  // The objects page is those objects, so it waits for them.
-  const current = ++revision, loading = page === 'home' ? loadSpace() : null;
-  const [result, space] = await Promise.all([api('/v1/overview'), page === 'objects' ? loadSpace() : undefined]);
-  if (requestId && current === revision) {
-    try {
-      const found = (await api(requestApi)).request;
-      accessRequest = found; requestError = '';
+  refreshController?.abort();
+  const controller = refreshController = new AbortController(), { signal } = controller;
+  const current = ++revision, loading = ['home', 'objects'].includes(page) ? loadSpace(signal) : null;
+  try {
+    const result = await api('/v1/overview', { signal });
+    if (requestId && current === revision) {
+      try {
+        const found = (await api(requestApi, { signal })).request;
+        accessRequest = found; requestError = '';
+      }
+      catch (error) { accessRequest = null; requestError = error.message; }
     }
-    catch (error) { accessRequest = null; requestError = error.message; }
+    if (current !== revision || signal.aborted) return;
+    const sameOwner = state?.user.id === result.user.id;
+    // Keep the displayed snapshot consistent while the holder edits it. Their next save or navigation refreshes it.
+    if (background && sameOwner && editingPage()) return;
+    const changed = !state || Object.entries(result).some(([key, value]) => JSON.stringify(state[key]) !== JSON.stringify(value));
+    const space = sameOwner ? state.space : undefined;
+    if (!sameOwner) closeDialog();
+    state = { ...result, space };
+    if (!background || changed) render();
+    if (loading) {
+      const loaded = await loading;
+      if (current !== revision || signal.aborted) return;
+      if (background && editingPage()) return;
+      const changed = JSON.stringify(state.space) !== JSON.stringify(loaded);
+      state.space = loaded;
+      if (page === 'objects' && changed) render();
+      if (page === 'home') {
+        const count = app.querySelector('.home-card[href="/objects"] p');
+        if (count) count.textContent = spaceSummary(loaded);
+      }
+    }
+  } catch (error) {
+    if (signal.aborted || current !== revision) return;
+    if (page === 'objects' && state && state.space === undefined) { state.space = null; render(); }
+    throw error;
   }
-  if (current !== revision) return;
-  state = { ...result, space };
-  render();
-  if (loading) { const loaded = await loading; if (current === revision) { state = { ...state, space: loaded }; render(); } }
+}
+const spaceSummary = space => space === undefined ? '…' : space?.available ? `${space.usage.count} 件・${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}` : '使えません';
+
+// Ordinary links still open directly or in a new tab. Within the signed-in workspace, keep the frame.
+function scrollToPage(position = [0, 0]) {
+  let anchor;
+  try { anchor = document.getElementById(decodeURIComponent(location.hash.slice(1))); } catch {}
+  if (anchor) anchor.scrollIntoView();
+  else window.scrollTo({ left: position[0], top: position[1], behavior: 'auto' });
+}
+function navigate(url, { restore = false, position } = {}) {
+  if (!restore) {
+    history.replaceState({ ...history.state, scroll: [scrollX, scrollY] }, '', location.href);
+    history.pushState({ scroll: [0, 0] }, '', url);
+  }
+  const changed = pagePath !== url.pathname;
+  pagePath = url.pathname; page = pagePath.slice(1) || 'home';
+  if (changed) {
+    closeDialog(); clearTimeout(toastTimer); notice.hidden = true;
+    render();
+    app.querySelector('main')?.focus({ preventScroll: true });
+    void refresh({ background: true }).catch(error => { if (error.status !== 401) toast(error.message); });
+  }
+  scrollToPage(position);
+}
+document.addEventListener('click', event => {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || !state || requestId || isLoginConfirmation) return;
+  const link = event.target.closest('a[href]');
+  if (!link || link.hasAttribute('download') || (link.target && link.target !== '_self')) return;
+  const url = new URL(link.href);
+  if (url.origin !== location.origin || !Object.hasOwn(pages, url.pathname) || url.search) return;
+  event.preventDefault();
+  if (url.href !== location.href) navigate(url);
+});
+if (!requestId && !isLoginConfirmation) {
+  history.scrollRestoration = 'manual';
+  window.addEventListener('popstate', event => {
+    if (!state) { location.reload(); return; }
+    navigate(new URL(location.href), { restore: true, position: event.state?.scroll });
+  });
 }
 // What the holder let Foundation use: grants they handed over (given) and services they connected.
 const given = () => (state.grants || []).filter(item => item.method === 'given');
@@ -344,18 +415,26 @@ function bindConnect() {
 function render() {
   if (!state) return;
   if (requestId) { renderRequest(); return; }
-  const shell = inner => `<div class="workspace"><header class="topbar">${brand}${nav}<div class="user-menu"><a href="/account"${page === 'account' ? ' aria-current="page"' : ''}>アカウント</a><button class="text-button" data-action="logout">ログアウト</button></div></header><main>${inner}</main></div>`;
+  const shell = inner => {
+    if (!app.querySelector('.page-nav')) app.innerHTML = `<div class="workspace"><header class="topbar">${brand}${nav}<div class="user-menu"><a href="/account">アカウント</a><button class="text-button" data-action="logout">ログアウト</button></div></header><main tabindex="-1"></main></div>`;
+    app.querySelector('.topbar').querySelectorAll('a').forEach(link => {
+      if (link.getAttribute('href') === pagePath) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    });
+    document.title = page === 'home' ? 'Foundation' : pages[pagePath] + ' · Foundation';
+    app.querySelector('main').innerHTML = inner;
+  };
   if (page === 'objects') {
     const usage = state.space?.usage;
-    app.innerHTML = shell(`<header class="page-heading page-heading-actions"><div><h1>オブジェクト</h1>${usage ? `<p>${esc(kiloBytes(usage.bytes))} / ${esc(kiloBytes(usage.bytes_max))}・${usage.count} / ${usage.count_max} 件</p>` : ''}</div>
-      <label class="button secondary" for="space-upload">${icon('plus')} 追加</label><input id="space-upload" type="file" hidden></header>${spaceSection()}`);
+    shell(`<header class="page-heading page-heading-actions"><div><h1>オブジェクト</h1>${usage ? `<p>${esc(kiloBytes(usage.bytes))} / ${esc(kiloBytes(usage.bytes_max))}・${usage.count} / ${usage.count_max} 件</p>` : ''}</div>
+      <label class="button secondary" for="space-upload">${icon('plus')} 追加</label><input id="space-upload" type="file" ${state.space === undefined ? 'disabled' : ''} hidden></header>${spaceSection()}`);
     bindObjects();
     return;
   }
   if (page === 'functions') {
     // Available operations, independent of their invocations.
     const known = { 'http.request': ['HTTPS リクエスト', '預けたものを使ってHTTPSリクエストを送ります。'] };
-    app.innerHTML = shell(`<header class="page-heading"><h1>ファンクション</h1></header>
+    shell(`<header class="page-heading"><h1>ファンクション</h1></header>
       <section class="resource-section" aria-labelledby="functions-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="functions-title">処理</h2></div></div></div>
       <div class="agent-list">${(state.functions || []).map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(known[item.id]?.[0] || item.id)}</h3><p><code>${esc(item.id)}</code></p></div><div class="agent-permissions"><span class="muted">${esc(known[item.id]?.[1] || item.description)}</span></div><div class="agent-actions"></div></article>`).join('')}</div></section>
       `);
@@ -363,7 +442,7 @@ function render() {
   }
   if (page === 'account') {
     // The account itself: who this is, and the few things done to it rather than in it.
-    app.innerHTML = shell(`<header class="page-heading"><h1>アカウント</h1><p>${esc(state.user.email)}</p></header>
+    shell(`<header class="page-heading"><h1>アカウント</h1><p>${esc(state.user.email)}</p></header>
       <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">データのダウンロード</h2><p>認証情報の値、接続と登録した相手の一覧が JSON ファイルで入ります。オブジェクトは入りません。</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ダウンロード</a></div></section>
       <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">開発者</h2></div></div><a class="button secondary" href="/principals#apps">アプリの登録</a></div></section>`);
     return;
@@ -373,11 +452,11 @@ function render() {
     const space = state.space, kept = given(), connections = connected(), keys = state.actors || [];
     const card = (href, title, line) => `<a class="home-card" href="${href}"><h2>${title}</h2><p>${esc(line)}</p></a>`;
     const lastUsed = keys.flatMap(key => key.credentials.map(item => item.last_used_at)).filter(Boolean).sort().at(-1);
-    app.innerHTML = shell(`<header class="page-heading"><h1>Foundation</h1></header>
+    shell(`<header class="page-heading"><h1>Foundation</h1></header>
       <div class="home-cards">
         ${card('/credentials', '認証情報', `${kept.length} 件`)}
         ${card('/connections', '接続', `${connections.length} 件${connections.length ? '（' + connections.map(item => item.label).join('、') + '）' : ''}`)}
-        ${card('/objects', 'オブジェクト', space === undefined ? '…' : space?.available ? `${space.usage.count} 件・${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}` : '使えません')}
+        ${card('/objects', 'オブジェクト', spaceSummary(space))}
         ${card('/principals', 'アクセス管理', keys.length ? `許可済み ${keys.length} 件${lastUsed ? '・最終利用 ' + new Date(lastUsed).toLocaleString('ja-JP') : ''}` : 'ありません')}
         ${card('/functions', 'ファンクション', `${state.functions?.length || 0} 種類`)}
       </div>`);
@@ -387,7 +466,7 @@ function render() {
     const actors = state.actors || [], others = (state.principals || []).filter(item => !actors.some(actor => actor.id === item.id));
     const used = item => { const at = item.credentials.map(c => c.last_used_at).filter(Boolean).sort().at(-1); return at ? '最終利用 ' + esc(new Date(at).toLocaleString('ja-JP')) : 'まだ利用されていません'; };
     const row = (item, allowed) => `<article class="agent-row access-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${used(item)}</p></div><div class="agent-permissions"><span class="muted">${allowed ? '許可 ' + esc(new Date(item.approved_at).toLocaleDateString('ja-JP')) : '全体へのアクセス許可なし'}</span></div><div class="agent-actions"><button class="text-button" data-action="principal-details" data-id="${esc(item.id)}">詳細</button>${allowed ? `<button class="text-button danger" data-action="revoke-access" data-id="${esc(item.id)}">取り消す</button>` : ''}</div></article>`;
-    app.innerHTML = shell(`<header class="page-heading"><h1>アクセス管理</h1></header>
+    shell(`<header class="page-heading"><h1>アクセス管理</h1></header>
       <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><h2 id="access-title">登録した相手</h2></div><button class="button secondary" data-action="add-key">${icon('plus')} 追加</button></div>
       ${actors.length || others.length ? `<div class="agent-list">${actors.map(item => row(item, true)).join('')}${others.map(item => row(item, false)).join('')}</div>` : '<div class="access-empty"><p>登録した相手はいません。</p></div>'}</section>
       <div class="integration-entry" id="apps"><button class="text-button" data-action="add-integration">アプリを登録</button></div>`);
@@ -395,7 +474,7 @@ function render() {
   }
   if (page === 'connections') {
     const connections = connected();
-    app.innerHTML = shell(`<header class="page-heading"><h1>接続</h1></header>
+    shell(`<header class="page-heading"><h1>接続</h1></header>
       <section class="resource-section" aria-labelledby="connections-title"><div class="section-heading"><h2 id="connections-title">接続済み</h2></div>
         ${connections.length ? `<div class="agent-list">${connections.map(connectionRow).join('')}</div>` : '<div class="access-empty"><p>接続済みのサービスはありません。</p></div>'}</section>
       ${connectSection()}${appsSection()}`);
@@ -404,7 +483,7 @@ function render() {
   }
   if (page === 'credentials') {
     const kept = given();
-    app.innerHTML = shell(`<header class="page-heading page-heading-actions"><h1>認証情報</h1>
+    shell(`<header class="page-heading page-heading-actions"><h1>認証情報</h1>
       <button class="button secondary" data-action="add-grant">${icon('plus')} 追加</button></header>
       <section class="resource-section" aria-label="認証情報">
         ${kept.length ? `<div class="agent-list">${kept.map(grantRow).join('')}</div>` : '<div class="access-empty"><p>認証情報はありません。</p></div>'}</section>`);
@@ -947,6 +1026,7 @@ document.addEventListener('click', async (event) => {
   const { action, id } = target.dataset;
   try {
     if (action === 'close-dialog') closeDialog();
+    if (action === 'retry-page') { target.disabled = true; await refresh(); }
     if (action === 'logout') { target.disabled = true; await api('/v1/session', { method: 'DELETE', data: {} }); await showLogin(); }
     if (action === 'request-connect') {
       target.disabled = true;
@@ -1039,8 +1119,9 @@ if (linkToken) {
 }
 if (isLoginConfirmation) showLoginConfirmation();
 else {
-  if ((location.search || location.hash) && resultCode !== 'review') history.replaceState(null, '', pagePath);
+  if ((location.search || linkToken) && resultCode !== 'review') history.replaceState(null, '', pagePath + (linkToken ? '' : location.hash));
   try { await refresh(); } catch (error) { if (error.status !== 401) { await showLogin(); toast(error.message); } }
+  if (state && !requestId) scrollToPage(history.state?.scroll);
 }
 // What came back from an OAuth round trip, in words that hold for any service.
 const resultMessages = { connected: '接続しました。', denied: '接続をキャンセルしました。', expired: '接続の手続きが切れました。もう一度お試しください。',

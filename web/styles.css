@@ -22,6 +22,10 @@ svg { width: 19px; height: 19px; flex-shrink: 0; }
 .muted, .optional { color: var(--muted); }
 .block { display: block; }
 .loading { padding: 40px 24px; }
+.content-loading { display: grid; gap: 18px; padding: 24px 0 28px; }
+.content-loading span { height: 18px; border-radius: 4px; background: var(--soft); }
+.content-loading span:nth-child(2) { width: 78%; }
+.content-loading span:nth-child(3) { width: 52%; }
 .workspace { max-width: 1136px; margin: 0 auto; padding: 0 40px 72px; }
 .topbar { display: flex; min-height: 88px; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid #cdd9d0; }
 .brand { display: inline-flex; align-items: center; gap: 11px; font-size: 21px; font-weight: 650; letter-spacing: -.045em; }
