@@ -4,13 +4,15 @@ import { builtins } from './catalog.mjs';
 import { SupabaseAuth } from './auth.mjs';
 import { Kms, resolveEncryptionKey } from './kms.mjs';
 import { S3Space } from './objects.mjs';
+import { FlyRunner } from './runners/fly.mjs';
 
 const config = configuration();
 const kms = config.kms.keyId ? new Kms({ keyId: config.kms.keyId, region: config.kms.region }) : null;
 const encryptionKey = await resolveEncryptionKey({ database: config.database, encryptionKey: config.encryptionKey, kms });
 const auth = new SupabaseAuth(config.supabase);
 const services = builtins();
-const app = createApp({ database: config.database, encryptionKey, space: new S3Space(config.objects), publicOrigin: config.publicOrigin, owners: config.owners, trustedProxies: config.trustedProxies, auth, services });
+const runner = config.runner.token && config.runner.app && config.runner.image ? new FlyRunner(config.runner) : null;
+const app = createApp({ database: config.database, encryptionKey, runner, space: new S3Space(config.objects), publicOrigin: config.publicOrigin, owners: config.owners, trustedProxies: config.trustedProxies, auth, services });
 app.server.listen(config.port, config.bind, () => {
   console.log(`Foundation: http://${config.bind}:${config.port}`);
   console.log(`Encryption key: ${kms ? 'wrapped by KMS ' + config.kms.keyId : 'plaintext key file or variable'}`);
@@ -19,6 +21,7 @@ app.server.listen(config.port, config.bind, () => {
   console.log(`Email login: ${auth.emailEnabled ? 'enabled' : 'disabled'}; Object space: ${config.objects.bucket || 'not configured'}`);
   // Which services Foundation's own side is set up for: its OAuth app, or its role.
   console.log('Services with Foundation\'s own app or role: ' + services.filter(entry => Object.values(entry.schemes).some(scheme => scheme.kind !== 'token' && scheme.available)).map(entry => entry.definition.id).join(', '));
+  console.log(`Lent machines: ${runner ? 'Fly Machines, app ' + config.runner.app + ' in ' + config.runner.region : 'not configured'}`);
   console.log(`Owners: ${config.owners.length ? config.owners.join(', ') : 'anyone who can log in'}`);
 });
 let closing = false;
