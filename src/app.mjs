@@ -246,14 +246,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         return res.end(content);
       }
       if (at === 'health' && method === 'GET') return send(200, { status: 'ok' });
-      if (path === '/start' && (method === 'GET' || method === 'HEAD')) {
-        // Older CLIs fall back to a stale bundled guide on any non-200 response.
-        const instructions = `The standalone guide has been retired. Read ${origin}/openapi.json or ${origin}/docs.\nUpdate the CLI: npm install -g @tomato414941/foundation@latest\n`;
-        res.setHeader('Link', '</openapi.json>; rel="service-desc"');
-        res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
-        return res.end(method === 'HEAD' ? undefined : instructions);
-      }
       if (path === '/login/callback' && method === 'GET') return redirect('/?login=invalid');
+      if (!route && path !== '/mcp') fail(404, 'not_found', '指定された操作が見つかりません。');
       // Every OAuth consent comes back here: the state names the flow, and the flow the service and the app.
       if (at === 'oauthCallback' && method === 'GET') {
         let destination = '/services', flowService = null;

@@ -2,6 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, USER_A } from './helpers.mjs';
 
+test('未定義のURLには認証状態によらず404を返し、認証が必要なAPIにはログインを要求する', async t => {
+  const f = await fixture(t);
+  for (const anonymous of [true, false]) {
+    for (const path of ['/unknown-page', '/v1/unknown-operation']) {
+      const response = await f.request(path, { anonymous });
+      assert.equal(response.status, 404);
+      assert.equal(response.json.error.code, 'not_found');
+      const head = await f.request(path, { method: 'HEAD', anonymous });
+      assert.equal(head.status, 404);
+      assert.equal(head.text, '');
+    }
+  }
+  const protectedResource = await f.request('/v1/resources?kind=secret', { anonymous: true });
+  assert.equal(protectedResource.status, 401);
+  assert.equal(protectedResource.json.error.code, 'login_required');
+});
+
 test('公開入口のHTMLからFoundationの説明とAPI仕様へ進めるようにする', async t => {
   const f = await fixture(t, { login: false });
   const page = await f.request('/', { anonymous: true });
