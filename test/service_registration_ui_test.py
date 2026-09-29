@@ -192,7 +192,7 @@ with sync_playwright() as p:
 
     # AIからの依頼でも、未検証であることを伝えてトークンを受け取る。
     actor = api('/v1/principals', 'POST', {'name': 'テストAI', 'actor': True, 'key': True})
-    response = context.request.post(args.base + '/v1/requests?as=' + actor['principal']['acts_for'][0]['id'],
+    response = context.request.post(args.base + '/v1/requests?as=' + actor['principal']['acts_for'][0],
         data={'kind': 'connect', 'input': {'service': named['id'], 'auth_scheme': 'token'}, 'purpose': '接続を確認します。'},
         headers={'Origin': args.base, 'Authorization': 'Bearer ' + actor['token']})
     assert response.ok, response.text()

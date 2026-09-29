@@ -6,8 +6,8 @@ import { takesApps } from './apps.mjs';
 // Operations crossing resource boundaries. Each local result and its request completion
 // commit together; notifications run only after the transaction has committed.
 export class RequestActions {
-  constructor({ store, requests, credentials, services, apps, principals, auditLog, changed = () => {} }) {
-    Object.assign(this, { store, requests, credentials, services, apps, principals, auditLog, changed });
+  constructor({ store, requests, credentials, services, apps, principals, authorization, auditLog, changed = () => {} }) {
+    Object.assign(this, { store, requests, credentials, services, apps, principals, authorization, auditLog, changed });
   }
   // A request is checked against what is there when it is made, so a mismatch reaches the requester and never the
   // one asked. A secret's name already in use must be declared a replacement, and a replacement must name something
@@ -27,7 +27,7 @@ export class RequestActions {
       const previous = definition.credential_id === undefined ? undefined : this.credentials.reconnection(toId, ref, definition.auth_scheme, definition.credential_id);
       if (definition.app !== undefined && definition.app !== 'foundation') {
         const app = this.apps.get(definition.app);
-        if (!app || !this.apps.usableBy(toId, app.id)) fail(404, 'not_found', 'アプリが見つかりません。');
+        if (!app || !this.authorization.can(toId, 'use', 'app', { id: app.id, holder: app.holder_id })) fail(404, 'not_found', 'アプリが見つかりません。');
         if (app.service !== ref) fail(400, 'app_mismatch', 'このアプリは別のサービスのものです。');
       } else if (takesApps(scheme) && !(definition.app === undefined && previous?.app_id) && !scheme.oauthClient.enabled) {
         fail(409, 'app_required', 'このサービスにはFoundationのアプリがありません。先にOAuthアプリの登録を依頼してください（kind "app"）。トークンで接続できるサービスなら、auth_scheme "token" の依頼にもできます。');
@@ -112,7 +112,7 @@ export class RequestActions {
     this.requests.verifyCode(id, toId, code);
     const done = this.store.transaction(() => {
       const row = this.requests.verifyCode(id, toId, code);
-      if (this.principals.actsFor(row.from_id).some(item => item.id === toId)) fail(409, 'request_changed', '依頼元の状態が変わりました。新しい依頼を作ってもらってください。');
+      if (this.principals.actsFor(row.from_id).includes(toId)) fail(409, 'request_changed', '依頼元の状態が変わりました。新しい依頼を作ってもらってください。');
       this.principals.relate(toId, 'owner', 'principal', row.from_id);
       this.principals.relate(row.from_id, 'actor', 'principal', toId);
       this.requests.done(id, toId, { principal_id: row.from_id });

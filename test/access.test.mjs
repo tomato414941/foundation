@@ -58,7 +58,7 @@ test('自分宛ての未完了依頼を取り消し、他のアカウントの�
   await f.login();
   assert.equal((await revoke(f, agent.id)).status, 200);
   const me = (await f.request('/v1/principals/me', { token: agent.token })).json;
-  assert.deepEqual(me.acts_for.map(row => row.id), [USER_B]);
+  assert.deepEqual(me.acts_for, [USER_B]);
   assert.equal((await f.read('credential', 'private-b', { token: agent.token, as: USER_B })).text, 'other-value');
   for (const request of [nextA, connectA]) {
     const current = (await f.request('/v1/requests/' + request.id, { token: agent.token })).json.request;
@@ -122,7 +122,7 @@ test('個別のキーを失効させても他のキーから同じアクセス�
   assert.equal((await f.request(`/v1/principals/${agent.id}/keys/${agent.key_id}`, { method: 'DELETE', data: {} })).status, 200);
   assert.equal((await f.request('/v1/principals/me', { token: agent.token })).status, 401);
   const result = await f.request('/v1/principals/me', { token: second.json.token });
-  assert.equal(result.status, 200); assert.deepEqual(result.json.acts_for.map(row => row.id), [USER_A]);
+  assert.equal(result.status, 200); assert.deepEqual(result.json.acts_for, [USER_A]);
   assert.equal((await f.request('/v1/resources?kind=credential', { token: second.json.token, as: USER_A })).status, 200);
 });
 

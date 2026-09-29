@@ -7,6 +7,9 @@
 // onto the resource (viewer, editor), or by that one action drawn onto the resource or onto the holder. Owning a
 // principal is managing it (its name, keys, limits, removal), not reaching what it holds. What the subject came in by
 // decides nothing, except that a request link reaches its one request and nothing else.
+// A line names a role, a named set of actions, or one action written as the rules name it (credential.disconnect).
+export const ROLES = ['owner', 'actor', 'viewer', 'editor'];
+export const ACTION = /^[a-z_]+\.[a-z-]+$/;
 const SELF = (subject, resource) => subject === resource.holder;
 const ACTOR = (subject, resource, principals) => principals.has(subject, 'actor', 'principal', resource.holder);
 const OWNER = (subject, resource, principals) => principals.has(subject, 'owner', 'principal', resource.holder);
@@ -82,7 +85,7 @@ export class Authorization {
 // what its rules give that role; acting for a principal reaches what the rules give an actor. null when the line
 // cannot be drawn there.
 export function reaches(relation, objectType, kind) {
-  if (/^[a-z_]+\.[a-z-]+$/.test(relation)) {
+  if (ACTION.test(relation)) {
     const [type, name] = [relation.slice(0, relation.indexOf('.')), relation.slice(relation.indexOf('.') + 1)];
     if (!RULES[type]?.[name] || (objectType === 'resource' && type !== kind)) return null;
     return [[type, name]];

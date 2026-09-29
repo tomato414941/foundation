@@ -199,7 +199,7 @@ async function main() {
   if (action === 'api') {
     if (!/[?&]as=/.test(call.target)) {
       const me = await send('/v1/principals/me', undefined, { method: 'GET', accept: () => true });
-      if (me.acts_for?.length === 1) call.target += (call.target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(me.acts_for[0].id);
+      if (me.acts_for?.length === 1) call.target += (call.target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(me.acts_for[0]);
     }
     const response = await fetch(url.origin + call.target, { method: call.method, headers: { authorization: 'Bearer ' + token, ...(call.body === undefined ? {} : { 'content-type': call.type }) },
       ...(call.body === undefined ? {} : { body: call.body }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
@@ -239,7 +239,7 @@ async function main() {
   if (!own && !current.acts_for?.length) throw new Error('Foundation request failed (401, not_approved). This key acts for nobody yet' + (current.requests?.[0] ? '; it is waiting for approval at ' + current.requests[0].verification_uri : '') + '.');
   // Whose resources a run reaches: the one this key acts for, the one named when it acts for several, or its own.
   const acting = current.acts_for ?? [];
-  const holder = process.env.FOUNDATION_AS || (acting.length === 1 ? acting[0].id : null);
+  const holder = process.env.FOUNDATION_AS || (acting.length === 1 ? acting[0] : null);
   if (!holder && acting.length > 1) throw new Error('This key acts for several principals. Set FOUNDATION_AS=<principal id> to say which one this run is for.');
   const forHolder = target => holder ? target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(holder) : target;
   let injection;

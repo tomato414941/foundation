@@ -52,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.get_by_label('確認コード', exact=True).fill(approval['confirmation_code'])
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
-    owner_id = cli('api', 'GET', '/v1/principals/me')['acts_for'][0]['id']
+    owner_id = cli('api', 'GET', '/v1/principals/me')['acts_for'][0]
     request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'service': 'openrouter'}, 'purpose': '接続したキーの情報を確認。モデルは実行しません。'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='OpenRouterに接続', exact=True)).to_be_visible()

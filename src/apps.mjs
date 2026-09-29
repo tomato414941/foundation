@@ -57,11 +57,6 @@ export class Apps {
       WHERE l.subject_id=? AND r.holder_id<>? ORDER BY a.service, r.name, r.id`).all(principalId, principalId)
       .filter(row => this.services.authorization.can(principalId, 'read', 'app', { id: row.id, holder: row.holder_id }));
   }
-  // Whether a principal may connect through an app: whether the rules let it use it.
-  usableBy(principalId, id) {
-    const row = this.get(id);
-    return Boolean(row && this.services.authorization.can(principalId, 'use', 'app', { id: row.id, holder: row.holder_id }));
-  }
 
   // What an app of this service holds.
   fields(serviceRef) {

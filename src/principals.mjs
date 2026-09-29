@@ -1,15 +1,13 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { digest } from './crypto.mjs';
 import { fail } from './errors.mjs';
+import { ROLES, ACTION } from './authorization.mjs';
 
 // A principal is anything that comes to Foundation: a person, an AI, an app, an app's user. One row each,
 // with a name and a beginning, and nothing that says which of those it is. What it may do follows from the
 // lines between principals (relations) and from the access key it came in with.
 export const KEY = /^fdn_[A-Za-z0-9_-]{43}$/;
 export const LINK = /^[A-Za-z0-9_-]{43}$/;
-// A line names a role, a named set of actions, or one action written as the rules name it (credential.disconnect).
-export const ROLES = ['owner', 'actor', 'viewer', 'editor'];
-export const ACTION = /^[a-z_]+\.[a-z-]+$/;
 export const OBJECT_TYPES = ['principal', 'resource'];
 const OWNED_MAX = 100_000, KEYS_MAX = 50;
 const now = () => new Date().toISOString();
@@ -104,7 +102,7 @@ export class Principals {
     return found ? this.get(found.object_id) : undefined;
   }
   // Whom this principal acts for, and who acts for it.
-  actsFor(id) { return this.db.prepare("SELECT object_id AS id FROM relations WHERE subject_id=? AND relation='actor' AND object_type='principal'").all(id); }
+  actsFor(id) { return this.db.prepare("SELECT object_id AS id FROM relations WHERE subject_id=? AND relation='actor' AND object_type='principal'").all(id).map(row => row.id); }
   actorsOf(id) {
     return this.db.prepare(`SELECT p.id, p.name, p.created_at, r.created_at AS approved_at FROM relations r JOIN principals p ON p.id=r.subject_id
       WHERE r.relation='actor' AND r.object_type='principal' AND r.object_id=? ORDER BY r.created_at`).all(id).map(row => ({ ...row, keys: this.keys(row.id) }));

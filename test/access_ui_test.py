@@ -74,7 +74,7 @@ with sync_playwright() as p:
     dialog.get_by_role('button', name='完了', exact=True).click()
     expect(dialog.locator('.credential-list li')).to_have_count(2)
     me = caller.get('/v1/principals/me', headers={'authorization': 'Bearer ' + token}).json()
-    holder = me['acts_for'][0]['id']
+    holder = me['acts_for'][0]
     original_key = actor['key']['id'][:8]
     dialog.locator('.credential-list li').filter(has_text=original_key).get_by_role('button', name='失効', exact=True).click()
     expect(dialog.get_by_text('このキーは使えなくなります。他のキーとアクセス許可は残ります。', exact=True)).to_be_visible()

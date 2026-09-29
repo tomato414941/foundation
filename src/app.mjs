@@ -130,7 +130,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   const functions = new Functions({ credentials, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
   const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, credentials, apps }, row, origin, options);
-  const requestActions = new RequestActions({ store, requests, credentials, services, apps, principals, auditLog,
+  const requestActions = new RequestActions({ store, requests, credentials, services, apps, principals, authorization, auditLog,
     changed: row => { if (row.to_id) void settings.notify(row.to_id, 'request.' + row.status, { request: viewRequest(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() }); } });
   const logins = new EmailLogins({ now: loginClock });
   const refreshing = new Map(), limits = new Map(), disconnects = new Set();
@@ -1127,7 +1127,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           guide: () => guide(services.catalogView()),
           // The tool names whom the caller acts for when it is exactly one and the call did not say.
           call: async ({ method: verb, path: target, body: payload }) => {
-            const named = actsFor.length === 1 && !/[?&]as=/.test(target) ? target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(actsFor[0].id) : target;
+            const named = actsFor.length === 1 && !/[?&]as=/.test(target) ? target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(actsFor[0]) : target;
             const response = await fetch(`http://127.0.0.1:${port}${named}`, {
               method: verb, redirect: 'error', signal: AbortSignal.timeout(20_000),
               headers: { authorization, ...(payload === undefined ? {} : { 'content-type': 'application/json' }) },

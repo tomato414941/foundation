@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page).to_have_url(args.base + '/principals')
     expect(page.get_by_role('heading', name='アクセス管理', exact=True)).to_be_visible()
     review(page)
-    owner_id = cli('api', 'GET', '/v1/principals/me')['acts_for'][0]['id']
+    owner_id = cli('api', 'GET', '/v1/principals/me')['acts_for'][0]
     assert cli('api', 'GET', '/v1/resources?kind=credential')['resources'] == []
 
     # 2. The approved key asks for a registration, on its own link and without a code.

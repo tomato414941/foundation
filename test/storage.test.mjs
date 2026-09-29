@@ -22,7 +22,7 @@ test('Gmail and Supabase secrets are encrypted; keys and cookies never persist i
   const persisted = modules(second);
   assert.equal(persisted.credentials.state(persisted.credentials.held(USER_A, account.id)).private_state.refresh_token, 'refresh-personal');
   assert.ok(persisted.sessions.get(cookie.slice(12)));
-  assert.equal(persisted.principals.actsFor(second.db.prepare('SELECT principal_id FROM access_keys WHERE hash=?').get(digest(agent.token)).principal_id)[0].id, USER_A);
+  assert.equal(persisted.principals.actsFor(second.db.prepare('SELECT principal_id FROM access_keys WHERE hash=?').get(digest(agent.token)).principal_id)[0], USER_A);
   const tables = second.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((item) => item.name);
   assert.ok(!tables.some((name) => name !== 'audit_log' && /mail|message|log|body/.test(name)), 'nothing of an email is kept');
   assert.equal((await stat(database)).mode & 0o777, 0o600);

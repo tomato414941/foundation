@@ -998,7 +998,7 @@ async function principalDetails(id) {
   const owned = (state.principals || []).some(item => item.id === id);
   const item = owned ? (await api(`/v1/principals/${id}`)).principal : principalById(id);
   if (!item) return;
-  const allowed = owned ? item.acts_for.some(holder => holder.id === state.user.id) : true;
+  const allowed = owned ? item.acts_for.includes(state.user.id) : true;
   const keys = item.keys;
   openDialog(`<div class="principal-heading"><h2 id="dialog-title">${esc(item.name)}</h2>${owned ? `<button class="icon-button" data-action="rename-principal" data-id="${esc(id)}" aria-label="名前を編集" title="名前を編集">${icon('edit')}</button>` : ''}</div>
     <p>${allowed ? 'アクセス許可済み' : '全体へのアクセス許可なし'}</p>

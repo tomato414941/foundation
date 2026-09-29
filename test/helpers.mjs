@@ -150,7 +150,7 @@ export async function fixture(t, options = {}) {
   async function issueKey(name = 'laptop') {
     const result = await request('/v1/principals', { method: 'POST', data: { name, actor: true, key: true } });
     assert.equal(result.status, 201, result.text);
-    actsFor.set(result.json.token, result.json.principal.acts_for[0].id);
+    actsFor.set(result.json.token, result.json.principal.acts_for[0]);
     return { ...result.json.principal, token: result.json.token, key_id: result.json.key.id };
   }
   // Ages a credential past its expiry in both the envelope and the scheme's private state.
