@@ -8,14 +8,14 @@ import { digest } from './crypto.mjs';
 import { Principals } from './principals.mjs';
 import { Sessions, OAuthFlows } from './sessions.mjs';
 import { RequestActions } from './request-actions.mjs';
-import { requestDefinition, requestView } from './http-requests.mjs';
+import { requestView, INTERVAL } from './http-requests.mjs';
 import { fail, HttpError, nameValue } from './errors.mjs';
 import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
 import { Requests } from './requests.mjs';
 import { Settings } from './settings.mjs';
 import { AuditLog } from './audit-log.mjs';
 import { scopeList, requestedScopes } from './scopes.mjs';
-import { appReference } from './request-input.mjs';
+import { appReference, requestDetails } from './request-input.mjs';
 import { Apps, FOUNDATION_APP, takesApps } from './apps.mjs';
 import { Credentials } from './credentials.mjs';
 import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX } from './secrets.mjs';
@@ -103,7 +103,7 @@ function principalId(value) {
   return value;
 }
 
-export function createApp({ database = ':memory:', encryptionKey, auth, services: catalog, serviceFetcher, space: spaceBackend = null, publicOrigin, owners: ownerList = [], loginClock, trustedProxies = [], outbound = {}, runner = null, compute = {} }) {
+export function createApp({ database = ':memory:', encryptionKey, auth, services: catalog, serviceFetcher, space: spaceBackend = null, publicOrigin, owners: ownerList = [], loginClock, trustedProxies = [], outbound = {}, runner = null, compute = {}, requestInterval = INTERVAL }) {
   if (!auth || !Array.isArray(catalog)) throw new Error('Authentication and services are required');
   let external;
   if (publicOrigin) {
@@ -133,7 +133,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   const environments = new Environments({ store, resources, principals, runner, limits: compute });
   const functions = new Functions({ secrets, inputs, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
-  const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, credentials, apps }, row, origin, options);
+  const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, credentials, apps, resources }, row, origin, { interval: requestInterval, ...options });
   const requestActions = new RequestActions({ store, requests, secrets, credentials, services, apps, principals, authorization, auditLog,
     changed: row => { if (row.to_id) void settings.notify(row.to_id, 'request.' + row.status, { request: viewRequest(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() }); } });
   const logins = new EmailLogins({ now: loginClock });
@@ -145,6 +145,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
     logins.sweep();
     for (const [key, value] of limits) if (value.until <= Date.now()) limits.delete(key);
   }, 60_000).unref();
+  // When each asker last looked at each of its requests, to answer slow_down.
+  const polled = new Map();
   function rateLimit(key, max, window = 60_000) {
     let value = limits.get(key);
     if (!value || value.until <= Date.now()) value = { count: 0, until: Date.now() + window };
@@ -192,7 +194,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
     if (req.aborted || req.socket.destroyed || localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
     return commit(result);
   }
-  const notApproved = () => fail(401, 'not_approved', 'このキーはまだ誰の代わりにも動けないか、失効しています。foundation connect（POST /v1/requests kind actor）で承認を依頼し、承認後にお試しください。');
+  const notApproved = () => fail(401, 'not_approved', 'このキーはまだ誰の代わりにも動けないか、失効しています。foundation connect（POST /v1/requests で relation actor を依頼）で承認を依頼し、承認後にお試しください。');
   const server = createServer(async (req, res) => {
     const send = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
     const redirect = (path) => { res.writeHead(303, { location: path }); res.end(); };
@@ -440,20 +442,24 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
 
       // Requests: what one principal asks of another, and what the one asked does about it.
       if (requestRoute) {
-        const id = requestRoute.requestId, action = at === 'done' || at === 'deny' ? '/' + at : null;
+        const id = requestRoute.requestId, action = at === 'grant' || at === 'deny' ? at : null;
         if (!id && method === 'POST') {
           const input = await body(req);
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
-          const definition = requestDefinition(input);
-          const toId = definition.kind === 'actor' ? (input.to === undefined ? null : principalId(input.to)) : input.to === undefined ? holderId : principalId(input.to);
+          const { type, detail } = requestDetails(input.authorization_details);
+          // Whom it asks: the one named; for a relation onto something, whoever holds it; for a relation onto nothing,
+          // nobody yet - whoever answers; otherwise the holder this principal acts as.
+          const holderOf = () => detail.object_type === 'principal' ? detail.object_id : resources.at(detail.object_id).holder_id;
+          const toId = input.to !== undefined ? principalId(input.to)
+            : type === 'relation' ? (detail.object_type === undefined ? null : holderOf()) : holderId;
           if (toId !== null && !principals.get(toId)) fail(404, 'not_found', '相手が見つかりません。');
-          if (definition.kind !== 'actor') permit('list', definition.kind === 'store' ? 'secret' : 'credential', undefined, toId);
-          const row = requestActions.ask(subject.id, { ...definition, toId, purpose: purposeValue(input.purpose), steps: input.steps ?? [], validMinutes: input.valid_minutes ?? 30 });
-          return send(201, { request: viewRequest(row, origin, { code: definition.kind === 'actor' }) });
+          if (type !== 'relation') permit('list', type === 'secret' ? 'secret' : 'credential', undefined, toId);
+          const row = requestActions.ask(subject.id, { type, detail, toId, bindingMessage: purposeValue(input.binding_message), steps: input.steps ?? [], validMinutes: input.valid_minutes ?? 30 });
+          return send(201, { request: viewRequest(row, origin, { code: true }) });
         }
         if (!id && method === 'GET') {
           const status = url.searchParams.get('status');
-          if (status !== null && !['pending', 'done', 'denied', 'cancelled'].includes(status)) fail(400, 'invalid_status', 'status は pending / done / denied / cancelled のいずれかです。');
+          if (status !== null && !['pending', 'granted', 'denied', 'cancelled'].includes(status)) fail(400, 'invalid_status', 'status は pending / granted / denied / cancelled のいずれかです。');
           limit('request-poll', 30);
           const mine = url.searchParams.get('to') === 'me';
           return send(200, { requests: (mine ? requests.listTo(subject.id, status) : requests.list(subject.id, status)).map(row => viewRequest(row, origin)) });
@@ -461,8 +467,14 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         const row = requests.get(id);
         const asker = row.from_id === subject.id;
         if (!action && method === 'GET') {
+          if (asker) {
+            // The one asking looks again no more often than interval, as RFC 8628 and CIBA ask of a polling client.
+            const key = subject.id + ':' + row.id, last = polled.get(key), now = Date.now();
+            polled.set(key, now);
+            if (row.status === 'pending' && last !== undefined && now - last < requestInterval * 1000 - 500) fail(429, 'slow_down', `${requestInterval}秒以上あけて確認してください。`);
+            return send(200, { request: viewRequest(row, origin, { events: true, code: row.status === 'pending' }) });
+          }
           limit('request-poll', 30);
-          if (asker) return send(200, { request: viewRequest(row, origin, { events: true, code: row.status === 'pending' }) });
           requests.forTo(id, subject.id);
           permit('read', 'request', id, row.to_id ?? subject.id);
           requests.record(row.id, 'page_viewed');
@@ -473,26 +485,26 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           permit('cancel', 'request', id, row.from_id);
           return send(200, { request: viewRequest(requestActions.cancel(subject.id, id), origin) });
         }
-        if (action === '/done' && method === 'POST') {
+        if (action === 'grant' && method === 'POST') {
           const pending = requests.forTo(id, subject.id, true);
-          permit('done', 'request', id, row.to_id ?? subject.id);
+          permit('grant', 'request', id, row.to_id ?? subject.id);
           progressRequestId = pending.id;
-          if (pending.kind === 'store') {
-            const input = await inputBody(SECRET_MAX * requests.input(pending).fields.length);
+          if (pending.type === 'secret') {
+            const input = await inputBody(SECRET_MAX * requests.detail(pending).fields.length);
             return send(200, { stored: true, ...requestActions.save(id, subject.id, input.entries) });
           }
-          if (pending.kind === 'actor') {
+          if (pending.type === 'relation') {
             const input = await inputBody();
-            return send(200, { request: viewRequest(requestActions.approve(id, subject.id, input.confirmation_code), origin) });
+            return send(200, { request: viewRequest(requestActions.grantRelation(id, subject.id, input.user_code), origin) });
           }
-          if (pending.kind === 'app') {
+          if (pending.type === 'app') {
             if (!session) fail(401, 'login_required', 'ログインしてください。');
             const input = await inputBody();
             return send(200, { registered: true, ...requestActions.registerApp(id, subject.id, input) });
           }
-          fail(409, 'wrong_kind', 'この依頼はページから完了するものではありません。');
+          fail(409, 'wrong_kind', 'この依頼は、サービスとの接続を済ませると許可されます。');
         }
-        if (action === '/deny' && method === 'POST') {
+        if (action === 'deny' && method === 'POST') {
           requests.forTo(id, subject.id, true);
           permit('deny', 'request', id, row.to_id ?? subject.id);
           await inputBody();
@@ -580,7 +592,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           const input = await inputBody();
           if (typeof input.request_id !== 'string') fail(400, 'invalid_request', 'リンクにする依頼を指定してください。');
           const row = requests.forTo(input.request_id, id, true);
-          if (row.kind !== 'store') fail(409, 'link_unsupported', '接続の依頼はまだリンクで引き渡せません。');
+          if (row.type !== 'secret') fail(409, 'link_unsupported', '接続の依頼はまだリンクで引き渡せません。');
           const made = principals.issueLink(id, row.id, LINK_TTL);
           auditLog.write(subject.id, 'link.issued', 'principal', id, { request: row.id });
           return send(201, { link: { id: made.id, request_id: made.request_id, expires_at: made.expires_at }, url: origin + '/requests/' + row.id + '#link=' + made.token, expires_at: made.expires_at });
@@ -996,8 +1008,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         limit('connect', 10);
         const request = input.request_id === undefined ? null : requests.forTo(input.request_id, holderId, true);
         progressRequestId = request?.id || null;
-        const asked = request ? requests.input(request) : null;
-        if (request && request.kind !== 'connect') fail(409, 'approval_only', 'この依頼は接続の依頼ではありません。');
+        const asked = request ? requests.detail(request) : null;
+        if (request && request.type !== 'credential') fail(409, 'approval_only', 'この依頼は接続の依頼ではありません。');
         // The service, the scheme, the scopes and the app are the request's when there is one: what the holder saw is
         // what happens.
         const { ref, definition } = services.get(asked ? asked.service : input.service, holderId);

@@ -4,12 +4,12 @@ import { fixture, USER_A } from './helpers.mjs';
 
 async function ask(f, token, names = ['suggested'], options = {}) {
   const response = await f.request('/v1/requests', { method: 'POST', token, data: {
-    kind: 'store', input: { fields: names.map(name => ({ name, label: 'APIキー', ...options })) },
+    authorization_details: [{ type: 'secret', fields: names.map(name => ({ name, label: 'APIキー', ...options })) }],
   } });
   assert.equal(response.status, 201, response.text);
   return response.json.request;
 }
-const save = (f, row, entries) => f.request(`/v1/requests/${row.id}/done`, { method: 'POST', data: { entries } });
+const save = (f, row, entries) => f.request(`/v1/requests/${row.id}/grant`, { method: 'POST', data: { entries } });
 const entry = (name, content = 'fixture-private-value') => ({ name, content });
 
 test('利用者が選んだ名前で保存し、依頼元に実際の保存名を返す', async t => {
@@ -19,7 +19,7 @@ test('利用者が選んだ名前で保存し、依頼元に実際の保存名�
   assert.equal(response.status, 200, response.text);
   assert.deepEqual(response.json.names, ['stripe-test-api-key']);
   const done = (await f.request(`/v1/requests/${row.id}`, { token })).json.request;
-  assert.equal(done.status, 'done');
+  assert.equal(done.status, 'granted');
   assert.deepEqual(done.result.names, ['stripe-test-api-key']);
   const kept = f.app.secrets.list(USER_A);
   assert.deepEqual(kept.map(value => value.name), ['stripe-test-api-key']);
@@ -89,19 +89,19 @@ test('同じ保存名への同時登録は一方だけを保存し、もう一�
   const winner = results.findIndex(response => response.status === 200);
   assert.equal(f.app.secrets.content(f.app.secrets.find(USER_A, 'shared')).toString(), ['first-value', 'second-value'][winner]);
   const statuses = await Promise.all([first, second].map(async row => (await f.request(`/v1/requests/${row.id}`, { token })).json.request.status));
-  assert.equal(statuses[winner], 'done');
+  assert.equal(statuses[winner], 'granted');
   assert.equal(statuses[1 - winner], 'pending');
 });
 
 test('依頼を作る時点で保存先を確かめ、食い違いは依頼元にだけ返す', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
   await f.request('/v1/resources?kind=secret&name=existing', { method: 'PUT', raw: 'keep-this-value', type: 'text/plain' });
-  const taken = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'store', input: { fields: { name: 'existing', label: 'APIキー' }  }} });
+  const taken = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'secret', fields: { name: 'existing', label: 'APIキー' } }]} });
   assert.equal(taken.status, 409); assert.equal(taken.json.error.code, 'name_taken');
-  const missing = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'store', input: { fields: { name: 'nothing-here', label: 'APIキー', replace: true }  }} });
+  const missing = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'secret', fields: { name: 'nothing-here', label: 'APIキー', replace: true } }]} });
   assert.equal(missing.status, 409); assert.equal(missing.json.error.code, 'name_missing');
   assert.deepEqual((await f.request('/v1/requests', { token })).json.requests, [], 'nothing reached the owner');
-  assert.equal((await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'store', input: { fields: { name: 'existing', label: 'APIキー', replace: 'yes' }  }} })).status, 400);
+  assert.equal((await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'secret', fields: { name: 'existing', label: 'APIキー', replace: 'yes' } }]} })).status, 400);
 });
 
 test('置き換えの依頼は、持ち主がそのままの名前で完了すると既存の値だけを入れ替え、線はそのまま保つ', async t => {

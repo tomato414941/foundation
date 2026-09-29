@@ -68,8 +68,8 @@ with sync_playwright() as p:
     # The product makes its user's account and key; the user's AI asks for something to keep.
     user = call('/v1/principals', product, 'POST', {'alias': 'user-1'})['principal']
     key = call('/v1/principals/' + user['id'] + '/keys', product, 'POST', {})['token']
-    asked = call('/v1/requests', key, 'POST', {'kind': 'store', 'input': {'fields': {'name': 'npm-token', 'label': 'npm のアクセストークン', 'site': 'https://www.npmjs.com/'}},
-                                             'purpose': 'パッケージの公開に使います。', 'steps': ['npmjs.com でアクセストークンを作ります。', '表示されたトークンをここに貼ります。']})['request']
+    asked = call('/v1/requests', key, 'POST', {'authorization_details': [{'type': 'secret', 'fields': {'name': 'npm-token', 'label': 'npm のアクセストークン', 'site': 'https://www.npmjs.com/'}}],
+                                             'binding_message': 'パッケージの公開に使います。', 'steps': ['npmjs.com でアクセストークンを作ります。', '表示されたトークンをここに貼ります。']})['request']
     link = call('/v1/principals/' + user['id'] + '/links', product, 'POST', {'request_id': asked['id']})['url']
 
     # The user, who has never signed up for Foundation, opens the link the product handed them.
@@ -90,7 +90,7 @@ with sync_playwright() as p:
     expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
     expect(page.get_by_role('main').get_by_role('link')).to_have_text(['ai-simplicityに戻る'])
     returned = page.get_by_role('link', name='ai-simplicityに戻る').get_attribute('href')
-    assert returned == 'https://simplicity.example.test/foundation?foundation_request=' + asked['id'] + '&foundation_status=done', returned
+    assert returned == 'https://simplicity.example.test/foundation?foundation_request=' + asked['id'] + '&foundation_status=granted', returned
     review(page)
     page.screenshot(path=str(shots / 'link-done.png'), full_page=True)
     assert call('/v1/requests/' + asked['id'], key)['request']['result']['names'] == ['npm-api-token']

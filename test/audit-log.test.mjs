@@ -25,11 +25,11 @@ test('複数の利用者の代理を務めるキーの操作履歴を、対象�
   await f.keep('secret', 'second-value', 'fixture-b');
   const asked = await f.request('/v1/requests', {
     method: 'POST', token: key.token, anonymous: true,
-    data: { kind: 'actor', to: USER_B, input: { name: 'shared agent' } },
+    data: { authorization_details: [{ type: 'relation', relation: 'actor' }], to: USER_B },
   });
   assert.equal(asked.status, 201, asked.text);
-  const accepted = await f.request('/v1/requests/' + asked.json.request.id + '/done', {
-    method: 'POST', data: { confirmation_code: asked.json.request.confirmation_code },
+  const accepted = await f.request('/v1/requests/' + asked.json.request.id + '/grant', {
+    method: 'POST', data: { user_code: asked.json.request.user_code },
   });
   assert.equal(accepted.status, 200, accepted.text);
   await deliver(f, key, USER_B, 'second-value');

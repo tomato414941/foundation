@@ -58,7 +58,7 @@ const services = process.env.FOUNDATION_TEST_AWS === '1' ? withGoogle([entry('aw
   : process.env.FOUNDATION_TEST_OPENROUTER === '1' ? withGoogle([entry('openrouter', { oauth: openrouterOauth(new FakeOpenRouter()) })])
   : withGoogle([]);
 // Lent machines as directories on this host: enough to see them on the page, isolating nothing.
-const app = createApp({ encryptionKey: KEY, auth, space, services, serviceFetcher: described.fetch, runner: new LocalRunner() });
+const app = createApp({ encryptionKey: KEY, auth, space, services, serviceFetcher: described.fetch, runner: new LocalRunner(), requestInterval: 0 });
 const port = Number(process.env.FOUNDATION_TEST_PORT || 3418);
 app.server.listen(port, '127.0.0.1', () => console.log('Test fixture: http://127.0.0.1:' + port));
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, async () => { await app.close(); process.exit(0); });

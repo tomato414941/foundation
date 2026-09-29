@@ -210,7 +210,7 @@ async function main() {
       await writeKey(keyPath, made.token, !process.env.FOUNDATION_RUNTIME_KEY_FILE);
       token = made.token; me = null;
     }
-    const answer = me?.acts_for?.length ? null : await send('/v1/requests', { kind: 'actor', input: { name: wanted } });
+    const answer = me?.acts_for?.length ? null : await send('/v1/requests', { authorization_details: [{ type: 'relation', relation: 'actor' }] });
     if (connectTo !== undefined) await saveUrl(url.origin);
     console.log(answer === null ? 'Already approved on ' + url.origin + '.' : JSON.stringify(answer, null, 2));
     console.log('\nKey file: ' + keyPath + '\nServer: ' + url.origin + (connectTo !== undefined ? ' (saved to ' + configPath() + ')' : '') + '\nEverything else is HTTP: Authorization: Bearer <the contents of that file>');

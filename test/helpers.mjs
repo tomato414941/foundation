@@ -67,7 +67,8 @@ export function acquired(store, entries, service, { subject, secret }, scheme = 
 }
 export async function fixture(t, options = {}) {
   const { google = new FakeGoogle(), services = [entry('google', { oauth: googleOauth(google) })], ...rest } = options, auth = options.auth || new FakeAuth();
-  const app = createApp({ encryptionKey: KEY, ...rest, auth, services });
+  // Tests look at a request again at once; the interval between looks is a test of its own.
+  const app = createApp({ encryptionKey: KEY, requestInterval: 0, ...rest, auth, services });
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   let closed = false;
   const close = async () => { if (!closed) { closed = true; await app.close(); } };
@@ -140,9 +141,9 @@ export async function fixture(t, options = {}) {
   }
   async function approveKey(name = 'laptop') {
     const made = await become(name);
-    const asked = await request('/v1/requests', { method: 'POST', anonymous: true, token: made.token, data: { kind: 'actor', input: { name } } });
+    const asked = await request('/v1/requests', { method: 'POST', anonymous: true, token: made.token, data: { authorization_details: [{ type: 'relation', relation: 'actor' }] } });
     assert.equal(asked.status, 201, asked.text);
-    const done = await request('/v1/requests/' + asked.json.request.id + '/done', { method: 'POST', data: { confirmation_code: asked.json.request.confirmation_code } });
+    const done = await request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { user_code: asked.json.request.user_code } });
     assert.equal(done.status, 200, done.text);
     actsFor.set(made.token, done.json.request.to);
     return { ...asked.json.request, token: made.token, principal_id: made.id };

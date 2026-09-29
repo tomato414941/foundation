@@ -242,7 +242,7 @@ test('connect makes the key as a private file, never printing it, and the same k
 
   const before = await execute(['exec', ...inputs, '--', process.execPath, '-e', '0'], env);
   assert.equal(before.code, 1); assert.match(before.err, /not_approved/);
-  const approval = await f.request('/v1/requests/' + row.id + '/done', { method: 'POST', data: { confirmation_code: row.confirmation_code } });
+  const approval = await f.request('/v1/requests/' + row.id + '/grant', { method: 'POST', data: { user_code: row.user_code } });
   assert.equal(approval.status, 200, approval.text);
   const run = await execute(['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("connected")'], env);
   assert.equal(run.code, 0, run.err);
@@ -276,7 +276,7 @@ test('A denied request is indistinguishable from waiting, and asking again still
   const denied = await execute(['exec', ...inputs, '--', process.execPath, '-e', '0'], env);
   assert.equal(denied.code, 1); assert.match(denied.err, /not_approved/, 'denial is indistinguishable from waiting');
   const again = JSON.parse((await execute(['connect'], env)).out.split('\n\nKey file')[0]).request;
-  await f.request('/v1/requests/' + again.id + '/done', { method: 'POST', data: { confirmation_code: again.confirmation_code } });
+  await f.request('/v1/requests/' + again.id + '/grant', { method: 'POST', data: { user_code: again.user_code } });
   const after = await execute(['exec', ...inputs, '--', process.execPath, '-e', 'console.log("ready")'], env);
   assert.equal(after.code, 0, after.err); assert.equal(after.out.trim(), 'ready');
 });
@@ -339,14 +339,14 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   assert.match(unset.err, /foundation connect <url>/);
   const connected = await run(foundation, ['connect', f.base], env);
   assert.equal(connected.code, 0, connected.err);
-  assert.match(connected.out, /confirmation_code/);
+  assert.match(connected.out, /user_code/);
   assert.deepEqual(JSON.parse(await readFile(join(dir, 'config', 'foundation', 'config.json'), 'utf8')), { url: f.base });
   const spec = await run(foundation, ['api', 'GET', '/openapi.json'], env);
   assert.equal(JSON.parse(spec.out).info.title, 'Foundation API');
   const waiting = await run(foundation, ['api', 'GET', '/v1/principals/me'], env);
   assert.match(waiting.out, /"status":"pending"/); assert.doesNotMatch(waiting.out, /fdn_/);
   const request = JSON.parse(connected.out.split('\n\nKey file')[0]).request;
-  const approved = await f.request('/v1/requests/' + request.id + '/done', { method: 'POST', data: { confirmation_code: request.confirmation_code } });
+  const approved = await f.request('/v1/requests/' + request.id + '/grant', { method: 'POST', data: { user_code: request.user_code } });
   assert.equal(approved.status, 200, approved.text);
   const me = await run(foundation, ['api', 'GET', '/v1/principals/me'], env);
   assert.equal(me.code, 0, me.out + me.err);
@@ -398,7 +398,7 @@ test('FOUNDATION_AGENT gives each agent its own key file and default name', asyn
   assert.equal(keys.length, 2); assert.ok(keys.some(name => name.endsWith('-claude.key')) && keys.some(name => name.endsWith('-codex.key')));
   const bad = await execute(['connect'], { ...base, FOUNDATION_AGENT: '../x' });
   assert.equal(bad.code, 1); assert.match(bad.err, /FOUNDATION_AGENT/);
-  await f.request('/v1/requests/' + rows[0].id + '/done', { method: 'POST', data: { confirmation_code: rows[0].confirmation_code } });
+  await f.request('/v1/requests/' + rows[0].id + '/grant', { method: 'POST', data: { user_code: rows[0].user_code } });
   const approved = await execute(['exec', ...inputs, '--', process.execPath, '-e', 'console.log("ready")'], { ...base, FOUNDATION_AGENT: 'claude' });
   assert.equal(approved.code, 0, approved.err);
   const other = await execute(['exec', ...inputs, '--', process.execPath, '-e', '0'], { ...base, FOUNDATION_AGENT: 'codex' });

@@ -1,7 +1,7 @@
 import { fail } from './errors.mjs';
 import { resourceName } from './resources.mjs';
-import { requestInput } from './request-input.mjs';
 import { takesApps } from './apps.mjs';
+import { reaches } from './authorization.mjs';
 
 // Operations crossing resource boundaries. Each local result and its request completion
 // commit together; notifications run only after the transaction has committed.
@@ -14,11 +14,11 @@ export class RequestActions {
   // that exists (the same rule is applied again when it is completed, see save). A connection must be one the one
   // asked can make: through an app they may use, or Foundation's when it has one - asking for a connection nobody
   // can complete would leave them at a dead end.
-  ask(fromId, { kind, input, toId, ...rest }) {
-    const definition = requestInput(kind, input);
-    if (kind === 'store') for (const field of definition.fields) this.placement(toId, field, field.name);
-    if (kind === 'app') this.apps.fields(this.services.get(definition.service, toId).ref);
-    if (kind === 'connect') {
+  ask(fromId, { type, detail: definition, toId, ...rest }) {
+    if (type === 'secret') for (const field of definition.fields) this.placement(toId, field, field.name);
+    if (type === 'app') this.apps.fields(this.services.get(definition.service, toId).ref);
+    if (type === 'relation') this.relationAsked(fromId, toId, definition);
+    if (type === 'credential') {
       const { ref, definition: service } = this.services.get(definition.service, toId);
       definition.auth_scheme ??= Object.keys(service.auth_schemes)[0];
       const scheme = this.services.scheme(ref, definition.auth_scheme);
@@ -30,12 +30,37 @@ export class RequestActions {
         if (!app || !this.authorization.can(toId, 'use', 'app', { id: app.id, holder: app.holder_id })) fail(404, 'not_found', 'アプリが見つかりません。');
         if (app.service !== ref) fail(400, 'app_mismatch', 'このアプリは別のサービスのものです。');
       } else if (takesApps(scheme) && !(definition.app === undefined && previous?.app_id) && !scheme.oauthClient.enabled) {
-        fail(409, 'app_required', 'このサービスにはFoundationのアプリがありません。先にOAuthアプリの登録を依頼してください（kind "app"）。');
+        fail(409, 'app_required', 'このサービスにはFoundationのアプリがありません。先にOAuthアプリの登録を依頼してください（type "app"）。');
       } else if (!takesApps(scheme) && !scheme.available) fail(503, 'scheme_unavailable', '現在この方法では接続できません。');
     }
-    const row = this.requests.create(fromId, { kind, input: definition, toId, ...rest });
-    this.auditLog.write(fromId, 'request.asked', 'request', row.id, { kind, to: toId });
+    const row = this.requests.create(fromId, { type, detail: definition, toId, requesterName: this.principals.get(fromId)?.name ?? '', code: type === 'relation' && this.firstContact(fromId, toId, definition), ...rest });
+    this.auditLog.write(fromId, 'request.asked', 'request', row.id, { type, to: toId });
     return row;
+  }
+  // A relation may be drawn where the rules let it be drawn. Asked by one with no line yet to the one asked - named or
+  // not - it is first contact: the only thing to ask is to act for them, and the answer needs the asker's code. Asked
+  // by one already on a line to them or to what it asks about, it is asked where they are.
+  relationAsked(fromId, toId, { relation, object_type, object_id }) {
+    if (this.firstContact(fromId, toId, { object_type, object_id })) {
+      if (relation !== 'actor' || object_type !== undefined) fail(400, 'invalid_authorization_details', 'まだ関係がない相手に頼めるのは、代わりに動くこと（actor）だけです。');
+      return;
+    }
+    const object = this.objectOf(toId, { relation, object_type, object_id });
+    if (!reaches(relation, object.type, object.kind)) fail(400, 'invalid_authorization_details', '関係の種類を確認してください。');
+  }
+  // Whether the one asking has no line yet to the one asked, nor to what it asks about.
+  firstContact(fromId, toId, { object_type, object_id } = {}) {
+    if (toId === null) return true;
+    return !this.principals.relationsOf(fromId).some(line => line.subject_id === fromId
+      && ((line.object_type === 'principal' && line.object_id === toId) || (object_type === 'resource' && line.object_type === 'resource' && line.object_id === object_id)));
+  }
+  // What a relation is drawn onto: the one named, or the one answering when none is.
+  objectOf(toId, { object_type, object_id }) {
+    if (object_type === undefined) return { type: 'principal', id: toId };
+    if (object_type === 'principal') return { type: 'principal', id: this.principals.at(object_id).id };
+    const held = this.secrets.resources.at(object_id);
+    if (held.holder_id !== toId) fail(400, 'invalid_authorization_details', '依頼する相手の持ち物を指定してください。');
+    return { type: 'resource', id: held.id, kind: held.kind, holder_id: held.holder_id };
   }
   // Where one value will go: new under a free name, or in place of what a replacement names. Nothing
   // else: a request never overwrites what it did not declare it would.
@@ -48,8 +73,8 @@ export class RequestActions {
   save(id, toId, entries) {
     const done = this.store.transaction(() => {
       const row = this.requests.forTo(id, toId, true);
-      if (row.kind !== 'store') fail(409, 'wrong_kind', 'この依頼は保管の依頼ではありません。');
-      const asked = this.requests.input(row).fields;
+      if (row.type !== 'secret') fail(409, 'wrong_kind', 'この依頼は保管の依頼ではありません。');
+      const asked = this.requests.detail(row).fields;
       if (!Array.isArray(entries) || entries.length !== asked.length || entries.some(entry => !entry || typeof entry.content !== 'string' || !entry.content)) fail(400, 'invalid_values', '入力内容を確認してください。');
       const names = entries.map(entry => resourceName(entry.name));
       if (new Set(names).size !== names.length) fail(400, 'duplicate_names', '保存名が重複しています。別の名前を入力してください。');
@@ -63,7 +88,7 @@ export class RequestActions {
       }
       this.requests.done(id, toId, { names, replaced: names.filter((_, at) => targets[at]) });
       this.requests.record(id, 'stored');
-      this.auditLog.write(toId, 'request.done', 'request', id, { kind: 'store', names });
+      this.auditLog.write(toId, 'request.granted', 'request', id, { type: 'secret', names });
       return this.requests.get(id);
     });
     this.changed(done);
@@ -73,14 +98,14 @@ export class RequestActions {
   registerApp(id, toId, input) {
     const done = this.store.transaction(() => {
       const row = this.requests.forTo(id, toId, true);
-      if (row.kind !== 'app') fail(409, 'wrong_kind', 'この依頼はアプリの登録の依頼ではありません。');
-      const asked = this.requests.input(row);
+      if (row.type !== 'app') fail(409, 'wrong_kind', 'この依頼はアプリの登録の依頼ではありません。');
+      const asked = this.requests.detail(row);
       if (this.apps.find(toId, input?.name ?? '')) fail(409, 'name_taken', 'その名前のアプリはすでにあります。別の名前を入力してください。');
       const app = this.apps.put(toId, { ...input, service: asked.service });
       this.auditLog.write(toId, 'app.created', 'resource', app.id, { service: asked.service, request: id });
       this.requests.done(id, toId, { app_id: app.id });
       this.requests.record(id, 'registered', { service: asked.service });
-      this.auditLog.write(toId, 'request.done', 'request', id, { kind: 'app', service: asked.service });
+      this.auditLog.write(toId, 'request.granted', 'request', id, { type: 'app', service: asked.service });
       return this.requests.get(id);
     });
     this.changed(done);
@@ -91,8 +116,8 @@ export class RequestActions {
     const saved = this.store.transaction(() => {
       if (id) {
         const row = this.requests.forTo(id, holderId, true);
-        const input = this.requests.input(row);
-        if (row.kind !== 'connect' || input.service !== service || input.auth_scheme !== scheme) fail(409, 'wrong_kind', '依頼された方法で接続してください。');
+        const input = this.requests.detail(row);
+        if (row.type !== 'credential' || input.service !== service || input.auth_scheme !== scheme) fail(409, 'wrong_kind', '依頼された方法で接続してください。');
         if (input.credential_id !== previous?.id) fail(409, 'credential_changed', '依頼された接続を選んでください。');
       }
       const saved = this.credentials.save(holderId, service, scheme, result, { previous, scopes, app });
@@ -100,24 +125,29 @@ export class RequestActions {
       if (id) {
         this.requests.done(id, holderId, { credential_id: saved.id });
         this.requests.record(id, 'connected', { service });
-        this.auditLog.write(holderId, 'request.done', 'request', id, { kind: 'connect', service });
+        this.auditLog.write(holderId, 'request.granted', 'request', id, { type: 'credential', service });
       }
       return saved;
     });
     if (id) this.changed(this.requests.get(id));
     return saved;
   }
-  // The one asked accepts the asker as an actor: from then on the asker acts for them, and they own the asker.
-  approve(id, toId, code) {
-    this.requests.verifyCode(id, toId, code);
+  // The one asked draws the relation asked for, by the same rule as any line they draw. Asked of nobody yet, the one
+  // who answers types the code the asker showed, is who the relation is onto, and owns the asker from then on.
+  grantRelation(id, toId, code) {
+    const first = Boolean(this.requests.forTo(id, toId, true).user_code);
+    if (first) this.requests.verifyCode(id, toId, code);
     const done = this.store.transaction(() => {
-      const row = this.requests.verifyCode(id, toId, code);
-      if (this.principals.actsFor(row.from_id).includes(toId)) fail(409, 'request_changed', '依頼元の状態が変わりました。新しい依頼を作ってもらってください。');
-      this.principals.relate(toId, 'owner', 'principal', row.from_id);
-      this.principals.relate(row.from_id, 'actor', 'principal', toId);
-      this.requests.done(id, toId, { principal_id: row.from_id });
-      this.requests.record(id, 'approved');
-      this.auditLog.write(toId, 'relation.added', 'principal', row.from_id, { relation: 'actor', for: toId });
+      const row = first ? this.requests.verifyCode(id, toId, code) : this.requests.forTo(id, toId, true);
+      if (row.type !== 'relation') fail(409, 'wrong_kind', 'この依頼は関係の依頼ではありません。');
+      const asked = this.requests.detail(row), object = this.objectOf(toId, asked);
+      if (!this.authorization.mayGive(toId, asked.relation, object.type, object.type === 'principal' ? { id: object.id } : object)) fail(403, 'forbidden', 'この関係を引く権限がありません。');
+      if (asked.relation === 'actor' && this.principals.actsFor(row.from_id).includes(object.id)) fail(409, 'request_changed', '依頼元の状態が変わりました。新しい依頼を作ってもらってください。');
+      if (first && !this.principals.ownersOf(row.from_id).length) this.principals.relate(toId, 'owner', 'principal', row.from_id);
+      this.principals.relate(row.from_id, asked.relation, object.type, object.id);
+      this.requests.done(id, toId, { relation: asked.relation, object_type: object.type, object_id: object.id });
+      this.requests.record(id, 'granted');
+      this.auditLog.write(toId, 'relation.added', object.type, object.id, { subject: row.from_id, relation: asked.relation, request: id });
       return this.requests.get(id);
     });
     this.changed(done);
@@ -127,7 +157,7 @@ export class RequestActions {
     this.requests.deny(id, toId);
     this.requests.record(id, 'denied');
     const row = this.requests.get(id);
-    this.auditLog.write(toId, 'request.denied', 'request', id, { kind: row.kind });
+    this.auditLog.write(toId, 'request.denied', 'request', id, { type: row.type });
     this.changed(row);
     return row;
   }

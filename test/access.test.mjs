@@ -6,7 +6,7 @@ import { fixture, USER_A, USER_B } from './helpers.mjs';
 const revoke = (f, id, options = {}) => f.request(`/v1/principals/${id}/access`, { method: 'DELETE', data: {}, ...options });
 async function ask(f, agent, to, kind = 'store') {
   const input = kind === 'store' ? { fields: [{ name: 'requested', label: '値', readable: true }] } : { service: 'google' };
-  const result = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { kind, input, to } });
+  const result = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: { actor: 'relation', store: 'secret', connect: 'credential', app: 'app' }[kind], ...(kind === 'actor' ? { relation: 'actor' } : input) }], to } });
   assert.equal(result.status, 201, result.text);
   return result.json.request;
 }
@@ -45,13 +45,13 @@ test('アクセス許可と個別の閲覧・編集権限を取り消し、相�
 test('自分宛ての未完了依頼を取り消し、他のアカウントの権限・依頼・共有を維持する', async t => {
   const f = await fixture(t), agent = await f.issueKey();
   const pendingA = await ask(f, agent, USER_A), connectA = await ask(f, agent, USER_A, 'connect');
-  const completed = await f.request('/v1/requests/' + pendingA.id + '/done', { method: 'POST', data: { entries: [{ name: 'kept', content: 'value' }] } });
+  const completed = await f.request('/v1/requests/' + pendingA.id + '/grant', { method: 'POST', data: { entries: [{ name: 'kept', content: 'value' }] } });
   assert.equal(completed.status, 200);
   const nextA = await ask(f, agent, USER_A);
   await f.login('other@example.test');
-  const approval = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { kind: 'actor', input: { name: 'laptop' }, to: USER_B } });
+  const approval = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'relation', relation: 'actor' }], to: USER_B } });
   assert.equal(approval.status, 201);
-  assert.equal((await f.request(`/v1/requests/${approval.json.request.id}/done`, { method: 'POST', data: { confirmation_code: approval.json.request.confirmation_code } })).status, 200);
+  assert.equal((await f.request(`/v1/requests/${approval.json.request.id}/grant`, { method: 'POST', data: { user_code: approval.json.request.user_code } })).status, 200);
   const privateB = await f.keep('secret', 'private-b', 'other-value');
   f.app.principals.relate(agent.id, 'viewer', 'resource', privateB.json.resource.id);
   const pendingB = await ask(f, agent, USER_B);
@@ -63,12 +63,12 @@ test('自分宛ての未完了依頼を取り消し、他のアカウントの�
   for (const request of [nextA, connectA]) {
     const current = (await f.request('/v1/requests/' + request.id, { token: agent.token })).json.request;
     assert.equal(current.status, 'cancelled'); assert.equal(current.reason, 'access_revoked');
-    assert.equal((await f.request('/v1/requests/' + request.id + '/done', { method: 'POST', data: { entries: [{ name: 'later', content: 'value' }] } })).status, 409);
+    assert.equal((await f.request('/v1/requests/' + request.id + '/grant', { method: 'POST', data: { entries: [{ name: 'later', content: 'value' }] } })).status, 409);
   }
-  assert.equal((await f.request('/v1/requests/' + pendingA.id, { token: agent.token })).json.request.status, 'done');
+  assert.equal((await f.request('/v1/requests/' + pendingA.id, { token: agent.token })).json.request.status, 'granted');
   assert.equal((await f.request('/v1/requests/' + pendingB.id, { token: agent.token })).json.request.status, 'pending');
   await f.login('other@example.test');
-  assert.equal((await f.request('/v1/requests/' + pendingB.id + '/done', { method: 'POST', data: { entries: [{ name: 'requested', content: 'b-value' }] } })).status, 200);
+  assert.equal((await f.request('/v1/requests/' + pendingB.id + '/grant', { method: 'POST', data: { entries: [{ name: 'requested', content: 'b-value' }] } })).status, 200);
 });
 
 test('保有者が自分への許可だけを取り消し、相手の所有権を持たなくても停止する', async t => {
@@ -86,9 +86,9 @@ test('保有者が自分への許可だけを取り消し、相手の所有権�
 test('取り消した相手を同じキーで再承認し、以後に追加したデータも利用する', async t => {
   const f = await fixture(t), agent = await f.issueKey();
   await revoke(f, agent.id);
-  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { kind: 'actor', input: { name: 'laptop' }, purpose: '作業の再開' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'relation', relation: 'actor' }], binding_message: '作業の再開' } });
   assert.equal(asked.status, 201);
-  assert.equal((await f.request('/v1/requests/' + asked.json.request.id + '/done', { method: 'POST', data: { confirmation_code: asked.json.request.confirmation_code } })).status, 200);
+  assert.equal((await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { user_code: asked.json.request.user_code } })).status, 200);
   await f.keep('secret', 'later', 'later-value');
   const delivered = await f.request('/v1/injections', { method: 'POST', token: agent.token, data: { names: [{ name: 'later', as: 'VALUE' }] } });
   assert.equal(delivered.status, 200); assert.equal(delivered.json.injection.environment.VALUE, 'later-value');

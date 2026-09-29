@@ -116,7 +116,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     assert json.loads(before.stdout)['acts_for'] == []
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_text('初めて使うAIの依頼', exact=True)).to_be_visible()
-    page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
+    page.get_by_label('確認コード', exact=True).fill(request['user_code'])
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
     approved = cli('api', 'GET', '/v1/principals/me')

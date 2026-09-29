@@ -93,7 +93,7 @@ with sync_playwright() as p:
         body: JSON.stringify({name: 'UI test agent', actor: true, key: true})})).json();
       const owner = key.principal.acts_for[0];
       const made = await (await fetch('/v1/requests?as=' + owner, {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
-        body: JSON.stringify({kind: 'store', input: {fields: [{name: 'slack-bot', label: 'Bot User OAuth Token', site: 'https://api.slack.com/apps'}]}, purpose: 'チャンネルに要約を投稿します。',
+        body: JSON.stringify({authorization_details: [{type: 'secret', fields: [{name: 'slack-bot', label: 'Bot User OAuth Token', site: 'https://api.slack.com/apps'}]}], binding_message: 'チャンネルに要約を投稿します。',
           steps: ['Slackでアプリを作り、Bot User OAuth Tokenを写します。']})})).json();
       return '/requests/' + made.request.id;
     }""")

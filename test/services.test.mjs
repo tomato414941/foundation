@@ -25,14 +25,14 @@ test('サービスを名前だけで登録し、後からOAuthを設定して接
 
   const app = await f.request('/v1/resources?kind=app&name=Notes', { method: 'PUT', data: { service, client_id: 'notes-client', client_secret: 'notes-secret' } });
   assert.equal(app.status, 200, app.text);
-  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'connect', input: { service, app: app.json.resource.id }, purpose: 'ノートを取得します。' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'credential', service, app: app.json.resource.id }], binding_message: 'ノートを取得します。' } });
   assert.equal(asked.status, 201, asked.text);
   const started = await f.request('/v1/credentials', { method: 'POST', data: { request_id: asked.json.request.id } });
   assert.equal(started.status, 200, started.text);
   const callback = await f.callback(new URL(started.json.url), 'notes-code');
   assert.match(callback.headers.get('location'), /result=connected/);
   const completed = (await f.request('/v1/requests/' + asked.json.request.id, { token })).json.request;
-  assert.equal(completed.status, 'done');
+  assert.equal(completed.status, 'granted');
   const connected = (await f.request('/v1/resources/' + completed.result.credential_id)).json.resource;
   assert.equal(connected.service.id, service);
   const injected = await f.inject(connected, { token });
@@ -49,7 +49,7 @@ test('OAuthアプリが必要な依頼では登録先を示し、登録後に接
   const f = await fixture(t), { token } = await f.issueKey();
   const registered = await register(f, 'Notes', { data: { version: 1, name: 'Notes', auth_schemes: { oauth } } });
   const service = registered.json.resource.id;
-  const request = input => f.request('/v1/requests', { method: 'POST', token, data: { kind: 'connect', input, purpose: 'ノートを取得します。' } });
+  const request = input => f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'credential', ...input }], binding_message: 'ノートを取得します。' } });
   const refused = await request({ service });
   assert.equal(refused.status, 409, refused.text);
   assert.equal(refused.json.error.code, 'app_required');

@@ -38,7 +38,7 @@ test('未ログインのAIへOpenAPIで接続先・認証要件・入力形式�
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-type'), /^application\/json/);
   assert.deepEqual(page.json.servers, [{ url: f.base }]);
-  assert.match(page.json.paths['/v1/principals'].post.description, /verification_uri and confirmation_code/);
+  assert.match(page.json.paths['/v1/principals'].post.description, /verification_uri and user_code/);
   assert.deepEqual(page.json.paths['/v1/credentials'].post.security, [{ session: [] }]);
   assert.equal(page.json.paths['/v1/injections'].post.requestBody.content['application/json'].schema.$ref, '#/components/schemas/Inject');
 });

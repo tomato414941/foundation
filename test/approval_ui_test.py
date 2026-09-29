@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
 
     # 1. A new key asks only to be approved. The owner types the code; nothing is registered here.
     request = cli('connect', '--name', 'laptop のAI')['request']
-    assert '/requests/' in request['verification_uri'] and request['confirmation_code']
+    assert '/requests/' in request['verification_uri'] and request['user_code']
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 1050})
     page = context.new_page()
@@ -64,8 +64,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_text('認証情報とオブジェクトの取得・追加・更新・削除', exact=True)).to_be_visible()
     expect(page.get_by_text('接続済みサービスの利用とファンクションの実行', exact=True)).to_be_visible()
     expect(page.get_by_text('接続の追加・解除、他の相手への権限付与、アカウント管理は含みません。', exact=True)).to_be_visible()
-    expect(page.get_by_text(request['confirmation_code'], exact=True)).to_have_count(0)
-    assert request['confirmation_code'] not in page.content()
+    expect(page.get_by_text(request['user_code'], exact=True)).to_have_count(0)
+    assert request['user_code'] not in page.content()
     expect(page.get_by_role('button', name='Googleの画面へ', exact=True)).to_have_count(0)
     expect(page.get_by_role('button', name='許可する', exact=True)).to_be_disabled()
     for width in [1280, 390, 320]:
@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('alert')).to_contain_text('確認コードを入力してください')
     assert cli('api', 'GET', '/v1/principals/me')['acts_for'] == []
-    page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'].lower())
+    page.get_by_label('確認コード', exact=True).fill(request['user_code'].lower())
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
     expect(page.get_by_role('link', name='アクセス管理', exact=True)).to_have_attribute('href', '/principals')
@@ -89,8 +89,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     assert cli('api', 'GET', '/v1/resources?kind=secret')['resources'] == []
 
     # 2. The approved key asks for a registration, on its own link and without a code.
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.readonly']}, 'purpose': '届いたメールを確認する'}))['request']
-    assert request['kind'] == 'connect' and 'confirmation_code' not in request
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'credential', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.readonly']}], 'binding_message': '届いたメールを確認する'}))['request']
+    assert request['authorization_details'][0]['type'] == 'credential' and 'user_code' not in request
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='Googleに接続', exact=True)).to_be_visible()
     expect(page.get_by_text('laptop のAIの依頼', exact=True)).to_be_visible()
@@ -140,7 +140,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
     # 3. Revoking access stops use of this account and cancels its open registration requests.
-    pending = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.metadata']}, 'purpose': '件名を確認する'}))['request']
+    pending = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'credential', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.metadata']}], 'binding_message': '件名を確認する'}))['request']
     page.goto(args.base + '/principals', wait_until='networkidle')
     runtime = page.locator('.agent-row').filter(has_text='laptop のAI')
     runtime.get_by_role('button', name='取り消す', exact=True).click()
@@ -162,22 +162,22 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     # 5. Approved again, the key asks for a metadata-only Gmail scope: another request, its own registration.
     request = cli('connect', '--name', 'laptop のAI')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
-    page.get_by_label('確認コード', exact=True).fill(request['confirmation_code'])
+    page.get_by_label('確認コード', exact=True).fill(request['user_code'])
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.metadata']}, 'purpose': '件名を確認する'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'credential', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.metadata']}], 'binding_message': '件名を確認する'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.locator('.approval-facts')).to_contain_text('https://www.googleapis.com/auth/gmail.metadata')
     page.get_by_role('button', name='Googleの画面へ', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     expect(page.get_by_text('headers@example.test', exact=False)).to_be_visible()
     review(page)
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.readonly']}, 'purpose': '確認'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'credential', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.readonly']}], 'binding_message': '確認'}))['request']
     cli('api', 'DELETE', '/v1/requests/' + request['id'])
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='依頼は取り消されました', exact=True)).to_be_visible()
 
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.readonly']}, 'purpose': '<img src=x onerror="window.xss=1">' + '長い用途' * 50}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'credential', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.readonly']}], 'binding_message': '<img src=x onerror="window.xss=1">' + '長い用途' * 50}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     assert page.locator('.approval-card img').count() == 0
     assert page.evaluate('window.xss === undefined')

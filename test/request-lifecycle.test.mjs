@@ -5,7 +5,7 @@ import { fixture, USER_A } from './helpers.mjs';
 import { requestResultView } from '../web/request-view.js';
 
 async function ask(f, token, kind, input) {
-  const answer = await f.request('/v1/requests', { method: 'POST', token, data: { kind, input } });
+  const answer = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: { actor: 'relation', store: 'secret', connect: 'credential', app: 'app' }[kind], ...(kind === 'actor' ? { relation: 'actor' } : input) }] } });
   assert.equal(answer.status, 201, answer.text);
   return answer.json.request;
 }
@@ -13,13 +13,12 @@ async function ask(f, token, kind, input) {
 test('依頼の種類と内容を保存し、同じ依頼を二度出しても一つとして扱う', async t => {
   const f = await fixture(t), key = await f.issueKey();
   const request = await ask(f, key.token, 'connect', { service: 'google' });
-  const again = await f.request('/v1/requests', { method: 'POST', token: key.token, data: { kind: 'connect', input: { service: 'google' } } });
+  const again = await f.request('/v1/requests', { method: 'POST', token: key.token, data: { authorization_details: [{ type: 'credential', service: 'google' }] } });
   assert.equal(again.json.request.id, request.id);
-  assert.equal(request.kind, 'connect');
-  assert.deepEqual(request.input, { service: 'google', auth_scheme: 'oauth' });
+  assert.deepEqual(request.authorization_details, [{ type: 'credential', service: 'google', auth_scheme: 'oauth' }]);
   for (const data of [
-    { kind: 'other', input: {} }, { kind: 'connect', input: { fields: [] } },
-    { kind: 'store', input: { service: 'google' } }, { service: 'google' },
+    { authorization_details: [{ type: 'other' }] }, { authorization_details: [{ type: 'credential', fields: [] }] },
+    { authorization_details: [{ type: 'secret', service: 'google' }] }, { service: 'google' },
   ]) assert.equal((await f.request('/v1/requests', { method: 'POST', token: key.token, data })).status, 400);
 });
 
@@ -30,15 +29,15 @@ test('接続の失効・削除後も依頼の完了と結果を維持する', as
   await f.callback(new URL(start.json.url));
   const read = async () => (await f.request('/v1/requests/' + request.id, { token: key.token })).json.request;
   const done = await read(), id = done.result.credential_id;
-  assert.equal(done.status, 'done');
+  assert.equal(done.status, 'granted');
   f.app.credentials.reconnectRequired(f.app.credentials.held(USER_A, id));
   assert.equal((await f.request('/v1/resources?kind=credential', { token: key.token })).json.resources[0].status, 'reconnect_required');
   for (const remove of [false, true]) {
     if (remove) await f.request('/v1/resources/' + id, { method: 'DELETE', data: { revoke: false } });
     const current = await read();
-    assert.equal(current.status, 'done');
+    assert.equal(current.status, 'granted');
     assert.deepEqual(current.result, done.result);
-    assert.equal((await f.request('/v1/requests?status=done', { token: key.token })).json.requests[0].status, 'done');
+    assert.equal((await f.request('/v1/requests?status=granted', { token: key.token })).json.requests[0].status, 'granted');
   }
   f.app.services.catalog.delete('google');
   assert.deepEqual((await read()).result, done.result);
@@ -47,32 +46,32 @@ test('接続の失効・削除後も依頼の完了と結果を維持する', as
 test('保存値の名前変更や削除後も依頼には完了時の保存名を返す', async t => {
   const f = await fixture(t), key = await f.issueKey();
   const request = await ask(f, key.token, 'store', { fields: [{ name: 'first', label: 'トークン' }] });
-  const complete = await f.request('/v1/requests/' + request.id + '/done', { method: 'POST', data: { entries: [{ name: 'first', content: 'fixture-secret' }] } });
+  const complete = await f.request('/v1/requests/' + request.id + '/grant', { method: 'POST', data: { entries: [{ name: 'first', content: 'fixture-secret' }] } });
   assert.equal(complete.status, 200);
   await f.request('/v1/resources?kind=secret&name=first', { method: 'PATCH', data: { name: 'renamed' } });
   await f.request('/v1/resources?kind=secret&name=renamed', { method: 'DELETE', data: {} });
   const done = (await f.request('/v1/requests/' + request.id, { token: key.token })).json.request;
-  assert.equal(done.status, 'done');
+  assert.equal(done.status, 'granted');
   assert.deepEqual(done.result, { names: ['first'], replaced: [] });
 });
 
 test('キー失効時に未完了の依頼を取り消し、同じトークンの再承認後も以前の依頼へのアクセスを拒否する', async t => {
   const f = await fixture(t), key = await f.issueKey();
   const doneRequest = await ask(f, key.token, 'store', { fields: [{ name: 'kept', label: 'トークン' }] });
-  await f.request('/v1/requests/' + doneRequest.id + '/done', { method: 'POST', data: { entries: [{ name: 'kept', content: 'fixture-secret' }] } });
+  await f.request('/v1/requests/' + doneRequest.id + '/grant', { method: 'POST', data: { entries: [{ name: 'kept', content: 'fixture-secret' }] } });
   const pending = await ask(f, key.token, 'connect', { service: 'google' });
   await f.request('/v1/principals/' + key.id, { method: 'DELETE', data: {} });
   const cancelled = (await f.request('/v1/requests/' + pending.id)).json.request;
   assert.equal(cancelled.status, 'cancelled');
   assert.equal(cancelled.reason, 'requester_revoked');
   const done = (await f.request('/v1/requests/' + doneRequest.id)).json.request;
-  assert.equal(done.status, 'done');
+  assert.equal(done.status, 'granted');
   assert.deepEqual(done.result, { names: ['kept'], replaced: [] });
   assert.equal((await f.request('/v1/requests/' + doneRequest.id, { token: key.token })).status, 401);
   assert.equal((await f.request('/v1/requests', { token: key.token })).status, 401);
   const again = await f.approveKey('再承認');
   assert.equal((await f.request('/v1/requests/' + doneRequest.id, { token: again.token })).status, 404);
-  assert.deepEqual((await f.request('/v1/requests', { token: again.token })).json.requests.map(row => row.kind), ['actor'], 'a newly approved machine is a new principal, with only its own asking behind it');
+  assert.deepEqual((await f.request('/v1/requests', { token: again.token })).json.requests.map(row => row.authorization_details[0].relation), ['actor'], 'a newly approved machine is a new principal, with only its own asking behind it');
   assert.equal((await f.request('/v1/resources?kind=secret', { token: again.token })).json.resources[0].name, 'kept');
 });
 
@@ -80,9 +79,9 @@ test('承認依頼の完了結果を保ち、失効キーの認証を拒否す�
   const f = await fixture(t);
   const approval = await f.approveKey(), token = approval.token;
   const approved = (await f.request('/v1/requests/' + approval.id)).json.request;
-  assert.equal(approved.kind, 'actor');
-  assert.equal(approved.status, 'done');
-  await f.request('/v1/principals/' + approved.result.principal_id, { method: 'DELETE', data: {} });
+  assert.equal(approved.authorization_details[0].relation, 'actor');
+  assert.equal(approved.status, 'granted');
+  await f.request('/v1/principals/' + approved.from, { method: 'DELETE', data: {} });
   assert.deepEqual((await f.request('/v1/requests/' + approval.id)).json.request, approved);
   assert.equal((await f.request('/v1/principals/me', { token })).status, 401);
 });
@@ -140,12 +139,12 @@ test('保存と依頼完了を一緒に確定し、失敗した場合は再試�
 });
 
 test('依頼の種類に合った完了表示と移動先を返す', () => {
-  for (const [kind, title, href, label] of [['connect', '接続しました', '/services', 'サービス'], ['store', '登録しました', '/secrets', 'シークレット'], ['actor', 'アクセスを許可しました', '/principals', 'アクセス管理']]) {
-    const view = requestResultView({ kind, status: 'done' });
+  for (const [type, title, href, label] of [['credential', '接続しました', '/services', 'サービス'], ['secret', '登録しました', '/secrets', 'シークレット'], ['relation', '許可しました', '/principals', 'アクセス管理']]) {
+    const view = requestResultView({ authorization_details: [{ type }], status: 'granted' });
     assert.equal(view.title, title); assert.equal(view.href, href); assert.equal(view.completed, true);
     assert.equal(view.label, label);
   }
-  const unknown = requestResultView({ kind: '__proto__', status: 'done' });
+  const unknown = requestResultView({ authorization_details: [{ type: '__proto__' }], status: 'granted' });
   assert.equal(unknown.title, '依頼を確認できません');
   assert.equal(unknown.href, '/');
 });

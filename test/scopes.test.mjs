@@ -14,15 +14,15 @@ async function scoped(t) {
 
 test('頼む権限は接続先の権限名の配列で受け付け、重複を除いて並べる', async t => {
   const f = await scoped(t), { token } = await f.issueKey();
-  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'connect', input: { service: 'google', scopes: [READONLY, 'openid', READONLY] }, purpose: 'メールを読みます。' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'credential', service: 'google', scopes: [READONLY, 'openid', READONLY] }], binding_message: 'メールを読みます。' } });
   assert.equal(asked.status, 201, asked.text);
-  assert.deepEqual(asked.json.request.input.scopes, ['https://www.googleapis.com/auth/gmail.readonly', 'openid']);
+  assert.deepEqual(asked.json.request.authorization_details[0].scopes, ['https://www.googleapis.com/auth/gmail.readonly', 'openid']);
 });
 
 test('形の正しくない権限の指定を、依頼でも接続の開始でも断る', async t => {
   const f = await scoped(t), { token } = await f.issueKey();
   for (const scopes of ['openid', [''], ['a b'], ['a"b'], [42], Array.from({ length: 101 }, (_, n) => 'scope.' + n)]) {
-    const asked = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'connect', input: { service: 'google', scopes }, purpose: 'x' } });
+    const asked = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'credential', service: 'google', scopes }], binding_message: 'x' } });
     assert.equal(asked.json.error.code, 'invalid_scopes', JSON.stringify(scopes));
     const started = await f.request('/v1/credentials', { method: 'POST', data: { service: 'google', scopes } });
     assert.equal(started.json.error.code, 'invalid_scopes', JSON.stringify(scopes));

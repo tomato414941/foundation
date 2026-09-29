@@ -117,7 +117,7 @@ with sync_playwright() as p:
         body: JSON.stringify({name: 'UI test agent', actor: true, key: true})})).json();
       const owner = key.principal.acts_for[0];
       const made = await (await fetch('/v1/requests?as=' + owner, {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
-        body: JSON.stringify({kind: 'app', input: {service: 'cloudflare', name: 'メール用'}, purpose: 'メールの転送を設定できるアプリを使います。',
+        body: JSON.stringify({authorization_details: [{type: 'app', service: 'cloudflare', name: 'メール用'}], binding_message: 'メールの転送を設定できるアプリを使います。',
           steps: ['CloudflareのOAuth clientsでアプリを作ります。']})})).json();
       return {path: '/requests/' + made.request.id, id: made.request.id, token: key.token, owner};
     }""")
@@ -135,7 +135,7 @@ with sync_playwright() as p:
     expect(page.get_by_role('heading', name='OAuthアプリを登録しました', exact=True)).to_be_visible()
     result = page.evaluate("""async (request) => (await (await fetch('/v1/requests/' + request.id + '?as=' + request.owner,
       {headers: {authorization: 'Bearer ' + request.token}})).json()).request""", request)
-    assert result['status'] == 'done' and result['result']['app_id'], result
+    assert result['status'] == 'granted' and result['result']['app_id'], result
     assert 'mail-app-secret' not in json.dumps(result)
     assert not errors, errors
     browser.close()

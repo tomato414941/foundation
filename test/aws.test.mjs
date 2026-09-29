@@ -92,7 +92,7 @@ test('AWSの再接続依頼を同じ役割のARNと外部IDで完了し、接続
   assert.equal(first.status, 200, first.text);
   const connection = first.json.credential;
   const asked = await f.request('/v1/requests', { method: 'POST', token: key.token, data: {
-    kind: 'connect', input: { service: 'aws', auth_scheme: 'role', credential_id: connection.id } } });
+    authorization_details: [{ type: 'credential', service: 'aws', auth_scheme: 'role', credential_id: connection.id }] } });
   assert.equal(asked.status, 201, asked.text);
   const flow = await f.request('/v1/credentials', { method: 'POST', data: { service: 'aws', auth_scheme: 'role', request_id: asked.json.request.id } });
   assert.equal(flow.status, 200, flow.text);
@@ -104,6 +104,6 @@ test('AWSの再接続依頼を同じ役割のARNと外部IDで完了し、接続
   assert.equal(same.json.credential.id, connection.id);
   assert.equal((await f.inject(connection, { token: key.token })).status, 200);
   const completed = (await f.request('/v1/requests/' + asked.json.request.id, { token: key.token })).json.request;
-  assert.equal(completed.status, 'done');
+  assert.equal(completed.status, 'granted');
   assert.equal(completed.result.credential_id, connection.id);
 });

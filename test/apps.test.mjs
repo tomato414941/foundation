@@ -120,22 +120,22 @@ test('線を引かれた人は、そのアプリで自分のアカウントを�
 
 test('AIはアプリの登録を依頼でき、持ち主が秘密を入力し、AIはアプリのIDだけを受け取って接続を依頼する', async t => {
   const f = await withApps(t), { token } = await f.issueKey();
-  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'app', input: { service: 'cloudflare' }, purpose: 'メール転送を設定できるアプリを使います。' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'app', service: 'cloudflare' }], binding_message: 'メール転送を設定できるアプリを使います。' } });
   assert.equal(asked.status, 201, asked.text);
   assert.deepEqual(asked.json.request.service.auth_schemes.oauth.app_fields.map(field => [field.name, Boolean(field.sealed)]), [['client_id', false], ['client_secret', true]]);
-  const done = await f.request('/v1/requests/' + asked.json.request.id + '/done', { method: 'POST', data: { name: 'メール用', client_id: 'mail-app-id', client_secret: 'mail-app-secret' } });
+  const done = await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { name: 'メール用', client_id: 'mail-app-id', client_secret: 'mail-app-secret' } });
   assert.equal(done.status, 200, done.text);
   const result = (await f.request('/v1/requests/' + asked.json.request.id, { token })).json.request;
-  assert.equal(result.status, 'done');
+  assert.equal(result.status, 'granted');
   assert.doesNotMatch(JSON.stringify(result), /mail-app-secret/);
   const appId = result.result.app_id;
-  const connect = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'connect', input: { service: 'cloudflare', app: appId, scopes: ['dns.write'] }, purpose: 'DNSを設定します。' } });
+  const connect = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'credential', service: 'cloudflare', app: appId, scopes: ['dns.write'] }], binding_message: 'DNSを設定します。' } });
   assert.equal(connect.status, 201, connect.text);
   assert.deepEqual(connect.json.request.app, { id: appId, name: 'メール用', foundation: false });
   const started = await f.request('/v1/credentials', { method: 'POST', data: { service: 'cloudflare', request_id: connect.json.request.id } });
   assert.equal(new URL(started.json.url).searchParams.get('client_id'), 'mail-app-id');
-  const wrong = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'connect', input: { service: 'google', app: appId }, purpose: 'x' } });
+  const wrong = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'credential', service: 'google', app: appId }], binding_message: 'x' } });
   assert.equal(wrong.json.error.code, 'app_mismatch');
-  assert.equal((await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'app', input: { service: 'openrouter' }, purpose: 'x' } })).json.error.code, 'app_unsupported');
+  assert.equal((await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'app', service: 'openrouter' }], binding_message: 'x' } })).json.error.code, 'app_unsupported');
   assert.equal(f.app.apps.list(USER_A).length, 1);
 });

@@ -3,12 +3,23 @@ import { resourceName } from './resources.mjs';
 import { scopeList } from './scopes.mjs';
 import { SCHEMES } from './service-definition.mjs';
 
-export function requestInput(kind, input) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'invalid_request', '依頼内容を指定してください。');
+// What is asked, in the shape of RFC 9396 (authorization_details): a list of details, each a type and what that type
+// needs. Foundation defines four types: a relation drawn to the one asking, secrets kept by the one asked, a service
+// connected by them, an app registered by them. One detail per request for now.
+export const TYPES = ['relation', 'secret', 'credential', 'app'];
+export function requestDetails(value) {
+  if (!Array.isArray(value) || value.length !== 1 || !value[0] || typeof value[0] !== 'object' || Array.isArray(value[0])) fail(400, 'invalid_authorization_details', 'authorization_details に依頼の内容を1件指定してください。');
+  const { type, ...detail } = value[0];
+  if (!TYPES.includes(type)) fail(400, 'invalid_authorization_details', '依頼の種類（type）を確認してください。');
+  return { type, detail: requestInput(type, detail) };
+}
+
+export function requestInput(type, input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'invalid_authorization_details', '依頼の内容を指定してください。');
   // Connecting: which service and by which scheme, optionally which existing credential it replaces, and the
   // service's scopes the AI needs. app: the app to connect through - one the holder may use, by id - or Foundation's
   // own when left out.
-  if (kind === 'connect' && Object.keys(input).every(key => ['service', 'auth_scheme', 'credential_id', 'scopes', 'app'].includes(key)) && typeof input.service === 'string'
+  if (type === 'credential' && Object.keys(input).every(key => ['service', 'auth_scheme', 'credential_id', 'scopes', 'app'].includes(key)) && typeof input.service === 'string'
     && (input.auth_scheme === undefined || SCHEMES.includes(input.auth_scheme))
     && (input.credential_id === undefined || (typeof input.credential_id === 'string' && /^[0-9a-f-]{36}$/.test(input.credential_id)))) {
     const scopes = scopeList(input.scopes), app = appReference(input.app);
@@ -16,21 +27,26 @@ export function requestInput(kind, input) {
       ...(scopes.length ? { scopes } : {}), ...(app ? { app } : {}) };
   }
   // Registering an app: the holder types its ID and secret on the request page; the asker learns only its id.
-  if (kind === 'app' && Object.keys(input).every(key => ['service', 'name'].includes(key)) && typeof input.service === 'string'
+  if (type === 'app' && Object.keys(input).every(key => ['service', 'name'].includes(key)) && typeof input.service === 'string'
     && (input.name === undefined || typeof input.name === 'string')) {
     return { service: input.service, ...(input.name === undefined ? {} : { name: resourceName(input.name) }) };
   }
-  // Asking to act for someone: only what the asker wants to be called.
-  if (kind === 'actor' && Object.keys(input).every(key => key === 'name') && typeof input.name === 'string' && input.name.trim() && input.name.length <= 80) return { name: input.name.trim() };
-  if (kind === 'store' && Object.keys(input).every(key => key === 'fields')) return { fields: declarations(input.fields) };
-  fail(400, 'invalid_request', '依頼の種類と内容が一致しません。');
+  // A relation drawn to the one asking: a role or one action, onto a principal or a resource. Left without an object,
+  // it is onto the one who answers - how a principal nobody knows yet asks to act for someone.
+  if (type === 'relation' && Object.keys(input).every(key => ['relation', 'object_type', 'object_id'].includes(key)) && typeof input.relation === 'string'
+    && ((input.object_type === undefined && input.object_id === undefined)
+      || (['principal', 'resource'].includes(input.object_type) && typeof input.object_id === 'string' && /^[0-9a-f-]{36}$/.test(input.object_id)))) {
+    return { relation: input.relation, ...(input.object_type === undefined ? {} : { object_type: input.object_type, object_id: input.object_id }) };
+  }
+  if (type === 'secret' && Object.keys(input).every(key => key === 'fields')) return { fields: declarations(input.fields) };
+  fail(400, 'invalid_authorization_details', '依頼の種類と内容が一致しません。');
 }
 
-export function requestResult(kind, result) {
-  if (kind === 'connect' && typeof result?.credential_id === 'string' && result.credential_id) return { credential_id: result.credential_id };
-  if (kind === 'store' && Array.isArray(result?.names) && result.names.length) return { names: result.names.map(resourceName), replaced: (result.replaced ?? []).map(resourceName) };
-  if (kind === 'actor' && typeof result?.principal_id === 'string' && result.principal_id) return { principal_id: result.principal_id };
-  if (kind === 'app' && typeof result?.app_id === 'string' && result.app_id) return { app_id: result.app_id };
+export function requestResult(type, result) {
+  if (type === 'credential' && typeof result?.credential_id === 'string' && result.credential_id) return { credential_id: result.credential_id };
+  if (type === 'secret' && Array.isArray(result?.names) && result.names.length) return { names: result.names.map(resourceName), replaced: (result.replaced ?? []).map(resourceName) };
+  if (type === 'relation' && typeof result?.relation === 'string' && ['principal', 'resource'].includes(result.object_type) && typeof result.object_id === 'string') return { relation: result.relation, object_type: result.object_type, object_id: result.object_id };
+  if (type === 'app' && typeof result?.app_id === 'string' && result.app_id) return { app_id: result.app_id };
   throw new Error('The result does not match the request');
 }
 

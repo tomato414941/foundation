@@ -57,13 +57,12 @@ test('Googleの同意を、頼まれた権限と本人確認の権限、state・
 
 test('AIが頼んだ権限で接続の依頼を完了し、確認結果と短期トークンを分けて渡す', async t => {
   const f = await googleFixture(t), agent = await f.issueKey();
-  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { kind: 'connect',
-    input: { service: 'google', scopes: [READONLY, SEND] }, purpose: 'メールを読み、返信を送ります。' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'credential', service: 'google', scopes: [READONLY, SEND] }], binding_message: 'メールを読み、返信を送ります。' } });
   assert.equal(asked.status, 201, asked.text);
-  assert.deepEqual(asked.json.request.input.scopes, [READONLY, SEND]);
+  assert.deepEqual(asked.json.request.authorization_details[0].scopes, [READONLY, SEND]);
   const a = await f.connect('personal', { request_id: asked.json.request.id });
   const done = await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token });
-  assert.equal(done.json.request.status, 'done'); assert.equal(done.json.request.result.credential_id, a.id);
+  assert.equal(done.json.request.status, 'granted'); assert.equal(done.json.request.result.credential_id, a.id);
   const [listed] = (await f.request('/v1/resources?kind=credential', { token: agent.token })).json.resources;
   assert.equal(listed.label, 'personal@example.test');
   assert.deepEqual(listed.facts.scopes, with_(READONLY, SEND));

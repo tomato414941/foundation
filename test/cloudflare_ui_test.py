@@ -88,7 +88,7 @@ with sync_playwright() as p:
         body: JSON.stringify({name: 'UI test agent', actor: true, key: true})})).json();
       const owner = key.principal.acts_for[0];
       const response = await fetch('/v1/requests?as=' + owner, {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
-        body: JSON.stringify({kind: 'connect', input: {service: 'cloudflare', credential_id: id}, purpose: '共有アカウントへの接続を更新'})});
+        body: JSON.stringify({authorization_details: [{type: 'credential', service: 'cloudflare', credential_id: id}], binding_message: '共有アカウントへの接続を更新'})});
       if (response.status !== 201) throw new Error(await response.text());
       return '/requests/' + (await response.json()).request.id;
     }""", first_id)

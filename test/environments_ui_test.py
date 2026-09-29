@@ -32,7 +32,7 @@ with sync_playwright() as p:
 
     actor = call('POST', '/v1/principals', {'name': '作業用AI'})
     token = actor['token']
-    asked = call('POST', '/v1/requests', {'kind': 'actor', 'input': {'name': '作業用AI'}}, token)['request']
+    asked = call('POST', '/v1/requests', {'authorization_details': [{'type': 'relation', 'relation': 'actor'}]}, token)['request']
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -43,7 +43,7 @@ with sync_playwright() as p:
     callback = args.base + '/login/confirm?' + urlencode({'return_to': '/requests/' + asked['id']})
     page.goto(callback + '#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
     page.get_by_role('button', name='ログイン', exact=True).click()
-    page.get_by_label('確認コード', exact=True).fill(asked['confirmation_code'])
+    page.get_by_label('確認コード', exact=True).fill(asked['user_code'])
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
     owner = call('GET', '/v1/principals/me', token=token)['acts_for'][0]

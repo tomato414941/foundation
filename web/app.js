@@ -1,4 +1,4 @@
-import { requestResultView, knownRequestKind } from './request-view.js';
+import { requestResultView, knownRequestKind, detailOf } from './request-view.js';
 import { pages, brand, pageTitle, workspaceView, pendingView } from './workspace-view.js';
 
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
@@ -590,10 +590,10 @@ const siteLink = value => { try { const url = new URL(value); return `<a href="$
 // The steps the requesting AI wrote for the owner to follow, shown as the numbered list they are.
 const stepsBlock = steps => steps?.length ? `<section class="ai-guidance"><h3>手順</h3><ol class="guidance-steps">${steps.map(step => `<li>${esc(step)}</li>`).join('')}</ol></section>` : '';
 const requestHeading = (row, title, symbol = 'lock') => `${state?.user?.email ? `<p class="request-account">${esc(state.user.email)}</p>` : ''}<header class="approval-heading"><span class="approval-symbol">${icon(symbol)}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(title)}</h1></div></header>`;
-const requestPurpose = row => row.purpose ? `<div class="approval-purpose"><dt>目的</dt><dd>${esc(row.purpose)}</dd></div>` : '';
-const codeComplete = form => /^[0-9a-fA-F]{8}$/.test((form.elements.confirmationCode?.value || '').replace(/[^0-9a-zA-Z]/g, ''));
+const requestPurpose = row => row.binding_message ? `<div class="approval-purpose"><dt>目的</dt><dd>${esc(row.binding_message)}</dd></div>` : '';
+const codeComplete = form => /^[0-9A-Z]{8}$/.test((form.elements.confirmationCode?.value || '').toUpperCase().replace(/[^0-9A-Z]/g, ''));
 function codeField(enabled = true) {
-  return `<label for="confirmation-code">確認コード</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="0000-0000" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">依頼元から受け取ったコードを入力してください。</p>`;
+  return `<label for="confirmation-code">確認コード</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">依頼元から受け取ったコードを入力してください。</p>`;
 }
 // The link of a request shows the one screen its kind calls for:
 //   approve   a key not yet approved: the owner accepts it with the code. Nothing is registered here.
@@ -602,25 +602,26 @@ function codeField(enabled = true) {
 function renderRequest() {
   const row = accessRequest;
   const shell = (content) => `<div class="workspace"><header class="topbar">${brand}${linked ? '' : `<div class="user-menu"><a href="/account"${page === 'account' ? ' aria-current="page"' : ''}>アカウント</a><button class="text-button" data-action="logout">ログアウト</button></div>`}</header><main class="approval-main">${content}</main></div>`;
-  if (!row || row.status !== 'pending' || !knownRequestKind(row.kind)) {
+  const type = detailOf(row).type, asked = detailOf(row);
+  if (!row || row.status !== 'pending' || !knownRequestKind(type)) {
     const view = requestResultView(row, requestError);
-    const subject = view.completed ? row.kind === 'store' ? row.result.names.join('、') : row.kind === 'connect' ? connected().find(item => item.id === row.result.credential_id)?.label : row.requester_name : '';
+    const subject = view.completed ? type === 'secret' ? row.result.names.join('、') : type === 'credential' ? connected().find(item => item.id === row.result.credential_id)?.label : row.requester_name : '';
     const link = !linked ? '<a class="button secondary" href="' + view.href + '">' + view.label + ' ' + icon('arrow') + '</a>'
       : back ? '<a class="button secondary" href="' + esc(backTo(row)) + '">' + esc(back.name) + 'に戻る</a>' : '';
     app.innerHTML = shell('<section class="approval-card approval-result"><span class="approval-symbol">' + icon(view.completed ? 'check' : 'lock') + '</span><h1>' + view.title + '</h1>' + (subject ? '<p>' + esc(subject) + '</p>' : '') + (view.description ? '<p>' + esc(view.description) + '</p>' : '') + link + '</section>');
     return;
   }
-  const expiry = `<p class="request-expiry">${row.kind === 'actor' ? '承認期限：' : '依頼の期限：'}${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))}</p>`;
-  if (row.kind === 'actor') { renderApproval(row, shell, expiry); return; }
-  if (row.kind === 'store') { renderStore(row, shell, expiry); return; }
-  if (row.kind === 'app') { renderAppRequest(row, shell, expiry); return; }
+  const expiry = `<p class="request-expiry">${type === 'relation' ? '承認期限：' : '依頼の期限：'}${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))}</p>`;
+  if (type === 'relation') { renderApproval(row, shell, expiry); return; }
+  if (type === 'secret') { renderStore(row, shell, expiry); return; }
+  if (type === 'app') { renderAppRequest(row, shell, expiry); return; }
   const service = row.service;
   if (!service) {
     app.innerHTML = shell(`<section class="approval-card"><h1>接続</h1><p>このサービスには現在接続できません。</p><button class="text-button full" data-action="deny-request">接続しない</button>${expiry}</section>`);
     return;
   }
   const way = row.auth_scheme, scheme = service.auth_schemes[way], name = service.name;
-  const reconnecting = Boolean(row.input.credential_id), title = reconnecting ? name + 'に接続し直す' : name + 'に接続';
+  const reconnecting = Boolean(asked.credential_id), title = reconnecting ? name + 'に接続し直す' : name + 'に接続';
   const facts = `<dl class="approval-facts">${requestPurpose(row)}${row.credential ? `<div><dt>更新する接続</dt><dd>${esc(row.credential.label)}${cloudflareDetails(row.credential)}</dd></div>` : ''}
     <div><dt>方法</dt><dd>${WAYS[way][0]}${way === 'oauth' ? requestedScopesView(row, scheme) : ''}</dd></div>${row.app && !row.app.foundation ? `<div><dt>OAuthアプリ</dt><dd>${esc(row.app.name)}</dd></div>` : ''}</dl>`;
   let body;
@@ -635,10 +636,10 @@ function renderRequest() {
 }
 // The scopes a request asks the service for, as the service names them; the holder sees each before agreeing.
 function requestedScopesView(row, scheme) {
-  const asked = row.input.scopes || [];
+  const detail = detailOf(row), asked = detail.scopes || [];
   if (!scheme.scopes) return '';
-  if (!asked.length) return `<small class="muted block">${row.input.credential_id ? '今許可している権限のまま接続し直します。' : '本人確認のための権限だけを頼みます。'}</small>`;
-  return `<small class="muted block">${row.input.credential_id ? '今の権限に加えて、' : ''}次の権限を頼みます。</small><ul class="scope-list">${asked.map(scope => `<li><code>${esc(scope)}</code></li>`).join('')}</ul>`;
+  if (!asked.length) return `<small class="muted block">${detail.credential_id ? '今許可している権限のまま接続し直します。' : '本人確認のための権限だけを頼みます。'}</small>`;
+  return `<small class="muted block">${detail.credential_id ? '今の権限に加えて、' : ''}次の権限を頼みます。</small><ul class="scope-list">${asked.map(scope => `<li><code>${esc(scope)}</code></li>`).join('')}</ul>`;
 }
 // The owner registers an OAuth app for a key: its values go into the app, and the key learns only which app it is.
 function renderAppRequest(row, shell, expiry) {
@@ -650,19 +651,19 @@ function renderAppRequest(row, shell, expiry) {
   const title = service.name + 'のOAuthアプリを登録';
   app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, title)}
     <dl class="approval-facts">${requestPurpose(row)}</dl>${stepsBlock(row.steps)}
-    <form id="app-request-form"><label for="request-app-name">名前</label><input id="request-app-name" name="name" required maxlength="200" autocomplete="off" value="${esc(row.input.name || service.name + 'のアプリ')}">
+    <form id="app-request-form"><label for="request-app-name">名前</label><input id="request-app-name" name="name" required maxlength="200" autocomplete="off" value="${esc(detailOf(row).name || service.name + 'のアプリ')}">
       ${appFields(service, 'request-app')}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>
     <button class="text-button full" type="button" data-action="deny-request">登録しない</button>${expiry}</section>`);
   bindForm(async (form) => {
     const values = Object.fromEntries(service.auth_schemes.oauth.app_fields.map(({ name }) => [name, String(form.get(name) || '')]));
-    await api('/v1/requests/' + row.id + '/done', { method: 'POST', data: { name: String(form.get('name') || ''), ...values } });
+    await api('/v1/requests/' + row.id + '/grant', { method: 'POST', data: { name: String(form.get('name') || ''), ...values } });
     await refresh();
   }, app);
 }
 // The owner puts something into storage for a key. Everything specific to the service is the AI's words;
 // Foundation shows only where it will go and how it will be handed over.
 function renderStore(row, shell, expiry) {
-  const asked = row.input.fields, replacing = asked.some(one => one.replace);
+  const asked = detailOf(row).fields, replacing = asked.some(one => one.replace);
   const title = asked.length === 1 ? `${asked[0].label}を${replacing ? '置き換える' : '登録する'}` : `${asked.length}件を${replacing ? '置き換える' : '登録する'}`;
   const site = asked.find(one => one.site)?.site;
   const field = (one, at) => one.multiline
@@ -685,7 +686,7 @@ function renderStore(row, shell, expiry) {
   });
   bindForm(async (data) => {
     const entries = asked.map((_, at) => ({ name: String(data.get('name-' + at) ?? ''), content: String(data.get('value-' + at) ?? '') }));
-    try { await api(`/v1/requests/${row.id}/done`, { method: 'POST', data: { entries } }); }
+    try { await api(`/v1/requests/${row.id}/grant`, { method: 'POST', data: { entries } }); }
     catch (error) { if ([401, 404].includes(error.status)) await refresh(); throw error; }
     await refresh(); toast('登録しました。');
   }, app);
@@ -694,18 +695,34 @@ const accessSummary = '保存データの取得・変更・削除と、接続済
 const accessScope = '<ul class="access-scope"><li>認証情報とオブジェクトの取得・追加・更新・削除</li><li>接続済みサービスの利用とファンクションの実行</li></ul>';
 const accessExclusions = '接続の追加・解除、他の相手への権限付与、アカウント管理は含みません。';
 const accessDetails = () => `<details class="access-permissions"><summary>許可の詳細</summary>${accessScope}<p>${accessExclusions}</p><p>依頼元の名前は自己申告です。</p></details>`;
-// The counterpart is what is accepted, not the individual credential it carries.
+// What one action lets its holder do, in the words of whoever grants it.
+const ACTION_WORDS = {
+  'secret.list': 'シークレットの一覧を見る', 'secret.read': 'シークレットの情報を見る', 'secret.content': 'シークレットの値を読む', 'secret.write': 'シークレットの値を書き換える', 'secret.remove': 'シークレットを削除する',
+  'credential.list': 'サービスとの接続の一覧を見る', 'credential.read': 'サービスとの接続の情報を見る', 'credential.connect': 'サービスに接続する', 'credential.disconnect': 'サービスとの接続を解除する',
+  'object.list': 'オブジェクトの一覧を見る', 'object.read': 'オブジェクトを読む', 'object.write': 'オブジェクトを書き換える', 'object.remove': 'オブジェクトを削除する', 'object.link': 'オブジェクトの共有リンクを作る',
+  'app.use': 'このOAuthアプリで接続する', 'app.write': 'OAuthアプリの設定を変える', 'app.remove': 'OAuthアプリを削除する',
+  'service.write': 'サービスの定義を変える', 'service.remove': 'サービスの定義を削除する',
+  'environment.open': '計算機を立ち上げる', 'environment.exec': '計算機でコマンドを実行する', 'environment.remove': '計算機を片付ける',
+  'principal.export': 'データを書き出す', 'principal.audit-log': '操作の記録を見る', 'principal.relate': '他の相手に権限を渡す', 'principal.issue-key': 'キーを発行する',
+  'principal.inject': '保存した値をコマンドに渡す', 'principal.invoke': 'ファンクションを実行する',
+};
+const actionWords = relation => ACTION_WORDS[relation] ?? { viewer: '見る', editor: '見る・変える' }[relation] ?? relation.replace(/^[a-z_]+\./, '').replace(/-/g, ' ');
+// A relation asked for: to act for the one answering, asked by a key nobody knows yet and confirmed with its code; or
+// one permission onto something, asked by a key already known.
 function renderApproval(row, shell, expiry) {
-  app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, 'アクセスを許可する', 'device')}
-    <dl class="approval-facts">${requestPurpose(row)}<div><dt>権限</dt><dd>${accessScope}<small class="muted block">${accessExclusions}</small></dd></div>
-    <div><dt>対象・期間</dt><dd>今後追加するものも含め、取り消すまで有効です。</dd></div></dl>
+  const asked = detailOf(row), first = row.to === null, acting = asked.relation === 'actor';
+  const target = row.object ? `<div><dt>対象</dt><dd>${esc(row.object.name || row.object.id)}</dd></div>` : '';
+  const scope = acting ? `${accessScope}<small class="muted block">${accessExclusions}</small>` : `<ul class="access-scope"><li>${esc(actionWords(asked.relation))}</li></ul>`;
+  app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, acting ? 'アクセスを許可する' : '権限を渡す', 'device')}
+    <dl class="approval-facts">${requestPurpose(row)}<div><dt>権限</dt><dd>${scope}</dd></div>${target}
+    <div><dt>期間</dt><dd>${acting ? '今後追加するものも含め、' : ''}取り消すまで有効です。</dd></div></dl>
     <p class="permission-note">依頼元の名前は自己申告です。</p>
-    <form id="access-request-form">${codeField()}
+    <form id="access-request-form">${first ? codeField() : ''}
     <p class="form-error" role="alert"></p>
-    <button class="button primary full" type="submit" disabled>許可する ${icon('arrow')}</button></form>
+    <button class="button primary full" type="submit"${first ? ' disabled' : ''}>許可する ${icon('arrow')}</button></form>
     <button class="text-button full" type="button" data-action="deny-request">許可しない</button>${expiry}</section>`);
   const form = document.querySelector('#access-request-form'), submit = form.querySelector('[type="submit"]');
-  const update = () => { submit.disabled = !codeComplete(form); };
+  const update = () => { submit.disabled = first && !codeComplete(form); };
   form.addEventListener('change', update); form.addEventListener('input', update);
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -713,7 +730,7 @@ function renderApproval(row, shell, expiry) {
     submit.disabled = true;
     const errorElement = form.querySelector('[role="alert"]'); errorElement.textContent = '';
     try {
-      await api(`${requestApi}/done`, { method: 'POST', data: { confirmation_code: form.elements.confirmationCode.value } });
+      await api(`${requestApi}/grant`, { method: 'POST', data: first ? { user_code: form.elements.confirmationCode.value } : {} });
       await refresh();
     } catch (error) { if (form.isConnected) { errorElement.textContent = error.message; submit.disabled = false; } }
   });

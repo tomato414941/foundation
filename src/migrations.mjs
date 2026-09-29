@@ -1,10 +1,11 @@
-export const SCHEMA_VERSION = 33;
+export const SCHEMA_VERSION = 34;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
   31: oneKindOfLine,
   32: separateSecrets,
   33: namesApart,
+  34: requestsAsDetails,
 };
 
 // What one principal was given is kept in one place. A line names a role (owner, actor, viewer, editor) or one
@@ -133,6 +134,33 @@ function namesApart({ db }) {
 }
 namesApart.rebuilds = true;
 
+// A request says what it asks as authorization details (RFC 9396): a type and what that type needs. Asking to act for
+// someone becomes asking for a relation; a store, a connect and an app request keep their input as their detail. Who
+// asked is kept by the name they had then. A request is granted, not done; the code a person types is a user code, and only a request addressed to nobody has one.
+function requestsAsDetails({ db }) {
+  db.exec(`
+    CREATE TABLE requests_next (
+    id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,
+    type TEXT NOT NULL CHECK(type IN ('relation','secret','credential','app')), detail TEXT NOT NULL,
+    requester_name TEXT NOT NULL DEFAULT '', binding_message TEXT NOT NULL, steps TEXT NOT NULL, user_code TEXT, attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, result TEXT, reason TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','granted','denied','cancelled')),
+    created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    );
+    INSERT INTO requests_next SELECT id, from_id, to_id,
+      CASE kind WHEN 'actor' THEN 'relation' WHEN 'store' THEN 'secret' WHEN 'connect' THEN 'credential' ELSE 'app' END,
+      CASE kind WHEN 'actor' THEN '{"relation":"actor"}' ELSE input END,
+      COALESCE(CASE kind WHEN 'actor' THEN json_extract(input, '$.name') END, (SELECT name FROM principals WHERE id=from_id), ''),
+      purpose, steps, CASE WHEN to_id IS NULL THEN code END, attempts, progress,
+      CASE WHEN kind='actor' AND status='done' THEN json_object('relation','actor','object_type','principal','object_id',to_id) ELSE result END,
+      reason, CASE status WHEN 'done' THEN 'granted' ELSE status END, created_at, expires_at
+    FROM requests;
+    DROP TABLE requests; ALTER TABLE requests_next RENAME TO requests;
+    CREATE INDEX requests_from ON requests(from_id, created_at);
+    CREATE INDEX requests_to ON requests(to_id, created_at);
+  `);
+}
+requestsAsDetails.rebuilds = true;
+
 export const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE principals (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
@@ -164,9 +192,9 @@ export const SCHEMA = `
   CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);
   CREATE TABLE requests (
     id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,
-    kind TEXT NOT NULL CHECK(kind IN ('actor','store','connect','app')), input TEXT NOT NULL,
-    purpose TEXT NOT NULL, steps TEXT NOT NULL, code TEXT, attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, result TEXT, reason TEXT,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','denied','cancelled')),
+    type TEXT NOT NULL CHECK(type IN ('relation','secret','credential','app')), detail TEXT NOT NULL,
+    requester_name TEXT NOT NULL DEFAULT '', binding_message TEXT NOT NULL, steps TEXT NOT NULL, user_code TEXT, attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, result TEXT, reason TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','granted','denied','cancelled')),
     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
   );
   CREATE INDEX requests_from ON requests(from_id, created_at);

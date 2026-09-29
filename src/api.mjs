@@ -25,10 +25,12 @@ const app = nullable({ anyOf: [id, { const: 'foundation' }] });
 const field = object({ name: resourceName, label: string, site: string, readable: boolean, multiline: boolean, replace: boolean }, ['name', 'label']);
 const connect = object({ service: string, auth_scheme: scheme, credential_id: id, scopes, app }, ['service']);
 const requestProperties = {
-  to: errorCode(principalId, 'invalid_principal'), purpose: errorCode({ type: 'string', maxLength: 240 }, 'invalid_purpose'), steps: errorCode({ type: ['array', 'null'], items: errorCode(string, 'invalid_steps'), maxItems: 20 }, 'invalid_steps'),
+  to: errorCode(principalId, 'invalid_principal'), binding_message: errorCode({ type: 'string', maxLength: 240 }, 'invalid_purpose'), steps: errorCode({ type: ['array', 'null'], items: errorCode(string, 'invalid_steps'), maxItems: 20 }, 'invalid_steps'),
   valid_minutes: errorCode({ type: ['integer', 'null'], description: 'Expiry in minutes; default 30, from 1 to 1440. null uses the default.' }, 'invalid_validity'),
 };
-const requestVariant = (kind, input) => ({ if: object({ kind: { const: kind } }, ['kind']), then: object({ input }) });
+// One authorization detail (RFC 9396): a type and what that type needs.
+const relationDetail = object({ type: { const: 'relation' }, relation: string, object_type: choice(['principal', 'resource']), object_id: string }, ['type', 'relation']);
+const detailOf = (type, fields, required = []) => object({ type: { const: type }, ...fields }, ['type', ...required]);
 const appValues = { ...object({ service: string, name: resourceName, client_id: string, client_secret: { ...string, writeOnly: true } }),
   description: 'Client fields are top-level keys. Additional service-specific keys (for example runame or domain) are declared by app_fields in GET /v1/services or the service resource. Client secrets are write-only.' };
 const lifetime = errorCode(nullable(object({ end: errorCode(nullable(choice(['exit', 'idle'])), 'invalid_lifetime'), idle_seconds: errorCode(nullable(integer), 'invalid_lifetime'), max_seconds: errorCode(nullable(integer), 'invalid_lifetime') })), 'invalid_lifetime');
@@ -54,24 +56,22 @@ export const schemas = {
     keys: array(ref('Key')), requests: array(ref('Request')) }, ['principal', 'acts_for', 'owners', 'keys', 'requests']),
   Relation: object({ subject_id: principalId, relation: string, object_type: choice(['principal', 'resource']), object_id: string, created_at: iso }, ['relation', 'object_type', 'object_id']),
   RelationInput: object({ subject: principalId, relation: string, object_type: choice(['principal', 'resource']), object_id: string }, ['relation', 'object_type', 'object_id']),
-  CreateRequest: { ...errorCode(object({ ...requestProperties, kind: errorCode(choice(['actor', 'store', 'connect', 'app']), 'invalid_request'), input: errorCode(object(), 'nothing_requested') }, ['kind', 'input']), 'nothing_requested'), allOf: [
-    requestVariant('actor', object({ name: string }, ['name'])),
-    requestVariant('store', object({ fields: { anyOf: [field, { ...array(field), minItems: 1, maxItems: 8 }] } }, ['fields'])),
-    requestVariant('connect', connect),
-    requestVariant('app', object({ service: string, name: resourceName }, ['service'])),
-  ] },
-  Request: object({ id: requestId, kind: choice(['actor', 'store', 'connect', 'app']), from: principalId, to: nullable(principalId),
-    input: { anyOf: [object({ name: string }), object({ fields: array(field) }), connect, object({ service: string, name: string })] },
-    purpose: string, steps: array(string), status: choice(['pending', 'done', 'denied', 'cancelled']), created_at: time, expires_at: time,
-    verification_uri: string, requester_name: string, confirmation_code: string, reason: string,
-    result: object({ names: array(string), replaced: array(string), principal_id: principalId, credential_id: id, app_id: id }),
+  AuthorizationDetail: { anyOf: [relationDetail,
+    detailOf('secret', { fields: { anyOf: [field, { ...array(field), minItems: 1, maxItems: 8 }] } }, ['fields']),
+    detailOf('credential', connect.properties, ['service']),
+    detailOf('app', { service: string, name: resourceName }, ['service'])] },
+  CreateRequest: errorCode(object({ ...requestProperties, authorization_details: errorCode({ ...array(ref('AuthorizationDetail')), minItems: 1, maxItems: 1 }, 'invalid_authorization_details') }, ['authorization_details']), 'invalid_authorization_details'),
+  Request: object({ id: requestId, authorization_details: array(ref('AuthorizationDetail')), from: principalId, to: nullable(principalId),
+    binding_message: string, steps: array(string), status: choice(['pending', 'granted', 'denied', 'cancelled']), created_at: time, expires_at: time, expires_in: integer, interval: integer,
+    verification_uri: string, requester_name: string, user_code: string, reason: string,
+    result: object({ names: array(string), replaced: array(string), relation: string, object_type: string, object_id: string, credential_id: id, app_id: id }),
     events: array(object({ event: string, at: time, detail: object() })), service: ref('ServiceDescription'),
     credential: nullable(ref('Credential')), auth_scheme: scheme, app: nullable(object({ id: string, name: string, foundation: boolean })), store: array(field),
-  }, ['id', 'kind', 'from', 'to', 'input', 'status', 'verification_uri', 'expires_at']),
-  CompleteRequest: { anyOf: [
+  }, ['id', 'authorization_details', 'from', 'to', 'status', 'verification_uri', 'expires_at', 'interval']),
+  GrantRequest: { anyOf: [
     object({ entries: array(object({ name: resourceName, content: string }, ['name', 'content'])) }, ['entries']),
-    object({ confirmation_code: string }, ['confirmation_code']), appValues,
-  ], description: 'store: entries in the requested field order; actor: confirmation_code shown to the owner; app: name, client_id, client_secret and service-specific top-level app fields. connect completes through /v1/credentials and the service consent flow. Invalid actor codes, including missing codes, count toward the attempt limit.' },
+    object({ user_code: string }), appValues,
+  ], description: 'secret: entries in the requested field order; relation: the user_code the asker showed, when the request was addressed to nobody; app: name, client_id, client_secret and service-specific top-level app fields. credential is granted through /v1/credentials and the service consent flow. Wrong user codes, including missing ones, count toward the attempt limit.' },
   Settings: object({ principal_id: principalId, return_url: string, refresh_url: string, webhook_url: nullable(string),
     notifies: boolean, webhook_secret: string, created_at: iso }, ['principal_id', 'return_url', 'refresh_url', 'notifies']),
   SettingsInput: object({ return_url: string, refresh_url: string, webhook_url: string }, ['return_url']),
@@ -106,7 +106,7 @@ export const schemas = {
   Resource: { oneOf: ['Secret', 'Object', 'Credential', 'App', 'Service', 'Environment'].map(ref) },
   PatchResource: { ...object({ name: resourceName, auth_schemes: object({ oauth: ref('OAuthDefinition') }), client_id: string, client_secret: string }), description: 'Apps also accept their service-specific top-level client fields, as declared by app_fields.' },
   DeleteResource: object({ revoke: boolean, confirm: boolean }),
-  Connect: { ...object({ ...connect.properties, request_id: requestId }), description: 'A browser session is required. With request_id the stored request determines service, scheme, app and scopes. Otherwise service is required. Use kind connect at POST /v1/requests to ask a person to connect.' },
+  Connect: { ...object({ ...connect.properties, request_id: requestId }), description: 'A browser session is required. With request_id the stored request determines service, scheme, app and scopes. Otherwise service is required. Use a credential detail at POST /v1/requests to ask a person to connect.' },
   ConnectResult: object({ url: string, state: string, complete: object({ fields: oauthFields }) }, ['url']),
   Confirmation: object({ credential: ref('Credential'), changes: array(object()) }, ['credential', 'changes']),
   CreateEnvironment: object(environment),
@@ -173,7 +173,7 @@ export const routes = [
     get: op('listPrincipals', 'List principals owned by the caller', many('principals', 'Principal')),
     post: op('createPrincipal', 'Create a principal', object({ principal: ref('Principal'), token: string, key: ref('Key') }, ['principal']), {
       input: 'CreatePrincipal', status: 201, security: [{}, ...secure], 'x-input-error': 'invalid_name',
-      description: 'Without authentication, name is required and a private Bearer token is issued once. Store it privately; it has no access to anyone else. To ask an owner for access, use it to POST /v1/requests with {"kind":"actor","input":{"name":"your name"}} and give the owner the returned verification_uri and confirmation_code. Only the owner approves; GET /v1/principals/me reports acts_for afterward. With authentication, creates an owned principal; alias is an idempotent local name, actor:true gives it access to the caller, key:true issues a token. The CLI can perform the bootstrap: foundation connect <server> --name <name>.' }),
+      description: 'Without authentication, name is required and a private Bearer token is issued once. Store it privately; it has no access to anyone else. To ask an owner for access, use it to POST /v1/requests with {"authorization_details":[{"type":"relation","relation":"actor"}]} and give the owner the returned verification_uri and user_code. Only the owner approves; GET /v1/principals/me reports acts_for afterward. With authentication, creates an owned principal; alias is an idempotent local name, actor:true gives it access to the caller, key:true issues a token. The CLI can perform the bootstrap: foundation connect <server> --name <name>.' }),
   } },
   { name: 'principal', group: 'principals', path: '/v1/principals/{principalId}', methods: {
     get: op('getPrincipal', 'Read a principal', one('Principal')), patch: op('renamePrincipal', 'Rename a principal', one('Principal'), { input: 'Rename', 'x-input-error': 'invalid_name' }), delete: okay('removePrincipal', 'Remove an owned principal and its resources'),
@@ -195,14 +195,14 @@ export const routes = [
     delete: okay('removeSettings', 'Remove return and webhook settings'),
   } },
   { name: 'requests', group: 'requests', path: '/v1/requests', methods: {
-    get: op('listRequests', 'List sent or received requests', many('requests', 'Request'), { parameters: [query('status', choice(['pending', 'done', 'denied', 'cancelled'])), query('to', string, 'Use me for received requests; otherwise lists sent requests.')] }),
-    post: op('createRequest', 'Ask someone to approve access, store a value, connect a service or register an app', one('Request'), { input: 'CreateRequest', status: 201, parameters: [as], 'x-input-error': 'invalid_request', description: 'Show verification_uri to the person asked. For actor requests also show confirmation_code, which the person enters. Other requests default to the holder selected by as. Poll GET /v1/requests/{requestId} for the outcome. Do not collect secrets in chat.' }),
+    get: op('listRequests', 'List sent or received requests', many('requests', 'Request'), { parameters: [query('status', choice(['pending', 'granted', 'denied', 'cancelled'])), query('to', string, 'Use me for received requests; otherwise lists sent requests.')] }),
+    post: op('createRequest', 'Ask someone for a relation, secrets, a connected service or a registered app', one('Request'), { input: 'CreateRequest', status: 201, parameters: [as], 'x-input-error': 'invalid_authorization_details', description: 'authorization_details holds one detail (RFC 9396). A relation with no object, asked of nobody, is how a principal nobody knows asks to act for whoever answers; it returns a user_code to show beside verification_uri (as in RFC 8628). Otherwise the request goes to to, the holder of the object, or the holder selected by as, who answers where they are (as in CIBA); binding_message tells them why. Poll GET /v1/requests/{requestId} no more often than interval seconds; faster polling is answered with slow_down, and an expired request with expired_token. Do not collect secrets in chat.' }),
   } },
   { name: 'request', group: 'requests', path: '/v1/requests/{requestId}', methods: {
     get: op('getRequest', 'Read a request and its outcome', one('Request'), { security: [...secure, { requestLink: [] }] }),
     delete: op('cancelRequest', 'Cancel a sent request', one('Request'), { input: 'Empty' }),
   } },
-  { name: 'done', group: 'requests', path: '/v1/requests/{requestId}/done', methods: { post: op('completeRequest', 'Answer a request as its recipient', { anyOf: [one('Request'), object({ stored: { const: true }, names: array(string), replaced: array(string) }, ['stored', 'names', 'replaced']), object({ registered: { const: true }, app_id: id }, ['registered', 'app_id'])] }, { input: 'CompleteRequest', security: [...secure, { requestLink: [] }], description: 'Request-link cookies may answer only their store request. App registration requires a browser session. Incorrect actor codes count toward the attempt limit.' }) } },
+  { name: 'grant', group: 'requests', path: '/v1/requests/{requestId}/grant', methods: { post: op('grantRequest', 'Grant a request as the one asked', { anyOf: [one('Request'), object({ stored: { const: true }, names: array(string), replaced: array(string) }, ['stored', 'names', 'replaced']), object({ registered: { const: true }, app_id: id }, ['registered', 'app_id'])] }, { input: 'GrantRequest', security: [...secure, { requestLink: [] }], description: 'Request-link cookies may answer only their own request. App registration requires a browser session. A relation is drawn only where the one granting may draw it. Wrong user codes count toward the attempt limit.' }) } },
   { name: 'deny', group: 'requests', path: '/v1/requests/{requestId}/deny', methods: { post: op('denyRequest', 'Decline a received request', one('Request'), { input: 'Empty', security: [...secure, { requestLink: [] }] }) } },
   { name: 'relations', path: '/v1/relations', methods: {
     get: op('listRelations', 'List the caller’s relations', many('relations', 'Relation')),

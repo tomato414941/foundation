@@ -54,23 +54,23 @@ test('asks for several things at once, and keeps them together or not at all', a
   const f = await fixture(t);
   KEY = (await f.approveKey()).token;
   const asked = await f.request('/v1/requests', { method: 'POST', token: KEY, anonymous: true, data: {
-    kind: 'store', input: { fields: [
+    authorization_details: [{ type: 'secret', fields: [
       { name: 'apple/auth-key', label: '.p8 の中身', multiline: true, type: 'text/plain' },
       { name: 'apple/key-id', label: 'Key ID', readable: true },
       { name: 'apple/issuer-id', label: 'Issuer ID', readable: true },
-    ] },
-    purpose: 'ビルドの提出に使います。' } });
+    ] }],
+    binding_message: 'ビルドの提出に使います。' } });
   assert.equal(asked.status, 201, asked.text);
-  assert.equal(asked.json.request.kind, 'store');
+  assert.equal(asked.json.request.authorization_details[0].type, 'secret');
   assert.deepEqual(asked.json.request.store.map(one => one.name), ['apple/auth-key', 'apple/key-id', 'apple/issuer-id']);
 
   // One missing value keeps none of them.
-  const partial = await f.request('/v1/requests/' + asked.json.request.id + '/done',
+  const partial = await f.request('/v1/requests/' + asked.json.request.id + '/grant',
     { method: 'POST', data: { entries: [{ name: 'apple/auth-key', content: 'KEY' }, { name: 'apple/key-id', content: 'ABC123' }] } });
   assert.equal(partial.status, 400);
   assert.deepEqual((await f.request('/v1/resources?kind=secret', { token: KEY, anonymous: true })).json.resources, []);
 
-  const stored = await f.request('/v1/requests/' + asked.json.request.id + '/done',
+  const stored = await f.request('/v1/requests/' + asked.json.request.id + '/grant',
     { method: 'POST', data: { entries: [{ name: 'apple/auth-key', content: 'KEY' }, { name: 'apple/key-id', content: 'ABC123' }, { name: 'apple/issuer-id', content: 'UUID' }] } });
   assert.equal(stored.status, 200, stored.text);
   const kept = await f.request('/v1/resources?kind=secret', { token: KEY, anonymous: true });

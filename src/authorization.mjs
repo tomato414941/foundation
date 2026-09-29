@@ -43,7 +43,7 @@ const RULES = {
   // along a viewer line too. Its identity is changed by the holder or whoever acts for them.
   environment: { list: [SELF, ACTOR], open: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], exec: [SELF, ACTOR, LINE('editor')],
     identity: [SELF, ACTOR], remove: [SELF, ACTOR], rename: [SELF], share: [SELF] },
-  request: { read: [SELF], done: [SELF], deny: [SELF], cancel: [SELF] },
+  request: { read: [SELF], grant: [SELF], deny: [SELF], cancel: [SELF] },
 };
 
 export class Authorization {

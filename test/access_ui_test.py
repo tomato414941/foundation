@@ -24,7 +24,7 @@ with sync_playwright() as p:
 
     actor = post('/v1/principals', {'name': 'laptop の作業用AI'})
     token = actor['token']
-    asked = post('/v1/requests', {'kind': 'actor', 'input': {'name': 'laptop の作業用AI'}, 'purpose': '保存した認証情報を使って接続を確認します。'}, token)['request']
+    asked = post('/v1/requests', {'authorization_details': [{'type': 'relation', 'relation': 'actor'}], 'binding_message': '保存した認証情報を使って接続を確認します。'}, token)['request']
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -55,7 +55,7 @@ with sync_playwright() as p:
         if width != 320:
             page.screenshot(path=str(shots / f'approval-{width}.png'), full_page=True)
     page.set_viewport_size({'width': 1280, 'height': 1000})
-    page.get_by_label('確認コード', exact=True).fill(asked['confirmation_code'])
+    page.get_by_label('確認コード', exact=True).fill(asked['user_code'])
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
     page.get_by_role('link', name='アクセス管理', exact=True).click()
