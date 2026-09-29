@@ -264,17 +264,14 @@ test('The runtime hands what is kept to a command, as bytes and as a file, and n
   assert.match(refused.err, /connect .* exec/);
 });
 
-test('保存には承認済みキーを要求し、ガイドに保存と受け渡しのAPIを示す', async t => {
+test('保存値の一覧には認証を要求し、OpenAPIは認証前に取得する', async t => {
   const f = await fixture(t); let token;
   assert.equal((await f.request('/v1/resources?kind=secret', { token, anonymous: true })).status, 401);
-  // No server configured: the bundled reference.
   const configDir = await mkdtemp(join(tmpdir(), 'foundation-config-'));
   t.after(() => rm(configDir, { recursive: true, force: true }));
-  const guide = (await run(['guide'], { XDG_CONFIG_HOME: configDir, FOUNDATION_URL: '' })).out.toString();
-  assert.match(guide, /PUT \/v1\/resources\?kind=secret&name=<name>/);
-  assert.match(guide, /POST \/v1\/injections/);
-  assert.match(guide, /Nothing here needs a shell/);
-  assert.match(guide, /foundation exec <ENV>/, 'and the one thing that does need one');
+  const spec = JSON.parse((await run(['api', 'GET', '/openapi.json'], { XDG_CONFIG_HOME: configDir, FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(configDir, 'missing-key') })).out.toString());
+  assert.ok(spec.paths['/v1/resources'].put.parameters.find(p => p.name === 'kind').schema.enum.includes('secret'));
+  assert.equal(spec.paths['/v1/injections'].post.operationId, 'inject');
 });
 
 test('Anyone becomes a principal with no credential, is issued a key once, and reaches nothing until a line is drawn', async t => {

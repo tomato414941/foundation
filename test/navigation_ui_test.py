@@ -165,18 +165,18 @@ with sync_playwright() as p:
     expect(page.get_by_role('table')).to_be_visible()
     print('取得の失敗を表示し、再読み込みで一覧を表示する。')
 
-    # ガイドなどの通常のページへ移動し、戻って引き続き利用する。
+    # API仕様のページへ移動し、戻って引き続き利用する。
     page.get_by_role('link', name='Foundation ホーム', exact=True).click()
     expect(page.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()
     page.wait_for_load_state('networkidle')
-    page.goto(args.base + '/start', wait_until='networkidle')
-    expect(page.locator('body')).to_contain_text('foundation connect')
+    page.goto(args.base + '/docs', wait_until='networkidle')
+    expect(page.get_by_role('heading', name='Foundation API', exact=False)).to_be_visible()
     page.go_back(wait_until='networkidle')
     expect(page.get_by_role('main').get_by_role('link', name='シークレット', exact=False)).to_be_visible()
 
     # セッションが切れていたらログインへ案内する。
     context.clear_cookies()
-    go('サービス')
+    page.get_by_role('navigation').get_by_role('link', name='サービス', exact=True).click()
     expect(page.get_by_role('heading', name='ログイン', exact=True)).to_be_visible()
     expect(page.get_by_label('メールアドレス', exact=True)).to_be_enabled()
     page.go_back(wait_until='networkidle')

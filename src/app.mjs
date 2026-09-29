@@ -27,7 +27,8 @@ import { Resources, KINDS } from './resources.mjs';
 import { respond } from './mcp.mjs';
 import { FETCH_BODY_MAX } from './fetch.mjs';
 import { FUNCTIONS, Functions } from './functions.mjs';
-import { guide } from '../cli/guide.mjs';
+import { matchRoute, openapi, validateBody } from './api.mjs';
+import { serveDocs } from './api-docs.mjs';
 import { Authorization, reaches } from './authorization.mjs';
 import { pages, pageTitle, workspaceView, pendingView } from '../web/workspace-view.js';
 
@@ -65,7 +66,7 @@ function loginEmail(value) {
   return value.trim().toLowerCase();
 }
 
-async function body(req, max = MAX_BODY) {
+async function readBody(req, max = MAX_BODY) {
   if (req.headers['content-type']?.split(';')[0] !== 'application/json') fail(415, 'json_required', 'JSON形式で送信してください。');
   if (Number(req.headers['content-length']) > max) fail(413, 'body_too_large', '送信内容が大きすぎます。');
   const chunks = [];
@@ -208,6 +209,18 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       if (!allowedHosts.includes(req.headers.host)) fail(403, 'host_denied', 'このホストからは利用できません。');
       const origin = external?.origin || `http://${req.headers.host}`;
       const url = new URL(req.url, origin), path = url.pathname, method = req.method;
+      const route = matchRoute(path, method), at = route?.name;
+      const body = async (request, max) => {
+        const input = await readBody(request, max);
+        validateBody(route, input, url.searchParams.get('kind'));
+        return input;
+      };
+      if (path === '/openapi.json' && ['GET', 'HEAD'].includes(method)) {
+        res.setHeader('Link', '</docs>; rel="service-doc"; type="text/html"');
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        return res.end(method === 'HEAD' ? undefined : JSON.stringify(openapi(origin, VERSION)));
+      }
+      if (await serveDocs(req, res, path)) return;
       const setNamedCookie = (name, value, age, cookiePath = '/') => res.appendHeader('Set-Cookie', `${name}=${value}; HttpOnly; SameSite=${cookiePath === '/' ? 'Lax' : 'Strict'}; Path=${cookiePath}; Max-Age=${age}${external ? '; Secure' : ''}`);
       const setCookie = (value, age) => setNamedCookie('fdn_session', value, age);
       const loginToken = readCookie(req, 'fdn_login');
@@ -232,36 +245,17 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         res.writeHead(200, { 'content-type': type });
         return res.end(content);
       }
-      if (path === '/health' && method === 'GET') return send(200, { status: 'ok' });
+      if (at === 'health' && method === 'GET') return send(200, { status: 'ok' });
       if (path === '/start' && (method === 'GET' || method === 'HEAD')) {
-        const instructions = [
-          'CONNECT THIS AI TO FOUNDATION', '',
-          'Server: ' + origin,
-          'This is a public guide, not an access key or an approval. The owner approves access separately.', '',
-          'Use the CLI quick start below if you can run shell commands. Do the setup in your own environment.',
-          'Without a shell, use the HTTP instructions in WHO YOU ARE below and keep your key in private storage.',
-          'Never ask the owner to paste credentials into chat.', '',
-          '1. Use the existing foundation CLI, or install it with Node.js 24 or later:',
-          '   npm install -g @tomato414941/foundation',
-          '2. Connect with a name the owner will recognize:',
-          '   foundation connect ' + origin + ' --name "<your name>"',
-          '   An existing approved key is reused. If already approved, skip to step 4.',
-          '3. Show the owner the returned request.verification_uri and request.confirmation_code.',
-          '   Ask them to open the URL, check your name and permissions, and approve with the code.',
-          '   Never approve on their behalf. Do not print or copy the private key file into the conversation.',
-          '4. After they approve, check:',
-          '   foundation api GET /v1/principals/me',
-          '   Confirm acts_for contains the intended owner; if it does not, approval is not complete.',
-          '5. Read the API guide below and continue with the owner\'s actual task.',
-          '   Connecting alone does not authorize unrelated changes or access to external services.', '',
-          guide(services.catalogView()),
-        ].join('\n');
+        // Older CLIs fall back to a stale bundled guide on any non-200 response.
+        const instructions = `The standalone guide has been retired. Read ${origin}/openapi.json or ${origin}/docs.\nUpdate the CLI: npm install -g @tomato414941/foundation@latest\n`;
+        res.setHeader('Link', '</openapi.json>; rel="service-desc"');
         res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
         return res.end(method === 'HEAD' ? undefined : instructions);
       }
       if (path === '/login/callback' && method === 'GET') return redirect('/?login=invalid');
       // Every OAuth consent comes back here: the state names the flow, and the flow the service and the app.
-      if (path === '/oauth/callback' && method === 'GET') {
+      if (at === 'oauthCallback' && method === 'GET') {
         let destination = '/services', flowService = null;
         const location = code => destination + '?result=' + code + (destination === '/services' && flowService ? '&service=' + encodeURIComponent(flowService) : '');
         try {
@@ -313,18 +307,18 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         }
       }
       if (req.headers['sec-fetch-site'] === 'cross-site') fail(403, 'cross_site_denied', '外部サイトからの操作は許可されていません。');
-      const requestRoute = path.match(/^\/v1\/requests(?:\/([A-Za-z0-9_-]{43})(\/done|\/deny)?)?$/);
+      const requestRoute = route?.group === 'requests' ? route.params : null;
       // One tree, one question. A bearer token, when sent, says which principal speaks. Without one the browser
       // speaks, through its login session or the short credential a single-use link left, and every change it
       // asks for must come from Foundation's own pages. Cookies are never read beside a token.
       const token = bearer(req), browser = req.headers.authorization === undefined;
       if (!browser && !token) fail(401, 'invalid_token', 'Bearer形式のキーを指定してください。');
       // Becoming a principal needs no credential and no login: the request carries nothing to protect.
-      const becoming = path === '/v1/principals' && method === 'POST' && browser && !cookieToken(req);
+      const becoming = at === 'principals' && method === 'POST' && browser && !cookieToken(req);
       if (browser && !['GET', 'HEAD'].includes(method) && !becoming) requireOrigin(req, origin);
       if (!browser && req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
-      if (path === '/v1/login' && method === 'GET') return send(200, { available: auth.emailEnabled ?? auth.enabled, method: 'email_link', pending: logins.summary(loginToken) });
-      if (path === '/v1/login' && method === 'POST') {
+      if (at === 'login' && method === 'GET') return send(200, { available: auth.emailEnabled ?? auth.enabled, method: 'email_link', pending: logins.summary(loginToken) });
+      if (at === 'login' && method === 'POST') {
         const input = await body(req);
         const email = loginEmail(input?.email);
         // Reachable from anywhere means anyone who finds the URL could otherwise make themselves an owner here.
@@ -340,7 +334,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           return send(202, { pending: logins.summary(pendingToken) });
         } catch (error) { logins.cancel(pendingToken); throw error; }
       }
-      if (path === '/v1/login/verify' && method === 'POST') {
+      if (at === 'verifyLogin' && method === 'POST') {
         requireOrigin(req, origin);
         rateLimit('login:' + clientAddress(req), 30, 600_000);
         const input = await body(req), email = loginEmail(input?.email), destination = returnPath(input.return_to);
@@ -365,11 +359,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         setNamedCookie('fdn_login', '', 0);
         return send(200, { ok: true, return_to: destination });
       }
-      if (path === '/v1/login' && method === 'DELETE') {
+      if (at === 'login' && method === 'DELETE') {
         logins.cancel(loginToken); setNamedCookie('fdn_login', '', 0);
         return send(200, { ok: true });
       }
-      if (path === '/v1/session' && method === 'DELETE') {
+      if (at === 'session' && method === 'DELETE') {
         const session = sessions.get(cookieToken(req));
         logins.cancel(loginToken);
         sessions.remove(cookieToken(req));
@@ -381,17 +375,16 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       }
       // The services Foundation knows, and how it comes to hold a credential for each. Public: a key not yet
       // approved reads it too.
-      if (path === '/v1/services' && method === 'GET') return send(200, { services: services.catalogView() });
+      if (at === 'catalog' && method === 'GET') return send(200, { services: services.catalogView() });
       // Where the page sends someone back after a request: the handler's page for it. Public, and says nothing else.
-      const returnRoute = path.match(/^\/v1\/requests\/([A-Za-z0-9_-]{43})\/return$/);
-      if (returnRoute && method === 'GET') {
-        const back = settings.backFor(requests.get(returnRoute[1]));
+      if (at === 'return' && method === 'GET') {
+        const back = settings.backFor(requests.get(route.params.requestId));
         if (!back) fail(404, 'not_found', '戻り先はありません。');
         return send(200, { back });
       }
       // Spending a single-use link: the one in the URL is gone, and a short link for the browser takes its place,
       // sent as a cookie that reaches that one request's routes and nothing else.
-      if (path === '/v1/links/exchange' && method === 'POST') {
+      if (at === 'exchangeLink' && method === 'POST') {
         const input = await body(req);
         rateLimit('link:' + clientAddress(req), 20, 600_000);
         const made = principals.exchangeLink(input.link, input.request_id, LINKED_TTL);
@@ -417,7 +410,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       if (!browser && !known) notApproved();
       if (!browser) subject = { id: known.principal.id, via: { kind: 'key', id: known.key.id, ...(known.key.environment ? { environment: known.key.environment } : {}) } };
       else {
-        const linked = requestRoute?.[1] ? principals.authenticateLink(readCookie(req, 'fdn_link'), requestRoute[1]) : undefined;
+        const linked = requestRoute?.requestId ? principals.authenticateLink(readCookie(req, 'fdn_link'), requestRoute.requestId) : undefined;
         if (linked) subject = { id: linked.principal.id, via: { kind: 'link', ...linked.link } };
         else {
           ({ user, session } = await loggedIn(req));
@@ -453,7 +446,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
 
       // Requests: what one principal asks of another, and what the one asked does about it.
       if (requestRoute) {
-        const id = requestRoute[1], action = requestRoute[2];
+        const id = requestRoute.requestId, action = at === 'done' || at === 'deny' ? '/' + at : null;
         if (!id && method === 'POST') {
           const input = await body(req);
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
@@ -516,7 +509,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       }
       if (subject.via.kind === 'link') fail(401, 'login_required', 'ログインしてください。');
       // Principals: oneself, and those one owns.
-      if (path === '/v1/principals/me') {
+      if (at === 'me') {
         if (method === 'GET') return send(200, { principal: self, ...(subject.via.kind === 'key' ? { key: { id: subject.via.id, ...(subject.via.environment ? { environment: subject.via.environment } : {}) } } : {}), acts_for: actsFor, owners: principals.ownersOf(subject.id), keys: principals.keys(subject.id), requests: requests.list(subject.id, 'pending').map(row => viewRequest(row, origin, { code: true })) });
         if (method === 'PATCH') { const input = await inputBody(); return send(200, { principal: principals.rename(subject.id, nameValue(input.name)) }); }
         // Leaving: a principal takes itself away, its open requests with it. What it acted for stays where it was.
@@ -527,11 +520,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           for (const row of cancelled) requestActions.changed(row);
           return send(200, { ok: true });
         }
+        fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
-      if (path === '/v1/principals' && method === 'GET') { permit('list', 'principal', undefined, subject.id); return send(200, { principals: principals.owned(subject.id) }); }
+      if (at === 'principals' && method === 'GET') { permit('list', 'principal', undefined, subject.id); return send(200, { principals: principals.owned(subject.id) }); }
       // Making a principal. One that is to act for its maker, and to carry a key, can be asked for in the same
       // breath; that is what making oneself a key is.
-      if (path === '/v1/principals' && method === 'POST') {
+      if (at === 'principals' && method === 'POST') {
         const input = await inputBody();
         const alias = input.alias === undefined ? undefined : nameValue(input.alias);
         const { made, issued } = store.transaction(() => {
@@ -543,9 +537,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         auditLog.write(subject.id, 'principal.created', 'principal', made.id, { alias: alias ?? null, actor: input.actor === true, key: Boolean(issued) });
         return send(201, { principal: { ...made, alias: alias ?? null, keys: principals.keys(made.id), acts_for: principals.actsFor(made.id) }, ...(issued ? { token: issued.token, key: { id: issued.id, kind: 'key' } } : {}) });
       }
-      const principalRoute = path.match(/^\/v1\/principals\/([A-Za-z0-9-]{1,64})(?:\/(keys|links|settings|access|compute)(?:\/([a-f0-9-]{36}))?)?$/);
-      if (principalRoute) {
-        const id = principalRoute[1] === 'me' ? subject.id : principalRoute[1], part = principalRoute[2], keyId = principalRoute[3];
+      if (route?.group === 'principals') {
+        const id = route.params.principalId === 'me' ? subject.id : route.params.principalId, part = at === 'principal' ? null : at === 'key' ? 'keys' : at, keyId = route.params.keyId;
         const target = principals.at(id);
         if (part === 'access' && !keyId && method === 'DELETE') {
           permit('relate', 'principal', holderId);
@@ -625,7 +618,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       // Lines: the one record of what a principal was given. A line names a role or one action and points at a
       // principal or a resource. It is drawn by one who may give lines there and may take there all it reaches; it is
       // taken back by one who may give lines there, or given up by the one it was drawn to. Owning is never drawn.
-      if (path === '/v1/relations') {
+      if (at === 'relations') {
         if (method === 'GET') return send(200, { relations: principals.relationsOf(subject.id) });
         if (method !== 'POST' && method !== 'DELETE') fail(405, 'method_not_allowed', 'この操作は利用できません。');
         const input = await inputBody();
@@ -657,14 +650,14 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         permit('pass', 'principal', id);
         return id;
       };
-      if (path === '/v1/environments' && method === 'GET') { permit('list', 'environment'); return send(200, { environments: environments.list(holderId).map(row => environments.view(row)) }); }
-      if ((path === '/v1/environments' || path === '/v1/runs') && method === 'POST') {
+      if (at === 'environments' && method === 'GET') { permit('list', 'environment'); return send(200, { environments: environments.list(holderId).map(row => environments.view(row)) }); }
+      if ((at === 'environments' || at === 'runs') && method === 'POST') {
         permit('open', 'environment');
         environments.check();
         limit('environments', 20);
         const input = await inputBody(1024 * 1024 + 20_000);
         const identity = passable(input.identity);
-        const run = path === '/v1/runs';
+        const run = at === 'runs';
         const opened = await environments.open(holderId, { ...input, identity, ...(run ? { lifetime: { ...(input.lifetime ?? {}), end: 'exit' } } : {}) }, origin);
         auditLog.write(subject.id, 'environment.opened', 'resource', opened.id, { identity, size: opened.size, lifetime: opened.lifetime });
         if (!run) return send(201, { environment: environments.view(opened) });
@@ -673,11 +666,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         const answered = await environments.answer(opened.id, started.id, 20_000);
         return send(answered.status === 'running' ? 202 : 200, { environment: environments.view(environments.get(opened.id)), command: answered });
       }
-      const environmentRoute = path.match(/^\/v1\/(environments|resources)\/([a-f0-9-]{36})(?:\/commands(?:\/([a-f0-9-]{36}))?)?$/);
-      const environmentHeld = environmentRoute && (environmentRoute[1] === 'environments' || (!path.includes('/commands') && resources.get(environmentRoute[2])?.kind === 'environment'))
-        ? environments.at(environmentRoute[2]) : null;
-      if (environmentHeld && (environmentRoute[1] === 'environments' || method === 'DELETE')) {
-        const held = environmentHeld, commands = path.endsWith('/commands') || Boolean(environmentRoute[3]);
+      const environmentHeld = route?.group === 'environments' || (at === 'resource' && resources.get(route.params.resourceId)?.kind === 'environment')
+        ? environments.at(route.params.resourceId) : null;
+      if (environmentHeld && (route.group === 'environments' || method === 'DELETE')) {
+        const held = environmentHeld, commands = at === 'commands' || at === 'command';
         if (!commands && method === 'GET') { permit('read', 'environment', held.id, held.holder_id); return send(200, { environment: environments.view(held) }); }
         if (!commands && method === 'PATCH') {
           permit('identity', 'environment', held.id, held.holder_id);
@@ -695,7 +687,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           auditLog.write(subject.id, 'environment.closed', 'resource', held.id, {});
           return send(200, { ok: true });
         }
-        if (commands && !environmentRoute[3] && method === 'POST') {
+        if (at === 'commands' && method === 'POST') {
           permit('exec', 'environment', held.id, held.holder_id);
           const input = await inputBody(1024 * 1024 + 20_000);
           const started = environments.run(held, subject.id, input);
@@ -703,9 +695,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           const answered = await environments.answer(held.id, started.id, 20_000);
           return send(answered.status === 'running' ? 202 : 200, { command: answered });
         }
-        if (commands && environmentRoute[3] && method === 'GET') {
+        if (at === 'command' && method === 'GET') {
           permit('read', 'environment', held.id, held.holder_id);
-          return send(200, { command: environments.command(held.id, environmentRoute[3]) });
+          return send(200, { command: environments.command(held.id, route.params.commandId) });
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
@@ -722,7 +714,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         if ((required && kind === undefined) || (kind !== undefined && !KINDS.includes(kind))) fail(400, 'invalid_kind', 'kind は secret / credential / object / app / service / environment のいずれかです。');
         return kind;
       };
-      if (path === '/v1/resources' && method === 'GET') {
+      if (at === 'resources' && method === 'GET') {
         if (url.searchParams.get('shown') === 'me') { permit('shown', 'principal', subject.id); return send(200, { resources: principals.shownTo(subject.id) }); }
         const kind = resourceKind(false), name = url.searchParams.get('name') ?? undefined, prefix = url.searchParams.get('prefix') ?? undefined;
         const kinds = kind ? [kind] : KINDS;
@@ -748,7 +740,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       }
       // Placing a thing by name: the holder's name for it. The same name, same kind, replaces what is there. A
       // secret placed this way is the holder's bytes. Managed authorizations are made at /v1/credentials.
-      if (path === '/v1/resources' && method === 'PUT') {
+      if (at === 'resources' && method === 'PUT') {
         const kind = resourceKind(true), name = url.searchParams.get('name');
         if (name === null) fail(400, 'invalid_name', '名前を指定してください。');
         // An app is registered by its holder, as values: which service, its client ID and secret. The same name
@@ -801,9 +793,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         line(saved);
         return send(200, { resource: shown(saved) });
       }
-      const resourceRoute = path.match(/^\/v1\/resources\/([a-f0-9-]{36})(\/content|\/link)?$/);
-      if (resourceRoute) {
-        const held = resources.at(resourceRoute[1]), part = resourceRoute[2];
+      if (route?.group === 'resources') {
+        const held = resources.at(route.params.resourceId), part = at === 'content' ? '/content' : at === 'objectLink' ? '/link' : null;
         const credential = held.kind === 'credential' ? credentials.get(held.id) : null, secret = held.kind === 'secret' ? secrets.get(held.id) : null;
         // An app: renamed by its holder; given new values by its holder or an editor; removed by its holder, which
         // stops the credentials made through it. Its secret is never read back, by anyone.
@@ -959,9 +950,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
-      if (path === '/v1/audit-log' && method === 'GET') { permit('audit-log', 'principal', subject.id); return send(200, { entries: auditLog.list(subject.id) }); }
+      if (at === 'audit' && method === 'GET') { permit('audit-log', 'principal', subject.id); return send(200, { entries: auditLog.list(subject.id) }); }
       // The holder's screen, in one answer.
-      if (path === '/v1/overview' && method === 'GET') {
+      if (at === 'overview' && method === 'GET') {
         permit('overview', 'principal', holderId);
         return send(200, { user: { id: subject.id, email: user?.email ?? null }, principal: self, secrets: secrets.list(holderId).map(row => secrets.view(row)), credentials: credentials.list(holderId).map(row => credentials.view(row, { owner: true })),
           apps: [...apps.list(holderId).map(row => apps.view(row, { owner: true })), ...apps.lent(holderId).map(row => apps.view(row)), ...apps.offeredAll()],
@@ -971,7 +962,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       }
       // Everything, in one file, for the holder alone. Lending someone a place to keep things means they can take
       // them away again; without this the promise is words.
-      if (path === '/v1/export' && method === 'GET') {
+      if (at === 'export' && method === 'GET') {
         permit('export', 'principal', holderId);
         // A secret goes out with its bytes; a credential for a service with what is known of it, since what renews
         // it is Foundation's to keep and would be of no use elsewhere. A described service goes out as its definition.
@@ -986,7 +977,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       // and comes back at /oauth/callback; a role is made in the service's console and named here; a token is
       // handed over here. The credential it makes is a resource like any other: listed and removed at
       // /v1/resources.
-      if (path === '/v1/credentials/confirmation' && ['GET', 'POST', 'DELETE'].includes(method)) {
+      if (at === 'confirmation' && ['GET', 'POST', 'DELETE'].includes(method)) {
         permit('connect', 'credential');
         if (!session) fail(401, 'login_required', 'ログインしてください。');
         const state = method === 'GET' ? url.searchParams.get('state') : (await inputBody()).state;
@@ -1003,7 +994,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         flows.drop(session.id, state);
         return send(200, { credential: credentials.view(saved, { owner: true }) });
       }
-      if (path === '/v1/credentials' && method === 'POST') {
+      if (at === 'credentials' && method === 'POST') {
         permit('connect', 'credential');
         const input = await inputBody();
         limit('connect', 10);
@@ -1047,7 +1038,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         const state = flows.begin(session.id, { ...flow, verifier, redirectUri });
         return send(200, { url: await active.authorization.begin({ state, verifier, redirectUri, scopes }, credentials.context(previous)) });
       }
-      if (path === '/v1/credentials/complete' && method === 'POST') {
+      if (at === 'completeCredential' && method === 'POST') {
         permit('connect', 'credential');
         const input = await inputBody();
         if (!session) fail(401, 'login_required', 'ログインしてください。');
@@ -1066,7 +1057,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         return send(200, { credential: credentials.view(saved, { owner: true }) });
       }
       // What this holder is using, and what they may use. Lending has a cost, so both sides can see it.
-      if (path === '/v1/usage' && method === 'GET') {
+      if (at === 'usage' && method === 'GET') {
         permit('usage', 'principal', holderId);
         const kept = secrets.usage(holderId);
         const space = objects.enabled ? await objects.usage(holderId) : null;
@@ -1076,7 +1067,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       }
       // Injecting derives what each credential yields now: a secret its bytes, one for a service what its scheme
       // obtains. This is the one place a credential reaches a service.
-      if (path === '/v1/injections' && method === 'POST') {
+      if (at === 'injections' && method === 'POST') {
         permit('inject', 'principal', holderId);
         const input = await inputBody();
         limit('issue', 30);
@@ -1088,8 +1079,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         auditLog.write(subject.id, 'injection', 'principal', holderId, { names: names.map(item => typeof item === 'string' ? item : item?.name).filter(Boolean) });
         return send(200, { injection, expires_at, expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
       }
-      if (path === '/v1/functions' && method === 'GET') { permit('functions', 'principal', holderId); return send(200, { functions: FUNCTIONS }); }
-      if (path === '/v1/functions/http.request' && method === 'POST') {
+      if (at === 'functions' && method === 'GET') { permit('functions', 'principal', holderId); return send(200, { functions: FUNCTIONS }); }
+      if (at === 'httpRequest' && method === 'POST') {
         permit('invoke', 'principal', holderId);
         const input = await inputBody(FETCH_BODY_MAX * 2);
         limit('fetch', 30);
@@ -1105,10 +1096,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         const authorization = req.headers.authorization;
         const answer = await respond(await body(req), req.headers, {
           serverInfo: { name: 'foundation', version: VERSION },
-          guide: () => guide(services.catalogView()),
           // The tool names whom the caller acts for when it is exactly one and the call did not say.
           call: async ({ method: verb, path: target, body: payload, body_encoding }) => {
-            const named = actsFor.length === 1 && !/[?&]as=/.test(target) ? target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(actsFor[0]) : target;
+            const named = target !== '/openapi.json' && actsFor.length === 1 && !/[?&]as=/.test(target) ? target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(actsFor[0]) : target;
             const response = await fetch(`http://127.0.0.1:${port}${named}`, {
               method: verb, redirect: 'error', signal: AbortSignal.timeout(20_000),
               headers: { authorization, ...(payload === undefined ? {} : { 'content-type': body_encoding === 'json' ? 'application/json' : 'application/octet-stream' }) },

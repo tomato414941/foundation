@@ -26,16 +26,17 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
                               capture_output=True, text=True, timeout=30)
 
     browser = p.chromium.launch(headless=True)
-    # The public entry and its guide can be read and followed without JavaScript.
+    # The public entry links to the specification even without JavaScript.
     reading = browser.new_context(java_script_enabled=False)
     entry = reading.new_page()
     entry.goto(args.base, wait_until='networkidle')
     expect(entry.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()
     expect(entry.get_by_text('人・AI・アプリが使う認証情報やファイルを保管し、権限を決めて共有できます。', exact=True)).to_be_visible()
     entry.screenshot(path=str(shots / 'entry-no-js.png'), full_page=True)
-    entry.get_by_role('link', name='APIガイド', exact=True).click()
-    expect(entry.locator('body')).to_contain_text('foundation connect ' + args.base)
-    expect(entry.locator('body')).to_contain_text('POST /v1/principals')
+    entry.get_by_role('link', name='API仕様', exact=True).click()
+    entry.get_by_role('link', name='OpenAPI JSON', exact=True).click()
+    expect(entry.locator('body')).to_contain_text('"openapi":"3.1.1"')
+    expect(entry.locator('body')).to_contain_text('/v1/principals')
     reading.close()
 
     context = browser.new_context(viewport={'width': 1280, 'height': 800})
@@ -44,11 +45,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.goto(args.base, wait_until='networkidle')
     expect(page.get_by_role('heading', name='ログイン', exact=True)).to_be_visible()
-    expect(page.get_by_role('link', name='APIガイド', exact=True)).to_have_attribute('href', '/start')
+    expect(page.get_by_role('link', name='API仕様', exact=True)).to_have_attribute('href', '/docs')
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 800})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-        expect(page.get_by_role('link', name='APIガイド', exact=True)).to_be_visible()
+        expect(page.get_by_role('link', name='API仕様', exact=True)).to_be_visible()
         page.screenshot(path=str(shots / f'login-{width}.png'), full_page=True)
     page.set_viewport_size({'width': 1280, 'height': 800})
     email = 'new-user@example.test'
@@ -98,15 +99,15 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     page.set_viewport_size({'width': 1280, 'height': 800})
     page.reload(wait_until='networkidle')
 
-    # The public guide works outside the owner's signed-in browser.
+    # The specification is public, independent of the owner's browser session.
     public = p.request.new_context()
-    response = public.get(args.base + '/start')
+    response = public.get(args.base + '/openapi.json')
     assert response.status == 200
-    assert response.headers['content-type'].startswith('text/plain')
-    assert 'foundation connect ' + args.base in response.text()
+    assert response.headers['content-type'].startswith('application/json')
+    assert response.json()['servers'] == [{'url': args.base}]
     public.dispose()
 
-    # A new CLI environment follows that guide and the owner approves through the existing UI.
+    # A new CLI environment connects and the owner approves through the existing UI.
     connected = cli('connect', args.base, '--name', '初めて使うAI')
     assert connected.returncode == 0, connected.stderr
     request = json.loads(connected.stdout.split('\nKey file:', 1)[0])['request']
@@ -144,4 +145,4 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     assert not errors, errors
     context.close()
     browser.close()
-    print('Start UI passed: home navigation, responsive layout, public guide, fresh CLI approval, delivery and revocation.')
+    print('Start UI passed: home navigation, responsive layout, public specification, fresh CLI approval, delivery and revocation.')

@@ -16,6 +16,7 @@ import { Resources } from '../src/resources.mjs';
 import { Principals } from '../src/principals.mjs';
 import { Authorization } from '../src/authorization.mjs';
 import { Sessions, OAuthFlows } from '../src/sessions.mjs';
+import { matchRoute, validateSchema } from '../src/api.mjs';
 
 // Gmail scopes the tests ask Google for.
 const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.';
@@ -83,6 +84,14 @@ export async function fixture(t, options = {}) {
     const response = await fetch(base + path, { method, redirect: 'manual', headers: { ...(!anonymous && cookie ? { cookie } : {}), ...(method !== 'GET' ? { origin: options.publicOrigin || base } : {}), ...(body !== undefined ? { 'content-type': raw !== undefined ? type : 'application/json' } : {}), ...(token ? { authorization: 'Bearer ' + token } : {}), ...headers }, ...(body !== undefined ? { body } : {}) });
     const text = await response.text();
     let json; try { json = JSON.parse(text); } catch {}
+    const operation = matchRoute(new URL(path, base).pathname, method)?.operation;
+    const described = operation?.responses[response.status] ?? operation?.responses.default;
+    const schema = described?.content?.['application/json']?.schema;
+    if (schema && json !== undefined) {
+      const checked = validateSchema(schema, json);
+      assert.ok(checked.valid, `${method} ${new URL(path, base).pathname} ${response.status}: response must match OpenAPI: ` +
+        JSON.stringify(checked.errors.map(({ instancePath, keyword, message }) => ({ instancePath, keyword, message }))));
+    }
     return { status: response.status, json, text, headers: response.headers };
   }
   async function login(email = 'owner@example.test') {

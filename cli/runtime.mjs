@@ -8,7 +8,6 @@ import { homedir, hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { validEnvName } from './env-name.mjs';
-import { guide } from './guide.mjs';
 
 // This program does only what the agent running it cannot do for itself.
 //
@@ -96,8 +95,7 @@ async function outputBytes(path) {
   } finally { await handle?.close(); }
 }
 
-// --help is the usual thing: the commands and their options. The guide (what Foundation is and how to ask it
-// for things) is its own command, since it is the server's document, not this program's.
+// --help describes the CLI. The server publishes its API contract at /openapi.json.
 const HELP = `Usage: foundation <command> [options]
 
 Commands:
@@ -109,8 +107,10 @@ Commands:
                                        Run a command with saved values in its environment.
   exec --inputs '<json>' -- <command>  The same, with files, structured inputs, or a credential for a service by id.
   exec --output '<json>' -- <command>  Also save a file the command writes.
-  guide                                Read the server's API guide (bundled reference when offline).
   version                              Print the version.
+
+API specification:
+  foundation api GET /openapi.json      Read the server's OpenAPI specification; no key required.
 
 Environment:
   FOUNDATION_URL               The server for this run (otherwise the one saved by connect).
@@ -125,21 +125,6 @@ async function main() {
   if (action === '--version' || action === '-v' || action === 'version') { console.log(VERSION); return; }
   const configured = process.env.FOUNDATION_URL || await savedUrl();
   if (action === '--help' || action === '-h' || action === 'help' || !action) { console.log(HELP); return; }
-  if (action === 'guide') {
-    if (configured) {
-      try {
-        const response = await fetch(new URL('/start', serverUrl(configured)), { redirect: 'error', signal: AbortSignal.timeout(5_000) });
-        if (!response.ok || response.headers.get('content-type')?.split(';')[0].trim() !== 'text/plain') throw new Error('Guide unavailable');
-        const instructions = await response.text();
-        if (!instructions.trim()) throw new Error('Empty guide');
-        console.log(instructions.trimEnd());
-        return;
-      } catch {}
-    }
-    console.error(`${configured ? 'Could not read the server guide.' : 'No Foundation server configured.'} Using the bundled reference from CLI ${VERSION}; it may differ from your server.`);
-    console.log(guide());
-    return;
-  }
   const separatorAt = args.indexOf('--'), command = separatorAt >= 0 ? args.slice(separatorAt + 1) : [];
   // Names remain literal. Inputs inject bytes; an optional output saves one generated file.
   let names = [], output;
@@ -187,7 +172,8 @@ async function main() {
   }
   const url = serverUrl(connectTo ?? configured);
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
-  let token = await readKey(keyPath, { missingOk: action === 'connect' });
+  const publicSpec = action === 'api' && call.method === 'GET' && call.target === '/openapi.json';
+  let token = publicSpec ? null : await readKey(keyPath, { missingOk: action === 'connect' });
   async function send(target, payload, { accept, method = 'POST', type = 'application/json' } = {}) {
     const response = await fetch(url.origin + target, { method, headers: { authorization: 'Bearer ' + token, ...(payload === undefined ? {} : { 'content-type': type }) },
       body: payload === undefined ? undefined : type === 'application/json' ? JSON.stringify(payload) : payload, redirect: 'error', signal: AbortSignal.timeout(30_000) });
@@ -197,11 +183,11 @@ async function main() {
   }
   // One request, with the key attached and the answer printed as it came. Nothing here knows the endpoints.
   if (action === 'api') {
-    if (!/[?&]as=/.test(call.target)) {
+    if (!publicSpec && !/[?&]as=/.test(call.target)) {
       const me = await send('/v1/principals/me', undefined, { method: 'GET', accept: () => true });
       if (me.acts_for?.length === 1) call.target += (call.target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(me.acts_for[0]);
     }
-    const response = await fetch(url.origin + call.target, { method: call.method, headers: { authorization: 'Bearer ' + token, ...(call.body === undefined ? {} : { 'content-type': call.type }) },
+    const response = await fetch(url.origin + call.target, { method: call.method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), ...(call.body === undefined ? {} : { 'content-type': call.type }) },
       ...(call.body === undefined ? {} : { body: call.body }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
     const bytes = Buffer.from(await response.arrayBuffer());
     process.stdout.write(bytes);

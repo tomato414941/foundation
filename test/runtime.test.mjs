@@ -281,54 +281,41 @@ test('A denied request is indistinguishable from waiting, and asking again still
   assert.equal(after.code, 0, after.err); assert.equal(after.out.trim(), 'ready');
 });
 
-test('--helpでコマンドを案内し、guideで接続先の公開ガイドを読む', async t => {
+test('--helpでコマンドを案内し、認証前に接続先のOpenAPI仕様を読む', async t => {
   const f = await fixture(t);
   const help = await execute(['--help'], { FOUNDATION_URL: '' });
   assert.equal(help.code, 0, help.err);
-  assert.match(help.out, /^Usage: foundation <command>/); assert.match(help.out, /\n  guide /); assert.match(help.out, /FOUNDATION_AGENT/);
-  assert.doesNotMatch(help.out, /\/v1\//, 'the API belongs to the guide');
-  const offline = await execute(['guide'], { FOUNDATION_URL: '', XDG_CONFIG_HOME: join(tmpdir(), 'foundation-no-config') });
-  assert.equal(offline.code, 0, offline.err);
-  assert.match(offline.err, /No Foundation server configured.*bundled reference from CLI/);
-  assert.match(offline.out, /GET \/v1\/services lists the services this server knows/);
-  assert.match(offline.out, /Nothing here needs a shell/);
-  assert.doesNotMatch(offline.out, /gmail/);
-  const online = await execute(['guide'], { FOUNDATION_URL: f.base });
+  assert.match(help.out, /^Usage: foundation <command>/); assert.match(help.out, /api GET \/openapi.json/); assert.match(help.out, /FOUNDATION_AGENT/);
+  const dir = await mkdtemp(join(tmpdir(), 'foundation-spec-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const online = await execute(['api', 'GET', '/openapi.json'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'no-key') });
   assert.equal(online.code, 0, online.err);
-  const published = await f.request('/start', { anonymous: true });
+  const published = await f.request('/openapi.json', { anonymous: true });
   assert.equal(online.out, published.text.trimEnd() + '\n');
-  assert.match(online.out, /google  Google  oauth \(Foundation's app\)/);
+  assert.equal(JSON.parse(online.out).paths['/v1/principals'].post.operationId, 'createPrincipal');
 });
 
-test('CLIを更新せずに接続先の新しいガイドを読み、取得できない場合は同梱版と明示する', async t => {
-  let content = 'Guide from this server, revision 1', status = 200, type = 'text/plain; charset=utf-8';
+test('CLIを更新せずに接続先の新しい仕様を読み、取得失敗を失敗として返す', async t => {
+  let content, status = 200;
   const server = createServer((req, res) => {
-    assert.equal(req.url, '/start');
-    assert.equal(req.headers.authorization, undefined, '公開ガイドの取得には認証情報を送らない');
-    res.writeHead(status, { 'content-type': type });
+    assert.equal(req.url, '/openapi.json');
+    assert.equal(req.headers.authorization, undefined, '公開仕様の取得には認証情報を送らない');
+    res.writeHead(status, { 'content-type': 'application/json' });
     res.end(content);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const env = { FOUNDATION_URL: `http://127.0.0.1:${server.address().port}` };
   for (const revision of [1, 2]) {
-    content = 'Guide from this server, revision ' + revision;
-    const result = await execute(['guide'], env);
+    content = JSON.stringify({ openapi: '3.1.1', info: { version: String(revision) } });
+    const result = await execute(['api', 'GET', '/openapi.json'], env);
     assert.equal(result.code, 0, result.err);
     assert.equal(result.out, content + '\n');
     assert.equal(result.err, '');
   }
-  for (const failure of [
-    { status: 503, type: 'text/plain', content: 'Service unavailable' },
-    { status: 200, type: 'text/html', content: '<h1>Login</h1>' },
-    { status: 200, type: 'text/plain', content: '' },
-  ]) {
-    ({ status, type, content } = failure);
-    const result = await execute(['guide'], env);
-    assert.equal(result.code, 0, result.err);
-    assert.match(result.err, /Could not read the server guide.*bundled reference from CLI/);
-    assert.match(result.out, /POST \/v1\/principals/);
-  }
+  status = 503; content = JSON.stringify({ error: { code: 'unavailable', message: 'Service unavailable' } });
+  const failed = await execute(['api', 'GET', '/openapi.json'], env);
+  assert.equal(failed.code, 1);
+  assert.deepEqual(JSON.parse(failed.out), JSON.parse(content));
 });
 
 test('The CLI installs from its npm package, and connect <url> remembers the server for every later command', async t => {
@@ -354,8 +341,8 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   assert.equal(connected.code, 0, connected.err);
   assert.match(connected.out, /confirmation_code/);
   assert.deepEqual(JSON.parse(await readFile(join(dir, 'config', 'foundation', 'config.json'), 'utf8')), { url: f.base });
-  const help = await run(foundation, ['guide'], env);
-  assert.match(help.out, /google  Google  oauth/);
+  const spec = await run(foundation, ['api', 'GET', '/openapi.json'], env);
+  assert.equal(JSON.parse(spec.out).info.title, 'Foundation API');
   const waiting = await run(foundation, ['api', 'GET', '/v1/principals/me'], env);
   assert.match(waiting.out, /"status":"pending"/); assert.doesNotMatch(waiting.out, /fdn_/);
   const request = JSON.parse(connected.out.split('\n\nKey file')[0]).request;
@@ -379,8 +366,8 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   assert.equal(saved.out.trim(), 'output-ready');
   assert.equal((await f.read('secret', 'installed login')).text, '//registry.npmjs.org/:_authToken=fake-install-token\n');
   assert.doesNotMatch(saved.out + saved.err, /fake-install-token/);
-  const moved = await run(foundation, ['guide'], { ...env, FOUNDATION_URL: 'http://127.0.0.1:9' });
-  assert.doesNotMatch(moved.out, /google  Google  oauth/, 'FOUNDATION_URL wins over the remembered server');
+  const moved = await run(foundation, ['api', 'GET', '/openapi.json'], { ...env, FOUNDATION_URL: 'http://127.0.0.1:9' });
+  assert.equal(moved.code, 1, 'FOUNDATION_URL wins over the remembered server');
 });
 
 test('connect on a key already approved only remembers the server', async t => {

@@ -21,12 +21,12 @@ async function connected(t) {
   return f;
 }
 
-test('lists the two tools to an approved key', async (t) => {
+test('公開APIを操作するツールを承認済みキーに提示する', async (t) => {
   const f = await connected(t);
   const result = await modern(f, { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
   assert.equal(result.status, 200, result.text);
   assert.equal(result.json.result.resultType, 'complete');
-  assert.deepEqual(result.json.result.tools.map(tool => tool.name), ['foundation_guide', 'foundation_api']);
+  assert.deepEqual(result.json.result.tools.map(tool => tool.name), ['foundation_api']);
   assert.equal(result.json.result._meta[META + 'serverInfo'].name, 'foundation');
 });
 
@@ -54,12 +54,13 @@ test('refuses a key that was never approved', async (t) => {
   assert.equal(result.json.error.code, 'not_approved');
 });
 
-test('hands over the guide an agent reads first', async (t) => {
+test('共通APIツールで最新のOpenAPI仕様を取得する', async (t) => {
   const f = await connected(t);
-  const result = await modern(f, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'foundation_guide', arguments: {} } });
+  const result = await modern(f, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'foundation_api', arguments: { method: 'GET', path: '/openapi.json' } } });
   assert.equal(result.status, 200, result.text);
-  assert.match(result.json.result.content[0].text, /Foundation holds, for each principal, credentials and objects/);
-  assert.match(result.json.result.content[0].text, /GET \/v1\/functions/);
+  const published = await f.request('/openapi.json', { anonymous: true });
+  assert.deepEqual(result.json.result.structuredContent, published.json);
+  assert.deepEqual(JSON.parse(result.json.result.content[0].text), published.json);
   assert.equal(result.json.result.isError, undefined);
 });
 
@@ -94,7 +95,7 @@ test('reports a refused API call as a tool error the model can act on', async (t
 
 test('keeps foundation_api to the API', async (t) => {
   const f = await connected(t);
-  for (const path of ['/v1/overview', '/health', 'v1/grants']) {
+  for (const path of ['/v1/overview', '/health', 'v1/grants', '/v1/../health', '/v1/%2e%2e/openapi.json', '/openapi.json?url=https://elsewhere.example']) {
     const result = await modern(f, { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'foundation_api', arguments: { method: 'GET', path } } });
     assert.equal(result.json.result.isError, true, path);
   }
@@ -109,7 +110,7 @@ test('answers an unknown tool with a protocol error', async (t) => {
 
 test('rejects a header that disagrees with the body', async (t) => {
   const f = await connected(t);
-  const result = await modern(f, { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'foundation_guide', arguments: {} } }, { headers: { 'mcp-name': 'foundation_api' } });
+  const result = await modern(f, { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'foundation_api', arguments: { method: 'GET', path: '/openapi.json' } } }, { headers: { 'mcp-name': 'another_tool' } });
   assert.equal(result.status, 400);
   assert.equal(result.json.error.code, -32020);
 });
@@ -138,7 +139,7 @@ test('serves a client that still opens with initialize', async (t) => {
   assert.equal(opened.json.result.protocolVersion, '2025-06-18');
   assert.deepEqual(opened.json.result.capabilities, { tools: {} });
   assert.equal(opened.json.result.resultType, undefined);
-  assert.match(opened.json.result.instructions, /foundation_guide/);
+  assert.match(opened.json.result.instructions, /GET \/openapi.json/);
 
   const ready = await f.request('/mcp', { method: 'POST', token: KEY, data: { jsonrpc: '2.0', method: 'notifications/initialized' }, headers: { 'mcp-protocol-version': '2025-06-18' } });
   assert.equal(ready.status, 202);
@@ -146,7 +147,7 @@ test('serves a client that still opens with initialize', async (t) => {
 
   const listed = await f.request('/mcp', { method: 'POST', token: KEY, data: { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, headers: { 'mcp-protocol-version': '2025-06-18' } });
   assert.equal(listed.status, 200, listed.text);
-  assert.equal(listed.json.result.tools.length, 2);
+  assert.equal(listed.json.result.tools[0].name, 'foundation_api');
 });
 
 test('tells a modern client that initialize is gone', async (t) => {

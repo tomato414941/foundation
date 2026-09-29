@@ -14,6 +14,11 @@
     "check": "for source in src/*.mjs src/adapters/*.mjs src/adapters/*/*.mjs src/schemes/*.mjs src/runners/*.mjs cli/*.mjs web/*.js; do node --check \"$source\" || exit; done"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.116.0"
+    "@supabase/supabase-js": "^2.116.0",
+    "ajv": "8.20.0",
+    "swagger-ui-dist": "5.33.0"
+  },
+  "devDependencies": {
+    "@apidevtools/swagger-parser": "13.1.0"
   }
 }

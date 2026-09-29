@@ -5,9 +5,8 @@
 // It adds no capability that HTTP does not already have, and it holds no state: a call here is the same
 // call the CLI would make, made on the caller's behalf with the caller's own key.
 //
-// Two tools, because the API is the source of truth and a tool per endpoint would be a second one:
-//   foundation_guide  the page every agent reads first
-//   foundation_api    any request to the API, with the key attached
+// One tool, because the API is the source of truth and a tool per endpoint would be a second one.
+// The same tool reads /openapi.json for the current contract.
 //
 // Both eras of the protocol are served. 2026-07-28 removed the initialize handshake and carries the
 // protocol version and client capabilities in each request's _meta, mirrored into headers; the earlier
@@ -16,24 +15,18 @@ export const LATEST = '2026-07-28';
 export const SUPPORTED = [LATEST, '2025-11-25', '2025-06-18', '2025-03-26'];
 const STATELESS = new Set([LATEST]);
 const META = 'io.modelcontextprotocol/';
-const INSTRUCTIONS = 'This MCP interface provides access to the Foundation HTTP API. Call foundation_guide first; it describes the currently available operations and their requirements.';
+const INSTRUCTIONS = 'This MCP interface provides access to the Foundation HTTP API. Its OpenAPI specification is available through foundation_api: GET /openapi.json.';
 
 const TOOLS = [
   {
-    name: 'foundation_guide',
-    title: 'How to use Foundation',
-    description: 'Read this first. Explains what Foundation keeps, how to ask its owner for something, and every endpoint foundation_api can reach.',
-    inputSchema: { type: 'object', additionalProperties: false },
-  },
-  {
     name: 'foundation_api',
     title: 'Call the Foundation API',
-    description: 'Make one request to the Foundation HTTP API with this key attached. Paths begin with /v1/. Read foundation_guide for what the paths are.',
+    description: 'Make one request to the Foundation HTTP API with this key attached. GET /openapi.json returns the current API specification, including inputs, outputs and authorization requirements.',
     inputSchema: {
       type: 'object',
       properties: {
         method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], description: 'HTTP method' },
-        path: { type: 'string', maxLength: 2048, description: 'Path beginning with /v1/, for example /v1/resources?kind=credential' },
+        path: { type: 'string', maxLength: 2048, description: 'Path beginning with /v1/, or /openapi.json for GET. For example /v1/resources?kind=secret.' },
         body: { description: 'Request body. JSON by default; a string when body_encoding is text or base64.' },
         body_encoding: { type: 'string', enum: ['json', 'text', 'base64'], description: 'Default json. Use text to save a token verbatim, or base64 to send file bytes.' },
       },
@@ -74,13 +67,13 @@ function mirrored(headers, message) {
 }
 
 // One call, made against the API the CLI would call. `call` is given the caller's own authorization.
-async function runTool(name, args, { call, guide }) {
-  if (name === 'foundation_guide') return { content: [text(guide())] };
+async function runTool(name, args, { call }) {
   if (name !== 'foundation_api') return null;
   if (!args || typeof args !== 'object' || Array.isArray(args)) return { content: [text('Arguments must be an object with method and path.')], isError: true };
   const { method, path, body, body_encoding = 'json' } = args;
   if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return { content: [text('method must be one of GET, POST, PUT, PATCH, DELETE.')], isError: true };
-  if (typeof path !== 'string' || !path.startsWith('/v1/') || path.length > 2048 || /[\s\\]/.test(path)) return { content: [text('path must begin with /v1/. See foundation_guide.')], isError: true };
+  const allowed = typeof path === 'string' && (path.startsWith('/v1/') || (method === 'GET' && path === '/openapi.json'));
+  if (!allowed || path.length > 2048 || /[\s\\]/.test(path) || new URL(path, 'https://foundation.invalid').pathname !== path.split('?')[0]) return { content: [text('Use a /v1/ path, or GET /openapi.json for the API specification.')], isError: true };
   if (!['json', 'text', 'base64'].includes(body_encoding) || (body_encoding !== 'json' && typeof body !== 'string')) {
     return { content: [text('body_encoding must be json, text or base64. For text or base64, body must be a string.')], isError: true };
   }

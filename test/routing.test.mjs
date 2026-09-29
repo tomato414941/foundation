@@ -2,40 +2,37 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, USER_A } from './helpers.mjs';
 
-test('公開入口のHTMLからFoundationの説明とAPIガイドを読めるようにする', async t => {
+test('公開入口のHTMLからFoundationの説明とAPI仕様へ進めるようにする', async t => {
   const f = await fixture(t, { login: false });
   const page = await f.request('/', { anonymous: true });
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-type'), /^text\/html/);
   assert.match(page.text, /人・AI・アプリが使う認証情報やファイルを保管し、権限を決めて共有できます。/);
-  const link = page.text.match(/<a href="([^"]+)">APIガイド<\/a>/);
-  assert.ok(link, 'HTMLのリンクからガイドへ進める');
-  const guide = await f.request(link[1], { anonymous: true });
-  assert.equal(guide.status, 200);
-  assert.match(guide.text, /POST \/v1\/principals/);
+  const link = page.text.match(/<a href="([^"]+)">API仕様<\/a>/);
+  assert.ok(link, 'HTMLのリンクからAPI仕様へ進める');
+  const docs = await f.request(link[1], { anonymous: true });
+  assert.equal(docs.status, 200);
+  assert.match(docs.text, /href="\/openapi.json"/);
 });
 
-test('未ログインのAIに接続先・接続手順・利用可能なAPIを案内する', async t => {
+test('未ログインのAIへOpenAPIで接続先・認証要件・入力形式を公開する', async t => {
   const f = await fixture(t, { login: false });
-  const page = await f.request('/start', { anonymous: true, headers: { 'sec-fetch-site': 'cross-site' } });
+  const page = await f.request('/openapi.json', { anonymous: true, headers: { 'sec-fetch-site': 'cross-site' } });
   assert.equal(page.status, 200);
-  assert.match(page.headers.get('content-type'), /^text\/plain; charset=utf-8$/);
-  assert.ok(page.text.includes('Server: ' + f.base));
-  assert.ok(page.text.includes('foundation connect ' + f.base));
-  assert.match(page.text, /npm install -g @tomato414941\/foundation/);
-  assert.match(page.text, /request\.verification_uri and request\.confirmation_code/);
-  assert.match(page.text, /foundation api GET \/v1\/principals\/me/);
-  assert.match(page.text, /GET \/v1\/resources/);
-  assert.match(page.text, /google  Google  oauth/);
+  assert.match(page.headers.get('content-type'), /^application\/json/);
+  assert.deepEqual(page.json.servers, [{ url: f.base }]);
+  assert.match(page.json.paths['/v1/principals'].post.description, /verification_uri and confirmation_code/);
+  assert.deepEqual(page.json.paths['/v1/credentials'].post.security, [{ session: [] }]);
+  assert.equal(page.json.paths['/v1/injections'].post.requestBody.content['application/json'].schema.$ref, '#/components/schemas/Inject');
 });
 
-test('公開用の接続先を案内し、HEADでも案内の形式を確認できる', async t => {
+test('OpenAPIに公開用の接続先を示し、HEADでも仕様の形式を確認する', async t => {
   const origin = 'https://foundation.example.test';
   const f = await fixture(t, { login: false, publicOrigin: origin });
-  const page = await f.request('/start', { anonymous: true });
+  const page = await f.request('/openapi.json', { anonymous: true });
   assert.equal(page.status, 200);
-  assert.ok(page.text.includes('foundation connect ' + origin));
-  const head = await f.request('/start', { method: 'HEAD', anonymous: true });
+  assert.deepEqual(page.json.servers, [{ url: origin }]);
+  const head = await f.request('/openapi.json', { method: 'HEAD', anonymous: true });
   assert.equal(head.status, 200);
   assert.equal(head.headers.get('content-type'), page.headers.get('content-type'));
   assert.equal(head.text, '');
