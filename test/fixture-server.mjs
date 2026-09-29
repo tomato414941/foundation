@@ -1,4 +1,5 @@
 import { createApp } from '../src/app.mjs';
+import { LocalRunner } from '../src/runners/local.mjs';
 import { FakeAuth, FakeGoogle, KEY } from './helpers.mjs';
 import { createHash } from 'node:crypto';
 import { FakeOpenRouter } from '../src/adapters/openrouter/fixture.mjs';
@@ -56,7 +57,8 @@ const services = process.env.FOUNDATION_TEST_AWS === '1' ? withGoogle([entry('aw
   : process.env.FOUNDATION_TEST_SERVICES === '1' ? [...builtins({}).filter(item => item.definition.id !== 'google'), entry('google', { oauth: googleOauth(google) })]
   : process.env.FOUNDATION_TEST_OPENROUTER === '1' ? withGoogle([entry('openrouter', { oauth: openrouterOauth(new FakeOpenRouter()) })])
   : withGoogle([]);
-const app = createApp({ encryptionKey: KEY, auth, space, services, serviceFetcher: described.fetch });
+// Lent machines as directories on this host: enough to see them on the page, isolating nothing.
+const app = createApp({ encryptionKey: KEY, auth, space, services, serviceFetcher: described.fetch, runner: new LocalRunner() });
 const port = Number(process.env.FOUNDATION_TEST_PORT || 3418);
 app.server.listen(port, '127.0.0.1', () => console.log('Test fixture: http://127.0.0.1:' + port));
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, async () => { await app.close(); process.exit(0); });

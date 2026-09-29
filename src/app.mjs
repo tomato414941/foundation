@@ -952,7 +952,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           apps: [...apps.list(holderId).map(row => apps.view(row, { owner: true })), ...apps.lent(holderId).map(row => apps.view(row)), ...apps.offeredAll()],
           services: [...services.list(holderId).map(row => services.view(row, { owner: true })), ...services.lent(holderId).map(row => services.view(row))],
           catalog: services.catalogView(), principals: principals.owned(holderId), actors: principals.actorsOf(holderId),
-          requests: requests.listTo(holderId, 'pending').map(row => viewRequest(row, origin)), functions: FUNCTIONS, settings: settings.get(holderId) ?? null });
+          requests: requests.listTo(holderId, 'pending').map(row => viewRequest(row, origin)), functions: FUNCTIONS, settings: settings.get(holderId) ?? null,
+          // Machines lent to the holder and still running, and the computing they spend.
+          environments: environments.list(holderId).filter(row => row.status !== 'stopped').map(row => environments.view(row)), compute: environments.usage(holderId) });
       }
       // Everything, in one file, for the holder alone. Lending someone a place to keep things means they can take
       // them away again; without this the promise is words.

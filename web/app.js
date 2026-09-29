@@ -473,6 +473,7 @@ function render() {
     shell(`<header class="page-heading"><h1>アクセス管理</h1></header>
       <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><h2 id="access-title">登録した相手</h2></div><button class="button secondary" data-action="add-key">${icon('plus')} 追加</button></div>
       ${actors.length || others.length ? `<div class="agent-list">${actors.map(item => row(item, true)).join('')}${others.map(item => row(item, false)).join('')}</div>` : '<div class="access-empty"><p>登録した相手はいません。</p></div>'}</section>
+      ${environmentsSection()}
       <div class="integration-entry" id="apps"><button class="text-button" data-action="add-integration">アプリを登録</button></div>`);
     return;
   }
@@ -947,6 +948,18 @@ function addKey() {
   });
 }
 const principalById = id => (state.actors || []).find(item => item.id === id) || (state.principals || []).find(item => item.id === id);
+// Machines lent to this account and still running: who each acts as, until when, and the month's computing.
+function environmentsSection() {
+  const running = state.environments || [], compute = state.compute;
+  const minutes = seconds => Math.ceil(seconds / 60).toLocaleString('ja-JP') + ' 分';
+  const status = { starting: '準備中', ready: '待機中', busy: '実行中' };
+  const identity = id => !id ? '権限なし' : id === state.user.id ? 'あなたとして動作' : (principalById(id)?.name || '登録した相手') + ' として動作';
+  const row = item => `<article class="agent-row access-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${esc(status[item.status] || item.status)} · ${esc(identity(item.identity))}</p></div>
+    <div class="agent-permissions"><span class="muted">${esc(new Date(item.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで</span></div>
+    <div class="agent-actions"><button class="text-button danger" data-action="close-environment" data-id="${esc(item.id)}">閉じる</button></div></article>`;
+  return `<section class="resource-section" aria-labelledby="environments-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><h2 id="environments-title">環境</h2></div>${compute ? `<span class="muted">今月の計算時間 ${esc(minutes(compute.used_seconds))} / ${esc(minutes(compute.limit_seconds))}</span>` : ''}</div>
+    ${running.length ? `<div class="agent-list">${running.map(row).join('')}</div>` : '<div class="access-empty"><p>開いている環境はありません。</p></div>'}</section>`;
+}
 async function principalDetails(id) {
   const owned = (state.principals || []).some(item => item.id === id);
   const item = owned ? (await api(`/v1/principals/${id}`)).principal : principalById(id);
@@ -957,7 +970,7 @@ async function principalDetails(id) {
     <p>${allowed ? 'アクセス許可済み' : '全体へのアクセス許可なし'}</p>
     ${allowed ? `<p>${accessSummary.replace('許可します。', '許可しています。')}</p>${accessDetails()}` : ''}
     ${owned ? `<section class="principal-keys"><div class="section-heading"><h3>アクセスキー</h3><button class="text-button" data-action="issue-key" data-id="${esc(id)}">キーを発行</button></div>
-      ${keys.length ? `<ul class="credential-list">${keys.map(key => `<li><div><code>${esc(key.id.slice(0, 8))}</code><p>発行 ${esc(new Date(key.created_at).toLocaleString('ja-JP'))}</p></div><button class="text-button danger" data-action="revoke-key" data-id="${esc(id)}" data-key="${esc(key.id)}">失効</button></li>`).join('')}</ul>` : '<p class="muted">キーはありません。</p>'}</section>
+      ${keys.length ? `<ul class="credential-list">${keys.map(key => `<li><div><code>${esc(key.id.slice(0, 8))}</code><p>${key.environment_id ? '環境用（閉じると消えます）' : '発行 ' + esc(new Date(key.created_at).toLocaleString('ja-JP'))}</p></div><button class="text-button danger" data-action="revoke-key" data-id="${esc(id)}" data-key="${esc(key.id)}">失効</button></li>`).join('')}</ul>` : '<p class="muted">キーはありません。</p>'}</section>
       <div class="principal-delete"><button class="text-button danger" data-action="remove-principal" data-id="${esc(id)}">登録を削除</button></div>` : ''}`);
 }
 function renamePrincipal(item) {
@@ -1169,9 +1182,9 @@ function bindSecretValue(entry, row) {
   };
   show();
 }
-function confirmRemoval(title, body, run) {
-  openDialog(`<h2 id="dialog-title">${esc(title)}</h2><form><p>${esc(body)}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">削除する</button></div></form>`);
-  bindForm(async () => { await run(); closeDialog(); await refresh(); toast('削除しました。'); });
+function confirmRemoval(title, body, run, done = '削除しました。', label = '削除する') {
+  openDialog(`<h2 id="dialog-title">${esc(title)}</h2><form><p>${esc(body)}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">${esc(label)}</button></div></form>`);
+  bindForm(async () => { await run(); closeDialog(); await refresh(); toast(done); });
 }
 document.addEventListener('click', async (event) => {
   const target = event.target.closest('[data-action]'); if (!target || target.disabled) return;
@@ -1255,6 +1268,10 @@ document.addEventListener('click', async (event) => {
     if (action === 'edit-secret') editSecret(secrets().find(item => item.name === target.dataset.name), target);
     if (action === 'add-key') addKey();
     if (action === 'revoke-access') revokeAccess(principalById(id));
+    if (action === 'close-environment') {
+      const item = (state.environments || []).find(row => row.id === id);
+      if (item) confirmRemoval(item.name + ' を閉じますか？', '中のファイルは消え、この環境に渡した鍵は使えなくなります。', () => api('/v1/environments/' + item.id, { method: 'DELETE', data: {} }), '閉じました。', '環境を閉じる');
+    }
     if (action === 'principal-details') await principalDetails(id);
     if (action === 'issue-key') { target.disabled = true; await issueKey(principalById(id)); }
     if (action === 'revoke-key') revokeKey(principalById(id), target.dataset.key);
