@@ -64,7 +64,7 @@ test('AIが頼んだ権限で接続の依頼を完了し、確認結果と短期
   const a = await f.connect('personal', { request_id: asked.json.request.id });
   const done = await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token });
   assert.equal(done.json.request.status, 'done'); assert.equal(done.json.request.result.credential_id, a.id);
-  const [listed] = (await f.request('/v1/resources?kind=credential&secret=false', { token: agent.token })).json.resources;
+  const [listed] = (await f.request('/v1/resources?kind=credential', { token: agent.token })).json.resources;
   assert.equal(listed.label, 'personal@example.test');
   assert.deepEqual(listed.facts.scopes, with_(READONLY, SEND));
   assert.deepEqual(listed.facts.requested_scopes, with_(READONLY, SEND));
@@ -97,7 +97,7 @@ test('複数アカウントをメールアドレスで区別し、別の所有�
   assert.equal((await f.inject(b, { token: agent.token })).json.injection.environment.GOOGLE_ACCOUNT_EMAIL, 'work@example.test');
   await f.login('second@example.test');
   const stranger = await f.issueKey();
-  assert.deepEqual((await f.request('/v1/resources?kind=credential&secret=false', { token: stranger.token })).json.resources, []);
+  assert.deepEqual((await f.request('/v1/resources?kind=credential', { token: stranger.token })).json.resources, []);
   assert.equal((await f.inject(a, { token: stranger.token })).status, 404);
   assert.equal((await f.request('/v1/resources/' + a.id, { method: 'DELETE', data: { revoke: false } })).status, 403);
 });

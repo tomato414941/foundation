@@ -7,12 +7,12 @@ import { destination } from './fetch.mjs';
 // scheme that connects - and nothing else may be in it. The catalog alone may name code (an adapter) for a scheme
 // that data cannot describe.
 //
-//   { version: 1, id?, name, logo?, api?, docs?, console?, auth_schemes?: { oauth?, token?, role? } }
+//   { version: 1, id?, name, logo?, api?, docs?, console?, auth_schemes?: { oauth?, role? } }
 //
 // id and logo are the catalog's; a holder's service is known by its resource id. console is where an app or a
-// token for the service is made. The schemes are described in schemes/oauth.mjs and schemes/token.mjs.
+// token for the service is made. The OAuth scheme is described in schemes/oauth.mjs.
 export const DEFINITION_VERSION = 1;
-export const SCHEMES = ['oauth', 'token', 'role'];
+export const SCHEMES = ['oauth', 'role'];
 const ID = /^[a-z][a-z0-9-]{0,39}$/, FIELD = /^[a-z][a-z0-9_]{0,39}$/;
 
 const bad = (message, where) => { throw Object.assign(new Error(where + ': ' + message), { where }); };
@@ -37,17 +37,16 @@ const address = (value, where) => {
 const link = (value, where) => { address(value, where); if (/\{/.test(value)) bad('must not have placeholders', where); };
 const pattern = (value, where) => { text(value, where); try { new RegExp(value); } catch { bad('must be a regular expression', where); } };
 const headers = (value, where) => { object(value, where); for (const [name, template] of Object.entries(value)) { if (!/^[a-z0-9-]{1,60}$/.test(name)) bad('header names are lowercase', where); text(template, where + '.' + name, 500); } };
-function fields(value, where, { secret }) {
+function fields(value, where) {
   if (!Array.isArray(value) || !value.length || value.length > 8) bad('must list 1 to 8 fields', where);
   const names = new Set();
   for (const [at, field] of value.entries()) {
     const here = where + '[' + at + ']';
-    object(field, here); only(field, ['name', 'label', 'required', 'secret', 'placeholder', 'note', 'pattern', 'leading'], here);
+    object(field, here); only(field, ['name', 'label', 'required', 'placeholder', 'note', 'pattern', 'leading'], here);
     if (!FIELD.test(field.name ?? '') || names.has(field.name)) bad('needs a unique lowercase name', here);
     names.add(field.name);
     text(field.label, here + '.label', 60);
     if (field.required !== undefined) bool(field.required, here + '.required');
-    if (field.secret !== undefined) { if (!secret) bad('secret is for token fields', here); bool(field.secret, here + '.secret'); }
     if (field.leading !== undefined) bool(field.leading, here + '.leading');
     if (field.placeholder !== undefined) text(field.placeholder, here + '.placeholder');
     if (field.note !== undefined) text(field.note, here + '.note', 300);
@@ -102,7 +101,7 @@ function oauth(value, where, { catalog }) {
   if (value.keep !== undefined) { if (!Array.isArray(value.keep) || value.keep.length > 8) bad('must list fields', where + '.keep'); value.keep.forEach(one => { if (!FIELD.test(one)) bad('field names are lowercase', where + '.keep'); }); }
   if (value.subject_prefix !== undefined) text(value.subject_prefix, where + '.subject_prefix', 20);
   if (value.defaults !== undefined) { object(value.defaults, where + '.defaults'); for (const [key, one] of Object.entries(value.defaults)) text(one, where + '.defaults.' + key); }
-  if (value.app_fields !== undefined) fields(value.app_fields, where + '.app_fields', { secret: false });
+  if (value.app_fields !== undefined) fields(value.app_fields, where + '.app_fields');
   if (value.identity !== undefined) identity(value.identity, where + '.identity', { from: ['token', 'app'] });
   if (value.revoke !== undefined) {
     object(value.revoke, where + '.revoke'); only(value.revoke, ['url', 'style', 'auth'], where + '.revoke');
@@ -112,14 +111,6 @@ function oauth(value, where, { catalog }) {
   if (value.scopes !== undefined) scopes(value.scopes, where + '.scopes');
   const known = ['access_token', 'account', 'expires_at', ...(value.keep ?? []), ...(value.app_fields ?? []).map(field => field.name)];
   injection(value.injection, where + '.injection', known);
-  if (value.hint !== undefined) text(value.hint, where + '.hint', 2000);
-}
-function token(value, where) {
-  object(value, where); only(value, ['fields', 'identity', 'subject_prefix', 'injection', 'hint'], where);
-  fields(value.fields, where + '.fields', { secret: true });
-  if (value.identity !== undefined) identity(value.identity, where + '.identity', { from: ['fields'] });
-  if (value.subject_prefix !== undefined) text(value.subject_prefix, where + '.subject_prefix', 20);
-  injection(value.injection, where + '.injection', [...value.fields.map(field => field.name), 'account']);
   if (value.hint !== undefined) text(value.hint, where + '.hint', 2000);
 }
 function role(value, where, { catalog }) {
@@ -143,7 +134,6 @@ export function checkDefinition(value, { catalog = false } = {}) {
   object(value.auth_schemes, 'definition.auth_schemes');
   only(value.auth_schemes, SCHEMES, 'definition.auth_schemes');
   if (value.auth_schemes.oauth !== undefined) oauth(value.auth_schemes.oauth, 'definition.auth_schemes.oauth', { catalog });
-  if (value.auth_schemes.token !== undefined) token(value.auth_schemes.token, 'definition.auth_schemes.token');
   if (value.auth_schemes.role !== undefined) role(value.auth_schemes.role, 'definition.auth_schemes.role', { catalog });
   return value;
 }

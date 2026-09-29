@@ -34,7 +34,8 @@ const TOOLS = [
       properties: {
         method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], description: 'HTTP method' },
         path: { type: 'string', maxLength: 2048, description: 'Path beginning with /v1/, for example /v1/resources?kind=credential' },
-        body: { description: 'JSON body for anything but GET' },
+        body: { description: 'Request body. JSON by default; a string when body_encoding is text or base64.' },
+        body_encoding: { type: 'string', enum: ['json', 'text', 'base64'], description: 'Default json. Use text to save a token verbatim, or base64 to send file bytes.' },
       },
       required: ['method', 'path'],
       additionalProperties: false,
@@ -77,10 +78,16 @@ async function runTool(name, args, { call, guide }) {
   if (name === 'foundation_guide') return { content: [text(guide())] };
   if (name !== 'foundation_api') return null;
   if (!args || typeof args !== 'object' || Array.isArray(args)) return { content: [text('Arguments must be an object with method and path.')], isError: true };
-  const { method, path, body } = args;
+  const { method, path, body, body_encoding = 'json' } = args;
   if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return { content: [text('method must be one of GET, POST, PUT, PATCH, DELETE.')], isError: true };
   if (typeof path !== 'string' || !path.startsWith('/v1/') || path.length > 2048 || /[\s\\]/.test(path)) return { content: [text('path must begin with /v1/. See foundation_guide.')], isError: true };
-  const result = await call({ method, path, body: method === 'GET' ? undefined : body ?? {} });
+  if (!['json', 'text', 'base64'].includes(body_encoding) || (body_encoding !== 'json' && typeof body !== 'string')) {
+    return { content: [text('body_encoding must be json, text or base64. For text or base64, body must be a string.')], isError: true };
+  }
+  if (body_encoding === 'base64' && Buffer.from(body, 'base64').toString('base64') !== body) {
+    return { content: [text('body must contain valid, padded base64.')], isError: true };
+  }
+  const result = await call({ method, path, body: method === 'GET' ? undefined : body ?? {}, body_encoding });
   let parsed;
   try { parsed = JSON.parse(result.text); } catch { parsed = undefined; }
   return { content: [text(result.text)], ...(parsed === undefined ? {} : { structuredContent: parsed }), ...(result.ok ? {} : { isError: true }) };

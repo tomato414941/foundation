@@ -84,7 +84,7 @@ test('依頼を完了し、確認済みのアカウント情報とAPI用トー�
   const a = await f.connect('personal', { request_id: asked.json.request.id });
   const done = (await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token })).json.request;
   assert.equal(done.status, 'done'); assert.equal(done.result.credential_id, a.id);
-  const catalog = await f.request('/v1/resources?kind=credential&secret=false', { token: agent.token });
+  const catalog = await f.request('/v1/resources?kind=credential', { token: agent.token });
   assert.equal(catalog.json.resources[0].label, 'personal-seller');
   assert.deepEqual(catalog.json.resources[0].facts.scopes, GRANTED);
   assert.doesNotMatch(catalog.text, /ebay-access-|ebay-refresh-|test-ebay-secret/);
@@ -105,14 +105,14 @@ test('アカウントを固定IDで区別し、名前の変更を反映して別
   assert.notEqual(a.id, b.id);
   assert.equal(a.subject, '1001'); assert.equal(b.subject, '1002');
   assert.match((await f.callback(await f.start(), 'personal')).headers.get('location'), /result=connected/);
-  assert.equal((await f.request('/v1/resources?kind=credential&secret=false')).json.resources.length, 3);
+  assert.equal((await f.request('/v1/resources?kind=credential')).json.resources.length, 3);
   assert.match((await f.callback(await f.start({ credential_id: a.id }), 'work')).headers.get('location'), /result=wrong_account/);
   f.ebay.inspectHandler = () => json(inspected({ username: 'renamed-seller' }));
   const reconnected = await f.connect('personal', { credential_id: a.id });
   assert.equal(reconnected.id, a.id); assert.equal(reconnected.label, 'renamed-seller');
   await f.login('second@example.test');
   const stranger = await f.issueKey();
-  assert.deepEqual((await f.request('/v1/resources?kind=credential&secret=false', { token: stranger.token })).json.resources, []);
+  assert.deepEqual((await f.request('/v1/resources?kind=credential', { token: stranger.token })).json.resources, []);
   assert.equal((await f.inject(a, { token: stranger.token })).status, 404);
   assert.equal((await f.request('/v1/resources/' + a.id, { method: 'DELETE', data: { revoke: true } })).status, 403);
 });

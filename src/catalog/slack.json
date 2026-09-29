@@ -34,30 +34,6 @@
         "SLACK_TOKEN_EXPIRES_AT": "{expires_at}"
       },
       "hint": "The access token is a bot token for the Slack Web API (https://slack.com/api/<method>). SLACK_TEAM_ID is the workspace ID."
-    },
-    "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "Bot User OAuth Token",
-          "secret": true
-        }
-      ],
-      "identity": {
-        "url": "https://slack.com/api/auth.test",
-        "method": "POST",
-        "headers": {
-          "authorization": "Bearer {token}"
-        },
-        "id": "team_id",
-        "label": "team",
-        "ok_field": "ok"
-      },
-      "subject_prefix": "team:",
-      "injection": {
-        "SLACK_BOT_TOKEN": "{token}",
-        "SLACK_TEAM_ID": "{account}"
-      }
     }
   }
 }

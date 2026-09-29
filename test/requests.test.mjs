@@ -24,7 +24,7 @@ async function register(f, overrides = {}, agent = null) {
 }
 const approve = (f, row, overrides = {}) => f.request('/v1/requests/' + row.id + '/done', { method: 'POST', data: { confirmation_code: row.confirmation_code, ...overrides } });
 // Once approved, a machine names the person it acts for on every call, as the CLI does.
-const usable = (f, token) => f.request('/v1/resources?kind=credential&secret=false', { token, anonymous: true, as: USER_A });
+const usable = (f, token) => f.request('/v1/resources?kind=credential', { token, anonymous: true, as: USER_A });
 const cancel = (f, token) => f.request('/v1/principals/me', { method: 'DELETE', token, anonymous: true, data: {} });
 const rowStatus = (f, id) => f.app.store.db.prepare('SELECT status FROM requests WHERE id=?').get(id)?.status;
 
@@ -37,7 +37,7 @@ test('A new key asks only to be approved: no access before approval, the same pr
   assert.doesNotMatch(JSON.stringify(row), /fdn_|token_hash|refresh_token/);
   assert.equal((await f.request('/requests/' + row.id, { anonymous: true, headers: { 'sec-fetch-site': 'cross-site' } })).status, 200);
   assert.equal((await f.request('/v1/requests/' + row.id, { anonymous: true })).status, 401);
-  assert.deepEqual((await f.request('/v1/resources?kind=credential&secret=false', { token, anonymous: true })).json.resources, [], 'a key nobody has accepted holds nothing but itself');
+  assert.deepEqual((await f.request('/v1/resources?kind=credential', { token, anonymous: true })).json.resources, [], 'a key nobody has accepted holds nothing but itself');
   assert.equal((await cancel(f, row.id)).status, 401);
   assert.equal((await cancel(f, key())).status, 401);
   assert.equal((await f.request('/v1/principals/me', { token, anonymous: true })).json.requests[0].id, row.id, 'a runtime may read its own request');
@@ -66,7 +66,7 @@ test('A key not yet approved cannot ask for a registration, an approval request 
   const { row } = await create(f);
   const attempt = await f.request('/v1/credentials', { method: 'POST', data: { service: 'google', request_id: row.id } });
   assert.equal(attempt.status, 409); assert.equal(attempt.json.error.code, 'approval_only');
-  assert.equal(f.app.credentials.forServices(USER_A).length, 0);
+  assert.equal(f.app.credentials.list(USER_A).length, 0);
   const approved = await f.issueKey();
   const bare = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: approved.token, data: { purpose: '何もない' } });
   assert.equal(bare.status, 400); assert.equal(bare.json.error.code, 'nothing_requested');
@@ -137,7 +137,7 @@ test('A registration request stays with its owner, completes by registering, and
   assert.equal(blocked.status, 409);
   assert.equal(f.app.principals.actorsOf(USER_A).length, 0);
   assert.equal(f.app.principals.actorsOf(USER_B).length, 0);
-  assert.equal(f.app.credentials.forServices(USER_A).length, 2);
+  assert.equal(f.app.credentials.list(USER_A).length, 2);
 });
 
 test('An approval request belongs to the owner who approves it', async t => {
@@ -164,7 +164,7 @@ for (const end of ['deny', 'cancel', 'expire']) test(`A ${end} registration requ
   release();
   const result = await callback;
   assert.equal(result.headers.get('location'), '/requests/' + row.id + '?result=failed');
-  assert.equal(f.app.credentials.forServices(USER_A).length, 1);
+  assert.equal(f.app.credentials.list(USER_A).length, 1);
   if (end === 'expire') {
     assert.equal(rowStatus(f, row.id), 'pending');
     f.app.store.sweep();
@@ -223,11 +223,11 @@ test('利用者が定義したサービスも、共通の依頼・認証・受�
   assert.equal(start.status, 200, start.text);
   const callback = await f.callback(new URL(start.json.url), 'personal');
   assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?result=connected');
-  const saved = f.app.credentials.forServices(USER_A)[0];
+  const saved = f.app.credentials.list(USER_A)[0];
   assert.equal(saved.service, service); assert.equal(saved.subject, 'user:id-personal');
   const injected = await f.inject(saved, { token });
   assert.deepEqual(injected.json.injection.environment, { NOTES_TOKEN: 'access-personal-0' });
-  const listed = (await f.request('/v1/resources?kind=credential&secret=false', { token })).json.resources[0];
+  const listed = (await f.request('/v1/resources?kind=credential', { token })).json.resources[0];
   assert.deepEqual(listed.variables, ['NOTES_TOKEN']); assert.equal(listed.service.name, 'Notes');
 });
 
@@ -283,9 +283,9 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
   assert.equal(f.app.principals.actorsOf(USER_A)[0].name, '作業用 Claude');
   // Leaving revokes the key but keeps the credentials.
   assert.equal((await f.request('/v1/principals/me', { method: 'DELETE', token, anonymous: true, data: {} })).status, 200);
-  assert.equal((await f.request('/v1/resources?kind=credential&secret=false', { token, anonymous: true })).status, 401);
+  assert.equal((await f.request('/v1/resources?kind=credential', { token, anonymous: true })).status, 401);
   assert.equal(f.app.principals.actorsOf(USER_A).length, 0);
-  assert.equal(f.app.credentials.forServices(USER_A).length, 1);
+  assert.equal(f.app.credentials.list(USER_A).length, 1);
 });
 
 test('依頼元が認証失敗と再試行の経過を機密入力なしで確認する', async t => {

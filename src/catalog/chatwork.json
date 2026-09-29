@@ -28,27 +28,6 @@
         "CHATWORK_ACCESS_TOKEN": "{access_token}",
         "CHATWORK_TOKEN_EXPIRES_AT": "{expires_at}"
       }
-    },
-    "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "APIトークン",
-          "secret": true
-        }
-      ],
-      "identity": {
-        "url": "https://api.chatwork.com/v2/me",
-        "headers": {
-          "x-chatworktoken": "{token}"
-        },
-        "id": "account_id",
-        "label": "name"
-      },
-      "injection": {
-        "CHATWORK_API_TOKEN": "{token}"
-      },
-      "hint": "Send the token in the \"X-ChatWorkToken\" header."
     }
   }
 }

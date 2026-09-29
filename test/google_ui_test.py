@@ -86,7 +86,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-google-ui-') as private_dir,
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     review(page)
     connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['credential_id']
-    facts = next(row for row in cli('api', 'GET', '/v1/resources?kind=credential&secret=false')['resources'] if row['id'] == connection)['facts']
+    facts = next(row for row in cli('api', 'GET', '/v1/resources?kind=credential')['resources'] if row['id'] == connection)['facts']
     assert facts['missing_scopes'] == []
     handed = subprocess.run(['node', 'cli/runtime.mjs', 'exec', '--inputs', json.dumps([{'name': connection}]), '--', 'node', '-e',
                              'if(!process.env.CLOUDSDK_AUTH_ACCESS_TOKEN||!process.env.GOOGLE_ACCOUNT_EMAIL)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=30)

@@ -10,7 +10,7 @@ test('Login gives a private state behind a safe session cookie', async (t) => {
   assert.match(login.headers.get('set-cookie'), /HttpOnly; SameSite=Lax/);
   const result = await f.request('/v1/overview');
   assert.equal(result.json.user.id, USER_A);
-  assert.deepEqual(result.json.credentials.filter(row => row.service === null), []);
+  assert.deepEqual(result.json.secrets, []);
   assert.deepEqual(result.json.credentials.filter(row => row.service !== null), []);
   assert.equal(result.headers.get('cache-control'), 'no-store');
   assert.doesNotMatch(result.text, /supabase-access|refresh_token|"secret"|token_hash/);
@@ -54,11 +54,11 @@ test('Connections expose explicit credential outputs independently of saved name
   assert.notEqual(a.id, b.id);
   assert.equal(a.label, 'personal@example.test');
   assert.equal(b.label, 'work@example.test');
-  const saved = await f.request('/v1/resources?kind=credential&name=gmail%2Fpersonal-example-test', { method: 'PUT', raw: 'independent-value' });
+  const saved = await f.request('/v1/resources?kind=secret&name=gmail%2Fpersonal-example-test', { method: 'PUT', raw: 'independent-value' });
   assert.equal(saved.status, 200);
-  assert.deepEqual((await f.request('/v1/resources?kind=credential&secret=true', { token: agent.token })).json.resources.map(row => row.name), ['gmail/personal-example-test']);
-  assert.deepEqual((await f.request('/v1/resources?kind=credential', { token: agent.token })).json.resources.map(row => row.auth_scheme), [null, 'oauth', 'oauth'], 'secrets and credentials for services are listed together');
-  const connections = await f.request('/v1/resources?kind=credential&secret=false', { token: agent.token });
+  assert.deepEqual((await f.request('/v1/resources?kind=secret', { token: agent.token })).json.resources.map(row => row.name), ['gmail/personal-example-test']);
+  assert.deepEqual((await f.request('/v1/resources?kind=credential', { token: agent.token })).json.resources.map(row => row.auth_scheme), ['oauth', 'oauth'], 'managed authorizations are listed independently of secrets');
+  const connections = await f.request('/v1/resources?kind=credential', { token: agent.token });
   assert.deepEqual(connections.json.resources.map(item => item.id), [a.id, b.id]);
   assert.deepEqual(connections.json.resources[0].service, { id: 'google', name: 'Google', catalog: true });
   assert.doesNotMatch(connections.text, /refresh_token|google-access-|"state":/);
@@ -72,7 +72,7 @@ test('Connections expose explicit credential outputs independently of saved name
   assert.equal((await f.inject(b, { token: agent.token })).json.injection.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-work');
 
   // Credential processing leaves existing saved values unchanged.
-  assert.equal((await f.read('credential', 'gmail/personal-example-test')).text, 'independent-value');
+  assert.equal((await f.read('secret', 'gmail/personal-example-test')).text, 'independent-value');
   assert.ok(!f.google.calls.some((call) => call.url.includes('/messages')));
 });
 
@@ -81,14 +81,14 @@ test('Owners cannot see, disconnect or reach each other\'s connections', async (
   await f.login('second@example.test');
   const state = await f.request('/v1/overview');
   assert.deepEqual(state.json.credentials.filter(row => row.service !== null), []);
-  assert.deepEqual(state.json.credentials.filter(row => row.service === null), []);
+  assert.deepEqual(state.json.secrets, []);
   assert.deepEqual(state.json.actors, []);
   assert.equal((await f.request('/v1/resources/' + encodeURIComponent(first.id), { method: 'DELETE', data: { revoke: true } })).status, 403);
   const intruder = await f.issueKey('intruder');
-  assert.deepEqual((await f.request('/v1/resources?kind=credential&secret=false', { token: intruder.token })).json.resources, []);
+  assert.deepEqual((await f.request('/v1/resources?kind=credential', { token: intruder.token })).json.resources, []);
   assert.equal((await f.inject(first, { token: intruder.token })).status, 404);
   await f.request('/v1/principals/' + runtime.id, { method: 'DELETE', data: {} });
-  assert.equal((await f.request('/v1/resources?kind=credential&secret=false', { token: runtime.token })).json.resources.length, 1, 'the owner keeps it when one key is revoked');
+  assert.equal((await f.request('/v1/resources?kind=credential', { token: runtime.token })).json.resources.length, 1, 'the owner keeps it when one key is revoked');
   const second = await f.credential();
   assert.notEqual(second.id, first.id);
   assert.equal((await f.request('/v1/overview')).json.credentials.filter(row => row.service !== null).length, 1);
@@ -99,10 +99,10 @@ test('Connecting again pins the Google account', async (t) => {
   let flow = await f.start({ scopes: GMAIL.metadata, credential_id: a.id });
   assert.equal(flow.searchParams.get('login_hint'), 'personal@example.test');
   assert.equal((await f.callback(flow, 'work')).headers.get('location'), '/services?result=wrong_account&service=google');
-  assert.equal((await f.request('/v1/resources?kind=credential&secret=false', { token: agent.token })).json.resources.length, 1);
+  assert.equal((await f.request('/v1/resources?kind=credential', { token: agent.token })).json.resources.length, 1);
   flow = await f.start({ scopes: GMAIL.metadata, credential_id: a.id });
   assert.equal((await f.callback(flow, 'personal')).headers.get('location'), '/services?result=connected&service=google');
-  const seen = (await f.request('/v1/resources?kind=credential&secret=false', { token: agent.token })).json.resources;
+  const seen = (await f.request('/v1/resources?kind=credential', { token: agent.token })).json.resources;
   assert.equal(seen.length, 1); assert.equal(seen[0].id, a.id);
 });
 
@@ -111,7 +111,7 @@ test('同じGmailユーザーの新たな認可を別の接続として保存す
   const flow = await f.start();
   assert.equal((await f.callback(flow, 'personal')).headers.get('location'), '/services?result=connected&service=google');
   assert.equal((await f.request('/v1/overview')).json.credentials.filter(row => row.service !== null)[0].id, a.id);
-  const connections = (await f.request('/v1/resources?kind=credential&secret=false', { token: agent.token })).json.resources;
+  const connections = (await f.request('/v1/resources?kind=credential', { token: agent.token })).json.resources;
   assert.equal(connections.length, 2);
   assert.equal(new Set(connections.map(item => item.id)).size, 2);
 });
@@ -149,17 +149,17 @@ test('Refreshing is coalesced, and an invalid grant asks the owner to connect ag
 
 test('Disconnecting preserves saved values even when service revocation fails, and reports the failure', async (t) => {
   const f = await fixture(t), a = await f.credential(), agent = await f.issueKey();
-  await f.request('/v1/resources?kind=credential&name=gmail%2Fpersonal-example-test%2Ftoken', { method: 'PUT', raw: 'independent-copy' });
+  await f.request('/v1/resources?kind=secret&name=gmail%2Fpersonal-example-test%2Ftoken', { method: 'PUT', raw: 'independent-copy' });
   f.google.revokeHandler = () => new Response('{}', { status: 503 });
   const removed = await f.request('/v1/resources/' + encodeURIComponent(a.id), { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.status, 200);
   assert.equal(removed.json.service_revoked, false, 'the owner learns the grant is still at Google');
   const state = await f.request('/v1/overview');
   assert.deepEqual(state.json.credentials.filter(row => row.service !== null), []);
-  assert.deepEqual(state.json.credentials.filter(row => row.service === null).map(row => row.name), ['gmail/personal-example-test/token']);
-  assert.equal((await f.read('credential', 'gmail/personal-example-test/token')).text, 'independent-copy');
+  assert.deepEqual(state.json.secrets.map(row => row.name), ['gmail/personal-example-test/token']);
+  assert.equal((await f.read('secret', 'gmail/personal-example-test/token')).text, 'independent-copy');
   assert.equal((await f.inject(a, { token: agent.token })).status, 404);
-  assert.deepEqual((await f.request('/v1/resources?kind=credential&secret=false', { token: agent.token })).json.resources, []);
+  assert.deepEqual((await f.request('/v1/resources?kind=credential', { token: agent.token })).json.resources, []);
 });
 
 test('Where the owners are named, nobody else can make themselves one', async t => {

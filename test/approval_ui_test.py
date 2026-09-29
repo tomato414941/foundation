@@ -86,7 +86,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_role('heading', name='アクセス管理', exact=True)).to_be_visible()
     review(page)
     owner_id = cli('api', 'GET', '/v1/principals/me')['acts_for'][0]
-    assert cli('api', 'GET', '/v1/resources?kind=credential')['resources'] == []
+    assert cli('api', 'GET', '/v1/resources?kind=secret')['resources'] == []
 
     # 2. The approved key asks for a registration, on its own link and without a code.
     request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'kind': 'connect', 'input': {'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.readonly']}, 'purpose': '届いたメールを確認する'}))['request']
@@ -121,7 +121,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_role('button', name='Googleの画面へ', exact=True).click()
     expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']
-    assert cli('api', 'GET', '/v1/resources?kind=credential')['resources'] == []
+    assert cli('api', 'GET', '/v1/resources?kind=secret')['resources'] == []
     authorization['deny'] = False
     page.get_by_role('button', name='Googleの画面へ', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
@@ -134,7 +134,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     review(page)
     page.screenshot(path=str(shots / 'request-approved.png'), full_page=True)
     connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['credential_id']
-    listed = cli('api', 'GET', '/v1/resources?kind=credential')['resources']
+    listed = cli('api', 'GET', '/v1/resources?kind=secret')['resources']
     assert [row['auth_scheme'] for row in listed if row['id'] == connection] == ['oauth']
     command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', '--inputs', json.dumps([{'name': connection}]), '--', 'node', '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
@@ -146,7 +146,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     runtime.get_by_role('button', name='取り消す', exact=True).click()
     page.get_by_role('dialog').get_by_role('button', name='許可を取り消す', exact=True).click()
     expect(page.get_by_role('dialog')).not_to_be_visible()
-    cli('api', 'GET', '/v1/resources?kind=credential&as=' + owner_id, success=False)
+    cli('api', 'GET', '/v1/resources?kind=secret&as=' + owner_id, success=False)
     page.goto(pending['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='依頼は取り消されました', exact=True)).to_be_visible()
 

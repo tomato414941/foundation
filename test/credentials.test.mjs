@@ -1,4 +1,3 @@
-import { mkdtempSync } from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
@@ -24,7 +23,7 @@ async function keyed(t) {
   return { f, token };
 }
 const put = (f, token, name, content, query = {}, type = 'text/plain') =>
-  f.request('/v1/resources?' + new URLSearchParams({ ...query, kind: 'credential', name }), { method: 'PUT', token, anonymous: true, raw: content, type });
+  f.request('/v1/resources?' + new URLSearchParams({ ...query, kind: 'secret', name }), { method: 'PUT', token, anonymous: true, raw: content, type });
 
 test('Stored names and caller-selected environment variables are independent', async t => {
   const { f, token } = await keyed(t);
@@ -32,18 +31,18 @@ test('Stored names and caller-selected environment variables are independent', a
   assert.equal(kept.status, 200, kept.text);
   assert.match(kept.json.resource.id, /^[0-9a-f-]{36}$/, 'a held thing has an id of its own');
   assert.deepEqual({ ...kept.json.resource, id: undefined, created_at: 0, updated_at: 0 },
-    { id: undefined, kind: 'credential', name: 'github/gh-token', holder_id: USER_A, created_at: 0, updated_at: 0, service: null, auth_scheme: null, status: 'usable', size: secret.length });
+    { id: undefined, kind: 'secret', name: 'github/gh-token', holder_id: USER_A, created_at: 0, updated_at: 0, size: secret.length });
   assert.doesNotMatch(kept.text, new RegExp(secret), 'writing never echoes the bytes back');
 
-  const listed = await f.request('/v1/resources?kind=credential', { token, anonymous: true });
+  const listed = await f.request('/v1/resources?kind=secret', { token, anonymous: true });
   assert.deepEqual(listed.json.resources.map(row => row.name), ['github/gh-token']);
   assert.doesNotMatch(listed.text, new RegExp(secret), 'listing tells what is kept, never the bytes');
 
   // What the key kept it may read back, along the line drawn for it; the holder can take that line away.
-  assert.equal((await f.read('credential', 'github/gh-token', { token, anonymous: true })).status, 200);
+  assert.equal((await f.read('secret', 'github/gh-token', { token, anonymous: true })).status, 200);
   const keyId = (await f.request('/v1/principals/me', { token, anonymous: true })).json.principal.id;
   assert.equal((await f.request('/v1/relations', { method: 'DELETE', data: { subject: keyId, relation: 'editor', object_type: 'resource', object_id: kept.json.resource.id } })).status, 200);
-  const refused = await f.read('credential', 'github/gh-token', { token, anonymous: true });
+  const refused = await f.read('secret', 'github/gh-token', { token, anonymous: true });
   assert.equal(refused.status, 403);
   assert.equal(refused.json.error.code, 'forbidden');
 
@@ -55,7 +54,7 @@ test('Bytes with no delivery are kept and read back as they were written', async
   const { f, token } = await keyed(t);
   const state = JSON.stringify({ step: 'レビュー待ち', pull_request: 42 });
   assert.equal((await put(f, token, 'release/2026-09-23', state, {}, 'application/json')).status, 200);
-  const read = await f.read('credential', 'release/2026-09-23', { token, anonymous: true });
+  const read = await f.read('secret', 'release/2026-09-23', { token, anonymous: true });
   assert.equal(read.status, 200);
   assert.equal(read.text, state);
   // Delivery needs an explicit destination variable regardless of the saved name.
@@ -102,10 +101,10 @@ test('Writing the same name again replaces what is there', async t => {
   const { f, token } = await keyed(t);
   await put(f, token, 'github/gh-token', 'first');
   await put(f, token, 'github/gh-token', 'second');
-  assert.equal((await f.request('/v1/resources?kind=credential', { token, anonymous: true })).json.resources.length, 1);
+  assert.equal((await f.request('/v1/resources?kind=secret', { token, anonymous: true })).json.resources.length, 1);
   const delivered = await f.request('/v1/injections', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'github/gh-token', as: 'GH_TOKEN' }] } });
   assert.deepEqual(delivered.json.injection.environment, { GH_TOKEN: 'second' });
-  assert.equal((await f.read('credential', 'github/gh-token', { token, anonymous: true })).text, 'second');
+  assert.equal((await f.read('secret', 'github/gh-token', { token, anonymous: true })).text, 'second');
 });
 
 test('Delivering several at once refuses two that want the same variable', async t => {
@@ -123,19 +122,19 @@ test('Delivering several at once refuses two that want the same variable', async
 test('Listing narrows by a literal name prefix, and each owner reaches only their own', async t => {
   const { f, token } = await keyed(t);
   for (const path of ['github/token', 'github/user', 'release/expo-v3']) await put(f, token, path, 'x');
-  const narrowed = await f.request('/v1/resources?kind=credential&prefix=github', { token, anonymous: true });
+  const narrowed = await f.request('/v1/resources?kind=secret&prefix=github', { token, anonymous: true });
   assert.deepEqual(narrowed.json.resources.map(row => row.name), ['github/token', 'github/user']);
 
   await f.login('other@example.test');
   let other;
   other = (await f.approveKey('other-machine')).token;
-  assert.deepEqual((await f.request('/v1/resources?kind=credential', { token: other, anonymous: true })).json.resources, []);
-  assert.equal((await f.read('credential', 'github/token', { token: other, anonymous: true })).status, 404);
-  assert.equal(f.app.credentials.list(USER_B).length, 0);
+  assert.deepEqual((await f.request('/v1/resources?kind=secret', { token: other, anonymous: true })).json.resources, []);
+  assert.equal((await f.read('secret', 'github/token', { token: other, anonymous: true })).status, 404);
+  assert.equal(f.app.secrets.list(USER_B).length, 0);
 
-  const dropped = await f.drop('credential', 'github/token', { token, anonymous: true });
+  const dropped = await f.drop('secret', 'github/token', { token, anonymous: true });
   assert.equal(dropped.status, 200);
-  assert.equal((await f.read('credential', 'github/token', { token, anonymous: true })).status, 404);
+  assert.equal((await f.read('secret', 'github/token', { token, anonymous: true })).status, 404);
 });
 
 test('What is kept is bounded, so one owner cannot fill the disk', async t => {
@@ -155,23 +154,23 @@ test('The owner reads and removes anything kept, including what the key may not 
   const { f, token } = await keyed(t);
   await put(f, token, 'github/token', secret, { env: 'GH_TOKEN', secret: 'true' });
   const state = await f.request('/v1/overview');
-  assert.deepEqual(state.json.credentials.filter(row => row.service === null).map(row => row.name), ['github/token']);
+  assert.deepEqual(state.json.secrets.map(row => row.name), ['github/token']);
   assert.doesNotMatch(state.text, new RegExp(secret));
-  const read = await f.read('credential', 'github/token');
+  const read = await f.read('secret', 'github/token');
   assert.equal(read.status, 200);
   assert.equal(read.text, secret, 'the owner sees what they are keeping');
-  assert.equal((await f.drop('credential', 'github/token')).status, 200);
-  assert.deepEqual((await f.request('/v1/resources?kind=credential', { token, anonymous: true })).json.resources, []);
+  assert.equal((await f.drop('secret', 'github/token')).status, 200);
+  assert.deepEqual((await f.request('/v1/resources?kind=secret', { token, anonymous: true })).json.resources, []);
 });
 
 test('The owner edits the value they opened while preserving its name and the lines onto it', async t => {
   const { f, token } = await keyed(t);
   for (const privateValue of [true, false]) {
     const name = privateValue ? 'private value' : 'readable value';
-    const path = '/v1/resources?' + new URLSearchParams({ kind: 'credential', name });
+    const path = '/v1/resources?' + new URLSearchParams({ kind: 'secret', name });
     // Kept by the owner, no line reaches it; kept by the key, the key is on a line to it.
     if (privateValue) await f.request(path, { method: 'PUT', raw: 'original', type: 'text/plain' }); else await put(f, token, name, 'original');
-    const content = '/v1/resources/' + (await f.lookup('credential', name)).json.resource.id + '/content';
+    const content = '/v1/resources/' + (await f.lookup('secret', name)).json.resource.id + '/content';
     const opened = await f.request(content);
     const etag = opened.headers.get('etag');
     assert.ok(etag);
@@ -184,44 +183,44 @@ test('The owner edits the value they opened while preserving its name and the li
     const updated = await f.request(content);
     assert.equal(updated.text, value);
     assert.equal(updated.headers.get('etag'), saved.headers.get('etag'));
-    const keyRead = await f.read('credential', name, { token, anonymous: true });
+    const keyRead = await f.read('secret', name, { token, anonymous: true });
     assert.equal(keyRead.status, privateValue ? 403 : 200);
   }
 });
 
 test('A stale editor preserves a newer value and its permissions', async t => {
   const { f, token } = await keyed(t);
-  const path = '/v1/resources?kind=credential&name=shared';
+  const path = '/v1/resources?kind=secret&name=shared';
   await put(f, token, 'shared', 'original');
-  const opened = await f.read('credential', 'shared');
+  const opened = await f.read('secret', 'shared');
   await put(f, token, 'shared', 'newer value');
   const saved = await f.request(path, { method: 'PUT', raw: 'stale draft', headers: { 'if-match': opened.headers.get('etag') } });
   assert.equal(saved.status, 412, saved.text);
   assert.equal(saved.json.error.code, 'secret_changed');
-  assert.equal((await f.read('credential', 'shared')).text, 'newer value');
+  assert.equal((await f.read('secret', 'shared')).text, 'newer value');
 });
 
 test('A stale editor respects renames, deletion, recreation, and owner boundaries', async t => {
   const { f, token } = await keyed(t);
-  const path = '/v1/resources?kind=credential&name=original';
+  const path = '/v1/resources?kind=secret&name=original';
   await put(f, token, 'original', 'first');
-  const etag = (await f.read('credential', 'original')).headers.get('etag');
+  const etag = (await f.read('secret', 'original')).headers.get('etag');
   const save = () => f.request(path, { method: 'PUT', raw: 'draft', headers: { 'if-match': etag } });
-  const rename = async (from, to) => f.request('/v1/resources/' + (await f.lookup('credential', from)).json.resource.id, { method: 'PATCH', data: { name: to } });
+  const rename = async (from, to) => f.request('/v1/resources/' + (await f.lookup('secret', from)).json.resource.id, { method: 'PATCH', data: { name: to } });
   await rename('original', 'renamed');
   assert.equal((await save()).status, 412);
-  assert.deepEqual((await f.request('/v1/overview')).json.credentials.filter(row => row.service === null).map(row => row.name), ['renamed']);
+  assert.deepEqual((await f.request('/v1/overview')).json.secrets.map(row => row.name), ['renamed']);
   await rename('renamed', 'original');
-  await f.drop('credential', 'original');
+  await f.drop('secret', 'original');
   assert.equal((await save()).status, 412);
   await put(f, token, 'original', 'recreated');
   assert.equal((await save()).status, 412);
-  assert.equal((await f.read('credential', 'original')).text, 'recreated');
-  const current = (await f.read('credential', 'original')).headers.get('etag');
+  assert.equal((await f.read('secret', 'original')).text, 'recreated');
+  const current = (await f.read('secret', 'original')).headers.get('etag');
   await f.login('other@example.test');
-  assert.equal((await f.read('credential', 'original')).status, 404);
+  assert.equal((await f.read('secret', 'original')).status, 404);
   assert.equal((await f.request(path, { method: 'PUT', raw: 'other owner', headers: { 'if-match': current } })).status, 412);
-  assert.deepEqual((await f.request('/v1/overview')).json.credentials.filter(row => row.service === null), []);
+  assert.deepEqual((await f.request('/v1/overview')).json.secrets, []);
 });
 
 test('The runtime hands what is kept to a command, as bytes and as a file, and nothing else', async t => {
@@ -267,10 +266,12 @@ test('The runtime hands what is kept to a command, as bytes and as a file, and n
 
 test('保存には承認済みキーを要求し、ガイドに保存と受け渡しのAPIを示す', async t => {
   const f = await fixture(t); let token;
-  assert.equal((await f.request('/v1/resources?kind=credential', { token, anonymous: true })).status, 401);
+  assert.equal((await f.request('/v1/resources?kind=secret', { token, anonymous: true })).status, 401);
   // No server configured: the bundled reference.
-  const guide = (await run(['guide'], { XDG_CONFIG_HOME: mkdtempSync(join(tmpdir(), 'foundation-config-')), FOUNDATION_URL: '' })).out.toString();
-  assert.match(guide, /PUT \/v1\/resources\?kind=credential&name=<name>/);
+  const configDir = await mkdtemp(join(tmpdir(), 'foundation-config-'));
+  t.after(() => rm(configDir, { recursive: true, force: true }));
+  const guide = (await run(['guide'], { XDG_CONFIG_HOME: configDir, FOUNDATION_URL: '' })).out.toString();
+  assert.match(guide, /PUT \/v1\/resources\?kind=secret&name=<name>/);
   assert.match(guide, /POST \/v1\/injections/);
   assert.match(guide, /Nothing here needs a shell/);
   assert.match(guide, /foundation exec <ENV>/, 'and the one thing that does need one');
@@ -283,42 +284,41 @@ test('Anyone becomes a principal with no credential, is issued a key once, and r
   assert.match(made.json.token, /^fdn_[A-Za-z0-9_-]{43}$/);
   const me = await f.request('/v1/principals/me', { token: made.json.token, anonymous: true });
   assert.equal(me.status, 200); assert.deepEqual(me.json.acts_for, []); assert.equal(me.json.token, undefined, 'never handed out a second time');
-  assert.deepEqual((await f.request('/v1/resources?kind=credential', { token: made.json.token, anonymous: true })).json.resources, [], 'its own resources, empty');
-  assert.equal((await f.request('/v1/resources?kind=credential&as=' + USER_A, { token: made.json.token, anonymous: true })).status, 401, 'and nobody else\'s');
+  assert.deepEqual((await f.request('/v1/resources?kind=secret', { token: made.json.token, anonymous: true })).json.resources, [], 'its own resources, empty');
+  assert.equal((await f.request('/v1/resources?kind=secret&as=' + USER_A, { token: made.json.token, anonymous: true })).status, 401, 'and nobody else\'s');
   const unknown = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: 'fdn_' + 'z'.repeat(43), data: { kind: 'actor', input: { name: 'x' } } });
   assert.equal(unknown.status, 401, 'a key nobody issued is just unknown');
 });
 
 test('閲覧を許された相手は、その保有者の値だけを読み、別の保有者が同じ名前で持つ値は読めない', async t => {
   const f = await fixture(t);
-  const kept = await f.request('/v1/resources?kind=credential&name=shared', { method: 'PUT', raw: 'a-value' });
+  const kept = await f.request('/v1/resources?kind=secret&name=shared', { method: 'PUT', raw: 'a-value' });
   const made = await f.request('/v1/principals', { method: 'POST', data: { name: 'reader', key: true } });
   assert.equal(made.status, 201, made.text);
   const granted = await f.request('/v1/relations', { method: 'POST', data: { subject: made.json.principal.id, relation: 'viewer', object_type: 'resource', object_id: kept.json.resource.id } });
   assert.equal(granted.status, 201, granted.text);
   await f.login('other@example.test');
-  await f.request('/v1/resources?kind=credential&name=shared', { method: 'PUT', raw: 'b-value' });
+  await f.request('/v1/resources?kind=secret&name=shared', { method: 'PUT', raw: 'b-value' });
   const allowed = await f.request('/v1/resources/' + kept.json.resource.id + '/content', { token: made.json.token, anonymous: true });
   assert.equal(allowed.status, 200, allowed.text); assert.equal(allowed.text, 'a-value');
-  const refused = await f.request('/v1/resources/' + (await f.lookup('credential', 'shared')).json.resource.id + '/content', { token: made.json.token, anonymous: true });
+  const refused = await f.request('/v1/resources/' + (await f.lookup('secret', 'shared')).json.resource.id + '/content', { token: made.json.token, anonymous: true });
   assert.equal(refused.status, 403, refused.text);
 });
 
 test('編集を許された相手はその値を書き換え、値を消すと線は消え、名前を変えると線はついていく', async t => {
   const f = await fixture(t);
-  const kept = await f.request('/v1/resources?kind=credential&name=doc', { method: 'PUT', raw: 'v1' });
+  const kept = await f.request('/v1/resources?kind=secret&name=doc', { method: 'PUT', raw: 'v1' });
   const made = await f.request('/v1/principals', { method: 'POST', data: { name: 'editor', key: true } });
   const token = made.json.token, id = made.json.principal.id;
   assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: id, relation: 'editor', object_type: 'resource', object_id: kept.json.resource.id } })).status, 201);
-  const written = await f.request('/v1/resources?kind=credential&name=doc&as=' + USER_A, { method: 'PUT', raw: 'v2', token, anonymous: true });
+  const written = await f.request('/v1/resources?kind=secret&name=doc&as=' + USER_A, { method: 'PUT', raw: 'v2', token, anonymous: true });
   assert.equal(written.status, 200, written.text);
-  assert.equal((await f.read('credential', 'doc')).text, 'v2');
+  assert.equal((await f.read('secret', 'doc')).text, 'v2');
   assert.equal((await f.request('/v1/resources/' + kept.json.resource.id, { method: 'PATCH', data: { name: 'moved' } })).status, 200);
   assert.equal((await f.request('/v1/resources/' + kept.json.resource.id + '/content', { token, anonymous: true })).status, 200, 'the line follows the thing');
-  await f.drop('credential', 'moved');
-  const fresh = await f.request('/v1/resources?kind=credential&name=moved', { method: 'PUT', raw: 'fresh' });
+  await f.drop('secret', 'moved');
+  const fresh = await f.request('/v1/resources?kind=secret&name=moved', { method: 'PUT', raw: 'fresh' });
   assert.equal((await f.request('/v1/resources/' + fresh.json.resource.id + '/content', { token, anonymous: true })).status, 403, 'a new thing by the old name starts with no lines');
   const owner = await f.request('/v1/relations', { method: 'POST', data: { subject: id, relation: 'owner', object_type: 'principal', object_id: USER_A } });
   assert.equal(owner.status, 400, 'ownership is not drawn by hand');
 });
-

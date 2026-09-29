@@ -81,7 +81,6 @@ export class Services {
         app_fields: takesApps(scheme) ? appFieldsOf(scheme).map(({ leading, ...field }) => field) : [],
         scopes: scheme.scopes ? { base: scheme.scopes.base, documentation_url: scheme.scopes.documentationUrl || '' } : null,
         can_revoke: typeof scheme.revoke === 'function', can_reconnect: scheme.canReconnect !== false };
-      if (id === 'token') described.token = { ...common, verifies_token: scheme.verifiesToken, fields: scheme.fields.map(({ pattern, ...field }) => field) };
       if (id === 'role') described.role = { ...common, available: scheme.available };
     }
     return { id: ref, name: definition.name, ...(definition.logo ? { logo: definition.logo } : {}), catalog,

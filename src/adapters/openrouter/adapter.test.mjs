@@ -65,7 +65,7 @@ test('OpenRouter callback cannot use another session, forged state, or a denied 
 
 test('承認したキーに認証情報と提供元の有効期限を渡し、失効後の取得を拒否する', async t => {
   const f = await openrouterFixture(t); let token = 'fdn_' + randomBytes(32).toString('base64url');
-  assert.equal((await f.request('/v1/resources?kind=credential&secret=false', { token, anonymous: true })).status, 401, 'a key nobody knows is nobody');
+  assert.equal((await f.request('/v1/resources?kind=credential', { token, anonymous: true })).status, 401, 'a key nobody knows is nobody');
   token = (await f.approveKey()).token;
   const created = await f.request('/v1/requests', { method: 'POST', token, data: { kind: 'connect', input: { service: 'openrouter' }, purpose: 'キー情報を確認。モデルは実行しない。' } });
   const row = created.json.request;
@@ -74,7 +74,7 @@ test('承認したキーに認証情報と提供元の有効期限を渡し、�
   assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?result=connected');
   const account = (await f.request('/v1/overview')).json.credentials[0];
   assert.equal((await f.request('/v1/requests/' + row.id)).json.request.status, 'done', 'the request is complete');
-  const listed = await f.request('/v1/resources?kind=credential&secret=false', { token });
+  const listed = await f.request('/v1/resources?kind=credential', { token });
   assert.deepEqual(listed.json.resources[0].variables, ['OPENROUTER_API_KEY']);
   assert.doesNotMatch(listed.text, /sk-or-v1-/);
   const issued = await credential(f, account, token);
@@ -122,7 +122,7 @@ test('Provider expiry, revocation and budget updates are checked before every AP
   let issued = await credential(f, account, agent.token);
   assert.equal(issued.json.expires_at, Date.parse(f.openrouter.info.expires_at));
   assert.ok(issued.json.expires_in > 80_000, 'not replaced with a fictitious short lifetime');
-  const connection = (await f.request('/v1/resources?kind=credential&secret=false', { token: agent.token })).json.resources[0];
+  const connection = (await f.request('/v1/resources?kind=credential', { token: agent.token })).json.resources[0];
   assert.equal(connection.label, account.label, 'what the key can see about it is on the connection, not the delivery');
   assert.equal(connection.facts.expires_at, Date.parse(f.openrouter.info.expires_at));
   assert.equal(connection.facts.key_info.limit, 10);

@@ -43,17 +43,6 @@ with sync_playwright() as p:
     def service(name):
         return next(item for item in overview()['services'] if item['name'] == name)
 
-    def keep(name, value):
-        query = urlencode({'kind': 'credential', 'name': name})
-        response = context.request.put(args.base + '/v1/resources?' + query, data=value,
-                                       headers={'Origin': args.base, 'content-type': 'text/plain'})
-        assert response.ok, response.text()
-        return response.json()['resource']
-
-    def adopt(entry):
-        page.goto(args.base + '/secrets', wait_until='networkidle')
-        page.get_by_role('article', name=entry['name'], exact=True).get_by_role('button', name='サービスのトークンにする', exact=True).click()
-
     def review(label):
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), label
         text = page.locator('body').inner_text()
@@ -66,7 +55,7 @@ with sync_playwright() as p:
         if shots:
             page.screenshot(path=str(shots / (label + '.png')), full_page=True)
 
-    # 名前だけで登録し、再読込後も未接続のサービスとして表示する。
+
     page.get_by_role('button', name='サービスを追加', exact=True).click()
     dialog.get_by_label('サービスを探す', exact=True).fill('社内ツール')
     dialog.get_by_role('button', name='一覧にないサービスを追加', exact=True).click()
@@ -78,148 +67,68 @@ with sync_playwright() as p:
     expect(row.get_by_text('未接続', exact=True)).to_be_visible()
     page.reload(wait_until='networkidle')
     expect(row.get_by_text('未接続', exact=True)).to_be_visible()
-    registered = service('社内ツール')
-    assert registered['definition']['auth_schemes'] == {}
+    assert service('社内ツール')['definition']['auth_schemes'] == {}
+
     row.get_by_role('button', name='接続を追加', exact=True).click()
-    dialog.get_by_role('button', name='トークンを入力する').click()
-    dialog.get_by_label('トークン', exact=True).fill('fixture-private-cancelled')
+    dialog.get_by_role('button', name='ログインして許可する').click()
+    expect(dialog.get_by_role('heading', name='社内ツールのOAuth設定', exact=True)).to_be_visible()
     page.keyboard.press('Escape')
     expect(dialog).not_to_be_visible()
     assert service('社内ツール')['definition']['auth_schemes'] == {}
-    print('名前だけの登録を保持し、接続を途中で取り消すと未設定のままにする。')
 
-    # 後からトークンを預ける。通信失敗後も入力を保ち、再試行して利用する。
-    row.get_by_role('button', name='接続を追加', exact=True).click()
-    dialog.get_by_role('button', name='トークンを入力する').click()
-    dialog.get_by_label('トークン', exact=True).fill('fixture-private-manual')
-    expect(dialog.get_by_text('接続先での有効性の確認は行いません。', exact=True)).to_be_visible()
-    page.route('**/v1/credentials', lambda route: route.fulfill(status=503, json={'error': {'message': '再試行してください。'}}))
-    dialog.get_by_role('button', name='預ける', exact=True).click()
-    expect(dialog.get_by_role('alert')).to_have_text('再試行してください。')
-    expect(dialog.get_by_label('トークン', exact=True)).to_have_value('fixture-private-manual')
-    page.unroute('**/v1/credentials')
-    dialog.get_by_role('button', name='預ける', exact=True).click()
-    expect(dialog).not_to_be_visible()
-    expect(page.get_by_text('トークン・未検証', exact=True)).to_be_visible()
-    connected = next(item for item in overview()['credentials'] if item.get('service', {}).get('id') == registered['id'])
-    assert api('/v1/injections', 'POST', {'names': [{'name': connected['id']}]})['injection']['environment'] == {'API_TOKEN': 'fixture-private-manual'}
-    print('未検証であることを示し、通信失敗後に入力を保ってトークンを登録・利用する。')
-
-    # シークレットの移行からサービスを登録し、キャンセル後も元の値を保つ。
-    kept = keep('任意の名前/a', 'fixture-private-adopt')
-    adopt(kept)
-    search = dialog.get_by_label('サービスを探す', exact=True)
-    search.fill('自作アプリ')
-    expect(dialog.get_by_text('見つかりません。', exact=True)).to_be_visible()
-    dialog.get_by_role('button', name='一覧にないサービスを追加', exact=True).click()
-    expect(dialog.get_by_label('サービス名', exact=True)).to_have_value('自作アプリ')
-    dialog.get_by_role('button', name='追加', exact=True).click()
-    expect(dialog.get_by_role('heading', name='自作アプリのトークンにする', exact=True)).to_be_visible()
-    expect(dialog.get_by_text('任意の名前/a', exact=True)).to_be_visible()
-    page.keyboard.press('Escape')
-    expect(dialog).not_to_be_visible()
-    assert service('自作アプリ')['definition']['auth_schemes'] == {}
-    original = context.request.get(args.base + '/v1/resources/' + kept['id'] + '/content')
-    assert original.text() == 'fixture-private-adopt'
-
-    # 同名の新規登録は既存の接続設定を上書きせず、その場で再入力を受け付ける。
-    adopt(kept)
-    dialog.get_by_label('サービスを探す', exact=True).fill('社内ツール')
-    dialog.get_by_role('button', name='一覧にないサービスを追加', exact=True).click()
-    dialog.get_by_role('button', name='追加', exact=True).click()
-    expect(dialog.get_by_role('alert')).to_have_text('同じ名前のサービスがあります。一覧から選んでください。')
-    expect(dialog.get_by_label('サービス名', exact=True)).to_have_value('社内ツール')
-    assert service('社内ツール')['definition']['auth_schemes']['token']['injection'] == {'API_TOKEN': '{token}'}
-    dialog.get_by_label('サービス名', exact=True).fill('追加のアプリ')
-    dialog.get_by_role('button', name='追加', exact=True).click()
-    expect(dialog.get_by_role('heading', name='追加のアプリのトークンにする', exact=True)).to_be_visible()
-    dialog.get_by_role('button', name='移す', exact=True).click()
-    expect(dialog).not_to_be_visible()
-    adopted = next(item for item in overview()['credentials'] if item['id'] == kept['id'])
-    assert adopted['name'] == kept['name']
-    assert adopted['service']['id'] == service('追加のアプリ')['id']
-    assert api('/v1/injections', 'POST', {'names': [{'name': kept['id']}]})['injection']['environment'] == {'API_TOKEN': 'fixture-private-adopt'}
-    print('移行中の新規登録・キャンセル・名前の競合に対応し、元のID・名前・値で移行する。')
-
-    # 検索して既存の未接続サービスを選び、キーボードで移行を確定する。
-    second = keep('別のシークレット', 'fixture-private-second')
-    adopt(second)
-    dialog.get_by_label('サービスを探す', exact=True).fill('自作')
-    choice = dialog.get_by_role('button', name='自作アプリ', exact=True)
+    page.get_by_role('button', name='サービスを追加', exact=True).click()
+    dialog.get_by_label('サービスを探す', exact=True).fill('社内')
+    choice = dialog.get_by_role('button', name='社内ツール', exact=True)
     expect(choice).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 900})
         review('search-' + str(width))
     choice.focus()
     page.keyboard.press('Enter')
-    review('adopt-mobile')
-    dialog.get_by_role('button', name='移す', exact=True).click()
-    expect(dialog).not_to_be_visible()
-    assert next(item for item in overview()['credentials'] if item['id'] == second['id'])['service']['id'] == service('自作アプリ')['id']
-    print('PCとスマートフォンでサービスを検索し、キーボードでも選択・移行する。')
+    dialog.get_by_role('button', name='ログインして許可する').click()
+    dialog.get_by_label('認可エンドポイントのURL', exact=True).fill('https://service.example/authorize')
+    dialog.get_by_label('トークンエンドポイントのURL', exact=True).fill('https://service.example/token')
+    review('oauth-mobile')
+    dialog.get_by_role('button', name='次へ', exact=True).click()
+    expect(dialog.get_by_role('heading', name='OAuthアプリを追加', exact=True)).to_be_visible()
+    page.keyboard.press('Escape')
+    configured = service('社内ツール')['definition']
+    assert configured['auth_schemes']['oauth']['authorize'] == 'https://service.example/authorize'
 
-    # OAuthだけのサービスも検索し、トークン方式を追加して元のOAuth設定を保つ。
-    oauth = {'authorize': 'https://service.example/authorize', 'token': 'https://service.example/token',
-             'scopes': {'base': []}, 'injection': {'OAUTH_ACCESS_TOKEN': '{access_token}'}}
-    named = api('/v1/resources?kind=service&name=OAuth-only', 'PUT',
-                {'version': 1, 'name': 'OAuth-only', 'auth_schemes': {'oauth': oauth}})['resource']
-    third = keep('oauth-service-token', 'fixture-private-third')
-    adopt(third)
-    dialog.get_by_label('サービスを探す', exact=True).fill('oauth-only')
-    dialog.get_by_role('button', name='OAuth-only', exact=True).click()
-    dialog.get_by_role('button', name='移す', exact=True).click()
-    expect(dialog).not_to_be_visible()
-    assert service('OAuth-only')['definition']['auth_schemes']['oauth'] == oauth
-    assert service('OAuth-only')['definition']['auth_schemes']['token']['injection'] == {'API_TOKEN': '{token}'}
-
-    # 複数の入力を持つトークン方式では、保存済みの値に追加情報だけを添える。
-    fields = {'fields': [{'name': 'token', 'label': 'トークン', 'secret': True},
-                         {'name': 'account', 'label': 'アカウントID', 'secret': False}],
-              'identity': {'from': 'fields', 'id': 'account'},
-              'injection': {'API_TOKEN': '{token}', 'ACCOUNT_ID': '{account}'}}
-    api('/v1/resources?kind=service&name=Account-Service', 'PUT',
-        {'version': 1, 'name': 'Account-Service', 'auth_schemes': {'token': fields}})
-    fourth = keep('account-token', 'fixture-private-fourth')
-    adopt(fourth)
-    dialog.get_by_label('サービスを探す', exact=True).fill('account-service')
-    dialog.get_by_role('button', name='Account-Service', exact=True).click()
-    dialog.get_by_label('アカウントID', exact=True).fill('account-1')
-    dialog.get_by_role('button', name='移す', exact=True).click()
-    expect(dialog).not_to_be_visible()
-    assert api('/v1/injections', 'POST', {'names': [{'name': fourth['id']}]})['injection']['environment'] == {
-        'API_TOKEN': 'fixture-private-fourth', 'ACCOUNT_ID': 'account-1'}
-    print('OAuth設定を保持してトークン方式を加え、追加のアカウントIDが必要なサービスにも移行する。')
-
-    # AIからの依頼でも、未検証であることを伝えてトークンを受け取る。
-    actor = api('/v1/principals', 'POST', {'name': 'テストAI', 'actor': True, 'key': True})
-    response = context.request.post(args.base + '/v1/requests?as=' + actor['principal']['acts_for'][0],
-        data={'kind': 'connect', 'input': {'service': named['id'], 'auth_scheme': 'token'}, 'purpose': '接続を確認します。'},
-        headers={'Origin': args.base, 'Authorization': 'Bearer ' + actor['token']})
-    assert response.ok, response.text()
-    page.goto(args.base + '/requests/' + response.json()['request']['id'], wait_until='networkidle')
-    expect(page.get_by_text('接続先での有効性の確認は行いません。', exact=True)).to_be_visible()
-    page.get_by_label('トークン', exact=True).fill('fixture-private-request')
-    page.get_by_role('button', name='預ける', exact=True).click()
-    expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
-    print('AIからのトークン接続依頼でも検証の有無を示し、預かった結果を返す。')
-
-    # 使っていない登録を明示確認のうえ削除する。
     page.set_viewport_size({'width': 1280, 'height': 900})
-    page.goto(args.base + '/services', wait_until='networkidle')
-    expect(page.get_by_text(kept['name'], exact=True)).to_be_visible()
-    expect(page.get_by_text(second['name'], exact=True)).to_be_visible()
     page.get_by_role('button', name='サービスを追加', exact=True).click()
-    dialog.get_by_label('サービスを探す', exact=True).fill('削除用')
+    dialog.get_by_label('サービスを探す', exact=True).fill('社内ツール')
     dialog.get_by_role('button', name='一覧にないサービスを追加', exact=True).click()
     dialog.get_by_role('button', name='追加', exact=True).click()
+    expect(dialog.get_by_role('alert')).to_have_text('同じ名前のサービスがあります。一覧から選んでください。')
+    expect(dialog.get_by_label('サービス名', exact=True)).to_have_value('社内ツール')
+    assert service('社内ツール')['definition'] == configured
+    dialog.get_by_label('サービス名', exact=True).fill('追加のアプリ')
+    dialog.get_by_role('button', name='追加', exact=True).click()
     expect(dialog).not_to_be_visible()
-    deleting = service('削除用')
-    page.get_by_role('article', name='削除用', exact=True).get_by_role('button', name='削除', exact=True).click()
-    expect(dialog.get_by_role('heading', name='削除用 を削除しますか？', exact=True)).to_be_visible()
+    expect(page.get_by_role('article', name='追加のアプリ', exact=True)).to_be_visible()
+
+    page.goto(args.base + '/secrets', wait_until='networkidle')
+    page.get_by_role('button', name='追加', exact=True).click()
+    dialog.get_by_label('名前', exact=True).fill('任意の名前/a')
+    dialog.get_by_label('値', exact=True).fill('fixture-private-token')
+    dialog.get_by_role('button', name='追加', exact=True).click()
+    expect(dialog).not_to_be_visible()
+    expect(page.get_by_role('article', name='任意の名前/a', exact=True)).to_be_visible()
+    kept = next(item for item in overview()['secrets'] if item['name'] == '任意の名前/a')
+    assert api('/v1/injections', 'POST', {'names': [{'name': kept['id'], 'as': 'MY_TOKEN'}]})['injection']['environment'] == {'MY_TOKEN': 'fixture-private-token'}
+    for width in [1280, 390, 320]:
+        page.set_viewport_size({'width': width, 'height': 900})
+        review('secrets-' + str(width))
+
+    page.goto(args.base + '/services', wait_until='networkidle')
+    deleting = service('追加のアプリ')
+    page.get_by_role('article', name='追加のアプリ', exact=True).get_by_role('button', name='削除', exact=True).click()
+    expect(dialog.get_by_role('heading', name='追加のアプリ を削除しますか？', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='削除する', exact=True).click()
     expect(dialog).not_to_be_visible()
     assert context.request.get(args.base + '/v1/resources/' + deleting['id']).status == 404
-    review('services-desktop')
-    print('不要になった未接続サービスの登録を削除する。')
+    review('services-mobile')
     assert not errors, errors
     browser.close()
+    print('サービスの登録・検索・OAuth設定・競合・削除と、固定トークンの保存・利用を確認しました。')

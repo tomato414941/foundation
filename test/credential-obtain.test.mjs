@@ -36,7 +36,6 @@ test('カタログのサービスごとに設定を読み込み、Foundation側�
   assert.equal(scheme('github').foundation_app, false);
   assert.equal(scheme('openrouter').can_revoke, false);
   assert.deepEqual(scheme('github').variables, ['GH_TOKEN', 'GITHUB_TOKEN']);
-  assert.deepEqual(scheme('github', 'token').variables, ['GH_TOKEN', 'GITHUB_TOKEN']);
   assert.doesNotMatch(JSON.stringify(catalog), /test-secret|test-id/);
 });
 
@@ -120,11 +119,11 @@ test('各サービスの暗号化状態・接続ID・保存名を再起動後も
     callback.searchParams.set('code', code);
     const completed = await first.request(callback.pathname + callback.search);
     assert.match(completed.headers.get('location'), /result=connected/);
-    const row = first.app.credentials.forServices(USER_A).find(item => item.service === service);
+    const row = first.app.credentials.list(USER_A).find(item => item.service === service);
     identities.push({ id: row.id, subject: row.subject, generation: row.generation, service, output });
   }
   const agent = await first.issueKey();
-  await first.request('/v1/resources?kind=credential&name=a%2Faa%2Faaa', { method: 'PUT', raw: 'independent-snapshot' });
+  await first.request('/v1/resources?kind=secret&name=a%2Faa%2Faaa', { method: 'PUT', raw: 'independent-snapshot' });
   await first.close();
   const second = await fixture(t, { database, services: makeServices() });
   for (const identity of identities) {
@@ -138,5 +137,5 @@ test('各サービスの暗号化状態・接続ID・保存名を再起動後も
     assert.ok(state.private_state.access_token);
     assert.doesNotMatch(JSON.stringify(delivered.json), /refresh_token|private_state/, 'what renews the credential never leaves');
   }
-  assert.equal((await second.read('credential', 'a/aa/aaa')).text, 'independent-snapshot');
+  assert.equal((await second.read('secret', 'a/aa/aaa')).text, 'independent-snapshot');
 });

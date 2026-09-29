@@ -32,26 +32,6 @@
         "GITLAB_ACCESS_TOKEN": "{access_token}",
         "GITLAB_TOKEN_EXPIRES_AT": "{expires_at}"
       }
-    },
-    "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "Personal access token",
-          "secret": true
-        }
-      ],
-      "identity": {
-        "url": "https://gitlab.com/api/v4/user",
-        "headers": {
-          "authorization": "Bearer {token}"
-        },
-        "id": "id",
-        "label": "username"
-      },
-      "injection": {
-        "GITLAB_TOKEN": "{token}"
-      }
     }
   }
 }

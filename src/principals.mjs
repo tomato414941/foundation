@@ -86,8 +86,8 @@ export class Principals {
   }
   // What others hold and show to this principal, with the line it is shown along.
   shownTo(id) {
-    return this.db.prepare(`SELECT x.id, x.holder_id, x.kind, x.name, COALESCE(o.size, c.size) AS size, o.type, x.updated_at, l.relation FROM relations l JOIN resources x ON x.id=l.object_id
-      LEFT JOIN objects o ON o.resource_id=x.id LEFT JOIN credentials c ON c.resource_id=x.id
+    return this.db.prepare(`SELECT x.id, x.holder_id, x.kind, x.name, COALESCE(o.size, s.size) AS size, o.type, x.updated_at, l.relation FROM relations l JOIN resources x ON x.id=l.object_id
+      LEFT JOIN objects o ON o.resource_id=x.id LEFT JOIN secrets s ON s.resource_id=x.id
       WHERE l.subject_id=? AND l.object_type='resource' ORDER BY l.created_at`).all(id);
   }
   ownersOf(id) { return this.db.prepare("SELECT subject_id AS id FROM relations WHERE relation='owner' AND object_type='principal' AND object_id=?").all(id).map(row => row.id); }

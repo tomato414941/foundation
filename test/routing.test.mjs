@@ -54,14 +54,14 @@ test('認証情報と接続の画面をそれぞれのURLから開く', async t 
 
 test('ログイン済みの初回HTMLで行き先の見出しとメニューを表示し、データは認証済みAPIから取得する', async t => {
   const f = await fixture(t);
-  await f.request('/v1/resources?kind=credential&name=private-test-name', { method: 'PUT', raw: 'private-test-value' });
+  await f.request('/v1/resources?kind=secret&name=private-test-name', { method: 'PUT', raw: 'private-test-value' });
   const page = await f.request('/secrets');
   assert.match(page.text, /<h1>シークレット<\/h1>/);
   assert.match(page.text, /href="\/secrets" aria-current="page"/);
   assert.match(page.text, /role="status" aria-label="読み込み中"/);
   assert.equal(page.headers.get('cache-control'), 'private, no-store');
   for (const privateValue of ['private-test-name', 'private-test-value', 'owner@example.test']) assert.ok(!page.text.includes(privateValue));
-  const records = await f.request('/v1/resources?kind=credential&secret=true');
+  const records = await f.request('/v1/resources?kind=secret');
   assert.equal(records.json.resources[0].name, 'private-test-name');
   const denied = await f.request('/v1/resources?kind=credential', { headers: { cookie: 'fdn_session=unverified' } });
   assert.equal(denied.status, 401);
@@ -93,9 +93,9 @@ test('同じURLでCookieとBearerを受け付け、Bearerがある場合はそ�
   const f = await fixture(t), first = await f.credential(), key = await f.issueKey();
   await f.login('second@example.test');
   await f.credential('work');
-  const browser = await f.request('/v1/resources?kind=credential&secret=false');
+  const browser = await f.request('/v1/resources?kind=credential');
   assert.equal(browser.json.resources[0].subject, 'work@example.test');
-  const agent = await f.request('/v1/resources?kind=credential&secret=false', { token: key.token });
+  const agent = await f.request('/v1/resources?kind=credential', { token: key.token });
   assert.deepEqual(agent.json.resources.map(item => item.id), [first.id]);
   const anonymous = await f.request('/v1/services', { anonymous: true });
   assert.deepEqual(anonymous.json.services.map(item => item.id), ['google']);
@@ -105,16 +105,16 @@ test('解釈できないAuthorizationが付いた要求をCookieで代用せず�
   const f = await fixture(t);
   await f.credential();
   for (const authorization of ['Basic invalid', 'Bearer', '', 'Bearer invalid token', 'Bearer not-an-approved-key']) {
-    const read = await f.request('/v1/resources?kind=credential&secret=false', { headers: { authorization } });
+    const read = await f.request('/v1/resources?kind=credential', { headers: { authorization } });
     assert.equal(read.status, 401, authorization || '(empty header)');
-    const write = await f.request('/v1/resources?kind=credential&name=must-not-write', { method: 'PUT', raw: 'untrusted', headers: { authorization } });
+    const write = await f.request('/v1/resources?kind=secret&name=must-not-write', { method: 'PUT', raw: 'untrusted', headers: { authorization } });
     assert.equal(write.status, 401, authorization || '(empty header)');
   }
-  assert.deepEqual((await f.request('/v1/resources?kind=credential&secret=true')).json.resources, []);
+  assert.deepEqual((await f.request('/v1/resources?kind=secret')).json.resources, []);
 });
 
 test('Cookieによる更新は同一Originに限定し、CLIのBearerではOriginなしで更新する', async t => {
-  const f = await fixture(t), key = await f.issueKey(), path = '/v1/resources?kind=credential&name=url-review&as=' + USER_A;
+  const f = await fixture(t), key = await f.issueKey(), path = '/v1/resources?kind=secret&name=url-review&as=' + USER_A;
   const request = async headers => {
     const response = await fetch(f.base + path, { method: 'PUT', headers: { 'content-type': 'application/octet-stream', ...headers }, body: 'fixture-value' });
     await response.arrayBuffer();
@@ -124,5 +124,5 @@ test('Cookieによる更新は同一Originに限定し、CLIのBearerではOrigi
   assert.equal(await request({ cookie: f.cookie(), origin: 'https://elsewhere.example' }), 403);
   assert.equal(await request({ authorization: 'Bearer ' + key.token, origin: 'https://elsewhere.example' }), 403);
   assert.equal(await request({ authorization: 'Bearer ' + key.token }), 200);
-  assert.equal((await f.read('credential', 'url-review')).text, 'fixture-value');
+  assert.equal((await f.read('secret', 'url-review')).text, 'fixture-value');
 });

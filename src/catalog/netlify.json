@@ -22,29 +22,6 @@
         "NETLIFY_ACCESS_TOKEN": "{access_token}",
         "NETLIFY_TOKEN_EXPIRES_AT": "{expires_at}"
       }
-    },
-    "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "Personal access token",
-          "secret": true
-        }
-      ],
-      "identity": {
-        "url": "https://api.netlify.com/api/v1/user",
-        "headers": {
-          "authorization": "Bearer {token}"
-        },
-        "id": "id",
-        "label": [
-          "email",
-          "full_name"
-        ]
-      },
-      "injection": {
-        "NETLIFY_AUTH_TOKEN": "{token}"
-      }
     }
   }
 }

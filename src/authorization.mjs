@@ -24,11 +24,11 @@ const RULES = {
     // Giving a machine this principal's identity: whoever may act as it. Bounding what it may compute: its owner.
     pass: [SELF, OWNER, ACTOR], limit: [OWNER], relate: [SELF, OWNER], settings: [SELF, OWNER],
   },
-  // A credential is read (what it is) by whoever acts for the holder; a secret's content only along a line. Using
-  // one - deriving what it yields for a command - is an injection. Registering an existing token is the same
-  // operation for any client. Connecting and disconnecting are the holder's, and whoever the holder gives them to.
-  credential: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], content: [SELF, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')],
-    remove: [SELF, ACTOR], rename: [SELF], share: [SELF], 'register-token': [SELF, ACTOR], connect: [SELF], disconnect: [SELF] },
+  // Private bytes may be used without disclosing them to the caller. Managed authorizations expose their facts,
+  // not their renewal state. Both can be delivered by an injection.
+  secret: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], content: [SELF, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')],
+    remove: [SELF, ACTOR], rename: [SELF], share: [SELF] },
+  credential: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], rename: [SELF], share: [SELF], connect: [SELF], disconnect: [SELF] },
   object: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')], remove: [SELF, ACTOR], rename: [SELF], link: [SELF, ACTOR], share: [SELF] },
   // An app is seen by whoever acts for its holder, used to connect by its holder and anyone on a line to it, and given
   // new values by its holder or an editor. Its secret is never read: there is no action for it.

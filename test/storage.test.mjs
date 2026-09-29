@@ -53,7 +53,7 @@ test('A new database is created in the current shape; a database of any other sh
   const dir = await directory(t), path = join(dir, 'state.sqlite');
   const created = new Store(path, KEY), live = modules(created);
   const connection = live.credentials.keep(USER_A, { service: 'google', scheme: 'oauth', subject: 'kept@example.test', label: 'kept', state: { private_state: { refresh_token: 'keep-private' }, facts: {}, expires_at: null } });
-  live.credentials.put(USER_A, { name: 'gmail/kept/access-token', content: Buffer.from('google-access') });
+  live.secrets.put(USER_A, { name: 'gmail/kept/access-token', content: Buffer.from('google-access') });
   live.principals.ensure(USER_A);
   const runtime = live.principals.create(USER_A, { name: 'runtime' });
   live.principals.relate(runtime.id, 'actor', 'principal', USER_A);
@@ -64,7 +64,7 @@ test('A new database is created in the current shape; a database of any other sh
   const reopened = new Store(path, KEY); t.after(() => reopened.close());
   const persisted = modules(reopened);
   assert.equal(persisted.credentials.state(persisted.credentials.held(USER_A, connection.id)).private_state.refresh_token, 'keep-private');
-  assert.deepEqual(persisted.credentials.list(USER_A, { secret: true }).map(row => row.name), ['gmail/kept/access-token']);
+  assert.deepEqual(persisted.secrets.list(USER_A).map(row => row.name), ['gmail/kept/access-token']);
   assert.equal(reopened.db.prepare('SELECT last_used_at FROM access_keys WHERE hash=?').get(digest(agent.token)).last_used_at, lastUsed);
   for (const shape of ['CREATE TABLE accounts(id TEXT); INSERT INTO accounts VALUES (\'existing\');', 'CREATE TABLE accounts(id TEXT); PRAGMA user_version=999;', 'PRAGMA user_version=1;', 'CREATE TABLE entries(id TEXT);']) {
     const other = join(dir, 'other-' + Math.random().toString(36).slice(2) + '.sqlite'), db = new DatabaseSync(other);

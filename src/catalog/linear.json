@@ -38,34 +38,6 @@
         "LINEAR_TOKEN_EXPIRES_AT": "{expires_at}"
       },
       "hint": "The access token is sent as \"Authorization: Bearer <token>\" to the GraphQL endpoint."
-    },
-    "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "Personal API key",
-          "secret": true
-        }
-      ],
-      "identity": {
-        "url": "https://api.linear.app/graphql",
-        "method": "POST",
-        "headers": {
-          "authorization": "{token}"
-        },
-        "json": {
-          "query": "{ viewer { id name email } }"
-        },
-        "id": "data.viewer.id",
-        "label": [
-          "data.viewer.email",
-          "data.viewer.name"
-        ]
-      },
-      "injection": {
-        "LINEAR_API_KEY": "{token}"
-      },
-      "hint": "Send LINEAR_API_KEY as the Authorization header itself, without \"Bearer\"."
     }
   }
 }

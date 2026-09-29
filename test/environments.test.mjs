@@ -25,7 +25,7 @@ test('環境は何の ID も持たずに開き、コマンドを動かしても 
 
 test('ID を付けた環境は、その principal として動き、渡した値は出力から伏せられ、閉じると鍵が失効する', async t => {
   const f = await lent(t), agent = await f.issueKey();
-  await f.request('/v1/resources?kind=credential&name=token', { method: 'PUT', raw: 'kept-secret-value', type: 'text/plain' });
+  await f.request('/v1/resources?kind=secret&name=token', { method: 'PUT', raw: 'kept-secret-value', type: 'text/plain' });
   const opened = await f.request('/v1/environments', { method: 'POST', token: agent.token, data: { identity: USER_A } });
   assert.equal(opened.status, 201, opened.text);
   const id = opened.json.environment.id;

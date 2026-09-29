@@ -29,27 +29,6 @@
         "HEROKU_TOKEN_EXPIRES_AT": "{expires_at}"
       },
       "hint": "Send \"Accept: application/vnd.heroku+json; version=3\" with every request."
-    },
-    "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "API key",
-          "secret": true
-        }
-      ],
-      "identity": {
-        "url": "https://api.heroku.com/account",
-        "headers": {
-          "authorization": "Bearer {token}",
-          "accept": "application/vnd.heroku+json; version=3"
-        },
-        "id": "id",
-        "label": "email"
-      },
-      "injection": {
-        "HEROKU_API_KEY": "{token}"
-      }
     }
   }
 }

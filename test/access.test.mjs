@@ -13,14 +13,14 @@ async function ask(f, agent, to, kind = 'store') {
 
 test('アクセス許可と個別の閲覧・編集権限を取り消し、相手と保存データを維持する', async t => {
   const f = await fixture(t), agent = await f.issueKey(), other = await f.issueKey('other');
-  const given = await f.keep('credential', 'private', 'owner-value');
-  const written = await f.keep('credential', 'written', 'actor-value', { token: agent.token });
+  const given = await f.keep('secret', 'private', 'owner-value');
+  const written = await f.keep('secret', 'written', 'actor-value', { token: agent.token });
   f.app.principals.relate(agent.id, 'viewer', 'resource', given.json.resource.id);
   f.app.principals.relate(other.id, 'viewer', 'resource', given.json.resource.id);
-  await f.keep('credential', 'own', 'own-value', { token: agent.token, as: agent.id });
+  await f.keep('secret', 'own', 'own-value', { token: agent.token, as: agent.id });
   const second = await f.request(`/v1/principals/${agent.id}/keys`, { method: 'POST', data: {} });
   assert.equal(second.status, 201);
-  assert.equal((await f.read('credential', 'private', { token: agent.token })).text, 'owner-value');
+  assert.equal((await f.read('secret', 'private', { token: agent.token })).text, 'owner-value');
   assert.equal((await revoke(f, agent.id)).status, 200);
   for (const token of [agent.token, second.json.token]) {
     const me = await f.request('/v1/principals/me', { token, as: agent.id });
@@ -34,11 +34,11 @@ test('アクセス許可と個別の閲覧・編集権限を取り消し、相�
     }
     const delivered = await f.request('/v1/injections', { method: 'POST', token, as: USER_A, data: { names: [{ name: 'private', as: 'VALUE' }] } });
     assert.equal(delivered.status, 403);
-    assert.equal((await f.read('credential', 'own', { token, as: agent.id })).text, 'own-value');
+    assert.equal((await f.read('secret', 'own', { token, as: agent.id })).text, 'own-value');
   }
-  assert.equal((await f.read('credential', 'private')).text, 'owner-value');
-  assert.equal((await f.read('credential', 'written')).text, 'actor-value');
-  assert.equal((await f.read('credential', 'private', { token: other.token })).text, 'owner-value');
+  assert.equal((await f.read('secret', 'private')).text, 'owner-value');
+  assert.equal((await f.read('secret', 'written')).text, 'actor-value');
+  assert.equal((await f.read('secret', 'private', { token: other.token })).text, 'owner-value');
   assert.equal((await revoke(f, agent.id)).status, 200, '取り消しを再送しても完了する');
 });
 
@@ -52,14 +52,14 @@ test('自分宛ての未完了依頼を取り消し、他のアカウントの�
   const approval = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { kind: 'actor', input: { name: 'laptop' }, to: USER_B } });
   assert.equal(approval.status, 201);
   assert.equal((await f.request(`/v1/requests/${approval.json.request.id}/done`, { method: 'POST', data: { confirmation_code: approval.json.request.confirmation_code } })).status, 200);
-  const privateB = await f.keep('credential', 'private-b', 'other-value');
+  const privateB = await f.keep('secret', 'private-b', 'other-value');
   f.app.principals.relate(agent.id, 'viewer', 'resource', privateB.json.resource.id);
   const pendingB = await ask(f, agent, USER_B);
   await f.login();
   assert.equal((await revoke(f, agent.id)).status, 200);
   const me = (await f.request('/v1/principals/me', { token: agent.token })).json;
   assert.deepEqual(me.acts_for, [USER_B]);
-  assert.equal((await f.read('credential', 'private-b', { token: agent.token, as: USER_B })).text, 'other-value');
+  assert.equal((await f.read('secret', 'private-b', { token: agent.token, as: USER_B })).text, 'other-value');
   for (const request of [nextA, connectA]) {
     const current = (await f.request('/v1/requests/' + request.id, { token: agent.token })).json.request;
     assert.equal(current.status, 'cancelled'); assert.equal(current.reason, 'access_revoked');
@@ -89,7 +89,7 @@ test('取り消した相手を同じキーで再承認し、以後に追加し�
   const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { kind: 'actor', input: { name: 'laptop' }, purpose: '作業の再開' } });
   assert.equal(asked.status, 201);
   assert.equal((await f.request('/v1/requests/' + asked.json.request.id + '/done', { method: 'POST', data: { confirmation_code: asked.json.request.confirmation_code } })).status, 200);
-  await f.keep('credential', 'later', 'later-value');
+  await f.keep('secret', 'later', 'later-value');
   const delivered = await f.request('/v1/injections', { method: 'POST', token: agent.token, data: { names: [{ name: 'later', as: 'VALUE' }] } });
   assert.equal(delivered.status, 200); assert.equal(delivered.json.injection.environment.VALUE, 'later-value');
 });
@@ -143,11 +143,11 @@ test('認証情報の更新中にアクセスを取り消すと受け渡しを�
 
 test('アップロード中にアクセスを取り消すと保存を拒否し、元の値を維持する', async t => {
   const f = await fixture(t), agent = await f.issueKey();
-  await f.keep('credential', 'value', 'original');
+  await f.keep('secret', 'value', 'original');
   const started = new Promise(resolve => f.app.server.once('request', req => req.once('readable', resolve)));
   let upload;
   const completed = new Promise((resolve, reject) => {
-    upload = httpRequest(f.base + '/v1/resources?kind=credential&name=value&as=' + USER_A, { method: 'PUT', headers: { 'content-type': 'text/plain', authorization: 'Bearer ' + agent.token } }, res => {
+    upload = httpRequest(f.base + '/v1/resources?kind=secret&name=value&as=' + USER_A, { method: 'PUT', headers: { 'content-type': 'text/plain', authorization: 'Bearer ' + agent.token } }, res => {
       const chunks = []; res.on('data', chunk => chunks.push(chunk));
       res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString() })); res.on('error', reject);
     });
@@ -158,7 +158,7 @@ test('アップロード中にアクセスを取り消すと保存を拒否し�
   assert.equal((await revoke(f, agent.id)).status, 200);
   upload.end('value');
   assert.equal((await completed).status, 401);
-  assert.equal((await f.read('credential', 'value')).text, 'original');
+  assert.equal((await f.read('secret', 'value')).text, 'original');
 });
 
 test('接続認証の完了前にアクセスを取り消すと、取消済みの依頼として完了を拒否する', async t => {
@@ -176,5 +176,5 @@ test('接続認証の完了前にアクセスを取り消すと、取消済み�
   const callback = await returning;
   assert.match(callback.headers.get('location'), /result=failed/);
   assert.equal((await f.request('/v1/requests/' + asked.id)).json.request.status, 'cancelled');
-  assert.deepEqual((await f.request('/v1/resources?kind=credential&secret=false')).json.resources, []);
+  assert.deepEqual((await f.request('/v1/resources?kind=credential')).json.resources, []);
 });

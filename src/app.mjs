@@ -17,7 +17,9 @@ import { AuditLog } from './audit-log.mjs';
 import { scopeList, requestedScopes } from './scopes.mjs';
 import { appReference } from './request-input.mjs';
 import { Apps, FOUNDATION_APP, takesApps } from './apps.mjs';
-import { Credentials, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX, isSecret } from './credentials.mjs';
+import { Credentials } from './credentials.mjs';
+import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX } from './secrets.mjs';
+import { Inputs } from './inputs.mjs';
 import { Services } from './services.mjs';
 import { Objects, OBJECT_MAX } from './objects.mjs';
 import { Environments } from './environments.mjs';
@@ -124,13 +126,14 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   const authorization = new Authorization(principals);
   const services = new Services(store, resources, catalog, { authorization, ...(serviceFetcher ? { fetcher: serviceFetcher } : {}) });
   const apps = new Apps(store, resources, services), credentials = new Credentials(store, resources, services, apps);
+  const secrets = new Secrets(store, resources), inputs = new Inputs(secrets, credentials);
   const objects = new Objects(spaceBackend, resources, store);
   const requests = new Requests(store), settings = new Settings(store, principals), auditLog = new AuditLog(store);
   const environments = new Environments({ store, resources, principals, runner, limits: compute });
-  const functions = new Functions({ credentials, outbound });
+  const functions = new Functions({ secrets, inputs, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
   const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, credentials, apps }, row, origin, options);
-  const requestActions = new RequestActions({ store, requests, credentials, services, apps, principals, authorization, auditLog,
+  const requestActions = new RequestActions({ store, requests, secrets, credentials, services, apps, principals, authorization, auditLog,
     changed: row => { if (row.to_id) void settings.notify(row.to_id, 'request.' + row.status, { request: viewRequest(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() }); } });
   const logins = new EmailLogins({ now: loginClock });
   const refreshing = new Map(), limits = new Map(), disconnects = new Set();
@@ -457,7 +460,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           const definition = requestDefinition(input);
           const toId = definition.kind === 'actor' ? (input.to === undefined ? null : principalId(input.to)) : input.to === undefined ? holderId : principalId(input.to);
           if (toId !== null && !principals.get(toId)) fail(404, 'not_found', '相手が見つかりません。');
-          if (definition.kind !== 'actor') permit('list', 'credential', undefined, toId);
+          if (definition.kind !== 'actor') permit('list', definition.kind === 'store' ? 'secret' : 'credential', undefined, toId);
           const row = requestActions.ask(subject.id, { ...definition, toId, purpose: purposeValue(input.purpose), steps: input.steps ?? [], validMinutes: input.valid_minutes ?? 30 });
           return send(201, { request: viewRequest(row, origin, { code: definition.kind === 'actor' }) });
         }
@@ -710,12 +713,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       // how the holder calls one: a way to find or place a thing, not its identity. A credential says what it is
       // and where it works; an object says its size and type; neither says anything of its content here.
       const shown = row => row.kind === 'credential' ? credentials.view(credentials.get(row.id), { owner: subject.id === row.holder_id })
+        : row.kind === 'secret' ? secrets.view(secrets.get(row.id))
         : row.kind === 'app' ? apps.view(apps.get(row.id), { owner: subject.id === row.holder_id })
         : row.kind === 'service' ? services.view(services.row(row.id), { owner: subject.id === row.holder_id })
         : row.kind === 'environment' ? environments.view(environments.get(row.id)) : objects.view(objects.get(row.id));
       const resourceKind = required => {
         const kind = url.searchParams.get('kind') ?? undefined;
-        if ((required && kind === undefined) || (kind !== undefined && !KINDS.includes(kind))) fail(400, 'invalid_kind', 'kind は credential / object / app / service / environment のいずれかです。');
+        if ((required && kind === undefined) || (kind !== undefined && !KINDS.includes(kind))) fail(400, 'invalid_kind', 'kind は secret / credential / object / app / service / environment のいずれかです。');
         return kind;
       };
       if (path === '/v1/resources' && method === 'GET') {
@@ -724,17 +728,16 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         const kinds = kind ? [kind] : KINDS;
         for (const one of kinds) permit('list', one);
         if (name !== undefined) {
-          const found = (kinds.includes('credential') && credentials.find(holderId, name)) || (kinds.includes('object') && objects.enabled && objects.find(holderId, name))
+          const found = (kinds.includes('secret') && secrets.find(holderId, name)) || (kinds.includes('object') && objects.enabled && objects.find(holderId, name))
             || (kinds.includes('service') && services.find(holderId, name)) || (kinds.includes('app') && apps.find(holderId, name));
           if (!found) fail(404, 'not_found', '見つかりません。');
           return send(200, { resource: shown(found) });
         }
         const rows = [];
+        if (kinds.includes('secret')) rows.push(...secrets.list(holderId, { prefix }));
         if (kinds.includes('credential')) {
-          // service: one service's credentials; secret=true: only secrets, secret=false: only those for a service.
-          const service = url.searchParams.get('service') ?? undefined, secret = url.searchParams.get('secret');
-          if (secret !== null && !['true', 'false'].includes(secret)) fail(400, 'invalid_secret', 'secret は true か false です。');
-          rows.push(...credentials.list(holderId, { service, secret: secret === null ? undefined : secret === 'true', prefix }).filter(row => subject.id === holderId || row.status !== 'disconnecting'));
+          const service = url.searchParams.get('service') ?? undefined;
+          rows.push(...credentials.list(holderId, { service, prefix }).filter(row => subject.id === holderId || row.status !== 'disconnecting'));
         }
         if (kinds.includes('object')) { if (kind === 'object') objects.check(); if (objects.enabled) { limit('objects', 60); rows.push(...objects.list(holderId, prefix ?? '')); } }
         if (kinds.includes('app')) rows.push(...apps.list(holderId), ...apps.lent(holderId));
@@ -744,8 +747,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         return send(200, { resources: [...rows.map(shown), ...(kind === 'app' ? apps.offeredAll() : [])] });
       }
       // Placing a thing by name: the holder's name for it. The same name, same kind, replaces what is there. A
-      // credential placed this way is a secret: the holder hands the bytes over. Credentials for a service are made
-      // at /v1/credentials.
+      // secret placed this way is the holder's bytes. Managed authorizations are made at /v1/credentials.
       if (path === '/v1/resources' && method === 'PUT') {
         const kind = resourceKind(true), name = url.searchParams.get('name');
         if (name === null) fail(400, 'invalid_name', '名前を指定してください。');
@@ -774,19 +776,20 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           auditLog.write(subject.id, existing ? 'service.changed' : 'service.created', 'resource', saved.id, {});
           return send(200, { resource: shown(saved) });
         }
-        const existing = kind === 'credential' ? credentials.find(holderId, name) : (objects.check(), objects.find(holderId, name));
+        if (!['secret', 'object'].includes(kind)) fail(405, 'method_not_allowed', 'この操作は利用できません。');
+        const existing = kind === 'secret' ? secrets.find(holderId, name) : (objects.check(), objects.find(holderId, name));
         permit('write', kind, existing?.id);
-        limit(kind === 'credential' ? 'secrets' : 'objects', kind === 'credential' ? 120 : 60);
-        const content = await inputBytes(kind === 'credential' ? SECRET_MAX : OBJECT_MAX);
-        if (kind === 'credential' && !content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
+        limit(kind === 'secret' ? 'secrets' : 'objects', kind === 'secret' ? 120 : 60);
+        const content = await inputBytes(kind === 'secret' ? SECRET_MAX : OBJECT_MAX);
+        if (kind === 'secret' && !content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
         // A thing made for the holder by someone else is one its maker may read and write: a line says so.
         const line = saved => { if (!existing && subject.id !== holderId) principals.relate(subject.id, 'editor', 'resource', saved.id); };
-        if (kind === 'credential') {
+        if (kind === 'secret') {
           const saved = store.transaction(() => {
             const match = req.headers['if-match'];
-            const current = match === undefined ? null : credentials.find(holderId, name);
+            const current = match === undefined ? null : secrets.find(holderId, name);
             if (match !== undefined && (!current || match !== secretTag(current))) fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
-            const saved = credentials.put(holderId, { name, content });
+            const saved = secrets.put(holderId, { name, content });
             line(saved);
             res.setHeader('etag', secretTag(saved));
             return saved;
@@ -801,7 +804,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       const resourceRoute = path.match(/^\/v1\/resources\/([a-f0-9-]{36})(\/content|\/link)?$/);
       if (resourceRoute) {
         const held = resources.at(resourceRoute[1]), part = resourceRoute[2];
-        const credential = held.kind === 'credential' ? credentials.get(held.id) : null, secret = credential ? isSecret(credential) : false;
+        const credential = held.kind === 'credential' ? credentials.get(held.id) : null, secret = held.kind === 'secret' ? secrets.get(held.id) : null;
         // An app: renamed by its holder; given new values by its holder or an editor; removed by its holder, which
         // stops the credentials made through it. Its secret is never read back, by anyone.
         if (held.kind === 'app') {
@@ -874,11 +877,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           const input = await inputBody();
           permit('rename', held.kind, held.id, held.holder_id);
           if (held.kind === 'object') return send(200, { resource: shown(objects.rename(objects.get(held.id), input.name)) });
+          if (secret) return send(200, { resource: shown(secrets.rename(secret, input.name)) });
           return send(200, { resource: shown(credentials.rename(credential, input.name)) });
         }
         // Removing a credential for a service disconnects it: Foundation stops obtaining from it and, when asked,
         // asks the service to revoke it. Removing always succeeds; the revocation's outcome is reported.
-        if (!part && method === 'DELETE' && credential && !secret) {
+        if (!part && method === 'DELETE' && credential) {
           permit('disconnect', 'credential', held.id, held.holder_id);
           const input = await inputBody();
           if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', 'サービス側の許可を取り消すか選んでください。');
@@ -901,18 +905,18 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         if (!part && method === 'DELETE') {
           permit('remove', held.kind, held.id, held.holder_id);
           await inputBody();
-          if (held.kind === 'credential') credentials.remove(held); else { await objects.remove(objects.get(held.id)); still(); }
+          if (secret) secrets.remove(secret); else { await objects.remove(objects.get(held.id)); still(); }
           return send(200, { ok: true });
         }
         // The content of a thing: an object's bytes, or a secret's. A credential for a service has nothing to read;
         // what it yields is derived when it is injected.
         if (part === '/content' && method === 'GET') {
-          if (credential && !secret) fail(405, 'method_not_allowed', 'この接続に読める中身はありません。使うには /v1/injections を使います。');
-          permit(held.kind === 'credential' ? 'content' : 'read', held.kind, held.id, held.holder_id);
+          if (credential) fail(405, 'method_not_allowed', 'この接続に読める中身はありません。使うには /v1/injections を使います。');
+          permit(secret ? 'content' : 'read', held.kind, held.id, held.holder_id);
           const disposition = `attachment; filename="resource.bin"; filename*=UTF-8''${encodeURIComponent(held.name.split('/').pop()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}`;
           if (secret) {
-            const content = credentials.content(credential);
-            res.setHeader('etag', secretTag(credential));
+            const content = secrets.content(secret);
+            res.setHeader('etag', secretTag(secret));
             res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length, 'content-disposition': disposition });
             return res.end(content);
           }
@@ -922,16 +926,17 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           return res.end(found.content);
         }
         if (part === '/content' && method === 'PUT') {
-          if (credential && !secret) fail(405, 'method_not_allowed', 'この接続の中身は書き換えられません。');
+          if (credential) fail(405, 'method_not_allowed', 'この接続の中身は書き換えられません。');
           permit('write', held.kind, held.id, held.holder_id);
           if (secret) {
             limit('secrets', 120);
             const content = await inputBytes(SECRET_MAX);
             if (!content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
             const saved = store.transaction(() => {
-              const match = req.headers['if-match'], current = credentials.get(held.id);
+              const match = req.headers['if-match'], current = secrets.get(held.id);
+              if (!current) fail(404, 'not_found', '見つかりません。');
               if (match !== undefined && match !== secretTag(current)) fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
-              const saved = credentials.write(current, content);
+              const saved = secrets.write(current, content);
               res.setHeader('etag', secretTag(saved));
               return saved;
             });
@@ -958,7 +963,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       // The holder's screen, in one answer.
       if (path === '/v1/overview' && method === 'GET') {
         permit('read', 'overview');
-        return send(200, { user: { id: subject.id, email: user?.email ?? null }, principal: self, credentials: credentials.list(holderId).map(row => credentials.view(row, { owner: true })),
+        return send(200, { user: { id: subject.id, email: user?.email ?? null }, principal: self, secrets: secrets.list(holderId).map(row => secrets.view(row)), credentials: credentials.list(holderId).map(row => credentials.view(row, { owner: true })),
           apps: [...apps.list(holderId).map(row => apps.view(row, { owner: true })), ...apps.lent(holderId).map(row => apps.view(row)), ...apps.offeredAll()],
           services: [...services.list(holderId).map(row => services.view(row, { owner: true })), ...services.lent(holderId).map(row => services.view(row))],
           catalog: services.catalogView(), principals: principals.owned(holderId), actors: principals.actorsOf(holderId),
@@ -970,8 +975,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         permit('read', 'export');
         // A secret goes out with its bytes; a credential for a service with what is known of it, since what renews
         // it is Foundation's to keep and would be of no use elsewhere. A described service goes out as its definition.
-        const kept = credentials.list(holderId).map(row => ({ ...credentials.view(row, { owner: true }), ...(isSecret(row) ? { content: credentials.content(row).toString('base64'), encoding: 'base64' } : {}) }));
-        const value = { exported_at: new Date().toISOString(), owner: user?.email ?? null, origin, credentials: kept,
+        const kept = secrets.list(holderId).map(row => ({ ...secrets.view(row), content: secrets.content(row).toString('base64'), encoding: 'base64' }));
+        const value = { exported_at: new Date().toISOString(), owner: user?.email ?? null, origin, secrets: kept, credentials: credentials.list(holderId).map(row => credentials.view(row, { owner: true })),
           services: services.list(holderId).map(row => ({ id: row.id, name: row.name, definition: JSON.parse(row.definition) })), principals: principals.owned(holderId) };
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
           'content-disposition': `attachment; filename="foundation-${new Date().toISOString().slice(0, 10)}.json"` });
@@ -999,11 +1004,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         return send(200, { credential: credentials.view(saved, { owner: true }) });
       }
       if (path === '/v1/credentials' && method === 'POST') {
-        permit('list', 'credential');
+        permit('connect', 'credential');
         const input = await inputBody();
         limit('connect', 10);
-        // Answering someone's request remains the holder's decision, even when it asks for a token.
-        if (input.request_id !== undefined) permit('connect', 'credential');
         const request = input.request_id === undefined ? null : requests.forTo(input.request_id, holderId, true);
         progressRequestId = request?.id || null;
         const asked = request ? requests.input(request) : null;
@@ -1013,35 +1016,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         const { ref, definition } = services.get(asked ? asked.service : input.service, holderId);
         const schemeId = asked ? asked.auth_scheme : input.auth_scheme ?? Object.keys(definition.auth_schemes)[0];
         if (request && input.service !== undefined && input.service !== ref) fail(400, 'scope_mismatch', '依頼されたサービスで接続してください。');
-        if (!request) permit(schemeId === 'token' ? 'register-token' : 'connect', 'credential');
         const scheme = services.scheme(ref, schemeId);
         if (request) requests.record(request.id, 'connect_started', { service: ref });
         // Who asked for it, as they were called then. One started from the page was asked by no one.
         const requestedBy = request ? principals.get(request.from_id)?.name ?? '' : subject.id === holderId ? '' : self.name;
         const target = asked ? asked.credential_id : input.credential_id;
         if (request && input.credential_id !== undefined && input.credential_id !== target) fail(409, 'credential_changed', '依頼された接続を選んでください。');
-        // A secret the holder kept may become the token of a service: it keeps its id and name.
-        const adopting = !request && schemeId === 'token' && target !== undefined && isSecret(credentials.held(holderId, target) ?? { service: '' });
-        const previous = target === undefined ? undefined : adopting ? credentials.held(holderId, target) : credentials.reconnection(holderId, ref, schemeId, target);
-        if (schemeId === 'token') {
-          const fields = input.fields && typeof input.fields === 'object' && !Array.isArray(input.fields) ? { ...input.fields } : {};
-          // Adopting: the secret's bytes fill the scheme's one sealed field.
-          if (adopting) {
-            const sealed = scheme.fields.filter(field => field.secret);
-            if (sealed.length !== 1) fail(400, 'invalid_fields', 'このサービスのトークンには、預けた値をそのまま使えません。');
-            fields[sealed[0].name] = credentials.content(previous).toString('utf8');
-          }
-          const result = await scheme.authorization.complete({ fields }, adopting ? undefined : credentials.context(previous));
-          // A remote check can outlive this key, session, permission, or service definition. No client may commit
-          // a result checked under a different authorization or against a different service.
-          still();
-          if (req.aborted || req.socket.destroyed) fail(409, 'request_interrupted', '接続が中断されました。もう一度お試しください。');
-          if (JSON.stringify(services.get(ref, holderId).definition) !== JSON.stringify(definition)) {
-            fail(409, 'service_changed', 'サービスの設定が変わりました。もう一度お試しください。');
-          }
-          const saved = requestActions.connect(request?.id, holderId, ref, schemeId, result, { requestedBy, previous });
-          return send(200, { credential: credentials.view(saved, { owner: subject.id === holderId }) });
-        }
+        const previous = target === undefined ? undefined : credentials.reconnection(holderId, ref, schemeId, target);
         if (!session) fail(401, 'login_required', 'ログインしてください。');
         const previousState = previous ? credentials.state(previous) : null;
         const scopes = requestedScopes(scheme, asked ? asked.scopes ?? [] : scopeList(input.scopes), previousState);
@@ -1087,7 +1068,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       // What this holder is using, and what they may use. Lending has a cost, so both sides can see it.
       if (path === '/v1/usage' && method === 'GET') {
         permit('read', 'usage');
-        const kept = credentials.usage(holderId);
+        const kept = secrets.usage(holderId);
         const space = objects.enabled ? await objects.usage(holderId) : null;
         still();
         return send(200, { secrets: { ...kept, count_max: SECRET_COUNT_MAX, bytes_max: SECRET_TOTAL_MAX },
@@ -1100,7 +1081,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         const input = await inputBody();
         limit('issue', 30);
         const names = Array.isArray(input.names) ? input.names : [];
-        const { injection, expires_at } = await credentials.inject(holderId, names);
+        const { injection, expires_at } = await inputs.inject(holderId, names);
         still();
         // Handed into a lent machine: what it prints is cleaned of these.
         if (subject.via.environment) environments.reveal(subject.via.environment, [...Object.values(injection.environment), ...injection.files.map(file => Buffer.from(file.content, 'base64').toString('utf8'))]);
@@ -1126,12 +1107,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           serverInfo: { name: 'foundation', version: VERSION },
           guide: () => guide(services.catalogView()),
           // The tool names whom the caller acts for when it is exactly one and the call did not say.
-          call: async ({ method: verb, path: target, body: payload }) => {
+          call: async ({ method: verb, path: target, body: payload, body_encoding }) => {
             const named = actsFor.length === 1 && !/[?&]as=/.test(target) ? target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(actsFor[0]) : target;
             const response = await fetch(`http://127.0.0.1:${port}${named}`, {
               method: verb, redirect: 'error', signal: AbortSignal.timeout(20_000),
-              headers: { authorization, ...(payload === undefined ? {} : { 'content-type': 'application/json' }) },
-              ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+              headers: { authorization, ...(payload === undefined ? {} : { 'content-type': body_encoding === 'json' ? 'application/json' : 'application/octet-stream' }) },
+              ...(payload === undefined ? {} : { body: body_encoding === 'base64' ? Buffer.from(payload, 'base64') : body_encoding === 'text' ? payload : JSON.stringify(payload) }),
             });
             return { ok: response.ok, text: await response.text() };
           },
@@ -1151,7 +1132,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   return {
-    server, store, resources, services, credentials, apps, objects, environments, principals, sessions, flows, requests, requestActions, settings, auditLog,
+    server, store, resources, services, secrets, credentials, inputs, apps, objects, environments, principals, sessions, flows, requests, requestActions, settings, auditLog,
     async close() {
       clearInterval(timer);
       if (server.listening) await new Promise((resolve) => { server.close(resolve); server.closeIdleConnections(); });

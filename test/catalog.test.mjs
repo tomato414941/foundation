@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFINITIONS, builtins, schemesOf } from '../src/catalog.mjs';
+import { DEFINITIONS, builtins } from '../src/catalog.mjs';
 import { oauthScheme, oauthClient } from '../src/schemes/oauth.mjs';
-import { tokenScheme } from '../src/schemes/token.mjs';
 import { checkDefinition } from '../src/service-definition.mjs';
 import { fixture } from './helpers.mjs';
 
@@ -74,39 +73,6 @@ for (const definition of DEFINITIONS.filter(item => item.auth_schemes.oauth && !
   });
 }
 
-for (const definition of DEFINITIONS.filter(item => item.auth_schemes.token)) {
-  const spec = definition.auth_schemes.token;
-  test(`${definition.name}: 利用者が作ったトークンを定義どおりに確かめて預かり、定義どおりの変数で渡す`, async t => {
-    const calls = [];
-    const fetcher = async (url, options = {}) => { calls.push({ url, options }); return reply(200, who(spec.identity, spec.identity?.ok_field ? { [spec.identity.ok_field]: true } : {})); };
-    const f = await fixture(t, { services: [{ definition, schemes: { token: tokenScheme(definition, { fetcher }) } }] });
-    const fields = Object.fromEntries(spec.fields.map(field => [field.name, SAMPLE[field.name] ?? 'value']));
-    const made = await f.request('/v1/credentials', { method: 'POST', data: { service: definition.id, auth_scheme: 'token', fields } });
-    assert.equal(made.status, 200, made.text);
-    if (spec.identity?.url) {
-      assert.equal(calls.length, 1);
-      assert.equal(calls[0].url, fill(spec.identity.url, fields));
-      for (const [name, template] of Object.entries(spec.identity.headers ?? {})) assert.equal(calls[0].options.headers[name], fill(template, fields));
-    }
-    assert.doesNotMatch(made.text, /token-value/, 'the token is never said back');
-    const injected = await f.inject(made.json.credential);
-    assert.equal(injected.status, 200, injected.text);
-    assert.deepEqual(Object.keys(injected.json.injection.environment).sort(), Object.keys(spec.injection).sort());
-    for (const [name, template] of Object.entries(spec.injection)) if (template === '{token}') assert.equal(injected.json.injection.environment[name], 'token-value');
-  });
-}
-
-test('トークンが拒まれたら預からず、入力の形が違えばどこが違うかを示す', async t => {
-  const definition = DEFINITIONS.find(item => item.id === 'github');
-  const fetcher = async () => reply(401, { message: 'Bad credentials' });
-  const f = await fixture(t, { services: [{ definition, schemes: { token: tokenScheme(definition, { fetcher }) } }] });
-  const refused = await f.request('/v1/credentials', { method: 'POST', data: { service: 'github', auth_scheme: 'token', fields: { token: 'bad' } } });
-  assert.equal(refused.json.error.code, 'token_refused');
-  const empty = await f.request('/v1/credentials', { method: 'POST', data: { service: 'github', auth_scheme: 'token', fields: {} } });
-  assert.equal(empty.json.error.code, 'invalid_fields');
-  assert.deepEqual((await f.request('/v1/overview')).json.credentials, []);
-});
-
 test('Foundationのアプリは設定があるサービスだけで使え、ストアやドメインごとのサービスでは使わない', () => {
   const env = { ...Object.fromEntries(DEFINITIONS.flatMap(definition => ['CLIENT_ID', 'CLIENT_SECRET'].map(part => ['FOUNDATION_' + definition.id.toUpperCase().replace(/-/g, '_') + '_' + part, 'value']))), FOUNDATION_EBAY_RUNAME: 'value' };
   const offered = Object.fromEntries(builtins(env).map(entry => [entry.definition.id, entry.schemes.oauth?.available]));
@@ -114,7 +80,6 @@ test('Foundationのアプリは設定があるサービスだけで使え、ス�
   assert.equal(offered.kintone, false);
   assert.equal(offered.shopify, false);
   assert.ok(builtins({}).filter(entry => !entry.definition.auth_schemes.oauth?.adapter).every(entry => entry.schemes.oauth?.available !== true));
-  assert.equal(schemesOf(DEFINITIONS.find(item => item.id === 'notion')).token.available, true);
 });
 
 test('利用者のサービスの定義は、運営の定義と同じ規則で確かめ、コードの名前は運営の定義にだけ許す', () => {

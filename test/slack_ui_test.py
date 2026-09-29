@@ -44,25 +44,8 @@ with sync_playwright() as p:
     dialog = page.get_by_role('dialog')
     connections = page.locator('[aria-label="サービス"]')
 
-    # Slack can be connected two ways; Foundation has no Slack app here, and the choice says so.
+    # Slackへの接続は、利用者のOAuthアプリを登録して始める。
     start_connect(page, 'Slack')
-    expect(dialog.get_by_text('先にOAuthアプリの登録が要ります。', exact=False)).to_be_visible()
-    review(page)
-    if shots:
-        page.screenshot(path=str(shots / 'slack-ways.png'), full_page=True)
-
-    # A bot token made at Slack: checked with Slack, then kept for the workspace it belongs to.
-    dialog.get_by_role('button', name='トークンを入力する').click()
-    expect(dialog.get_by_role('link', name='api.slack.com を開く ↗', exact=True)).to_be_visible()
-    dialog.get_by_label('Bot User OAuth Token', exact=True).fill('xoxb-work-1-0')
-    review(page)
-    dialog.get_by_role('button', name='預ける', exact=True).click()
-    expect(page.get_by_text('Slackに接続しました。', exact=True)).to_be_visible()
-    expect(connections.get_by_text('仕事のワークスペース', exact=True)).to_be_visible()
-    expect(connections.get_by_text('トークン', exact=True)).to_be_visible()
-
-    # Logging in instead starts with the owner's own Slack app, then goes on to Slack's consent screen.
-    start_connect(page, 'Slack', 'ログインして許可する')
     expect(dialog.get_by_role('heading', name='OAuthアプリを追加', exact=True)).to_be_visible()
     expect(dialog.get_by_label('サービス', exact=True)).to_have_value('slack')
     expect(dialog.get_by_text(args.base + '/oauth/callback', exact=True)).to_be_visible()
@@ -104,20 +87,18 @@ with sync_playwright() as p:
     dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(connections.get_by_text('個人のワークスペース', exact=True)).to_have_count(0)
-    expect(connections.get_by_text('仕事のワークスペース', exact=True)).to_be_visible()
     # An AI asks for a Slack token; the owner makes it at Slack and hands it over on the request's page.
     request = page.evaluate("""async () => {
       const key = await (await fetch('/v1/principals', {method: 'POST', headers: {'content-type': 'application/json'},
         body: JSON.stringify({name: 'UI test agent', actor: true, key: true})})).json();
       const owner = key.principal.acts_for[0];
       const made = await (await fetch('/v1/requests?as=' + owner, {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
-        body: JSON.stringify({kind: 'connect', input: {service: 'slack', auth_scheme: 'token'}, purpose: 'チャンネルに要約を投稿します。',
+        body: JSON.stringify({kind: 'store', input: {fields: [{name: 'slack-bot', label: 'Bot User OAuth Token', site: 'https://api.slack.com/apps'}]}, purpose: 'チャンネルに要約を投稿します。',
           steps: ['Slackでアプリを作り、Bot User OAuth Tokenを写します。']})})).json();
       return '/requests/' + made.request.id;
     }""")
     page.goto(args.base + request, wait_until='networkidle')
-    expect(page.get_by_role('heading', name='Slackに接続', exact=True)).to_be_visible()
-    expect(page.get_by_text('トークンを入力する', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='Bot User OAuth Tokenを登録する', exact=True)).to_be_visible()
     page.get_by_label('Bot User OAuth Token', exact=True).fill('xoxb-personal-2-0')
     for width in [1280, 390]:
         page.set_viewport_size({'width': width, 'height': 1000})
@@ -125,24 +106,18 @@ with sync_playwright() as p:
         if shots:
             page.screenshot(path=str(shots / f'slack-token-request-{width}.png'), full_page=True)
     page.set_viewport_size({'width': 1280, 'height': 1000})
-    page.get_by_role('button', name='預ける').click()
-    expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
-    expect(page.get_by_text('個人のワークスペース', exact=True)).to_be_visible()
+    page.get_by_role('button', name='登録する').click()
+    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
 
-    # A token kept by hand as a secret becomes Slack's, keeping its name, once Slack confirms it.
-    page.goto(args.base + '/secrets', wait_until='networkidle')
-    page.get_by_role('button', name='追加', exact=True).click()
-    dialog.get_by_label('名前', exact=True).fill('slack/old-bot')
-    dialog.get_by_label('値', exact=True).fill('xoxb-work-3-0')
-    dialog.get_by_role('button', name='追加', exact=True).click()
-    expect(dialog).not_to_be_visible()
-    page.locator('.secret-row').filter(has_text='slack/old-bot').get_by_role('button', name='サービスのトークンにする', exact=True).click()
-    dialog.get_by_label('サービスを探す', exact=True).fill('slack')
-    dialog.get_by_role('button', name='Slack', exact=True).click()
+    page.get_by_role('link', name='シークレット', exact=True).click()
+    expect(page.get_by_role('article', name='slack-bot', exact=True)).to_be_visible()
+    result = page.evaluate("""async () => {
+      const response = await fetch('/v1/injections', {method:'POST', headers:{'content-type':'application/json'},
+        body:JSON.stringify({names:[{name:'slack-bot',as:'SLACK_TOKEN'}]})});
+      return response.json();
+    }""")
+    assert result['injection']['environment']['SLACK_TOKEN'] == 'xoxb-personal-2-0'
     review(page)
-    dialog.get_by_role('button', name='確かめて移す', exact=True).click()
-    expect(page.get_by_text('slack/old-bot をSlackの接続にしました。', exact=True)).to_be_visible()
-    expect(page.get_by_text('シークレットはありません。', exact=True)).to_be_visible()
     assert not errors, errors
     browser.close()
-    print('Slack: トークンでの接続・自分のアプリを通した接続・取り消し付きの解除・依頼ページでのトークンの受け渡し・シークレットからの移行と、PC・スマートフォンの表示を確認しました。')
+    print('SlackのOAuth接続・解除と、固定トークンの保存依頼・受け渡しをPC・スマートフォンで確認しました。')

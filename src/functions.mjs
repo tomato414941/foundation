@@ -15,7 +15,7 @@ export const FUNCTIONS = [
 export class Functions {
   // Run in a holder's name. `still` is asked again after every wait: whether the caller's key is still good,
   // since an authorization may be withdrawn while a service answers.
-  constructor({ credentials, outbound = {} }) { this.credentials = credentials; this.outbound = outbound; }
+  constructor({ secrets, inputs, outbound = {} }) { Object.assign(this, { secrets, inputs, outbound }); }
   async request({ holderId, still = () => {} }, input, ownHosts) {
     still();
     const prepared = prepareFetch(input, ownHosts), bindings = input.bindings ?? {};
@@ -25,14 +25,14 @@ export class Functions {
     // Each bound credential yields one text: a secret its bytes, one for a service what its scheme derives now.
     const values = new Map();
     for (const [at, slot] of prepared.names.entries()) {
-      const content = await this.credentials.text(holderId, references[at]), text = content.toString('utf8');
+      const content = await this.inputs.text(holderId, references[at]), text = content.toString('utf8');
       if (!Buffer.from(text, 'utf8').equals(content)) fail(400, 'not_text', '指定された入力は文字列ではないため、リクエストには入れられません。');
       values.set(slot, text);
     }
     still();
     const response = await sendFetch(prepared, values, { ...this.outbound, ownHosts });
     still();
-    const saved = outputs ? saveOutputs(this.credentials, holderId, outputs,
+    const saved = outputs ? saveOutputs(this.secrets, holderId, outputs,
       new Map([['response', { content: Buffer.from(response.body, response.body_encoding === 'base64' ? 'base64' : 'utf8') }]])) : null;
     return saved ? { response: { status: response.status, headers: response.headers }, saved } : { response };
   }
@@ -54,10 +54,10 @@ export function outputNames(save, available) {
 }
 
 // The caller chooses the names. This writes exactly those outputs, atomically, as secrets.
-export function saveOutputs(credentials, ownerId, names, values) {
-  return credentials.store.transaction(() => names.map(({ output, name }) => {
+export function saveOutputs(secrets, ownerId, names, values) {
+  return secrets.store.transaction(() => names.map(({ output, name }) => {
     const value = values.get(output);
     if (!value) fail(502, 'service_response', '指定された出力が返されませんでした。');
-    return credentials.put(ownerId, { name, content: value.content });
+    return secrets.put(ownerId, { name, content: value.content });
   }));
 }

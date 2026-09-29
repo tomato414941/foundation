@@ -25,29 +25,6 @@
         "NOTION_TOKEN_EXPIRES_AT": "{expires_at}"
       },
       "hint": "NOTION_WORKSPACE_ID is the workspace ID. Every request also needs a \"Notion-Version\" header (for example 2022-06-28)."
-    },
-    "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "内部インテグレーションのシークレット",
-          "secret": true
-        }
-      ],
-      "identity": {
-        "url": "https://api.notion.com/v1/users/me",
-        "headers": {
-          "authorization": "Bearer {token}",
-          "notion-version": "2022-06-28"
-        },
-        "id": "id",
-        "label": "bot.workspace_name"
-      },
-      "subject_prefix": "bot:",
-      "injection": {
-        "NOTION_TOKEN": "{token}"
-      },
-      "hint": "Only pages shared with the integration in Notion can be read. Every request also needs a \"Notion-Version\" header."
     }
   }
 }

@@ -26,29 +26,6 @@
         "CALENDLY_ACCESS_TOKEN": "{access_token}",
         "CALENDLY_TOKEN_EXPIRES_AT": "{expires_at}"
       }
-    },
-    "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "Personal access token",
-          "secret": true
-        }
-      ],
-      "identity": {
-        "url": "https://api.calendly.com/users/me",
-        "headers": {
-          "authorization": "Bearer {token}"
-        },
-        "id": "resource.uri",
-        "label": [
-          "resource.email",
-          "resource.name"
-        ]
-      },
-      "injection": {
-        "CALENDLY_TOKEN": "{token}"
-      }
     }
   }
 }

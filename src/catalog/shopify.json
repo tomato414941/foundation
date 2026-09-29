@@ -36,31 +36,6 @@
         "SHOPIFY_TOKEN_EXPIRES_AT": "{expires_at}"
       },
       "hint": "The access token is sent in the \"X-Shopify-Access-Token\" header to https://<SHOPIFY_SHOP>.myshopify.com/admin/api/<version>/graphql.json. SHOPIFY_SHOP is the store name (<SHOPIFY_SHOP>.myshopify.com)."
-    },
-    "token": {
-      "fields": [
-        {
-          "name": "shop",
-          "label": "ストア名",
-          "placeholder": "example（example.myshopify.com の場合）",
-          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
-        },
-        {
-          "name": "token",
-          "label": "Admin APIのアクセストークン",
-          "secret": true
-        }
-      ],
-      "identity": {
-        "from": "fields",
-        "id": "shop"
-      },
-      "subject_prefix": "shop:",
-      "injection": {
-        "SHOPIFY_SHOP": "{shop}",
-        "SHOPIFY_ACCESS_TOKEN": "{token}"
-      },
-      "hint": "Send the token in the \"X-Shopify-Access-Token\" header to https://<SHOPIFY_SHOP>.myshopify.com/admin/api/<version>/graphql.json."
     }
   }
 }

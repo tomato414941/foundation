@@ -57,7 +57,7 @@ with sync_playwright() as p:
         field = page.get_by_label('サービスを探す', exact=True)
         field.fill('Slack')
         if width == 1280:
-            created = context.request.put(args.base + '/v1/resources?kind=credential&name=background-example',
+            created = context.request.put(args.base + '/v1/resources?kind=secret&name=background-example',
                                           data='fixture-only', headers={'Origin': args.base, 'content-type': 'text/plain'})
             assert created.ok, created.status
         assert pending, '最新情報の確認を進める'
@@ -138,7 +138,7 @@ with sync_playwright() as p:
     print('新しいタブでも通常のリンクとして接続画面を開く。')
 
     # ほかのクライアントで追加された情報を、移動時に取り込む。
-    created = context.request.put(args.base + '/v1/resources?kind=credential&name=navigation-example',
+    created = context.request.put(args.base + '/v1/resources?kind=secret&name=navigation-example',
                                   data='fixture-only', headers={'Origin': args.base, 'content-type': 'text/plain'})
     assert created.ok, created.status
     go('サービス')

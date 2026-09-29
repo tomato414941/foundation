@@ -7,7 +7,9 @@ import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
 import { Vault, digest } from '../src/crypto.mjs';
 import { Principals } from '../src/principals.mjs';
-import { KEY, USER_A } from './helpers.mjs';
+import { SCHEMA_VERSION, STEPS } from '../src/migrations.mjs';
+import { Authorization } from '../src/authorization.mjs';
+import { KEY, USER_A, modules } from './helpers.mjs';
 
 // The schema a running Foundation is on today, fixed here so the step is tested against what it will meet.
 const SCHEMA_30 = `
@@ -125,7 +127,7 @@ test('30版のデータベースを、関係も渡した権限も一つの関係
 
   const store = new Store(path, KEY);
   t.after(() => store.close());
-  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 31);
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   const lines = store.db.prepare('SELECT subject_id,relation,object_type,object_id,alias FROM relations ORDER BY relation').all().map(row => ({ ...row }));
   assert.deepEqual(lines.map(row => row.relation), ['actor', 'object.remove', 'owner', 'viewer']);
   assert.equal(lines.find(row => row.relation === 'owner').alias, 'laptop', 'the name an owner gave stays');
@@ -134,6 +136,97 @@ test('30版のデータベースを、関係も渡した権限も一つの関係
   assert.equal(store.db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1, 'references are checked again after the step');
   store.db.prepare(`DELETE FROM principals WHERE id='${ai}'`).run();
   assert.equal(store.db.prepare('SELECT count(*) n FROM relations WHERE subject_id=?').get(ai).n, 0, 'and still follow what they refer to');
+});
+
+async function previous(t) {
+  const directory = await mkdtemp(join(tmpdir(), 'foundation-migrate-secrets-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'state.sqlite'), db = new DatabaseSync(path), vault = new Vault(KEY);
+  db.exec(SCHEMA_30);
+  STEPS[31]({ db }); db.exec('PRAGMA user_version=31');
+  db.prepare('INSERT INTO metadata VALUES (?,?)').run('key_check', vault.seal(true, 'key_check'));
+  const stamp = '2026-01-01T00:00:00.000Z', reader = 'reader';
+  for (const id of [USER_A, reader]) db.prepare('INSERT INTO principals VALUES (?,?,?)').run(id, id, stamp);
+  const resource = (id, kind, name) => db.prepare('INSERT INTO resources VALUES (?,?,?,?,?,?)').run(id, USER_A, kind, name, stamp, stamp);
+  const keep = (id, name, scheme, value) => {
+    resource(id, 'credential', name);
+    const state = scheme ? vault.seal(value, 'credential:' + USER_A + ':' + id) : vault.sealBytes(value, 'credential:' + USER_A + ':' + id);
+    db.prepare('INSERT INTO credentials (resource_id,service,auth_scheme,subject,generation,size,state) VALUES (?,?,?,?,?,?,?)')
+      .run(id, scheme ? '12345678-1234-4234-8234-123456789012' : null, scheme, scheme ? 'account-one' : null, 7, scheme ? 0 : value.length, state);
+  };
+  const line = (relation, type, id) => db.prepare('INSERT INTO relations (subject_id,relation,object_type,object_id,created_at) VALUES (?,?,?,?,?)').run(reader, relation, type, id, stamp);
+  return { db, vault, path, reader, resource, keep, line };
+}
+
+test('31版のシークレットと固定トークンを値・ID・共有権限を保って移し、OAuthとロールの状態も保持する', async t => {
+  const old = await previous(t), bytes = Buffer.from([0, 255, 10, 1]), fields = { token: 'private-token', account_id: 'account-one' };
+  old.keep('plain', 'same name', null, bytes);
+  old.keep('single', 'same name', 'token', { private_state: { fields: { token: 'single-token' } } });
+  old.keep('multi', 'multiple values', 'token', { private_state: { fields } });
+  const managed = { private_state: { refresh_token: 'refresh-private' }, facts: { label: 'account-one' }, expires_at: null };
+  old.keep('oauth', 'OAuth account', 'oauth', managed);
+  old.keep('role', 'AWS role', 'role', { ...managed, private_state: { role_arn: 'arn:aws:iam::123456789012:role/fixture' } });
+  old.line('viewer', 'resource', 'plain');
+  old.line('credential.write', 'resource', 'plain');
+  old.line('viewer', 'resource', 'single');
+  old.line('credential.content', 'resource', 'single');
+  old.line('credential.disconnect', 'resource', 'single');
+  old.line('credential.list', 'principal', USER_A);
+  old.line('credential.rename', 'resource', 'oauth');
+  old.resource('12345678-1234-4234-8234-123456789012', 'service', 'Notes');
+  old.db.prepare('INSERT INTO services VALUES (?,?)').run('12345678-1234-4234-8234-123456789012', JSON.stringify({ version: 1, name: 'Notes',
+    auth_schemes: { token: { fields: [{ name: 'token', label: 'Token', secret: true }], injection: { API_TOKEN: '{token}' } } },
+  }));
+  const expires = Date.now() + 3600000;
+  for (const status of ['pending', 'done']) old.db.prepare('INSERT INTO requests (id,from_id,to_id,kind,input,purpose,steps,status,result,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+    .run('request-' + status, old.reader, USER_A, 'connect', JSON.stringify({ service: '12345678-1234-4234-8234-123456789012', auth_scheme: 'token' }), 'test', '[]', status,
+      status === 'done' ? JSON.stringify({ credential_id: 'single' }) : null, Date.now(), expires);
+  old.db.close();
+
+  const store = new Store(old.path, KEY); t.after(() => store.close());
+  const { secrets, credentials, services, principals, authorization } = modules(store);
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
+  assert.deepEqual(secrets.content(secrets.get('plain')), bytes);
+  assert.equal(secrets.get('plain').name, 'same name');
+  assert.equal(secrets.get('plain').generation, 7);
+  assert.equal(secrets.get('single').name, 'same name (single)');
+  assert.equal(secrets.content(secrets.get('single')).toString(), 'single-token');
+  assert.deepEqual(JSON.parse(secrets.content(secrets.get('multi')).toString()), fields);
+  assert.deepEqual(credentials.state(credentials.get('oauth')), managed);
+  assert.equal(credentials.get('oauth').generation, 7);
+  assert.equal(credentials.state(credentials.get('role')).private_state.role_arn, 'arn:aws:iam::123456789012:role/fixture');
+  assert.equal(services.get('12345678-1234-4234-8234-123456789012').definition.name, 'Notes');
+  const allowed = (action, id, type = 'secret') => authorization.can(old.reader, action, type, { holder: USER_A, id });
+  assert.equal(allowed('content', 'plain'), true);
+  assert.equal(allowed('write', 'plain'), true);
+  assert.equal(allowed('read', 'single'), true);
+  assert.equal(allowed('content', 'single'), false, 'a former metadata viewer still cannot read the private value');
+  assert.equal(allowed('write', 'single'), false);
+  assert.equal(allowed('remove', 'single'), true);
+  assert.equal(allowed('rename', 'oauth', 'credential'), true);
+  assert.equal(authorization.can(old.reader, 'list', 'secret', { holder: USER_A }), true);
+  assert.equal(authorization.can(old.reader, 'list', 'credential', { holder: USER_A }), true);
+  assert.equal(store.db.prepare("SELECT status FROM requests WHERE id='request-pending'").get().status, 'cancelled');
+  assert.deepEqual(JSON.parse(store.db.prepare("SELECT result FROM requests WHERE id='request-done'").get().result), { credential_id: 'single' });
+  assert.deepEqual(store.db.prepare('PRAGMA foreign_key_check').all(), []);
+  assert.deepEqual(principals.shownTo(old.reader).filter(row => row.id === 'plain').map(row => row.kind), ['secret', 'secret']);
+});
+
+test('移行で値を復号できない場合は全体をロールバックして以前のデータを保持する', async t => {
+  for (const corrupt of [false, true]) {
+    const old = await previous(t);
+    old.keep('plain', 'private value', null, Buffer.from('private-value'));
+    old.keep('token', 'token', 'token', corrupt ? { private_state: {} } : { private_state: { fields: { token: 'token-private' } } });
+    const before = old.db.prepare('SELECT * FROM credentials ORDER BY resource_id').all();
+    old.db.close();
+    assert.throws(() => new Store(old.path, corrupt ? KEY : Buffer.alloc(32, 8)));
+    const check = new DatabaseSync(old.path);
+    try {
+      assert.equal(check.prepare('PRAGMA user_version').get().user_version, 31);
+      assert.deepEqual(check.prepare('SELECT * FROM credentials ORDER BY resource_id').all(), before);
+      assert.equal(check.prepare("SELECT kind FROM resources WHERE id='plain'").get().kind, 'credential');
+    } finally { check.close(); }
+  }
 });
 
 test('もう誰も動かしていない形のデータベースは、移行せずに断る', async t => {

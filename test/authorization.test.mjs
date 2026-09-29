@@ -11,16 +11,16 @@ test('答えは subject・action・resource から decision だけを返し、�
   principals.relate(key.id, 'actor', 'principal', person.id);
   const ask = (subject, name, resource) => authorization.allowed({ subject, action: { name }, resource }).decision;
   const me = { id: person.id, via: { kind: 'session' } }, actor = { id: key.id, via: { kind: 'key' } }, stranger = { id: other.id, via: { kind: 'key' } };
-  assert.equal(ask(me, 'content', { type: 'credential', id: 'x', holder: person.id }), true, 'the holder');
-  assert.equal(ask(actor, 'list', { type: 'credential', holder: person.id }), true, 'one who acts for the holder reaches their things');
-  assert.equal(ask(actor, 'read', { type: 'credential', id: 'x', holder: person.id }), true, 'and sees what each is');
-  assert.equal(ask(actor, 'content', { type: 'credential', id: 'x', holder: person.id }), false, 'but reads what one holds only along a line to it');
-  assert.equal(ask(stranger, 'content', { type: 'credential', id: 'x', holder: person.id }), false, 'nobody else');
-  assert.equal(ask(actor, 'rename', { type: 'credential', id: 'x', holder: person.id }), false, 'renaming is the holder\'s alone');
+  assert.equal(ask(me, 'content', { type: 'secret', id: 'x', holder: person.id }), true, 'the holder');
+  assert.equal(ask(actor, 'list', { type: 'secret', holder: person.id }), true, 'one who acts for the holder reaches their things');
+  assert.equal(ask(actor, 'read', { type: 'secret', id: 'x', holder: person.id }), true, 'and sees what each is');
+  assert.equal(ask(actor, 'content', { type: 'secret', id: 'x', holder: person.id }), false, 'but reads what one holds only along a line to it');
+  assert.equal(ask(stranger, 'content', { type: 'secret', id: 'x', holder: person.id }), false, 'nobody else');
+  assert.equal(ask(actor, 'rename', { type: 'secret', id: 'x', holder: person.id }), false, 'renaming is the holder\'s alone');
   principals.relate(other.id, 'viewer', 'resource', 'x');
-  assert.equal(ask(stranger, 'content', { type: 'credential', id: 'x', holder: person.id }), true, 'a line drawn onto the thing itself');
-  assert.equal(ask(stranger, 'content', { type: 'credential', id: 'y', holder: person.id }), false, 'and only that thing');
-  assert.equal(ask(stranger, 'write', { type: 'credential', id: 'x', holder: person.id }), false);
+  assert.equal(ask(stranger, 'content', { type: 'secret', id: 'x', holder: person.id }), true, 'a line drawn onto the thing itself');
+  assert.equal(ask(stranger, 'content', { type: 'secret', id: 'y', holder: person.id }), false, 'and only that thing');
+  assert.equal(ask(stranger, 'write', { type: 'secret', id: 'x', holder: person.id }), false);
   assert.equal(ask(me, 'remove', { type: 'principal', id: key.id }), true, 'the owner');
   assert.equal(ask(actor, 'remove', { type: 'principal', id: key.id }), false, 'not oneself');
   assert.equal(ask(actor, 'rename', { type: 'principal', id: key.id }), true, 'oneself, for a name');
@@ -37,7 +37,7 @@ test('答えは subject・action・resource から decision だけを返し、�
 
 test('ルートは同じ問いを立て、許されない主体には 403、依頼だけを渡された利用者には 401 で答える', async t => {
   const f = await fixture(t), key = await f.issueKey();
-  const kept = await f.keep('credential', 'x', 'value');
+  const kept = await f.keep('secret', 'x', 'value');
   for (const [path, options] of [['/v1/overview', {}], ['/v1/export', {}],
     ['/v1/resources/' + kept.json.resource.id, { method: 'PATCH', data: { name: 'y' } }], ['/v1/credentials', { method: 'POST', data: { service: 'google' } }]]) {
     const refused = await f.request(path, { ...options, token: key.token, anonymous: true });
@@ -77,7 +77,7 @@ test('持ち物全体に引いた操作は、その持ち主のどの接続に�
 
 test('自分がその場所でできないことを含む関係は引けず、所有は引けない', async t => {
   const f = await fixture(t), key = await f.issueKey(), other = await f.issueKey('other');
-  const connected = await f.credential();
+  const connected = (await f.keep('secret', 'private value', 'value')).json.resource;
   const draw = (token, data) => f.request('/v1/relations', { method: 'POST', data, token, anonymous: true });
   assert.equal((await draw(key.token, { subject: other.id, relation: 'credential.disconnect', object_type: 'principal', object_id: USER_A })).status, 403, '代わりに動く者は持ち主に線を引けない');
   assert.equal((await draw(key.token, { subject: other.id, relation: 'viewer', object_type: 'resource', object_id: connected.id })).status, 403, '共有できない物にも引けない');
@@ -88,7 +88,7 @@ test('自分がその場所でできないことを含む関係は引けず、�
   assert.equal((await owner({ subject: key.id, relation: 'viewer', object_type: 'principal', object_id: other.id })).status, 400, '役割の置き場所');
   const shared = await owner({ subject: key.id, relation: 'share', object_type: 'resource', object_id: connected.id });
   assert.equal(shared.status, 400);
-  assert.equal((await owner({ subject: key.id, relation: 'credential.share', object_type: 'resource', object_id: connected.id })).status, 201, '共有する権利も渡せる');
+  assert.equal((await owner({ subject: key.id, relation: 'secret.share', object_type: 'resource', object_id: connected.id })).status, 201, '共有する権利も渡せる');
   assert.equal((await draw(key.token, { subject: other.id, relation: 'viewer', object_type: 'resource', object_id: connected.id })).status, 403, 'それでも自分が読めない中身を含む役割は渡せない');
 });
 

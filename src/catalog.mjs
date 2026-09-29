@@ -1,7 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { checkDefinition } from './service-definition.mjs';
 import { oauthScheme, oauthClient, oauthSettings } from './schemes/oauth.mjs';
-import { tokenScheme } from './schemes/token.mjs';
 import { create as github } from './adapters/github/index.mjs';
 import { create as google } from './adapters/google/index.mjs';
 import { create as cloudflare } from './adapters/cloudflare/index.mjs';
@@ -31,7 +30,6 @@ export function schemesOf(definition, env = {}, { fetcher } = {}) {
   for (const [id, spec] of Object.entries(definition.auth_schemes)) {
     if (spec.adapter) schemes[id] = ADAPTERS[spec.adapter](env);
     else if (id === 'oauth') schemes[id] = oauthScheme(definition, oauthClient(definition, definition.id ? oauthSettings(definition, env) : {}, options));
-    else if (id === 'token') schemes[id] = tokenScheme(definition, options);
   }
   return schemes;
 }

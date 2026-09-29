@@ -6,8 +6,8 @@ import { takesApps } from './apps.mjs';
 // Operations crossing resource boundaries. Each local result and its request completion
 // commit together; notifications run only after the transaction has committed.
 export class RequestActions {
-  constructor({ store, requests, credentials, services, apps, principals, authorization, auditLog, changed = () => {} }) {
-    Object.assign(this, { store, requests, credentials, services, apps, principals, authorization, auditLog, changed });
+  constructor({ store, requests, secrets, credentials, services, apps, principals, authorization, auditLog, changed = () => {} }) {
+    Object.assign(this, { store, requests, secrets, credentials, services, apps, principals, authorization, auditLog, changed });
   }
   // A request is checked against what is there when it is made, so a mismatch reaches the requester and never the
   // one asked. A secret's name already in use must be declared a replacement, and a replacement must name something
@@ -30,7 +30,7 @@ export class RequestActions {
         if (!app || !this.authorization.can(toId, 'use', 'app', { id: app.id, holder: app.holder_id })) fail(404, 'not_found', 'アプリが見つかりません。');
         if (app.service !== ref) fail(400, 'app_mismatch', 'このアプリは別のサービスのものです。');
       } else if (takesApps(scheme) && !(definition.app === undefined && previous?.app_id) && !scheme.oauthClient.enabled) {
-        fail(409, 'app_required', 'このサービスにはFoundationのアプリがありません。先にOAuthアプリの登録を依頼してください（kind "app"）。トークンで接続できるサービスなら、auth_scheme "token" の依頼にもできます。');
+        fail(409, 'app_required', 'このサービスにはFoundationのアプリがありません。先にOAuthアプリの登録を依頼してください（kind "app"）。');
       } else if (!takesApps(scheme) && !scheme.available) fail(503, 'scheme_unavailable', '現在この方法では接続できません。');
     }
     const row = this.requests.create(fromId, { kind, input: definition, toId, ...rest });
@@ -40,7 +40,7 @@ export class RequestActions {
   // Where one value will go: new under a free name, or in place of what a replacement names. Nothing
   // else: a request never overwrites what it did not declare it would.
   placement(holderId, asked, name) {
-    const existing = this.credentials.find(holderId, name), replacing = asked.replace && name === asked.name;
+    const existing = this.secrets.find(holderId, name), replacing = asked.replace && name === asked.name;
     if (replacing && !existing) fail(409, 'name_missing', `「${name}」という保存値はありません。置き換えではなく、新しく預ける依頼にしてください。`);
     if (!replacing && existing) fail(409, 'name_taken', `「${name}」はすでに使われています。別の保存名を入力してください。`);
     return replacing ? existing : null;
@@ -57,7 +57,7 @@ export class RequestActions {
       const targets = asked.map((one, at) => this.placement(toId, one, names[at]));
       for (const [at, one] of asked.entries()) {
         const existing = targets[at];
-        const saved = this.credentials.put(toId, { name: names[at], content: Buffer.from(entries[at].content, 'utf8') });
+        const saved = this.secrets.put(toId, { name: names[at], content: Buffer.from(entries[at].content, 'utf8') });
         // Asked to read it back, the asker is put on a line to it; a value that already existed keeps its lines as they were.
         if (!existing && one.readable) this.principals.relate(row.from_id, 'viewer', 'resource', saved.id);
       }
@@ -86,7 +86,7 @@ export class RequestActions {
     this.changed(done);
     return JSON.parse(done.result);
   }
-  // previous: the credential this one replaces. A secret the holder turns into a token for a service keeps its id.
+  // previous: the managed authorization this one replaces.
   connect(id, holderId, service, scheme, result, { requestedBy = '', previous, scopes, app = null } = {}) {
     const saved = this.store.transaction(() => {
       if (id) {

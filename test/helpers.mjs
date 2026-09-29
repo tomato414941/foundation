@@ -8,6 +8,8 @@ import { googleOauth } from '../src/adapters/google/index.mjs';
 import { entry } from '../src/catalog.mjs';
 export { entry } from '../src/catalog.mjs';
 import { Credentials } from '../src/credentials.mjs';
+import { Secrets } from '../src/secrets.mjs';
+import { Inputs } from '../src/inputs.mjs';
 import { Services } from '../src/services.mjs';
 import { Apps } from '../src/apps.mjs';
 import { Resources } from '../src/resources.mjs';
@@ -23,7 +25,8 @@ export const GMAIL = { readonly: [GMAIL_SCOPE + 'readonly'], metadata: [GMAIL_SC
 export function modules(store, entries = []) {
   const principals = new Principals(store), authorization = new Authorization(principals);
   const resources = new Resources(store), services = new Services(store, resources, entries, { authorization }), apps = new Apps(store, resources, services);
-  return { resources, services, apps, credentials: new Credentials(store, resources, services, apps), principals, authorization, sessions: new Sessions(store), flows: new OAuthFlows(store) };
+  const secrets = new Secrets(store, resources), credentials = new Credentials(store, resources, services, apps);
+  return { resources, services, apps, secrets, credentials, inputs: new Inputs(secrets, credentials), principals, authorization, sessions: new Sessions(store), flows: new OAuthFlows(store) };
 }
 
 export const KEY = Buffer.alloc(32, 7);
@@ -113,7 +116,7 @@ export async function fixture(t, options = {}) {
     return request('/v1/injections', { method: 'POST', data: { names: [{ name: credential.id }] }, ...options });
   }
   async function credentialFacts(credential, options = {}) {
-    const listed = await request('/v1/resources?kind=credential&secret=false', options);
+    const listed = await request('/v1/resources?kind=credential', options);
     assert.equal(listed.status, 200, listed.text);
     const found = listed.json.resources.find(item => item.id === credential.id);
     assert.ok(found, '接続の一覧から対象を取得する');

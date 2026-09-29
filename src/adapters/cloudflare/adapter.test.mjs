@@ -69,7 +69,7 @@ test('接続依頼を完了し、許可された権限と認証情報を分け�
   const completed = await f.request('/v1/requests/' + asked.json.request.id, { token });
   assert.equal(completed.json.request.status, 'done');
   assert.equal(completed.json.request.result.credential_id, connection.id);
-  const listed = await f.request('/v1/resources?kind=credential&secret=false', { token });
+  const listed = await f.request('/v1/resources?kind=credential', { token });
   assert.equal(listed.json.resources[0].label, 'personal@example.test');
   assert.equal(listed.json.resources[0].facts.user_id, '1'.repeat(32));
   assert.deepEqual(listed.json.resources[0].facts.scopes, GRANTED);
@@ -152,7 +152,7 @@ test('複数の同時要求を一回の更新にまとめ、後続の取得で�
   const hold = new Promise(resolve => release = resolve);
   f.cloudflare.refreshHandler = async () => { await hold; };
   const names = [{ name: connection.id }];
-  const one = f.app.credentials.inject(USER_A, names), two = f.app.credentials.inject(USER_A, names);
+  const one = f.app.inputs.inject(USER_A, names), two = f.app.inputs.inject(USER_A, names);
   release();
   const results = await Promise.all([one, two]);
   for (const result of results) {

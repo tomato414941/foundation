@@ -24,26 +24,6 @@
         "AIRTABLE_ACCESS_TOKEN": "{access_token}",
         "AIRTABLE_TOKEN_EXPIRES_AT": "{expires_at}"
       }
-    },
-    "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "Personal access token",
-          "secret": true
-        }
-      ],
-      "identity": {
-        "url": "https://api.airtable.com/v0/meta/whoami",
-        "headers": {
-          "authorization": "Bearer {token}"
-        },
-        "id": "id",
-        "label": "email"
-      },
-      "injection": {
-        "AIRTABLE_TOKEN": "{token}"
-      }
     }
   }
 }

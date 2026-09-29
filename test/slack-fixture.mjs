@@ -1,6 +1,5 @@
 import { definitionOf } from '../src/catalog.mjs';
 import { oauthClient, oauthScheme } from '../src/schemes/oauth.mjs';
-import { tokenScheme } from '../src/schemes/token.mjs';
 const reply = (status, body) => ({ ok: status >= 200 && status < 300, status, text: typeof body === 'string' ? body : JSON.stringify(body) });
 const TEAMS = { personal: { id: 'T0PERSONAL', name: '個人のワークスペース' }, work: { id: 'T0WORK', name: '仕事のワークスペース' } };
 
@@ -14,8 +13,7 @@ export class FakeSlack {
   // Slack grants the bot scopes its consent screen asked for; the fake learns them as the consent screen would.
   entry() {
     const definition = definitionOf('slack'), oauth = oauthScheme(definition, this.client);
-    return { definition, schemes: { oauth: { ...oauth, authorization: { ...oauth.authorization, begin: context => { this.asked = context.scopes; return oauth.authorization.begin(context); } } },
-      token: tokenScheme(definition, { fetcher: (url, options) => this.answer(url, options) }) } };
+    return { definition, schemes: { oauth: { ...oauth, authorization: { ...oauth.authorization, begin: context => { this.asked = context.scopes; return oauth.authorization.begin(context); } } } } };
   }
   async answer(url, options = {}) {
     this.calls.push({ url, options });
