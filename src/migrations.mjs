@@ -1,9 +1,10 @@
-export const SCHEMA_VERSION = 32;
+export const SCHEMA_VERSION = 33;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
   31: oneKindOfLine,
   32: separateSecrets,
+  33: namesApart,
 };
 
 // What one principal was given is kept in one place. A line names a role (owner, actor, viewer, editor) or one
@@ -111,6 +112,27 @@ function separateSecrets({ db, vault }) {
 }
 separateSecrets.rebuilds = true;
 
+// A line says who, which relation, onto what, and nothing more: the name an owner calls what it owns by is the
+// owner's own record. What is done to a principal as a whole is named as that principal's action.
+function namesApart({ db }) {
+  db.exec(`
+    CREATE TABLE aliases (
+    owner_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+    alias TEXT NOT NULL, PRIMARY KEY (owner_id, principal_id), UNIQUE (owner_id, alias)
+    );
+    INSERT INTO aliases SELECT subject_id, object_id, alias FROM relations WHERE relation='owner' AND object_type='principal' AND alias IS NOT NULL;
+    CREATE TABLE relations_next (
+    subject_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, relation TEXT NOT NULL,
+    object_type TEXT NOT NULL CHECK(object_type IN ('principal','resource')), object_id TEXT NOT NULL, created_at TEXT NOT NULL,
+    PRIMARY KEY (subject_id, relation, object_type, object_id)
+    );
+    INSERT OR IGNORE INTO relations_next SELECT subject_id, CASE relation WHEN 'overview.read' THEN 'principal.overview' WHEN 'export.read' THEN 'principal.export' WHEN 'usage.read' THEN 'principal.usage' WHEN 'injection.create' THEN 'principal.inject' WHEN 'function.list' THEN 'principal.functions' WHEN 'function.invoke' THEN 'principal.invoke' WHEN 'resource.list' THEN 'principal.shown' WHEN 'audit_log.list' THEN 'principal.audit-log' ELSE relation END, object_type, object_id, created_at FROM relations;
+    DROP TABLE relations; ALTER TABLE relations_next RENAME TO relations;
+    CREATE INDEX relations_object ON relations(object_type, object_id, relation);
+  `);
+}
+namesApart.rebuilds = true;
+
 export const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE principals (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
@@ -126,12 +148,14 @@ export const SCHEMA = `
   CREATE INDEX request_links_principal ON request_links(principal_id);
   CREATE TABLE relations (
     subject_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, relation TEXT NOT NULL,
-    object_type TEXT NOT NULL CHECK(object_type IN ('principal','resource')), object_id TEXT NOT NULL,
-    alias TEXT, created_at TEXT NOT NULL,
+    object_type TEXT NOT NULL CHECK(object_type IN ('principal','resource')), object_id TEXT NOT NULL, created_at TEXT NOT NULL,
     PRIMARY KEY (subject_id, relation, object_type, object_id)
   );
   CREATE INDEX relations_object ON relations(object_type, object_id, relation);
-  CREATE UNIQUE INDEX relations_alias ON relations(subject_id, relation, alias) WHERE alias IS NOT NULL;
+  CREATE TABLE aliases (
+    owner_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+    alias TEXT NOT NULL, PRIMARY KEY (owner_id, principal_id), UNIQUE (owner_id, alias)
+  );
   CREATE TABLE settings (
     principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
     return_url TEXT NOT NULL, refresh_url TEXT, webhook_url TEXT, webhook_secret TEXT, created_at TEXT NOT NULL

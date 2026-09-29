@@ -26,10 +26,6 @@ test('答えは subject・action・resource から decision だけを返し、�
   assert.equal(ask(actor, 'rename', { type: 'principal', id: key.id }), true, 'oneself, for a name');
   assert.equal(ask(actor, 'connect', { type: 'credential', holder: person.id }), false, 'connecting is the holder\'s unless given');
   assert.equal(ask(me, 'connect', { type: 'credential', holder: person.id }), true);
-  const linked = { id: person.id, via: { kind: 'link', request: 'r1' } };
-  assert.equal(ask(linked, 'done', { type: 'request', id: 'r1', holder: person.id }), true, 'the one request a link reaches');
-  assert.equal(ask(linked, 'read', { type: 'request', id: 'r2', holder: person.id }), false);
-  assert.equal(ask(linked, 'list', { type: 'credential', holder: person.id }), false, 'and nothing else');
   assert.deepEqual(authorization.allowed({}), { decision: false });
   assert.ok(rules().some(rule => rule.resource === 'credential' && rule.action === 'rename' && rule.grounds.join() === 'self'));
   store.close();
@@ -96,7 +92,7 @@ test('来かたによらず、同じ関係なら同じ答えを返す', () => {
   const store = new Store(':memory:', KEY), principals = new Principals(store), authorization = new Authorization(principals);
   const person = principals.ensure('person');
   const ask = (via, name, resource) => authorization.allowed({ subject: { id: person.id, via: { kind: via } }, action: { name }, resource }).decision;
-  for (const [name, resource] of [['connect', { type: 'credential', holder: person.id }], ['disconnect', { type: 'credential', id: 'x', holder: person.id }], ['read', { type: 'export', holder: person.id }]]) {
+  for (const [name, resource] of [['connect', { type: 'credential', holder: person.id }], ['disconnect', { type: 'credential', id: 'x', holder: person.id }], ['export', { type: 'principal', id: person.id }]]) {
     assert.equal(ask('key', name, resource), ask('session', name, resource), name);
     assert.equal(ask('key', name, resource), true, name);
   }

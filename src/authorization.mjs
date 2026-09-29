@@ -6,7 +6,7 @@
 // or a request. An action is reached by the holder itself, by whoever acts for or owns the holder, by a role drawn
 // onto the resource (viewer, editor), or by that one action drawn onto the resource or onto the holder. Owning a
 // principal is managing it (its name, keys, limits, removal), not reaching what it holds. What the subject came in by
-// decides nothing, except that a request link reaches its one request and nothing else.
+// decides nothing: a request link is bound to its one request where it is recognized, before any question is asked.
 // A line names a role, a named set of actions, or one action written as the rules name it (credential.disconnect).
 export const ROLES = ['owner', 'actor', 'viewer', 'editor'];
 export const ACTION = /^[a-z_]+\.[a-z-]+$/;
@@ -16,13 +16,15 @@ const OWNER = (subject, resource, principals) => principals.has(subject, 'owner'
 const LINE = relation => Object.assign((subject, resource, principals) => resource.id !== undefined && principals.has(subject, relation, 'resource', resource.id), { role: relation });
 
 const RULES = {
-  overview: { read: [SELF] },
-  export: { read: [SELF] },
+  // What is done to a principal as a whole, and with all it holds at once.
   principal: {
     read: [SELF, OWNER], rename: [SELF, OWNER], remove: [OWNER], list: [SELF],
     'issue-key': [SELF, OWNER], 'revoke-key': [SELF, OWNER], 'issue-link': [SELF, OWNER],
     // Giving a machine this principal's identity: whoever may act as it. Bounding what it may compute: its owner.
     pass: [SELF, OWNER, ACTOR], limit: [OWNER], relate: [SELF, OWNER], settings: [SELF, OWNER],
+    overview: [SELF], export: [SELF], usage: [SELF, ACTOR, OWNER], shown: [SELF], 'audit-log': [SELF],
+    // Using what it holds without reading it: injecting into a command, calling the built-in functions.
+    inject: [SELF, ACTOR], functions: [SELF, ACTOR], invoke: [SELF, ACTOR],
   },
   // Private bytes may be used without disclosing them to the caller. Managed authorizations expose their facts,
   // not their renewal state. Both can be delivered by an injection.
@@ -41,11 +43,6 @@ const RULES = {
   // along a viewer line too. Its identity is changed by the holder or whoever acts for them.
   environment: { list: [SELF, ACTOR], open: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], exec: [SELF, ACTOR, LINE('editor')],
     identity: [SELF, ACTOR], remove: [SELF, ACTOR], rename: [SELF], share: [SELF] },
-  usage: { read: [SELF, ACTOR, OWNER] },
-  injection: { create: [SELF, ACTOR] },
-  function: { list: [SELF, ACTOR], invoke: [SELF, ACTOR] },
-  resource: { list: [SELF] },
-  audit_log: { list: [SELF] },
   request: { read: [SELF], done: [SELF], deny: [SELF], cancel: [SELF] },
 };
 
@@ -53,8 +50,6 @@ export class Authorization {
   constructor(principals) { this.principals = principals; }
   allowed({ subject, action, resource }) {
     if (!subject?.id || !action?.name || !resource?.type) return { decision: false };
-    // A request link reaches the one request it was made for, and nothing else.
-    if (subject.via?.kind === 'link') return { decision: resource.type === 'request' && resource.id === subject.via.request };
     const grounds = RULES[resource.type]?.[action.name];
     if (!grounds) return { decision: false };
     const holder = resource.holder ?? (resource.type === 'principal' ? resource.id : undefined);

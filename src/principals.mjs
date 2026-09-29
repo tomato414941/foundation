@@ -30,13 +30,14 @@ export class Principals {
   create(ownerId, { name = '', alias } = {}) {
     return this.store.transaction(() => {
       if (alias !== undefined) {
-        const found = this.db.prepare("SELECT object_id FROM relations WHERE subject_id=? AND relation='owner' AND object_type='principal' AND alias=?").get(ownerId, alias);
-        if (found) return this.get(found.object_id);
+        const found = this.ownedByAlias(ownerId, alias);
+        if (found) return found;
       }
       if (this.db.prepare("SELECT count(*) n FROM relations WHERE subject_id=? AND relation='owner' AND object_type='principal'").get(ownerId).n >= OWNED_MAX) fail(409, 'principal_limit', '作れる相手の上限に達しました。');
       const id = randomUUID(), at = now();
       this.db.prepare('INSERT INTO principals (id,name,created_at) VALUES (?,?,?)').run(id, name, at);
-      this.relate(ownerId, 'owner', 'principal', id, { alias });
+      this.relate(ownerId, 'owner', 'principal', id);
+      if (alias !== undefined) this.db.prepare('INSERT INTO aliases (owner_id,principal_id,alias) VALUES (?,?,?)').run(ownerId, id, alias);
       return this.get(id);
     });
   }
@@ -56,12 +57,12 @@ export class Principals {
   }
 
   // Lines between principals, and from principals onto resources. A resource is pointed at by its id.
-  relate(subjectId, relation, objectType, objectId, { alias } = {}) {
+  relate(subjectId, relation, objectType, objectId) {
     if (!(ROLES.includes(relation) || ACTION.test(relation)) || !OBJECT_TYPES.includes(objectType)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
     if (!this.get(subjectId) || (objectType === 'principal' && !this.get(objectId))) fail(404, 'not_found', '相手が見つかりません。');
     if (subjectId === objectId && objectType === 'principal') fail(400, 'invalid_relation', '自分自身との関係は引けません。');
-    this.db.prepare('INSERT OR REPLACE INTO relations (subject_id,relation,object_type,object_id,alias,created_at) VALUES (?,?,?,?,?,?)')
-      .run(subjectId, relation, objectType, objectId, alias ?? null, now());
+    this.db.prepare('INSERT OR IGNORE INTO relations (subject_id,relation,object_type,object_id,created_at) VALUES (?,?,?,?,?)')
+      .run(subjectId, relation, objectType, objectId, now());
   }
   unrelate(subjectId, relation, objectType, objectId) {
     return this.db.prepare('DELETE FROM relations WHERE subject_id=? AND relation=? AND object_type=? AND object_id=?').run(subjectId, relation, objectType, objectId).changes > 0;
@@ -78,7 +79,7 @@ export class Principals {
   }
   // Every line a principal is on, either end.
   relationsOf(id) {
-    return this.db.prepare('SELECT subject_id,relation,object_type,object_id,alias,created_at FROM relations WHERE subject_id=? OR (object_type=? AND object_id=?) ORDER BY created_at').all(id, 'principal', id);
+    return this.db.prepare('SELECT subject_id,relation,object_type,object_id,created_at FROM relations WHERE subject_id=? OR (object_type=? AND object_id=?) ORDER BY created_at').all(id, 'principal', id);
   }
   // Lines onto one resource: who may see or change it.
   linesOnto(resourceId) {
@@ -93,14 +94,17 @@ export class Principals {
   ownersOf(id) { return this.db.prepare("SELECT subject_id AS id FROM relations WHERE relation='owner' AND object_type='principal' AND object_id=?").all(id).map(row => row.id); }
   // The principals this one owns, each with the name it gave them and the access keys they carry.
   owned(ownerId) {
-    return this.db.prepare(`SELECT p.id, p.name, p.created_at, r.alias FROM relations r JOIN principals p ON p.id=r.object_id
+    return this.db.prepare(`SELECT p.id, p.name, p.created_at, a.alias FROM relations r JOIN principals p ON p.id=r.object_id
+      LEFT JOIN aliases a ON a.owner_id=r.subject_id AND a.principal_id=r.object_id
       WHERE r.subject_id=? AND r.relation='owner' AND r.object_type='principal' ORDER BY r.created_at, p.id`).all(ownerId)
       .map(row => ({ ...row, keys: this.keys(row.id), acts_for: this.actsFor(row.id) }));
   }
+  // The name an owner calls what it owns by: the owner's record, not a line.
   ownedByAlias(ownerId, alias) {
-    const found = this.db.prepare("SELECT object_id FROM relations WHERE subject_id=? AND relation='owner' AND object_type='principal' AND alias=?").get(ownerId, alias);
-    return found ? this.get(found.object_id) : undefined;
+    const found = this.db.prepare('SELECT principal_id FROM aliases WHERE owner_id=? AND alias=?').get(ownerId, alias);
+    return found ? this.get(found.principal_id) : undefined;
   }
+  aliasOf(ownerId, principalId) { return this.db.prepare('SELECT alias FROM aliases WHERE owner_id=? AND principal_id=?').get(ownerId, principalId)?.alias ?? null; }
   // Whom this principal acts for, and who acts for it.
   actsFor(id) { return this.db.prepare("SELECT object_id AS id FROM relations WHERE subject_id=? AND relation='actor' AND object_type='principal'").all(id).map(row => row.id); }
   actorsOf(id) {

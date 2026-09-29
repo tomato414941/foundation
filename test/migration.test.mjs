@@ -107,7 +107,7 @@ const SCHEMA_30 = `
   PRAGMA user_version = 30;
 `;
 
-test('30版のデータベースを、関係も渡した権限も一つの関係の記録に移し、何も失わない', async t => {
+test('30版のデータベースを、関係も渡した権限も一つの関係の記録に移し、呼び名は所有者の記録として分け、何も失わない', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), db = new DatabaseSync(path), vault = new Vault(KEY);
@@ -123,14 +123,16 @@ test('30版のデータベースを、関係も渡した権限も一つの関係
   db.prepare("INSERT INTO relations (subject_id,relation,object_type,object_id,created_at) VALUES (?,'actor','principal',?,?)").run(ai, USER_A, stamp);
   db.prepare("INSERT INTO relations (subject_id,relation,object_type,object_id,created_at) VALUES (?,'viewer','resource','object-1',?)").run(ai, stamp);
   db.prepare("INSERT INTO permissions (subject_id,action,object_type,object_id,granted_by,created_at) VALUES (?,'object.remove','resource','object-1',?,?)").run(ai, USER_A, stamp);
+  db.prepare("INSERT INTO permissions (subject_id,action,object_type,object_id,granted_by,created_at) VALUES (?,'export.read','principal',?,?,?)").run(ai, USER_A, USER_A, stamp);
   db.close();
 
   const store = new Store(path, KEY);
   t.after(() => store.close());
   assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
-  const lines = store.db.prepare('SELECT subject_id,relation,object_type,object_id,alias FROM relations ORDER BY relation').all().map(row => ({ ...row }));
-  assert.deepEqual(lines.map(row => row.relation), ['actor', 'object.remove', 'owner', 'viewer']);
-  assert.equal(lines.find(row => row.relation === 'owner').alias, 'laptop', 'the name an owner gave stays');
+  const lines = store.db.prepare('SELECT * FROM relations ORDER BY relation').all().map(row => ({ ...row }));
+  assert.deepEqual(lines.map(row => row.relation), ['actor', 'object.remove', 'owner', 'principal.export', 'viewer'], 'what was done to a principal as a whole is its own action');
+  assert.deepEqual(Object.keys(lines[0]).sort(), ['created_at', 'object_id', 'object_type', 'relation', 'subject_id'], 'a line is who, which, onto what');
+  assert.equal(new Principals(store).aliasOf(USER_A, ai), 'laptop', 'the name an owner gave stays, as the owner\'s record');
   assert.equal(store.db.prepare("SELECT count(*) n FROM sqlite_schema WHERE name='permissions'").get().n, 0);
   assert.deepEqual(new Principals(store).authenticateKey(key)?.key, { id: 'key-1' });
   assert.equal(store.db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1, 'references are checked again after the step');

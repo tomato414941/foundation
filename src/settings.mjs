@@ -37,7 +37,7 @@ export class Settings {
   handlerOf(principalId) {
     for (const ownerId of this.principals.ownersOf(principalId)) {
       const found = this.db.prepare('SELECT * FROM settings WHERE principal_id=?').get(ownerId);
-      if (found) return { ...found, alias: this.principals.has(ownerId, 'owner', 'principal', principalId) && this.db.prepare("SELECT alias FROM relations WHERE subject_id=? AND relation='owner' AND object_type='principal' AND object_id=?").get(ownerId, principalId)?.alias };
+      if (found) return { ...found, alias: this.principals.aliasOf(ownerId, principalId) };
     }
   }
   returnUrlFor(principalId) { return this.handlerOf(principalId)?.return_url; }

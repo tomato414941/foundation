@@ -600,7 +600,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         }
         // Computing this principal spent this month and may spend; its owner bounds it.
         if (part === 'compute' && !keyId) {
-          if (method === 'GET') { permit('read', 'usage', undefined, id); return send(200, { compute: environments.usage(id) }); }
+          if (method === 'GET') { permit('usage', 'principal', id); return send(200, { compute: environments.usage(id) }); }
           if (method === 'PUT') {
             permit('limit', 'principal', id);
             const input = await inputBody();
@@ -723,7 +723,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         return kind;
       };
       if (path === '/v1/resources' && method === 'GET') {
-        if (url.searchParams.get('shown') === 'me') { permit('list', 'resource', undefined, subject.id); return send(200, { resources: principals.shownTo(subject.id) }); }
+        if (url.searchParams.get('shown') === 'me') { permit('shown', 'principal', subject.id); return send(200, { resources: principals.shownTo(subject.id) }); }
         const kind = resourceKind(false), name = url.searchParams.get('name') ?? undefined, prefix = url.searchParams.get('prefix') ?? undefined;
         const kinds = kind ? [kind] : KINDS;
         for (const one of kinds) permit('list', one);
@@ -959,10 +959,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
-      if (path === '/v1/audit-log' && method === 'GET') { permit('list', 'audit_log', undefined, subject.id); return send(200, { entries: auditLog.list(subject.id) }); }
+      if (path === '/v1/audit-log' && method === 'GET') { permit('audit-log', 'principal', subject.id); return send(200, { entries: auditLog.list(subject.id) }); }
       // The holder's screen, in one answer.
       if (path === '/v1/overview' && method === 'GET') {
-        permit('read', 'overview');
+        permit('overview', 'principal', holderId);
         return send(200, { user: { id: subject.id, email: user?.email ?? null }, principal: self, secrets: secrets.list(holderId).map(row => secrets.view(row)), credentials: credentials.list(holderId).map(row => credentials.view(row, { owner: true })),
           apps: [...apps.list(holderId).map(row => apps.view(row, { owner: true })), ...apps.lent(holderId).map(row => apps.view(row)), ...apps.offeredAll()],
           services: [...services.list(holderId).map(row => services.view(row, { owner: true })), ...services.lent(holderId).map(row => services.view(row))],
@@ -972,7 +972,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       // Everything, in one file, for the holder alone. Lending someone a place to keep things means they can take
       // them away again; without this the promise is words.
       if (path === '/v1/export' && method === 'GET') {
-        permit('read', 'export');
+        permit('export', 'principal', holderId);
         // A secret goes out with its bytes; a credential for a service with what is known of it, since what renews
         // it is Foundation's to keep and would be of no use elsewhere. A described service goes out as its definition.
         const kept = secrets.list(holderId).map(row => ({ ...secrets.view(row), content: secrets.content(row).toString('base64'), encoding: 'base64' }));
@@ -1067,7 +1067,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       }
       // What this holder is using, and what they may use. Lending has a cost, so both sides can see it.
       if (path === '/v1/usage' && method === 'GET') {
-        permit('read', 'usage');
+        permit('usage', 'principal', holderId);
         const kept = secrets.usage(holderId);
         const space = objects.enabled ? await objects.usage(holderId) : null;
         still();
@@ -1077,7 +1077,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       // Injecting derives what each credential yields now: a secret its bytes, one for a service what its scheme
       // obtains. This is the one place a credential reaches a service.
       if (path === '/v1/injections' && method === 'POST') {
-        permit('create', 'injection');
+        permit('inject', 'principal', holderId);
         const input = await inputBody();
         limit('issue', 30);
         const names = Array.isArray(input.names) ? input.names : [];
@@ -1088,9 +1088,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         auditLog.write(subject.id, 'injection', 'principal', holderId, { names: names.map(item => typeof item === 'string' ? item : item?.name).filter(Boolean) });
         return send(200, { injection, expires_at, expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
       }
-      if (path === '/v1/functions' && method === 'GET') { permit('list', 'function'); return send(200, { functions: FUNCTIONS }); }
+      if (path === '/v1/functions' && method === 'GET') { permit('functions', 'principal', holderId); return send(200, { functions: FUNCTIONS }); }
       if (path === '/v1/functions/http.request' && method === 'POST') {
-        permit('invoke', 'function', 'http.request');
+        permit('invoke', 'principal', holderId);
         const input = await inputBody(FETCH_BODY_MAX * 2);
         limit('fetch', 30);
         const result = await functions.request({ holderId, still }, input, [url.hostname, ...(external ? [external.hostname] : [])]);
