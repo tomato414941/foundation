@@ -151,7 +151,7 @@ function toast(text) {
 }
 async function api(path, { method = 'GET', data, signal, headers = {} } = {}) {
   let response;
-  try { response = await fetch(path, { method, signal, connections: 'same-origin', cache: 'no-store', headers: { ...(data !== undefined ? { 'content-type': 'application/json' } : {}), ...headers }, ...(data !== undefined ? { body: JSON.stringify(data) } : {}) }); }
+  try { response = await fetch(path, { method, signal, credentials: 'same-origin', cache: 'no-store', headers: { ...(data !== undefined ? { 'content-type': 'application/json' } : {}), ...headers }, ...(data !== undefined ? { body: JSON.stringify(data) } : {}) }); }
   catch (error) { if (signal?.aborted) throw error; throw new Error('接続できませんでした。通信状況を確認してください。'); }
   const result = await response.json();
   signal?.throwIfAborted();
@@ -575,7 +575,7 @@ function bindObjects() {
         });
         if (!go) return;
       }
-      const response = await fetch('/v1/resources?' + new URLSearchParams({ kind: 'object', name: key }), { method: 'PUT', connections: 'same-origin',
+      const response = await fetch('/v1/resources?' + new URLSearchParams({ kind: 'object', name: key }), { method: 'PUT', credentials: 'same-origin',
         headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
       const result = await response.json();
       if (response.status === 401) await showLogin();
@@ -1085,7 +1085,7 @@ function addSecret() {
   bindForm(async (form) => {
     const name = form.get('name');
     const response = await fetch('/v1/resources?' + new URLSearchParams({ kind: 'secret', name }),
-      { method: 'PUT', connections: 'same-origin', headers: { 'content-type': 'text/plain' }, body: String(form.get('value')) });
+      { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'text/plain' }, body: String(form.get('value')) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
     closeDialog(); await refresh(); toast(name + ' を追加しました。');
@@ -1156,7 +1156,7 @@ function bindSecretValue(entry, row) {
     busy = true; lock(true); panel.setAttribute('aria-busy', 'true');
     panel.querySelectorAll('button').forEach(button => { button.disabled = true; });
     try {
-      const response = await fetch(path, { connections: 'same-origin', cache: 'no-store' });
+      const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
       if (response.status === 401) await showLogin();
       if (!response.ok) throw new Error('値を取得できませんでした。');
       const bytes = new Uint8Array(await response.arrayBuffer());
@@ -1222,7 +1222,7 @@ function bindSecretValue(entry, row) {
       try {
         if (!etag) throw new Error('編集をやり直してから保存してください。');
         const bytes = binary ? new Uint8Array(await file.arrayBuffer()) : content;
-        const response = await fetch(path, { method: 'PUT', connections: 'same-origin', cache: 'no-store',
+        const response = await fetch(path, { method: 'PUT', credentials: 'same-origin', cache: 'no-store',
           headers: { 'content-type': 'application/octet-stream', 'if-match': etag }, body: bytes });
         const result = await response.json();
         if (response.status === 401) await showLogin();
