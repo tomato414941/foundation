@@ -850,7 +850,8 @@ function servicePicker({ title, services, query = '', choose, create, filtered =
   filter.addEventListener('input', () => { filtered(filter.value); apply(); });
   dialog.querySelectorAll('.service-choice').forEach(button => button.addEventListener('click', () => choose(serviceById(button.dataset.id))));
   dialog.querySelector('#create-service').addEventListener('click', () => create(filter.value.trim()));
-  apply(); filter.focus();
+  // Typing at once helps with a mouse and a keyboard; on a touch screen it only raises the keyboard over the list.
+  apply(); if (matchMedia('(pointer: fine)').matches) filter.focus();
 }
 function addService() {
   servicePicker({ title: 'サービスを追加', services: allServices().filter(service => Object.keys(service.auth_schemes).length || ownService(service.id)), query: serviceFilter,
