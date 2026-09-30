@@ -165,8 +165,22 @@ export class Principals {
       return { principal_id: found.principal_id, ...this.issueLink(found.principal_id, found.request_id, ttl) };
     });
   }
-  sweep() {
-    this.db.prepare('DELETE FROM request_links WHERE expires_at<=?').run(Date.now());
-    this.db.prepare('DELETE FROM access_keys WHERE expires_at IS NOT NULL AND expires_at<=?').run(Date.now());
+  sweep(now = Date.now()) {
+    this.db.prepare('DELETE FROM request_links WHERE expires_at<=?').run(now);
+    this.db.prepare('DELETE FROM access_keys WHERE expires_at IS NOT NULL AND expires_at<=?').run(now);
+    this.sweepAbandoned(now);
+  }
+  // A principal anyone made for themselves and then left: it carries a key nobody has used for a day, nobody took it
+  // on, it holds and has set up nothing, it waits on no request, and no one is logged in as it. It is gone, keys and all.
+  sweepAbandoned(now = Date.now()) {
+    const cutoff = new Date(now - 86_400_000).toISOString();
+    return this.db.prepare(`DELETE FROM principals WHERE created_at<?
+      AND EXISTS (SELECT 1 FROM access_keys k WHERE k.principal_id=principals.id)
+      AND NOT EXISTS (SELECT 1 FROM access_keys k WHERE k.principal_id=principals.id AND k.last_used_at>=?)
+      AND NOT EXISTS (SELECT 1 FROM relations r WHERE r.subject_id=principals.id OR (r.object_type='principal' AND r.object_id=principals.id))
+      AND NOT EXISTS (SELECT 1 FROM resources h WHERE h.holder_id=principals.id)
+      AND NOT EXISTS (SELECT 1 FROM settings s WHERE s.principal_id=principals.id)
+      AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.owner_id=principals.id)
+      AND NOT EXISTS (SELECT 1 FROM requests q WHERE q.from_id=principals.id AND q.status='pending' AND q.expires_at>?)`).run(cutoff, cutoff, now).changes;
   }
 }

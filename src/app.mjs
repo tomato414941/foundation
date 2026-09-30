@@ -453,6 +453,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           const toId = input.to !== undefined ? principalId(input.to)
             : type === 'relation' ? (detail.object_type === undefined ? null : holderOf()) : holderId;
           if (toId !== null && !principals.get(toId)) fail(404, 'not_found', '相手が見つかりません。');
+          // Someone nobody has taken on yet may only ask whoever opens the page it hands over; naming a person would let
+          // anyone put a request in front of them. Once it is on a line with someone, it is known, and may name.
+          if (input.to !== undefined && !principals.relationsOf(subject.id).length) fail(403, 'unknown_requester', 'まだ誰にも承認されていないので、相手を指定した依頼は出せません。相手を指定せずに依頼し、その画面を渡してください。');
           if (type !== 'relation') permit('list', type === 'secret' ? 'secret' : 'credential', undefined, toId);
           const row = requestActions.ask(subject.id, { type, detail, toId, bindingMessage: purposeValue(input.binding_message), steps: input.steps ?? [], validMinutes: input.valid_minutes ?? 30 });
           return send(201, { request: viewRequest(row, origin, { code: true }) });

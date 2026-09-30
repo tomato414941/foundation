@@ -43,7 +43,6 @@ export class Requests {
       .get(fromId, toId, Date.now(), type, encoded, bindingMessage, written, ttl);
     if (same) return same;
     if (this.db.prepare("SELECT count(*) n FROM requests WHERE from_id=? AND status='pending' AND expires_at>?").get(fromId, Date.now()).n >= PENDING_MAX) fail(409, 'too_many_pending', '同時に開いておける依頼は10件までです。');
-    if (this.db.prepare('SELECT count(*) n FROM requests').get().n >= 1000) fail(429, 'request_limit', '依頼が混み合っています。しばらく待ってからお試しください。');
     const id = randomBytes(32).toString('base64url'), now = Date.now();
     // First contact carries a code: whoever answers types what the asker shows, so the one who answers is the one the
     // asker is talking to.
