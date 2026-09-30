@@ -694,7 +694,7 @@ function renderStore(row, shell, expiry) {
 const accessSummary = '保存データの取得・変更・削除と、接続済みサービスの利用を許可します。';
 const accessScope = '<ul class="access-scope"><li>認証情報とオブジェクトの取得・追加・更新・削除</li><li>接続済みサービスの利用とファンクションの実行</li></ul>';
 const accessExclusions = '接続の追加・解除、他の相手への権限付与、アカウント管理は含みません。';
-const accessDetails = () => `<details class="access-permissions"><summary>許可の詳細</summary>${accessScope}<p>${accessExclusions}</p><p>依頼元の名前は自己申告です。</p></details>`;
+const accessDetails = () => `<details class="access-permissions"><summary>許可の詳細</summary>${accessScope}<p>${accessExclusions}</p></details>`;
 // What one action lets its holder do, in the words of whoever grants it.
 const ACTION_WORDS = {
   'secret.list': 'シークレットの一覧を見る', 'secret.read': 'シークレットの情報を見る', 'secret.content': 'シークレットの値を読む', 'secret.write': 'シークレットの値を書き換える', 'secret.remove': 'シークレットを削除する',
@@ -716,7 +716,6 @@ function renderApproval(row, shell, expiry) {
   app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, acting ? 'アクセスを許可する' : '権限を渡す', 'device')}
     <dl class="approval-facts">${requestPurpose(row)}<div><dt>権限</dt><dd>${scope}</dd></div>${target}
     <div><dt>期間</dt><dd>${acting ? '今後追加するものも含め、' : ''}取り消すまで有効です。</dd></div></dl>
-    <p class="permission-note">依頼元の名前は自己申告です。</p>
     <form id="access-request-form">${first ? codeField() : ''}
     <p class="form-error" role="alert"></p>
     <button class="button primary full" type="submit"${first ? ' disabled' : ''}>許可する ${icon('arrow')}</button></form>
