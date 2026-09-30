@@ -86,7 +86,7 @@ test('省略可能な値にnullを渡した場合も従来の既定値で依頼�
   assert.equal(asked.status, 201);
   assert.deepEqual(asked.json.request.steps, []);
   assert.equal(asked.json.request.expires_at - asked.json.request.created_at, 30 * 60_000);
-  const started = await f.request('/v1/credentials', { method: 'POST', data: { service: 'google', scopes: null, app: null } });
+  const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'google', scopes: null, app: null } });
   assert.equal(started.status, 200);
   assert.equal(new URL(started.json.url).protocol, 'https:');
 });

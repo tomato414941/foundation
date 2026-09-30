@@ -35,7 +35,7 @@ async function outputFixture(t) {
 }
 
 test('CLIからリテラルな名前と接続の出力を明示して、値をコマンドの環境へ渡す', async t => {
-  const f = await outputFixture(t), connection = await f.credential();
+  const f = await outputFixture(t), connection = await f.connection();
   await f.keep('secret', 'token#work', 'work-value');
   const direct = await execute(['exec', 'VALUE=token#work', '--', process.execPath, '-e', "if(process.env.VALUE!=='work-value')process.exit(2);console.log('ready')"], f.env);
   assert.equal(direct.code, 0, direct.err);

@@ -89,8 +89,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     assert cli('api', 'GET', '/v1/resources?kind=secret')['resources'] == []
 
     # 2. The approved key asks for a registration, on its own link and without a code.
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'credential', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.readonly']}], 'binding_message': '届いたメールを確認する'}))['request']
-    assert request['authorization_details'][0]['type'] == 'credential' and 'user_code' not in request
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'connection', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.readonly']}], 'binding_message': '届いたメールを確認する'}))['request']
+    assert request['authorization_details'][0]['type'] == 'connection' and 'user_code' not in request
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='Googleに接続', exact=True)).to_be_visible()
     expect(page.get_by_text('laptop のAIの依頼', exact=True)).to_be_visible()
@@ -133,14 +133,14 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.goto(request['verification_uri'], wait_until='networkidle')
     review(page)
     page.screenshot(path=str(shots / 'request-approved.png'), full_page=True)
-    connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['credential_id']
-    listed = cli('api', 'GET', '/v1/resources?kind=credential')['resources']
+    connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['connection_id']
+    listed = cli('api', 'GET', '/v1/resources?kind=connection')['resources']
     assert [row['auth_scheme'] for row in listed if row['id'] == connection] == ['oauth']
     command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', '--inputs', json.dumps([{'id': connection}]), '--', 'node', '-e', 'if(!process.env.GOOGLE_OAUTH_ACCESS_TOKEN)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
     # 3. Revoking access stops use of this account and cancels its open registration requests.
-    pending = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'credential', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.metadata']}], 'binding_message': '件名を確認する'}))['request']
+    pending = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'connection', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.metadata']}], 'binding_message': '件名を確認する'}))['request']
     page.goto(args.base + '/principals', wait_until='networkidle')
     runtime = page.locator('.agent-row').filter(has_text='laptop のAI')
     runtime.get_by_role('button', name='取り消す', exact=True).click()
@@ -165,19 +165,19 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_label('確認コード', exact=True).fill(request['user_code'])
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'credential', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.metadata']}], 'binding_message': '件名を確認する'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'connection', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.metadata']}], 'binding_message': '件名を確認する'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.locator('.approval-facts')).to_contain_text('https://www.googleapis.com/auth/gmail.metadata')
     page.get_by_role('button', name='Googleの画面へ', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     expect(page.get_by_text('headers@example.test', exact=False)).to_be_visible()
     review(page)
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'credential', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.readonly']}], 'binding_message': '確認'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'connection', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.readonly']}], 'binding_message': '確認'}))['request']
     cli('api', 'DELETE', '/v1/requests/' + request['id'])
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='依頼は取り消されました', exact=True)).to_be_visible()
 
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'credential', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.readonly']}], 'binding_message': '<img src=x onerror="window.xss=1">' + '長い用途' * 50}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'connection', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.readonly']}], 'binding_message': '<img src=x onerror="window.xss=1">' + '長い用途' * 50}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     assert page.locator('.approval-card img').count() == 0
     assert page.evaluate('window.xss === undefined')
@@ -191,4 +191,4 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     assert not errors, errors
     context.close()
     browser.close()
-    print('Approval flow passed: key approval with code, then separate registration, Google consent/cancellation, native credentials, revocation, refusal, metadata-only credential, cancellation, invalid link, mobile, XSS and visible copy.')
+    print('Approval flow passed: key approval with code, then separate registration, Google consent/cancellation, native connections, revocation, refusal, metadata-only connection, cancellation, invalid link, mobile, XSS and visible copy.')

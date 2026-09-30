@@ -8,7 +8,7 @@ import { pointerTokens, valueAt } from '../src/json-pointer.mjs';
 import { uriTemplate } from '../src/uri-template.mjs';
 
 // Each service is data; these tests hold every definition to what it says. A fake answers at the addresses the
-// definition names, in the shape the definition reads, so a credential is made end to end.
+// definition names, in the shape the definition reads, so a connection is made end to end.
 const SAMPLE = { domain: 'example.cybozu.com', shop: 'example', subdomain: 'example', tenant: 'contoso.onmicrosoft.com', token: 'token-value' };
 const put = (target, pointer, value) => { const keys = pointerTokens(pointer); let at = target; for (const key of keys.slice(0, -1)) at = at[key] ??= {}; at[keys.at(-1)] = value; return target; };
 const fill = (template, values) => uriTemplate(template).expand(values);
@@ -46,7 +46,7 @@ for (const definition of DEFINITIONS.filter(item => item.auth_schemes.oauth && !
     const app = await f.request('/v1/resources?kind=app&name=' + definition.id, { method: 'PUT', data: { service: definition.id, client_id: 'own-client', client_secret: 'own-secret',
       ...Object.fromEntries((spec.app_fields ?? []).map(field => [field.name, SAMPLE[field.name]])) } });
     assert.equal(app.status, 200, app.text);
-    const started = await f.request('/v1/credentials', { method: 'POST', data: { service: definition.id, app: app.json.resource.id, ...(spec.scopes ? { scopes: ['one', 'two'] } : {}) } });
+    const started = await f.request('/v1/connections', { method: 'POST', data: { service: definition.id, app: app.json.resource.id, ...(spec.scopes ? { scopes: ['one', 'two'] } : {}) } });
     assert.equal(started.status, 200, started.text);
     const url = new URL(started.json.url), done = await f.callback(url, 'code-1');
     assert.match(done.headers.get('location'), /result=connected/, done.headers.get('location'));
@@ -59,17 +59,17 @@ for (const definition of DEFINITIONS.filter(item => item.auth_schemes.oauth && !
     assert.equal(sent.code, 'code-1');
     if (spec.client_auth === 'body') assert.equal(sent.client_secret, 'own-secret');
     else assert.equal(token.options.headers.authorization, 'Basic ' + Buffer.from('own-client:own-secret').toString('base64'));
-    const credential = (await f.request('/v1/overview')).json.credentials.find(item => item.service?.id === definition.id);
+    const connection = (await f.request('/v1/overview')).json.connections.find(item => item.service?.id === definition.id);
     if (spec.identity) {
-      assert.equal(credential.facts.account, spec.identity.from === 'app' ? valueAt(values, spec.identity.id) : [].concat(spec.identity.id).map((_, index) => 'id-' + index).join(':'));
-      if (spec.identity.label) assert.equal(credential.label, 'someone@example.test');
+      assert.equal(connection.facts.account, spec.identity.from === 'app' ? valueAt(values, spec.identity.id) : [].concat(spec.identity.id).map((_, index) => 'id-' + index).join(':'));
+      if (spec.identity.label) assert.equal(connection.label, 'someone@example.test');
     }
-    const injected = await f.inject(credential);
+    const injected = await f.inject(connection);
     assert.equal(injected.status, 200, injected.text);
     const environment = injected.json.injection.environment;
     for (const [name, template] of Object.entries(spec.injection)) if (template === '/access_token') assert.match(environment[name], /^access-/);
     assert.deepEqual(Object.keys(environment).filter(name => !Object.keys(spec.injection).includes(name)), []);
-    const removed = await f.request('/v1/resources/' + credential.id, { method: 'DELETE', data: { revoke: true } });
+    const removed = await f.request('/v1/resources/' + connection.id, { method: 'DELETE', data: { revoke: true } });
     assert.equal(removed.status, 200, removed.text);
     assert.equal(removed.json.service_revoked === true, Boolean(spec.revoke));
   });

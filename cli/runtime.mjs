@@ -105,7 +105,7 @@ Commands:
                                        Send one request to the Foundation API with the key attached.
   exec <ENV>=<name> [...] -- <command> [args...]
                                        Run a command with saved values in its environment.
-  exec --inputs '<json>' -- <command>  The same, with files, structured inputs, or a credential for a service by id.
+  exec --inputs '<json>' -- <command>  The same, with files, structured inputs, or a connection for a service by id.
   exec --output '<json>' -- <command>  Also save a file the command writes.
   version                              Print the version.
 
@@ -138,7 +138,7 @@ async function main() {
       if (at < 1) throw new Error('Specify the environment variable explicitly: ENV=name');
       return { name: value.slice(at + 1), as: value.slice(0, at) };
     });
-    // A credential for a service names its own variables, so an input may leave `as` out; a secret must say where it goes.
+    // A connection for a service names its own variables, so an input may leave `as` out; a secret must say where it goes.
     if (!Array.isArray(names) || names.length > 16 || names.some(item => {
       if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some(key => !['name', 'id', 'output', 'as', 'filename'].includes(key))) return true;
       if (Object.hasOwn(item, 'name') === Object.hasOwn(item, 'id')) return true;

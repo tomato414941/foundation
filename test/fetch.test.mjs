@@ -152,7 +152,7 @@ test('Foundation itself is not reachable under another name that points at its o
 });
 
 test('The HTTPS function binds opaque stored names explicitly and saves only its selected response body', async t => {
-  const { f, key, received } = await setup(t), connection = await f.credential();
+  const { f, key, received } = await setup(t), connection = await f.connection();
   const inputName = '{{入力}} /..,=x', outputName = '結果 /?';
   const input = await f.request('/v1/resources?kind=secret&name=' + encodeURIComponent(inputName) + '', { method: 'PUT', token: key.token, raw: TOKEN });
   assert.equal(input.status, 200);
@@ -223,10 +223,10 @@ test('JSON Pointerで選んだ値を差し込み、JSONとフォームをそれ�
 });
 
 test('接続から明示した出力を一度の取得で揃え、複数の差し込み先に送信する', async t => {
-  const { f, call, received } = await setup(t), connection = await f.credential();
+  const { f, call, received } = await setup(t), connection = await f.connection();
   let obtains = 0;
-  const derive = f.app.credentials.derive.bind(f.app.credentials);
-  f.app.credentials.derive = async row => { obtains++; return derive(row); };
+  const derive = f.app.connections.derive.bind(f.app.connections);
+  f.app.connections.derive = async row => { obtains++; return derive(row); };
   const answer = await call({ url: 'https://api.example.test/echo', headers: { authorization: '', 'x-account': '' }, bindings: [
     { target: '/headers/authorization', parts: ['Bearer ', { id: connection.id, output: 'GOOGLE_OAUTH_ACCESS_TOKEN' }] },
     { target: '/headers/x-account', parts: [{ id: connection.id, output: 'GOOGLE_ACCOUNT_EMAIL' }] },
@@ -238,7 +238,7 @@ test('接続から明示した出力を一度の取得で揃え、複数の差�
 });
 
 test('差し込み先とすべての参照を送信前に検証し、不正な要求では接続を更新しない', async t => {
-  const { f, call, received } = await setup(t), connection = await f.credential();
+  const { f, call, received } = await setup(t), connection = await f.connection();
   f.expire(connection.id);
   const calls = f.google.calls.length, good = { id: connection.id, output: 'GOOGLE_OAUTH_ACCESS_TOKEN' };
   const base = { url: 'https://api.example.test/echo', method: 'POST', headers: { authorization: '' }, json: { list: [''], number: 1 } };

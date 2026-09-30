@@ -3,7 +3,7 @@
   "name": "Google",
   "api": "https://www.googleapis.com",
   "docs": "https://developers.google.com/apis-explorer",
-  "console": "https://console.cloud.google.com/apis/credentials",
+  "console": "https://console.cloud.google.com/apis/connections",
   "auth_schemes": {
     "oauth": {
       "adapter": "google",

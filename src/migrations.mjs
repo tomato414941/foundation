@@ -1,6 +1,6 @@
 import { checkDefinition } from './service-definition.mjs';
 
-export const SCHEMA_VERSION = 35;
+export const SCHEMA_VERSION = 36;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -9,6 +9,7 @@ export const STEPS = {
   33: namesApart,
   34: requestsAsDetails,
   35: standardReferences,
+  36: connectionsWithMethods,
 };
 
 // A one-time data conversion, never a runtime parser for earlier definitions. Refuse any expression that cannot
@@ -203,6 +204,54 @@ function requestsAsDetails({ db }) {
 }
 requestsAsDetails.rebuilds = true;
 
+// A way into a service is a connection, whatever its method: OAuth, a role, or a token the holder gave. The kind, the
+// table, the actions drawn onto it and what requests say of it take that name; a connection's state is sealed to it
+// under that name; and a token becomes one of its methods.
+function connectionsWithMethods({ db, vault }) {
+  const indexes = db.prepare("SELECT sql FROM sqlite_schema WHERE type='index' AND tbl_name='resources' AND sql IS NOT NULL").all().map(row => row.sql);
+  const sealed = db.prepare('SELECT c.resource_id, c.state, r.holder_id FROM credentials c JOIN resources r ON r.id=c.resource_id WHERE c.state IS NOT NULL').all()
+    .map(row => ({ id: row.resource_id, state: vault.seal(vault.open(row.state, `credential:${row.holder_id}:${row.resource_id}`), `connection:${row.holder_id}:${row.resource_id}`) }));
+  db.exec(`
+    CREATE TABLE resources_next (
+    id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('secret','connection','object','app','service','environment')), name TEXT NOT NULL,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    INSERT INTO resources_next SELECT id, holder_id, CASE kind WHEN 'credential' THEN 'connection' ELSE kind END, name, created_at, updated_at FROM resources;
+    DROP TABLE resources; ALTER TABLE resources_next RENAME TO resources;
+    CREATE TABLE connections (
+    resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+    service TEXT NOT NULL, auth_scheme TEXT NOT NULL CHECK(auth_scheme IN ('oauth','role','token')),
+    app_id TEXT, subject TEXT, status TEXT NOT NULL DEFAULT 'usable' CHECK(status IN ('usable','reconnect_required','disconnecting')),
+    generation INTEGER NOT NULL DEFAULT 1, state BLOB
+    );
+    INSERT INTO connections SELECT resource_id, service, auth_scheme, app_id, subject, status, generation, state FROM credentials;
+    DROP TABLE credentials;
+    CREATE INDEX connections_app ON connections(app_id) WHERE app_id IS NOT NULL;
+    UPDATE relations SET relation='connection.' || substr(relation, 12) WHERE relation LIKE 'credential.%';
+    CREATE TABLE requests_next (
+    id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,
+    type TEXT NOT NULL CHECK(type IN ('relation','secret','connection','app')), detail TEXT NOT NULL,
+    requester_name TEXT NOT NULL DEFAULT '', binding_message TEXT NOT NULL, steps TEXT NOT NULL, user_code TEXT, attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, result TEXT, reason TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','granted','denied','cancelled')),
+    created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    );
+    INSERT INTO requests_next SELECT id, from_id, to_id, CASE type WHEN 'credential' THEN 'connection' ELSE type END,
+      CASE WHEN json_extract(detail, '$.credential_id') IS NOT NULL THEN json_remove(json_set(detail, '$.connection_id', json_extract(detail, '$.credential_id')), '$.credential_id')
+        WHEN json_extract(detail, '$.relation') LIKE 'credential.%' THEN json_set(detail, '$.relation', 'connection.' || substr(json_extract(detail, '$.relation'), 12)) ELSE detail END,
+      requester_name, binding_message, steps, user_code, attempts, progress,
+      CASE WHEN json_extract(result, '$.credential_id') IS NOT NULL THEN json_remove(json_set(result, '$.connection_id', json_extract(result, '$.credential_id')), '$.credential_id')
+        WHEN json_extract(result, '$.relation') LIKE 'credential.%' THEN json_set(result, '$.relation', 'connection.' || substr(json_extract(result, '$.relation'), 12)) ELSE result END,
+      reason, status, created_at, expires_at FROM requests;
+    DROP TABLE requests; ALTER TABLE requests_next RENAME TO requests;
+    CREATE INDEX requests_from ON requests(from_id, created_at);
+    CREATE INDEX requests_to ON requests(to_id, created_at);
+    UPDATE audit_log SET object_type='connection' WHERE object_type='credential';
+  `);
+  for (const sql of indexes) db.exec(sql);
+  for (const row of sealed) db.prepare('UPDATE connections SET state=? WHERE resource_id=?').run(row.state, row.id);
+}
+connectionsWithMethods.rebuilds = true;
+
 export const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE principals (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
@@ -234,7 +283,7 @@ export const SCHEMA = `
   CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);
   CREATE TABLE requests (
     id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,
-    type TEXT NOT NULL CHECK(type IN ('relation','secret','credential','app')), detail TEXT NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('relation','secret','connection','app')), detail TEXT NOT NULL,
     requester_name TEXT NOT NULL DEFAULT '', binding_message TEXT NOT NULL, steps TEXT NOT NULL, user_code TEXT, attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, result TEXT, reason TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','granted','denied','cancelled')),
     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
@@ -243,7 +292,7 @@ export const SCHEMA = `
   CREATE INDEX requests_to ON requests(to_id, created_at);
   -- What a holder holds: one row each, and a row in the table of its kind.
   CREATE TABLE resources (
-    id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('secret','credential','object','app','service','environment')), name TEXT NOT NULL,
+    id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('secret','connection','object','app','service','environment')), name TEXT NOT NULL,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   );
   CREATE INDEX resources_holder ON resources(holder_id, kind, name);
@@ -251,19 +300,20 @@ export const SCHEMA = `
   CREATE UNIQUE INDEX resources_object_name ON resources(holder_id, name) WHERE kind='object';
   CREATE UNIQUE INDEX resources_app_name ON resources(holder_id, name) WHERE kind='app';
   CREATE UNIQUE INDEX resources_service_name ON resources(holder_id, name) WHERE kind='service';
-  -- Arbitrary private bytes are not managed authorizations.
+  -- Private bytes the holder keeps, for no service in particular.
   CREATE TABLE secrets (
     resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
     size INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, content BLOB NOT NULL
   );
-  -- State used to obtain or renew credentials at a service.
-  CREATE TABLE credentials (
+  -- A way into a service as some account: by OAuth, a role, or a token the holder gave. The account is known when the
+  -- method can say; the state is what the method keeps, sealed.
+  CREATE TABLE connections (
     resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
-    service TEXT NOT NULL, auth_scheme TEXT NOT NULL CHECK(auth_scheme IN ('oauth','role')),
+    service TEXT NOT NULL, auth_scheme TEXT NOT NULL CHECK(auth_scheme IN ('oauth','role','token')),
     app_id TEXT, subject TEXT, status TEXT NOT NULL DEFAULT 'usable' CHECK(status IN ('usable','reconnect_required','disconnecting')),
     generation INTEGER NOT NULL DEFAULT 1, state BLOB
   );
-  CREATE INDEX credentials_app ON credentials(app_id) WHERE app_id IS NOT NULL;
+  CREATE INDEX connections_app ON connections(app_id) WHERE app_id IS NOT NULL;
   CREATE TABLE objects (resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE, size INTEGER NOT NULL DEFAULT 0, type TEXT);
   -- An OAuth app someone holds: which service it is for, its client ID, what else is said of it, and its sealed secret.
   CREATE TABLE apps (

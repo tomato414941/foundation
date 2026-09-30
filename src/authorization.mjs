@@ -7,7 +7,7 @@
 // onto the resource (viewer, editor), or by that one action drawn onto the resource or onto the holder. Owning a
 // principal is managing it (its name, keys, limits, removal), not reaching what it holds. What the subject came in by
 // decides nothing: a request link is bound to its one request where it is recognized, before any question is asked.
-// A line names a role, a named set of actions, or one action written as the rules name it (credential.disconnect).
+// A line names a role, a named set of actions, or one action written as the rules name it (connection.disconnect).
 export const ROLES = ['owner', 'actor', 'viewer', 'editor'];
 export const ACTION = /^[a-z_]+\.[a-z-]+$/;
 const SELF = (subject, resource) => subject === resource.holder;
@@ -30,7 +30,7 @@ const RULES = {
   // not their renewal state. Both can be delivered by an injection.
   secret: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], content: [SELF, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')],
     remove: [SELF, ACTOR], rename: [SELF], share: [SELF] },
-  credential: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], rename: [SELF], share: [SELF], connect: [SELF], disconnect: [SELF] },
+  connection: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], rename: [SELF], share: [SELF], connect: [SELF], disconnect: [SELF] },
   object: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')], remove: [SELF, ACTOR], rename: [SELF], link: [SELF, ACTOR], share: [SELF] },
   // An app is seen by whoever acts for its holder, used to connect by its holder and anyone on a line to it, and given
   // new values by its holder or an editor. Its secret is never read: there is no action for it.

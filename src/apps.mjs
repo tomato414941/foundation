@@ -7,8 +7,8 @@ import { resourceName } from './resources.mjs';
 // their own. The two are the same kind of thing, and differ only in who holds them.
 //
 // Three layers, each with its own grain: a service (services.mjs), apps through which it is authorized, and the
-// credentials made through them - one account's authorization, with the scopes it gave - each through exactly one
-// app. A credential renews and revokes through its app. Changing an app's secret keeps its credentials; removing an
+// connections made through them - one account's authorization, with the scopes it gave - each through exactly one
+// app. A connection renews and revokes through its app. Changing an app's secret keeps its connections; removing an
 // app stops them, as removing it at the service would, and they wait to be connected again through another.
 //
 // An app is used by Foundation alone. What it holds is either said (its client ID, and whatever else is not secret)
@@ -75,7 +75,7 @@ export class Apps {
     }
     return { said, sealed };
   }
-  // Registering an app, or giving one of the same name new values (a rotated secret). Its credentials go on.
+  // Registering an app, or giving one of the same name new values (a rotated secret). Its connections go on.
   put(holderId, { name, service, ...input }) {
     resourceName(name);
     const { ref } = this.services.get(service, holderId), { said: { client_id, ...settings }, sealed } = this.values(ref, input);
@@ -105,7 +105,7 @@ export class Apps {
     const sealed = this.vault.open(this.db.prepare('SELECT secret FROM apps WHERE resource_id=?').get(row.id).secret, this.binding(row));
     return Object.fromEntries(Object.entries({ client_id: row.client_id, ...JSON.parse(row.settings), ...sealed }).map(([key, value]) => [camel(key), value]));
   }
-  // The OAuth scheme to speak to a service with, through the app a credential names: one held, or Foundation's own.
+  // The OAuth scheme to speak to a service with, through the app a connection names: one held, or Foundation's own.
   scheme(serviceRef, appId) {
     const scheme = this.services.scheme(serviceRef, 'oauth');
     if (!appId || appId === FOUNDATION_APP) return scheme;
@@ -113,15 +113,15 @@ export class Apps {
     if (row.service !== serviceRef) fail(400, 'app_mismatch', 'このアプリは別のサービスのものです。');
     return through(scheme, this.clientValues(row));
   }
-  // The credentials made through an app, whoever holds them.
+  // The connections made through an app, whoever holds them.
   dependents(row) {
-    return this.db.prepare(`SELECT r.id, r.holder_id, r.name FROM credentials c JOIN resources r ON r.id=c.resource_id WHERE c.app_id=? AND c.status<>'disconnecting' ORDER BY r.created_at`).all(row.id);
+    return this.db.prepare(`SELECT r.id, r.holder_id, r.name FROM connections c JOIN resources r ON r.id=c.resource_id WHERE c.app_id=? AND c.status<>'disconnecting' ORDER BY r.created_at`).all(row.id);
   }
-  // Removing an app is what removing it at the service does: its credentials can no longer renew. They stay, with
+  // Removing an app is what removing it at the service does: its connections can no longer renew. They stay, with
   // their scopes and without an app, waiting to be connected again through another.
   remove(row) {
     this.store.transaction(() => {
-      this.db.prepare("UPDATE credentials SET app_id=NULL, status='reconnect_required', generation=generation+1 WHERE app_id=? AND status<>'disconnecting'").run(row.id);
+      this.db.prepare("UPDATE connections SET app_id=NULL, status='reconnect_required', generation=generation+1 WHERE app_id=? AND status<>'disconnecting'").run(row.id);
       this.resources.remove(row);
     });
   }
@@ -134,8 +134,8 @@ export class Apps {
       ? { id: FOUNDATION_APP, kind: 'app', name: 'Foundationのアプリ', service: this.services.summary(serviceRef), foundation: true } : null;
   }
   offeredAll() { return this.services.catalogIds().map(ref => this.offered(ref)).filter(Boolean); }
-  // An app as a credential or a request names it: which one, by what name, and whether it is Foundation's. A
-  // credential whose app was removed names none.
+  // An app as a connection or a request names it: which one, by what name, and whether it is Foundation's. A
+  // connection whose app was removed names none.
   reference(appId) {
     if (appId === FOUNDATION_APP) return { id: FOUNDATION_APP, name: 'Foundationのアプリ', foundation: true };
     const row = appId ? this.get(appId) : undefined;
@@ -143,6 +143,6 @@ export class Apps {
   }
   view(row, { owner = false } = {}) {
     return { ...this.resources.view(row), service: this.services.summary(row.service), client_id: row.client_id, settings: JSON.parse(row.settings),
-      foundation: false, ...(owner ? { credentials: this.dependents(row).length } : {}) };
+      foundation: false, ...(owner ? { connections: this.dependents(row).length } : {}) };
   }
 }

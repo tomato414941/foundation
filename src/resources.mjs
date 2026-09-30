@@ -4,12 +4,12 @@ import { fail } from './errors.mjs';
 // it and an audit log about it; it is listed, renamed and removed by the same rules. What a resource is lives in a
 // table of its own kind, keyed by this id, and what is done with it belongs to that kind:
 //   secret      private bytes whose purpose is the holder's (secrets.mjs)
-//   credential  a managed authorization at a service (credentials.mjs)
+//   connection  a managed authorization at a service (connections.mjs)
 //   object      a file the holder placed here (objects.mjs)
 //   app         an OAuth app, the name a service knows Foundation by (apps.mjs)
 //   service     a service the holder described, for one the catalog does not know (services.mjs)
 //   environment a machine lent to the holder, with a shell, files and the network (environments.mjs)
-export const KINDS = ['secret', 'credential', 'object', 'app', 'service', 'environment'];
+export const KINDS = ['secret', 'connection', 'object', 'app', 'service', 'environment'];
 const COMMON = 'id,holder_id,kind,name,created_at,updated_at';
 const now = () => new Date().toISOString();
 

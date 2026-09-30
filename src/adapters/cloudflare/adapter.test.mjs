@@ -13,18 +13,18 @@ const GRANTED = [...new Set([...CLOUDFLARE_BASE_SCOPES, ...ASKED])].sort();
 async function cloudflareFixture(t, cloudflare = new FakeCloudflare()) {
   const f = await fixture(t, { services: [entry('cloudflare', { oauth: cloudflareOauth(cloudflare) })] });
   async function start(input = {}) {
-    const result = await f.request('/v1/credentials', { method: 'POST', data: { service: 'cloudflare', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
+    const result = await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
-  const connections = async () => (await f.request('/v1/overview')).json.credentials;
+  const connections = async () => (await f.request('/v1/overview')).json.connections;
   async function connect(code = 'personal', input = {}) {
     const ids = new Set((await connections()).map(item => item.id));
     const done = await f.callback(await start(input), code);
     assert.match(done.headers.get('location'), /result=connected/, done.headers.get('location'));
-    return (await connections()).find(item => input.credential_id ? item.id === input.credential_id : !ids.has(item.id));
+    return (await connections()).find(item => input.connection_id ? item.id === input.connection_id : !ids.has(item.id));
   }
-  const secret = connection => f.app.credentials.state(f.app.credentials.held(USER_A, connection.id)).private_state;
+  const secret = connection => f.app.connections.state(f.app.connections.held(USER_A, connection.id)).private_state;
   return { ...f, cloudflare, start, connect, connections, secret };
 }
 
@@ -34,7 +34,7 @@ test('Cloudflareの設定を読み込み、未設定なら利用不可として�
   const f = await cloudflareFixture(t, new CloudflareClient());
   const listed = await f.request('/v1/services');
   assert.equal(listed.json.services[0].auth_schemes.oauth.available, false);
-  assert.equal((await f.request('/v1/credentials', { method: 'POST', data: { service: 'cloudflare' } })).status, 503);
+  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare' } })).status, 503);
 });
 
 test('Cloudflareの認可を、頼まれた権限と継続利用・本人確認の権限、state・PKCE付きで要求し、同じセッションで完了する', async t => {
@@ -63,13 +63,13 @@ test('Cloudflareの認可を、頼まれた権限と継続利用・本人確認�
 test('接続依頼を完了し、許可された権限と認証情報を分けて返す', async t => {
   const f = await cloudflareFixture(t), { token } = await f.issueKey();
   const asked = await f.request('/v1/requests', { method: 'POST', token, data: {
-    authorization_details: [{ type: 'credential', service: 'cloudflare', scopes: ASKED }], binding_message: 'ドメインとDNSを管理します。' } });
+    authorization_details: [{ type: 'connection', service: 'cloudflare', scopes: ASKED }], binding_message: 'ドメインとDNSを管理します。' } });
   assert.equal(asked.status, 201, asked.text);
   const connection = await f.connect('personal', { request_id: asked.json.request.id });
   const completed = await f.request('/v1/requests/' + asked.json.request.id, { token });
   assert.equal(completed.json.request.status, 'granted');
-  assert.equal(completed.json.request.result.credential_id, connection.id);
-  const listed = await f.request('/v1/resources?kind=credential', { token });
+  assert.equal(completed.json.request.result.connection_id, connection.id);
+  const listed = await f.request('/v1/resources?kind=connection', { token });
   assert.equal(listed.json.resources[0].label, 'personal@example.test');
   assert.equal(listed.json.resources[0].facts.user_id, '1'.repeat(32));
   assert.deepEqual(listed.json.resources[0].facts.scopes, GRANTED);
@@ -88,9 +88,9 @@ test('同じユーザーの認可を別の接続として保存し、指定し�
   const second = await f.connect();
   assert.notEqual(second.id, personal.id);
   assert.notEqual(f.secret(second).refresh_token, f.secret(personal).refresh_token);
-  assert.match((await f.callback(await f.start({ credential_id: personal.id }), 'work')).headers.get('location'), /result=wrong_account/);
+  assert.match((await f.callback(await f.start({ connection_id: personal.id }), 'work')).headers.get('location'), /result=wrong_account/);
   f.cloudflare.identityHandler = () => json({ success: true, result: { id: '1'.repeat(32), email: 'new@example.test' } });
-  const same = await f.connect('personal', { credential_id: personal.id });
+  const same = await f.connect('personal', { connection_id: personal.id });
   assert.equal(same.id, personal.id);
   assert.equal(same.label, 'new@example.test');
   assert.equal((await f.connections()).find(item => item.id === second.id).label, 'personal@example.test');
@@ -102,7 +102,7 @@ test('同じユーザーの認可を別の接続として保存し、指定し�
 
 test('Cloudflareで拒否された認可を依頼の結果に反映する', async t => {
   const f = await cloudflareFixture(t), { token } = await f.issueKey();
-  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'credential', service: 'cloudflare' }] } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'connection', service: 'cloudflare' }] } });
   const url = await f.start({ request_id: asked.json.request.id });
   const denied = await f.request('/oauth/callback?state=' + url.searchParams.get('state') + '&error=access_denied');
   assert.match(denied.headers.get('location'), /result=denied/);
@@ -115,7 +115,7 @@ test('頼んだ権限に対する不足と追加を、Cloudflareの応答に従�
   f.cloudflare.scopes = 'user-details.read offline_access workers-r2.read';
   const connection = await f.connect(), delivered = await f.inject(connection);
   assert.equal(delivered.status, 200);
-  const facts = await f.credentialFacts(connection);
+  const facts = await f.connectionFacts(connection);
   assert.deepEqual(facts.missing_scopes, ASKED);
   assert.deepEqual(facts.additional_scopes, ['workers-r2.read']);
 });
@@ -132,7 +132,7 @@ test('有効期限が近づいた認証情報を更新し、ローテーショ�
   const second = await f.inject(connection);
   assert.equal(second.json.injection.environment.CLOUDFLARE_API_TOKEN, 'cf-access-personal-2');
   assert.equal(f.cloudflare.calls.filter(call => call.options.body?.get('grant_type') === 'refresh_token')[1].options.body.get('refresh_token'), 'cf-refresh-personal-1');
-  assert.equal((await f.credentialFacts(connection)).user_id, connection.subject);
+  assert.equal((await f.connectionFacts(connection)).user_id, connection.subject);
 });
 
 test('更新応答で省略された権限と更新トークンを元の認可から引き継ぐ', async t => {
@@ -142,7 +142,7 @@ test('更新応答で省略された権限と更新トークンを元の認可�
   const delivered = await f.inject(connection);
   assert.equal(delivered.status, 200, delivered.text);
   assert.equal(f.secret(connection).refresh_token, 'cf-refresh-personal-0');
-  assert.deepEqual((await f.credentialFacts(connection)).scopes, GRANTED);
+  assert.deepEqual((await f.connectionFacts(connection)).scopes, GRANTED);
 });
 
 test('複数の同時要求を一回の更新にまとめ、後続の取得でも更新済みの認証情報を渡す', async t => {
@@ -211,12 +211,12 @@ test('Cloudflareの認証応答を検証し、不正な値を安全なエラー�
 test('再接続では新たな継続利用の許可と確認できる利用者情報を要求する', async t => {
   const f = await cloudflareFixture(t), connection = await f.connect();
   f.cloudflare.exchangeHandler = () => json({ access_token: 'cf-access-work-0', token_type: 'Bearer', expires_in: 3600, scope: GRANTED.join(' ') });
-  assert.match((await f.callback(await f.start({ credential_id: connection.id }), 'work')).headers.get('location'), /result=retry/);
+  assert.match((await f.callback(await f.start({ connection_id: connection.id }), 'work')).headers.get('location'), /result=retry/);
   assert.equal(f.secret(connection).identity.user_id, '1'.repeat(32));
   f.cloudflare.exchangeHandler = undefined;
   for (const result of [{ id: 'bad', email: 'person@example.test' }, { id: '1'.repeat(32), email: 'bad\n@example.test' }]) {
     f.cloudflare.identityHandler = () => json({ success: true, result });
-    assert.match((await f.callback(await f.start({ credential_id: connection.id }), 'personal')).headers.get('location'), /result=failed/);
+    assert.match((await f.callback(await f.start({ connection_id: connection.id }), 'personal')).headers.get('location'), /result=failed/);
   }
 });
 
@@ -248,8 +248,8 @@ test('同じユーザーが異なるアカウントへの許可を追加し、�
   assert.notEqual(first.id, second.id);
   assert.equal(second.facts.client_id, 'test-cloudflare-client');
   assert.deepEqual(second.facts.observed_accounts.items, f.cloudflare.listedAccounts);
-  assert.deepEqual((await f.credentialFacts(first)).observed_accounts.items, [{ id: 'a'.repeat(32), name: 'Personal account' }]);
-  assert.deepEqual((await f.credentialFacts(first)).scopes, GRANTED);
+  assert.deepEqual((await f.connectionFacts(first)).observed_accounts.items, [{ id: 'a'.repeat(32), name: 'Personal account' }]);
+  assert.deepEqual((await f.connectionFacts(first)).scopes, GRANTED);
   assert.equal((await f.inject(first)).status, 200);
   assert.equal((await f.inject(second)).status, 200);
 });
@@ -276,17 +276,17 @@ test('アカウント一覧の取得に失敗しても認可を保存し、対�
 
 test('再接続依頼で指定したIDを維持し、その依頼を完了する', async t => {
   const f = await cloudflareFixture(t), connection = await f.connect(), original = f.secret(connection), { token } = await f.issueKey();
-  const input = { service: 'cloudflare', credential_id: connection.id };
-  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'credential', ...input }] } });
+  const input = { service: 'cloudflare', connection_id: connection.id };
+  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'connection', ...input }] } });
   assert.equal(asked.status, 201, asked.text);
   const request = asked.json.request;
-  assert.deepEqual(request.authorization_details, [{ type: 'credential', ...input, auth_scheme: 'oauth' }]);
-  assert.equal(request.credential.id, connection.id);
+  assert.deepEqual(request.authorization_details, [{ type: 'connection', ...input, auth_scheme: 'oauth' }]);
+  assert.equal(request.connection.id, connection.id);
   const done = await f.callback(await f.start({ request_id: request.id }), 'personal');
   assert.match(done.headers.get('location'), /result=connected/);
   const completed = (await f.request('/v1/requests/' + request.id, { token })).json.request;
   assert.equal(completed.status, 'granted');
-  assert.equal(completed.result.credential_id, connection.id);
+  assert.equal(completed.result.connection_id, connection.id);
   assert.equal((await f.connections()).length, 1);
   assert.notEqual(f.secret(connection).refresh_token, original.refresh_token);
 });
@@ -294,53 +294,53 @@ test('再接続依頼で指定したIDを維持し、その依頼を完了する
 test('新規接続の依頼と再接続の依頼を、それぞれ指定された対象に固定する', async t => {
   const f = await cloudflareFixture(t), one = await f.connect(), two = await f.connect(), { token } = await f.issueKey();
   const ask = async connectionId => (await f.request('/v1/requests', { method: 'POST', token, data: {
-    authorization_details: [{ type: 'credential', service: 'cloudflare', ...(connectionId ? { credential_id: connectionId } : {}) }] } })).json.request;
+    authorization_details: [{ type: 'connection', service: 'cloudflare', ...(connectionId ? { connection_id: connectionId } : {}) }] } })).json.request;
   const renewal = await ask(one.id), addition = await ask();
   for (const [request, target] of [[renewal, two.id], [addition, one.id]]) {
-    const started = await f.request('/v1/credentials', { method: 'POST', data: { service: 'cloudflare', request_id: request.id, credential_id: target } });
+    const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare', request_id: request.id, connection_id: target } });
     assert.equal(started.status, 409, started.text);
-    assert.equal(started.json.error.code, 'credential_changed');
+    assert.equal(started.json.error.code, 'connection_changed');
   }
   assert.equal(f.cloudflare.exchanges, 2);
   await f.login('second@example.test');
   const other = await f.issueKey();
   const refused = await f.request('/v1/requests', { method: 'POST', token: other.token, data: {
-    authorization_details: [{ type: 'credential', service: 'cloudflare', credential_id: one.id }] } });
+    authorization_details: [{ type: 'connection', service: 'cloudflare', connection_id: one.id }] } });
   assert.equal(refused.status, 404);
 });
 
 test('新しいOAuthアプリへの再接続で変更内容を確認し、既存IDを維持して移行する', async t => {
   const f = await cloudflareFixture(t), connection = await f.connect(), old = f.secret(connection), { token } = await f.issueKey();
   const asked = await f.request('/v1/requests', { method: 'POST', token, data: {
-    authorization_details: [{ type: 'credential', service: 'cloudflare', credential_id: connection.id }] } });
+    authorization_details: [{ type: 'connection', service: 'cloudflare', connection_id: connection.id }] } });
   f.cloudflare.clientId = 'new-cloudflare-client';
   f.cloudflare.scopes = 'user-details.read account-settings.read offline_access';
   f.cloudflare.listedAccounts = [{ id: 'b'.repeat(32), name: 'Another account' }];
   const done = await f.callback(await f.start({ request_id: asked.json.request.id }), 'personal');
   const location = new URL(done.headers.get('location'), f.base), state = location.searchParams.get('state');
   assert.equal(location.searchParams.get('result'), 'review');
-  const review = await f.request('/v1/credentials/confirmation?state=' + state);
+  const review = await f.request('/v1/connections/confirmation?state=' + state);
   assert.equal(review.status, 200, review.text);
   assert.deepEqual(review.json.changes.map(item => item.label), ['OAuthアプリ', '権限', '確認できたアカウント']);
   assert.doesNotMatch(review.text, /cf-access-|cf-refresh-/);
   assert.deepEqual(f.secret(connection), old);
   assert.equal((await f.request('/v1/requests/' + asked.json.request.id, { token })).json.request.status, 'pending');
-  const approved = await f.request('/v1/credentials/confirmation', { method: 'POST', data: { state } });
+  const approved = await f.request('/v1/connections/confirmation', { method: 'POST', data: { state } });
   assert.equal(approved.status, 200, approved.text);
-  assert.equal(approved.json.credential.id, connection.id);
-  assert.equal(approved.json.credential.facts.client_id, 'new-cloudflare-client');
-  assert.equal((await f.request('/v1/requests/' + asked.json.request.id, { token })).json.request.result.credential_id, connection.id);
+  assert.equal(approved.json.connection.id, connection.id);
+  assert.equal(approved.json.connection.facts.client_id, 'new-cloudflare-client');
+  assert.equal((await f.request('/v1/requests/' + asked.json.request.id, { token })).json.request.result.connection_id, connection.id);
   assert.equal((await f.inject(connection, { token })).status, 200);
-  assert.equal((await f.request('/v1/credentials/confirmation', { method: 'POST', data: { state } })).status, 400);
+  assert.equal((await f.request('/v1/connections/confirmation', { method: 'POST', data: { state } })).status, 400);
 });
 
 test('変更の確認をキャンセルして元の接続を利用し続ける', async t => {
   const f = await cloudflareFixture(t), connection = await f.connect(), old = f.secret(connection);
   f.cloudflare.listedAccounts = [{ id: 'b'.repeat(32), name: 'Another account' }];
-  const done = await f.callback(await f.start({ credential_id: connection.id }), 'personal');
+  const done = await f.callback(await f.start({ connection_id: connection.id }), 'personal');
   const state = new URL(done.headers.get('location'), f.base).searchParams.get('state');
   assert.ok(state);
-  assert.equal((await f.request('/v1/credentials/confirmation', { method: 'DELETE', data: { state } })).status, 200);
+  assert.equal((await f.request('/v1/connections/confirmation', { method: 'DELETE', data: { state } })).status, 200);
   assert.deepEqual(f.secret(connection), old);
   assert.equal((await f.inject(connection)).status, 200);
   assert.equal(f.cloudflare.revoked.size, 0);
@@ -349,30 +349,30 @@ test('変更の確認をキャンセルして元の接続を利用し続ける',
 test('確認待ちに別の更新が完了した場合は、先に完了した接続を維持する', async t => {
   const f = await cloudflareFixture(t), connection = await f.connect();
   f.cloudflare.listedAccounts = [{ id: 'b'.repeat(32), name: 'Another account' }];
-  const done = await f.callback(await f.start({ credential_id: connection.id }), 'personal');
+  const done = await f.callback(await f.start({ connection_id: connection.id }), 'personal');
   const state = new URL(done.headers.get('location'), f.base).searchParams.get('state');
-  const row = f.app.credentials.held(USER_A, connection.id), context = f.app.credentials.context(row);
+  const row = f.app.connections.held(USER_A, connection.id), context = f.app.connections.context(row);
   const result = await cloudflareOauth(f.cloudflare).authorization.complete({ code: 'personal', verifier: 'test', redirectUri: f.base }, context);
-  const fresh = f.app.credentials.save(USER_A, 'cloudflare', 'oauth', result, { previous: row });
-  const confirmed = await f.request('/v1/credentials/confirmation', { method: 'POST', data: { state } });
+  const fresh = f.app.connections.save(USER_A, 'cloudflare', 'oauth', result, { previous: row });
+  const confirmed = await f.request('/v1/connections/confirmation', { method: 'POST', data: { state } });
   assert.equal(confirmed.status, 409);
-  assert.equal(confirmed.json.error.code, 'credential_changed');
-  assert.equal(f.app.credentials.held(USER_A, connection.id).generation, fresh.generation);
+  assert.equal(confirmed.json.error.code, 'connection_changed');
+  assert.equal(f.app.connections.held(USER_A, connection.id).generation, fresh.generation);
   assert.equal(f.secret(connection).refresh_token, result.privateState.refresh_token);
 });
 
 test('取り消された依頼や別のブラウザーでは確認待ちの変更を確定しない', async t => {
   const f = await cloudflareFixture(t), connection = await f.connect(), old = f.secret(connection), { token } = await f.issueKey();
   const asked = await f.request('/v1/requests', { method: 'POST', token, data: {
-    authorization_details: [{ type: 'credential', service: 'cloudflare', credential_id: connection.id }] } });
+    authorization_details: [{ type: 'connection', service: 'cloudflare', connection_id: connection.id }] } });
   f.cloudflare.listedAccounts = [];
   const done = await f.callback(await f.start({ request_id: asked.json.request.id }), 'personal');
   const state = new URL(done.headers.get('location'), f.base).searchParams.get('state');
-  assert.equal((await f.request('/v1/credentials/confirmation?state=' + state, { anonymous: true })).status, 401);
-  assert.equal((await f.request('/v1/credentials/confirmation', { method: 'POST', token, data: { state } })).status, 403);
+  assert.equal((await f.request('/v1/connections/confirmation?state=' + state, { anonymous: true })).status, 401);
+  assert.equal((await f.request('/v1/connections/confirmation', { method: 'POST', token, data: { state } })).status, 403);
   assert.equal((await f.request('/v1/requests/' + asked.json.request.id, { method: 'DELETE', token, data: {} })).status, 200);
-  assert.equal((await f.request('/v1/credentials/confirmation', { method: 'POST', data: { state } })).status, 409);
+  assert.equal((await f.request('/v1/connections/confirmation', { method: 'POST', data: { state } })).status, 409);
   await f.login('second@example.test');
-  assert.equal((await f.request('/v1/credentials/confirmation?state=' + state)).status, 400);
+  assert.equal((await f.request('/v1/connections/confirmation?state=' + state)).status, 400);
   assert.deepEqual(f.secret(connection), old);
 });

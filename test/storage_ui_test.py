@@ -325,7 +325,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     assert Path(download_info.value.path()).read_bytes() == binary
     binary_row.get_by_role('button', name='値を編集', exact=True).click()
     replaced = b'\x00\xfe\x01replacement'
-    binary_row.get_by_label('ファイル', exact=True).set_input_files({'name': 'credential.bin', 'mimeType': 'application/octet-stream', 'buffer': replaced})
+    binary_row.get_by_label('ファイル', exact=True).set_input_files({'name': 'connection.bin', 'mimeType': 'application/octet-stream', 'buffer': replaced})
     binary_row.get_by_role('button', name='保存', exact=True).click()
     expect(binary_row.get_by_text('ファイル', exact=True)).to_be_visible()
     assert read(page, 'binary').body() == replaced

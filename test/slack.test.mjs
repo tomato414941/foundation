@@ -10,18 +10,18 @@ const ASKED = ['channels:read', 'chat:write'];
 async function slackFixture(t, slack = new FakeSlack()) {
   const f = await fixture(t, { services: [slack.entry()] });
   async function start(input = {}) {
-    const result = await f.request('/v1/credentials', { method: 'POST', data: { service: 'slack', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
+    const result = await f.request('/v1/connections', { method: 'POST', data: { service: 'slack', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
-  const connections = async () => (await f.request('/v1/overview')).json.credentials;
+  const connections = async () => (await f.request('/v1/overview')).json.connections;
   async function connect(code = 'personal', input = {}) {
     const ids = new Set((await connections()).map(item => item.id));
     const done = await f.callback(await start(input), code);
     assert.match(done.headers.get('location'), /result=connected/, done.headers.get('location'));
-    return (await connections()).find(item => input.credential_id ? item.id === input.credential_id : !ids.has(item.id));
+    return (await connections()).find(item => input.connection_id ? item.id === input.connection_id : !ids.has(item.id));
   }
-  const secret = connection => f.app.credentials.state(f.app.credentials.held(USER_A, connection.id)).private_state;
+  const secret = connection => f.app.connections.state(f.app.connections.held(USER_A, connection.id)).private_state;
   return { ...f, slack, start, connect, connections, secret };
 }
 
@@ -33,7 +33,7 @@ test('Slackの設定を読み込み、未設定なら運営のアプリなしと
   assert.equal(listed.available, false);
   assert.equal(listed.foundation_app, false);
   assert.equal(listed.takes_apps, true);
-  assert.equal((await f.request('/v1/credentials', { method: 'POST', data: { service: 'slack' } })).status, 503);
+  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'slack' } })).status, 503);
 });
 
 test('頼まれたBotの権限をカンマ区切りでSlackに求め、ワークスペースごとの接続として保存する', async t => {
@@ -102,9 +102,9 @@ test('失効した更新トークンでは再接続を案内する', async t => 
 
 test('別のワークスペースでつなぎ直そうとすると断り、同じワークスペースならIDを保ってつなぎ直す', async t => {
   const f = await slackFixture(t), connection = await f.connect();
-  const other = await f.callback(await f.start({ credential_id: connection.id }), 'work');
+  const other = await f.callback(await f.start({ connection_id: connection.id }), 'work');
   assert.match(other.headers.get('location'), /result=wrong_account/);
-  const again = await f.connect('personal', { credential_id: connection.id });
+  const again = await f.connect('personal', { connection_id: connection.id });
   assert.equal(again.id, connection.id);
 });
 

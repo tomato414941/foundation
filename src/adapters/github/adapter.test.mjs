@@ -9,12 +9,12 @@ import { FakeGoogle, fixture, entry } from '../../../test/helpers.mjs';
 async function githubFixture(t, github = new FakeGitHub()) {
   const google = new FakeGoogle(), f = await fixture(t, { google, services: [entry('github', { oauth: githubOauth(github) }), entry('google', { oauth: googleOauth(google) })] });
   async function start(extra = {}) {
-    const result = await f.request('/v1/credentials', { method: 'POST', data: { service: 'github', name: '', ...extra } });
+    const result = await f.request('/v1/connections', { method: 'POST', data: { service: 'github', name: '', ...extra } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
   const back = (url, code) => f.request(new URL(url.searchParams.get('redirect_uri')).pathname + '?state=' + url.searchParams.get('state') + '&code=' + code);
-  const connections = async () => (await f.request('/v1/overview')).json.credentials.filter(item => item.service?.id === 'github');
+  const connections = async () => (await f.request('/v1/overview')).json.connections.filter(item => item.service?.id === 'github');
   return { ...f, github, start, back, connections };
 }
 
@@ -52,7 +52,7 @@ test('頼んだGitHub権限に対する不足と追加を接続一覧で確認�
   const agent = await f.issueKey(), [connection] = await f.connections();
   const result = await f.inject(connection, { token: agent.token });
   assert.equal(result.status, 200, result.text);
-  const facts = await f.credentialFacts(connection, { token: agent.token });
+  const facts = await f.connectionFacts(connection, { token: agent.token });
   assert.deepEqual(facts.missing_scopes, ['gist', 'repo', 'workflow']);
   assert.deepEqual(facts.additional_scopes, ['admin:org']);
   assert.equal(result.json.injection.environment.GH_TOKEN, 'gho_octo');
@@ -72,9 +72,9 @@ test('Registering again must use the same GitHub account', async t => {
   const f = await githubFixture(t);
   await f.back(await f.start(), 'octo');
   const [connection] = await f.connections();
-  const other = await f.back(await f.start({ credential_id: connection.id }), 'other');
+  const other = await f.back(await f.start({ connection_id: connection.id }), 'other');
   assert.match(other.headers.get('location'), /result=wrong_account/);
-  const same = await f.back(await f.start({ credential_id: connection.id }), 'octo');
+  const same = await f.back(await f.start({ connection_id: connection.id }), 'octo');
   assert.match(same.headers.get('location'), /result=connected/);
   assert.equal((await f.connections()).length, 1);
 });
@@ -94,5 +94,5 @@ test('Without a client ID and secret GitHub is offered as unavailable', async t 
   const google = new FakeGoogle(), f = await fixture(t, { google, services: [entry('github', { oauth: githubOauth(new GitHubClient()) }), entry('google', { oauth: googleOauth(google) })] });
   const scheme = (await f.request('/v1/overview')).json.catalog.find(item => item.id === 'github').auth_schemes.oauth;
   assert.equal(scheme.available, false);
-  assert.equal((await f.request('/v1/credentials', { method: 'POST', data: { service: 'github' } })).status, 503);
+  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'github' } })).status, 503);
 });

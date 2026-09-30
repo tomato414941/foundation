@@ -6,8 +6,8 @@ import { reaches } from './authorization.mjs';
 // Operations crossing resource boundaries. Each local result and its request completion
 // commit together; notifications run only after the transaction has committed.
 export class RequestActions {
-  constructor({ store, requests, secrets, credentials, services, apps, principals, authorization, auditLog, changed = () => {} }) {
-    Object.assign(this, { store, requests, secrets, credentials, services, apps, principals, authorization, auditLog, changed });
+  constructor({ store, requests, secrets, connections, services, apps, principals, authorization, auditLog, changed = () => {} }) {
+    Object.assign(this, { store, requests, secrets, connections, services, apps, principals, authorization, auditLog, changed });
   }
   // A request is checked against what is there when it is made, so a mismatch reaches the requester and never the
   // one asked. A secret's name already in use must be declared a replacement, and a replacement must name something
@@ -18,13 +18,13 @@ export class RequestActions {
     if (type === 'secret') for (const field of definition.fields) this.placement(toId, field, field.name);
     if (type === 'app') this.apps.fields(this.services.get(definition.service, toId).ref);
     if (type === 'relation') this.relationAsked(fromId, toId, definition);
-    if (type === 'credential') {
+    if (type === 'connection') {
       const { ref, definition: service } = this.services.get(definition.service, toId);
       definition.auth_scheme ??= Object.keys(service.auth_schemes)[0];
       const scheme = this.services.scheme(ref, definition.auth_scheme);
       if (definition.scopes && !scheme.scopes) fail(400, 'scopes_unsupported', 'この接続方法では権限を指定できません。');
       if (definition.app !== undefined && !takesApps(scheme)) fail(400, 'app_unsupported', 'この接続方法はアプリを通しません。');
-      const previous = definition.credential_id === undefined ? undefined : this.credentials.reconnection(toId, ref, definition.auth_scheme, definition.credential_id);
+      const previous = definition.connection_id === undefined ? undefined : this.connections.reconnection(toId, ref, definition.auth_scheme, definition.connection_id);
       if (definition.app !== undefined && definition.app !== 'foundation') {
         const app = this.apps.get(definition.app);
         if (!app || !this.authorization.can(toId, 'use', 'app', { id: app.id, holder: app.holder_id })) fail(404, 'not_found', 'アプリが見つかりません。');
@@ -117,15 +117,15 @@ export class RequestActions {
       if (id) {
         const row = this.requests.forTo(id, holderId, true);
         const input = this.requests.detail(row);
-        if (row.type !== 'credential' || input.service !== service || input.auth_scheme !== scheme) fail(409, 'wrong_kind', '依頼された方法で接続してください。');
-        if (input.credential_id !== previous?.id) fail(409, 'credential_changed', '依頼された接続を選んでください。');
+        if (row.type !== 'connection' || input.service !== service || input.auth_scheme !== scheme) fail(409, 'wrong_kind', '依頼された方法で接続してください。');
+        if (input.connection_id !== previous?.id) fail(409, 'connection_changed', '依頼された接続を選んでください。');
       }
-      const saved = this.credentials.save(holderId, service, scheme, result, { previous, scopes, app });
-      this.auditLog.write(holderId, previous ? 'credential.renewed' : 'credential.created', 'credential', saved.id, { service, auth_scheme: scheme, requested_by: requestedBy || null, request: id || null });
+      const saved = this.connections.save(holderId, service, scheme, result, { previous, scopes, app });
+      this.auditLog.write(holderId, previous ? 'connection.renewed' : 'connection.created', 'connection', saved.id, { service, auth_scheme: scheme, requested_by: requestedBy || null, request: id || null });
       if (id) {
-        this.requests.done(id, holderId, { credential_id: saved.id });
+        this.requests.done(id, holderId, { connection_id: saved.id });
         this.requests.record(id, 'connected', { service });
-        this.auditLog.write(holderId, 'request.granted', 'request', id, { type: 'credential', service });
+        this.auditLog.write(holderId, 'request.granted', 'request', id, { type: 'connection', service });
       }
       return saved;
     });

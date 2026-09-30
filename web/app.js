@@ -151,7 +151,7 @@ function toast(text) {
 }
 async function api(path, { method = 'GET', data, signal, headers = {} } = {}) {
   let response;
-  try { response = await fetch(path, { method, signal, credentials: 'same-origin', cache: 'no-store', headers: { ...(data !== undefined ? { 'content-type': 'application/json' } : {}), ...headers }, ...(data !== undefined ? { body: JSON.stringify(data) } : {}) }); }
+  try { response = await fetch(path, { method, signal, connections: 'same-origin', cache: 'no-store', headers: { ...(data !== undefined ? { 'content-type': 'application/json' } : {}), ...headers }, ...(data !== undefined ? { body: JSON.stringify(data) } : {}) }); }
   catch (error) { if (signal?.aborted) throw error; throw new Error('接続できませんでした。通信状況を確認してください。'); }
   const result = await response.json();
   signal?.throwIfAborted();
@@ -271,7 +271,7 @@ async function refresh({ background = false } = {}) {
     try { back = back || (await api('/v1/requests/' + requestId + '/return')).back; } catch {}
     try { accessRequest = (await api(requestApi)).request; requestError = ''; }
     catch (error) { accessRequest = null; requestError = error.status === 401 ? 'このリンクはもう使えません。元の画面から開き直してください。' : error.message; }
-    state = { user: { email: '' }, secrets: [], credentials: [], actors: [], principals: [], catalog: [], services: [], apps: [], space: null };
+    state = { user: { email: '' }, secrets: [], connections: [], actors: [], principals: [], catalog: [], services: [], apps: [], space: null };
     render();
     return;
   }
@@ -364,9 +364,9 @@ if (!requestId && !isLoginConfirmation) {
     navigate(new URL(location.href), { restore: true, position: event.state?.scroll });
   });
 }
-// What the holder let Foundation use: secrets they handed over, and credentials for services.
+// What the holder let Foundation use: secrets they handed over, and connections for services.
 const secrets = () => state.secrets || [];
-const connected = () => state.credentials || [];
+const connected = () => state.connections || [];
 // Every service the holder can connect: those Foundation knows, and those they (or someone for them) described.
 const allServices = () => [...(state.catalog || []), ...(state.services || []).map(row => row.service)];
 const serviceById = id => allServices().find(item => item.id === id);
@@ -381,7 +381,7 @@ const keptWhen = value => new Date(value).toLocaleString('ja-JP');
 const kiloBytes = size => size < 1024 ? size + ' バイト' : size < 1024 * 1024 ? Math.round(size / 1024) + ' KB'
   : size < 1024 * 1024 * 1024 ? Math.round(size / (1024 * 1024)) + ' MB' : (size / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 const statusName = status => ({ usable: '利用できます', reconnect_required: '接続し直しが必要です', disconnecting: '解除しています' }[status] || '確認が必要です');
-// One credential for a service: which service, which account, and what is wrong when something is.
+// One connection for a service: which service, which account, and what is wrong when something is.
 function connectionRow(connection) {
   const warning = connection.status !== 'usable';
   const account = connection.label;
@@ -570,7 +570,7 @@ function bindObjects() {
         });
         if (!go) return;
       }
-      const response = await fetch('/v1/resources?' + new URLSearchParams({ kind: 'object', name: key }), { method: 'PUT', credentials: 'same-origin',
+      const response = await fetch('/v1/resources?' + new URLSearchParams({ kind: 'object', name: key }), { method: 'PUT', connections: 'same-origin',
         headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
       const result = await response.json();
       if (response.status === 401) await showLogin();
@@ -605,7 +605,7 @@ function renderRequest() {
   const type = detailOf(row).type, asked = detailOf(row);
   if (!row || row.status !== 'pending' || !knownRequestKind(type)) {
     const view = requestResultView(row, requestError);
-    const subject = view.completed ? type === 'secret' ? row.result.names.join('、') : type === 'credential' ? connected().find(item => item.id === row.result.credential_id)?.label : row.requester_name : '';
+    const subject = view.completed ? type === 'secret' ? row.result.names.join('、') : type === 'connection' ? connected().find(item => item.id === row.result.connection_id)?.label : row.requester_name : '';
     const link = !linked ? '<a class="button secondary" href="' + view.href + '">' + view.label + ' ' + icon('arrow') + '</a>'
       : back ? '<a class="button secondary" href="' + esc(backTo(row)) + '">' + esc(back.name) + 'に戻る</a>' : '';
     app.innerHTML = shell('<section class="approval-card approval-result"><span class="approval-symbol">' + icon(view.completed ? 'check' : 'lock') + '</span><h1>' + view.title + '</h1>' + (subject ? '<p>' + esc(subject) + '</p>' : '') + (view.description ? '<p>' + esc(view.description) + '</p>' : '') + link + '</section>');
@@ -621,11 +621,11 @@ function renderRequest() {
     return;
   }
   const way = row.auth_scheme, scheme = service.auth_schemes[way], name = service.name;
-  const reconnecting = Boolean(asked.credential_id), title = reconnecting ? name + 'に接続し直す' : name + 'に接続';
-  const facts = `<dl class="approval-facts">${requestPurpose(row)}${row.credential ? `<div><dt>更新する接続</dt><dd>${esc(row.credential.label)}${cloudflareDetails(row.credential)}</dd></div>` : ''}
+  const reconnecting = Boolean(asked.connection_id), title = reconnecting ? name + 'に接続し直す' : name + 'に接続';
+  const facts = `<dl class="approval-facts">${requestPurpose(row)}${row.connection ? `<div><dt>更新する接続</dt><dd>${esc(row.connection.label)}${cloudflareDetails(row.connection)}</dd></div>` : ''}
     <div><dt>方法</dt><dd>${WAYS[way][0]}${way === 'oauth' ? requestedScopesView(row, scheme) : ''}</dd></div>${row.app && !row.app.foundation ? `<div><dt>OAuthアプリ</dt><dd>${esc(row.app.name)}</dd></div>` : ''}</dl>`;
   let body;
-  if (reconnecting && !row.credential) body = '<p class="form-error" role="status">更新する接続が見つかりません。</p>';
+  if (reconnecting && !row.connection) body = '<p class="form-error" role="status">更新する接続が見つかりません。</p>';
   else if (row.app === null) body = '<p class="form-error" role="status">使うOAuthアプリが見つかりません。</p>';
   else if (!scheme.available && (way !== 'oauth' || row.app?.foundation || !scheme.takes_apps)) body = `<p class="form-error" role="status">現在${esc(name)}に接続できません。</p>`;
   else body = `<button class="button primary full request-connect" type="button" data-action="request-connect">${esc(way === 'role' ? 'IAMロールを作る' : name + 'の画面へ')} ${icon('arrow')}</button>`;
@@ -638,8 +638,8 @@ function renderRequest() {
 function requestedScopesView(row, scheme) {
   const detail = detailOf(row), asked = detail.scopes || [];
   if (!scheme.scopes) return '';
-  if (!asked.length) return `<small class="muted block">${detail.credential_id ? '今許可している権限のまま接続し直します。' : '本人確認のための権限だけを頼みます。'}</small>`;
-  return `<small class="muted block">${detail.credential_id ? '今の権限に加えて、' : ''}次の権限を頼みます。</small><ul class="scope-list">${asked.map(scope => `<li><code>${esc(scope)}</code></li>`).join('')}</ul>`;
+  if (!asked.length) return `<small class="muted block">${detail.connection_id ? '今許可している権限のまま接続し直します。' : '本人確認のための権限だけを頼みます。'}</small>`;
+  return `<small class="muted block">${detail.connection_id ? '今の権限に加えて、' : ''}次の権限を頼みます。</small><ul class="scope-list">${asked.map(scope => `<li><code>${esc(scope)}</code></li>`).join('')}</ul>`;
 }
 // The owner registers an OAuth app for a key: its values go into the app, and the key learns only which app it is.
 function renderAppRequest(row, shell, expiry) {
@@ -698,7 +698,7 @@ const accessDetails = () => `<details class="access-permissions"><summary>許可
 // What one action lets its holder do, in the words of whoever grants it.
 const ACTION_WORDS = {
   'secret.list': 'シークレットの一覧を見る', 'secret.read': 'シークレットの情報を見る', 'secret.content': 'シークレットの値を読む', 'secret.write': 'シークレットの値を書き換える', 'secret.remove': 'シークレットを削除する',
-  'credential.list': 'サービスとの接続の一覧を見る', 'credential.read': 'サービスとの接続の情報を見る', 'credential.connect': 'サービスに接続する', 'credential.disconnect': 'サービスとの接続を解除する',
+  'connection.list': 'サービスとの接続の一覧を見る', 'connection.read': 'サービスとの接続の情報を見る', 'connection.connect': 'サービスに接続する', 'connection.disconnect': 'サービスとの接続を解除する',
   'object.list': 'オブジェクトの一覧を見る', 'object.read': 'オブジェクトを読む', 'object.write': 'オブジェクトを書き換える', 'object.remove': 'オブジェクトを削除する', 'object.link': 'オブジェクトの共有リンクを作る',
   'app.use': 'このOAuthアプリで接続する', 'app.write': 'OAuthアプリの設定を変える', 'app.remove': 'OAuthアプリを削除する',
   'service.write': 'サービスの定義を変える', 'service.remove': 'サービスの定義を削除する',
@@ -757,8 +757,8 @@ function bindForm(handler, container = dialog) {
 // through - Foundation's, one of their own, or one someone lent them.
 const appsFor = serviceId => (state.apps || []).filter(app => app.service?.id === serviceId);
 const oauthUsable = service => Boolean(service?.auth_schemes.oauth && (service.auth_schemes.oauth.foundation_app || (!service.auth_schemes.oauth.takes_apps && service.auth_schemes.oauth.available) || appsFor(service.id).length));
-function connectChoices(service, credentialId, appId) {
-  const scheme = service.auth_schemes.oauth, reconnecting = credentialId ? connected().find(item => item.id === credentialId) : null;
+function connectChoices(service, connectionId, appId) {
+  const scheme = service.auth_schemes.oauth, reconnecting = connectionId ? connected().find(item => item.id === connectionId) : null;
   const scopes = scheme.scopes ? `<label for="connect-scopes">${reconnecting ? '追加で許可する権限' : '許可する権限'}（1行に1つ）</label>
     <textarea id="connect-scopes" name="scopes" rows="3" autocomplete="off" spellcheck="false" placeholder="${esc(service.name)}の権限名"></textarea>
     <p class="permission-note">${reconnecting ? '今許可している権限はそのまま残ります。' : ''}本人確認のため${scheme.scopes.base.length ? esc(scheme.scopes.base.join('、')) + 'も頼みます。' : '追加で頼む権限はありません。'}${scheme.scopes.documentation_url ? `<a href="${esc(scheme.scopes.documentation_url)}" target="_blank" rel="noopener noreferrer">権限の一覧 ↗</a>` : ''}</p>` : '';
@@ -777,7 +777,7 @@ function appsSection() {
   const apps = [...(state.apps || [])].sort((a, b) => (a.service?.name || '').localeCompare(b.service?.name || '', 'ja') || Number(b.foundation) - Number(a.foundation) || a.name.localeCompare(b.name, 'ja'));
   const row = app => {
     const mine = !app.foundation && app.holder_id === state.principal?.id;
-    const detail = app.foundation ? '誰でも使えます。' : mine ? `クライアントID ${esc(app.client_id)}・接続 ${esc(String(app.credentials ?? 0))}件` : 'ほかの人から使うことを許可されたアプリ';
+    const detail = app.foundation ? '誰でも使えます。' : mine ? `クライアントID ${esc(app.client_id)}・接続 ${esc(String(app.connections ?? 0))}件` : 'ほかの人から使うことを許可されたアプリ';
     return `<article class="agent-row"><div class="connection-identity">${serviceLogo(app.service)}<div class="agent-name"><h3>${esc(app.service?.name || '')}</h3><p>${esc(app.name)}</p></div></div>
       <div class="agent-permissions"><span class="muted">${detail}</span></div>
       <div class="agent-actions">${mine ? `<button class="text-button" data-action="change-app" data-id="${esc(app.id)}">シークレットを変更</button><button class="text-button danger" data-action="remove-app" data-id="${esc(app.id)}">削除</button>` : ''}</div></article>`;
@@ -820,7 +820,7 @@ function changeApp(app) {
 }
 // Removing an app stops the connections made through it, as removing it at the service would.
 function removeApp(app) {
-  const count = app.credentials ?? 0;
+  const count = app.connections ?? 0;
   openDialog(`<h2 id="dialog-title">${esc(app.name)} を削除しますか？</h2><form>
     <p>${count ? `このアプリで作った接続が${esc(String(count))}件あります。削除すると、別のアプリでつなぎ直すまで使えなくなります。` : 'このアプリで作った接続はありません。'}</p>
     <p class="permission-note">${esc(app.service?.name || '')}側のアプリは残ります。不要ならそちらでも削除してください。</p><p class="form-error" role="alert"></p>
@@ -828,7 +828,7 @@ function removeApp(app) {
   bindForm(async () => {
     const result = await api('/v1/resources/' + app.id, { method: 'DELETE', data: { confirm: true } });
     closeDialog(); await refresh();
-    toast(result.credentials_stopped ? `削除しました。${result.credentials_stopped}件の接続がつなぎ直し待ちになりました。` : '削除しました。');
+    toast(result.connections_stopped ? `削除しました。${result.connections_stopped}件の接続がつなぎ直し待ちになりました。` : '削除しました。');
   });
 }
 // Adding a service: find it among those Foundation knows and those the holder described, or describe one it does not.
@@ -869,21 +869,21 @@ function chooseService(serviceId) {
   openDialog(`<h2 id="dialog-title">${esc(service.name)}に接続</h2>
     ${ways.length ? `<div class="way-list">${ways.map(way => `<button class="way-choice" data-action="choose-way" data-id="${esc(service.id)}" data-way="${way}"><strong>${WAYS[way][0]}</strong><span>${way === 'oauth' && !service.auth_schemes.oauth ? 'OAuth 2.0の接続先とアプリを設定します。' : WAYS[way][1] + (way === 'oauth' && !oauthUsable(service) ? '先にOAuthアプリの登録が要ります。' : '')}</span></button>`).join('')}</div>` : '<p>接続方法が未設定です。</p>'}`);
 }
-function connectBy(service, way, credentialId) {
+function connectBy(service, way, connectionId) {
   if (way === 'oauth' && !service.auth_schemes.oauth && ownService(service.id)) configureOAuth(service);
-  else connect(service.id, credentialId);
+  else connect(service.id, connectionId);
 }
 // Starting a connection Foundation performs itself: the service decides who it is.
-function connect(serviceId, credentialId, appId) {
+function connect(serviceId, connectionId, appId) {
   const service = serviceById(serviceId);
   if (!service) return;
-  if (service.auth_schemes.role) { startRole(service, credentialId); return; }
-  if (!oauthUsable(service)) { addApp(service.id, id => connect(id, credentialId)); return; }
-  openDialog(`<h2 id="dialog-title">${esc(service.name)}に${credentialId ? '接続し直す' : '接続'}</h2><p>${esc(service.name)}の画面でログインし、アクセスを許可します。</p><form>
-    ${connectChoices(service, credentialId, appId)}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(service.name)}の画面へ ${icon('arrow')}</button></form>`);
+  if (service.auth_schemes.role) { startRole(service, connectionId); return; }
+  if (!oauthUsable(service)) { addApp(service.id, id => connect(id, connectionId)); return; }
+  openDialog(`<h2 id="dialog-title">${esc(service.name)}に${connectionId ? '接続し直す' : '接続'}</h2><p>${esc(service.name)}の画面でログインし、アクセスを許可します。</p><form>
+    ${connectChoices(service, connectionId, appId)}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(service.name)}の画面へ ${icon('arrow')}</button></form>`);
   bindForm(async (form) => {
     const scopes = String(form.get('scopes') || '').split(/\s+/).filter(Boolean), app = String(form.get('app') || '');
-    const result = await api('/v1/credentials', { method: 'POST', data: { service: service.id, auth_scheme: 'oauth', ...(credentialId ? { credential_id: credentialId } : {}),
+    const result = await api('/v1/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'oauth', ...(connectionId ? { connection_id: connectionId } : {}),
       ...(scopes.length ? { scopes } : {}), ...(app && app !== 'foundation' ? { app } : {}) } });
     location.assign(result.url);
   });
@@ -892,8 +892,8 @@ async function addServiceScheme(service, way, definition) {
   const result = await api('/v1/resources/' + service.id, { method: 'PATCH', data: { auth_schemes: { [way]: definition } } });
   return rememberService(result.resource);
 }
-async function startRole(service, credentialId, requestId) {
-  const started = await api('/v1/credentials', { method: 'POST', data: requestId ? { request_id: requestId } : { service: service.id, auth_scheme: 'role', ...(credentialId ? { credential_id: credentialId } : {}) } });
+async function startRole(service, connectionId, requestId) {
+  const started = await api('/v1/connections', { method: 'POST', data: requestId ? { request_id: requestId } : { service: service.id, auth_scheme: 'role', ...(connectionId ? { connection_id: connectionId } : {}) } });
   completeByHand(service, started);
 }
 // A role flow: the service's console opens in another tab, the holder makes what Foundation asked for there, and
@@ -906,7 +906,7 @@ function completeByHand(service, started) {
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">接続する ${icon('arrow')}</button></form>`);
   bindForm(async (form) => {
     const fields = Object.fromEntries(started.complete.fields.map(field => [field.name, String(form.get(field.name) || '')]));
-    await api('/v1/credentials/complete', { method: 'POST', data: { state: started.state, fields } });
+    await api('/v1/connections/complete', { method: 'POST', data: { state: started.state, fields } });
     closeDialog(); await refresh(); toast(service.name + 'に接続しました。');
   });
 }
@@ -941,7 +941,7 @@ function configureOAuth(service) {
     addApp(service.id, id => connect(id));
   });
 }
-// Disconnect only this credential; secrets kept by hand remain.
+// Disconnect only this connection; secrets kept by hand remain.
 function disconnect(connection) {
   const revoke = connection.can_revoke
     ? `<label class="check"><input type="checkbox" name="revoke" checked> ${esc(connection.service.name)}側の許可も取り消す</label>`
@@ -987,7 +987,7 @@ async function principalDetails(id) {
     <p>${allowed ? 'アクセス許可済み' : '全体へのアクセス許可なし'}</p>
     ${allowed ? `<p>${accessSummary.replace('許可します。', '許可しています。')}</p>${accessDetails()}` : ''}
     ${owned ? `<section class="principal-keys"><div class="section-heading"><h3>アクセスキー</h3><button class="text-button" data-action="issue-key" data-id="${esc(id)}">キーを発行</button></div>
-      ${keys.length ? `<ul class="credential-list">${keys.map(key => `<li><div><code>${esc(key.id.slice(0, 8))}</code><p>${key.environment_id ? '環境用（閉じると消えます）' : '発行 ' + esc(new Date(key.created_at).toLocaleString('ja-JP'))}</p></div><button class="text-button danger" data-action="revoke-key" data-id="${esc(id)}" data-key="${esc(key.id)}">失効</button></li>`).join('')}</ul>` : '<p class="muted">キーはありません。</p>'}</section>
+      ${keys.length ? `<ul class="connection-list">${keys.map(key => `<li><div><code>${esc(key.id.slice(0, 8))}</code><p>${key.environment_id ? '環境用（閉じると消えます）' : '発行 ' + esc(new Date(key.created_at).toLocaleString('ja-JP'))}</p></div><button class="text-button danger" data-action="revoke-key" data-id="${esc(id)}" data-key="${esc(key.id)}">失効</button></li>`).join('')}</ul>` : '<p class="muted">キーはありません。</p>'}</section>
       <div class="principal-delete"><button class="text-button danger" data-action="remove-principal" data-id="${esc(id)}">登録を削除</button></div>` : ''}`);
 }
 function renamePrincipal(item) {
@@ -1042,7 +1042,7 @@ function addSecret() {
   bindForm(async (form) => {
     const name = form.get('name');
     const response = await fetch('/v1/resources?' + new URLSearchParams({ kind: 'secret', name }),
-      { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'text/plain' }, body: String(form.get('value')) });
+      { method: 'PUT', connections: 'same-origin', headers: { 'content-type': 'text/plain' }, body: String(form.get('value')) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
     closeDialog(); await refresh(); toast(name + ' を追加しました。');
@@ -1113,7 +1113,7 @@ function bindSecretValue(entry, row) {
     busy = true; lock(true); panel.setAttribute('aria-busy', 'true');
     panel.querySelectorAll('button').forEach(button => { button.disabled = true; });
     try {
-      const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
+      const response = await fetch(path, { connections: 'same-origin', cache: 'no-store' });
       if (response.status === 401) await showLogin();
       if (!response.ok) throw new Error('値を取得できませんでした。');
       const bytes = new Uint8Array(await response.arrayBuffer());
@@ -1179,7 +1179,7 @@ function bindSecretValue(entry, row) {
       try {
         if (!etag) throw new Error('編集をやり直してから保存してください。');
         const bytes = binary ? new Uint8Array(await file.arrayBuffer()) : content;
-        const response = await fetch(path, { method: 'PUT', credentials: 'same-origin', cache: 'no-store',
+        const response = await fetch(path, { method: 'PUT', connections: 'same-origin', cache: 'no-store',
           headers: { 'content-type': 'application/octet-stream', 'if-match': etag }, body: bytes });
         const result = await response.json();
         if (response.status === 401) await showLogin();
@@ -1214,7 +1214,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'request-connect') {
       target.disabled = true;
       if (accessRequest.auth_scheme === 'role') { await startRole(accessRequest.service, undefined, requestId); target.disabled = false; return; }
-      location.assign((await api('/v1/credentials', { method: 'POST', data: { request_id: requestId } })).url);
+      location.assign((await api('/v1/connections', { method: 'POST', data: { request_id: requestId } })).url);
     }
     if (action === 'deny-request') {
       target.disabled = true;
@@ -1329,16 +1329,16 @@ const resultMessages = { connected: '接続しました。', denied: '接続を�
   retry: '継続利用の許可を取得できませんでした。もう一度接続してください。', changed: '接続の状態が変わりました。もう一度お試しください。', failed: '接続できませんでした。もう一度お試しください。' };
 if (resultCode === 'review') {
   try {
-    const review = await api('/v1/credentials/confirmation?state=' + encodeURIComponent(confirmationState));
+    const review = await api('/v1/connections/confirmation?state=' + encodeURIComponent(confirmationState));
     const values = items => items.length ? items.map(esc).join('<br>') : 'なし';
-    openDialog(`<h2 id="dialog-title">接続の変更を確認</h2><p>${esc(review.credential.service.name)} · ${esc(review.credential.label)}</p>
+    openDialog(`<h2 id="dialog-title">接続の変更を確認</h2><p>${esc(review.connection.service.name)} · ${esc(review.connection.label)}</p>
       <dl class="approval-facts">${review.changes.map(change => `<div><dt>${esc(change.label)}</dt><dd><p>変更前：${values(change.before)}</p><p>変更後：${values(change.after)}</p></dd></div>`).join('')}</dl>
       <p class="permission-note">更新すると、この接続を使うAIにも変更後の権限が渡ります。キャンセルしても、接続先で許可した内容は残ります。</p>
       <form><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="cancel-connection-review">キャンセル</button><button type="submit" class="button primary">この内容で更新</button></div></form>`);
     document.querySelector('[data-action="cancel-connection-review"]').addEventListener('click', async () => {
-      try { await api('/v1/credentials/confirmation', { method: 'DELETE', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); }
+      try { await api('/v1/connections/confirmation', { method: 'DELETE', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); }
       catch (error) { toast(error.message); }
     });
-    bindForm(async () => { await api('/v1/credentials/confirmation', { method: 'POST', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); await refresh(); toast('接続を更新しました。'); });
+    bindForm(async () => { await api('/v1/connections/confirmation', { method: 'POST', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); await refresh(); toast('接続を更新しました。'); });
   } catch (error) { toast(error.message); }
 } else if (resultCode) toast(resultMessages[resultCode] || '接続を確認し、もう一度お試しください。');

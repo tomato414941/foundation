@@ -17,7 +17,7 @@ import { AuditLog } from './audit-log.mjs';
 import { scopeList, requestedScopes } from './scopes.mjs';
 import { appReference, requestDetails } from './request-input.mjs';
 import { Apps, FOUNDATION_APP, takesApps } from './apps.mjs';
-import { Credentials } from './credentials.mjs';
+import { Connections } from './connections.mjs';
 import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX } from './secrets.mjs';
 import { Inputs } from './inputs.mjs';
 import { Services } from './services.mjs';
@@ -126,15 +126,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   const principals = new Principals(store), sessions = new Sessions(store), flows = new OAuthFlows(store);
   const authorization = new Authorization(principals);
   const services = new Services(store, resources, catalog, { authorization, ...(serviceFetcher ? { fetcher: serviceFetcher } : {}) });
-  const apps = new Apps(store, resources, services), credentials = new Credentials(store, resources, services, apps);
-  const secrets = new Secrets(store, resources), inputs = new Inputs(secrets, credentials);
+  const apps = new Apps(store, resources, services), connections = new Connections(store, resources, services, apps);
+  const secrets = new Secrets(store, resources), inputs = new Inputs(secrets, connections);
   const objects = new Objects(spaceBackend, resources, store);
   const requests = new Requests(store), settings = new Settings(store, principals), auditLog = new AuditLog(store);
   const environments = new Environments({ store, resources, principals, runner, limits: compute });
   const functions = new Functions({ secrets, inputs, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
-  const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, credentials, apps, resources }, row, origin, { interval: requestInterval, ...options });
-  const requestActions = new RequestActions({ store, requests, secrets, credentials, services, apps, principals, authorization, auditLog,
+  const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, connections, apps, resources }, row, origin, { interval: requestInterval, ...options });
+  const requestActions = new RequestActions({ store, requests, secrets, connections, services, apps, principals, authorization, auditLog,
     changed: row => { if (row.to_id) void settings.notify(row.to_id, 'request.' + row.status, { request: viewRequest(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() }); } });
   const logins = new EmailLogins({ now: loginClock });
   const refreshing = new Map(), limits = new Map(), disconnects = new Set();
@@ -272,20 +272,20 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           if (!code || code.length > 8192) fail(400, 'invalid_state', '接続をやり直してください。');
           let previous;
           if (flow.previous) {
-            previous = credentials.forService(user.id, flow.previous.id);
-            if (previous.generation !== flow.previous.generation || previous.status === 'disconnecting') fail(409, 'credential_changed', '接続の状態が変わりました。');
+            previous = connections.forService(user.id, flow.previous.id);
+            if (previous.generation !== flow.previous.generation || previous.status === 'disconnecting') fail(409, 'connection_changed', '接続の状態が変わりました。');
           }
           if (flow.requestId) requests.forTo(flow.requestId, user.id, true);
-          const previousContext = credentials.context(previous);
+          const previousContext = connections.context(previous);
           const completion = await verifyConnection(req, session,
             () => active.authorization.complete({ code, verifier: flow.verifier, redirectUri: flow.redirectUri }, previousContext),
             result => {
               const changes = previous ? active.authorization.changes?.(result, previousContext) : undefined;
               if (changes?.length) {
                 if (flow.requestId) requests.forTo(flow.requestId, user.id, true);
-                const current = credentials.reconnection(user.id, flow.service, 'oauth', previous.id);
-                if (current.generation !== previous.generation) fail(409, 'credential_changed', '接続の状態が変わりました。');
-                credentials.nextState(result);
+                const current = connections.reconnection(user.id, flow.service, 'oauth', previous.id);
+                if (current.generation !== previous.generation) fail(409, 'connection_changed', '接続の状態が変わりました。');
+                connections.nextState(result);
                 const { credentials: produced, ...kept } = result;
                 const state = flows.begin(session.id, { kind: 'confirmation', service: flow.service, scheme: 'oauth', requestId: flow.requestId,
                   requestedBy: flow.requestedBy, previous: flow.previous, result: kept, changes, scopes: flow.scopes ?? null, app: flow.app ?? null });
@@ -298,18 +298,18 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           return redirect(location('connected'));
         } catch (error) {
           if (progressRequestId && error instanceof HttpError) requests.record(progressRequestId, 'connect_failed', { service: flowService, code: error.code, message: error.message });
-          const codes = { authorization_denied: 'denied', invalid_state: 'expired', login_required: 'expired', account_changed: 'wrong_account', scope_mismatch: 'scope', refresh_missing: 'retry', credential_changed: 'changed', service_response: 'failed' };
+          const codes = { authorization_denied: 'denied', invalid_state: 'expired', login_required: 'expired', account_changed: 'wrong_account', scope_mismatch: 'scope', refresh_missing: 'retry', connection_changed: 'changed', service_response: 'failed' };
           return redirect(location(codes[error.code] || 'failed'));
         }
       }
       if (req.headers['sec-fetch-site'] === 'cross-site') fail(403, 'cross_site_denied', '外部サイトからの操作は許可されていません。');
       const requestRoute = route?.group === 'requests' ? route.params : null;
       // One tree, one question. A bearer token, when sent, says which principal speaks. Without one the browser
-      // speaks, through its login session or the short credential a single-use link left, and every change it
+      // speaks, through its login session or the short connection a single-use link left, and every change it
       // asks for must come from Foundation's own pages. Cookies are never read beside a token.
       const token = bearer(req), browser = req.headers.authorization === undefined;
       if (!browser && !token) fail(401, 'invalid_token', 'Bearer形式のキーを指定してください。');
-      // Becoming a principal needs no credential and no login: the request carries nothing to protect.
+      // Becoming a principal needs no connection and no login: the request carries nothing to protect.
       const becoming = at === 'principals' && method === 'POST' && browser && !cookieToken(req);
       if (browser && !['GET', 'HEAD'].includes(method) && !becoming) requireOrigin(req, origin);
       if (!browser && req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
@@ -369,7 +369,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         if (session) { try { await auth.logout(session.value.access_token); } catch { authLogout = false; } }
         return send(200, { ok: true, authLogout });
       }
-      // The services Foundation knows, and how it comes to hold a credential for each. Public: a key not yet
+      // The services Foundation knows, and how it comes to hold a connection for each. Public: a key not yet
       // approved reads it too.
       if (at === 'catalog' && method === 'GET') return send(200, { services: services.catalogView() });
       // Where the page sends someone back after a request: the handler's page for it. Public, and says nothing else.
@@ -456,7 +456,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           // Someone nobody has taken on yet may only ask whoever opens the page it hands over; naming a person would let
           // anyone put a request in front of them. Once it is on a line with someone, it is known, and may name.
           if (input.to !== undefined && !principals.relationsOf(subject.id).length) fail(403, 'unknown_requester', 'まだ誰にも承認されていないので、相手を指定した依頼は出せません。相手を指定せずに依頼し、その画面を渡してください。');
-          if (type !== 'relation') permit('list', type === 'secret' ? 'secret' : 'credential', undefined, toId);
+          if (type !== 'relation') permit('list', type === 'secret' ? 'secret' : 'connection', undefined, toId);
           const row = requestActions.ask(subject.id, { type, detail, toId, bindingMessage: purposeValue(input.binding_message), steps: input.steps ?? [], validMinutes: input.valid_minutes ?? 30 });
           return send(201, { request: viewRequest(row, origin, { code: true }) });
         }
@@ -711,16 +711,16 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
       // Resources. Each has an id, and that is how lines, the audit log and the calls below refer to it. A name is
-      // how the holder calls one: a way to find or place a thing, not its identity. A credential says what it is
+      // how the holder calls one: a way to find or place a thing, not its identity. A connection says what it is
       // and where it works; an object says its size and type; neither says anything of its content here.
-      const shown = row => row.kind === 'credential' ? credentials.view(credentials.get(row.id), { owner: subject.id === row.holder_id })
+      const shown = row => row.kind === 'connection' ? connections.view(connections.get(row.id), { owner: subject.id === row.holder_id })
         : row.kind === 'secret' ? secrets.view(secrets.get(row.id))
         : row.kind === 'app' ? apps.view(apps.get(row.id), { owner: subject.id === row.holder_id })
         : row.kind === 'service' ? services.view(services.row(row.id), { owner: subject.id === row.holder_id })
         : row.kind === 'environment' ? environments.view(environments.get(row.id)) : objects.view(objects.get(row.id));
       const resourceKind = required => {
         const kind = url.searchParams.get('kind') ?? undefined;
-        if ((required && kind === undefined) || (kind !== undefined && !KINDS.includes(kind))) fail(400, 'invalid_kind', 'kind は secret / credential / object / app / service / environment のいずれかです。');
+        if ((required && kind === undefined) || (kind !== undefined && !KINDS.includes(kind))) fail(400, 'invalid_kind', 'kind は secret / connection / object / app / service / environment のいずれかです。');
         return kind;
       };
       if (at === 'resources' && method === 'GET') {
@@ -736,9 +736,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         }
         const rows = [];
         if (kinds.includes('secret')) rows.push(...secrets.list(holderId, { prefix }));
-        if (kinds.includes('credential')) {
+        if (kinds.includes('connection')) {
           const service = url.searchParams.get('service') ?? undefined;
-          rows.push(...credentials.list(holderId, { service, prefix }).filter(row => subject.id === holderId || row.status !== 'disconnecting'));
+          rows.push(...connections.list(holderId, { service, prefix }).filter(row => subject.id === holderId || row.status !== 'disconnecting'));
         }
         if (kinds.includes('object')) { if (kind === 'object') objects.check(); if (objects.enabled) { limit('objects', 60); rows.push(...objects.list(holderId, prefix ?? '')); } }
         if (kinds.includes('app')) rows.push(...apps.list(holderId), ...apps.lent(holderId));
@@ -748,12 +748,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         return send(200, { resources: [...rows.map(shown), ...(kind === 'app' ? apps.offeredAll() : [])] });
       }
       // Placing a thing by name: the holder's name for it. The same name, same kind, replaces what is there. A
-      // secret placed this way is the holder's bytes. Managed authorizations are made at /v1/credentials.
+      // secret placed this way is the holder's bytes. Managed authorizations are made at /v1/connections.
       if (at === 'resources' && method === 'PUT') {
         const kind = resourceKind(true), name = url.searchParams.get('name');
         if (name === null) fail(400, 'invalid_name', '名前を指定してください。');
         // An app is registered by its holder, as values: which service, its client ID and secret. The same name
-        // again gives it new values, and its credentials go on through it.
+        // again gives it new values, and its connections go on through it.
         if (kind === 'app') {
           const existing = apps.find(holderId, name);
           permit('write', 'app', existing?.id);
@@ -804,9 +804,9 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       }
       if (route?.group === 'resources') {
         const held = resources.at(route.params.resourceId), part = at === 'content' ? '/content' : at === 'objectLink' ? '/link' : null;
-        const credential = held.kind === 'credential' ? credentials.get(held.id) : null, secret = held.kind === 'secret' ? secrets.get(held.id) : null;
+        const connection = held.kind === 'connection' ? connections.get(held.id) : null, secret = held.kind === 'secret' ? secrets.get(held.id) : null;
         // An app: renamed by its holder; given new values by its holder or an editor; removed by its holder, which
-        // stops the credentials made through it. Its secret is never read back, by anyone.
+        // stops the connections made through it. Its secret is never read back, by anyone.
         if (held.kind === 'app') {
           const app = apps.at(held.id);
           if (part) fail(405, 'method_not_allowed', 'アプリの秘密は読み出せません。');
@@ -828,11 +828,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
             // Removing an app stops what was connected through it; that is said, and agreed to, first.
             if (dependents.length && input.confirm !== true) {
               fail(409, 'app_in_use', `このアプリで作った接続が${dependents.length}件あります。削除すると、つなぎ直すまで使えなくなります。`,
-                { credentials: dependents.length, yours: dependents.filter(row => row.holder_id === app.holder_id).map(row => ({ id: row.id, name: row.name })) });
+                { connections: dependents.length, yours: dependents.filter(row => row.holder_id === app.holder_id).map(row => ({ id: row.id, name: row.name })) });
             }
             apps.remove(app);
-            auditLog.write(subject.id, 'app.removed', 'resource', app.id, { service: app.service, credentials_stopped: dependents.length });
-            return send(200, { ok: true, credentials_stopped: dependents.length });
+            auditLog.write(subject.id, 'app.removed', 'resource', app.id, { service: app.service, connections_stopped: dependents.length });
+            return send(200, { ok: true, connections_stopped: dependents.length });
           }
         }
         // A service a holder described: its definition is read, replaced and renamed; it is removed once nothing
@@ -878,29 +878,29 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           permit('rename', held.kind, held.id, held.holder_id);
           if (held.kind === 'object') return send(200, { resource: shown(objects.rename(objects.get(held.id), input.name)) });
           if (secret) return send(200, { resource: shown(secrets.rename(secret, input.name)) });
-          return send(200, { resource: shown(credentials.rename(credential, input.name)) });
+          return send(200, { resource: shown(connections.rename(connection, input.name)) });
         }
-        // Removing a credential for a service disconnects it: Foundation stops obtaining from it and, when asked,
+        // Removing a connection for a service disconnects it: Foundation stops obtaining from it and, when asked,
         // asks the service to revoke it. Removing always succeeds; the revocation's outcome is reported.
-        if (!part && method === 'DELETE' && credential) {
-          permit('disconnect', 'credential', held.id, held.holder_id);
+        if (!part && method === 'DELETE' && connection) {
+          permit('disconnect', 'connection', held.id, held.holder_id);
           const input = await inputBody();
           if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', 'サービス側の許可を取り消すか選んでください。');
           let scheme = null;
-          try { scheme = credentials.schemeFor(credential); } catch {}
-          if (disconnects.has(credential.id)) fail(409, 'disconnect_in_progress', '接続を解除しています。');
-          disconnects.add(credential.id);
+          try { scheme = connections.schemeFor(connection); } catch {}
+          if (disconnects.has(connection.id)) fail(409, 'disconnect_in_progress', '接続を解除しています。');
+          disconnects.add(connection.id);
           try {
-            const previous = credentials.disconnect(held.holder_id, credential.id);
+            const previous = connections.disconnect(held.holder_id, connection.id);
             let revoked = null;
             if (input.revoke && typeof scheme?.revoke === 'function') {
-              try { await scheme.revoke(credentials.context(previous).privateState); revoked = true; }
+              try { await scheme.revoke(connections.context(previous).privateState); revoked = true; }
               catch { revoked = false; }
             }
-            credentials.remove(previous);
-            auditLog.write(subject.id, 'credential.removed', 'credential', credential.id, { service: credential.service, revoked });
+            connections.remove(previous);
+            auditLog.write(subject.id, 'connection.removed', 'connection', connection.id, { service: connection.service, revoked });
             return send(200, { ok: true, service_revoked: revoked });
-          } finally { disconnects.delete(credential.id); }
+          } finally { disconnects.delete(connection.id); }
         }
         if (!part && method === 'DELETE') {
           permit('remove', held.kind, held.id, held.holder_id);
@@ -908,10 +908,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           if (secret) secrets.remove(secret); else { await objects.remove(objects.get(held.id)); still(); }
           return send(200, { ok: true });
         }
-        // The content of a thing: an object's bytes, or a secret's. A credential for a service has nothing to read;
+        // The content of a thing: an object's bytes, or a secret's. A connection for a service has nothing to read;
         // what it yields is derived when it is injected.
         if (part === '/content' && method === 'GET') {
-          if (credential) fail(405, 'method_not_allowed', 'この接続に読める中身はありません。使うには /v1/injections を使います。');
+          if (connection) fail(405, 'method_not_allowed', 'この接続に読める中身はありません。使うには /v1/injections を使います。');
           permit(secret ? 'content' : 'read', held.kind, held.id, held.holder_id);
           const disposition = `attachment; filename="resource.bin"; filename*=UTF-8''${encodeURIComponent(held.name.split('/').pop()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}`;
           if (secret) {
@@ -926,7 +926,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           return res.end(found.content);
         }
         if (part === '/content' && method === 'PUT') {
-          if (credential) fail(405, 'method_not_allowed', 'この接続の中身は書き換えられません。');
+          if (connection) fail(405, 'method_not_allowed', 'この接続の中身は書き換えられません。');
           permit('write', held.kind, held.id, held.holder_id);
           if (secret) {
             limit('secrets', 120);
@@ -963,7 +963,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       // The holder's screen, in one answer.
       if (at === 'overview' && method === 'GET') {
         permit('overview', 'principal', holderId);
-        return send(200, { user: { id: subject.id, email: user?.email ?? null }, principal: self, secrets: secrets.list(holderId).map(row => secrets.view(row)), credentials: credentials.list(holderId).map(row => credentials.view(row, { owner: true })),
+        return send(200, { user: { id: subject.id, email: user?.email ?? null }, principal: self, secrets: secrets.list(holderId).map(row => secrets.view(row)), connections: connections.list(holderId).map(row => connections.view(row, { owner: true })),
           apps: [...apps.list(holderId).map(row => apps.view(row, { owner: true })), ...apps.lent(holderId).map(row => apps.view(row)), ...apps.offeredAll()],
           services: [...services.list(holderId).map(row => services.view(row, { owner: true })), ...services.lent(holderId).map(row => services.view(row))],
           catalog: services.catalogView(), principals: principals.owned(holderId), actors: principals.actorsOf(holderId),
@@ -975,44 +975,44 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       // them away again; without this the promise is words.
       if (at === 'export' && method === 'GET') {
         permit('export', 'principal', holderId);
-        // A secret goes out with its bytes; a credential for a service with what is known of it, since what renews
+        // A secret goes out with its bytes; a connection for a service with what is known of it, since what renews
         // it is Foundation's to keep and would be of no use elsewhere. A described service goes out as its definition.
         const kept = secrets.list(holderId).map(row => ({ ...secrets.view(row), content: secrets.content(row).toString('base64'), encoding: 'base64' }));
-        const value = { exported_at: new Date().toISOString(), owner: user?.email ?? null, origin, secrets: kept, credentials: credentials.list(holderId).map(row => credentials.view(row, { owner: true })),
+        const value = { exported_at: new Date().toISOString(), owner: user?.email ?? null, origin, secrets: kept, connections: connections.list(holderId).map(row => connections.view(row, { owner: true })),
           services: services.list(holderId).map(row => ({ id: row.id, name: row.name, definition: JSON.parse(row.definition) })), principals: principals.owned(holderId) };
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
           'content-disposition': `attachment; filename="foundation-${new Date().toISOString().slice(0, 10)}.json"` });
         return res.end(JSON.stringify(value, null, 2));
       }
-      // Connecting: a credential for a service, by one of its schemes. OAuth goes to the service's consent screen
+      // Connecting: a connection for a service, by one of its schemes. OAuth goes to the service's consent screen
       // and comes back at /oauth/callback; a role is made in the service's console and named here; a token is
-      // handed over here. The credential it makes is a resource like any other: listed and removed at
+      // handed over here. The connection it makes is a resource like any other: listed and removed at
       // /v1/resources.
       if (at === 'confirmation' && ['GET', 'POST', 'DELETE'].includes(method)) {
-        permit('connect', 'credential');
+        permit('connect', 'connection');
         if (!session) fail(401, 'login_required', 'ログインしてください。');
         const state = method === 'GET' ? url.searchParams.get('state') : (await inputBody()).state;
         const flow = flows.peek(session.id, state);
         if (!flow || flow.kind !== 'confirmation') fail(400, 'invalid_state', '接続をやり直してください。');
         progressRequestId = flow.requestId || null;
         if (method === 'DELETE') { flows.drop(session.id, state); return send(200, { ok: true }); }
-        const previous = credentials.reconnection(holderId, flow.service, flow.scheme, flow.previous.id);
-        if (previous.generation !== flow.previous.generation) fail(409, 'credential_changed', '接続の状態が変わりました。');
+        const previous = connections.reconnection(holderId, flow.service, flow.scheme, flow.previous.id);
+        if (previous.generation !== flow.previous.generation) fail(409, 'connection_changed', '接続の状態が変わりました。');
         if (flow.requestId) requests.forTo(flow.requestId, holderId, true);
-        if (method === 'GET') return send(200, { credential: credentials.view(previous, { owner: true }), changes: flow.changes });
+        if (method === 'GET') return send(200, { connection: connections.view(previous, { owner: true }), changes: flow.changes });
         still();
         const saved = requestActions.connect(flow.requestId, holderId, flow.service, flow.scheme, flow.result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, app: flow.app ?? null });
         flows.drop(session.id, state);
-        return send(200, { credential: credentials.view(saved, { owner: true }) });
+        return send(200, { connection: connections.view(saved, { owner: true }) });
       }
-      if (at === 'credentials' && method === 'POST') {
-        permit('connect', 'credential');
+      if (at === 'connections' && method === 'POST') {
+        permit('connect', 'connection');
         const input = await inputBody();
         limit('connect', 10);
         const request = input.request_id === undefined ? null : requests.forTo(input.request_id, holderId, true);
         progressRequestId = request?.id || null;
         const asked = request ? requests.detail(request) : null;
-        if (request && request.type !== 'credential') fail(409, 'approval_only', 'この依頼は接続の依頼ではありません。');
+        if (request && request.type !== 'connection') fail(409, 'approval_only', 'この依頼は接続の依頼ではありません。');
         // The service, the scheme, the scopes and the app are the request's when there is one: what the holder saw is
         // what happens.
         const { ref, definition } = services.get(asked ? asked.service : input.service, holderId);
@@ -1022,13 +1022,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         if (request) requests.record(request.id, 'connect_started', { service: ref });
         // Who asked for it, as they were called then. One started from the page was asked by no one.
         const requestedBy = request ? principals.get(request.from_id)?.name ?? '' : subject.id === holderId ? '' : self.name;
-        const target = asked ? asked.credential_id : input.credential_id;
-        if (request && input.credential_id !== undefined && input.credential_id !== target) fail(409, 'credential_changed', '依頼された接続を選んでください。');
-        const previous = target === undefined ? undefined : credentials.reconnection(holderId, ref, schemeId, target);
+        const target = asked ? asked.connection_id : input.connection_id;
+        if (request && input.connection_id !== undefined && input.connection_id !== target) fail(409, 'connection_changed', '依頼された接続を選んでください。');
+        const previous = target === undefined ? undefined : connections.reconnection(holderId, ref, schemeId, target);
         if (!session) fail(401, 'login_required', 'ログインしてください。');
-        const previousState = previous ? credentials.state(previous) : null;
+        const previousState = previous ? connections.state(previous) : null;
         const scopes = requestedScopes(scheme, asked ? asked.scopes ?? [] : scopeList(input.scopes), previousState);
-        // Reconnecting keeps the app the credential was made through unless another is named.
+        // Reconnecting keeps the app the connection was made through unless another is named.
         const named = asked ? asked.app : appReference(input.app);
         if (named !== undefined && !takesApps(scheme)) fail(400, 'app_unsupported', 'この接続方法はアプリを通しません。');
         const appId = takesApps(scheme) ? named ?? previous?.app_id ?? FOUNDATION_APP : null;
@@ -1039,7 +1039,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         // A role is made by the holder in the service's own console, then named here; what Foundation must remember
         // meanwhile (the external ID it chose) travels in the flow, and the flow lasts until the answer is right.
         if (schemeId === 'role') {
-          const started = await active.authorization.begin({ origin }, credentials.context(previous));
+          const started = await active.authorization.begin({ origin }, connections.context(previous));
           still();
           const state = flows.begin(session.id, { ...flow, kind: 'role', memo: started.memo ?? null });
           return send(200, { url: started.url, state, complete: { fields: started.fields ?? [] } });
@@ -1047,25 +1047,25 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         const verifier = randomBytes(32).toString('base64url');
         const redirectUri = origin + '/oauth/callback';
         const state = flows.begin(session.id, { ...flow, verifier, redirectUri });
-        return send(200, { url: await active.authorization.begin({ state, verifier, redirectUri, scopes }, credentials.context(previous)) });
+        return send(200, { url: await active.authorization.begin({ state, verifier, redirectUri, scopes }, connections.context(previous)) });
       }
-      if (at === 'completeCredential' && method === 'POST') {
-        permit('connect', 'credential');
+      if (at === 'completeConnection' && method === 'POST') {
+        permit('connect', 'connection');
         const input = await inputBody();
         if (!session) fail(401, 'login_required', 'ログインしてください。');
         limit('connect', 10);
         const flow = flows.peek(session.id, input.state);
         if (!flow || flow.kind !== 'role') fail(400, 'invalid_state', '接続をやり直してください。');
         const scheme = services.scheme(flow.service, 'role');
-        const previous = flow.previous ? credentials.forService(holderId, flow.previous.id) : undefined;
-        if (previous && previous.generation !== flow.previous.generation) fail(409, 'credential_changed', '接続の状態が変わりました。');
+        const previous = flow.previous ? connections.forService(holderId, flow.previous.id) : undefined;
+        if (previous && previous.generation !== flow.previous.generation) fail(409, 'connection_changed', '接続の状態が変わりました。');
         if (flow.requestId) { requests.forTo(flow.requestId, holderId, true); progressRequestId = flow.requestId; }
         const fields = input.fields && typeof input.fields === 'object' && !Array.isArray(input.fields) ? input.fields : {};
         const saved = await verifyConnection(req, session,
-          () => scheme.authorization.complete({ fields, memo: flow.memo }, credentials.context(previous)),
+          () => scheme.authorization.complete({ fields, memo: flow.memo }, connections.context(previous)),
           result => requestActions.connect(flow.requestId, holderId, flow.service, 'role', result, { requestedBy: flow.requestedBy, previous }));
         flows.drop(session.id, input.state);
-        return send(200, { credential: credentials.view(saved, { owner: true }) });
+        return send(200, { connection: connections.view(saved, { owner: true }) });
       }
       // What this holder is using, and what they may use. Lending has a cost, so both sides can see it.
       if (at === 'usage' && method === 'GET') {
@@ -1076,8 +1076,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         return send(200, { secrets: { ...kept, count_max: SECRET_COUNT_MAX, bytes_max: SECRET_TOTAL_MAX },
           objects: space ? { count: space.count, bytes: space.bytes, count_max: space.count_max, bytes_max: space.bytes_max } : null });
       }
-      // Injecting derives what each credential yields now: a secret its bytes, one for a service what its scheme
-      // obtains. This is the one place a credential reaches a service.
+      // Injecting derives what each connection yields now: a secret its bytes, one for a service what its scheme
+      // obtains. This is the one place a connection reaches a service.
       if (at === 'injections' && method === 'POST') {
         permit('inject', 'principal', holderId);
         const input = await inputBody();
@@ -1133,7 +1133,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   return {
-    server, store, resources, services, secrets, credentials, inputs, apps, objects, environments, principals, sessions, flows, requests, requestActions, settings, auditLog,
+    server, store, resources, services, secrets, connections, inputs, apps, objects, environments, principals, sessions, flows, requests, requestActions, settings, auditLog,
     async close() {
       clearInterval(timer);
       if (server.listening) await new Promise((resolve) => { server.close(resolve); server.closeIdleConnections(); });

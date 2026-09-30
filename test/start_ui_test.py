@@ -81,7 +81,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     # ホームはサービスとの接続の件数を要約し、サービスの画面へ案内する。
     overview = page.request.get(args.base + '/v1/overview').json()
     for count in [0, 1, 40]:
-        summary = {**overview, 'credentials': [
+        summary = {**overview, 'connections': [
             {'service': {'id': 'google', 'name': 'Google'}, 'auth_scheme': 'oauth', 'label': f'複数の用途で利用する接続先のアカウント {number}@example.test'}
             for number in range(count)
         ]}

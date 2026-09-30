@@ -34,17 +34,17 @@ function injectable(content, { env, filename }) {
   }
 }
 
-// A delivery operation can take private bytes or obtain current credentials. Storage does not choose how a
+// A delivery operation can take private bytes or obtain current connections. Storage does not choose how a
 // secret is used: its caller names the destination every time.
 export class Inputs {
-  constructor(secrets, credentials) { Object.assign(this, { secrets, credentials }); }
+  constructor(secrets, connections) { Object.assign(this, { secrets, connections }); }
   resolve(holderId, reference) {
     const ref = inputReference(reference);
     const row = Object.hasOwn(ref, 'name') ? this.secrets.find(holderId, ref.name)
-      : this.secrets.held(holderId, ref.id) || this.credentials.held(holderId, ref.id);
+      : this.secrets.held(holderId, ref.id) || this.connections.held(holderId, ref.id);
     if (!row) fail(404, 'not_found', '見つかりません。');
     if (row.kind === 'secret' && ref.output !== undefined) fail(400, 'invalid_input', 'シークレットには output を指定できません。');
-    if (row.kind !== 'secret' && ref.output !== undefined && !this.credentials.services.scheme(row.service, row.auth_scheme).variables.includes(ref.output)) {
+    if (row.kind !== 'secret' && ref.output !== undefined && !this.connections.services.scheme(row.service, row.auth_scheme).variables.includes(ref.output)) {
       fail(400, 'invalid_input', '指定された出力はありません。');
     }
     return row;
@@ -82,7 +82,7 @@ export class Inputs {
         place(row, item.as, filename, this.secrets.content(row));
         continue;
       }
-      if (!obtained.has(row.id)) obtained.set(row.id, await this.credentials.derive(row));
+      if (!obtained.has(row.id)) obtained.set(row.id, await this.connections.derive(row));
       const derived = obtained.get(row.id);
       if (derived.expires_at !== null) expires = expires === null ? derived.expires_at : Math.min(expires, derived.expires_at);
       const outputs = item.output === undefined ? [...derived.values] : [[item.output, derived.values.get(item.output)]];
@@ -97,7 +97,7 @@ export class Inputs {
     const row = this.resolve(holderId, reference);
     if (row.kind === 'secret') return this.secrets.content(row);
     if (reference.output === undefined) fail(400, 'invalid_input', '接続から使う値を output で指定してください。');
-    if (!cache.has(row.id)) cache.set(row.id, await this.credentials.derive(row));
+    if (!cache.has(row.id)) cache.set(row.id, await this.connections.derive(row));
     const derived = cache.get(row.id);
     const chosen = derived.values.get(reference.output);
     if (!chosen) fail(400, 'invalid_input', '指定された出力が取得できませんでした。');

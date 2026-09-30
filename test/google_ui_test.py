@@ -55,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-google-ui-') as private_dir,
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
 
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'credential', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/cloud-platform']}], 'binding_message': 'Google Cloudの設定を確認します。リソースの作成や変更はしません。'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'connection', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/cloud-platform']}], 'binding_message': 'Google Cloudの設定を確認します。リソースの作成や変更はしません。'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='Googleに接続', exact=True)).to_be_visible()
     expect(page.locator('.approval-facts')).to_contain_text('https://www.googleapis.com/auth/cloud-platform')
@@ -85,15 +85,15 @@ with tempfile.TemporaryDirectory(prefix='foundation-google-ui-') as private_dir,
     page.get_by_role('button', name='Googleの画面へ', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
     review(page)
-    connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['credential_id']
-    facts = next(row for row in cli('api', 'GET', '/v1/resources?kind=credential')['resources'] if row['id'] == connection)['facts']
+    connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['connection_id']
+    facts = next(row for row in cli('api', 'GET', '/v1/resources?kind=connection')['resources'] if row['id'] == connection)['facts']
     assert facts['missing_scopes'] == []
     handed = subprocess.run(['node', 'cli/runtime.mjs', 'exec', '--inputs', json.dumps([{'id': connection}]), '--', 'node', '-e',
                              'if(!process.env.CLOUDSDK_AUTH_ACCESS_TOKEN||!process.env.GOOGLE_ACCOUNT_EMAIL)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=30)
     assert handed.returncode == 0 and handed.stdout.strip() == 'ready', handed.stderr
 
     # If gcloud is installed, prove it consumes the delivered token against a local fake API.
-    # No existing gcloud configuration, credentials, or real Google API is used.
+    # No existing gcloud configuration, connections, or real Google API is used.
     gcloud = shutil.which('gcloud')
     if gcloud:
         calls = []

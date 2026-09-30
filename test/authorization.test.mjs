@@ -24,10 +24,10 @@ test('答えは subject・action・resource から decision だけを返し、�
   assert.equal(ask(me, 'remove', { type: 'principal', id: key.id }), true, 'the owner');
   assert.equal(ask(actor, 'remove', { type: 'principal', id: key.id }), false, 'not oneself');
   assert.equal(ask(actor, 'rename', { type: 'principal', id: key.id }), true, 'oneself, for a name');
-  assert.equal(ask(actor, 'connect', { type: 'credential', holder: person.id }), false, 'connecting is the holder\'s unless given');
-  assert.equal(ask(me, 'connect', { type: 'credential', holder: person.id }), true);
+  assert.equal(ask(actor, 'connect', { type: 'connection', holder: person.id }), false, 'connecting is the holder\'s unless given');
+  assert.equal(ask(me, 'connect', { type: 'connection', holder: person.id }), true);
   assert.deepEqual(authorization.allowed({}), { decision: false });
-  assert.ok(rules().some(rule => rule.resource === 'credential' && rule.action === 'rename' && rule.grounds.join() === 'self'));
+  assert.ok(rules().some(rule => rule.resource === 'connection' && rule.action === 'rename' && rule.grounds.join() === 'self'));
   store.close();
 });
 
@@ -35,12 +35,12 @@ test('ルートは同じ問いを立て、許されない主体には 403、依�
   const f = await fixture(t), key = await f.issueKey();
   const kept = await f.keep('secret', 'x', 'value');
   for (const [path, options] of [['/v1/overview', {}], ['/v1/export', {}],
-    ['/v1/resources/' + kept.json.resource.id, { method: 'PATCH', data: { name: 'y' } }], ['/v1/credentials', { method: 'POST', data: { service: 'google' } }]]) {
+    ['/v1/resources/' + kept.json.resource.id, { method: 'PATCH', data: { name: 'y' } }], ['/v1/connections', { method: 'POST', data: { service: 'google' } }]]) {
     const refused = await f.request(path, { ...options, token: key.token, anonymous: true });
     assert.equal(refused.status, 403, path + ' ' + refused.text); assert.equal(refused.json.error.code, 'forbidden');
   }
-  assert.equal((await f.request('/v1/resources?kind=credential', { token: key.token, anonymous: true })).status, 200, 'what both may do still works');
-  assert.equal((await f.request('/v1/resources?kind=credential')).status, 200);
+  assert.equal((await f.request('/v1/resources?kind=connection', { token: key.token, anonymous: true })).status, 200, 'what both may do still works');
+  assert.equal((await f.request('/v1/resources?kind=connection')).status, 200);
   assert.equal((await f.request('/v1/functions')).status, 200, 'the holder may do what those acting for them may');
   assert.equal((await f.request('/v1/principals/' + key.id, { method: 'DELETE', token: key.token, anonymous: true, data: {} })).status, 403, 'nobody removes what they do not own');
   const stranger = await f.request('/v1/principals/' + USER_A, { token: key.token, anonymous: true });
@@ -49,22 +49,22 @@ test('ルートは同じ問いを立て、許されない主体には 403、依�
 
 test('持ち主は一つの操作を関係として渡し、渡された相手は鍵からその操作をする', async t => {
   const f = await fixture(t), key = await f.issueKey();
-  const connected = await f.credential();
+  const connected = await f.connection();
   const disconnect = token => f.request('/v1/resources/' + connected.id, { method: 'DELETE', data: { revoke: false }, token, anonymous: true });
   assert.equal((await disconnect(key.token)).status, 403, '渡される前は解除できない');
-  const given = await f.request('/v1/relations', { method: 'POST', data: { subject: key.id, relation: 'credential.disconnect', object_type: 'resource', object_id: connected.id } });
+  const given = await f.request('/v1/relations', { method: 'POST', data: { subject: key.id, relation: 'connection.disconnect', object_type: 'resource', object_id: connected.id } });
   assert.equal(given.status, 201, given.text);
   const listed = await f.request('/v1/relations', { token: key.token, anonymous: true });
-  assert.ok(listed.json.relations.some(row => row.relation === 'credential.disconnect' && row.object_id === connected.id), '役割と同じ一覧に載る');
+  assert.ok(listed.json.relations.some(row => row.relation === 'connection.disconnect' && row.object_id === connected.id), '役割と同じ一覧に載る');
   const done = await disconnect(key.token);
   assert.equal(done.status, 200, done.text);
-  assert.equal((await f.request('/v1/resources?kind=credential')).json.resources.some(item => item.id === connected.id), false);
+  assert.equal((await f.request('/v1/resources?kind=connection')).json.resources.some(item => item.id === connected.id), false);
 });
 
 test('持ち物全体に引いた操作は、その持ち主のどの接続にも届き、外すと届かなくなる', async t => {
   const f = await fixture(t), key = await f.issueKey();
-  const first = await f.credential('personal'), second = await f.credential('work');
-  const line = { subject: key.id, relation: 'credential.disconnect', object_type: 'principal', object_id: USER_A };
+  const first = await f.connection('personal'), second = await f.connection('work');
+  const line = { subject: key.id, relation: 'connection.disconnect', object_type: 'principal', object_id: USER_A };
   assert.equal((await f.request('/v1/relations', { method: 'POST', data: line })).status, 201);
   assert.equal((await f.request('/v1/resources/' + first.id, { method: 'DELETE', data: { revoke: false }, token: key.token, anonymous: true })).status, 200);
   assert.equal((await f.request('/v1/relations', { method: 'DELETE', data: line })).status, 200);
@@ -75,10 +75,10 @@ test('自分がその場所でできないことを含む関係は引けず、�
   const f = await fixture(t), key = await f.issueKey(), other = await f.issueKey('other');
   const connected = (await f.keep('secret', 'private value', 'value')).json.resource;
   const draw = (token, data) => f.request('/v1/relations', { method: 'POST', data, token, anonymous: true });
-  assert.equal((await draw(key.token, { subject: other.id, relation: 'credential.disconnect', object_type: 'principal', object_id: USER_A })).status, 403, '代わりに動く者は持ち主に線を引けない');
+  assert.equal((await draw(key.token, { subject: other.id, relation: 'connection.disconnect', object_type: 'principal', object_id: USER_A })).status, 403, '代わりに動く者は持ち主に線を引けない');
   assert.equal((await draw(key.token, { subject: other.id, relation: 'viewer', object_type: 'resource', object_id: connected.id })).status, 403, '共有できない物にも引けない');
   const owner = (data) => f.request('/v1/relations', { method: 'POST', data });
-  assert.equal((await owner({ subject: key.id, relation: 'credential.nothing', object_type: 'resource', object_id: connected.id })).status, 400, 'ない操作');
+  assert.equal((await owner({ subject: key.id, relation: 'connection.nothing', object_type: 'resource', object_id: connected.id })).status, 400, 'ない操作');
   assert.equal((await owner({ subject: key.id, relation: 'object.read', object_type: 'resource', object_id: connected.id })).status, 400, '種類の違う物');
   assert.equal((await owner({ subject: key.id, relation: 'owner', object_type: 'principal', object_id: other.id })).status, 400, '所有は作るか承認するときだけ');
   assert.equal((await owner({ subject: key.id, relation: 'viewer', object_type: 'principal', object_id: other.id })).status, 400, '役割の置き場所');
@@ -92,7 +92,7 @@ test('来かたによらず、同じ関係なら同じ答えを返す', () => {
   const store = new Store(':memory:', KEY), principals = new Principals(store), authorization = new Authorization(principals);
   const person = principals.ensure('person');
   const ask = (via, name, resource) => authorization.allowed({ subject: { id: person.id, via: { kind: via } }, action: { name }, resource }).decision;
-  for (const [name, resource] of [['connect', { type: 'credential', holder: person.id }], ['disconnect', { type: 'credential', id: 'x', holder: person.id }], ['export', { type: 'principal', id: person.id }]]) {
+  for (const [name, resource] of [['connect', { type: 'connection', holder: person.id }], ['disconnect', { type: 'connection', id: 'x', holder: person.id }], ['export', { type: 'principal', id: person.id }]]) {
     assert.equal(ask('key', name, resource), ask('session', name, resource), name);
     assert.equal(ask('key', name, resource), true, name);
   }
@@ -105,8 +105,8 @@ test('所有者は所有する相手を管理するが、その持ち物には�
   const ask = (name, resource) => authorization.allowed({ subject: { id: person.id, via: { kind: 'key' } }, action: { name }, resource }).decision;
   assert.equal(ask('issue-key', { type: 'principal', id: ai.id }), true);
   assert.equal(ask('remove', { type: 'principal', id: ai.id }), true);
-  assert.equal(ask('content', { type: 'credential', id: 'x', holder: ai.id }), false);
+  assert.equal(ask('content', { type: 'connection', id: 'x', holder: ai.id }), false);
   principals.relate(person.id, 'actor', 'principal', ai.id);
-  assert.equal(ask('list', { type: 'credential', holder: ai.id }), true, '届かせるには代理の関係を別に引く');
+  assert.equal(ask('list', { type: 'connection', holder: ai.id }), true, '届かせるには代理の関係を別に引く');
   store.close();
 });

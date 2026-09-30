@@ -21,7 +21,7 @@ test('シークレットの名前を完全一致で扱い、名前とIDで別の
 });
 
 test('接続の出力を明示して一つ選び、名前を変えたりファイルにしたりして渡す', async t => {
-  const f = await fixture(t), connection = await f.credential();
+  const f = await fixture(t), connection = await f.connection();
   const selected = await f.request('/v1/injections', { method: 'POST', data: { names: [
     { id: connection.id, output: 'GOOGLE_OAUTH_ACCESS_TOKEN', as: 'TOKEN' },
     { id: connection.id, output: 'GOOGLE_ACCOUNT_EMAIL', as: 'ACCOUNT_FILE', filename: 'account.txt' },
@@ -36,7 +36,7 @@ test('接続の出力を明示して一つ選び、名前を変えたりファ�
 });
 
 test('参照の対象と出力を検証し、不正な指定では接続先に認証情報を要求しない', async t => {
-  const f = await fixture(t), connection = await f.credential();
+  const f = await fixture(t), connection = await f.connection();
   const secret = (await f.keep('secret', 'value', 'private')).json.resource;
   f.expire(connection.id);
   const calls = f.google.calls.length;

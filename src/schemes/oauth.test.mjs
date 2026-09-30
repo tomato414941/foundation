@@ -20,16 +20,16 @@ async function generic(t, definition = DEFINITION) {
   assert.equal(registered.status, 200, registered.text);
   const appId = registered.json.resource.id;
   async function start(input = {}) {
-    const started = await f.request('/v1/credentials', { method: 'POST', data: { service: serviceId, app: appId, ...input } });
+    const started = await f.request('/v1/connections', { method: 'POST', data: { service: serviceId, app: appId, ...input } });
     assert.equal(started.status, 200, started.text);
     return new URL(started.json.url);
   }
-  const connections = async () => (await f.request('/v1/overview')).json.credentials.filter(item => item.service?.id === serviceId);
+  const connections = async () => (await f.request('/v1/overview')).json.connections.filter(item => item.service?.id === serviceId);
   async function connect(account = 'personal', input = {}) {
     const before = new Set((await connections()).map(item => item.id));
     const url = await start(input), done = await f.callback(url, account);
     assert.match(done.headers.get('location'), /result=connected/, done.headers.get('location'));
-    return (await connections()).find(item => input.credential_id ? item.id === input.credential_id : !before.has(item.id));
+    return (await connections()).find(item => input.connection_id ? item.id === input.connection_id : !before.has(item.id));
   }
   const tokenCalls = () => service.calls.filter(call => call.url === SERVICE.token_url);
   return { ...f, service, serviceId, appId, start, connect, tokenCalls };
@@ -63,7 +63,7 @@ test('利用者情報のURLがあれば、誰が許可したかを確かめ、�
   assert.equal(delivered.json.injection.environment.OAUTH_ACCESS_TOKEN, 'access-personal-0');
   assert.ok(Number(delivered.json.injection.environment.OAUTH_EXPIRES_AT) > Date.now());
   assert.doesNotMatch(JSON.stringify(connection) + delivered.text, /refresh-personal|notes-secret/);
-  const again = await f.start({ credential_id: connection.id });
+  const again = await f.start({ connection_id: connection.id });
   assert.match((await f.callback(again, 'work')).headers.get('location'), /result=wrong_account/);
 });
 
@@ -73,7 +73,7 @@ test('利用者情報のURLがなければ、接続ごとに別のアカウン�
   assert.equal(connection.label, 'Notes');
   assert.match(connection.subject, /^connection:/);
   assert.equal(connection.can_revoke, false);
-  const again = await f.connect('anyone', { credential_id: connection.id });
+  const again = await f.connect('anyone', { connection_id: connection.id });
   assert.equal(again.id, connection.id); assert.equal(again.subject, connection.subject);
   const removed = await f.request('/v1/resources/' + connection.id, { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.json.service_revoked, null, 'nothing was asked of the service');
@@ -119,7 +119,7 @@ test('サービスの定義では、インターネット上のhttpsのURLを求
   }
   assert.equal((await f.request('/v1/resources?kind=service&name=Other', { method: 'PUT', data: { ...DEFINITION, name: '' } })).json.error.where, 'definition.name');
   const other = (await f.request('/v1/resources?kind=service&name=Plain', { method: 'PUT', data: { ...DEFINITION, name: 'Plain' } })).json.resource.id;
-  assert.equal((await f.request('/v1/credentials', { method: 'POST', data: { service: other } })).json.error.code, 'app_required');
+  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: other } })).json.error.code, 'app_required');
   const listed = (await f.request('/v1/resources?kind=app')).json.resources;
   assert.deepEqual(listed.filter(app => !app.foundation).map(app => [app.name, app.service.name]), [['Notes', 'Notes']]);
 });

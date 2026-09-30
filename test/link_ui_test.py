@@ -60,7 +60,7 @@ with sync_playwright() as p:
     expect(section.get_by_role('heading', name='ai-simplicity', exact=True)).to_be_visible()
     section.get_by_role('button', name='詳細', exact=True).click()
     expect(dialog.get_by_role('heading', name='アクセスキー', exact=True)).to_be_visible()
-    expect(dialog.locator('.credential-list li')).to_have_count(1)
+    expect(dialog.locator('.connection-list li')).to_have_count(1)
     dialog.get_by_role('button', name='閉じる', exact=True).click()
     review(owner)
     owner.screenshot(path=str(shots / 'integrations.png'), full_page=True)

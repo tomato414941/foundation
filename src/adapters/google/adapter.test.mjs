@@ -17,14 +17,14 @@ async function googleFixture(t, google = new FakeGoogle()) {
   const f = await fixture(t, { google, services: [entry('google', { oauth: googleOauth(google) })] });
   async function connect(code = 'personal', input = {}) {
     const ids = new Set((await connections()).map(item => item.id));
-    const result = await f.request('/v1/credentials', { method: 'POST', data: { service: 'google', ...(input.request_id ? {} : { scopes: [CLOUD] }), ...input } });
+    const result = await f.request('/v1/connections', { method: 'POST', data: { service: 'google', ...(input.request_id ? {} : { scopes: [CLOUD] }), ...input } });
     assert.equal(result.status, 200, result.text);
     const done = await f.callback(new URL(result.json.url), code);
     assert.match(done.headers.get('location'), /result=connected/, done.headers.get('location'));
-    return (await connections()).find(item => input.credential_id ? item.id === input.credential_id : !ids.has(item.id));
+    return (await connections()).find(item => input.connection_id ? item.id === input.connection_id : !ids.has(item.id));
   }
-  const connections = async () => (await f.request('/v1/overview')).json.credentials.filter(item => item.service?.id === 'google');
-  const secret = connection => f.app.credentials.state(f.app.credentials.held(USER_A, connection.id)).private_state;
+  const connections = async () => (await f.request('/v1/overview')).json.connections.filter(item => item.service?.id === 'google');
+  const secret = connection => f.app.connections.state(f.app.connections.held(USER_A, connection.id)).private_state;
   return { ...f, connect, connections, secret };
 }
 
@@ -33,7 +33,7 @@ test('Googleの設定を読み込み、未設定なら接続を利用不可と�
   for (const incomplete of [{ clientId: 'id' }, { clientSecret: 'secret' }]) assert.throws(() => new GoogleClient(incomplete), /Both Foundation Google/);
   const f = await googleFixture(t, new GoogleClient());
   assert.equal((await f.request('/v1/services')).json.services.find(item => item.id === 'google').auth_schemes.oauth.available, false);
-  assert.equal((await f.request('/v1/credentials', { method: 'POST', data: { service: 'google' } })).status, 503);
+  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'google' } })).status, 503);
 });
 
 test('Googleの同意を、頼まれた権限と本人確認の権限、state・PKCE・オフライン更新付きで一度だけ要求する', async t => {
@@ -57,13 +57,13 @@ test('Googleの同意を、頼まれた権限と本人確認の権限、state・
 
 test('AIが頼んだ権限で接続の依頼を完了し、確認結果と短期トークンを分けて渡す', async t => {
   const f = await googleFixture(t), agent = await f.issueKey();
-  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'credential', service: 'google', scopes: [READONLY, SEND] }], binding_message: 'メールを読み、返信を送ります。' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'connection', service: 'google', scopes: [READONLY, SEND] }], binding_message: 'メールを読み、返信を送ります。' } });
   assert.equal(asked.status, 201, asked.text);
   assert.deepEqual(asked.json.request.authorization_details[0].scopes, [READONLY, SEND]);
   const a = await f.connect('personal', { request_id: asked.json.request.id });
   const done = await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token });
-  assert.equal(done.json.request.status, 'granted'); assert.equal(done.json.request.result.credential_id, a.id);
-  const [listed] = (await f.request('/v1/resources?kind=credential', { token: agent.token })).json.resources;
+  assert.equal(done.json.request.status, 'granted'); assert.equal(done.json.request.result.connection_id, a.id);
+  const [listed] = (await f.request('/v1/resources?kind=connection', { token: agent.token })).json.resources;
   assert.equal(listed.label, 'personal@example.test');
   assert.deepEqual(listed.facts.scopes, with_(READONLY, SEND));
   assert.deepEqual(listed.facts.requested_scopes, with_(READONLY, SEND));
@@ -80,11 +80,11 @@ test('AIが頼んだ権限で接続の依頼を完了し、確認結果と短期
 
 test('つなぎ直しでは、同じアカウントで既存の権限に新しく頼んだ権限を足して要求する', async t => {
   const f = await googleFixture(t), a = await f.connect('personal', { scopes: [READONLY] });
-  const url = await f.start({ credential_id: a.id, scopes: [SEND] });
+  const url = await f.start({ connection_id: a.id, scopes: [SEND] });
   assert.equal(url.searchParams.get('login_hint'), 'personal@example.test');
   assert.deepEqual(url.searchParams.get('scope').split(' '), with_(READONLY, SEND));
   assert.match((await f.callback(url, 'work')).headers.get('location'), /result=wrong_account/);
-  const same = await f.connect('personal', { credential_id: a.id, scopes: [SEND] });
+  const same = await f.connect('personal', { connection_id: a.id, scopes: [SEND] });
   assert.equal(same.id, a.id);
   assert.deepEqual(same.facts.scopes, with_(READONLY, SEND));
 });
@@ -96,7 +96,7 @@ test('複数アカウントをメールアドレスで区別し、別の所有�
   assert.equal((await f.inject(b, { token: agent.token })).json.injection.environment.GOOGLE_ACCOUNT_EMAIL, 'work@example.test');
   await f.login('second@example.test');
   const stranger = await f.issueKey();
-  assert.deepEqual((await f.request('/v1/resources?kind=credential', { token: stranger.token })).json.resources, []);
+  assert.deepEqual((await f.request('/v1/resources?kind=connection', { token: stranger.token })).json.resources, []);
   assert.equal((await f.inject(a, { token: stranger.token })).status, 404);
   assert.equal((await f.request('/v1/resources/' + a.id, { method: 'DELETE', data: { revoke: false } })).status, 403);
 });
@@ -106,7 +106,7 @@ test('頼んだ権限に対する不足と追加を、Googleが付与した権�
   f.google.scopes = 'openid email ' + extra;
   const a = await f.connect('personal', { scopes: [CLOUD] });
   assert.equal((await f.inject(a, { token: agent.token })).status, 200);
-  const facts = await f.credentialFacts(a, { token: agent.token });
+  const facts = await f.connectionFacts(a, { token: agent.token });
   assert.deepEqual(facts.missing_scopes, [CLOUD]);
   assert.deepEqual(facts.additional_scopes, [extra]);
 });

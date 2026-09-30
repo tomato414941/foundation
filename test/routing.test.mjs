@@ -39,7 +39,7 @@ test('未ログインのAIへOpenAPIで接続先・認証要件・入力形式�
   assert.match(page.headers.get('content-type'), /^application\/json/);
   assert.deepEqual(page.json.servers, [{ url: f.base }]);
   assert.match(page.json.paths['/v1/principals'].post.description, /verification_uri and user_code/);
-  assert.deepEqual(page.json.paths['/v1/credentials'].post.security, [{ session: [] }]);
+  assert.deepEqual(page.json.paths['/v1/connections'].post.security, [{ session: [] }]);
   assert.equal(page.json.paths['/v1/injections'].post.requestBody.content['application/json'].schema.$ref, '#/components/schemas/Inject');
 });
 
@@ -77,7 +77,7 @@ test('ログイン済みの初回HTMLで行き先の見出しとメニューを�
   for (const privateValue of ['private-test-name', 'private-test-value', 'owner@example.test']) assert.ok(!page.text.includes(privateValue));
   const records = await f.request('/v1/resources?kind=secret');
   assert.equal(records.json.resources[0].name, 'private-test-name');
-  const denied = await f.request('/v1/resources?kind=credential', { headers: { cookie: 'fdn_session=unverified' } });
+  const denied = await f.request('/v1/resources?kind=connection', { headers: { cookie: 'fdn_session=unverified' } });
   assert.equal(denied.status, 401);
 });
 
@@ -104,12 +104,12 @@ test('ログインを終えると開こうとしていた認証情報または�
 });
 
 test('同じURLでCookieとBearerを受け付け、Bearerがある場合はその所有者として扱う', async t => {
-  const f = await fixture(t), first = await f.credential(), key = await f.issueKey();
+  const f = await fixture(t), first = await f.connection(), key = await f.issueKey();
   await f.login('second@example.test');
-  await f.credential('work');
-  const browser = await f.request('/v1/resources?kind=credential');
+  await f.connection('work');
+  const browser = await f.request('/v1/resources?kind=connection');
   assert.equal(browser.json.resources[0].subject, 'work@example.test');
-  const agent = await f.request('/v1/resources?kind=credential', { token: key.token });
+  const agent = await f.request('/v1/resources?kind=connection', { token: key.token });
   assert.deepEqual(agent.json.resources.map(item => item.id), [first.id]);
   const anonymous = await f.request('/v1/services', { anonymous: true });
   assert.deepEqual(anonymous.json.services.map(item => item.id), ['google']);
@@ -117,9 +117,9 @@ test('同じURLでCookieとBearerを受け付け、Bearerがある場合はそ�
 
 test('解釈できないAuthorizationが付いた要求をCookieで代用せず拒否する', async t => {
   const f = await fixture(t);
-  await f.credential();
+  await f.connection();
   for (const authorization of ['Basic invalid', 'Bearer', '', 'Bearer invalid token', 'Bearer not-an-approved-key']) {
-    const read = await f.request('/v1/resources?kind=credential', { headers: { authorization } });
+    const read = await f.request('/v1/resources?kind=connection', { headers: { authorization } });
     assert.equal(read.status, 401, authorization || '(empty header)');
     const write = await f.request('/v1/resources?kind=secret&name=must-not-write', { method: 'PUT', raw: 'untrusted', headers: { authorization } });
     assert.equal(write.status, 401, authorization || '(empty header)');

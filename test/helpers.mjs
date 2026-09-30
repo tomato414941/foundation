@@ -7,7 +7,7 @@ export { FakeGoogle } from '../src/adapters/google/fixture.mjs';
 import { googleOauth } from '../src/adapters/google/index.mjs';
 import { entry } from '../src/catalog.mjs';
 export { entry } from '../src/catalog.mjs';
-import { Credentials } from '../src/credentials.mjs';
+import { Connections } from '../src/connections.mjs';
 import { Secrets } from '../src/secrets.mjs';
 import { Inputs } from '../src/inputs.mjs';
 import { Services } from '../src/services.mjs';
@@ -26,8 +26,8 @@ export const GMAIL = { readonly: [GMAIL_SCOPE + 'readonly'], metadata: [GMAIL_SC
 export function modules(store, entries = []) {
   const principals = new Principals(store), authorization = new Authorization(principals);
   const resources = new Resources(store), services = new Services(store, resources, entries, { authorization }), apps = new Apps(store, resources, services);
-  const secrets = new Secrets(store, resources), credentials = new Credentials(store, resources, services, apps);
-  return { resources, services, apps, secrets, credentials, inputs: new Inputs(secrets, credentials), principals, authorization, sessions: new Sessions(store), flows: new OAuthFlows(store) };
+  const secrets = new Secrets(store, resources), connections = new Connections(store, resources, services, apps);
+  return { resources, services, apps, secrets, connections, inputs: new Inputs(secrets, connections), principals, authorization, sessions: new Sessions(store), flows: new OAuthFlows(store) };
 }
 
 export const KEY = Buffer.alloc(32, 7);
@@ -55,15 +55,15 @@ export class FakeAuth {
   async logout() {}
 }
 
-// Seed a credential for a service, including already-expired fixture tokens.
+// Seed a connection for a service, including already-expired fixture tokens.
 export function acquired(store, entries, service, { subject, secret }, scheme = 'oauth') {
-  const { credentials } = modules(store, entries);
-  const saved = credentials.keep(USER_A, { service, scheme, subject, label: subject,
+  const { connections } = modules(store, entries);
+  const saved = connections.keep(USER_A, { service, scheme, subject, label: subject,
     state: { private_state: secret, facts: {}, expires_at: secret.expires_at } });
-  const row = () => credentials.held(USER_A, saved.id);
-  const state = () => credentials.state(row());
-  const run = () => credentials.obtain(row());
-  return { credentials, row, run, state };
+  const row = () => connections.held(USER_A, saved.id);
+  const state = () => connections.state(row());
+  const run = () => connections.obtain(row());
+  return { connections, row, run, state };
 }
 export async function fixture(t, options = {}) {
   const { google = new FakeGoogle(), services = [entry('google', { oauth: googleOauth(google) })], ...rest } = options, auth = options.auth || new FakeAuth();
@@ -105,8 +105,8 @@ export async function fixture(t, options = {}) {
     return response;
   }
   // Connecting Google, asking to read Gmail unless other scopes are given.
-  async function start({ credential_id, scopes = GMAIL.readonly } = {}) {
-    const result = await request('/v1/credentials', { method: 'POST', data: { service: 'google', credential_id, scopes } });
+  async function start({ connection_id, scopes = GMAIL.readonly } = {}) {
+    const result = await request('/v1/connections', { method: 'POST', data: { service: 'google', connection_id, scopes } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
@@ -114,26 +114,26 @@ export async function fixture(t, options = {}) {
   async function callback(url, code = 'personal', extra = {}) {
     return request(new URL(url.searchParams.get('redirect_uri')).pathname + '?state=' + url.searchParams.get('state') + '&code=' + code, extra);
   }
-  // Connects one Google account, named by the code, and returns its own credential.
-  async function credential(code = 'personal', scopes = GMAIL.readonly) {
+  // Connects one Google account, named by the code, and returns its own connection.
+  async function connection(code = 'personal', scopes = GMAIL.readonly) {
     const url = await start({ scopes });
     const response = await callback(url, code);
     assert.equal(response.headers.get('location'), '/services?result=connected&service=google', response.text);
-    return (await request('/v1/overview')).json.credentials.find((item) => item.subject === code + '@example.test');
+    return (await request('/v1/overview')).json.connections.find((item) => item.subject === code + '@example.test');
   }
-  // Injecting a credential for a service derives what it yields now; nothing else reaches the service.
-  async function inject(credential, options = {}) {
-    return request('/v1/injections', { method: 'POST', data: { names: [{ id: credential.id }] }, ...options });
+  // Injecting a connection for a service derives what it yields now; nothing else reaches the service.
+  async function inject(connection, options = {}) {
+    return request('/v1/injections', { method: 'POST', data: { names: [{ id: connection.id }] }, ...options });
   }
-  async function credentialFacts(credential, options = {}) {
-    const listed = await request('/v1/resources?kind=credential', options);
+  async function connectionFacts(connection, options = {}) {
+    const listed = await request('/v1/resources?kind=connection', options);
     assert.equal(listed.status, 200, listed.text);
-    const found = listed.json.resources.find(item => item.id === credential.id);
+    const found = listed.json.resources.find(item => item.id === connection.id);
     assert.ok(found, '接続の一覧から対象を取得する');
     return found.facts;
   }
   // Makes a key known to the owner: the key asks to act for whoever opens its request, and the owner types its code.
-  // A machine becomes a principal with no credential, is issued a key, asks to act for the person, and is approved.
+  // A machine becomes a principal with no connection, is issued a key, asks to act for the person, and is approved.
   async function become(name = 'laptop') {
     const made = await request('/v1/principals', { method: 'POST', anonymous: true, data: { name } });
     assert.equal(made.status, 201, made.text);
@@ -166,12 +166,12 @@ export async function fixture(t, options = {}) {
     actsFor.set(result.json.token, result.json.principal.acts_for[0]);
     return { ...result.json.principal, token: result.json.token, key_id: result.json.key.id };
   }
-  // Ages a credential past its expiry in both the envelope and the scheme's private state.
+  // Ages a connection past its expiry in both the envelope and the scheme's private state.
   function expire(id, owner = USER_A) {
-    const credential = app.credentials.held(owner, id);
-    const state = app.credentials.state(credential), expires_at = Date.now() - 1;
-    app.credentials.saveState(credential, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
+    const connection = app.connections.held(owner, id);
+    const state = app.connections.state(connection), expires_at = Date.now() - 1;
+    app.connections.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
   }
   if (options.login !== false) await login();
-  return { app, auth, google, base, request, lookup, read, keep, drop, become, login, start, callback, credential, inject, credentialFacts, issueKey, approveKey, expire, close, cookie: () => cookie };
+  return { app, auth, google, base, request, lookup, read, keep, drop, become, login, start, callback, connection, inject, connectionFacts, issueKey, approveKey, expire, close, cookie: () => cookie };
 }

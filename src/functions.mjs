@@ -5,7 +5,7 @@ import { prepare as prepareFetch, send as sendFetch } from './fetch.mjs';
 // Built-in operations, not user-supplied code. Definitions describe invocation;
 // neither a definition nor a stored value implies an execution.
 export const FUNCTIONS = [
-  { id: 'http.request', description: 'Send one HTTPS request with explicitly referenced credentials.',
+  { id: 'http.request', description: 'Send one HTTPS request with explicitly referenced connections.',
     endpoint: '/v1/functions/http.request', input: { url: 'HTTPS URL', method: 'HTTP method', headers: 'literal header values', body: 'literal text or base64 body', json: 'JSON body', form: 'form fields', bindings: 'JSON Pointer targets and literal/reference parts' },
     output: 'response', save: 'optional name to keep the response body under, as a secret' },
 ];
@@ -20,7 +20,7 @@ export class Functions {
     still();
     const prepared = prepareFetch(input, ownHosts);
     const outputs = input.save === undefined ? null : outputNames({ response: input.save }, ['response']);
-    // Each bound credential yields one text: a secret its bytes, one for a service what its scheme derives now.
+    // Each bound connection yields one text: a secret its bytes, one for a service what its scheme derives now.
     const values = new Map(), derived = new Map();
     for (const reference of prepared.references.values()) {
       const row = this.inputs.resolve(holderId, reference);

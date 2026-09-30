@@ -1,6 +1,6 @@
 const kinds = {
   relation: { done: '許可しました', denied: '許可しませんでした', href: '/principals', label: 'アクセス管理' },
-  credential: { done: '接続しました', denied: '接続しませんでした', href: '/services', label: 'サービス' },
+  connection: { done: '接続しました', denied: '接続しませんでした', href: '/services', label: 'サービス' },
   secret: { done: '登録しました', denied: '登録しませんでした', href: '/secrets', label: 'シークレット' },
   app: { done: 'OAuthアプリを登録しました', denied: '登録しませんでした', href: '/services', label: 'サービス' },
 };

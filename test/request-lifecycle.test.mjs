@@ -5,7 +5,7 @@ import { fixture, USER_A } from './helpers.mjs';
 import { requestResultView } from '../web/request-view.js';
 
 async function ask(f, token, kind, input) {
-  const answer = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: { actor: 'relation', store: 'secret', connect: 'credential', app: 'app' }[kind], ...(kind === 'actor' ? { relation: 'actor' } : input) }] } });
+  const answer = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: { actor: 'relation', store: 'secret', connect: 'connection', app: 'app' }[kind], ...(kind === 'actor' ? { relation: 'actor' } : input) }] } });
   assert.equal(answer.status, 201, answer.text);
   return answer.json.request;
 }
@@ -13,11 +13,11 @@ async function ask(f, token, kind, input) {
 test('依頼の種類と内容を保存し、同じ依頼を二度出しても一つとして扱う', async t => {
   const f = await fixture(t), key = await f.issueKey();
   const request = await ask(f, key.token, 'connect', { service: 'google' });
-  const again = await f.request('/v1/requests', { method: 'POST', token: key.token, data: { authorization_details: [{ type: 'credential', service: 'google' }] } });
+  const again = await f.request('/v1/requests', { method: 'POST', token: key.token, data: { authorization_details: [{ type: 'connection', service: 'google' }] } });
   assert.equal(again.json.request.id, request.id);
-  assert.deepEqual(request.authorization_details, [{ type: 'credential', service: 'google', auth_scheme: 'oauth' }]);
+  assert.deepEqual(request.authorization_details, [{ type: 'connection', service: 'google', auth_scheme: 'oauth' }]);
   for (const data of [
-    { authorization_details: [{ type: 'other' }] }, { authorization_details: [{ type: 'credential', fields: [] }] },
+    { authorization_details: [{ type: 'other' }] }, { authorization_details: [{ type: 'connection', fields: [] }] },
     { authorization_details: [{ type: 'secret', service: 'google' }] }, { service: 'google' },
   ]) assert.equal((await f.request('/v1/requests', { method: 'POST', token: key.token, data })).status, 400);
 });
@@ -25,13 +25,13 @@ test('依頼の種類と内容を保存し、同じ依頼を二度出しても�
 test('接続の失効・削除後も依頼の完了と結果を維持する', async t => {
   const f = await fixture(t), key = await f.issueKey();
   const request = await ask(f, key.token, 'connect', { service: 'google' });
-  const start = await f.request('/v1/credentials', { method: 'POST', data: { service: 'google', request_id: request.id } });
+  const start = await f.request('/v1/connections', { method: 'POST', data: { service: 'google', request_id: request.id } });
   await f.callback(new URL(start.json.url));
   const read = async () => (await f.request('/v1/requests/' + request.id, { token: key.token })).json.request;
-  const done = await read(), id = done.result.credential_id;
+  const done = await read(), id = done.result.connection_id;
   assert.equal(done.status, 'granted');
-  f.app.credentials.reconnectRequired(f.app.credentials.held(USER_A, id));
-  assert.equal((await f.request('/v1/resources?kind=credential', { token: key.token })).json.resources[0].status, 'reconnect_required');
+  f.app.connections.reconnectRequired(f.app.connections.held(USER_A, id));
+  assert.equal((await f.request('/v1/resources?kind=connection', { token: key.token })).json.resources[0].status, 'reconnect_required');
   for (const remove of [false, true]) {
     if (remove) await f.request('/v1/resources/' + id, { method: 'DELETE', data: { revoke: false } });
     const current = await read();
@@ -90,7 +90,7 @@ test('APIの認証成功をキーの最終利用として記録する', async t 
   const f = await fixture(t), key = await f.issueKey();
   assert.equal((await f.request('/v1/overview')).json.actors[0].keys[0].last_used_at, null);
   const before = Date.now();
-  assert.equal((await f.request('/v1/resources?kind=credential', { token: key.token })).status, 200);
+  assert.equal((await f.request('/v1/resources?kind=connection', { token: key.token })).status, 200);
   const current = (await f.request('/v1/overview')).json.actors[0].keys[0];
   assert.ok(Date.parse(current.last_used_at) >= before);
   assert.ok(Date.parse(current.last_used_at) <= Date.now());
@@ -139,7 +139,7 @@ test('保存と依頼完了を一緒に確定し、失敗した場合は再試�
 });
 
 test('依頼の種類に合った完了表示と移動先を返す', () => {
-  for (const [type, title, href, label] of [['credential', '接続しました', '/services', 'サービス'], ['secret', '登録しました', '/secrets', 'シークレット'], ['relation', '許可しました', '/principals', 'アクセス管理']]) {
+  for (const [type, title, href, label] of [['connection', '接続しました', '/services', 'サービス'], ['secret', '登録しました', '/secrets', 'シークレット'], ['relation', '許可しました', '/principals', 'アクセス管理']]) {
     const view = requestResultView({ authorization_details: [{ type }], status: 'granted' });
     assert.equal(view.title, title); assert.equal(view.href, href); assert.equal(view.completed, true);
     assert.equal(view.label, label);

@@ -6,8 +6,8 @@ import { definitionInput } from './service-definition.mjs';
 import { schemesOf } from './catalog.mjs';
 import { appFieldsOf, takesApps } from './apps.mjs';
 
-// A service is where a credential works: what it is called, where its API and documentation are, where an app or a
-// token for it is made, and the schemes by which Foundation comes to hold a credential for it. Foundation's catalog
+// A service is where a connection works: what it is called, where its API and documentation are, where an app or a
+// token for it is made, and the schemes by which Foundation comes to hold a connection for it. Foundation's catalog
 // knows services by id; a holder may describe one the catalog does not know, as a resource of kind service, known by
 // its resource id. Both are the same shape (service-definition.mjs) and are used the same way.
 const COLUMNS = 'r.id,r.holder_id,r.kind,r.name,r.created_at,r.updated_at,s.definition';
@@ -63,7 +63,7 @@ export class Services {
     if (!scheme) fail(400, 'invalid_auth_scheme', 'このサービスでは、その方法で接続できません。');
     return scheme;
   }
-  // What a credential or an app says of its service. A removed described service says only that it is gone.
+  // What a connection or an app says of its service. A removed described service says only that it is gone.
   summary(ref) {
     if (!ref) return null;
     const entry = this.catalog.get(ref);
@@ -71,7 +71,7 @@ export class Services {
     const row = this.row(ref);
     return row ? { id: ref, name: JSON.parse(row.definition).name, catalog: false } : { id: ref, name: '削除されたサービス', catalog: false, removed: true };
   }
-  // What anyone may know of a service: where it is, and how Foundation comes to hold a credential for it.
+  // What anyone may know of a service: where it is, and how Foundation comes to hold a connection for it.
   describe(ref) {
     const { definition, catalog } = this.get(ref), schemes = this.schemes(ref), described = {};
     for (const [id, scheme] of Object.entries(schemes)) {
@@ -89,7 +89,7 @@ export class Services {
   catalogView() { return this.catalogIds().map(ref => this.describe(ref)); }
 
   // Describing a service: the holder's definition, checked as the catalog's are. The same name again replaces it;
-  // credentials made for it go on under the new definition.
+  // connections made for it go on under the new definition.
   put(holderId, name, input) {
     resourceName(name);
     const definition = definitionInput(input);
@@ -129,12 +129,12 @@ export class Services {
     if (name !== row.name && this.find(row.holder_id, name)) fail(409, 'name_taken', 'その名前はすでに使われています。');
     return this.row(this.resources.rename(row, name).id);
   }
-  // What refers to a described service: credentials and apps, whoever holds them.
+  // What refers to a described service: connections and apps, whoever holds them.
   dependents(row) {
-    return this.db.prepare(`SELECT r.id, r.holder_id, r.kind, r.name FROM resources r LEFT JOIN credentials c ON c.resource_id=r.id LEFT JOIN apps a ON a.resource_id=r.id
+    return this.db.prepare(`SELECT r.id, r.holder_id, r.kind, r.name FROM resources r LEFT JOIN connections c ON c.resource_id=r.id LEFT JOIN apps a ON a.resource_id=r.id
       WHERE c.service=? OR a.service=? ORDER BY r.created_at`).all(row.id, row.id);
   }
-  // A service something still refers to stays: removing it would leave credentials no scheme can use.
+  // A service something still refers to stays: removing it would leave connections no scheme can use.
   remove(row) {
     const dependents = this.dependents(row);
     if (dependents.length) fail(409, 'service_in_use', `このサービスを使う接続やアプリが${dependents.length}件あります。先にそれらを削除してください。`, { dependents: dependents.length });

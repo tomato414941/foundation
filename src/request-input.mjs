@@ -6,7 +6,7 @@ import { SCHEMES } from './service-definition.mjs';
 // What is asked, in the shape of RFC 9396 (authorization_details): a list of details, each a type and what that type
 // needs. Foundation defines four types: a relation drawn to the one asking, secrets kept by the one asked, a service
 // connected by them, an app registered by them. One detail per request for now.
-export const TYPES = ['relation', 'secret', 'credential', 'app'];
+export const TYPES = ['relation', 'secret', 'connection', 'app'];
 export function requestDetails(value) {
   if (!Array.isArray(value) || value.length !== 1 || !value[0] || typeof value[0] !== 'object' || Array.isArray(value[0])) fail(400, 'invalid_authorization_details', 'authorization_details に依頼の内容を1件指定してください。');
   const { type, ...detail } = value[0];
@@ -16,14 +16,14 @@ export function requestDetails(value) {
 
 export function requestInput(type, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'invalid_authorization_details', '依頼の内容を指定してください。');
-  // Connecting: which service and by which scheme, optionally which existing credential it replaces, and the
+  // Connecting: which service and by which scheme, optionally which existing connection it replaces, and the
   // service's scopes the AI needs. app: the app to connect through - one the holder may use, by id - or Foundation's
   // own when left out.
-  if (type === 'credential' && Object.keys(input).every(key => ['service', 'auth_scheme', 'credential_id', 'scopes', 'app'].includes(key)) && typeof input.service === 'string'
+  if (type === 'connection' && Object.keys(input).every(key => ['service', 'auth_scheme', 'connection_id', 'scopes', 'app'].includes(key)) && typeof input.service === 'string'
     && (input.auth_scheme === undefined || SCHEMES.includes(input.auth_scheme))
-    && (input.credential_id === undefined || (typeof input.credential_id === 'string' && /^[0-9a-f-]{36}$/.test(input.credential_id)))) {
+    && (input.connection_id === undefined || (typeof input.connection_id === 'string' && /^[0-9a-f-]{36}$/.test(input.connection_id)))) {
     const scopes = scopeList(input.scopes), app = appReference(input.app);
-    return { service: input.service, ...(input.auth_scheme === undefined ? {} : { auth_scheme: input.auth_scheme }), ...(input.credential_id === undefined ? {} : { credential_id: input.credential_id }),
+    return { service: input.service, ...(input.auth_scheme === undefined ? {} : { auth_scheme: input.auth_scheme }), ...(input.connection_id === undefined ? {} : { connection_id: input.connection_id }),
       ...(scopes.length ? { scopes } : {}), ...(app ? { app } : {}) };
   }
   // Registering an app: the holder types its ID and secret on the request page; the asker learns only its id.
@@ -43,7 +43,7 @@ export function requestInput(type, input) {
 }
 
 export function requestResult(type, result) {
-  if (type === 'credential' && typeof result?.credential_id === 'string' && result.credential_id) return { credential_id: result.credential_id };
+  if (type === 'connection' && typeof result?.connection_id === 'string' && result.connection_id) return { connection_id: result.connection_id };
   if (type === 'secret' && Array.isArray(result?.names) && result.names.length) return { names: result.names.map(resourceName), replaced: (result.replaced ?? []).map(resourceName) };
   if (type === 'relation' && typeof result?.relation === 'string' && ['principal', 'resource'].includes(result.object_type) && typeof result.object_id === 'string') return { relation: result.relation, object_type: result.object_type, object_id: result.object_id };
   if (type === 'app' && typeof result?.app_id === 'string' && result.app_id) return { app_id: result.app_id };

@@ -21,7 +21,7 @@ const value = (subject, state = 'opaque-0') => ({ subject, privateState: state, 
 const example = obtain => ({ definition: { id: 'example', name: 'Example', auth_schemes: { oauth: { adapter: 'example' } } },
   schemes: { oauth: { kind: 'oauth', available: true, variables: ['EXAMPLE_KEY'], authorization: { begin() {}, complete() {} }, obtain } } });
 function setup(t, obtain) {
-  const store = new Store(':memory:', KEY), { credentials: connections } = modules(store, [example(obtain)]);
+  const store = new Store(':memory:', KEY), { connections: connections } = modules(store, [example(obtain)]);
   t.after(() => store.close());
   const row = connections.save(USER_A, 'example', 'oauth', value('account-one'));
   return { store, connections, row };
@@ -97,7 +97,7 @@ test('取得中に再接続した場合は新しい認証状態を維持する',
   const pending = connections.obtain(row);
   connections.save(USER_A, 'example', 'oauth', value(row.subject, 'reconnected'), { previous: row });
   release();
-  await assert.rejects(pending, { code: 'credential_changed' });
+  await assert.rejects(pending, { code: 'connection_changed' });
   const current = connections.held(USER_A, row.id);
   assert.equal(current.status, 'usable');
   assert.equal(connections.state(current).private_state, 'reconnected');
@@ -112,14 +112,14 @@ test('各サービスの暗号化状態・接続ID・保存名を再起動後も
     ['github', 'octo', 'GH_TOKEN'], ['openrouter', 'personal', 'OPENROUTER_API_KEY'] ];
   const identities = [];
   for (const [service, code, output] of specs) {
-    const start = await first.request('/v1/credentials', { method: 'POST', data: { service } });
+    const start = await first.request('/v1/connections', { method: 'POST', data: { service } });
     assert.equal(start.status, 200, start.text);
     const url = new URL(start.json.url), callback = new URL(url.searchParams.get('redirect_uri') || url.searchParams.get('callback_url'));
     callback.searchParams.set('state', url.searchParams.get('state') || callback.searchParams.get('state'));
     callback.searchParams.set('code', code);
     const completed = await first.request(callback.pathname + callback.search);
     assert.match(completed.headers.get('location'), /result=connected/);
-    const row = first.app.credentials.list(USER_A).find(item => item.service === service);
+    const row = first.app.connections.list(USER_A).find(item => item.service === service);
     identities.push({ id: row.id, subject: row.subject, generation: row.generation, service, output });
   }
   const agent = await first.issueKey();
@@ -127,15 +127,15 @@ test('各サービスの暗号化状態・接続ID・保存名を再起動後も
   await first.close();
   const second = await fixture(t, { database, services: makeServices() });
   for (const identity of identities) {
-    const before = second.app.credentials.held(USER_A, identity.id);
+    const before = second.app.connections.held(USER_A, identity.id);
     assert.equal(before.subject, identity.subject); assert.equal(before.generation, identity.generation);
-    assert.ok(second.app.credentials.state(before).private_state);
+    assert.ok(second.app.connections.state(before).private_state);
     const delivered = await second.inject(identity, { token: agent.token, as: USER_A });
     assert.equal(delivered.status, 200, delivered.text);
     assert.ok(delivered.json.injection.environment[identity.output]);
-    const state = second.app.credentials.state(second.app.credentials.held(USER_A, identity.id));
+    const state = second.app.connections.state(second.app.connections.held(USER_A, identity.id));
     assert.ok(state.private_state.access_token);
-    assert.doesNotMatch(JSON.stringify(delivered.json), /refresh_token|private_state/, 'what renews the credential never leaves');
+    assert.doesNotMatch(JSON.stringify(delivered.json), /refresh_token|private_state/, 'what renews the connection never leaves');
   }
   assert.equal((await second.read('secret', 'a/aa/aaa')).text, 'independent-snapshot');
 });

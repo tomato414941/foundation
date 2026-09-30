@@ -29,7 +29,7 @@ const scopes = errorCode({ type: ['array', 'null'], items: errorCode(string, 'in
 const scheme = choice(['oauth', 'role']);
 const app = nullable({ anyOf: [id, { const: 'foundation' }] });
 const field = object({ name: resourceName, label: string, site: string, readable: boolean, multiline: boolean, replace: boolean }, ['name', 'label']);
-const connect = object({ service: string, auth_scheme: scheme, credential_id: id, scopes, app }, ['service']);
+const connect = object({ service: string, auth_scheme: scheme, connection_id: id, scopes, app }, ['service']);
 const requestProperties = {
   to: errorCode(principalId, 'invalid_principal'), binding_message: errorCode({ type: 'string', maxLength: 240 }, 'invalid_purpose'), steps: errorCode({ type: ['array', 'null'], items: errorCode(string, 'invalid_steps'), maxItems: 20 }, 'invalid_steps'),
   valid_minutes: errorCode({ type: ['integer', 'null'], description: 'Expiry in minutes; default 30, from 1 to 1440. null uses the default.' }, 'invalid_validity'),
@@ -64,20 +64,20 @@ export const schemas = {
   RelationInput: object({ subject: principalId, relation: string, object_type: choice(['principal', 'resource']), object_id: string }, ['relation', 'object_type', 'object_id']),
   AuthorizationDetail: { anyOf: [relationDetail,
     detailOf('secret', { fields: { anyOf: [field, { ...array(field), minItems: 1, maxItems: 8 }] } }, ['fields']),
-    detailOf('credential', connect.properties, ['service']),
+    detailOf('connection', connect.properties, ['service']),
     detailOf('app', { service: string, name: resourceName }, ['service'])] },
   CreateRequest: errorCode(object({ ...requestProperties, authorization_details: errorCode({ ...array(ref('AuthorizationDetail')), minItems: 1, maxItems: 1 }, 'invalid_authorization_details') }, ['authorization_details']), 'invalid_authorization_details'),
   Request: object({ id: requestId, authorization_details: array(ref('AuthorizationDetail')), from: principalId, to: nullable(principalId),
     binding_message: string, steps: array(string), status: choice(['pending', 'granted', 'denied', 'cancelled']), created_at: time, expires_at: time, expires_in: integer, interval: integer,
     verification_uri: string, requester_name: string, user_code: string, reason: string,
-    result: object({ names: array(string), replaced: array(string), relation: string, object_type: string, object_id: string, credential_id: id, app_id: id }),
+    result: object({ names: array(string), replaced: array(string), relation: string, object_type: string, object_id: string, connection_id: id, app_id: id }),
     events: array(object({ event: string, at: time, detail: object() })), service: ref('ServiceDescription'),
-    credential: nullable(ref('Credential')), auth_scheme: scheme, app: nullable(object({ id: string, name: string, foundation: boolean })), store: array(field),
+    connection: nullable(ref('Connection')), auth_scheme: scheme, app: nullable(object({ id: string, name: string, foundation: boolean })), store: array(field),
   }, ['id', 'authorization_details', 'from', 'to', 'status', 'verification_uri', 'expires_at', 'interval']),
   GrantRequest: { anyOf: [
     object({ entries: array(object({ name: resourceName, content: string }, ['name', 'content'])) }, ['entries']),
     object({ user_code: string }), appValues,
-  ], description: 'secret: entries in the requested field order; relation: the user_code the asker showed, when the request was addressed to nobody; app: name, client_id, client_secret and service-specific top-level app fields. credential is granted through /v1/credentials and the service consent flow. Wrong user codes, including missing ones, count toward the attempt limit.' },
+  ], description: 'secret: entries in the requested field order; relation: the user_code the asker showed, when the request was addressed to nobody; app: name, client_id, client_secret and service-specific top-level app fields. connection is granted through /v1/connections and the service consent flow. Wrong user codes, including missing ones, count toward the attempt limit.' },
   Settings: object({ principal_id: principalId, return_url: string, refresh_url: string, webhook_url: nullable(string),
     notifies: boolean, webhook_secret: string, created_at: iso }, ['principal_id', 'return_url', 'refresh_url', 'notifies']),
   SettingsInput: object({ return_url: string, refresh_url: string, webhook_url: string }, ['return_url']),
@@ -103,19 +103,19 @@ export const schemas = {
   AppInput: appValues,
   Secret: resource('secret', { size: integer }),
   Object: resource('object', { size: integer, type: nullable(string) }),
-  Credential: resource('credential', { service: ref('ServiceSummary'), auth_scheme: scheme, status: string, label: string,
+  Connection: resource('connection', { service: ref('ServiceSummary'), auth_scheme: scheme, status: string, label: string,
     facts: object(), variables: array(string), app: nullable(object({ id: string, name: string, foundation: boolean })), subject: string,
     generation: integer, expires_at: nullable(time), can_reconnect: boolean, can_revoke: boolean, available: boolean }),
-  App: resource('app', { service: ref('ServiceSummary'), foundation: boolean, client_id: string, settings: map(string), credentials: integer }),
+  App: resource('app', { service: ref('ServiceSummary'), foundation: boolean, client_id: string, settings: map(string), connections: integer }),
   Service: resource('service', { definition: object(), service: ref('ServiceDescription'), dependents: integer }),
   Environment: resource('environment', { size: string, lifetime, identity: nullable(principalId), status: string,
     started_at: nullable(iso), last_active_at: nullable(iso), expires_at: nullable(iso) }),
-  Resource: { oneOf: ['Secret', 'Object', 'Credential', 'App', 'Service', 'Environment'].map(ref) },
+  Resource: { oneOf: ['Secret', 'Object', 'Connection', 'App', 'Service', 'Environment'].map(ref) },
   PatchResource: { ...object({ name: resourceName, auth_schemes: object({ oauth: ref('OAuthDefinition') }), client_id: string, client_secret: string }), description: 'Apps also accept their service-specific top-level client fields, as declared by app_fields.' },
   DeleteResource: object({ revoke: boolean, confirm: boolean }),
-  Connect: { ...object({ ...connect.properties, request_id: requestId }), description: 'A browser session is required. With request_id the stored request determines service, scheme, app and scopes. Otherwise service is required. Use a credential detail at POST /v1/requests to ask a person to connect.' },
+  Connect: { ...object({ ...connect.properties, request_id: requestId }), description: 'A browser session is required. With request_id the stored request determines service, scheme, app and scopes. Otherwise service is required. Use a connection detail at POST /v1/requests to ask a person to connect.' },
   ConnectResult: object({ url: string, state: string, complete: object({ fields: oauthFields }) }, ['url']),
-  Confirmation: object({ credential: ref('Credential'), changes: array(object()) }, ['credential', 'changes']),
+  Confirmation: object({ connection: ref('Connection'), changes: array(object()) }, ['connection', 'changes']),
   CreateEnvironment: object(environment),
   Run: object({ ...environment, ...command }, ['command']),
   CommandInput: object(command, ['command']),
@@ -137,13 +137,13 @@ export const schemas = {
   StorageUsage: object({ count: integer, bytes: integer, count_max: integer, bytes_max: integer }, ['count', 'bytes', 'count_max', 'bytes_max']),
   AuditEntry: object({ id, actor_id: string, action: string, object_type: string, object_id: string, detail: object(), at: iso }, ['id', 'actor_id', 'action', 'object_type', 'object_id', 'detail', 'at']),
   Overview: object({ user: object({ id: principalId, email: nullable(string) }, ['id', 'email']), principal: ref('Principal'),
-    secrets: array(ref('Secret')), credentials: array(ref('Credential')), apps: array(ref('App')), services: array(ref('Service')),
+    secrets: array(ref('Secret')), connections: array(ref('Connection')), apps: array(ref('App')), services: array(ref('Service')),
     catalog: array(ref('ServiceDescription')), principals: array(ref('Principal')), actors: array(ref('Principal')), requests: array(ref('Request')),
     functions: array(ref('Function')), settings: nullable(ref('Settings')), environments: array(ref('Environment')), compute: ref('Compute') },
-    ['user', 'principal', 'secrets', 'credentials', 'apps', 'services', 'catalog', 'principals', 'actors', 'requests', 'functions', 'settings', 'environments', 'compute']),
+    ['user', 'principal', 'secrets', 'connections', 'apps', 'services', 'catalog', 'principals', 'actors', 'requests', 'functions', 'settings', 'environments', 'compute']),
   Export: object({ exported_at: iso, owner: nullable(string), origin: string,
     secrets: array({ allOf: [ref('Secret'), object({ content: string, encoding: { const: 'base64' } }, ['content', 'encoding'])] }),
-    credentials: array(ref('Credential')), services: array(object({ id, name: string, definition: object() })), principals: array(ref('Principal')) }, ['exported_at', 'owner', 'origin', 'secrets', 'credentials', 'services', 'principals']),
+    connections: array(ref('Connection')), services: array(object({ id, name: string, definition: object() })), principals: array(ref('Principal')) }, ['exported_at', 'owner', 'origin', 'secrets', 'connections', 'services', 'principals']),
 };
 
 const query = (name, schema = string, description, required = false) => ({ name, in: 'query', schema, required, ...(description ? { description } : {}) });
@@ -235,10 +235,10 @@ export const routes = [
   { name: 'command', group: 'environments', path: '/v1/environments/{resourceId}/commands/{commandId}', methods: { get: op('getCommand', 'Read command status and output', one('Command')) } },
   { name: 'resources', path: '/v1/resources', methods: {
     get: op('listResources', 'List resources or find one by literal name', { anyOf: [many('resources', 'Resource'), one('Resource')] }, {
-      parameters: [as, query('kind', choice(KINDS)), query('name', string, 'Exact name lookup for secret, object, service or app; returns resource (singular).'), query('prefix', string), query('service', string, 'Filter credentials by service id.'), query('shown', string, 'me lists resources shared with the caller.')],
-      description: 'Credential metadata contains no renewable state or token. Apps may include the built-in Foundation app. Without name the result is resources (an array).' }),
+      parameters: [as, query('kind', choice(KINDS)), query('name', string, 'Exact name lookup for secret, object, service or app; returns resource (singular).'), query('prefix', string), query('service', string, 'Filter connections by service id.'), query('shown', string, 'me lists resources shared with the caller.')],
+      description: 'Connection metadata contains no renewable state or token. Apps may include the built-in Foundation app. Without name the result is resources (an array).' }),
     put: op('putResource', 'Create or replace a resource by kind and name', one('Resource'), { parameters: [as, query('kind', choice(['secret', 'object', 'app', 'service']), undefined, true), query('name', resourceName, undefined, true), header('If-Match', 'Secret revision from ETag; mismatch returns 412 secret_changed.'), header('If-None-Match', 'Use * to create a service only when its name is unused; otherwise 412 name_taken.')],
-      description: 'kind determines the body: secret/object store raw bytes (including when Content-Type is application/json); app/service parse JSON. Secrets require 1 byte–1 MiB; objects allow up to 25 MiB and preserve Content-Type. Managed credentials are created through /v1/credentials, not here.',
+      description: 'kind determines the body: secret/object store raw bytes (including when Content-Type is application/json); app/service parse JSON. Secrets require 1 byte–1 MiB; objects allow up to 25 MiB and preserve Content-Type. Managed connections are created through /v1/connections, not here.',
       requestBody: { required: true, content: { ...rawContent, 'application/json': { schema: { anyOf: [ref('ServiceDefinition'), ref('AppInput'), {}], description: 'ServiceDefinition for kind=service; AppInput for kind=app; arbitrary raw JSON bytes for secret/object.' } } } },
       responses: { 200: { ...response(one('Resource')), headers: etag }, default: response('Error', 'Failure') },
     }),
@@ -246,29 +246,29 @@ export const routes = [
   { name: 'resource', group: 'resources', path: '/v1/resources/{resourceId}', methods: {
     get: op('getResource', 'Read resource metadata', one('Resource')),
     put: op('replaceService', 'Replace a service definition', one('Resource'), { input: 'ServiceDefinition', 'x-input-error': 'invalid_definition' }),
-    patch: op('patchResource', 'Rename a resource or update an app or service', one('Resource'), { input: 'PatchResource', description: 'For secret/object/credential, supply name. For an app, top-level client fields may also be changed. For a service, name renames the resource and auth_schemes adds connection methods; only those two fields are accepted.' }),
-    delete: op('removeResource', 'Remove a resource or disconnect a credential', object({ ok: { const: true }, service_revoked: nullable(boolean), credentials_stopped: integer }, ['ok']), { input: 'DeleteResource', description: 'For credentials, revoke (boolean) is required: true also attempts service-side revocation. service_revoked is true/false when attempted, null otherwise. For an app in use, confirm:true is required; its credentials stop working. Other kinds accept {}. Environments are closed before removal.' }),
+    patch: op('patchResource', 'Rename a resource or update an app or service', one('Resource'), { input: 'PatchResource', description: 'For secret/object/connection, supply name. For an app, top-level client fields may also be changed. For a service, name renames the resource and auth_schemes adds connection methods; only those two fields are accepted.' }),
+    delete: op('removeResource', 'Remove a resource or disconnect a connection', object({ ok: { const: true }, service_revoked: nullable(boolean), connections_stopped: integer }, ['ok']), { input: 'DeleteResource', description: 'For connections, revoke (boolean) is required: true also attempts service-side revocation. service_revoked is true/false when attempted, null otherwise. For an app in use, confirm:true is required; its connections stop working. Other kinds accept {}. Environments are closed before removal.' }),
   } },
   { name: 'content', group: 'resources', path: '/v1/resources/{resourceId}/content', methods: {
     get: op('getContent', 'Download secret or object bytes', 'Empty', { responses: { 200: { description: 'Secret bytes (application/octet-stream) or object bytes (stored Content-Type).', content: rawContent, headers: etag }, default: response('Error', 'Failure') } }),
     put: op('putContent', 'Replace secret or object bytes', one('Resource'), { requestBody: { required: true, content: rawContent }, parameters: [header('If-Match', 'Expected secret revision from ETag.')], responses: { 200: { ...response(one('Resource')), headers: etag }, default: response('Error', 'Failure') } }),
   } },
   { name: 'objectLink', group: 'resources', path: '/v1/resources/{resourceId}/link', methods: { post: op('createObjectLink', 'Create a time-limited object download URL', object({ id, name: string, url: string, url_expires_at: time }, ['id', 'name', 'url', 'url_expires_at']), { input: object({ minutes: integer }), 'x-input-error': 'invalid_minutes' }) } },
-  { name: 'confirmation', path: '/v1/credentials/confirmation', methods: {
+  { name: 'confirmation', path: '/v1/connections/confirmation', methods: {
     get: op('getConfirmation', 'Review changed service authorization', 'Confirmation', { parameters: [as, query('state', string, undefined, true)], security: session }),
-    post: op('acceptConfirmation', 'Accept changed service authorization', one('Credential'), { input: state, security: session, parameters: [as], 'x-input-error': 'invalid_state' }),
+    post: op('acceptConfirmation', 'Accept changed service authorization', one('Connection'), { input: state, security: session, parameters: [as], 'x-input-error': 'invalid_state' }),
     delete: okay('cancelConfirmation', 'Cancel changed service authorization', { input: state, security: session, parameters: [as], 'x-input-error': 'invalid_state' }),
   } },
-  { name: 'credentials', path: '/v1/credentials', methods: { post: op('connectService', 'Begin service authorization', 'ConnectResult', { input: 'Connect', security: session, parameters: [as] }) } },
-  { name: 'completeCredential', path: '/v1/credentials/complete', methods: { post: op('completeRole', 'Finish role-based service authorization', one('Credential'), { input: object({ state: string, fields: map(string) }, ['state']), security: session, parameters: [as], 'x-input-error': 'invalid_state' }) } },
+  { name: 'connections', path: '/v1/connections', methods: { post: op('connectService', 'Begin service authorization', 'ConnectResult', { input: 'Connect', security: session, parameters: [as] }) } },
+  { name: 'completeConnection', path: '/v1/connections/complete', methods: { post: op('completeRole', 'Finish role-based service authorization', one('Connection'), { input: object({ state: string, fields: map(string) }, ['state']), security: session, parameters: [as], 'x-input-error': 'invalid_state' }) } },
   { name: 'oauthCallback', path: '/oauth/callback', methods: { get: op('oauthCallback', 'Return from service OAuth consent', 'Empty', { security: session, parameters: [query('state', string, undefined, true), query('code'), query('error')], responses: { 303: { description: 'Returns to the service page or original request, with a result code.', headers: { Location: { schema: string } } } } }) } },
-  { name: 'injections', path: '/v1/injections', methods: { post: op('inject', 'Obtain secret bytes or current service credentials for a process', 'Injection', { input: 'Inject', parameters: [as], 'x-input-error': 'invalid_names', description: 'Each input has exactly one of name (literal secret name) or id (secret/connection id). A secret requires as (a non-reserved environment variable). A connection without output delivers all its named values; output selects one. as can rename a single value. filename delivers base64 file bytes instead of environment text. Connections refresh if needed. Deliver values privately to the intended process; do not print them into chat or logs. CLI exec does this without exposing values to the agent.' }) } },
+  { name: 'injections', path: '/v1/injections', methods: { post: op('inject', 'Obtain secret bytes or current service connections for a process', 'Injection', { input: 'Inject', parameters: [as], 'x-input-error': 'invalid_names', description: 'Each input has exactly one of name (literal secret name) or id (secret/connection id). A secret requires as (a non-reserved environment variable). A connection without output delivers all its named values; output selects one. as can rename a single value. filename delivers base64 file bytes instead of environment text. Connections refresh if needed. Deliver values privately to the intended process; do not print them into chat or logs. CLI exec does this without exposing values to the agent.' }) } },
   { name: 'functions', path: '/v1/functions', methods: { get: op('listFunctions', 'List built-in operations', many('functions', 'Function'), { parameters: [as] }) } },
   { name: 'httpRequest', path: '/v1/functions/http.request', methods: { post: op('httpRequest', 'Send an HTTPS request using saved values', 'FetchResult', { input: 'FetchInput', parameters: [as], description: 'Use bindings to place referenced values at JSON Pointer targets in headers or body. Ordinary strings are literal. json and form are encoded after binding; body is raw text or base64. URLs cannot be binding targets. Public HTTPS only, redirects are returned without following, request/response body limit 1 MiB. Bound values are redacted from the response. save stores the response body as a secret under that name and omits it from the response.' }) } },
   { name: 'usage', path: '/v1/usage', methods: { get: op('getUsage', 'Read storage usage and limits', 'Usage', { parameters: [as] }) } },
   { name: 'audit', path: '/v1/audit-log', methods: { get: op('getAuditLog', 'Read the caller’s audit records', many('entries', 'AuditEntry')) } },
   { name: 'overview', path: '/v1/overview', methods: { get: op('getOverview', 'Read the holder’s workspace', 'Overview', { parameters: [as] }) } },
-  { name: 'export', path: '/v1/export', methods: { get: op('exportData', 'Download the holder’s data, including secret bytes', 'Export', { parameters: [as], description: 'Contains base64 secret content. Handle as private data. Managed credentials export metadata, not renewable state.' }) } },
+  { name: 'export', path: '/v1/export', methods: { get: op('exportData', 'Download the holder’s data, including secret bytes', 'Export', { parameters: [as], description: 'Contains base64 secret content. Handle as private data. Managed connections export metadata, not renewable state.' }) } },
 ];
 
 const pathSchemas = { principalId, requestId, resourceId: id, keyId: id, commandId: id };

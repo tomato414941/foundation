@@ -18,6 +18,9 @@ const STORED_SERVICE = { version: 1, name: 'Stored service', auth_schemes: { oau
   injection: { ACCESS_TOKEN: '{access_token}', ACCOUNT: '{account}', EXPIRES_AT: '{expires_at}' },
 } } };
 
+// A connection's state is sealed under its name, so it is compared by what it opens to instead.
+const SNAPSHOT_COLUMNS = { credentials: 'resource_id,service,auth_scheme,app_id,subject,status,generation' };
+
 async function storedDefinitions(t, definitions) {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-reference-migration-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -29,10 +32,15 @@ async function storedDefinitions(t, definitions) {
     store.db.prepare('INSERT INTO services VALUES (?,?)').run(id, JSON.stringify(definition));
     return id;
   });
-  const credential = m.credentials.keep(USER_A, { service: ids[0], scheme: 'oauth', subject: 'account', label: 'Account',
+  const credential = m.connections.keep(USER_A, { service: ids[0], scheme: 'oauth', subject: 'account', label: 'Account',
     state: { private_state: { refresh_token: 'kept-refresh' }, facts: {}, expires_at: null } });
-  const snapshots = Object.fromEntries(['resources', 'secrets', 'credentials', 'relations'].map(table => [table, store.db.prepare('SELECT * FROM ' + table).all()]));
-  // This step changes definitions only; these are the same tables used by schema 34.
+  // Back to the shape of schema 34: connections were credentials then, sealed under that name.
+  const vault = new Vault(KEY);
+  for (const row of store.db.prepare('SELECT c.resource_id, c.state, r.holder_id FROM connections c JOIN resources r ON r.id=c.resource_id').all()) {
+    store.db.prepare('UPDATE connections SET state=? WHERE resource_id=?').run(vault.seal(vault.open(row.state, `connection:${row.holder_id}:${row.resource_id}`), `credential:${row.holder_id}:${row.resource_id}`), row.resource_id);
+  }
+  store.db.exec('DROP INDEX connections_app; ALTER TABLE connections RENAME TO credentials; CREATE INDEX credentials_app ON credentials(app_id) WHERE app_id IS NOT NULL;');
+  const snapshots = Object.fromEntries(['resources', 'secrets', 'credentials', 'relations'].map(table => [table, store.db.prepare(`SELECT ${SNAPSHOT_COLUMNS[table] ?? '*'} FROM ${table}`).all()]));
   store.db.exec('PRAGMA user_version=34'); store.close();
   return { path, ids, secret, credential, snapshots };
 }
@@ -40,7 +48,10 @@ async function storedDefinitions(t, definitions) {
 test('保存済みのサービス定義を標準参照に変換し、値・ID・名前・接続状態・権限を保持する', async t => {
   const old = await storedDefinitions(t, [STORED_SERVICE, { version: 1, name: 'Empty service' }]);
   const store = new Store(old.path, KEY);
-  for (const [table, expected] of Object.entries(old.snapshots)) assert.deepEqual(store.db.prepare('SELECT * FROM ' + table).all(), expected, table);
+  for (const [table, expected] of Object.entries(old.snapshots)) {
+    const now = table === 'credentials' ? 'connections' : table;
+    assert.deepEqual(store.db.prepare(`SELECT ${SNAPSHOT_COLUMNS[table] ?? '*'} FROM ${now}`).all(), expected, table);
+  }
   const definition = JSON.parse(store.db.prepare('SELECT definition FROM services WHERE resource_id=?').get(old.ids[0]).definition);
   const oauth = definition.auth_schemes.oauth;
   assert.deepEqual(definition, { name: 'Stored service', auth_schemes: { oauth: {
@@ -59,7 +70,7 @@ test('保存済みのサービス定義を標準参照に変換し、値・ID・
   assert.deepEqual(reopened.db.prepare('SELECT definition FROM services ORDER BY resource_id').all(), text);
   const m = modules(reopened);
   assert.deepEqual(m.secrets.content(m.secrets.get(old.secret.id)), Buffer.from([0, 255, 10, 42]));
-  assert.equal(m.credentials.state(m.credentials.get(old.credential.id)).private_state.refresh_token, 'kept-refresh');
+  assert.equal(m.connections.state(m.connections.get(old.credential.id)).private_state.refresh_token, 'kept-refresh');
 });
 
 test('安全に変換できないサービス定義があれば、移行全体を取り消して元のデータを保持する', async t => {
@@ -70,7 +81,7 @@ test('安全に変換できないサービス定義があれば、移行全体�
   const db = new DatabaseSync(old.path); t.after(() => db.close());
   assert.equal(db.prepare('PRAGMA user_version').get().user_version, 34);
   assert.deepEqual(db.prepare('SELECT definition FROM services ORDER BY resource_id').all().map(row => JSON.parse(row.definition)), [STORED_SERVICE, composite]);
-  for (const [table, expected] of Object.entries(old.snapshots)) assert.deepEqual(db.prepare('SELECT * FROM ' + table).all(), expected, table);
+  for (const [table, expected] of Object.entries(old.snapshots)) assert.deepEqual(db.prepare(`SELECT ${SNAPSHOT_COLUMNS[table] ?? '*'} FROM ${table}`).all(), expected, table);
 });
 
 // The schema a running Foundation is on today, fixed here so the step is tested against what it will meet.
@@ -248,7 +259,7 @@ test('31版のシークレットと固定トークンを値・ID・共有権限�
   old.db.close();
 
   const store = new Store(old.path, KEY); t.after(() => store.close());
-  const { secrets, credentials, services, principals, authorization } = modules(store);
+  const { secrets, connections, services, principals, authorization } = modules(store);
   assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   assert.deepEqual(secrets.content(secrets.get('plain')), bytes);
   assert.equal(secrets.get('plain').name, 'same name');
@@ -256,9 +267,9 @@ test('31版のシークレットと固定トークンを値・ID・共有権限�
   assert.equal(secrets.get('single').name, 'same name (single)');
   assert.equal(secrets.content(secrets.get('single')).toString(), 'single-token');
   assert.deepEqual(JSON.parse(secrets.content(secrets.get('multi')).toString()), fields);
-  assert.deepEqual(credentials.state(credentials.get('oauth')), managed);
-  assert.equal(credentials.get('oauth').generation, 7);
-  assert.equal(credentials.state(credentials.get('role')).private_state.role_arn, 'arn:aws:iam::123456789012:role/fixture');
+  assert.deepEqual(connections.state(connections.get('oauth')), managed);
+  assert.equal(connections.get('oauth').generation, 7);
+  assert.equal(connections.state(connections.get('role')).private_state.role_arn, 'arn:aws:iam::123456789012:role/fixture');
   assert.equal(services.get('12345678-1234-4234-8234-123456789012').definition.name, 'Notes');
   const allowed = (action, id, type = 'secret') => authorization.can(old.reader, action, type, { holder: USER_A, id });
   assert.equal(allowed('content', 'plain'), true);
@@ -267,12 +278,12 @@ test('31版のシークレットと固定トークンを値・ID・共有権限�
   assert.equal(allowed('content', 'single'), false, 'a former metadata viewer still cannot read the private value');
   assert.equal(allowed('write', 'single'), false);
   assert.equal(allowed('remove', 'single'), true);
-  assert.equal(allowed('rename', 'oauth', 'credential'), true);
+  assert.equal(allowed('rename', 'oauth', 'connection'), true);
   assert.equal(authorization.can(old.reader, 'list', 'secret', { holder: USER_A }), true);
-  assert.equal(authorization.can(old.reader, 'list', 'credential', { holder: USER_A }), true);
+  assert.equal(authorization.can(old.reader, 'list', 'connection', { holder: USER_A }), true);
   assert.equal(store.db.prepare("SELECT status FROM requests WHERE id='request-pending'").get().status, 'cancelled');
-  assert.deepEqual(JSON.parse(store.db.prepare("SELECT result FROM requests WHERE id='request-done'").get().result), { credential_id: 'single' });
-  assert.deepEqual({ ...store.db.prepare("SELECT type,status,user_code FROM requests WHERE id='request-done'").get() }, { type: 'credential', status: 'granted', user_code: null }, 'a request says what it asks as a detail, and is granted');
+  assert.deepEqual(JSON.parse(store.db.prepare("SELECT result FROM requests WHERE id='request-done'").get().result), { connection_id: 'single' });
+  assert.deepEqual({ ...store.db.prepare("SELECT type,status,user_code FROM requests WHERE id='request-done'").get() }, { type: 'connection', status: 'granted', user_code: null }, 'a request says what it asks as a detail, and is granted');
   assert.deepEqual(store.db.prepare('PRAGMA foreign_key_check').all(), []);
   assert.deepEqual(principals.shownTo(old.reader).filter(row => row.id === 'plain').map(row => row.kind), ['secret', 'secret']);
 });
