@@ -20,6 +20,7 @@ h3 { font-size: 17px; }
 svg { width: 19px; height: 19px; flex-shrink: 0; }
 [hidden] { display: none !important; }
 :is(button, a, input, textarea, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+main[tabindex="-1"]:focus { outline: none; }
 .muted, .optional { color: var(--muted); }
 .block { display: block; }
 .loading { padding: 40px 24px; }
