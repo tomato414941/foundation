@@ -60,15 +60,15 @@ test('公開仕様から操作を見つけ、初回接続・承認・保存・�
   const conflict = await call('putContent', { token, params: { resourceId }, raw: 'stale', headers: { 'if-match': etag } });
   assert.equal(conflict.status, 412);
   assert.equal(conflict.json.error.code, 'secret_changed');
-  const delivered = await call('inject', { token, query: { as }, data: { names: [{ name: resourceId, as: 'CONFIG_FILE', filename: 'config.json' }] } });
+  const delivered = await call('inject', { token, query: { as }, data: { names: [{ id: resourceId, as: 'CONFIG_FILE', filename: 'config.json' }] } });
   assert.equal(Buffer.from(delivered.json.injection.files[0].content, 'base64').toString(), 'next');
 });
 
 test('JSON定義を検証し、バイナリ保存とJSONリソースの入力を種類によって扱う', async t => {
   const f = await fixture(t);
-  const made = await f.request('/v1/resources?kind=service&name=notes', { method: 'PUT', data: { version: 1, name: 'Notes' } });
+  const made = await f.request('/v1/resources?kind=service&name=notes', { method: 'PUT', data: { name: 'Notes' } });
   assert.equal(made.status, 200);
-  const refused = await f.request('/v1/resources?kind=service&name=notes', { method: 'PUT', data: { version: 1, name: 123 } });
+  const refused = await f.request('/v1/resources?kind=service&name=notes', { method: 'PUT', data: { name: 123 } });
   assert.equal(refused.status, 400);
   const kept = await f.request('/v1/resources/' + made.json.resource.id);
   assert.equal(kept.json.resource.definition.name, 'Notes');

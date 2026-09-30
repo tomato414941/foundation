@@ -58,6 +58,23 @@ async function outputFixture(t) {
   await writeFile(keyPath, runtime.token, { mode: 0o600 });
   return { ...f, runtime, dir, env: { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath, XDG_RUNTIME_DIR: dir } };
 }
+
+test('CLIからリテラルな名前と接続の出力を明示して、値をコマンドの環境へ渡す', async t => {
+  const f = await outputFixture(t), connection = await f.credential();
+  await f.keep('secret', 'token#work', 'work-value');
+  const direct = await execute(['exec', 'VALUE=token#work', '--', process.execPath, '-e', "if(process.env.VALUE!=='work-value')process.exit(2);console.log('ready')"], f.env);
+  assert.equal(direct.code, 0, direct.err);
+  assert.equal(direct.out.trim(), 'ready');
+  const used = await execute(['exec', '--inputs', JSON.stringify([{ id: connection.id, output: 'GOOGLE_ACCOUNT_EMAIL', as: 'EMAIL' }]), '--', process.execPath, '-e',
+    "if(process.env.EMAIL!=='personal@example.test')process.exit(2);console.log('ready')"], f.env);
+  assert.equal(used.code, 0, used.err);
+  assert.equal(used.out.trim(), 'ready');
+  for (const input of [{ id: connection.id, name: 'token#work', as: 'VALUE' }, { name: 'token#work', output: 'VALUE', as: 'VALUE' }, { id: connection.id, output: 'UNKNOWN' }]) {
+    const refused = await execute(['exec', '--inputs', JSON.stringify([input]), '--', process.execPath, '-e', "console.log('must-not-run')"], f.env);
+    assert.equal(refused.code, 1);
+    assert.equal(refused.out, '');
+  }
+});
 const outputSpec = { name: 'login config', as: 'AUTH_FILE', filename: 'auth.json' };
 
 test('コマンドが作った非公開ファイルを名前どおりに保存し、後のコマンドへ渡す', async t => {

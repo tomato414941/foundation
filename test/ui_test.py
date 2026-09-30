@@ -189,7 +189,7 @@ with sync_playwright() as p:
     def runtime(path, token, method="GET"):
         return caller.fetch(held(path), method=method, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data="{}" if method == "POST" else None)
     def deliver(connection_id, token):
-        return caller.fetch(held("/v1/deliveries"), method="POST", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data=json.dumps({"names": [{"name": connection_id}]}))
+        return caller.fetch(held("/v1/deliveries"), method="POST", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data=json.dumps({"names": [{"id": connection_id}]}))
     connections = runtime("/v1/holdings?kind=grant&method=authorized", token_a).json()["holdings"]
     assert len(connections) == 2, "an issued key uses everything its owner keeps"
     connection_id = connections[0]["id"]

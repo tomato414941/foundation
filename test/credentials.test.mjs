@@ -58,7 +58,7 @@ test('Bytes with no delivery are kept and read back as they were written', async
   assert.equal(read.status, 200);
   assert.equal(read.text, state);
   // Delivery needs an explicit destination variable regardless of the saved name.
-  const asked = await f.request('/v1/injections', { method: 'POST', token, anonymous: true, data: { names: ['release/2026-09-23'] } });
+  const asked = await f.request('/v1/injections', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'release/2026-09-23' }] } });
   assert.equal(asked.status, 400);
   assert.equal(asked.json.error.code, 'no_variable');
   const named = await f.request('/v1/injections', { method: 'POST', token, anonymous: true, data: { names: [{ name: 'release/2026-09-23', as: 'RELEASE_STATE' }] } });

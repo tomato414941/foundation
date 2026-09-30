@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { fail } from '../errors.mjs';
 import { destination, prepare, send } from '../fetch.mjs';
+import { valueAt } from '../json-pointer.mjs';
+import { uriTemplate, templateVariables } from '../uri-template.mjs';
 
 // OAuth 2.0 as services actually speak it. Most follow RFC 6749; where one departs, the departure is a setting of the
 // service's definition (catalog/*.json, or one a holder wrote) rather than code of its own:
-//   authorize, token          where consent is asked and tokens are handed out ({name} is filled from the app's values)
+//   authorize, token          RFC 6570 URL templates for consent and token exchange
 //   authorize_params          anything else the consent screen needs (Dropbox: token_access_type=offline)
 //   scope_separator           how scopes are joined (Slack, Linear, Shopify: ",")
 //   pkce                      whether to send a code challenge (default: yes; services that do not know it ignore it)
@@ -31,7 +33,6 @@ const GONE = ['invalid_grant', 'invalid_refresh_token', 'token_revoked', 'token_
 const RETRY = ['invalid_code', 'code_already_used', 'bad_redirect_uri'];
 const REFUSED = ['invalid_client', 'unauthorized_client', 'invalid_client_id', 'bad_client_secret'];
 export const httpsUrl = value => { destination(value); return value; };
-export const at = (value, path) => path.split('.').reduce((item, key) => item && typeof item === 'object' ? item[key] : undefined, value);
 
 // The one way out: public https hosts only, pinned to the address that was checked, redirects handed back.
 export async function publicFetch(url, { method = 'GET', headers = {}, body } = {}) {
@@ -50,12 +51,15 @@ export class OAuth2Client {
   spec() { return typeof this.profile === 'function' ? this.profile(this) : this.profile; }
   // An app value by its field name, or the profile's default for it.
   value(name) { return this[camel(name)] ?? this.spec().defaults?.[name]; }
-  // Fills {name} from the app's values and what else is given; a whole-string placeholder is taken as it is (a URL).
+  // Required URL variables come only from declared app values and the operation's token fields.
   expand(template, extra = {}) {
-    const look = name => extra[name] ?? this.value(name);
-    const whole = /^\{([a-z_]+)\}$/.exec(template);
-    if (whole) return look(whole[1]);
-    return template.replace(/\{([a-z_]+)\}/g, (match, name) => look(name) === undefined ? match : encodeURIComponent(look(name)));
+    const parsed = uriTemplate(template), values = Object.fromEntries(['client_id', ...(this.spec().app_fields ?? []).map(field => field.name)]
+      .map(name => [name, this.value(name)]));
+    Object.assign(values, extra);
+    for (const name of templateVariables(parsed)) if (!Object.hasOwn(values, name) || values[name] === undefined || values[name] === null || values[name] === '') {
+      fail(400, 'app_required', 'URLの組み立てに必要な設定が足りません。');
+    }
+    return parsed.expand(values);
   }
   check() {
     const spec = this.spec();
@@ -63,7 +67,7 @@ export class OAuth2Client {
       const [status, message] = spec.unavailable ?? [400, 'この接続先には、自分のOAuthアプリを選んでください。'];
       fail(status, 'app_required', message);
     }
-    for (const url of [spec.authorize, spec.token]) if (typeof url !== 'string' || !url || /\{[a-z_]+\}/.test(this.expand(url))) fail(400, 'app_required', 'OAuthアプリの設定が足りません。');
+    for (const url of [spec.authorize, spec.token]) destination(this.expand(url));
   }
   clientAuth(spec = this.spec()) {
     return spec.client_auth === 'body' ? { headers: {}, values: { client_id: this.clientId, client_secret: this.clientSecret } }
@@ -79,6 +83,7 @@ export class OAuth2Client {
     return url.href;
   }
   async call(url, options) {
+    destination(url);
     let answer;
     try { answer = await this.fetcher(url, options); }
     catch (error) { if (error?.status) throw error; fail(502, 'service_unavailable', '接続先に接続できませんでした。時間をおいて再度お試しください。'); }
@@ -98,7 +103,7 @@ export class OAuth2Client {
     const answer = await this.call(this.expand(spec.token), { method: 'POST', headers: { accept: 'application/json', 'content-type': json ? 'application/json' : 'application/x-www-form-urlencoded', ...auth.headers },
       body: json ? JSON.stringify(all) : new URLSearchParams(all).toString() });
     const data = this.parse(answer), error = this.errorOf(data);
-    if (!answer.ok || (spec.ok_field ? data[spec.ok_field] !== true : Boolean(data.error))) {
+    if (!answer.ok || (spec.ok_field ? valueAt(data, spec.ok_field) !== true : Boolean(data.error))) {
       if (values.grant_type === 'refresh_token' && GONE.includes(error)) reconnect();
       if (error === 'invalid_grant' || RETRY.includes(error)) fail(400, 'invalid_state', '接続をやり直してください。');
       if (answer.status === 401 || REFUSED.includes(error)) fail(400, 'invalid_app', '接続先がアプリのIDかシークレットを受け付けませんでした。アプリの設定を確認してください。');
@@ -125,9 +130,9 @@ export class OAuth2Client {
   // Who an answer names: the paths the profile gives, or else the first stable identifier it carries.
   pick(body, { id, label } = {}) {
     const inner = body.data && typeof body.data === 'object' && !Array.isArray(body.data) ? { ...body.data, ...body } : body;
-    const ids = id ? [].concat(id).map(path => at(body, path)) : [['sub', 'id', 'user_id', 'uid', 'email', 'login', 'username'].map(key => inner[key]).find(validId)];
+    const ids = id ? [].concat(id).map(pointer => valueAt(body, pointer)) : [['sub', 'id', 'user_id', 'uid', 'email', 'login', 'username'].map(key => inner[key]).find(validId)];
     if (!ids.every(validId)) return null;
-    const named = (label ? [].concat(label).map(path => at(body, path)) : ['email', 'name', 'login', 'username'].map(key => inner[key]))
+    const named = (label ? [].concat(label).map(pointer => valueAt(body, pointer)) : ['email', 'name', 'login', 'username'].map(key => inner[key]))
       .find(value => typeof value === 'string' && value && value.length <= 200 && !/[\x00-\x1f]/.test(value));
     const joined = ids.map(String).join(':');
     return { id: joined, label: named || joined, checked_at: Date.now() };
@@ -136,7 +141,7 @@ export class OAuth2Client {
   async identity(grant, data) {
     const spec = this.spec(), how = spec.identity;
     if (!how) return null;
-    if (how.from === 'app') return this.pick({ [how.id]: this.value(how.id) }, { id: how.id });
+    if (how.from === 'app') return this.pick(Object.fromEntries((spec.app_fields ?? []).map(field => [field.name, this.value(field.name)])), how) ?? invalidResponse();
     if (how.from === 'token') return this.pick(data, how) ?? invalidResponse();
     const json = 'json' in how;
     const answer = await this.call(this.expand(how.url, { access_token: grant.access_token, ...grant.kept }), { method: how.method || 'GET',
@@ -145,7 +150,8 @@ export class OAuth2Client {
       ...(json ? { body: JSON.stringify(how.json) } : {}) });
     if (answer.status === 401) reconnect();
     const body = this.parse(answer);
-    if (spec.ok_field && body[spec.ok_field] !== true) { if (GONE.includes(this.errorOf(body))) reconnect(); invalidResponse(); }
+    const okField = how.ok_field ?? spec.ok_field;
+    if (okField && valueAt(body, okField) !== true) { if (GONE.includes(this.errorOf(body))) reconnect(); invalidResponse(); }
     if (!answer.ok) return how.optional ? null : invalidResponse();
     return this.pick(body, how) ?? (how.optional ? null : invalidResponse());
   }
@@ -185,7 +191,7 @@ export class OAuth2Client {
         body: new URLSearchParams({ token: secret.refresh_token || secret.access_token, ...auth.values }).toString() };
     }
     const answer = await this.call(url, options), body = this.parse(answer), gone = GONE.includes(this.errorOf(body));
-    if (!gone && (!answer.ok || (spec.ok_field && body[spec.ok_field] !== true))) fail(502, 'revoke_failed', '接続先の許可を取り消せませんでした。');
+    if (!gone && (!answer.ok || (spec.ok_field && valueAt(body, spec.ok_field) !== true))) fail(502, 'revoke_failed', '接続先の許可を取り消せませんでした。');
   }
   facts(secret) {
     return { label: secret.identity?.label || this.serviceName || this.spec().name, account: secret.identity?.id ?? null, client_id: secret.client_id,
@@ -193,18 +199,14 @@ export class OAuth2Client {
   }
 }
 
-// Fills a definition's {name} templates; a variable any of whose names is unknown or empty is left out.
-export function fill(template, values) {
-  let missing = false;
-  const text = template.replace(/\{([a-z_]+)\}/g, (_, name) => {
-    const value = values[name];
-    if (value === undefined || value === null || value === '') { missing = true; return ''; }
-    return String(value);
-  });
-  return missing ? undefined : text;
-}
+// Only declared scalar output values can be selected. Optional facts (such as expiry) may be absent.
 export function inject(injection, values) {
-  return Object.fromEntries(Object.entries(injection).map(([name, template]) => [name, fill(template, values)]).filter(([, value]) => value !== undefined));
+  return Object.fromEntries(Object.entries(injection).flatMap(([name, pointer]) => {
+    const value = valueAt(values, pointer);
+    if (value === undefined || value === null || value === '') return [];
+    if (!['string', 'number', 'boolean'].includes(typeof value)) invalidResponse();
+    return [[name, String(value)]];
+  }));
 }
 
 // Foundation's own app for a service, when its configuration holds FOUNDATION_<ID>_CLIENT_ID and _SECRET. A service

@@ -8,8 +8,70 @@ import { Store } from '../src/store.mjs';
 import { Vault, digest } from '../src/crypto.mjs';
 import { Principals } from '../src/principals.mjs';
 import { SCHEMA_VERSION, STEPS } from '../src/migrations.mjs';
+import { OAuth2Client, inject } from '../src/schemes/oauth.mjs';
 import { Authorization } from '../src/authorization.mjs';
 import { KEY, USER_A, modules } from './helpers.mjs';
+
+const STORED_SERVICE = { version: 1, name: 'Stored service', auth_schemes: { oauth: {
+  authorize: 'https://service.example/authorize', token: 'https://service.example/token', keep: ['id'], ok_field: 'ok',
+  identity: { url: '{id}', id: ['data.viewer.id', 'organization_id'], label: ['data.viewer.email'] },
+  injection: { ACCESS_TOKEN: '{access_token}', ACCOUNT: '{account}', EXPIRES_AT: '{expires_at}' },
+} } };
+
+async function storedDefinitions(t, definitions) {
+  const directory = await mkdtemp(join(tmpdir(), 'foundation-reference-migration-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'state.sqlite'), store = new Store(path, KEY), m = modules(store);
+  const secret = m.secrets.put(USER_A, { name: 'token#work', content: Buffer.from([0, 255, 10, 42]) });
+  const ids = definitions.map((definition, i) => {
+    const id = '12345678-1234-4234-8234-' + String(i + 1).padStart(12, '0');
+    m.resources.insert(id, USER_A, 'service', 'Service ' + i);
+    store.db.prepare('INSERT INTO services VALUES (?,?)').run(id, JSON.stringify(definition));
+    return id;
+  });
+  const credential = m.credentials.keep(USER_A, { service: ids[0], scheme: 'oauth', subject: 'account', label: 'Account',
+    state: { private_state: { refresh_token: 'kept-refresh' }, facts: {}, expires_at: null } });
+  const snapshots = Object.fromEntries(['resources', 'secrets', 'credentials', 'relations'].map(table => [table, store.db.prepare('SELECT * FROM ' + table).all()]));
+  // This step changes definitions only; these are the same tables used by schema 34.
+  store.db.exec('PRAGMA user_version=34'); store.close();
+  return { path, ids, secret, credential, snapshots };
+}
+
+test('保存済みのサービス定義を標準参照に変換し、値・ID・名前・接続状態・権限を保持する', async t => {
+  const old = await storedDefinitions(t, [STORED_SERVICE, { version: 1, name: 'Empty service' }]);
+  const store = new Store(old.path, KEY);
+  for (const [table, expected] of Object.entries(old.snapshots)) assert.deepEqual(store.db.prepare('SELECT * FROM ' + table).all(), expected, table);
+  const definition = JSON.parse(store.db.prepare('SELECT definition FROM services WHERE resource_id=?').get(old.ids[0]).definition);
+  const oauth = definition.auth_schemes.oauth;
+  assert.deepEqual(definition, { name: 'Stored service', auth_schemes: { oauth: {
+    authorize: 'https://service.example/authorize', token: 'https://service.example/token', keep: ['id'], ok_field: '/ok',
+    identity: { url: '{+id}', id: ['/data/viewer/id', '/organization_id'], label: ['/data/viewer/email'] },
+    injection: { ACCESS_TOKEN: '/access_token', ACCOUNT: '/account', EXPIRES_AT: '/expires_at' },
+  } } });
+  assert.deepEqual(inject(oauth.injection, { access_token: 'active', account: 'viewer:organization', expires_at: null }), { ACCESS_TOKEN: 'active', ACCOUNT: 'viewer:organization' });
+  const client = new OAuth2Client({ clientId: 'id', clientSecret: 'secret' }, { profile: oauth });
+  assert.equal(client.expand(oauth.identity.url, { id: 'https://service.example/a%2Fb' }), 'https://service.example/a%2Fb');
+  assert.equal(client.pick({ data: { viewer: { id: 'viewer', email: 'mail@example.test' } }, organization_id: 'organization' }, oauth.identity).id, 'viewer:organization');
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
+  const text = store.db.prepare('SELECT definition FROM services ORDER BY resource_id').all();
+  store.close();
+  const reopened = new Store(old.path, KEY); t.after(() => reopened.close());
+  assert.deepEqual(reopened.db.prepare('SELECT definition FROM services ORDER BY resource_id').all(), text);
+  const m = modules(reopened);
+  assert.deepEqual(m.secrets.content(m.secrets.get(old.secret.id)), Buffer.from([0, 255, 10, 42]));
+  assert.equal(m.credentials.state(m.credentials.get(old.credential.id)).private_state.refresh_token, 'kept-refresh');
+});
+
+test('安全に変換できないサービス定義があれば、移行全体を取り消して元のデータを保持する', async t => {
+  const composite = structuredClone(STORED_SERVICE);
+  composite.auth_schemes.oauth.injection.ACCESS_TOKEN = 'Bearer {access_token}';
+  const old = await storedDefinitions(t, [STORED_SERVICE, composite]);
+  assert.throws(() => new Store(old.path, KEY), /could not be migrated/);
+  const db = new DatabaseSync(old.path); t.after(() => db.close());
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 34);
+  assert.deepEqual(db.prepare('SELECT definition FROM services ORDER BY resource_id').all().map(row => JSON.parse(row.definition)), [STORED_SERVICE, composite]);
+  for (const [table, expected] of Object.entries(old.snapshots)) assert.deepEqual(db.prepare('SELECT * FROM ' + table).all(), expected, table);
+});
 
 // The schema a running Foundation is on today, fixed here so the step is tested against what it will meet.
 const SCHEMA_30 = `

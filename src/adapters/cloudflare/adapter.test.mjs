@@ -151,7 +151,7 @@ test('複数の同時要求を一回の更新にまとめ、後続の取得で�
   let release;
   const hold = new Promise(resolve => release = resolve);
   f.cloudflare.refreshHandler = async () => { await hold; };
-  const names = [{ name: connection.id }];
+  const names = [{ id: connection.id }];
   const one = f.app.inputs.inject(USER_A, names), two = f.app.inputs.inject(USER_A, names);
   release();
   const results = await Promise.all([one, two]);

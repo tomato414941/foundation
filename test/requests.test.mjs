@@ -209,8 +209,8 @@ test('Unavailable services cannot register through a request; expired request re
 test('利用者が定義したサービスも、共通の依頼・認証・受け渡しの動線を利用する', async t => {
   const notes = new FakeOAuth2Service();
   const f = await fixture(t, { serviceFetcher: notes.fetch });
-  const defined = await f.request('/v1/resources?kind=service&name=Notes', { method: 'PUT', data: { version: 1, name: 'Notes', api: 'https://service.example/api',
-    auth_schemes: { oauth: { authorize: SERVICE.authorize_url, token: SERVICE.token_url, identity: { url: SERVICE.userinfo_url }, injection: { NOTES_TOKEN: '{access_token}' } } } } });
+  const defined = await f.request('/v1/resources?kind=service&name=Notes', { method: 'PUT', data: { name: 'Notes', api: 'https://service.example/api',
+    auth_schemes: { oauth: { authorize: SERVICE.authorize_url, token: SERVICE.token_url, identity: { url: SERVICE.userinfo_url }, injection: { NOTES_TOKEN: '/access_token' } } } } });
   assert.equal(defined.status, 200, defined.text);
   const service = defined.json.resource.id;
   const app = (await f.request('/v1/resources?kind=app&name=' + encodeURIComponent('Notesのアプリ'), { method: 'PUT', data: { service, client_id: 'notes-client', client_secret: 'notes-secret' } })).json.resource;

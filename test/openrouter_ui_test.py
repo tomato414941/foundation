@@ -83,7 +83,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
         if width != 320:
             page.screenshot(path=str(shots / ('approval-desktop.png' if width == 1280 else 'approval-mobile.png')), full_page=True)
     connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['credential_id']
-    command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'OPENROUTER_API_KEY=' + connection, '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
+    command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', '--inputs', json.dumps([{'id': connection, 'output': 'OPENROUTER_API_KEY'}]), '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 
     page.goto(args.base + '/services', wait_until='networkidle')

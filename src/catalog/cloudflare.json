@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "cloudflare",
   "name": "Cloudflare",
   "api": "https://api.cloudflare.com/client/v4",

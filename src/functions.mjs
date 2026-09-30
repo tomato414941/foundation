@@ -6,7 +6,7 @@ import { prepare as prepareFetch, send as sendFetch } from './fetch.mjs';
 // neither a definition nor a stored value implies an execution.
 export const FUNCTIONS = [
   { id: 'http.request', description: 'Send one HTTPS request with explicitly referenced credentials.',
-    endpoint: '/v1/functions/http.request', input: { url: 'HTTPS URL', method: 'HTTP method', headers: 'header values', body: 'optional body', bindings: 'optional placeholder-to-credential map' },
+    endpoint: '/v1/functions/http.request', input: { url: 'HTTPS URL', method: 'HTTP method', headers: 'literal header values', body: 'literal text or base64 body', json: 'JSON body', form: 'form fields', bindings: 'JSON Pointer targets and literal/reference parts' },
     output: 'response', save: 'optional name to keep the response body under, as a secret' },
 ];
 
@@ -18,16 +18,19 @@ export class Functions {
   constructor({ secrets, inputs, outbound = {} }) { Object.assign(this, { secrets, inputs, outbound }); }
   async request({ holderId, still = () => {} }, input, ownHosts) {
     still();
-    const prepared = prepareFetch(input, ownHosts), bindings = input.bindings ?? {};
-    if (!bindings || typeof bindings !== 'object' || Array.isArray(bindings)) fail(400, 'invalid_input', 'bindings は入力名と保存名の組で指定してください。');
-    const references = prepared.names.map(slot => Object.hasOwn(bindings, slot) ? bindings[slot] : slot);
+    const prepared = prepareFetch(input, ownHosts);
     const outputs = input.save === undefined ? null : outputNames({ response: input.save }, ['response']);
     // Each bound credential yields one text: a secret its bytes, one for a service what its scheme derives now.
-    const values = new Map();
-    for (const [at, slot] of prepared.names.entries()) {
-      const content = await this.inputs.text(holderId, references[at]), text = content.toString('utf8');
+    const values = new Map(), derived = new Map();
+    for (const reference of prepared.references.values()) {
+      const row = this.inputs.resolve(holderId, reference);
+      if (row.kind !== 'secret' && reference.output === undefined) fail(400, 'invalid_input', '接続から使う値を output で指定してください。');
+    }
+    for (const [slot, reference] of prepared.references) {
+      const content = await this.inputs.text(holderId, reference, derived), text = content.toString('utf8');
       if (!Buffer.from(text, 'utf8').equals(content)) fail(400, 'not_text', '指定された入力は文字列ではないため、リクエストには入れられません。');
       values.set(slot, text);
+      still();
     }
     still();
     const response = await sendFetch(prepared, values, { ...this.outbound, ownHosts });

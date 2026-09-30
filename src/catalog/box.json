@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "box",
   "name": "Box",
   "api": "https://api.box.com/2.0",
@@ -12,10 +11,10 @@
       "client_auth": "body",
       "identity": {
         "url": "https://api.box.com/2.0/users/me",
-        "id": "id",
+        "id": "/id",
         "label": [
-          "login",
-          "name"
+          "/login",
+          "/name"
         ]
       },
       "revoke": {
@@ -27,8 +26,8 @@
         "docs": "https://developer.box.com/guides/api-calls/permissions-and-errors/scopes/"
       },
       "injection": {
-        "BOX_ACCESS_TOKEN": "{access_token}",
-        "BOX_TOKEN_EXPIRES_AT": "{expires_at}"
+        "BOX_ACCESS_TOKEN": "/access_token",
+        "BOX_TOKEN_EXPIRES_AT": "/expires_at"
       }
     }
   }

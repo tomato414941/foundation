@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "shopify",
   "name": "Shopify",
   "docs": "https://shopify.dev/docs/api/admin-graphql",
@@ -14,7 +13,7 @@
       "subject_prefix": "shop:",
       "identity": {
         "from": "app",
-        "id": "shop"
+        "id": "/shop"
       },
       "scopes": {
         "base": [],
@@ -31,9 +30,9 @@
         }
       ],
       "injection": {
-        "SHOPIFY_ACCESS_TOKEN": "{access_token}",
-        "SHOPIFY_SHOP": "{shop}",
-        "SHOPIFY_TOKEN_EXPIRES_AT": "{expires_at}"
+        "SHOPIFY_ACCESS_TOKEN": "/access_token",
+        "SHOPIFY_SHOP": "/shop",
+        "SHOPIFY_TOKEN_EXPIRES_AT": "/expires_at"
       },
       "hint": "The access token is sent in the \"X-Shopify-Access-Token\" header to https://<SHOPIFY_SHOP>.myshopify.com/admin/api/<version>/graphql.json. SHOPIFY_SHOP is the store name (<SHOPIFY_SHOP>.myshopify.com)."
     }

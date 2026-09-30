@@ -253,7 +253,7 @@ test('接続IDからeBay認証情報を更新し、CLI経由で子プロセス�
   t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'key');
   await writeFile(keyPath, agent.token, { mode: 0o600 });
-  const child = spawn(process.execPath, ['cli/runtime.mjs', 'exec', '--inputs', JSON.stringify([{ name: a.id }]), '--', process.execPath, '-e',
+  const child = spawn(process.execPath, ['cli/runtime.mjs', 'exec', '--inputs', JSON.stringify([{ id: a.id }]), '--', process.execPath, '-e',
     'if(process.env.EBAY_ACCESS_TOKEN!=="ebay-access-personal-1"||process.env.EBAY_ACCOUNT_ID!=="1001"||process.env.EBAY_USERNAME!=="personal-seller"||process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("ebay-ready")'],
   { env: { ...process.env, FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath } });
   let out = '', err = '';

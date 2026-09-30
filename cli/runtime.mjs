@@ -132,15 +132,22 @@ async function main() {
     const parsed = parseArgs({ args: args.slice(0, separatorAt), options: { inputs: { type: 'string' }, output: { type: 'string' } }, strict: true, allowPositionals: true });
     if (parsed.values.inputs !== undefined && parsed.positionals.length) throw new Error('--inputs and ENV=name are alternatives.');
     if (parsed.values.inputs !== undefined) {
-      try { names = JSON.parse(parsed.values.inputs); } catch { throw new Error('--inputs must be a JSON array of {name, as, filename?}.'); }
+      try { names = JSON.parse(parsed.values.inputs); } catch { throw new Error('--inputs must be a JSON array of {name, as, filename?} or {id, output?, as?, filename?}.'); }
     } else names = parsed.positionals.map(value => {
       const at = value.indexOf('=');
       if (at < 1) throw new Error('Specify the environment variable explicitly: ENV=name');
       return { name: value.slice(at + 1), as: value.slice(0, at) };
     });
     // A credential for a service names its own variables, so an input may leave `as` out; a secret must say where it goes.
-    if (!Array.isArray(names) || names.length > 16 || names.some(item => !item || typeof item.name !== 'string' || !item.name || (item.as !== undefined && !validEnvName(item.as)))) throw new Error('Each input needs a name and, when given, a non-reserved environment variable in as.');
-    const chosen = names.map(item => item.as).filter(value => value !== undefined);
+    if (!Array.isArray(names) || names.length > 16 || names.some(item => {
+      if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some(key => !['name', 'id', 'output', 'as', 'filename'].includes(key))) return true;
+      if (Object.hasOwn(item, 'name') === Object.hasOwn(item, 'id')) return true;
+      if (Object.hasOwn(item, 'name') && (typeof item.name !== 'string' || !item.name || Object.hasOwn(item, 'output'))) return true;
+      if (Object.hasOwn(item, 'id') && (typeof item.id !== 'string' || !/^[0-9a-f-]{36}$/.test(item.id))) return true;
+      if (Object.hasOwn(item, 'output') && (typeof item.output !== 'string' || !item.output || item.output.length > 200)) return true;
+      return item.as !== undefined && item.as !== null && !validEnvName(item.as);
+    })) throw new Error('Each input needs exactly one of name or id. Use output with a connection id; as must be a non-reserved environment variable.');
+    const chosen = names.map(item => item.as).filter(value => typeof value === 'string');
     if (new Set(chosen).size !== chosen.length) throw new Error('Each input needs a different environment variable.');
     if (parsed.values.output !== undefined) {
       try { output = JSON.parse(parsed.values.output); } catch { throw new Error('--output must be a JSON object {name, as, filename}.'); }
@@ -254,7 +261,7 @@ async function main() {
     fileNames.add(file.filename); variables.add(file.env);
   }
   if (output && variables.has(output.as)) throw new Error('Output needs a different environment variable from every input.');
-  environment.FOUNDATION_NAMES = JSON.stringify(names.map(item => item.name));
+  environment.FOUNDATION_NAMES = JSON.stringify(names.map(item => item.name ?? item.id));
   // Injected inputs are always cleaned up. A completed output survives only an unconfirmed upload.
   let secretDir, outputDir, outputPath, child, interrupted = false, retainOutput = false;
   const cleanup = () => {

@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "microsoft",
   "name": "Microsoft 365",
   "api": "https://graph.microsoft.com/v1.0",
@@ -15,11 +14,11 @@
       },
       "identity": {
         "url": "https://graph.microsoft.com/v1.0/me",
-        "id": "id",
+        "id": "/id",
         "label": [
-          "mail",
-          "userPrincipalName",
-          "displayName"
+          "/mail",
+          "/userPrincipalName",
+          "/displayName"
         ]
       },
       "scopes": {
@@ -38,8 +37,8 @@
         }
       ],
       "injection": {
-        "MICROSOFT_ACCESS_TOKEN": "{access_token}",
-        "MICROSOFT_TOKEN_EXPIRES_AT": "{expires_at}"
+        "MICROSOFT_ACCESS_TOKEN": "/access_token",
+        "MICROSOFT_TOKEN_EXPIRES_AT": "/expires_at"
       },
       "hint": "Scopes are Microsoft Graph permissions such as Mail.Read, Files.ReadWrite or Calendars.ReadWrite."
     }

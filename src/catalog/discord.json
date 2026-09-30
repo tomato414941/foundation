@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "discord",
   "name": "Discord",
   "api": "https://discord.com/api/v10",
@@ -11,10 +10,10 @@
       "token": "https://discord.com/api/oauth2/token",
       "identity": {
         "url": "https://discord.com/api/users/@me",
-        "id": "id",
+        "id": "/id",
         "label": [
-          "username",
-          "global_name"
+          "/username",
+          "/global_name"
         ]
       },
       "revoke": {
@@ -28,8 +27,8 @@
         "docs": "https://discord.com/developers/docs/topics/oauth2#shared-resources-oauth2-scopes"
       },
       "injection": {
-        "DISCORD_ACCESS_TOKEN": "{access_token}",
-        "DISCORD_TOKEN_EXPIRES_AT": "{expires_at}"
+        "DISCORD_ACCESS_TOKEN": "/access_token",
+        "DISCORD_TOKEN_EXPIRES_AT": "/expires_at"
       }
     }
   }

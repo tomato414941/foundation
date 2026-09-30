@@ -3,15 +3,16 @@ import { lookup } from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
 import { gunzipSync, inflateSync, brotliDecompressSync } from 'node:zlib';
 import { fail } from './errors.mjs';
+import { pointerTokens, valueAt, replaceAt } from './json-pointer.mjs';
+import { inputReference } from './inputs.mjs';
 
-// One HTTPS request sent on behalf of an agent that cannot run a command, with what is kept put into its headers
-// or body where the agent wrote {{foundation:<name>}}. The agent never sees those values: they are substituted
-// here, and taken back out of whatever comes back. What it can do is what a command given the same values could
+// One HTTPS request with explicitly bound values in headers or body. Ordinary strings are always literal.
+// The agent never sees bound values: they are inserted here and redacted from the response.
+// What it can do is what a command given the same values could
 // do, and no more: the network it reaches is the public internet, never this host or anything beside it.
 export const FETCH_BODY_MAX = 1024 * 1024;
 const TIMEOUT = 20_000;
 const METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const PLACEHOLDER = /\{\{foundation:([^{}]{1,300})\}\}/g;
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,100}$/;
 // Headers that describe the connection rather than the request. Foundation sets them itself.
 // accept-encoding too: a compressed answer would carry a reflected value past the redaction below.
@@ -35,19 +36,7 @@ export function destination(value, ownHosts = []) {
   const host = url.hostname.toLowerCase();
   if (isIP(host.replace(/^\[|\]$/g, '')) || !host.includes('.') || host.endsWith('.local') || host.endsWith('.internal') || host === 'localhost' || host.endsWith('.localhost')) fail(400, 'invalid_destination', '送り先はインターネット上のホスト名で指定してください。');
   if (ownHosts.includes(host)) fail(400, 'invalid_destination', 'Foundation 自身には送れません。APIを直接呼んでください。');
-  let decoded = url.href;
-  try { decoded = decodeURIComponent(url.href); } catch {}
-  if (/\{\{foundation:/.test(String(value)) || /\{\{foundation:/.test(decoded)) fail(400, 'secret_in_url', '保管したものはURLには入れられません。ヘッダか本文で使ってください。');
   return url;
-}
-
-// The names an agent named, in the order it named them.
-export function placeholders(input) {
-  const found = new Set();
-  const scan = text => { for (const match of String(text).matchAll(PLACEHOLDER)) found.add(match[1]); };
-  for (const value of Object.values(input.headers || {})) scan(value);
-  if (typeof input.body === 'string' && input.body_encoding !== 'base64') scan(input.body);
-  return [...found];
 }
 
 export function prepare(input, ownHosts = []) {
@@ -57,22 +46,55 @@ export function prepare(input, ownHosts = []) {
   if (!METHODS.has(method)) fail(400, 'invalid_method', 'method は GET / HEAD / POST / PUT / PATCH / DELETE のいずれかです。');
   const headers = input.headers ?? {};
   if (typeof headers !== 'object' || Array.isArray(headers) || Object.keys(headers).length > 50) fail(400, 'invalid_headers', 'headers は50件までのオブジェクトで指定してください。');
+  const headerNames = new Set();
   for (const [name, value] of Object.entries(headers)) {
     if (!HEADER_NAME.test(name) || OWN_HEADERS.has(name.toLowerCase()) || name.toLowerCase().startsWith('proxy-')) fail(400, 'invalid_headers', `ヘッダ ${name} は指定できません。`);
+    if (headerNames.has(name.toLowerCase())) fail(400, 'invalid_headers', '同じヘッダは一度だけ指定してください。');
+    headerNames.add(name.toLowerCase());
     if (typeof value !== 'string' || value.length > 8192 || /[\r\n\0]/.test(value)) fail(400, 'invalid_headers', `ヘッダ ${name} の値が不正です。`);
   }
   if (input.body !== undefined && typeof input.body !== 'string') fail(400, 'invalid_body', 'body は文字列で指定してください。');
   if (input.body_encoding !== undefined && !['utf8', 'base64'].includes(input.body_encoding)) fail(400, 'invalid_body', 'body_encoding は utf8 か base64 です。');
-  if (input.body !== undefined && ['GET', 'HEAD'].includes(method)) fail(400, 'invalid_body', `${method} には body を付けられません。`);
-  const names = placeholders(input);
-  if (names.length > 8) fail(400, 'too_many_secrets', '1回に使えるのは8件までです。');
-  return { url, method, headers, body: input.body, bodyEncoding: input.body_encoding || 'utf8', names };
+  const bodies = ['body', 'json', 'form'].filter(key => Object.hasOwn(input, key));
+  if (bodies.length > 1) fail(400, 'invalid_body', 'body・json・form はどれか一つで指定してください。');
+  if (input.body_encoding !== undefined && !Object.hasOwn(input, 'body')) fail(400, 'invalid_body', 'body_encoding は body と組み合わせて指定してください。');
+  if (bodies.length && ['GET', 'HEAD'].includes(method)) fail(400, 'invalid_body', `${method} には本文を付けられません。`);
+  if (Object.hasOwn(input, 'form') && (!input.form || typeof input.form !== 'object' || Array.isArray(input.form) || Object.values(input.form).some(value => typeof value !== 'string'))) {
+    fail(400, 'invalid_body', 'form は項目名と文字列の組で指定してください。');
+  }
+  const request = structuredClone({ headers, ...Object.fromEntries(bodies.map(key => [key, input[key]])) });
+  const bindings = input.bindings ?? [];
+  if (!Array.isArray(bindings) || bindings.length > 32) fail(400, 'invalid_input', 'bindings は32件までの配列で指定してください。');
+  const targets = new Set(), references = new Map();
+  const bound = bindings.map(binding => {
+    if (!binding || typeof binding !== 'object' || Array.isArray(binding) || Object.keys(binding).some(key => !['target', 'parts'].includes(key))) fail(400, 'invalid_input', '差し込み先と値の並びを指定してください。');
+    const { target, parts } = binding;
+    let tokens, value;
+    try { tokens = pointerTokens(target); value = valueAt(request, target); } catch { fail(400, 'invalid_input', 'target は JSON Pointer で指定してください。'); }
+    const allowed = (tokens[0] === 'headers' && tokens.length === 2) || (tokens[0] === 'body' && tokens.length === 1 && input.body_encoding !== 'base64')
+      || (tokens[0] === 'json' && tokens.length >= 1) || (tokens[0] === 'form' && tokens.length === 2);
+    if (!allowed || typeof value !== 'string') fail(400, 'invalid_input', '差し込み先には、ヘッダ・本文の既存の文字列を指定してください。');
+    if (targets.has(target)) fail(400, 'invalid_input', '差し込み先が重複しています。');
+    targets.add(target);
+    if (!Array.isArray(parts) || !parts.length || parts.length > 32) fail(400, 'invalid_input', 'parts は1〜32件の文字列または参照で指定してください。');
+    return { target, parts: parts.map(part => {
+      if (typeof part === 'string') return part;
+      const reference = inputReference(part), key = JSON.stringify(reference);
+      references.set(key, reference);
+      return reference;
+    }) };
+  });
+  if (references.size > 8) fail(400, 'too_many_secrets', '1回に使える参照は8件までです。');
+  return { url, method, request, bodyEncoding: input.body_encoding || 'utf8', bindings: bound, references };
 }
 
 // Every form a value could come back in that an agent could read it from.
 function forms(value) {
   const bytes = Buffer.from(value, 'utf8');
-  return [...new Set([value, bytes.toString('base64'), bytes.toString('base64url'), encodeURIComponent(value), JSON.stringify(value).slice(1, -1)])]
+  const encoded = [value, bytes.toString('base64'), bytes.toString('base64url'), encodeURIComponent(value),
+    new URLSearchParams({ value }).toString().slice('value='.length), JSON.stringify(value).slice(1, -1)];
+  // A service can reflect the encoded request body as a JSON string: redact that spelling as well.
+  return [...new Set([...encoded, ...encoded.map(text => JSON.stringify(text).slice(1, -1))])]
     .filter(Boolean).map(text => Buffer.from(text, 'utf8')).sort((a, b) => b.length - a.length);
 }
 export function redact(buffer, values) {
@@ -103,15 +125,29 @@ async function publicAddress(host, resolve, ownHosts) {
 // resolves differently a moment later changes nothing), redirects are handed back rather than followed, and the
 // answer is capped and cleaned of every value that went out.
 export async function send(prepared, values, { resolve = host => lookup(host, { all: true, verbatim: true }), createConnection, ca, ownHosts = [] } = {}) {
-  const fill = text => text.replace(PLACEHOLDER, (_, name) => values.get(name));
-  const headers = {};
-  for (const [name, value] of Object.entries(prepared.headers)) {
-    const filled = fill(value);
-    if (/[\r\n\0]/.test(filled) || filled.length > 16384) fail(400, 'invalid_headers', `ヘッダ ${name} に入れた値が、ヘッダには使えない形です。`);
-    headers[name] = filled;
+  const request = structuredClone(prepared.request);
+  for (const { target, parts } of prepared.bindings) {
+    const value = parts.map(part => {
+      if (typeof part === 'string') return part;
+      const key = JSON.stringify(part);
+      if (!values.has(key)) fail(400, 'invalid_input', '差し込む値が取得できませんでした。');
+      return values.get(key);
+    }).join('');
+    replaceAt(request, target, value);
   }
-  const body = prepared.body === undefined ? undefined
-    : prepared.bodyEncoding === 'base64' ? Buffer.from(prepared.body, 'base64') : Buffer.from(fill(prepared.body), 'utf8');
+  const headers = {};
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (/[\r\n\0]/.test(value) || value.length > 16384) fail(400, 'invalid_headers', `ヘッダ ${name} に入れた値が、ヘッダには使えない形です。`);
+    headers[name.toLowerCase()] = value;
+  }
+  let body;
+  if (Object.hasOwn(request, 'json')) {
+    body = Buffer.from(JSON.stringify(request.json), 'utf8');
+    headers['content-type'] ??= 'application/json';
+  } else if (Object.hasOwn(request, 'form')) {
+    body = Buffer.from(new URLSearchParams(request.form).toString(), 'utf8');
+    headers['content-type'] ??= 'application/x-www-form-urlencoded';
+  } else if (request.body !== undefined) body = Buffer.from(request.body, prepared.bodyEncoding);
   if (body && body.length > FETCH_BODY_MAX) fail(413, 'body_too_large', '送る内容は1MBまでです。');
   const host = prepared.url.hostname.toLowerCase();
   const address = await publicAddress(host, resolve, ownHosts.filter(name => !isIP(name)));

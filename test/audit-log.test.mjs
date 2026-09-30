@@ -35,10 +35,10 @@ test('複数の利用者の代理を務めるキーの操作履歴を、対象�
   await deliver(f, key, USER_B, 'second-value');
 
   const forSecond = await deliveries(f);
-  assert.deepEqual(forSecond.map(row => [row.object_id, row.detail.names]), [[USER_B, ['second-value']]]);
+  assert.deepEqual(forSecond.map(row => [row.object_id, row.detail.inputs]), [[USER_B, [{ name: 'second-value' }]]]);
   await f.login();
   const forFirst = await deliveries(f);
-  assert.deepEqual(forFirst.map(row => [row.object_id, row.detail.names]), [[USER_A, ['first-value']]]);
+  assert.deepEqual(forFirst.map(row => [row.object_id, row.detail.inputs]), [[USER_A, [{ name: 'first-value' }]]]);
 
   const byAgent = await deliveries(f, { token: key.token, anonymous: true });
   assert.deepEqual(new Set(byAgent.map(row => row.id)), new Set([...forFirst, ...forSecond].map(row => row.id)));

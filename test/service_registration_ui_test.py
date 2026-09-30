@@ -116,7 +116,7 @@ with sync_playwright() as p:
     expect(dialog).not_to_be_visible()
     expect(page.get_by_role('article', name='任意の名前/a', exact=True)).to_be_visible()
     kept = next(item for item in overview()['secrets'] if item['name'] == '任意の名前/a')
-    assert api('/v1/injections', 'POST', {'names': [{'name': kept['id'], 'as': 'MY_TOKEN'}]})['injection']['environment'] == {'MY_TOKEN': 'fixture-private-token'}
+    assert api('/v1/injections', 'POST', {'names': [{'id': kept['id'], 'as': 'MY_TOKEN'}]})['injection']['environment'] == {'MY_TOKEN': 'fixture-private-token'}
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 900})
         review('secrets-' + str(width))

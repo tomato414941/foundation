@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "zendesk",
   "name": "Zendesk",
   "docs": "https://developer.zendesk.com/api-reference/",
@@ -10,10 +9,10 @@
       "client_auth": "body",
       "identity": {
         "url": "https://{subdomain}.zendesk.com/api/v2/users/me.json",
-        "id": "user.id",
+        "id": "/user/id",
         "label": [
-          "user.email",
-          "user.name"
+          "/user/email",
+          "/user/name"
         ]
       },
       "scopes": {
@@ -33,9 +32,9 @@
         }
       ],
       "injection": {
-        "ZENDESK_ACCESS_TOKEN": "{access_token}",
-        "ZENDESK_SUBDOMAIN": "{subdomain}",
-        "ZENDESK_TOKEN_EXPIRES_AT": "{expires_at}"
+        "ZENDESK_ACCESS_TOKEN": "/access_token",
+        "ZENDESK_SUBDOMAIN": "/subdomain",
+        "ZENDESK_TOKEN_EXPIRES_AT": "/expires_at"
       },
       "hint": "ZENDESK_SUBDOMAIN is the Zendesk subdomain (https://<ZENDESK_SUBDOMAIN>.zendesk.com/api/v2/...)."
     }

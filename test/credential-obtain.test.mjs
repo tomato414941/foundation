@@ -18,7 +18,7 @@ import { fail } from '../src/errors.mjs';
 const value = (subject, state = 'opaque-0') => ({ subject, privateState: state, facts: { label: subject }, expiresAt: null,
   credentials: { environment: { EXAMPLE_KEY: 'usable-' + state } } });
 // A service whose one scheme is the test's own.
-const example = obtain => ({ definition: { version: 1, id: 'example', name: 'Example', auth_schemes: { oauth: { adapter: 'example' } } },
+const example = obtain => ({ definition: { id: 'example', name: 'Example', auth_schemes: { oauth: { adapter: 'example' } } },
   schemes: { oauth: { kind: 'oauth', available: true, variables: ['EXAMPLE_KEY'], authorization: { begin() {}, complete() {} }, obtain } } });
 function setup(t, obtain) {
   const store = new Store(':memory:', KEY), { credentials: connections } = modules(store, [example(obtain)]);

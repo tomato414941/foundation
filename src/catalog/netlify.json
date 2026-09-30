@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "netlify",
   "name": "Netlify",
   "api": "https://api.netlify.com/api/v1",
@@ -12,15 +11,15 @@
       "client_auth": "body",
       "identity": {
         "url": "https://api.netlify.com/api/v1/user",
-        "id": "id",
+        "id": "/id",
         "label": [
-          "email",
-          "full_name"
+          "/email",
+          "/full_name"
         ]
       },
       "injection": {
-        "NETLIFY_ACCESS_TOKEN": "{access_token}",
-        "NETLIFY_TOKEN_EXPIRES_AT": "{expires_at}"
+        "NETLIFY_ACCESS_TOKEN": "/access_token",
+        "NETLIFY_TOKEN_EXPIRES_AT": "/expires_at"
       }
     }
   }

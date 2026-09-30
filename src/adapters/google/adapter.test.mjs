@@ -181,7 +181,7 @@ test('接続IDからGoogleの認証情報を更新し、CLI経由で子プロセ
   t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'key');
   await writeFile(keyPath, agent.token, { mode: 0o600 });
-  const command = ['cli/runtime.mjs', 'exec', '--inputs', JSON.stringify([{ name: a.id }]), '--', process.execPath, '-e',
+  const command = ['cli/runtime.mjs', 'exec', '--inputs', JSON.stringify([{ id: a.id }]), '--', process.execPath, '-e',
     'if(process.env.CLOUDSDK_AUTH_ACCESS_TOKEN!=="google-access-personal-1"||process.env.GOOGLE_ACCOUNT_EMAIL!=="personal@example.test"||process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("google-ready")'];
   const child = spawn(process.execPath, command, { env: { ...process.env, FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath } });
   let out = '', err = '';

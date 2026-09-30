@@ -37,13 +37,13 @@ test('MCPで文字列とバイナリの保存値を指定の符号化で共通AP
   const stored = await call({ method: 'PUT', path: '/v1/resources?kind=secret&name=file', body: bytes.toString('base64'), body_encoding: 'base64' });
   assert.equal(stored.json.result.isError, undefined, stored.text);
   const id = stored.json.result.structuredContent.resource.id;
-  const delivered = await call({ method: 'POST', path: '/v1/injections', body: { names: [{ name: id, as: 'CONFIG_FILE', filename: 'config.bin' }] } });
+  const delivered = await call({ method: 'POST', path: '/v1/injections', body: { names: [{ id, as: 'CONFIG_FILE', filename: 'config.bin' }] } });
   assert.deepEqual(Buffer.from(delivered.json.result.structuredContent.injection.files[0].content, 'base64'), bytes);
   for (const [body, body_encoding] of [['%%%', 'base64'], [42, 'text'], ['x', 'unknown']]) {
     const refused = await call({ method: 'PUT', path: '/v1/resources?kind=secret&name=file', body, body_encoding });
     assert.equal(refused.json.result.isError, true, refused.text);
   }
-  const preserved = await call({ method: 'POST', path: '/v1/injections', body: { names: [{ name: id, as: 'CONFIG_FILE', filename: 'config.bin' }] } });
+  const preserved = await call({ method: 'POST', path: '/v1/injections', body: { names: [{ id, as: 'CONFIG_FILE', filename: 'config.bin' }] } });
   assert.deepEqual(Buffer.from(preserved.json.result.structuredContent.injection.files[0].content, 'base64'), bytes);
 });
 
@@ -78,7 +78,7 @@ test('MCP delivers what a connected grant yields, and never its renewal state', 
   const call = (method, path, body) => modern(f, { jsonrpc: '2.0', id: 20, method: 'tools/call', params: { name: 'foundation_api', arguments: { method, path, body } } });
   const catalog = await call('GET', '/v1/functions');
   assert.deepEqual(catalog.json.result.structuredContent.functions.map(fn => fn.id), ['http.request']);
-  const delivered = await call('POST', '/v1/injections', { names: [{ name: connection.id }] });
+  const delivered = await call('POST', '/v1/injections', { names: [{ id: connection.id }] });
   assert.equal(delivered.json.result.structuredContent.injection.environment.GOOGLE_ACCOUNT_EMAIL, 'personal@example.test');
   assert.doesNotMatch(delivered.text, /refresh-personal/);
   const content = await call('GET', '/v1/resources/' + connection.id + '/content');

@@ -123,7 +123,7 @@ export async function fixture(t, options = {}) {
   }
   // Injecting a credential for a service derives what it yields now; nothing else reaches the service.
   async function inject(credential, options = {}) {
-    return request('/v1/injections', { method: 'POST', data: { names: [{ name: credential.id }] }, ...options });
+    return request('/v1/injections', { method: 'POST', data: { names: [{ id: credential.id }] }, ...options });
   }
   async function credentialFacts(credential, options = {}) {
     const listed = await request('/v1/resources?kind=credential', options);

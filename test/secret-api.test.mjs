@@ -17,7 +17,7 @@ test('WebとAPIキーが同じAPIで固定トークンを保存・更新し、�
     const updated = await f.request(path + '/content', { ...options, method: 'PUT', raw: 'updated-' + name });
     assert.equal(updated.status, 200, updated.text);
     assert.equal(updated.json.resource.id, kept.json.resource.id);
-    const delivered = await f.request('/v1/injections', { ...options, method: 'POST', data: { names: [{ name: kept.json.resource.id, as: 'MY_TOKEN' }] } });
+    const delivered = await f.request('/v1/injections', { ...options, method: 'POST', data: { names: [{ id: kept.json.resource.id, as: 'MY_TOKEN' }] } });
     assert.deepEqual(delivered.json.injection.environment, { MY_TOKEN: 'updated-' + name });
     assert.doesNotMatch(kept.text + updated.text, /private-|updated-/);
   }
@@ -74,6 +74,6 @@ test('CLIとMCPが共通APIで固定トークンを保存し、同じIDの値を
   const saved = mcp.json.result.structuredContent.resource;
   assert.equal(saved.kind, 'secret');
   assert.equal((await f.read('secret', 'MCP')).text, 'mcp-private');
-  const delivered = await call('POST', '/v1/injections', { names: [{ name: id, as: 'CLI_TOKEN' }, { name: saved.id, as: 'MCP_TOKEN' }] });
+  const delivered = await call('POST', '/v1/injections', { names: [{ id, as: 'CLI_TOKEN' }, { id: saved.id, as: 'MCP_TOKEN' }] });
   assert.deepEqual(delivered.json.result.structuredContent.injection.environment, { CLI_TOKEN: 'cli-private', MCP_TOKEN: 'mcp-private' });
 });

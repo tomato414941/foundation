@@ -918,7 +918,7 @@ function defineService({ name = '', created } = {}) {
   bindForm(async (form) => {
     const name = String(form.get('name') || '').trim();
     const result = await api('/v1/resources?kind=service&name=' + encodeURIComponent(name), {
-      method: 'PUT', headers: { 'if-none-match': '*' }, data: { version: 1, name },
+      method: 'PUT', headers: { 'if-none-match': '*' }, data: { name },
     });
     const service = rememberService(result.resource);
     if (created) { created(service); return; }
@@ -936,7 +936,7 @@ function configureOAuth(service) {
     const value = name => String(form.get(name) || '').trim();
     const oauth = { authorize: value('authorize'), token: value('token'), scopes: { base: [] },
       ...(value('identity') ? { identity: { url: value('identity') } } : {}), ...(value('revoke') ? { revoke: { url: value('revoke'), style: 'rfc7009' } } : {}),
-      injection: { OAUTH_ACCESS_TOKEN: '{access_token}', OAUTH_EXPIRES_AT: '{expires_at}' } };
+      injection: { OAUTH_ACCESS_TOKEN: '/access_token', OAUTH_EXPIRES_AT: '/expires_at' } };
     await addServiceScheme(service, 'oauth', oauth);
     addApp(service.id, id => connect(id));
   });

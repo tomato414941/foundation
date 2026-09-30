@@ -1,4 +1,6 @@
-export const SCHEMA_VERSION = 34;
+import { checkDefinition } from './service-definition.mjs';
+
+export const SCHEMA_VERSION = 35;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -6,7 +8,47 @@ export const STEPS = {
   32: separateSecrets,
   33: namesApart,
   34: requestsAsDetails,
+  35: standardReferences,
 };
+
+// A one-time data conversion, never a runtime parser for earlier definitions. Refuse any expression that cannot
+// be represented faithfully, and let Store roll the entire migration back rather than guess or discard data.
+export function migrateServiceReferences(input) {
+  const definition = structuredClone(input), oauth = definition.auth_schemes?.oauth;
+  const token = value => value.replace(/~/g, '~0').replace(/\//g, '~1');
+  const path = value => {
+    if (Array.isArray(value)) return value.map(path);
+    if (typeof value !== 'string' || !value) throw new Error('Invalid stored field selector');
+    return '/' + value.split('.').map(token).join('/');
+  };
+  const url = value => value.replace(/^\{([a-z_]+)\}$/, '{+$1}');
+  if (oauth && !oauth.adapter) {
+    oauth.authorize = url(oauth.authorize); oauth.token = url(oauth.token);
+    if (oauth.revoke) oauth.revoke.url = url(oauth.revoke.url);
+    if (oauth.ok_field !== undefined) oauth.ok_field = '/' + token(oauth.ok_field);
+    if (oauth.identity) {
+      const who = oauth.identity;
+      if (who.url !== undefined) who.url = url(who.url);
+      for (const key of ['id', 'label']) if (who[key] !== undefined) who[key] = path(who[key]);
+      if (who.ok_field !== undefined) who.ok_field = '/' + token(who.ok_field);
+    }
+    oauth.injection = Object.fromEntries(Object.entries(oauth.injection).map(([name, template]) => {
+      const match = typeof template === 'string' && /^\{([a-z_]+)\}$/.exec(template);
+      if (!match) throw new Error('Output ' + name + ' needs an explicit conversion');
+      return [name, '/' + token(match[1])];
+    }));
+  }
+  delete definition.version;
+  return checkDefinition(definition);
+}
+
+function standardReferences({ db }) {
+  const converted = db.prepare('SELECT resource_id,definition FROM services').all().map(row => {
+    try { return { id: row.resource_id, definition: JSON.stringify(migrateServiceReferences(JSON.parse(row.definition))) }; }
+    catch (error) { throw new Error('Service ' + row.resource_id + ' could not be migrated: ' + error.message); }
+  });
+  for (const row of converted) db.prepare('UPDATE services SET definition=? WHERE resource_id=?').run(row.definition, row.id);
+}
 
 // What one principal was given is kept in one place. A line names a role (owner, actor, viewer, editor) or one
 // action (credential.disconnect); the permissions kept beside it join it, and the scope nothing read goes.

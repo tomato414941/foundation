@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { FakeOAuth2Service, SERVICE } from './oauth.fixture.mjs';
 import { fixture } from '../../test/helpers.mjs';
+import { OAuth2Client } from './oauth.mjs';
+import { checkDefinition } from '../service-definition.mjs';
 
 // A service the catalog does not know, described by its holder: plain OAuth 2.0 at the fake's addresses.
 const OAUTH = { authorize: SERVICE.authorize_url, token: SERVICE.token_url, scopes: { base: [] }, identity: { url: SERVICE.userinfo_url },
-  revoke: { url: SERVICE.revoke_url, style: 'rfc7009' }, injection: { OAUTH_ACCESS_TOKEN: '{access_token}', OAUTH_EXPIRES_AT: '{expires_at}' } };
-const DEFINITION = { version: 1, name: 'Notes', api: 'https://service.example/api', auth_schemes: { oauth: OAUTH } };
+  revoke: { url: SERVICE.revoke_url, style: 'rfc7009' }, injection: { OAUTH_ACCESS_TOKEN: '/access_token', OAUTH_EXPIRES_AT: '/expires_at' } };
+const DEFINITION = { name: 'Notes', api: 'https://service.example/api', auth_schemes: { oauth: OAUTH } };
 
 async function generic(t, definition = DEFINITION) {
   const service = new FakeOAuth2Service(), f = await fixture(t, { serviceFetcher: service.fetch });
@@ -120,4 +122,29 @@ test('サービスの定義では、インターネット上のhttpsのURLを求
   assert.equal((await f.request('/v1/credentials', { method: 'POST', data: { service: other } })).json.error.code, 'app_required');
   const listed = (await f.request('/v1/resources?kind=app')).json.resources;
   assert.deepEqual(listed.filter(app => !app.foundation).map(app => [app.name, app.service.name]), [['Notes', 'Notes']]);
+});
+
+test('利用者情報のJSON Pointerで、ドットやスラッシュを含むキーと配列から本人を特定する', async t => {
+  const oauth = { ...OAUTH, identity: { url: SERVICE.userinfo_url, id: '/profile.v1/0/id~1key', label: '/name~0shown' } };
+  const f = await generic(t, { ...DEFINITION, auth_schemes: { oauth } });
+  f.service.userinfoHandler = () => ({ 'profile.v1': [{ 'id/key': 'user-7' }], 'name~shown': '本人の表示名' });
+  const connection = await f.connect();
+  assert.equal(connection.subject, 'user:user-7');
+  assert.equal(connection.label, '本人の表示名');
+  assert.equal((await f.inject(connection)).json.injection.environment.OAUTH_ACCESS_TOKEN, 'access-personal-0');
+});
+
+test('URLの変数を宣言済みの値で展開し、欠落や不正な送信先を認可画面に進む前に検出する', () => {
+  const definition = { ...DEFINITION, auth_schemes: { oauth: { ...OAUTH, authorize: 'https://{domain}/authorize', token: 'https://{domain}/token',
+    app_fields: [{ name: 'domain', label: 'Domain' }] } } };
+  checkDefinition(definition);
+  const client = new OAuth2Client({ clientId: 'client', clientSecret: 'secret' }, { profile: definition.auth_schemes.oauth });
+  assert.throws(() => client.authorize({ state: 's', redirectUri: 'https://foundation.example/callback' }), error => error.code === 'app_required');
+  client.domain = '127.0.0.1';
+  assert.throws(() => client.authorize({ state: 's', redirectUri: 'https://foundation.example/callback' }), error => error.code === 'invalid_destination');
+  client.domain = 'notes.example';
+  assert.equal(new URL(client.authorize({ state: 's', redirectUri: 'https://foundation.example/callback' })).hostname, 'notes.example');
+  for (const path of ['/refresh_token', '/client_secret', '/account/unknown', '/constructor']) {
+    assert.throws(() => checkDefinition({ ...DEFINITION, auth_schemes: { oauth: { ...OAUTH, injection: { TOKEN: path } } } }), error => error.where === 'definition.auth_schemes.oauth.injection.TOKEN');
+  }
 });

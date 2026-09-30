@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "google",
   "name": "Google",
   "api": "https://www.googleapis.com",

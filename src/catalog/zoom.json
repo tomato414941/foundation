@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "zoom",
   "name": "Zoom",
   "api": "https://api.zoom.us/v2",
@@ -11,8 +10,8 @@
       "token": "https://zoom.us/oauth/token",
       "identity": {
         "url": "https://api.zoom.us/v2/users/me",
-        "id": "id",
-        "label": "email",
+        "id": "/id",
+        "label": "/email",
         "optional": true
       },
       "revoke": {
@@ -24,8 +23,8 @@
         "docs": "https://developers.zoom.us/docs/integrations/oauth-scopes-overview/"
       },
       "injection": {
-        "ZOOM_ACCESS_TOKEN": "{access_token}",
-        "ZOOM_TOKEN_EXPIRES_AT": "{expires_at}"
+        "ZOOM_ACCESS_TOKEN": "/access_token",
+        "ZOOM_TOKEN_EXPIRES_AT": "/expires_at"
       }
     }
   }

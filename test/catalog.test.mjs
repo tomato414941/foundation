@@ -4,12 +4,14 @@ import { DEFINITIONS, builtins } from '../src/catalog.mjs';
 import { oauthScheme, oauthClient } from '../src/schemes/oauth.mjs';
 import { checkDefinition } from '../src/service-definition.mjs';
 import { fixture } from './helpers.mjs';
+import { pointerTokens, valueAt } from '../src/json-pointer.mjs';
+import { uriTemplate } from '../src/uri-template.mjs';
 
 // Each service is data; these tests hold every definition to what it says. A fake answers at the addresses the
 // definition names, in the shape the definition reads, so a credential is made end to end.
 const SAMPLE = { domain: 'example.cybozu.com', shop: 'example', subdomain: 'example', tenant: 'contoso.onmicrosoft.com', token: 'token-value' };
-const put = (target, path, value) => { const keys = path.split('.'); let at = target; for (const key of keys.slice(0, -1)) at = at[key] ??= {}; at[keys.at(-1)] = value; return target; };
-const fill = (template, values) => template.replace(/\{([a-z_]+)\}/g, (_, name) => values[name] ?? '');
+const put = (target, pointer, value) => { const keys = pointerTokens(pointer); let at = target; for (const key of keys.slice(0, -1)) at = at[key] ??= {}; at[keys.at(-1)] = value; return target; };
+const fill = (template, values) => uriTemplate(template).expand(values);
 const reply = (status, body) => ({ ok: status >= 200 && status < 300, status, text: JSON.stringify(body) });
 const who = (identity, body) => {
   [].concat(identity?.id ?? []).forEach((path, index) => put(body, path, 'id-' + index));
@@ -19,7 +21,7 @@ const who = (identity, body) => {
 };
 
 function oauthFake(spec, values) {
-  const calls = [], ok = spec.ok_field ? { [spec.ok_field]: true } : {};
+  const calls = [], ok = spec.ok_field ? put({}, spec.ok_field, true) : {};
   const kept = { instance_url: 'https://example.my.salesforce.com', id: 'https://login.salesforce.com/id/00D000000000001/005000000000001' };
   const fetcher = async (url, options = {}) => {
     calls.push({ url, options });
@@ -59,13 +61,13 @@ for (const definition of DEFINITIONS.filter(item => item.auth_schemes.oauth && !
     else assert.equal(token.options.headers.authorization, 'Basic ' + Buffer.from('own-client:own-secret').toString('base64'));
     const credential = (await f.request('/v1/overview')).json.credentials.find(item => item.service?.id === definition.id);
     if (spec.identity) {
-      assert.equal(credential.facts.account, spec.identity.from === 'app' ? values[spec.identity.id] : [].concat(spec.identity.id).map((_, index) => 'id-' + index).join(':'));
+      assert.equal(credential.facts.account, spec.identity.from === 'app' ? valueAt(values, spec.identity.id) : [].concat(spec.identity.id).map((_, index) => 'id-' + index).join(':'));
       if (spec.identity.label) assert.equal(credential.label, 'someone@example.test');
     }
     const injected = await f.inject(credential);
     assert.equal(injected.status, 200, injected.text);
     const environment = injected.json.injection.environment;
-    for (const [name, template] of Object.entries(spec.injection)) if (template === '{access_token}') assert.match(environment[name], /^access-/);
+    for (const [name, template] of Object.entries(spec.injection)) if (template === '/access_token') assert.match(environment[name], /^access-/);
     assert.deepEqual(Object.keys(environment).filter(name => !Object.keys(spec.injection).includes(name)), []);
     const removed = await f.request('/v1/resources/' + credential.id, { method: 'DELETE', data: { revoke: true } });
     assert.equal(removed.status, 200, removed.text);
@@ -83,13 +85,13 @@ test('Foundationのアプリは設定があるサービスだけで使え、ス�
 });
 
 test('利用者のサービスの定義は、運営の定義と同じ規則で確かめ、コードの名前は運営の定義にだけ許す', () => {
-  const oauth = { authorize: 'https://notes.example/authorize', token: 'https://notes.example/token', injection: { NOTES_TOKEN: '{access_token}' } };
-  assert.equal(checkDefinition({ version: 1, name: 'Notes', auth_schemes: { oauth } }).name, 'Notes');
+  const oauth = { authorize: 'https://notes.example/authorize', token: 'https://notes.example/token', injection: { NOTES_TOKEN: '/access_token' } };
+  assert.equal(checkDefinition({ name: 'Notes', auth_schemes: { oauth } }).name, 'Notes');
   for (const [broken, where] of [
-    [{ version: 1, name: 'Notes', auth_schemes: { oauth: { ...oauth, authorize: 'http://notes.example/authorize' } } }, 'definition.auth_schemes.oauth.authorize'],
-    [{ version: 1, name: 'Notes', auth_schemes: { oauth: { ...oauth, injection: { NOTES_TOKEN: '{password}' } } } }, 'definition.auth_schemes.oauth.injection.NOTES_TOKEN'],
-    [{ version: 1, name: 'Notes', auth_schemes: { oauth: { adapter: 'github' } } }, 'definition.auth_schemes.oauth'],
-    [{ version: 1, id: 'notes', name: 'Notes', auth_schemes: { oauth } }, 'definition.id'],
-    [{ version: 2, name: 'Notes', auth_schemes: { oauth } }, 'definition.version'],
+    [{ name: 'Notes', auth_schemes: { oauth: { ...oauth, authorize: 'http://notes.example/authorize' } } }, 'definition.auth_schemes.oauth.authorize'],
+    [{ name: 'Notes', auth_schemes: { oauth: { ...oauth, injection: { NOTES_TOKEN: '/password' } } } }, 'definition.auth_schemes.oauth.injection.NOTES_TOKEN'],
+    [{ name: 'Notes', auth_schemes: { oauth: { adapter: 'github' } } }, 'definition.auth_schemes.oauth'],
+    [{ id: 'notes', name: 'Notes', auth_schemes: { oauth } }, 'definition.id'],
+    [{ name: 'Notes', unknown: true, auth_schemes: { oauth } }, 'definition'],
   ]) assert.throws(() => checkDefinition(broken), error => error.where === where, where);
 });

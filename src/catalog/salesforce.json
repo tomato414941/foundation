@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "salesforce",
   "name": "Salesforce",
   "docs": "https://developer.salesforce.com/docs/apis",
@@ -13,14 +12,14 @@
         "id"
       ],
       "identity": {
-        "url": "{id}",
+        "url": "{+id}",
         "id": [
-          "organization_id",
-          "user_id"
+          "/organization_id",
+          "/user_id"
         ],
         "label": [
-          "username",
-          "email"
+          "/username",
+          "/email"
         ]
       },
       "revoke": {
@@ -36,9 +35,9 @@
         "docs": "https://help.salesforce.com/s/articleView?id=xcloud.remoteaccess_oauth_tokens_scopes.htm"
       },
       "injection": {
-        "SALESFORCE_ACCESS_TOKEN": "{access_token}",
-        "SALESFORCE_INSTANCE_URL": "{instance_url}",
-        "SALESFORCE_TOKEN_EXPIRES_AT": "{expires_at}"
+        "SALESFORCE_ACCESS_TOKEN": "/access_token",
+        "SALESFORCE_INSTANCE_URL": "/instance_url",
+        "SALESFORCE_TOKEN_EXPIRES_AT": "/expires_at"
       },
       "hint": "SALESFORCE_INSTANCE_URL is the org's API base URL (<SALESFORCE_INSTANCE_URL>/services/data/...)."
     }

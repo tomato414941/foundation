@@ -10,6 +10,8 @@ import { gzipSync } from 'node:zlib';
 import { fixture } from './helpers.mjs';
 
 const TOKEN = 'sk-fetch-fixture-value-1234567890';
+const authorization = (name = 'api/token', prefix = '') => ({ headers: { authorization: '' },
+  bindings: [{ target: '/headers/authorization', parts: [prefix, { name }] }] });
 
 // A service on the public internet, played by a local HTTPS server with its own certificate. What it received
 // is kept so the test can see what really went out; what it answers reflects the request back.
@@ -58,8 +60,8 @@ async function setup(t) {
 
 test('A request goes out with what is kept in its headers and body, and comes back without it', async t => {
   const { received, call, f } = await setup(t);
-  const answer = await call({ url: 'https://api.example.test/echo?q=1', method: 'POST',
-    headers: { authorization: 'Bearer {{foundation:api/token}}', 'content-type': 'application/json' }, body: '{"token":"{{foundation:api/token}}"}' });
+  const answer = await call({ url: 'https://api.example.test/echo?q=1', method: 'POST', headers: { authorization: '' }, json: { token: '' },
+    bindings: [{ target: '/headers/authorization', parts: ['Bearer ', { name: 'api/token' }] }, { target: '/json/token', parts: [{ name: 'api/token' }] }] });
   assert.equal(answer.status, 200, answer.text);
   assert.equal(received[0].headers.authorization, 'Bearer ' + TOKEN);
   assert.equal(received[0].body, '{"token":"' + TOKEN + '"}');
@@ -77,7 +79,7 @@ test('A request goes out with what is kept in its headers and body, and comes ba
 
 test('A redirect comes back as it is, with what is kept taken out, and is not followed', async t => {
   const { received, call } = await setup(t);
-  const answer = await call({ url: 'https://api.example.test/redirect', headers: { authorization: '{{foundation:api/token}}' } });
+  const answer = await call({ url: 'https://api.example.test/redirect', ...authorization() });
   assert.equal(answer.json.response.status, 302);
   assert.equal(answer.json.response.headers.location, 'https://elsewhere.example.test/?seen=[redacted]');
   assert.equal(received.length, 1);
@@ -99,24 +101,24 @@ test('Only the public internet is reachable: never this host, its network, the m
     const refused = await call({ url });
     assert.equal(refused.status, 400, url); assert.match(refused.json.error.code, /^invalid_(url|destination)$/, url);
   }
-  const inUrl = await call({ url: 'https://api.example.test/?key={{foundation:api/token}}' });
-  assert.equal(inUrl.json.error.code, 'secret_in_url');
+  const inUrl = await call({ url: 'https://api.example.test/', bindings: [{ target: '/url', parts: [{ name: 'api/token' }] }] });
+  assert.equal(inUrl.json.error.code, 'invalid_input');
 });
 
 test('What goes out is checked: the key may use each path, headers are its own, and a value must fit where it goes', async t => {
   const { call, f, key, received } = await setup(t);
-  assert.equal((await call({ url: 'https://api.example.test/', headers: { authorization: '{{foundation:api/missing}}' } })).status, 404);
+  assert.equal((await call({ url: 'https://api.example.test/', ...authorization('api/missing') })).status, 404);
   for (const name of ['host', 'Content-Length', 'accept-encoding', 'proxy-authorization', 'x-forwarded-for']) {
     assert.equal((await call({ url: 'https://api.example.test/', headers: { [name]: 'x' } })).json.error.code, 'invalid_headers', name);
   }
   await f.request('/v1/resources?kind=secret&name=api/multiline', { method: 'PUT', token: key.token, raw: 'line1\nline2', type: 'text/plain' });
-  assert.equal((await call({ url: 'https://api.example.test/', headers: { authorization: '{{foundation:api/multiline}}' } })).json.error.code, 'invalid_headers');
+  assert.equal((await call({ url: 'https://api.example.test/', ...authorization('api/multiline') })).json.error.code, 'invalid_headers');
   await f.request('/v1/resources?kind=secret&name=api/binary', { method: 'PUT', token: key.token, raw: Buffer.from([0xff, 0xfe, 0x00]), type: 'application/octet-stream' });
-  assert.equal((await call({ url: 'https://api.example.test/', method: 'POST', body: '{{foundation:api/binary}}' })).json.error.code, 'not_text');
+  assert.equal((await call({ url: 'https://api.example.test/', method: 'POST', body: '', bindings: [{ target: '/body', parts: [{ name: 'api/binary' }] }] })).json.error.code, 'not_text');
   assert.equal((await call({ url: 'https://api.example.test/', method: 'GET', body: 'x' })).json.error.code, 'invalid_body');
   assert.equal(received.length, 0, 'nothing refused ever went out');
   await f.request('/v1/principals/' + key.id, { method: 'DELETE', data: {} });
-  assert.equal((await call({ url: 'https://api.example.test/', headers: { authorization: '{{foundation:api/token}}' } })).status, 401);
+  assert.equal((await call({ url: 'https://api.example.test/', ...authorization() })).status, 401);
 });
 
 test('An answer larger than 1MB is cut off rather than passed on', async t => {
@@ -127,12 +129,12 @@ test('An answer larger than 1MB is cut off rather than passed on', async t => {
 
 test('A compressed answer is opened here, so what is kept is taken out of what the agent reads; one that cannot be opened is not passed on', async t => {
   const { call, received } = await setup(t);
-  const opened = await call({ url: 'https://api.example.test/gzip', headers: { authorization: '{{foundation:api/token}}' } });
+  const opened = await call({ url: 'https://api.example.test/gzip', ...authorization() });
   assert.equal(opened.status, 200, opened.text);
   assert.equal(received[0].headers['accept-encoding'], 'identity');
   assert.equal(opened.json.response.headers['content-encoding'], undefined);
   assert.deepEqual(JSON.parse(opened.json.response.body), { authorization: '[redacted]' });
-  const opaque = await call({ url: 'https://api.example.test/compress', headers: { authorization: '{{foundation:api/token}}' } });
+  const opaque = await call({ url: 'https://api.example.test/compress', ...authorization() });
   assert.equal(opaque.status, 502); assert.equal(opaque.json.error.code, 'unsupported_encoding');
 });
 
@@ -157,8 +159,7 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
   f.expire(connection.id);
   const calls = f.google.calls.length;
   const saved = await f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: {
-    url: 'https://api.example.test/echo', headers: { authorization: 'Bearer {{foundation:chosen}}' },
-    bindings: { chosen: inputName }, save: outputName,
+    url: 'https://api.example.test/echo', ...authorization(inputName, 'Bearer '), save: outputName,
   } });
   assert.equal(saved.status, 200, saved.text);
   assert.equal(received[0].headers.authorization, 'Bearer ' + TOKEN);
@@ -184,7 +185,77 @@ test('The HTTPS function retains destination and owner checks, and validates out
   assert.equal((await call({ url: 'https://api.example.test/', save: '' })).json.error.code, 'invalid_name');
   await f.login('second@example.test');
   const other = await f.issueKey();
-  const refused = await call({ url: 'https://api.example.test/', headers: { authorization: '{{foundation:slot}}' }, bindings: { slot: 'api/token' } }, other.token);
+  const refused = await call({ url: 'https://api.example.test/', ...authorization() }, other.token);
   assert.equal(refused.status, 404);
   assert.equal(received.length, 0);
+});
+
+test('記号入りの保存名を完全一致で参照し、通常の文字列と秘密値を再解釈せずに送信する', async t => {
+  const { f, call, received } = await setup(t);
+  const literal = '{{foundation:api/token}}', secret = 'private-' + literal;
+  await f.keep('secret', 'api/token#work', secret);
+  const answer = await call({ url: 'https://api.example.test/echo', method: 'POST',
+    headers: { authorization: '', 'x-literal': literal }, body: literal,
+    bindings: [{ target: '/headers/authorization', parts: ['Bearer ', { name: 'api/token#work' }] }] });
+  assert.equal(answer.status, 200, answer.text);
+  assert.equal(received[0].headers.authorization, 'Bearer ' + secret);
+  assert.equal(received[0].headers['x-literal'], literal);
+  assert.equal(received[0].body, literal);
+  assert.equal(JSON.parse(answer.json.response.body).authorization, 'Bearer [redacted]');
+});
+
+test('JSON Pointerで選んだ値を差し込み、JSONとフォームをそれぞれ安全にエンコードする', async t => {
+  const { f, call, received } = await setup(t);
+  const value = 'value="quoted"&scope=admin + / あ\n';
+  await f.keep('secret', 'json/value', value);
+  const answer = await call({ url: 'https://api.example.test/echo', method: 'POST', json: { 'a/b': [{ 'm~n': '' }], 'literal.dot': 'untouched' },
+    bindings: [{ target: '/json/a~1b/0/m~0n', parts: [{ name: 'json/value' }] }] });
+  assert.equal(answer.status, 200, answer.text);
+  assert.deepEqual(JSON.parse(received[0].body), { 'a/b': [{ 'm~n': value }], 'literal.dot': 'untouched' });
+  assert.equal(received[0].headers['content-type'], 'application/json');
+  assert.equal(JSON.parse(JSON.parse(answer.json.response.body).body)['a/b'][0]['m~n'], '[redacted]');
+  const form = await call({ url: 'https://api.example.test/echo', method: 'POST', form: { token: '', scope: 'read' },
+    bindings: [{ target: '/form/token', parts: [{ name: 'json/value' }] }] });
+  assert.equal(form.status, 200, form.text);
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(received[1].body)), { token: value, scope: 'read' });
+  assert.equal(received[1].headers['content-type'], 'application/x-www-form-urlencoded');
+  assert.equal(JSON.parse(form.json.response.body).body, 'token=[redacted]&scope=read');
+});
+
+test('接続から明示した出力を一度の取得で揃え、複数の差し込み先に送信する', async t => {
+  const { f, call, received } = await setup(t), connection = await f.credential();
+  let obtains = 0;
+  const derive = f.app.credentials.derive.bind(f.app.credentials);
+  f.app.credentials.derive = async row => { obtains++; return derive(row); };
+  const answer = await call({ url: 'https://api.example.test/echo', headers: { authorization: '', 'x-account': '' }, bindings: [
+    { target: '/headers/authorization', parts: ['Bearer ', { id: connection.id, output: 'GOOGLE_OAUTH_ACCESS_TOKEN' }] },
+    { target: '/headers/x-account', parts: [{ id: connection.id, output: 'GOOGLE_ACCOUNT_EMAIL' }] },
+  ] });
+  assert.equal(answer.status, 200, answer.text);
+  assert.equal(obtains, 1);
+  assert.equal(received[0].headers.authorization, 'Bearer google-access-personal');
+  assert.equal(received[0].headers['x-account'], 'personal@example.test');
+});
+
+test('差し込み先とすべての参照を送信前に検証し、不正な要求では接続を更新しない', async t => {
+  const { f, call, received } = await setup(t), connection = await f.credential();
+  f.expire(connection.id);
+  const calls = f.google.calls.length, good = { id: connection.id, output: 'GOOGLE_OAUTH_ACCESS_TOKEN' };
+  const base = { url: 'https://api.example.test/echo', method: 'POST', headers: { authorization: '' }, json: { list: [''], number: 1 } };
+  for (const target of ['/url', '/method', '/headers/missing', '/json/list/01', '/json/list/-', '/json/number', '/json/constructor', '/json/bad~2']) {
+    const answer = await call({ ...base, bindings: [{ target, parts: [good] }] });
+    assert.equal(answer.status, 400, target);
+  }
+  for (const reference of [{ id: connection.id }, { id: connection.id, output: 'UNKNOWN' }, { name: 'api/token', id: connection.id }]) {
+    const answer = await call({ ...base, bindings: [{ target: '/headers/authorization', parts: [good, reference] }] });
+    assert.equal(answer.status, 400, JSON.stringify(reference));
+  }
+  const missing = await call({ ...base, bindings: [{ target: '/headers/authorization', parts: [good, { name: 'missing' }] }] });
+  assert.equal(missing.status, 404);
+  const duplicate = { target: '/headers/authorization', parts: [good] };
+  assert.equal((await call({ ...base, bindings: [duplicate, duplicate] })).status, 400);
+  assert.equal((await call({ ...base, body: 'other' })).status, 400);
+  assert.equal((await call({ url: base.url, method: 'POST', body: '', body_encoding: 'base64', bindings: [{ target: '/body', parts: [good] }] })).status, 400);
+  assert.equal(received.length, 0);
+  assert.equal(f.google.calls.length, calls);
 });

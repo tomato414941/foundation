@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { fixture } from './helpers.mjs';
 
 const oauth = { authorize: 'https://service.example/authorize', token: 'https://service.example/token',
-  scopes: { base: [] }, identity: { from: 'token', id: 'account' }, injection: { NOTES_TOKEN: '{access_token}' } };
+  scopes: { base: [] }, identity: { from: 'token', id: '/account' }, injection: { NOTES_TOKEN: '/access_token' } };
 const register = (f, name, options = {}) => f.request('/v1/resources?kind=service&name=' + encodeURIComponent(name), {
-  method: 'PUT', data: { version: 1, name }, ...options,
+  method: 'PUT', data: { name }, ...options,
 });
 const serviceFetcher = async () => ({ ok: true, status: 200, text: JSON.stringify({ access_token: 'notes-access', refresh_token: 'notes-refresh', account: 'one' }) });
 
@@ -14,7 +14,7 @@ test('サービスを名前だけで登録し、後からOAuthを設定して接
   const registered = await register(f, '社内ツール', { token });
   assert.equal(registered.status, 200, registered.text);
   const service = registered.json.resource.id;
-  assert.deepEqual(registered.json.resource.definition, { version: 1, name: '社内ツール', auth_schemes: {} });
+  assert.deepEqual(registered.json.resource.definition, { name: '社内ツール', auth_schemes: {} });
   assert.equal((await f.request('/v1/overview')).json.services.find(item => item.id === service).service.name, '社内ツール');
   const pending = await f.request('/v1/credentials', { method: 'POST', data: { service } });
   assert.equal(pending.status, 409, pending.text);
@@ -47,7 +47,7 @@ test('サービスを名前だけで登録し、後からOAuthを設定して接
 
 test('OAuthアプリが必要な依頼では登録先を示し、登録後に接続を依頼する', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
-  const registered = await register(f, 'Notes', { data: { version: 1, name: 'Notes', auth_schemes: { oauth } } });
+  const registered = await register(f, 'Notes', { data: { name: 'Notes', auth_schemes: { oauth } } });
   const service = registered.json.resource.id;
   const request = input => f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'credential', ...input }], binding_message: 'ノートを取得します。' } });
   const refused = await request({ service });
@@ -59,7 +59,7 @@ test('OAuthアプリが必要な依頼では登録先を示し、登録後に接
 
 test('OAuth設定の追加と再送でサービス情報を保ち、異なる設定への上書きは競合として返す', async t => {
   const f = await fixture(t);
-  const registered = await register(f, 'Notes', { data: { version: 1, name: 'Notes', api: 'https://service.example/api', docs: 'https://service.example/docs' } });
+  const registered = await register(f, 'Notes', { data: { name: 'Notes', api: 'https://service.example/api', docs: 'https://service.example/docs' } });
   const service = registered.json.resource.id;
   for (const result of await Promise.all([1, 2].map(() => f.request('/v1/resources/' + service, { method: 'PATCH', data: { auth_schemes: { oauth } } })))) {
     assert.equal(result.status, 200, result.text);
@@ -76,7 +76,7 @@ test('OAuth設定の追加と再送でサービス情報を保ち、異なる設
 });
 
 test('同名サービスの新規登録が競合したとき、保存済みの設定を保つ', async t => {
-  const f = await fixture(t), data = { version: 1, name: 'Notes', auth_schemes: { oauth } };
+  const f = await fixture(t), data = { name: 'Notes', auth_schemes: { oauth } };
   const first = await register(f, 'Notes', { data, headers: { 'if-none-match': '*' } });
   assert.equal(first.status, 200, first.text);
   const conflict = await register(f, 'Notes', { headers: { 'if-none-match': '*' } });

@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "gitlab",
   "name": "GitLab",
   "api": "https://gitlab.com/api/v4",
@@ -12,10 +11,10 @@
       "client_auth": "body",
       "identity": {
         "url": "https://gitlab.com/api/v4/user",
-        "id": "id",
+        "id": "/id",
         "label": [
-          "username",
-          "email"
+          "/username",
+          "/email"
         ]
       },
       "revoke": {
@@ -29,8 +28,8 @@
         "docs": "https://docs.gitlab.com/integration/oauth_provider/#view-all-authorized-applications"
       },
       "injection": {
-        "GITLAB_ACCESS_TOKEN": "{access_token}",
-        "GITLAB_TOKEN_EXPIRES_AT": "{expires_at}"
+        "GITLAB_ACCESS_TOKEN": "/access_token",
+        "GITLAB_TOKEN_EXPIRES_AT": "/expires_at"
       }
     }
   }

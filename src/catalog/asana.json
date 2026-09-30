@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "asana",
   "name": "Asana",
   "api": "https://app.asana.com/api/1.0",
@@ -12,10 +11,10 @@
       "client_auth": "body",
       "identity": {
         "url": "https://app.asana.com/api/1.0/users/me",
-        "id": "data.gid",
+        "id": "/data/gid",
         "label": [
-          "data.email",
-          "data.name"
+          "/data/email",
+          "/data/name"
         ]
       },
       "revoke": {
@@ -27,8 +26,8 @@
         "docs": "https://developers.asana.com/docs/oauth-scopes"
       },
       "injection": {
-        "ASANA_ACCESS_TOKEN": "{access_token}",
-        "ASANA_TOKEN_EXPIRES_AT": "{expires_at}"
+        "ASANA_ACCESS_TOKEN": "/access_token",
+        "ASANA_TOKEN_EXPIRES_AT": "/expires_at"
       }
     }
   }

@@ -115,7 +115,7 @@ export class Services {
       const current = this.row(row.id);
       if (!current) fail(404, 'not_found', 'サービスが見つかりません。');
       const definition = JSON.parse(current.definition);
-      const checked = definitionInput({ version: 1, name: definition.name, auth_schemes: added });
+      const checked = definitionInput({ name: definition.name, auth_schemes: added });
       for (const [id, spec] of Object.entries(checked.auth_schemes)) {
         if (definition.auth_schemes[id] && !isDeepStrictEqual(definition.auth_schemes[id], spec)) {
           fail(409, 'auth_scheme_exists', 'この接続方法はすでに設定されています。開き直して確認してください。');

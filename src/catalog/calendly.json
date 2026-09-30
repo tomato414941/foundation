@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "calendly",
   "name": "Calendly",
   "api": "https://api.calendly.com",
@@ -12,10 +11,10 @@
       "client_auth": "body",
       "identity": {
         "url": "https://api.calendly.com/users/me",
-        "id": "resource.uri",
+        "id": "/resource/uri",
         "label": [
-          "resource.email",
-          "resource.name"
+          "/resource/email",
+          "/resource/name"
         ]
       },
       "revoke": {
@@ -23,8 +22,8 @@
         "style": "rfc7009"
       },
       "injection": {
-        "CALENDLY_ACCESS_TOKEN": "{access_token}",
-        "CALENDLY_TOKEN_EXPIRES_AT": "{expires_at}"
+        "CALENDLY_ACCESS_TOKEN": "/access_token",
+        "CALENDLY_TOKEN_EXPIRES_AT": "/expires_at"
       }
     }
   }

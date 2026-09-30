@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "kintone",
   "name": "kintone",
   "docs": "https://cybozu.dev/ja/kintone/docs/rest-api/",
@@ -23,9 +22,9 @@
         }
       ],
       "injection": {
-        "KINTONE_ACCESS_TOKEN": "{access_token}",
-        "KINTONE_DOMAIN": "{domain}",
-        "KINTONE_TOKEN_EXPIRES_AT": "{expires_at}"
+        "KINTONE_ACCESS_TOKEN": "/access_token",
+        "KINTONE_DOMAIN": "/domain",
+        "KINTONE_TOKEN_EXPIRES_AT": "/expires_at"
       },
       "hint": "KINTONE_DOMAIN is the kintone domain (https://<KINTONE_DOMAIN>/k/v1/...)."
     }

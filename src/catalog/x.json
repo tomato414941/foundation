@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "x",
   "name": "X",
   "api": "https://api.x.com/2",
@@ -11,8 +10,8 @@
       "token": "https://api.x.com/2/oauth2/token",
       "identity": {
         "url": "https://api.x.com/2/users/me",
-        "id": "data.id",
-        "label": "data.username"
+        "id": "/data/id",
+        "label": "/data/username"
       },
       "revoke": {
         "url": "https://api.x.com/2/oauth2/revoke",
@@ -27,8 +26,8 @@
         "docs": "https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code"
       },
       "injection": {
-        "X_ACCESS_TOKEN": "{access_token}",
-        "X_TOKEN_EXPIRES_AT": "{expires_at}"
+        "X_ACCESS_TOKEN": "/access_token",
+        "X_TOKEN_EXPIRES_AT": "/expires_at"
       }
     }
   }

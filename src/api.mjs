@@ -18,6 +18,12 @@ const iso = { type: 'string', description: 'ISO 8601 timestamp.' };
 const resourceName = errorCode({ type: 'string', minLength: 1, description: 'Literal name, 1–200 UTF-16 code units, without control characters. A slash has no special meaning for secrets.' }, 'invalid_name');
 const principalId = { type: 'string', pattern: '^[A-Za-z0-9-]{1,64}$' };
 const id = { type: 'string', pattern: '^[a-f0-9-]{36}$' };
+const pointer = { type: 'string', pattern: '^(?:/(?:[^~/]|~[01])*)*$', description: 'JSON Pointer (RFC 6901), in JSON string form. / selects members; ~0 encodes ~ and ~1 encodes /. No URI fragment prefix.' };
+const uriTemplate = { type: 'string', description: 'URI Template (RFC 6570). Every referenced variable must be supplied. Expanded endpoints must use public HTTPS; use {+value} for a complete URL.' };
+const sourceReference = (extra = {}) => ({ oneOf: [
+  { ...object({ name: resourceName, ...extra }, ['name']), additionalProperties: false },
+  { ...object({ id, output: { type: 'string', minLength: 1, maxLength: 200, description: 'Exact connection output name. Not valid for a secret.' }, ...extra }, ['id']), additionalProperties: false },
+] });
 const requestId = { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$' };
 const scopes = errorCode({ type: ['array', 'null'], items: errorCode(string, 'invalid_scopes') }, 'invalid_scopes');
 const scheme = choice(['oauth', 'role']);
@@ -81,18 +87,19 @@ export const schemas = {
     auth_schemes: object({ oauth: object({ available: boolean, variables: array(string), hint: string, takes_apps: boolean, foundation_app: boolean,
       app_fields: oauthFields, scopes: nullable(object({ base: scopes, documentation_url: string })), can_revoke: boolean, can_reconnect: boolean }),
     role: object({ available: boolean, variables: array(string), hint: string }) }) }, ['id', 'name', 'auth_schemes']),
-  OAuthDefinition: object({ authorize: string, token: string, injection: map(string), authorize_params: map(string),
+  OAuthDefinition: object({ authorize: uriTemplate, token: uriTemplate,
+    injection: { ...map(pointer), description: 'Environment variable names mapped to JSON Pointers selecting /access_token, /account, /expires_at or a declared app/kept field. Missing, null or empty optional values are omitted.' }, authorize_params: map(string),
     scope_separator: choice([' ', ',', '+']), pkce: boolean, client_auth: choice(['basic', 'body']), token_format: choice(['form', 'json']),
-    ok_field: string, keep: array(string), subject_prefix: string, defaults: map(string), app_fields: oauthFields,
-    identity: object({ url: string, method: choice(['GET', 'POST']), headers: map(string), json: {}, token_header: string,
-      id: { anyOf: [string, array(string)] }, label: { anyOf: [string, array(string)] }, optional: boolean,
-      from: choice(['token', 'app']), ok_field: string }),
-    revoke: object({ url: string, style: choice(['rfc7009', 'bearer', 'delete']), auth: { const: 'none' } }, ['url', 'style']),
+    ok_field: pointer, keep: array(string), subject_prefix: string, defaults: map(string), app_fields: oauthFields,
+    identity: object({ url: uriTemplate, method: choice(['GET', 'POST']), headers: map(string), json: {}, token_header: string,
+      id: { anyOf: [pointer, array(pointer)] }, label: { anyOf: [pointer, array(pointer)] }, optional: boolean,
+      from: choice(['token', 'app']), ok_field: pointer }),
+    revoke: object({ url: uriTemplate, style: choice(['rfc7009', 'bearer', 'delete']), auth: { const: 'none' } }, ['url', 'style']),
     scopes: object({ base: scopes, docs: string }, ['base']), hint: string,
   }, ['authorize', 'token', 'injection']),
-  ServiceDefinition: { ...object({ version: { const: 1 }, name: string, api: string, docs: string, console: string,
-    auth_schemes: { ...object({ oauth: ref('OAuthDefinition') }), additionalProperties: false } }, ['version', 'name']),
-    additionalProperties: false, description: 'A holder-defined service. auth_schemes may be empty; catalog adapters and role schemes cannot be registered here. Endpoint URLs must use public HTTPS. Injection templates name environment variables and use {access_token}, {account}, {expires_at} or declared app/token fields.' },
+  ServiceDefinition: { ...object({ name: string, api: string, docs: string, console: string,
+    auth_schemes: { ...object({ oauth: ref('OAuthDefinition') }), additionalProperties: false } }, ['name']),
+    additionalProperties: false, description: 'A holder-defined service. auth_schemes may be empty; catalog adapters and role schemes cannot be registered here. URLs use RFC 6570; response selectors and injection values use RFC 6901 JSON Pointers. Endpoint variables come from declared app fields/client_id; identity URLs may also use access_token and kept fields, and revocation URLs access_token/refresh_token.' },
   AppInput: appValues,
   Secret: resource('secret', { size: integer }),
   Object: resource('object', { size: integer, type: nullable(string) }),
@@ -114,11 +121,16 @@ export const schemas = {
   CommandInput: object(command, ['command']),
   Command: object({ id, environment_id: id, command: array(string), status: choice(['running', 'done', 'timed_out', 'failed']),
     exit_code: nullable(integer), stdout: nullable(string), stderr: nullable(string), started_at: iso, ended_at: nullable(iso) }, ['id', 'environment_id', 'command', 'status', 'stdout', 'stderr']),
-  Inject: object({ names: { ...array({ anyOf: [string, object({ name: string, as: errorCode(nullable(string), 'invalid_env'), filename: errorCode(nullable(string), 'invalid_filename') }, ['name'])] }), minItems: 1, maxItems: 16 } }, ['names']),
+  SourceReference: { ...sourceReference(), description: 'Exactly one of a literal secret name or a resource id. A single connection value also requires output. Names and IDs are never inferred from each other.' },
+  InjectionInput: sourceReference({ as: errorCode(nullable(string), 'invalid_env'), filename: errorCode(nullable(string), 'invalid_filename') }),
+  Inject: object({ names: { ...array(ref('InjectionInput')), minItems: 1, maxItems: 16 } }, ['names']),
   Injection: object({ injection: object({ environment: map(string), files: array(object({ env: string, filename: string, content: string, encoding: { const: 'base64' } }, ['env', 'filename', 'content', 'encoding'])) }, ['environment', 'files']),
     expires_at: nullable(time), expires_in: nullable(integer) }, ['injection', 'expires_at', 'expires_in']),
-  FetchInput: object({ url: string, method: string, headers: nullable(map(string)), body: string, body_encoding: choice(['utf8', 'base64']),
-    bindings: nullable(map(string)), save: resourceName }, ['url']),
+  FetchBinding: { ...object({ target: pointer, parts: { ...array({ anyOf: [string, ref('SourceReference')] }), minItems: 1, maxItems: 32 } }, ['target', 'parts']), additionalProperties: false,
+    description: 'Replace an existing string at target by concatenating literal strings and referenced values once. Targets are header values, utf8 body, JSON string values or form fields. Targets must be unique. URLs cannot be bound.' },
+  FetchInput: { ...object({ url: string, method: string, headers: nullable(map(string)), body: string, body_encoding: choice(['utf8', 'base64']),
+    json: {}, form: map(string), bindings: { ...array(ref('FetchBinding')), maxItems: 32 }, save: resourceName }, ['url']), additionalProperties: false,
+    description: 'body, json and form are mutually exclusive. All strings are literal. Bindings are applied before JSON/form encoding. Up to eight distinct source references; connections require output. Authorization and public-HTTPS destination checks apply before sending.' },
   FetchResult: object({ response: object({ status: integer, headers: map(string), body: string, body_encoding: choice(['utf8', 'base64']) }, ['status', 'headers']), saved: array(object({ id, name: string })) }, ['response']),
   Function: object({ id: string, description: string, endpoint: string, input: map(string), output: string, save: string }, ['id', 'endpoint', 'description']),
   Usage: object({ secrets: ref('StorageUsage'), objects: nullable(ref('StorageUsage')) }, ['secrets', 'objects']),
@@ -250,9 +262,9 @@ export const routes = [
   { name: 'credentials', path: '/v1/credentials', methods: { post: op('connectService', 'Begin service authorization', 'ConnectResult', { input: 'Connect', security: session, parameters: [as] }) } },
   { name: 'completeCredential', path: '/v1/credentials/complete', methods: { post: op('completeRole', 'Finish role-based service authorization', one('Credential'), { input: object({ state: string, fields: map(string) }, ['state']), security: session, parameters: [as], 'x-input-error': 'invalid_state' }) } },
   { name: 'oauthCallback', path: '/oauth/callback', methods: { get: op('oauthCallback', 'Return from service OAuth consent', 'Empty', { security: session, parameters: [query('state', string, undefined, true), query('code'), query('error')], responses: { 303: { description: 'Returns to the service page or original request, with a result code.', headers: { Location: { schema: string } } } } }) } },
-  { name: 'injections', path: '/v1/injections', methods: { post: op('inject', 'Obtain secret bytes or current service credentials for a process', 'Injection', { input: 'Inject', parameters: [as], 'x-input-error': 'invalid_names', description: 'name selects a secret name/id or managed credential id. A secret requires as (a non-reserved environment variable). filename delivers base64 file bytes instead of environment text. A managed credential derives its current values, refreshing if needed, and names its own variables. Deliver values privately to the intended process; do not print them into chat or logs. CLI exec does this without exposing values to the agent.' }) } },
+  { name: 'injections', path: '/v1/injections', methods: { post: op('inject', 'Obtain secret bytes or current service credentials for a process', 'Injection', { input: 'Inject', parameters: [as], 'x-input-error': 'invalid_names', description: 'Each input has exactly one of name (literal secret name) or id (secret/connection id). A secret requires as (a non-reserved environment variable). A connection without output delivers all its named values; output selects one. as can rename a single value. filename delivers base64 file bytes instead of environment text. Connections refresh if needed. Deliver values privately to the intended process; do not print them into chat or logs. CLI exec does this without exposing values to the agent.' }) } },
   { name: 'functions', path: '/v1/functions', methods: { get: op('listFunctions', 'List built-in operations', many('functions', 'Function'), { parameters: [as] }) } },
-  { name: 'httpRequest', path: '/v1/functions/http.request', methods: { post: op('httpRequest', 'Send an HTTPS request using saved values', 'FetchResult', { input: 'FetchInput', parameters: [as], description: 'Use {{foundation:name}} placeholders in headers or text body; bindings optionally maps placeholders to secret names/ids or credential ids. URLs cannot contain secrets. Public HTTPS only, redirects are returned without following, request/response body limit 1 MiB. Values are redacted from the response. save stores the response body as a secret under that name and omits it from the response.' }) } },
+  { name: 'httpRequest', path: '/v1/functions/http.request', methods: { post: op('httpRequest', 'Send an HTTPS request using saved values', 'FetchResult', { input: 'FetchInput', parameters: [as], description: 'Use bindings to place referenced values at JSON Pointer targets in headers or body. Ordinary strings are literal. json and form are encoded after binding; body is raw text or base64. URLs cannot be binding targets. Public HTTPS only, redirects are returned without following, request/response body limit 1 MiB. Bound values are redacted from the response. save stores the response body as a secret under that name and omits it from the response.' }) } },
   { name: 'usage', path: '/v1/usage', methods: { get: op('getUsage', 'Read storage usage and limits', 'Usage', { parameters: [as] }) } },
   { name: 'audit', path: '/v1/audit-log', methods: { get: op('getAuditLog', 'Read the caller’s audit records', many('entries', 'AuditEntry')) } },
   { name: 'overview', path: '/v1/overview', methods: { get: op('getOverview', 'Read the holder’s workspace', 'Overview', { parameters: [as] }) } },

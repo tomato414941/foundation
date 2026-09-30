@@ -197,7 +197,7 @@ test('CLI asks for approval, then injects the OpenRouter key only into the child
   assert.match(row.verification_uri, /\/requests\//);
   const approved = await f.request('/v1/requests/' + row.id + '/grant', { method: 'POST', data: { user_code: row.user_code } });
   assert.equal(approved.status, 200);
-  const command = ['exec', 'OPENROUTER_API_KEY=' + account.id, '--', process.execPath, '-e',
+  const command = ['exec', '--inputs', JSON.stringify([{ id: account.id, output: 'OPENROUTER_API_KEY' }]), '--', process.execPath, '-e',
     'if(process.env.OPENROUTER_API_KEY!==' + JSON.stringify(f.openrouter.key()) + '||process.env.GOOGLE_OAUTH_ACCESS_TOKEN||process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("authenticated")'];
   const run = await execute(command, env);
   assert.equal(run.code, 0, run.err); assert.equal(run.out.trim(), 'authenticated');

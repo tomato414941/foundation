@@ -1084,7 +1084,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         still();
         // Handed into a lent machine: what it prints is cleaned of these.
         if (subject.via.environment) environments.reveal(subject.via.environment, [...Object.values(injection.environment), ...injection.files.map(file => Buffer.from(file.content, 'base64').toString('utf8'))]);
-        auditLog.write(subject.id, 'injection', 'principal', holderId, { names: names.map(item => typeof item === 'string' ? item : item?.name).filter(Boolean) });
+        auditLog.write(subject.id, 'injection', 'principal', holderId, { inputs: names.map(({ as, filename, ...reference }) => reference) });
         return send(200, { injection, expires_at, expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
       }
       if (at === 'functions' && method === 'GET') { permit('functions', 'principal', holderId); return send(200, { functions: FUNCTIONS }); }

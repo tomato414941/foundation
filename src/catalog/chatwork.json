@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "chatwork",
   "name": "Chatwork",
   "api": "https://api.chatwork.com/v2",
@@ -11,10 +10,10 @@
       "token": "https://oauth.chatwork.com/token",
       "identity": {
         "url": "https://api.chatwork.com/v2/me",
-        "id": "account_id",
+        "id": "/account_id",
         "label": [
-          "name",
-          "chatwork_id"
+          "/name",
+          "/chatwork_id"
         ]
       },
       "scopes": {
@@ -25,8 +24,8 @@
         "docs": "https://developer.chatwork.com/docs/oauth"
       },
       "injection": {
-        "CHATWORK_ACCESS_TOKEN": "{access_token}",
-        "CHATWORK_TOKEN_EXPIRES_AT": "{expires_at}"
+        "CHATWORK_ACCESS_TOKEN": "/access_token",
+        "CHATWORK_TOKEN_EXPIRES_AT": "/expires_at"
       }
     }
   }

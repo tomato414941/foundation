@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "digitalocean",
   "name": "DigitalOcean",
   "api": "https://api.digitalocean.com/v2",
@@ -12,10 +11,10 @@
       "client_auth": "body",
       "identity": {
         "from": "token",
-        "id": "info.uuid",
+        "id": "/info/uuid",
         "label": [
-          "info.email",
-          "info.name"
+          "/info/email",
+          "/info/name"
         ]
       },
       "scopes": {
@@ -25,8 +24,8 @@
         "docs": "https://docs.digitalocean.com/reference/api/oauth/"
       },
       "injection": {
-        "DIGITALOCEAN_ACCESS_TOKEN": "{access_token}",
-        "DIGITALOCEAN_TOKEN_EXPIRES_AT": "{expires_at}"
+        "DIGITALOCEAN_ACCESS_TOKEN": "/access_token",
+        "DIGITALOCEAN_TOKEN_EXPIRES_AT": "/expires_at"
       }
     }
   }

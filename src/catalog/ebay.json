@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "id": "ebay",
   "name": "eBay",
   "api": "https://api.ebay.com",

@@ -45,7 +45,7 @@ test('requires the caller to specify the delivery variable', async (t) => {
   const f = await fixture(t);
   KEY = (await f.approveKey()).token;
   await f.request('/v1/resources?kind=secret&name=notes/2026-09-23', { method: 'PUT', token: KEY, raw: 'x', type: 'text/plain' });
-  const refused = await f.request('/v1/injections', { method: 'POST', token: KEY, anonymous: true, data: { names: ['notes/2026-09-23'] } });
+  const refused = await f.request('/v1/injections', { method: 'POST', token: KEY, anonymous: true, data: { names: [{ name: 'notes/2026-09-23' }] } });
   assert.equal(refused.status, 400);
   assert.equal(refused.json.error.code, 'no_variable');
 });
