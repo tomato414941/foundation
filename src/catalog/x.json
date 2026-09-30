@@ -29,6 +29,19 @@
         "X_ACCESS_TOKEN": "/access_token",
         "X_TOKEN_EXPIRES_AT": "/expires_at"
       }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Bearer Token",
+          "secret": true
+        }
+      ],
+      "injection": {
+        "X_BEARER_TOKEN": "/token"
+      },
+      "hint": "An app-only Bearer Token from the developer portal: send \"Authorization: Bearer <X_BEARER_TOKEN>\". It reads public data only; it cannot post or act as a user."
     }
   }
 }

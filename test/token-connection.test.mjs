@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { fixture } from './helpers.mjs';
 import { entry } from '../src/catalog.mjs';
 
-const tokenFixture = t => fixture(t, { services: [entry('github'), entry('kintone')] });
+const tokenFixture = t => fixture(t, { services: [entry('github'), entry('kintone'), entry('openrouter'), entry('zendesk')] });
 const paste = (f, data, options = {}) => f.request('/v1/connections', { method: 'POST', data: { auth_scheme: 'token', ...data }, ...options });
 
 test('貼られたトークンをその場で接続にし、定義どおりの環境変数でAIに渡す', async t => {
@@ -115,4 +115,22 @@ test('トークンでの接続を頼まれた人が貼ると、依頼は叶い�
   const seen = await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token, anonymous: true });
   assert.equal(seen.json.request.status, 'granted');
   assert.deepEqual(seen.json.request.result, { connection_id: made.json.connection.id });
+});
+
+test('ログインで接続するサービスでも、サービスが出すキーを貼って接続し、同じ環境変数で渡す', async t => {
+  const f = await tokenFixture(t);
+  await f.login();
+  const made = await paste(f, { service: 'openrouter', fields: { token: 'sk-or-v1-pasted' } });
+  assert.equal(made.status, 201, made.text);
+  assert.equal(made.json.connection.name, 'OpenRouterのトークン');
+  assert.deepEqual((await f.inject(made.json.connection)).json.injection.environment, { OPENROUTER_API_KEY: 'sk-or-v1-pasted' });
+});
+
+test('サイトやメールと組にして使うトークンは、それぞれを別の環境変数で渡す', async t => {
+  const f = await tokenFixture(t);
+  await f.login();
+  const made = await paste(f, { service: 'zendesk', fields: { subdomain: 'example', email: 'owner@example.test', token: 'zendesk-token' } });
+  assert.equal(made.status, 201, made.text);
+  assert.deepEqual((await f.inject(made.json.connection)).json.injection.environment,
+    { ZENDESK_SUBDOMAIN: 'example', ZENDESK_EMAIL: 'owner@example.test', ZENDESK_API_TOKEN: 'zendesk-token' });
 });

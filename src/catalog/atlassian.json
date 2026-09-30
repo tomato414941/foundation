@@ -34,6 +34,32 @@
         "ATLASSIAN_TOKEN_EXPIRES_AT": "/expires_at"
       },
       "hint": "Find the site (cloud ID) with GET https://api.atlassian.com/oauth/token/accessible-resources, then call https://api.atlassian.com/ex/jira/<cloudid>/... or /ex/confluence/<cloudid>/..."
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "site",
+          "label": "サイト",
+          "placeholder": "example.atlassian.net",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.atlassian\\.net$"
+        },
+        {
+          "name": "email",
+          "label": "Atlassianアカウントのメールアドレス"
+        },
+        {
+          "name": "token",
+          "label": "APIトークン",
+          "secret": true
+        }
+      ],
+      "console": "https://id.atlassian.com/manage-profile/security/api-tokens",
+      "injection": {
+        "ATLASSIAN_SITE": "/site",
+        "ATLASSIAN_EMAIL": "/email",
+        "ATLASSIAN_API_TOKEN": "/token"
+      },
+      "hint": "Use HTTP Basic auth with ATLASSIAN_EMAIL as the user and ATLASSIAN_API_TOKEN as the password against https://<ATLASSIAN_SITE>/rest/api/3/... (Jira) or /wiki/rest/api/... (Confluence)."
     }
   }
 }

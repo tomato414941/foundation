@@ -9,6 +9,19 @@
     "oauth": {
       "adapter": "openrouter",
       "hint": "OpenRouter makes an API key for Foundation. Inspect facts.key_info, including is_management_key and is_provisioning_key (null means unknown), before use. Model calls can incur charges."
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "APIキー",
+          "secret": true
+        }
+      ],
+      "console": "https://openrouter.ai/settings/keys",
+      "injection": {
+        "OPENROUTER_API_KEY": "/token"
+      }
     }
   }
 }

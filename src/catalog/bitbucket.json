@@ -19,6 +19,25 @@
         "BITBUCKET_ACCESS_TOKEN": "/access_token",
         "BITBUCKET_TOKEN_EXPIRES_AT": "/expires_at"
       }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "email",
+          "label": "Atlassianアカウントのメールアドレス"
+        },
+        {
+          "name": "token",
+          "label": "APIトークン",
+          "secret": true
+        }
+      ],
+      "console": "https://id.atlassian.com/manage-profile/security/api-tokens",
+      "injection": {
+        "BITBUCKET_EMAIL": "/email",
+        "BITBUCKET_API_TOKEN": "/token"
+      },
+      "hint": "Use HTTP Basic auth with BITBUCKET_EMAIL as the user and BITBUCKET_API_TOKEN as the password against https://api.bitbucket.org/2.0/... The token must be made with Bitbucket scopes."
     }
   }
 }
