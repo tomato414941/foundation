@@ -34,6 +34,18 @@
         "HUBSPOT_ACCESS_TOKEN": "/access_token",
         "HUBSPOT_TOKEN_EXPIRES_AT": "/expires_at"
       }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Private app access token",
+          "secret": true
+        }
+      ],
+      "injection": {
+        "HUBSPOT_ACCESS_TOKEN": "/token"
+      }
     }
   }
 }

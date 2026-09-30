@@ -33,6 +33,19 @@
         "SLACK_TOKEN_EXPIRES_AT": "/expires_at"
       },
       "hint": "The access token is a bot token for the Slack Web API (https://slack.com/api/<method>). SLACK_TEAM_ID is the workspace ID."
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Bot User OAuth Token",
+          "secret": true
+        }
+      ],
+      "console": "https://api.slack.com/apps",
+      "injection": {
+        "SLACK_BOT_TOKEN": "/token"
+      }
     }
   }
 }

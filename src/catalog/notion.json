@@ -24,6 +24,20 @@
         "NOTION_TOKEN_EXPIRES_AT": "/expires_at"
       },
       "hint": "NOTION_WORKSPACE_ID is the workspace ID. Every request also needs a \"Notion-Version\" header (for example 2022-06-28)."
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "内部インテグレーションのシークレット",
+          "secret": true
+        }
+      ],
+      "console": "https://www.notion.so/profile/integrations",
+      "injection": {
+        "NOTION_TOKEN": "/token"
+      },
+      "hint": "Only pages shared with the integration in Notion can be read. Every request also needs a \"Notion-Version\" header."
     }
   }
 }

@@ -31,6 +31,19 @@
         "GITLAB_ACCESS_TOKEN": "/access_token",
         "GITLAB_TOKEN_EXPIRES_AT": "/expires_at"
       }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Personal access token",
+          "secret": true
+        }
+      ],
+      "console": "https://gitlab.com/-/user_settings/personal_access_tokens",
+      "injection": {
+        "GITLAB_TOKEN": "/token"
+      }
     }
   }
 }

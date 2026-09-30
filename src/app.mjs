@@ -975,10 +975,12 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       // them away again; without this the promise is words.
       if (at === 'export' && method === 'GET') {
         permit('export', 'principal', holderId);
-        // A secret goes out with its bytes; a connection for a service with what is known of it, since what renews
-        // it is Foundation's to keep and would be of no use elsewhere. A described service goes out as its definition.
+        // A secret goes out with its bytes; a connection with what is known of it, and a token with what was pasted.
+        // What renews the others is Foundation's to keep and would be of no use elsewhere. A described service goes
+        // out as its definition.
         const kept = secrets.list(holderId).map(row => ({ ...secrets.view(row), content: secrets.content(row).toString('base64'), encoding: 'base64' }));
-        const value = { exported_at: new Date().toISOString(), owner: user?.email ?? null, origin, secrets: kept, connections: connections.list(holderId).map(row => connections.view(row, { owner: true })),
+        const value = { exported_at: new Date().toISOString(), owner: user?.email ?? null, origin, secrets: kept,
+          connections: connections.list(holderId).map(row => ({ ...connections.view(row, { owner: true }), fields: connections.handed(row) })),
           services: services.list(holderId).map(row => ({ id: row.id, name: row.name, definition: JSON.parse(row.definition) })), principals: principals.owned(holderId) };
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
           'content-disposition': `attachment; filename="foundation-${new Date().toISOString().slice(0, 10)}.json"` });
@@ -1025,6 +1027,16 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         const target = asked ? asked.connection_id : input.connection_id;
         if (request && input.connection_id !== undefined && input.connection_id !== target) fail(409, 'connection_changed', '依頼された接続を選んでください。');
         const previous = target === undefined ? undefined : connections.reconnection(holderId, ref, schemeId, target);
+        // A token is pasted here by whoever may connect; there is no other site to go to and come back from. Pasting
+        // one for an existing connection replaces its value.
+        if (schemeId === 'token') {
+          if (input.scopes !== undefined || input.app !== undefined) fail(400, 'invalid_fields', 'トークンの接続にはスコープもアプリもありません。');
+          if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 80 || /[\x00-\x1f\x7f]/.test(input.name))) fail(400, 'invalid_name', '名前は80文字までで指定してください。');
+          const result = await scheme.authorization.complete({ fields: input.fields });
+          still();
+          const saved = requestActions.connect(request?.id, holderId, ref, 'token', result, { requestedBy, previous, name: input.name?.trim() });
+          return send(previous ? 200 : 201, { connection: connections.view(saved, { owner: true }) });
+        }
         if (!session) fail(401, 'login_required', 'ログインしてください。');
         const previousState = previous ? connections.state(previous) : null;
         const scopes = requestedScopes(scheme, asked ? asked.scopes ?? [] : scopeList(input.scopes), previousState);

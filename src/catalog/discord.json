@@ -30,6 +30,20 @@
         "DISCORD_ACCESS_TOKEN": "/access_token",
         "DISCORD_TOKEN_EXPIRES_AT": "/expires_at"
       }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Bot token",
+          "secret": true
+        }
+      ],
+      "console": "https://discord.com/developers/applications",
+      "injection": {
+        "DISCORD_BOT_TOKEN": "/token"
+      },
+      "hint": "Send it as \"Authorization: Bot <DISCORD_BOT_TOKEN>\"."
     }
   }
 }

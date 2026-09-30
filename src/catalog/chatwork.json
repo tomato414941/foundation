@@ -27,6 +27,20 @@
         "CHATWORK_ACCESS_TOKEN": "/access_token",
         "CHATWORK_TOKEN_EXPIRES_AT": "/expires_at"
       }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "APIトークン",
+          "secret": true
+        }
+      ],
+      "console": "https://www.chatwork.com/service/packages/chatwork/subpackages/api/token.php",
+      "injection": {
+        "CHATWORK_API_TOKEN": "/token"
+      },
+      "hint": "Send the token in the \"X-ChatWorkToken\" header."
     }
   }
 }

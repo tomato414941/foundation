@@ -82,6 +82,7 @@ export class Services {
         scopes: scheme.scopes ? { base: scheme.scopes.base, documentation_url: scheme.scopes.documentationUrl || '' } : null,
         can_revoke: typeof scheme.revoke === 'function', can_reconnect: scheme.canReconnect !== false };
       if (id === 'role') described.role = { ...common, available: scheme.available };
+      if (id === 'token') described.token = { ...common, available: scheme.available, fields: scheme.fields, console: scheme.console };
     }
     return { id: ref, name: definition.name, ...(definition.logo ? { logo: definition.logo } : {}), catalog,
       ...Object.fromEntries(['api', 'docs', 'console'].filter(key => definition[key]).map(key => [key, definition[key]])), auth_schemes: described };

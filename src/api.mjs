@@ -26,10 +26,11 @@ const sourceReference = (extra = {}) => ({ oneOf: [
 ] });
 const requestId = { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$' };
 const scopes = errorCode({ type: ['array', 'null'], items: errorCode(string, 'invalid_scopes') }, 'invalid_scopes');
-const scheme = choice(['oauth', 'role']);
+const scheme = choice(['oauth', 'role', 'token']);
 const app = nullable({ anyOf: [id, { const: 'foundation' }] });
 const field = object({ name: resourceName, label: string, site: string, readable: boolean, multiline: boolean, replace: boolean }, ['name', 'label']);
-const connect = object({ service: string, auth_scheme: scheme, connection_id: id, scopes, app }, ['service']);
+const connect = object({ service: string, auth_scheme: scheme, connection_id: id, scopes, app,
+  fields: { ...map(string), description: 'token: the values the service\'s token scheme lists, by field name.' }, name: { ...string, description: 'token: what to call the connection; defaults to the service name followed by のトークン.' } }, ['service']);
 const requestProperties = {
   to: errorCode(principalId, 'invalid_principal'), binding_message: errorCode({ type: 'string', maxLength: 240 }, 'invalid_purpose'), steps: errorCode({ type: ['array', 'null'], items: errorCode(string, 'invalid_steps'), maxItems: 20 }, 'invalid_steps'),
   valid_minutes: errorCode({ type: ['integer', 'null'], description: 'Expiry in minutes; default 30, from 1 to 1440. null uses the default.' }, 'invalid_validity'),
@@ -43,6 +44,7 @@ const lifetime = errorCode(nullable(object({ end: errorCode(nullable(choice(['ex
 const command = { command: errorCode({ ...array(string), minItems: 1 }, 'invalid_command'), stdin: errorCode(nullable(string), 'invalid_stdin'), timeout_seconds: errorCode(nullable(integer), 'invalid_timeout') };
 const environment = { name: resourceName, size: errorCode(nullable(choice(['small', 'medium', 'large'])), 'invalid_size'), lifetime, identity: errorCode(nullable(principalId), 'invalid_principal') };
 const oauthFields = array(object({ name: string, label: string, required: boolean, placeholder: string, note: string, pattern: string, leading: boolean }, ['name', 'label']));
+const tokenFields = array(object({ name: string, label: string, required: boolean, placeholder: string, note: string, pattern: string, secret: boolean }, ['name', 'label']));
 const resourceBase = { id: string, kind: choice(KINDS), name: string, holder_id: principalId, created_at: iso, updated_at: iso, lines: array(object({ subject_id: principalId, relation: string, created_at: iso }, ['subject_id', 'relation', 'created_at'])) };
 const resource = (kind, fields) => object({ ...resourceBase, kind: { const: kind }, ...fields }, ['id', 'kind', 'name']);
 
@@ -86,7 +88,8 @@ export const schemas = {
   ServiceDescription: object({ id: string, name: string, api: string, docs: string, console: string, logo: string, catalog: boolean,
     auth_schemes: object({ oauth: object({ available: boolean, variables: array(string), hint: string, takes_apps: boolean, foundation_app: boolean,
       app_fields: oauthFields, scopes: nullable(object({ base: scopes, documentation_url: string })), can_revoke: boolean, can_reconnect: boolean }),
-    role: object({ available: boolean, variables: array(string), hint: string }) }) }, ['id', 'name', 'auth_schemes']),
+    role: object({ available: boolean, variables: array(string), hint: string }),
+    token: object({ available: boolean, variables: array(string), hint: string, fields: tokenFields, console: nullable(string) }) }) }, ['id', 'name', 'auth_schemes']),
   OAuthDefinition: object({ authorize: uriTemplate, token: uriTemplate,
     injection: { ...map(pointer), description: 'Environment variable names mapped to JSON Pointers selecting /access_token, /account, /expires_at or a declared app/kept field. Missing, null or empty optional values are omitted.' }, authorize_params: map(string),
     scope_separator: choice([' ', ',', '+']), pkce: boolean, client_auth: choice(['basic', 'body']), token_format: choice(['form', 'json']),
@@ -97,14 +100,16 @@ export const schemas = {
     revoke: object({ url: uriTemplate, style: choice(['rfc7009', 'bearer', 'delete']), auth: { const: 'none' } }, ['url', 'style']),
     scopes: object({ base: scopes, docs: string }, ['base']), hint: string,
   }, ['authorize', 'token', 'injection']),
+  TokenDefinition: object({ fields: tokenFields, console: string,
+    injection: { ...map(pointer), description: 'Environment variable names mapped to JSON Pointers selecting a declared field.' }, hint: string }, ['fields', 'injection']),
   ServiceDefinition: { ...object({ name: string, api: string, docs: string, console: string,
-    auth_schemes: { ...object({ oauth: ref('OAuthDefinition') }), additionalProperties: false } }, ['name']),
+    auth_schemes: { ...object({ oauth: ref('OAuthDefinition'), token: ref('TokenDefinition') }), additionalProperties: false } }, ['name']),
     additionalProperties: false, description: 'A holder-defined service. auth_schemes may be empty; catalog adapters and role schemes cannot be registered here. URLs use RFC 6570; response selectors and injection values use RFC 6901 JSON Pointers. Endpoint variables come from declared app fields/client_id; identity URLs may also use access_token and kept fields, and revocation URLs access_token/refresh_token.' },
   AppInput: appValues,
   Secret: resource('secret', { size: integer }),
   Object: resource('object', { size: integer, type: nullable(string) }),
   Connection: resource('connection', { service: ref('ServiceSummary'), auth_scheme: scheme, status: string, label: string,
-    facts: object(), variables: array(string), app: nullable(object({ id: string, name: string, foundation: boolean })), subject: string,
+    facts: object(), variables: array(string), app: nullable(object({ id: string, name: string, foundation: boolean })), subject: nullable(string),
     generation: integer, expires_at: nullable(time), can_reconnect: boolean, can_revoke: boolean, available: boolean }),
   App: resource('app', { service: ref('ServiceSummary'), foundation: boolean, client_id: string, settings: map(string), connections: integer }),
   Service: resource('service', { definition: object(), service: ref('ServiceDescription'), dependents: integer }),
@@ -113,8 +118,8 @@ export const schemas = {
   Resource: { oneOf: ['Secret', 'Object', 'Connection', 'App', 'Service', 'Environment'].map(ref) },
   PatchResource: { ...object({ name: resourceName, auth_schemes: object({ oauth: ref('OAuthDefinition') }), client_id: string, client_secret: string }), description: 'Apps also accept their service-specific top-level client fields, as declared by app_fields.' },
   DeleteResource: object({ revoke: boolean, confirm: boolean }),
-  Connect: { ...object({ ...connect.properties, request_id: requestId }), description: 'A browser session is required. With request_id the stored request determines service, scheme, app and scopes. Otherwise service is required. Use a connection detail at POST /v1/requests to ask a person to connect.' },
-  ConnectResult: object({ url: string, state: string, complete: object({ fields: oauthFields }) }, ['url']),
+  Connect: { ...object({ ...connect.properties, request_id: requestId }), description: 'With request_id the stored request determines service, scheme, app and scopes. Otherwise service is required. oauth and role need a browser session and return where to go next. token connects at once with the given fields; with connection_id it replaces that connection\'s values. Use a connection detail at POST /v1/requests to ask a person to connect.' },
+  ConnectResult: object({ url: string, state: string, complete: object({ fields: oauthFields }), connection: ref('Connection') }),
   Confirmation: object({ connection: ref('Connection'), changes: array(object()) }, ['connection', 'changes']),
   CreateEnvironment: object(environment),
   Run: object({ ...environment, ...command }, ['command']),
@@ -143,7 +148,7 @@ export const schemas = {
     ['user', 'principal', 'secrets', 'connections', 'apps', 'services', 'catalog', 'principals', 'actors', 'requests', 'functions', 'settings', 'environments', 'compute']),
   Export: object({ exported_at: iso, owner: nullable(string), origin: string,
     secrets: array({ allOf: [ref('Secret'), object({ content: string, encoding: { const: 'base64' } }, ['content', 'encoding'])] }),
-    connections: array(ref('Connection')), services: array(object({ id, name: string, definition: object() })), principals: array(ref('Principal')) }, ['exported_at', 'owner', 'origin', 'secrets', 'connections', 'services', 'principals']),
+    connections: array({ allOf: [ref('Connection'), object({ fields: map(string) })] }), services: array(object({ id, name: string, definition: object() })), principals: array(ref('Principal')) }, ['exported_at', 'owner', 'origin', 'secrets', 'connections', 'services', 'principals']),
 };
 
 const query = (name, schema = string, description, required = false) => ({ name, in: 'query', schema, required, ...(description ? { description } : {}) });
@@ -259,7 +264,7 @@ export const routes = [
     post: op('acceptConfirmation', 'Accept changed service authorization', one('Connection'), { input: state, security: session, parameters: [as], 'x-input-error': 'invalid_state' }),
     delete: okay('cancelConfirmation', 'Cancel changed service authorization', { input: state, security: session, parameters: [as], 'x-input-error': 'invalid_state' }),
   } },
-  { name: 'connections', path: '/v1/connections', methods: { post: op('connectService', 'Begin service authorization', 'ConnectResult', { input: 'Connect', security: session, parameters: [as] }) } },
+  { name: 'connections', path: '/v1/connections', methods: { post: op('connectService', 'Connect a service', 'ConnectResult', { input: 'Connect', parameters: [as], responses: { 200: response('ConnectResult'), 201: response(one('Connection'), 'A token connection was made.'), default: response('Error', 'Failure') } }) } },
   { name: 'completeConnection', path: '/v1/connections/complete', methods: { post: op('completeRole', 'Finish role-based service authorization', one('Connection'), { input: object({ state: string, fields: map(string) }, ['state']), security: session, parameters: [as], 'x-input-error': 'invalid_state' }) } },
   { name: 'oauthCallback', path: '/oauth/callback', methods: { get: op('oauthCallback', 'Return from service OAuth consent', 'Empty', { security: session, parameters: [query('state', string, undefined, true), query('code'), query('error')], responses: { 303: { description: 'Returns to the service page or original request, with a result code.', headers: { Location: { schema: string } } } } }) } },
   { name: 'injections', path: '/v1/injections', methods: { post: op('inject', 'Obtain secret bytes or current service connections for a process', 'Injection', { input: 'Inject', parameters: [as], 'x-input-error': 'invalid_names', description: 'Each input has exactly one of name (literal secret name) or id (secret/connection id). A secret requires as (a non-reserved environment variable). A connection without output delivers all its named values; output selects one. as can rename a single value. filename delivers base64 file bytes instead of environment text. Connections refresh if needed. Deliver values privately to the intended process; do not print them into chat or logs. CLI exec does this without exposing values to the agent.' }) } },

@@ -1,0 +1,118 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { fixture } from './helpers.mjs';
+import { entry } from '../src/catalog.mjs';
+
+const tokenFixture = t => fixture(t, { services: [entry('github'), entry('kintone')] });
+const paste = (f, data, options = {}) => f.request('/v1/connections', { method: 'POST', data: { auth_scheme: 'token', ...data }, ...options });
+
+test('貼られたトークンをその場で接続にし、定義どおりの環境変数でAIに渡す', async t => {
+  const f = await tokenFixture(t);
+  await f.login();
+  const made = await paste(f, { service: 'github', fields: { token: ' ghp_first ' } });
+  assert.equal(made.status, 201, made.text);
+  const connection = made.json.connection;
+  assert.equal(connection.name, 'GitHubのトークン');
+  assert.equal(connection.auth_scheme, 'token');
+  assert.equal(connection.status, 'usable');
+  assert.equal(connection.subject, null);
+  assert.deepEqual(connection.facts, {});
+  const injected = await f.inject(connection);
+  assert.equal(injected.status, 200, injected.text);
+  assert.deepEqual(injected.json.injection.environment, { GH_TOKEN: 'ghp_first', GITHUB_TOKEN: 'ghp_first' });
+});
+
+test('トークンの接続に名前を付け、同じサービスにいくつでも接続を作る', async t => {
+  const f = await tokenFixture(t);
+  await f.login();
+  const work = await paste(f, { service: 'github', name: '仕事用', fields: { token: 'ghp_work' } });
+  const personal = await paste(f, { service: 'github', name: '個人用', fields: { token: 'ghp_personal' } });
+  assert.equal(work.status, 201, work.text);
+  assert.equal(personal.status, 201, personal.text);
+  const listed = (await f.request('/v1/overview')).json.connections.filter(item => item.service.id === 'github').map(item => item.name).sort();
+  assert.deepEqual(listed, ['仕事用', '個人用']);
+});
+
+test('既存の接続に貼り直すと、IDと名前を保ったまま値を差し替える', async t => {
+  const f = await tokenFixture(t);
+  await f.login();
+  const made = (await paste(f, { service: 'github', name: '仕事用', fields: { token: 'ghp_old' } })).json.connection;
+  const replaced = await paste(f, { service: 'github', connection_id: made.id, fields: { token: 'ghp_new' } });
+  assert.equal(replaced.status, 200, replaced.text);
+  assert.equal(replaced.json.connection.id, made.id);
+  assert.equal(replaced.json.connection.name, '仕事用');
+  assert.equal(replaced.json.connection.generation, made.generation + 1);
+  assert.equal((await f.inject(made)).json.injection.environment.GH_TOKEN, 'ghp_new');
+});
+
+test('鍵で動くAIも、接続を任されていればトークンで接続する', async t => {
+  const f = await tokenFixture(t);
+  await f.login();
+  const agent = await f.issueKey();
+  const refused = await paste(f, { service: 'github', fields: { token: 'ghp_agent' } }, { token: agent.token, anonymous: true });
+  assert.equal(refused.status, 403);
+  const given = await f.request('/v1/relations', { method: 'POST', data: { subject: agent.id, relation: 'connection.connect', object_type: 'principal', object_id: agent.acts_for[0] } });
+  assert.equal(given.status, 201, given.text);
+  const made = await paste(f, { service: 'github', fields: { token: 'ghp_agent' } }, { token: agent.token, anonymous: true });
+  assert.equal(made.status, 201, made.text);
+  assert.equal(made.json.connection.holder_id, agent.acts_for[0]);
+});
+
+test('トークンの項目が定義に合わなければ、接続を作らずに断る', async t => {
+  const f = await tokenFixture(t);
+  await f.login();
+  for (const fields of [{}, { token: '' }, { token: 'a\nb' }, { token: 'ok', extra: 'x' }]) {
+    const refused = await paste(f, { service: 'github', fields });
+    assert.equal(refused.status, 400, JSON.stringify(fields));
+    assert.equal(refused.json.error.code, 'invalid_fields');
+  }
+  const wrongDomain = await paste(f, { service: 'kintone', fields: { domain: 'example.com', token: 'k' } });
+  assert.equal(wrongDomain.status, 400);
+  const withScopes = await paste(f, { service: 'github', scopes: ['repo'], fields: { token: 'ghp' } });
+  assert.equal(withScopes.status, 400);
+  assert.equal((await f.request('/v1/overview')).json.connections.length, 0);
+});
+
+test('トークンそのものは見せず、ドメインのような秘密でない項目だけを接続の説明に示す', async t => {
+  const f = await tokenFixture(t);
+  await f.login();
+  const made = await paste(f, { service: 'kintone', fields: { domain: 'example.cybozu.com', token: 'kintone-secret' } });
+  assert.equal(made.status, 201, made.text);
+  assert.deepEqual(made.json.connection.facts, { domain: 'example.cybozu.com' });
+  const listed = await f.request('/v1/resources?kind=connection');
+  assert.doesNotMatch(listed.text, /kintone-secret/);
+  assert.deepEqual((await f.inject(made.json.connection)).json.injection.environment, { KINTONE_DOMAIN: 'example.cybozu.com', KINTONE_API_TOKEN: 'kintone-secret' });
+});
+
+test('書き出しには、貼ったトークンの値をそのまま含める', async t => {
+  const f = await tokenFixture(t);
+  await f.login();
+  await paste(f, { service: 'github', fields: { token: 'ghp_export' } });
+  const exported = await f.request('/v1/export');
+  assert.equal(exported.status, 200, exported.text);
+  assert.deepEqual(exported.json.connections.map(item => item.fields), [{ token: 'ghp_export' }]);
+});
+
+test('サービスの説明に、トークンで接続するときの項目と作る場所を示す', async t => {
+  const f = await tokenFixture(t);
+  await f.login();
+  const catalog = (await f.request('/v1/overview')).json.catalog;
+  const github = catalog.find(item => item.id === 'github').auth_schemes.token;
+  assert.equal(github.console, 'https://github.com/settings/tokens');
+  assert.deepEqual(github.fields.map(field => field.name), ['token']);
+  assert.deepEqual(github.variables, ['GH_TOKEN', 'GITHUB_TOKEN']);
+});
+
+test('トークンでの接続を頼まれた人が貼ると、依頼は叶い、頼んだAIに接続のIDを返す', async t => {
+  const f = await tokenFixture(t);
+  await f.login();
+  const agent = await f.issueKey();
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, anonymous: true,
+    data: { authorization_details: [{ type: 'connection', service: 'github', auth_scheme: 'token' }], binding_message: 'リポジトリを読みます。' } });
+  assert.equal(asked.status, 201, asked.text);
+  const made = await paste(f, { request_id: asked.json.request.id, fields: { token: 'ghp_asked' } });
+  assert.equal(made.status, 201, made.text);
+  const seen = await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token, anonymous: true });
+  assert.equal(seen.json.request.status, 'granted');
+  assert.deepEqual(seen.json.request.result, { connection_id: made.json.connection.id });
+});

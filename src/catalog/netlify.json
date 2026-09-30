@@ -21,6 +21,19 @@
         "NETLIFY_ACCESS_TOKEN": "/access_token",
         "NETLIFY_TOKEN_EXPIRES_AT": "/expires_at"
       }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Personal access token",
+          "secret": true
+        }
+      ],
+      "console": "https://app.netlify.com/user/applications",
+      "injection": {
+        "NETLIFY_AUTH_TOKEN": "/token"
+      }
     }
   }
 }

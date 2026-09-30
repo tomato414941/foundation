@@ -9,11 +9,11 @@ import { uriTemplate, templateVariables } from './uri-template.mjs';
 // scheme that connects - and nothing else may be in it. The catalog alone may name code (an adapter) for a scheme
 // that data cannot describe.
 //
-//   { id?, name, logo?, api?, docs?, console?, auth_schemes?: { oauth?, role? } }
+//   { id?, name, logo?, api?, docs?, console?, auth_schemes?: { oauth?, role?, token? } }
 //
 // id and logo are the catalog's; a holder's service is known by its resource id. console is where an app or a
-// token for the service is made. The OAuth scheme is described in schemes/oauth.mjs.
-export const SCHEMES = ['oauth', 'role'];
+// token for the service is made. The OAuth scheme is described in schemes/oauth.mjs, the token one in schemes/token.mjs.
+export const SCHEMES = ['oauth', 'role', 'token'];
 const ID = /^[a-z][a-z0-9-]{0,39}$/, FIELD = /^[a-z][a-z0-9_]{0,39}$/;
 
 const bad = (message, where) => { throw Object.assign(new Error(where + ': ' + message), { where }); };
@@ -48,17 +48,18 @@ const address = (value, where, known = []) => {
 const link = (value, where) => address(value, where);
 const pattern = (value, where) => { text(value, where); try { new RegExp(value); } catch { bad('must be a regular expression', where); } };
 const headers = (value, where) => { object(value, where); for (const [name, template] of Object.entries(value)) { if (!/^[a-z0-9-]{1,60}$/.test(name)) bad('header names are lowercase', where); text(template, where + '.' + name, 500); } };
-function fields(value, where) {
+function fields(value, where, { secret = false } = {}) {
   if (!Array.isArray(value) || !value.length || value.length > 8) bad('must list 1 to 8 fields', where);
   const names = new Set();
   for (const [at, field] of value.entries()) {
     const here = where + '[' + at + ']';
-    object(field, here); only(field, ['name', 'label', 'required', 'placeholder', 'note', 'pattern', 'leading'], here);
+    object(field, here); only(field, ['name', 'label', 'required', 'placeholder', 'note', 'pattern', 'leading', ...(secret ? ['secret'] : [])], here);
     if (!FIELD.test(field.name ?? '') || names.has(field.name)) bad('needs a unique lowercase name', here);
     names.add(field.name);
     text(field.label, here + '.label', 60);
     if (field.required !== undefined) bool(field.required, here + '.required');
     if (field.leading !== undefined) bool(field.leading, here + '.leading');
+    if (field.secret !== undefined) bool(field.secret, here + '.secret');
     if (field.placeholder !== undefined) text(field.placeholder, here + '.placeholder');
     if (field.note !== undefined) text(field.note, here + '.note', 300);
     if (field.pattern !== undefined) pattern(field.pattern, here + '.pattern');
@@ -131,6 +132,17 @@ function role(value, where, { catalog }) {
   if (value.hint !== undefined) text(value.hint, where + '.hint', 2000);
 }
 
+// A token the holder pastes: the fields it takes (secret: the token itself, never shown again), where one is made,
+// and which variables an AI is handed.
+function token(value, where) {
+  object(value, where); only(value, ['fields', 'console', 'injection', 'hint'], where);
+  fields(value.fields, where + '.fields', { secret: true });
+  if (!value.fields.some(field => field.secret)) bad('must mark the token field secret', where + '.fields');
+  if (value.console !== undefined) link(value.console, where + '.console');
+  injection(value.injection, where + '.injection', value.fields.map(field => field.name));
+  if (value.hint !== undefined) text(value.hint, where + '.hint', 2000);
+}
+
 // Throws on anything that does not hold; the catalog's are checked at start, a holder's when written.
 export function checkDefinition(value, { catalog = false } = {}) {
   publicOnly = !catalog;
@@ -146,6 +158,7 @@ export function checkDefinition(value, { catalog = false } = {}) {
   only(value.auth_schemes, SCHEMES, 'definition.auth_schemes');
   if (value.auth_schemes.oauth !== undefined) oauth(value.auth_schemes.oauth, 'definition.auth_schemes.oauth', { catalog });
   if (value.auth_schemes.role !== undefined) role(value.auth_schemes.role, 'definition.auth_schemes.role', { catalog });
+  if (value.auth_schemes.token !== undefined) token(value.auth_schemes.token, 'definition.auth_schemes.token');
   return value;
 }
 // A holder's definition, checked as a request is: a refusal says where.

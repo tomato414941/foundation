@@ -23,6 +23,19 @@
         "AIRTABLE_ACCESS_TOKEN": "/access_token",
         "AIRTABLE_TOKEN_EXPIRES_AT": "/expires_at"
       }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Personal access token",
+          "secret": true
+        }
+      ],
+      "console": "https://airtable.com/create/tokens",
+      "injection": {
+        "AIRTABLE_TOKEN": "/token"
+      }
     }
   }
 }

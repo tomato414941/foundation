@@ -3,8 +3,9 @@ import { scopeFacts } from './scopes.mjs';
 import { FOUNDATION_APP, takesApps } from './apps.mjs';
 import { randomUUID } from 'node:crypto';
 
-// A managed authorization: OAuth renewal state or the role used to obtain short-lived connections.
-// Arbitrary private bytes are secrets (secrets.mjs); nothing here changes a secret into an authorization.
+// What a principal holds for a service, by one of its schemes: OAuth renewal state, the role short-lived keys are
+// obtained with, or a token the holder pasted. Arbitrary private bytes are secrets (secrets.mjs); nothing moves one
+// into the other.
 export const CONNECTION_LIMIT = 50;
 const COLUMNS = 'r.id,r.holder_id,r.kind,r.name,r.created_at,r.updated_at,c.service,c.auth_scheme,c.app_id,c.subject,c.status,c.generation';
 const FROM = 'FROM resources r JOIN connections c ON c.resource_id=r.id';
@@ -35,7 +36,7 @@ export class Connections {
   context(row) { return row ? { subject: row.subject, privateState: this.state(row).private_state } : undefined; }
   // requested: the scopes this connection asked the service for (null for a scheme without scopes).
   nextState(result, { requested } = {}) {
-    if (!result || typeof result.subject !== 'string' || !result.subject || result.subject.length > 512
+    if (!result || (result.subject !== null && (typeof result.subject !== 'string' || !result.subject || result.subject.length > 512))
       || !Object.hasOwn(result, 'privateState') || result.privateState === undefined
       || !result.facts || typeof result.facts !== 'object' || Array.isArray(result.facts)
       || (result.expiresAt !== null && !(Number.isFinite(result.expiresAt) && result.expiresAt > Date.now()))) invalidResult();
@@ -56,11 +57,12 @@ export class Connections {
     return row;
   }
   // app: the app it was made through - a held app's id, or Foundation's - for a scheme authorized through apps;
-  // none otherwise.
-  save(holderId, serviceRef, schemeId, result, { previous, scopes, app = FOUNDATION_APP } = {}) {
+  // none otherwise. name: what the holder calls a pasted token; the service cannot say whose it is.
+  save(holderId, serviceRef, schemeId, result, { previous, scopes, app = FOUNDATION_APP, name } = {}) {
     const scheme = this.services.scheme(serviceRef, schemeId);
     const state = this.nextState(result, { requested: scopes });
-    const label = String(state.facts.label || result.subject).slice(0, 80);
+    const said = scheme.kind === 'token' ? name ?? (previous ? null : this.services.summary(serviceRef).name + 'のトークン') : state.facts.label || result.subject;
+    const label = said === null ? null : String(said).slice(0, 80) || this.services.summary(serviceRef).name;
     return this.keep(holderId, { service: serviceRef, scheme: schemeId, app: takesApps(scheme) ? app : null, subject: result.subject, label, state }, previous);
   }
   // Identity and renewal state belong to the connection, independently of requests. previous is the managed
@@ -76,7 +78,7 @@ export class Connections {
       const id = existing?.id ?? randomUUID(), sealed = this.vault.seal(state, `connection:${holderId}:${id}`);
       if (existing) {
         this.db.prepare("UPDATE connections SET service=?,auth_scheme=?,app_id=?,subject=?,state=?,status='usable',generation=generation+1 WHERE resource_id=?").run(service, scheme, app, subject, sealed, id);
-        this.resources.rename(existing, label);
+        if (label !== null) this.resources.rename(existing, label);
       } else {
         this.resources.insert(id, holderId, 'connection', label);
         this.db.prepare("INSERT INTO connections (resource_id,service,auth_scheme,app_id,subject,status,state) VALUES (?,?,?,?,?,'usable',?)").run(id, service, scheme, app, subject, sealed);
@@ -160,6 +162,11 @@ export class Connections {
   // What is said of a connection. The holder sees everything but the sealed state; whoever acts for them sees what
   // they need to use it. Whether disconnecting can also take it back at the service is as the app it was made
   // through can.
+  // What the holder pasted, for a token; what renews the others is Foundation's to keep and of no use elsewhere.
+  handed(row) {
+    if (row.auth_scheme !== 'token') return undefined;
+    return this.state(row).private_state.fields;
+  }
   revocable(row) {
     try { return typeof this.schemeFor(row).revoke === 'function'; } catch { return false; }
   }

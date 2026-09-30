@@ -9,6 +9,20 @@
     "oauth": {
       "adapter": "github",
       "hint": "gh and most tools read GH_TOKEN directly. For git push/pull, run gh auth setup-git inside the exec, then use git. Scopes are GitHub OAuth scopes such as repo, workflow, read:org or gist."
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Personal access token",
+          "secret": true
+        }
+      ],
+      "console": "https://github.com/settings/tokens",
+      "injection": {
+        "GH_TOKEN": "/token",
+        "GITHUB_TOKEN": "/token"
+      }
     }
   }
 }

@@ -28,6 +28,19 @@
         "HEROKU_TOKEN_EXPIRES_AT": "/expires_at"
       },
       "hint": "Send \"Accept: application/vnd.heroku+json; version=3\" with every request."
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "API key",
+          "secret": true
+        }
+      ],
+      "console": "https://dashboard.heroku.com/account",
+      "injection": {
+        "HEROKU_API_KEY": "/token"
+      }
     }
   }
 }

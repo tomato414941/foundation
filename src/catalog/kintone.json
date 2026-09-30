@@ -27,6 +27,26 @@
         "KINTONE_TOKEN_EXPIRES_AT": "/expires_at"
       },
       "hint": "KINTONE_DOMAIN is the kintone domain (https://<KINTONE_DOMAIN>/k/v1/...)."
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "domain",
+          "label": "kintoneのドメイン",
+          "placeholder": "example.cybozu.com",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.(cybozu\\.com|kintone\\.com|cybozu\\.cn)$"
+        },
+        {
+          "name": "token",
+          "label": "APIトークン",
+          "secret": true
+        }
+      ],
+      "injection": {
+        "KINTONE_DOMAIN": "/domain",
+        "KINTONE_API_TOKEN": "/token"
+      },
+      "hint": "Send the token in the \"X-Cybozu-API-Token\" header to https://<KINTONE_DOMAIN>/k/v1/..."
     }
   }
 }

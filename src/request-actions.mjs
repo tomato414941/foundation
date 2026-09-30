@@ -112,7 +112,7 @@ export class RequestActions {
     return JSON.parse(done.result);
   }
   // previous: the managed authorization this one replaces.
-  connect(id, holderId, service, scheme, result, { requestedBy = '', previous, scopes, app = null } = {}) {
+  connect(id, holderId, service, scheme, result, { requestedBy = '', previous, scopes, app = null, name } = {}) {
     const saved = this.store.transaction(() => {
       if (id) {
         const row = this.requests.forTo(id, holderId, true);
@@ -120,7 +120,7 @@ export class RequestActions {
         if (row.type !== 'connection' || input.service !== service || input.auth_scheme !== scheme) fail(409, 'wrong_kind', '依頼された方法で接続してください。');
         if (input.connection_id !== previous?.id) fail(409, 'connection_changed', '依頼された接続を選んでください。');
       }
-      const saved = this.connections.save(holderId, service, scheme, result, { previous, scopes, app });
+      const saved = this.connections.save(holderId, service, scheme, result, { previous, scopes, app, name });
       this.auditLog.write(holderId, previous ? 'connection.renewed' : 'connection.created', 'connection', saved.id, { service, auth_scheme: scheme, requested_by: requestedBy || null, request: id || null });
       if (id) {
         this.requests.done(id, holderId, { connection_id: saved.id });
