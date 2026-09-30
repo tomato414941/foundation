@@ -387,10 +387,15 @@ function connectionRow(connection) {
   const account = connection.label;
   const app = connection.app === null ? '<p class="muted warning-text">使っていたOAuthアプリが削除されました</p>'
     : connection.app && !connection.app.foundation ? `<p class="muted">OAuthアプリ：${esc(connection.app.name)}</p>` : '';
-  const way = connection.auth_scheme === 'role' ? '<p class="muted">IAMロール</p>' : '';
+  const way = connection.auth_scheme === 'role' ? '<p class="muted">IAMロール</p>' : connection.auth_scheme === 'token' ? '<p class="muted">トークン</p>' + tokenFacts(connection) : '';
   return `<article class="agent-row connection-row"><div class="connection-identity">${serviceLogo(connection.service)}<div class="agent-name"><h3>${esc(connection.service.name)}</h3>${account && account !== connection.service.name ? `<p class="connection-account">${esc(account)}</p>` : ''}</div></div>
     <div class="connection-details">${warning ? `<p class="connection-status warning-text">${esc(statusName(connection.status))}</p>` : ''}${way}${app}${cloudflareDetails(connection)}${scopeDetails(connection.facts)}</div>
-    <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}">接続し直す</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
+    <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}">${connection.auth_scheme === 'token' ? '値を差し替える' : '接続し直す'}</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
+}
+// What a token connection says of itself: the fields that are not the token, by the names the service gives them.
+function tokenFacts(connection) {
+  const fields = serviceById(connection.service.id)?.auth_schemes.token?.fields || [];
+  return fields.filter(field => connection.facts[field.name]).map(field => `<p class="muted">${esc(field.label)}：${esc(connection.facts[field.name])}</p>`).join('');
 }
 function cloudflareDetails(connection) {
   if (connection.service?.id !== 'cloudflare' || connection.auth_scheme !== 'oauth') return '';
@@ -623,16 +628,21 @@ function renderRequest() {
   const way = row.auth_scheme, scheme = service.auth_schemes[way], name = service.name;
   const reconnecting = Boolean(asked.connection_id), title = reconnecting ? name + 'に接続し直す' : name + 'に接続';
   const facts = `<dl class="approval-facts">${requestPurpose(row)}${row.connection ? `<div><dt>更新する接続</dt><dd>${esc(row.connection.label)}${cloudflareDetails(row.connection)}</dd></div>` : ''}
-    <div><dt>方法</dt><dd>${WAYS[way][0]}${way === 'oauth' ? requestedScopesView(row, scheme) : ''}</dd></div>${row.app && !row.app.foundation ? `<div><dt>OAuthアプリ</dt><dd>${esc(row.app.name)}</dd></div>` : ''}</dl>`;
+    <div><dt>方法</dt><dd>${WAYS[way]}${way === 'oauth' ? requestedScopesView(row, scheme) : ''}</dd></div>${row.app && !row.app.foundation ? `<div><dt>OAuthアプリ</dt><dd>${esc(row.app.name)}</dd></div>` : ''}</dl>`;
   let body;
   if (reconnecting && !row.connection) body = '<p class="form-error" role="status">更新する接続が見つかりません。</p>';
   else if (row.app === null) body = '<p class="form-error" role="status">使うOAuthアプリが見つかりません。</p>';
   else if (!scheme.available && (way !== 'oauth' || row.app?.foundation || !scheme.takes_apps)) body = `<p class="form-error" role="status">現在${esc(name)}に接続できません。</p>`;
+  else if (way === 'token') body = `${tokenConsole(service, scheme)}<form id="token-request-form">${tokenFields(scheme, 'request-token')}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${reconnecting ? '差し替える' : '接続する'}</button></form>`;
   else body = `<button class="button primary full request-connect" type="button" data-action="request-connect">${esc(way === 'role' ? 'IAMロールを作る' : name + 'の画面へ')} ${icon('arrow')}</button>`;
   app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, title)}${facts}
     ${stepsBlock(row.steps)}
     <div class="register-body">${body}</div>
     <button class="text-button full" type="button" data-action="deny-request">接続しない</button>${expiry}</section>`);
+  if (way === 'token' && app.querySelector('#token-request-form')) bindForm(async (form) => {
+    await api('/v1/connections', { method: 'POST', data: { request_id: row.id, fields: tokenValues(scheme, form) } });
+    await refresh();
+  }, app.querySelector('.register-body'));
 }
 // The scopes a request asks the service for, as the service names them; the holder sees each before agreeing.
 function requestedScopesView(row, scheme) {
@@ -857,35 +867,68 @@ function addService() {
   servicePicker({ title: 'サービスを追加', services: allServices().filter(service => Object.keys(service.auth_schemes).length || ownService(service.id)), query: serviceFilter,
     filtered: value => { serviceFilter = value; }, choose: service => chooseService(service.id), create: name => defineService({ name }) });
 }
-// How to connect a service, when it offers more than one way. The words say what the holder does, not the protocol.
-const WAYS = { oauth: ['ログインして許可する', 'サービスの画面で許可します。'], role: ['IAMロールを作る', 'AWSの画面でFoundation用のロールを作ります。'] };
+// How a connection was made, as the holder did it. The words say what the holder does, not the protocol.
+const WAYS = { oauth: 'ログインして許可する', role: 'IAMロールを作る', token: 'トークンを貼る' };
+// The ways a service can be connected, the one that asks least of the holder first: Foundation's own app, a token
+// they paste, then an OAuth app of their own. The first is offered outright; the rest sit under it, lighter.
+function waysOf(service) {
+  const oauth = service.auth_schemes.oauth, ways = [];
+  if (service.auth_schemes.role) ways.push('role');
+  if (oauth && (oauth.foundation_app || (!oauth.takes_apps && oauth.available))) ways.push('oauth');
+  if (service.auth_schemes.token) ways.push('token');
+  if (oauth?.takes_apps) ways.push('app');
+  if (!oauth && ownService(service.id)) ways.push('configure');
+  return ways;
+}
+const OTHER_WAYS = { oauth: service => service.name + 'の画面でログインする', role: () => 'IAMロールを作る', token: () => 'トークンを貼る', app: () => '自分のOAuthアプリを使う', configure: () => 'OAuthを設定する' };
+function otherWays(service, shown) {
+  const rest = waysOf(service).filter(way => way !== shown);
+  return rest.length ? `<div class="other-ways">${rest.map(way => `<button class="button secondary full" type="button" data-action="choose-way" data-id="${esc(service.id)}" data-way="${way}">${esc(OTHER_WAYS[way](service))}</button>`).join('')}</div>` : '';
+}
 function chooseService(serviceId) {
   const service = serviceById(serviceId);
   if (!service) return;
-  const ways = Object.keys(service.auth_schemes);
-  if (ownService(service.id)) {
-    if (!ways.includes('oauth')) ways.push('oauth');
-  } else if (ways.length === 1) { connectBy(service, ways[0]); return; }
-  openDialog(`<h2 id="dialog-title">${esc(service.name)}に接続</h2>
-    ${ways.length ? `<div class="way-list">${ways.map(way => `<button class="way-choice" data-action="choose-way" data-id="${esc(service.id)}" data-way="${way}"><strong>${WAYS[way][0]}</strong><span>${way === 'oauth' && !service.auth_schemes.oauth ? 'OAuth 2.0の接続先とアプリを設定します。' : WAYS[way][1] + (way === 'oauth' && !oauthUsable(service) ? '先にOAuthアプリの登録が要ります。' : '')}</span></button>`).join('')}</div>` : '<p>接続方法が未設定です。</p>'}`);
+  const [first] = waysOf(service);
+  if (first) connectBy(service, first);
+  else openDialog(`<h2 id="dialog-title">${esc(service.name)}に接続</h2><p>このサービスには、まだ接続する方法がありません。</p>`);
 }
 function connectBy(service, way, connectionId) {
-  if (way === 'oauth' && !service.auth_schemes.oauth && ownService(service.id)) configureOAuth(service);
-  else connect(service.id, connectionId);
+  if (way === 'configure') configureOAuth(service);
+  else if (way === 'role') startRole(service, connectionId);
+  else if (way === 'token') pasteToken(service, connectionId);
+  else if (way === 'app') {
+    const own = appsFor(service.id).find(app => !app.foundation);
+    if (own) connect(service.id, connectionId, own.id, 'app');
+    else addApp(service.id, id => connect(id, connectionId));
+  } else connect(service.id, connectionId);
 }
 // Starting a connection Foundation performs itself: the service decides who it is.
-function connect(serviceId, connectionId, appId) {
+function connect(serviceId, connectionId, appId, shown = 'oauth') {
   const service = serviceById(serviceId);
   if (!service) return;
-  if (service.auth_schemes.role) { startRole(service, connectionId); return; }
   if (!oauthUsable(service)) { addApp(service.id, id => connect(id, connectionId)); return; }
   openDialog(`<h2 id="dialog-title">${esc(service.name)}に${connectionId ? '接続し直す' : '接続'}</h2><p>${esc(service.name)}の画面でログインし、アクセスを許可します。</p><form>
-    ${connectChoices(service, connectionId, appId)}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(service.name)}の画面へ ${icon('arrow')}</button></form>`);
+    ${connectChoices(service, connectionId, appId)}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(service.name)}の画面へ ${icon('arrow')}</button></form>${connectionId ? '' : otherWays(service, shown)}`);
   bindForm(async (form) => {
     const scopes = String(form.get('scopes') || '').split(/\s+/).filter(Boolean), app = String(form.get('app') || '');
     const result = await api('/v1/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'oauth', ...(connectionId ? { connection_id: connectionId } : {}),
       ...(scopes.length ? { scopes } : {}), ...(app && app !== 'foundation' ? { app } : {}) } });
     location.assign(result.url);
+  });
+}
+// A token the holder made at the service: pasted here, it is the connection. Pasting again replaces its value.
+const tokenFields = (scheme, prefix) => scheme.fields.map(field => `<label for="${prefix}-${esc(field.name)}">${esc(field.label)}${field.required === false ? '（任意）' : ''}</label><input id="${prefix}-${esc(field.name)}" name="${esc(field.name)}"${field.required === false ? '' : ' required'}${field.secret ? ' type="password"' : ''} autocomplete="off" spellcheck="false"${field.placeholder ? ` placeholder="${esc(field.placeholder)}"` : ''}>${field.note ? `<p class="permission-note">${esc(field.note)}</p>` : ''}`).join('');
+const tokenValues = (scheme, form) => Object.fromEntries(scheme.fields.map(field => [field.name, String(form.get(field.name) || '').trim()]).filter(([, value]) => value));
+const tokenConsole = (service, scheme) => scheme.console ? `<a class="button secondary full" href="${esc(scheme.console)}" target="_blank" rel="noopener noreferrer">${esc(service.name)}でトークンを作る ↗</a>` : '';
+function pasteToken(service, connectionId) {
+  const scheme = service.auth_schemes.token, replacing = connectionId ? connected().find(item => item.id === connectionId) : null;
+  openDialog(`<h2 id="dialog-title">${replacing ? esc(replacing.label) + 'の値を差し替える' : esc(service.name) + 'にトークンで接続'}</h2><p>${esc(service.name)}で作ったトークンを貼り付けます。</p>${tokenConsole(service, scheme)}
+    <form>${replacing ? '' : `<label for="token-name">名前</label><input id="token-name" name="name" maxlength="80" autocomplete="off" value="${esc(service.name)}のトークン">`}${tokenFields(scheme, 'token')}
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${replacing ? '差し替える' : '接続する'}</button></form>${replacing ? '' : otherWays(service, 'token')}`);
+  bindForm(async (form) => {
+    const name = String(form.get('name') || '').trim();
+    await api('/v1/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'token', fields: tokenValues(scheme, form), ...(replacing ? { connection_id: replacing.id } : name ? { name } : {}) } });
+    closeDialog(); await refresh(); toast(replacing ? '差し替えました。' : service.name + 'に接続しました。');
   });
 }
 async function addServiceScheme(service, way, definition) {
@@ -945,7 +988,7 @@ function configureOAuth(service) {
 function disconnect(connection) {
   const revoke = connection.can_revoke
     ? `<label class="check"><input type="checkbox" name="revoke" checked> ${esc(connection.service.name)}側の許可も取り消す</label>`
-    : `<p class="permission-note">${esc(connection.service.name)}側の${connection.auth_scheme === 'role' ? 'IAMロール' : '許可'}は残ります。不要なら${esc(connection.service.name)}で削除してください。</p>`;
+    : `<p class="permission-note">${esc(connection.service.name)}側の${({ role: 'IAMロール', token: 'トークン' })[connection.auth_scheme] || '許可'}は残ります。不要なら${esc(connection.service.name)}で削除してください。</p>`;
   openDialog(`<h2 id="dialog-title">${esc(connection.label)} の接続を解除しますか？</h2><form>
     <p>この接続から認証情報を取得できなくなります。シークレットに預けた値は残ります。</p>
     <p class="permission-note">${esc(revocationNote)}</p>${revoke}<p class="form-error" role="alert"></p>

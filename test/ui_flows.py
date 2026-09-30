@@ -2,8 +2,8 @@
 
 
 def start_connect(page, service, way=None):
-    """Opens the service's connect dialog from the services page: add a service, choose it, and choose how when it
-    offers more than one way."""
+    """Opens the service's connect dialog from the services page: add a service and choose it. The dialog opens on
+    the first way; another way is chosen from the buttons under it."""
     page.get_by_role('button', name='サービスを追加', exact=True).click()
     dialog = page.get_by_role('dialog')
     dialog.get_by_label('サービスを探す', exact=True).fill(service)

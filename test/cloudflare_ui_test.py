@@ -27,8 +27,11 @@ with sync_playwright() as p:
     page.get_by_role('button', name='ログイン', exact=True).click()
     page.wait_for_url(args.base + '/services')
     page.wait_for_load_state('networkidle')
-    dialog = start_connect(page, 'Cloudflare', 'ログインして許可する')
+    # The way that asks least comes first; pasting a token or using one's own app sit under it.
+    dialog = start_connect(page, 'Cloudflare')
     expect(dialog.get_by_role('heading', name='Cloudflareに接続', exact=True)).to_be_visible()
+    expect(dialog.get_by_role('button', name='トークンを貼る', exact=True)).to_be_visible()
+    expect(dialog.get_by_role('button', name='自分のOAuthアプリを使う', exact=True)).to_be_visible()
     if shots:
         page.screenshot(path=str(shots / 'cloudflare-consent.png'), full_page=True)
 
@@ -50,7 +53,7 @@ with sync_playwright() as p:
     expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
     authorization['deny'] = False
     page.goto(args.base + '/services', wait_until='networkidle')
-    start_connect(page, 'Cloudflare', 'ログインして許可する')
+    start_connect(page, 'Cloudflare')
     dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('account-settings.read')
     dialog.get_by_role('button', name='Cloudflareの画面へ', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()
@@ -73,7 +76,7 @@ with sync_playwright() as p:
     page.goto(args.base + '/services', wait_until='networkidle')
     # A second authorization for the same user has its own local reference.
     first_id = page.evaluate("async () => (await (await fetch('/v1/resources?kind=connection')).json()).resources[0].id")
-    start_connect(page, 'Cloudflare', 'ログインして許可する')
+    start_connect(page, 'Cloudflare')
     dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('account-settings.read')
     dialog.get_by_role('button', name='Cloudflareの画面へ', exact=True).click()
     expect(page.get_by_text('接続しました。', exact=True)).to_be_visible()

@@ -51,7 +51,6 @@ with sync_playwright() as p:
     registered = page.get_by_role('article', name='Notes', exact=True)
     expect(registered.get_by_text('未接続', exact=True)).to_be_visible()
     registered.get_by_role('button', name='接続を追加', exact=True).click()
-    dialog.get_by_role('button', name='ログインして許可する').click()
     dialog.get_by_label('認可エンドポイントのURL', exact=True).fill('https://service.example/oauth/authorize')
     dialog.get_by_label('トークンエンドポイントのURL', exact=True).fill('http://service.example/oauth/token')
     dialog.get_by_label('利用者情報のURL（任意）', exact=True).fill('https://service.example/api/me')

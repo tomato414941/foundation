@@ -117,10 +117,7 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .folded-section > summary { cursor: pointer; padding: 14px 20px; list-style-position: inside; }
 .folded-section > summary h2 { display: inline; font-size: 17px; }
 .folded-section[open] > summary { border-bottom: 1px solid var(--line); }
-.way-list { display: grid; gap: 10px; }
-.way-choice { display: grid; gap: 2px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); text-align: left; font-size: 15px; }
-.way-choice:hover { border-color: var(--accent); }
-.way-choice span { color: var(--muted); font-size: 14px; }
+.other-ways { display: grid; gap: 8px; margin-top: 10px; }
 dialog .service-grid { max-height: 50dvh; overflow-y: auto; margin-bottom: 12px; }
 .secret-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 .secret-actions button { white-space: nowrap; }

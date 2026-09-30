@@ -73,7 +73,7 @@ with sync_playwright() as p:
         route.fulfill(status=302, headers={'location': values['redirect_uri'][0] + '?' + urlencode(query)}, body='')
 
     page.route('https://dash.cloudflare.com/oauth2/auth?*', consent)
-    start_connect(page, 'Cloudflare', 'ログインして許可する')
+    start_connect(page, 'Cloudflare')
     dialog.get_by_label('OAuthアプリ', exact=True).select_option(label='仕事用')
     review(page)
     if shots:

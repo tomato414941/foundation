@@ -70,7 +70,6 @@ with sync_playwright() as p:
     assert service('社内ツール')['definition']['auth_schemes'] == {}
 
     row.get_by_role('button', name='接続を追加', exact=True).click()
-    dialog.get_by_role('button', name='ログインして許可する').click()
     expect(dialog.get_by_role('heading', name='社内ツールのOAuth設定', exact=True)).to_be_visible()
     page.keyboard.press('Escape')
     expect(dialog).not_to_be_visible()
@@ -85,7 +84,6 @@ with sync_playwright() as p:
         review('search-' + str(width))
     choice.focus()
     page.keyboard.press('Enter')
-    dialog.get_by_role('button', name='ログインして許可する').click()
     dialog.get_by_label('認可エンドポイントのURL', exact=True).fill('https://service.example/authorize')
     dialog.get_by_label('トークンエンドポイントのURL', exact=True).fill('https://service.example/token')
     review('oauth-mobile')
