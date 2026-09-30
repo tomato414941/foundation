@@ -233,7 +233,7 @@ export function oauthScheme(definition, client) {
   return {
     kind: 'oauth', available: client.enabled, variables: Object.keys(spec.injection),
     ...(spec.scopes ? { scopes: { base: spec.scopes.base ?? [], documentationUrl: spec.scopes.docs || '' } } : {}),
-    oauthClient: client, withClient: other => oauthScheme(definition, other), appFields: spec.app_fields ?? [],
+    oauthClient: client, withClient: other => oauthScheme(definition, other),
     authorization: {
       begin: context => client.authorize(context),
       complete: async (context, previous) => result(await client.exchange(context, previous && { subject: previous.subject, secret: previous.privateState })),

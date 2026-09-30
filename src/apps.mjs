@@ -24,10 +24,10 @@ const COLUMNS = 'r.id,r.holder_id,r.kind,r.name,r.created_at,r.updated_at,a.serv
 const FROM = 'FROM resources r JOIN apps a ON a.resource_id=r.id';
 const camel = name => name.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 
-// What an app of a scheme holds, in the order it is asked for: where the service is (when the app says so), the
-// client, then the rest.
-export function appFieldsOf(scheme) {
-  const own = scheme.appFields ?? [];
+// What an app of a service holds, in the order it is asked for: where the service is (when the app says so), the
+// client, then the rest. The service's definition says what more than the client it takes.
+export function appFieldsOf(definition) {
+  const own = definition.auth_schemes.oauth?.app_fields ?? [];
   return [...own.filter(field => field.leading), ...APP_FIELDS, ...own.filter(field => !field.leading)];
 }
 // Whether a scheme is authorized through apps, and so whether someone may bring their own.
@@ -62,7 +62,7 @@ export class Apps {
   fields(serviceRef) {
     const scheme = this.services.scheme(serviceRef, 'oauth');
     if (!takesApps(scheme)) fail(400, 'app_unsupported', 'このサービスでは自分のアプリを使えません。');
-    return appFieldsOf(scheme);
+    return appFieldsOf(this.services.get(serviceRef).definition);
   }
   // The values given for an app, each checked: said values in the clear, sealed ones kept apart.
   values(serviceRef, input) {

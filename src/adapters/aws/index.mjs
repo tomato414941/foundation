@@ -22,7 +22,7 @@ export function awsRole(client) {
       // The holder makes the role from the link; what Foundation must remember until they come back is the external ID.
       begin: async () => {
         const { url, externalId } = await client.prepare();
-        return { url, fields: [{ name: 'role_arn', label: '作成されたIAMロールのARN', placeholder: 'arn:aws:iam::123456789012:role/foundation-connection-FoundationRole-...' }], memo: { external_id: externalId } };
+        return { url, memo: { external_id: externalId } };
       },
       complete: async ({ fields, memo }, previous) => {
         const role = client.parseRole(fields?.role_arn);

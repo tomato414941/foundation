@@ -1054,7 +1054,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           const started = await active.authorization.begin({ origin }, connections.context(previous));
           still();
           const state = flows.begin(session.id, { ...flow, kind: 'role', memo: started.memo ?? null });
-          return send(200, { url: started.url, state, complete: { fields: started.fields ?? [] } });
+          return send(200, { url: started.url, state });
         }
         const verifier = randomBytes(32).toString('base64url');
         const redirectUri = origin + '/oauth/callback';

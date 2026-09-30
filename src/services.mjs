@@ -78,11 +78,13 @@ export class Services {
       const spec = definition.auth_schemes[id], common = { variables: scheme.variables, ...(spec.hint ? { hint: spec.hint } : {}) };
       if (id === 'oauth') described.oauth = { ...common, available: scheme.available, takes_apps: takesApps(scheme),
         foundation_app: takesApps(scheme) && Boolean(scheme.oauthClient.enabled),
-        app_fields: takesApps(scheme) ? appFieldsOf(scheme).map(({ leading, ...field }) => field) : [],
+        app_fields: takesApps(scheme) ? appFieldsOf(definition).map(({ leading, ...field }) => field) : [],
         scopes: scheme.scopes ? { base: scheme.scopes.base, documentation_url: scheme.scopes.documentationUrl || '' } : null,
         can_revoke: typeof scheme.revoke === 'function', can_reconnect: scheme.canReconnect !== false };
-      if (id === 'role') described.role = { ...common, available: scheme.available };
-      if (id === 'token') described.token = { ...common, available: scheme.available, fields: scheme.fields, console: scheme.console };
+      // Made at the service and pasted here: what is pasted, and what to do there first.
+      const pasted = { fields: spec.fields, ...(spec.instructions ? { instructions: spec.instructions } : {}) };
+      if (id === 'role') described.role = { ...common, available: scheme.available, ...pasted };
+      if (id === 'token') described.token = { ...common, available: scheme.available, ...pasted, console: scheme.console };
     }
     return { id: ref, name: definition.name, ...(definition.logo ? { logo: definition.logo } : {}), catalog,
       ...Object.fromEntries(['api', 'docs', 'console'].filter(key => definition[key]).map(key => [key, definition[key]])), auth_schemes: described };

@@ -197,7 +197,6 @@ dialog .service-grid { max-height: 50dvh; overflow-y: auto; margin-bottom: 12px;
 .ai-guidance h3 { font-size: 15px; color: var(--ink); font-weight: 600; margin-bottom: 8px; }
 .guidance-steps li { font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
 .guidance-steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
-dialog h2 + .guidance-steps { margin-top: 18px; }
 .guidance-steps li { counter-increment: step; position: relative; padding-left: 36px; }
 .guidance-steps li + li { margin-top: 12px; }
 .guidance-steps li::before { content: counter(step); position: absolute; left: 0; top: 1px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--selected); color: var(--accent); font-size: 14px; font-weight: 600; line-height: 1; }

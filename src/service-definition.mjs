@@ -97,7 +97,8 @@ function oauth(value, where, { catalog }) {
   object(value, where);
   if (value.adapter !== undefined) {
     if (!catalog) bad('only Foundation\'s catalog names adapters', where);
-    only(value, ['adapter', 'hint'], where); text(value.adapter, where + '.adapter', 40);
+    only(value, ['adapter', 'hint', 'app_fields'], where); text(value.adapter, where + '.adapter', 40);
+    if (value.app_fields !== undefined) fields(value.app_fields, where + '.app_fields');
     if (value.hint !== undefined) text(value.hint, where + '.hint', 2000);
     return;
   }
@@ -128,17 +129,20 @@ function oauth(value, where, { catalog }) {
 }
 function role(value, where, { catalog }) {
   if (!catalog) bad('only Foundation\'s catalog has role schemes', where);
-  object(value, where); only(value, ['adapter', 'hint'], where); text(value.adapter, where + '.adapter', 40);
+  object(value, where); only(value, ['adapter', 'fields', 'instructions', 'hint'], where); text(value.adapter, where + '.adapter', 40);
+  fields(value.fields, where + '.fields');
+  if (value.instructions !== undefined) text(value.instructions, where + '.instructions', 300);
   if (value.hint !== undefined) text(value.hint, where + '.hint', 2000);
 }
 
 // A token the holder pastes: the fields it takes (secret: the token itself, never shown again), where one is made,
-// and which variables an AI is handed.
+// what to do there (instructions, for the person; hint is for an AI), and which variables an AI is handed.
 function token(value, where) {
-  object(value, where); only(value, ['fields', 'console', 'injection', 'hint'], where);
+  object(value, where); only(value, ['fields', 'console', 'instructions', 'injection', 'hint'], where);
   fields(value.fields, where + '.fields', { secret: true });
   if (!value.fields.some(field => field.secret)) bad('must mark the token field secret', where + '.fields');
   if (value.console !== undefined) link(value.console, where + '.console');
+  if (value.instructions !== undefined) text(value.instructions, where + '.instructions', 300);
   injection(value.injection, where + '.injection', value.fields.map(field => field.name));
   if (value.hint !== undefined) text(value.hint, where + '.hint', 2000);
 }

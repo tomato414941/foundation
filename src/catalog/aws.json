@@ -7,6 +7,14 @@
   "auth_schemes": {
     "role": {
       "adapter": "aws",
+      "fields": [
+        {
+          "name": "role_arn",
+          "label": "作成されたIAMロールのARN",
+          "placeholder": "arn:aws:iam::123456789012:role/foundation-connection-FoundationRole-..."
+        }
+      ],
+      "instructions": "Policiesで権限を選んで作成します。",
       "hint": "Delivered as AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN (valid for an hour) plus AWS_DEFAULT_REGION; the AWS CLI and SDKs read them directly. Inject again for fresh ones. What the role may do is the IAM policies the owner chose when creating it (AdministratorAccess unless changed)."
     }
   }

@@ -19,6 +19,9 @@ test('AWSは鍵を預からず、持ち主が作った役割を外部IDつきで
   const { aws, f } = await connected(t);
   const catalog = (await f.request('/v1/services', { anonymous: true })).json.services;
   assert.deepEqual(catalog.map(item => [item.id, Object.keys(item.auth_schemes)]), [['aws', ['role']]]);
+  // What is pasted back, and what to do at AWS first, are said with the service.
+  assert.deepEqual(catalog[0].auth_schemes.role.fields.map(field => field.name), ['role_arn']);
+  assert.equal(catalog[0].auth_schemes.role.instructions, 'Policiesで権限を選んで作成します。');
   const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'aws', auth_scheme: 'role' } });
   assert.equal(started.status, 200, started.text);
   const parameters = linkParameters(started.json.url);
@@ -27,7 +30,6 @@ test('AWSは鍵を預からず、持ち主が作った役割を外部IDつきで
   assert.equal(parameters.stackName, 'foundation-connection');
   assert.equal(parameters.param_FoundationRoleArn, 'arn:aws:iam::111111111111:role/foundation-host-InstanceRole');
   assert.match(parameters.param_ExternalId, /^[A-Za-z0-9_-]{32}$/);
-  assert.deepEqual(started.json.complete.fields.map(field => field.name), ['role_arn']);
   assert.ok(aws.calls.some(call => call.options.method === 'PUT'), 'the template was placed in the bucket for the link to reach');
 
   // A wrong paste is answered, and the same flow accepts the right one afterwards.
