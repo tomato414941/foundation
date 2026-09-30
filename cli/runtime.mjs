@@ -235,13 +235,6 @@ async function main() {
   const holder = process.env.FOUNDATION_AS || (acting.length === 1 ? acting[0] : null);
   if (!holder && acting.length > 1) throw new Error('This key acts for several principals. Set FOUNDATION_AS=<principal id> to say which one this run is for.');
   const forHolder = target => holder ? target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(holder) : target;
-  // A client can be updated before its server. Discover the storage kind before the command creates an output.
-  let outputKind = 'secret';
-  if (output) {
-    const probe = await send(forHolder('/v1/resources?kind=secret&prefix=' + encodeURIComponent(output.name)), undefined,
-      { method: 'GET', accept: data => data.error?.code === 'invalid_kind' });
-    if (probe.error?.code === 'invalid_kind') outputKind = 'credential';
-  }
   let injection;
   if (names.length) ({ injection } = await send(forHolder('/v1/injections'), { names }));
   else injection = { environment: {}, files: [] };
@@ -273,7 +266,7 @@ async function main() {
       }
     }
   };
-  const recovery = () => 'Foundation could not confirm the output was saved. The private output file is retained for recovery: ' + outputPath + '\nRetry with foundation api PUT "/v1/resources?kind=' + outputKind + '&name=<URL-encoded-name>" --from <file>, then remove that recovery file.';
+  const recovery = () => 'Foundation could not confirm the output was saved. The private output file is retained for recovery: ' + outputPath + '\nRetry with foundation api PUT "/v1/resources?kind=secret&name=<URL-encoded-name>" --from <file>, then remove that recovery file.';
   process.once('exit', cleanup);
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => {
     interrupted = true;
@@ -312,7 +305,7 @@ async function main() {
       retainOutput = true;
       // The command wrote it; the agent never saw it, and keeps it that way: the line drawn for the one who kept it is declined.
       let saved;
-      try { saved = await send(forHolder('/v1/resources?kind=' + outputKind + '&name=' + encodeURIComponent(output.name)), bytes, { method: 'PUT', type: 'application/octet-stream' }); }
+      try { saved = await send(forHolder('/v1/resources?kind=secret&name=' + encodeURIComponent(output.name)), bytes, { method: 'PUT', type: 'application/octet-stream' }); }
       catch { throw new Error(recovery()); }
       try { await send('/v1/relations', { relation: 'editor', object_type: 'resource', object_id: saved.resource.id }, { method: 'DELETE' }); } catch {}
       retainOutput = false;

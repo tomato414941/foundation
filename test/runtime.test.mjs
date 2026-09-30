@@ -15,31 +15,6 @@ const execute = (args, env) => new Promise((resolve, reject) => {
   child.once('error', reject); child.once('exit', (code) => resolve({ code, out, err }));
 });
 
-test('CLIだけを先に更新しても旧サーバーの保存APIへ出力を保存する', async t => {
-  const f = await outputFixture(t);
-  const server = createServer(async (req, res) => {
-    const url = new URL(req.url, f.base);
-    if (req.method === 'GET' && url.searchParams.get('kind') === 'secret') {
-      res.writeHead(400, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: { code: 'invalid_kind' } })); return;
-    }
-    if (req.method === 'PUT' && url.searchParams.get('kind') === 'credential') url.searchParams.set('kind', 'secret');
-    const parts = []; for await (const part of req) parts.push(part);
-    const response = await fetch(url, { method: req.method, headers: { authorization: req.headers.authorization,
-      ...(req.headers['content-type'] ? { 'content-type': req.headers['content-type'] } : {}) },
-      ...(parts.length ? { body: Buffer.concat(parts) } : {}) });
-    res.writeHead(response.status, { 'content-type': 'application/json' }); res.end(Buffer.from(await response.arrayBuffer()));
-  });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
-  const run = await execute(['exec', '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e',
-    "require('node:fs').writeFileSync(process.env.AUTH_FILE, 'old-server-output')"],
-    { ...f.env, FOUNDATION_URL: 'http://127.0.0.1:' + server.address().port });
-  assert.equal(run.code, 0, run.err);
-  assert.equal((await f.read('secret', outputSpec.name)).text, 'old-server-output');
-  assert.doesNotMatch(run.out + run.err, /old-server-output/);
-});
-
 // The runtime is only what the agent cannot do for itself: make the key, and put what is kept into a command.
 // Everything else it does over HTTP, with the key in that file.
 async function storedInputs(f) {
@@ -187,6 +162,7 @@ test('保存に失敗したときだけ復旧用の非公開出力を残し、�
   `], f.env);
   f.app.secrets.put = put;
   assert.equal(run.code, 1); assert.match(run.err, /retained for recovery/);
+  assert.ok(run.err.includes('foundation api PUT "/v1/resources?kind=secret&name=<URL-encoded-name>" --from <file>'));
   const [inputPath, outputPath] = JSON.parse(run.out);
   assert.ok(run.err.includes(outputPath));
   await assert.rejects(stat(dirname(inputPath)), { code: 'ENOENT' });
