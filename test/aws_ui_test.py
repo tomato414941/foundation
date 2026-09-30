@@ -36,7 +36,7 @@ with sync_playwright() as p:
     page.wait_for_url(args.base + '/services')
     page.wait_for_load_state('networkidle')
     dialog = start_connect(page, 'AWS')
-    expect(dialog.get_by_text('Foundationは鍵を預かりません。', exact=False)).to_be_visible()
+    expect(dialog.get_by_text('Policiesで権限を選んで作成します。', exact=True)).to_be_visible()
 
     # The console opens in another tab; here the owner pastes the role's name. A wrong paste is answered in place.
     expect(dialog.get_by_role('heading', name='AWSでIAMロールを作る', exact=True)).to_be_visible()

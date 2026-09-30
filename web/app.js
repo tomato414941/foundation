@@ -942,8 +942,8 @@ async function startRole(service, connectionId, requestId) {
 // A role flow: the service's console opens in another tab, the holder makes what Foundation asked for there, and
 // pastes back the one thing Foundation needs to find it. A wrong paste is answered here; the flow is not lost.
 function completeByHand(service, started) {
-  openDialog(`<h2 id="dialog-title">${esc(service.name)}でIAMロールを作る</h2><p>Foundationは鍵を預かりません。作ったロールを引き受けて、使うたびに1時間だけの認証情報を得ます。</p>
-    <ol class="guidance-steps"><li><a class="button secondary" href="${esc(started.url)}" target="_blank" rel="noopener noreferrer">${esc(service.name)}の画面を開く ↗</a><p class="permission-note">付ける権限をPoliciesで選び、内容を確認して「作成」を押します。1分ほどで終わります。</p></li>
+  openDialog(`<h2 id="dialog-title">${esc(service.name)}でIAMロールを作る</h2>
+    <ol class="guidance-steps"><li><a class="button secondary" href="${esc(started.url)}" target="_blank" rel="noopener noreferrer">${esc(service.name)}の画面を開く ↗</a><p class="permission-note">Policiesで権限を選んで作成します。</p></li>
     <li>できあがった値を貼り付けます。</li></ol>
     <form>${started.complete.fields.map(field => `<label for="complete-${esc(field.name)}">${esc(field.label)}</label><input id="complete-${esc(field.name)}" name="${esc(field.name)}" required autocomplete="off" spellcheck="false" placeholder="${esc(field.placeholder || '')}">`).join('')}
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">接続する ${icon('arrow')}</button></form>`);
