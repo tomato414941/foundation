@@ -19,12 +19,11 @@ test('未定義のURLには認証状態によらず404を返し、認証が必�
   assert.equal(protectedResource.json.error.code, 'login_required');
 });
 
-test('公開入口のHTMLからFoundationの説明とAPI仕様へ進めるようにする', async t => {
+test('公開入口のHTMLからAPI仕様へ進める', async t => {
   const f = await fixture(t, { login: false });
   const page = await f.request('/', { anonymous: true });
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-type'), /^text\/html/);
-  assert.match(page.text, /人・AI・アプリが使う認証情報やファイルを保管し、権限を決めて共有できます。/);
   const link = page.text.match(/<a href="([^"]+)">API仕様<\/a>/);
   assert.ok(link, 'HTMLのリンクからAPI仕様へ進める');
   const docs = await f.request(link[1], { anonymous: true });

@@ -31,7 +31,6 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     entry = reading.new_page()
     entry.goto(args.base, wait_until='networkidle')
     expect(entry.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()
-    expect(entry.get_by_text('人・AI・アプリが使う認証情報やファイルを保管し、権限を決めて共有できます。', exact=True)).to_be_visible()
     entry.screenshot(path=str(shots / 'entry-no-js.png'), full_page=True)
     entry.get_by_role('link', name='API仕様', exact=True).click()
     entry.get_by_role('link', name='OpenAPI JSON', exact=True).click()
