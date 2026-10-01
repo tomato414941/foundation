@@ -1,6 +1,7 @@
 name: Publish Foundation CLI
 
 on:
+  workflow_dispatch:
   release:
     types: [published]
 
@@ -13,7 +14,7 @@ concurrency:
 
 jobs:
   publish:
-    if: startsWith(github.event.release.tag_name, 'cli-v') && !github.event.release.prerelease
+    if: github.event_name == 'workflow_dispatch' || (startsWith(github.event.release.tag_name, 'cli-v') && !github.event.release.prerelease)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -37,7 +38,7 @@ jobs:
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
           const pkg = JSON.parse(readFileSync('cli/package.json', 'utf8'));
-          if (!/^cli-v\d+\.\d+\.\d+$/.test(process.env.RELEASE_TAG) || process.env.RELEASE_TAG !== 'cli-v' + pkg.version) {
+          if (process.env.RELEASE_TAG && (!/^cli-v\d+\.\d+\.\d+$/.test(process.env.RELEASE_TAG) || process.env.RELEASE_TAG !== 'cli-v' + pkg.version)) {
             throw new Error('The release tag must match the CLI package version.');
           }
           if (pkg.name !== '@tomato414941/foundation' || pkg.private === true) throw new Error('Unexpected CLI package.');
@@ -71,7 +72,33 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, 'tarball=' + tarball + '\n');
           console.log('Verified ' + packed.id + ' (' + packed.size + ' bytes).');
           NODE
+      - name: Verify npm trusted publishing
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('cli/package.json', 'utf8'));
+          const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
+          url.searchParams.set('audience', 'npm:registry.npmjs.org');
+          const identity = await fetch(url, {
+            headers: { Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
+            signal: AbortSignal.timeout(30_000),
+          });
+          if (!identity.ok) throw new Error(`GitHub OIDC returned HTTP ${identity.status}.`);
+          const { value } = await identity.json();
+          if (!value) throw new Error('GitHub did not return an OIDC token.');
+          const exchange = await fetch(`https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${encodeURIComponent(pkg.name)}`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${value}` },
+            signal: AbortSignal.timeout(30_000),
+          });
+          if (!exchange.ok) throw new Error(`npm rejected this workflow (HTTP ${exchange.status}). Check the package's Trusted Publisher settings.`);
+          const result = await exchange.json();
+          if (!result.token) throw new Error('npm did not issue a registry token.');
+          console.log(`npm accepted this workflow for ${pkg.name}. No package was published.`);
+          NODE
       - name: Publish through npm trusted publishing
+        if: github.event_name == 'release'
         working-directory: cli
         env:
           CLI_TARBALL: ${{ steps.package.outputs.tarball }}
