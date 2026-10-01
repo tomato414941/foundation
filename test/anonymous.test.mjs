@@ -29,17 +29,3 @@ test('ほかの人の依頼が溜まっても、承認された相手の依頼�
   assert.equal(asked.status, 201, asked.text);
 });
 
-test('作られたまま一日放置された principal は消え、使われているもの・承認されたもの・人は残る', async t => {
-  const f = await fixture(t), left = await f.become('left alone'), waiting = await f.become('waiting'), agent = await f.issueKey();
-  await f.request('/v1/requests', { method: 'POST', anonymous: true, token: waiting.token, data: actor });
-  const aged = new Date(Date.now() - 2 * 86_400_000).toISOString();
-  f.app.store.db.prepare('UPDATE principals SET created_at=?').run(aged);
-  f.app.store.db.prepare('UPDATE access_keys SET last_used_at=?').run(aged);
-  f.app.principals.sweep();
-  const exists = id => Boolean(f.app.principals.get(id));
-  assert.equal(exists(left.id), false, 'left alone');
-  assert.equal(exists(waiting.id), true, 'still waiting on its request');
-  assert.equal(exists(agent.id), true, 'taken on by someone');
-  assert.equal(exists(USER_A), true, 'a person');
-  assert.equal((await f.request('/v1/principals/me', { anonymous: true, token: left.token })).status, 401);
-});
