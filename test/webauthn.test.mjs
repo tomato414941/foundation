@@ -104,3 +104,32 @@ test('名前のないWebAuthnの資格情報や、ほかのプリンシパル向
   assert.equal(stolen.status, 400);
   assert.equal((await f.request('/v1/webauthn-credentials')).json.webauthn_credentials.length, 0);
 });
+
+test('WebAuthnの資格情報だけで新しいプリンシパルになり、ブラウザはCookieを、プログラムはトークンをその場で受け取る', async t => {
+  const f = await fixture(t, { signin: false });
+  const asked = await f.request('/v1/principals/options', { method: 'POST', data: { name: 'はじめての人' }, anonymous: true });
+  assert.equal(asked.status, 200, asked.text);
+  const made = createCredential(asked.json.options, f.base);
+  const browser = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { name: 'はじめての人', webauthn_credential: { name: 'この端末', credential: made.response }, return_to: '/secrets' } });
+  assert.equal(browser.status, 201, browser.text);
+  assert.equal(browser.json.principal.name, 'はじめての人');
+  assert.equal(browser.json.return_to, '/secrets');
+  const cookie = sessionCookie(browser);
+  assert.equal((await f.request('/v1/overview', { anonymous: true, headers: { cookie } })).json.user.id, browser.json.principal.id);
+  assert.equal((await signin(f, made.credential, { session: 'token' })).status, 200, 'and it signs in with that credential afterwards');
+
+  const program = createCredential((await f.request('/v1/principals/options', { method: 'POST', data: { name: 'laptop' }, anonymous: true })).json.options, f.base);
+  const made2 = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { name: 'laptop', webauthn_credential: { name: 'laptop', credential: program.response }, session: 'token' } });
+  assert.equal(made2.status, 201, made2.text);
+  assert.equal((await f.request('/v1/principals/me', { anonymous: true, token: made2.json.token })).json.principal.name, 'laptop');
+});
+
+test('既にいるプリンシパル向けのチャレンジで新しいプリンシパルは作れず、名前のない作成も受け付けない', async t => {
+  const f = await fixture(t);
+  const forExisting = createCredential((await f.request('/v1/webauthn-credentials/options', { method: 'POST', data: {} })).json.options, f.base);
+  const refused = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { name: 'x', webauthn_credential: { name: 'x', credential: forExisting.response }, session: 'token' } });
+  assert.equal(refused.status, 400);
+  const forNew = createCredential((await f.request('/v1/principals/options', { method: 'POST', data: { name: 'x' }, anonymous: true })).json.options, f.base);
+  assert.equal((await f.request('/v1/webauthn-credentials', { method: 'POST', data: { name: 'x', credential: forNew.response } })).status, 400, 'nor is it added to an existing one');
+  assert.equal((await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { name: '', webauthn_credential: { name: 'x', credential: forNew.response }, session: 'token' } })).status, 400);
+});

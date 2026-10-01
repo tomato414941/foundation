@@ -302,7 +302,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // Becoming a principal needs no connection and no signin: the request carries nothing to protect.
       const becoming = at === 'principals' && method === 'POST' && browser && !cookieToken(req);
       // Proving oneself by WebAuthn carries nothing to protect either; a browser's session is still asked its origin there.
-      const proving = ['webauthnSigninOptions', 'webauthnSignin'].includes(at);
+      const proving = ['webauthnSigninOptions', 'webauthnSignin', 'principalOptions'].includes(at);
       if (browser && !['GET', 'HEAD'].includes(method) && !becoming && !proving) requireOrigin(req, origin);
       if (!browser && req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
       // Signing in by email: a single-use link is sent to the address, and opening it proves receiving there. The
@@ -356,6 +356,12 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         return send(200, { ok: true, return_to: destination });
       }
       // Signing in by WebAuthn, from anywhere: a browser gets its session as a cookie, a program as an hour's token.
+      // Options for a credential that, once registered, makes its principal.
+      if (at === 'principalOptions' && method === 'POST') {
+        const input = await body(req);
+        rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
+        return send(200, { options: await webauthn.registration(randomUUID(), { origin, userName: nameValue(input?.name), creating: true }) });
+      }
       if (at === 'webauthnSigninOptions' && method === 'POST') {
         rateLimit('webauthn-options:' + clientAddress(req), 60, 600_000);
         return send(200, { options: await webauthn.authentication({ origin }) });
@@ -409,11 +415,24 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // or the one a request link handed to a single request.
       let subject, session = null;
       const known = browser ? undefined : principals.authenticateKey(token);
-      // Anyone may become a principal: one row and one key, issued here and shown once. It reaches nothing until
-      // someone draws it a line; what it may do never comes from the making, only from the lines.
+      // Anyone may become a principal: one row, with a WebAuthn credential made for it - and so a session at once, a
+      // cookie for a browser or an hour's token for a program - or else one key, issued here and shown once. It reaches
+      // nothing of anyone else's until someone draws it a line; what it may do never comes from the making.
       if (becoming) {
         const input = await body(req);
         rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
+        if (input?.webauthn_credential !== undefined) {
+          const asToken = input.session === 'token', given = input.webauthn_credential, name = nameValue(input.name);
+          if (!asToken) requireOrigin(req, origin);
+          const destination = asToken ? '/' : returnPath(input.return_to);
+          const made = await webauthn.register(given?.credential, { origin, name: given?.name, make: id => principals.ensure(id, name) });
+          auditLog.write(made.principalId, 'principal.created', 'principal', made.principalId, { webauthn_credential: made.credential.id });
+          const proof = { proof: 'webauthn', ref: made.credential.id }, principal = principals.get(made.principalId);
+          const answer = { principal, webauthn_credential: webauthn.view(made.credential), backed_up: made.backedUp };
+          if (asToken) return send(201, { ...answer, token: sessions.create(made.principalId, proof, { ttl: TOKEN_TTL }), expires_at: Date.now() + TOKEN_TTL });
+          setCookie(sessions.create(made.principalId, proof), SESSION_AGE);
+          return send(201, { ...answer, return_to: destination });
+        }
         const made = store.transaction(() => {
           const principal = principals.ensure(randomUUID(), nameValue(input.name, '相手'));
           return { principal, issued: principals.issueKey(principal.id) };
@@ -549,7 +568,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       if (at === 'webauthnCredentials' && method === 'POST') {
         permit('add-webauthn-credential', 'principal', holderId);
         const input = await inputBody();
-        const made = await webauthn.register(holderId, input.credential, { origin, name: input.name });
+        const made = await webauthn.register(input.credential, { origin, name: input.name, principalId: holderId });
         auditLog.write(subject.id, 'webauthn_credential.added', 'principal', holderId, { credential: made.credential.id });
         return send(201, { webauthn_credential: webauthn.view(made.credential), backed_up: made.backedUp });
       }

@@ -69,6 +69,26 @@ with sync_playwright() as p:
     page.get_by_role('region', name='パスキー').get_by_role('button', name='削除', exact=True).click()
     page.get_by_role('dialog').get_by_role('button', name='削除する', exact=True).click()
     expect(page.get_by_role('heading', name='サインイン', exact=True)).to_be_visible()
+
+    # Someone new starts with a passkey alone, in a browser of their own.
+    newcomer = browser.new_context(viewport={'width': 390, 'height': 844})
+    fresh = newcomer.new_page()
+    fresh.on('pageerror', lambda error: errors.append(str(error)))
+    other = newcomer.new_cdp_session(fresh)
+    other.send('WebAuthn.enable')
+    other.send('WebAuthn.addVirtualAuthenticator', {'options': {'protocol': 'ctap2', 'transport': 'internal', 'hasResidentKey': True,
+                                                                'hasUserVerification': True, 'isUserVerified': True, 'automaticPresenceSimulation': True}})
+    fresh.goto(base, wait_until='networkidle')
+    fresh.get_by_role('button', name='パスキーで始める', exact=True).click()
+    started = fresh.get_by_role('dialog')
+    started.get_by_label('名前', exact=True).fill('はじめての人')
+    fresh.screenshot(path=str(shots / 'start-390.png'), full_page=True)
+    review(fresh)
+    started.get_by_role('button', name='パスキーを作成', exact=True).click()
+    expect(started.get_by_text('このパスキーは、この端末にしか保存されていません。', exact=True)).to_be_visible()
+    started.get_by_role('button', name='続ける', exact=True).click()
+    expect(fresh.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()
+    assert newcomer.request.get(base + '/v1/overview').json()['principal']['name'] == 'はじめての人'
     assert not errors, errors
     browser.close()
-    print('パスキー: アカウントでの追加・パスキーだけでのサインイン・削除によるセッションの終了と、スマートフォンの表示を確認しました。')
+    print('パスキー: アカウントでの追加・パスキーだけでのサインイン・削除によるセッションの終了・パスキーだけで始めることと、スマートフォンの表示を確認しました。')

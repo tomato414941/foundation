@@ -58,7 +58,7 @@ export const schemas = {
   WebauthnCredential: object({ id: string, name: string, created_at: iso, last_used_at: nullable(iso) }, ['id', 'name', 'created_at', 'last_used_at']),
   AddWebauthnCredential: object({ name: errorCode(string, 'invalid_name'), credential: { ...object(), description: 'The RegistrationResponseJSON the authenticator made from the options.' } }, ['name', 'credential']),
   WebauthnSignin: object({ credential: { ...object(), description: 'The AuthenticationResponseJSON answering the options.' }, session: choice(['cookie', 'token']), return_to: errorCode(string, 'invalid_return') }, ['credential']),
-  CreatePrincipal: object({ name: string, alias: string, actor: boolean, key: boolean }),
+  CreatePrincipal: object({ name: string, alias: string, actor: boolean, key: boolean, webauthn_credential: object({ name: string, credential: object() }, ['name', 'credential']), session: choice(['cookie', 'token']), return_to: string }),
   Rename: object({ name: resourceName }, ['name']),
   Principal: object({ id: principalId, name: string, created_at: iso, alias: nullable(string),
     keys: array(ref('Key')), acts_for: array(principalId), owners: array(principalId) }, ['id', 'name', 'created_at']),
@@ -198,11 +198,13 @@ export const routes = [
     get: op('getMe', 'Read the caller and its current access', 'Me'), patch: op('renameMe', 'Rename the caller', one('Principal'), { input: 'Rename', 'x-input-error': 'invalid_name' }),
     delete: okay('removeMe', 'Remove the caller and its resources'),
   } },
+  { name: 'principalOptions', path: '/v1/principals/options', methods: { post: op('principalOptions', 'Start becoming a principal with a WebAuthn credential', object({ options: object() }, ['options']), { input: object({ name: errorCode(string, 'invalid_name') }, ['name']), security: [], 'x-input-error': 'invalid_name',
+    description: 'WebAuthn creation options (PublicKeyCredentialCreationOptionsJSON) for a principal that registering the credential will make. name is what the credential is known by in its authenticator.' }) } },
   { name: 'principals', path: '/v1/principals', methods: {
     get: op('listPrincipals', 'List principals owned by the caller', many('principals', 'Principal')),
-    post: op('createPrincipal', 'Create a principal', object({ principal: ref('Principal'), token: string, key: ref('Key') }, ['principal']), {
+    post: op('createPrincipal', 'Create a principal', object({ principal: ref('Principal'), token: string, key: ref('Key'), webauthn_credential: ref('WebauthnCredential'), backed_up: boolean, expires_at: time, return_to: string }, ['principal']), {
       input: 'CreatePrincipal', status: 201, security: [{}, ...secure], 'x-input-error': 'invalid_name',
-      description: 'Without authentication, name is required and a private Bearer token is issued once. Store it privately; it has no access to anyone else. To ask an owner for access, use it to POST /v1/requests with {"authorization_details":[{"type":"relation","relation":"actor"}]} and give the owner the returned verification_uri and user_code. Only the owner approves; GET /v1/principals/me reports acts_for afterward. With authentication, creates an owned principal; alias is an idempotent local name, actor:true gives it access to the caller, key:true issues a token. The CLI can perform the bootstrap: foundation connect <server> --name <name>.' }),
+      description: 'Without authentication, name is required. With webauthn_credential (a RegistrationResponseJSON made from POST /v1/principals/options, and what to call it), the principal is made with that credential and a session: a cookie for a browser (session "cookie", the default, with Origin), or an hour\'s bearer token (session "token"). Otherwise a private Bearer token is issued once. Store it privately; it has no access to anyone else. To ask an owner for access, use it to POST /v1/requests with {"authorization_details":[{"type":"relation","relation":"actor"}]} and give the owner the returned verification_uri and user_code. Only the owner approves; GET /v1/principals/me reports acts_for afterward. With authentication, creates an owned principal; alias is an idempotent local name, actor:true gives it access to the caller, key:true issues a token. The CLI can perform the bootstrap: foundation connect <server> --name <name>.' }),
   } },
   { name: 'principal', group: 'principals', path: '/v1/principals/{principalId}', methods: {
     get: op('getPrincipal', 'Read a principal', one('Principal')), patch: op('renamePrincipal', 'Rename a principal', one('Principal'), { input: 'Rename', 'x-input-error': 'invalid_name' }), delete: okay('removePrincipal', 'Remove an owned principal and its resources'),

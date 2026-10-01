@@ -183,12 +183,31 @@ const passkeysWork = () => Boolean(window.PublicKeyCredential && navigator.crede
 const bytes = text => Uint8Array.from(atob(text.replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0));
 const text64 = buffer => btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const described = list => (list || []).map(item => ({ ...item, id: bytes(item.id) }));
+async function makePasskey(options) {
+  const made = await navigator.credentials.create({ publicKey: { ...options, challenge: bytes(options.challenge), user: { ...options.user, id: bytes(options.user.id) }, excludeCredentials: described(options.excludeCredentials) } });
+  return { id: made.id, rawId: text64(made.rawId), type: made.type, authenticatorAttachment: made.authenticatorAttachment ?? undefined, clientExtensionResults: made.getClientExtensionResults(),
+    response: { clientDataJSON: text64(made.response.clientDataJSON), attestationObject: text64(made.response.attestationObject), transports: made.response.getTransports?.() || [] } };
+}
+const deviceName = () => navigator.userAgentData?.platform || 'この端末';
 async function createPasskey(name) {
   const { options } = await api('/v1/webauthn-credentials/options', { method: 'POST', data: {} });
-  const made = await navigator.credentials.create({ publicKey: { ...options, challenge: bytes(options.challenge), user: { ...options.user, id: bytes(options.user.id) }, excludeCredentials: described(options.excludeCredentials) } });
-  const credential = { id: made.id, rawId: text64(made.rawId), type: made.type, authenticatorAttachment: made.authenticatorAttachment ?? undefined, clientExtensionResults: made.getClientExtensionResults(),
-    response: { clientDataJSON: text64(made.response.clientDataJSON), attestationObject: text64(made.response.attestationObject), transports: made.response.getTransports?.() || [] } };
-  return api('/v1/webauthn-credentials', { method: 'POST', data: { name, credential } });
+  return api('/v1/webauthn-credentials', { method: 'POST', data: { name, credential: await makePasskey(options) } });
+}
+// Starting with a passkey alone: the passkey made here makes the principal, signed in at once.
+function startWithPasskey() {
+  openDialog(`<h2 id="dialog-title">パスキーで始める</h2><form><label for="start-name">名前</label><input id="start-name" name="name" required maxlength="80" autocomplete="name">
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">パスキーを作成</button></form>`);
+  bindForm(async (form) => {
+    const name = String(form.get('name') || '').trim();
+    let made;
+    try {
+      const { options } = await api('/v1/principals/options', { method: 'POST', data: { name } });
+      made = await api('/v1/principals', { method: 'POST', data: { name, webauthn_credential: { name: deviceName(), credential: await makePasskey(options) }, return_to: returnTo() } });
+    } catch (error) { throw passkeyDeclined(error) ? new Error('パスキーを作れませんでした。') : error; }
+    if (made.backed_up) { location.replace(made.return_to); return; }
+    openDialog(`<h2 id="dialog-title">パスキーを作成しました</h2><p>このパスキーは、この端末にしか保存されていません。</p><button class="button primary full" type="button" id="start-continue">続ける</button>`);
+    dialog.querySelector('#start-continue').addEventListener('click', () => location.replace(made.return_to));
+  });
 }
 async function answerPasskey() {
   const { options } = await api('/v1/signin/webauthn/options', { method: 'POST', data: {} });
@@ -213,7 +232,7 @@ async function showSignin({ email = '', message = '' } = {}) {
   const pending = config.available ? config.pending : null, withPasskey = !pending && passkeysWork();
   app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand}</header><main class="signin-main">${requestId ? '<p class="signin-context">依頼の確認</p>' : ''}<h1>${pending ? 'メールを確認' : 'サインイン'}</h1>
     ${pending ? `<p class="signin-intro" id="email-sent">サインイン用のリンクをお送りしました。</p><p class="signin-address">${esc(pending.email)}</p><p class="signin-help">メールのリンクからサインインしてください。有効期限は15分です。</p>` : ''}
-    ${withPasskey ? '<div class="signin-passkey"><button class="button primary full" type="button" id="passkey-signin">パスキーでサインイン</button><p class="form-error" role="alert" id="passkey-error"></p></div>' : ''}
+    ${withPasskey ? '<div class="signin-passkey"><button class="button primary full" type="button" id="passkey-signin">パスキーでサインイン</button><p class="form-error" role="alert" id="passkey-error"></p><button class="text-button full" type="button" id="passkey-start">パスキーで始める</button></div>' : ''}
     <form id="signin-form">${pending ? '' : `<label for="signin-email">メールアドレス</label><input id="signin-email" name="email" type="email" autocomplete="email" required maxlength="254" value="${esc(email)}" ${config.available ? '' : 'disabled'}>`}
     <p class="form-error" role="alert">${config.available ? esc(message) : '現在サインインを利用できません。'}</p><button class="button ${pending || withPasskey ? 'secondary' : 'primary'} full" type="submit" ${pending ? 'id="resend-link" disabled' : config.available ? '' : 'disabled'}>${pending ? 'メールを再送信' : 'サインインメールを送信'} ${pending ? '' : icon('arrow')}</button></form>
     ${pending ? '<p class="signin-help signin-delivery">届かない場合は、迷惑メールフォルダもご確認ください。</p><div class="signin-actions"><button class="text-button" type="button" id="change-email">メールアドレスを変更</button></div>' : ''}</main></div>`;
@@ -232,6 +251,7 @@ async function showSignin({ email = '', message = '' } = {}) {
     resend.disabled = busy || seconds > 0;
     resend.textContent = seconds > 0 ? `再送信まで ${seconds}秒` : 'メールを再送信';
   }
+  document.querySelector('#passkey-start')?.addEventListener('click', () => { if (!busy) startWithPasskey(); });
   const passkeyButton = document.querySelector('#passkey-signin');
   passkeyButton?.addEventListener('click', async () => {
     if (busy) return;
@@ -1268,7 +1288,7 @@ function bindSecretValue(entry, row) {
 // A passkey for this browser's device or password manager. One kept only on this device is said so: losing the device
 // loses it.
 function addPasskey() {
-  openDialog(`<h2 id="dialog-title">パスキーを追加</h2><form><label for="passkey-name">名前</label><input id="passkey-name" name="name" required maxlength="80" autocomplete="off" value="${esc(navigator.userAgentData?.platform || 'この端末')}">
+  openDialog(`<h2 id="dialog-title">パスキーを追加</h2><form><label for="passkey-name">名前</label><input id="passkey-name" name="name" required maxlength="80" autocomplete="off" value="${esc(deviceName())}">
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加</button></form>`);
   bindForm(async (form) => {
     let made;

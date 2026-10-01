@@ -32,27 +32,34 @@ export class WebauthnCredentials {
     return { id: row.id, name: row.name, created_at: at(row.created_at), last_used_at: at(row.last_used_at) };
   }
 
-  // Registering: the options a client makes a credential from, for this principal, and then what it made.
-  async registration(principalId, { origin, userName }) {
-    const challenge = this.challenges.issue('webauthn', 'register:' + principalId, { ttl: TTL });
+  // Registering: the options a client makes a credential from - for a principal, or for one that registering it
+  // makes - and then what it made.
+  async registration(principalId, { origin, userName, creating = false }) {
+    const challenge = this.challenges.issue('webauthn', (creating ? 'create:' : 'register:') + principalId, { ttl: TTL });
     return generateRegistrationOptions({ rpName: 'Foundation', rpID: new URL(origin).hostname, userID: Buffer.from(principalId), userName, userDisplayName: userName,
-      challenge, attestationType: 'none', excludeCredentials: this.list(principalId).map(row => ({ id: row.id })),
+      challenge, attestationType: 'none', excludeCredentials: creating ? [] : this.list(principalId).map(row => ({ id: row.id })),
       authenticatorSelection: { residentKey: 'required', userVerification: 'preferred' } });
   }
-  async register(principalId, response, { origin, name }) {
+  // For a principal that is (principalId), or - given make - for the one the options were made for, which make(id)
+  // brings into being in the same transaction.
+  async register(response, { origin, name, principalId, make }) {
     const label = typeof name === 'string' ? name.trim() : '';
     if (!label || label.length > NAME_MAX || /[\x00-\x1f\x7f]/.test(label)) fail(400, 'invalid_name', '名前は80文字までで指定してください。');
     const challenge = answered(response), spent = this.challenges.take('webauthn', challenge);
-    if (!spent || spent.subject !== 'register:' + principalId) refused();
+    const at = spent ? spent.subject.indexOf(':') : -1, purpose = spent?.subject.slice(0, at), owner = spent?.subject.slice(at + 1);
+    if (!spent || (make ? purpose !== 'create' : purpose !== 'register' || owner !== principalId)) refused();
     let verified;
     try { verified = await verifyRegistrationResponse({ response, expectedChallenge: Buffer.from(challenge).toString('base64url'), ...where(origin), requireUserVerification: false }); }
     catch { refused(); }
     if (!verified.verified) refused();
     const { credential, credentialBackedUp } = verified.registrationInfo;
-    if (this.get(credential.id)) fail(409, 'webauthn_credential_exists', 'このパスキーはすでに登録されています。');
-    this.db.prepare('INSERT INTO webauthn_credentials (id,principal_id,public_key,sign_count,name,created_at) VALUES (?,?,?,?,?,?)')
-      .run(credential.id, principalId, Buffer.from(credential.publicKey), credential.counter, label, Date.now());
-    return { credential: this.get(credential.id), backedUp: credentialBackedUp };
+    this.store.transaction(() => {
+      if (this.get(credential.id)) fail(409, 'webauthn_credential_exists', 'このパスキーはすでに登録されています。');
+      make?.(owner);
+      this.db.prepare('INSERT INTO webauthn_credentials (id,principal_id,public_key,sign_count,name,created_at) VALUES (?,?,?,?,?,?)')
+        .run(credential.id, owner, Buffer.from(credential.publicKey), credential.counter, label, Date.now());
+    });
+    return { principalId: owner, credential: this.get(credential.id), backedUp: credentialBackedUp };
   }
 
   // Signing in: any credential may answer, and the one that does says whose it is.
