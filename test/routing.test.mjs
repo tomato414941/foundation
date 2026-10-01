@@ -140,3 +140,15 @@ test('Cookieによる更新は同一Originに限定し、CLIのBearerではOrigi
   assert.equal(await request({ authorization: 'Bearer ' + key.token }), 200);
   assert.equal((await f.read('secret', 'url-review')).text, 'fixture-value');
 });
+
+test('ファビコンとホーム画面のアイコンを、名前で探すブラウザにもPNGで返す', async t => {
+  const f = await fixture(t);
+  for (const path of ['/favicon.ico', '/favicon.png', '/apple-touch-icon.png']) {
+    const response = await fetch(f.base + path);
+    assert.equal(response.status, 200, path);
+    assert.equal(response.headers.get('content-type'), 'image/png', path);
+    assert.deepEqual([...new Uint8Array(await response.arrayBuffer()).slice(0, 4)], [0x89, 0x50, 0x4e, 0x47], path);
+  }
+  const page = await (await fetch(f.base + '/')).text();
+  assert.match(page, /<link rel="apple-touch-icon" href="\/apple-touch-icon.png">/);
+});

@@ -43,6 +43,10 @@ STATIC.set('/request-view.js', ['request-view.js', 'text/javascript; charset=utf
 STATIC.set('/workspace-view.js', ['workspace-view.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/styles.css', ['styles.css', 'text/css; charset=utf-8']);
 STATIC.set('/service-logos.svg', ['service-logos.svg', 'image/svg+xml']);
+// The logo as images, for browsers that do not take the page's SVG icon (Safari asks for these by name).
+STATIC.set('/favicon.ico', ['favicon.png', 'image/png']);
+STATIC.set('/favicon.png', ['favicon.png', 'image/png']);
+STATIC.set('/apple-touch-icon.png', ['apple-touch-icon.png', 'image/png']);
 const MAX_BODY = 12_000;
 const SESSION_AGE = 14 * 86400;
 const LOGIN_CONFIRM = '/login/confirm';
