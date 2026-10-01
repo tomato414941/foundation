@@ -72,7 +72,7 @@ test('役割の流れは持ち主のブラウザーからだけ始まり、他�
   assert.equal((await f.request('/v1/connections', { method: 'POST', token: key.token, anonymous: true, data: { service: 'aws', auth_scheme: 'role' } })).status, 403);
   const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'aws', auth_scheme: 'role' } });
   const arn = aws.make(linkParameters(started.json.url).param_ExternalId);
-  await f.login('second@example.test');
+  await f.signin('second@example.test');
   const foreign = await f.request('/v1/connections/complete', { method: 'POST', data: { state: started.json.state, fields: { role_arn: arn } } });
   assert.equal(foreign.status, 400); assert.equal(foreign.json.error.code, 'invalid_state');
   assert.equal((await f.request('/v1/resources?kind=connection')).json.resources.length, 0);

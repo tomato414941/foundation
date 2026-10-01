@@ -8,7 +8,7 @@ const paste = (f, data, options = {}) => f.request('/v1/connections', { method: 
 
 test('貼られたトークンをその場で接続にし、定義どおりの環境変数でAIに渡す', async t => {
   const f = await tokenFixture(t);
-  await f.login();
+  await f.signin();
   const made = await paste(f, { service: 'github', fields: { token: ' ghp_first ' } });
   assert.equal(made.status, 201, made.text);
   const connection = made.json.connection;
@@ -24,7 +24,7 @@ test('貼られたトークンをその場で接続にし、定義どおりの�
 
 test('トークンの接続に名前を付け、同じサービスにいくつでも接続を作る', async t => {
   const f = await tokenFixture(t);
-  await f.login();
+  await f.signin();
   const work = await paste(f, { service: 'github', name: '仕事用', fields: { token: 'ghp_work' } });
   const personal = await paste(f, { service: 'github', name: '個人用', fields: { token: 'ghp_personal' } });
   assert.equal(work.status, 201, work.text);
@@ -35,7 +35,7 @@ test('トークンの接続に名前を付け、同じサービスにいくつ�
 
 test('既存の接続に貼り直すと、IDと名前を保ったまま値を差し替える', async t => {
   const f = await tokenFixture(t);
-  await f.login();
+  await f.signin();
   const made = (await paste(f, { service: 'github', name: '仕事用', fields: { token: 'ghp_old' } })).json.connection;
   const replaced = await paste(f, { service: 'github', connection_id: made.id, fields: { token: 'ghp_new' } });
   assert.equal(replaced.status, 200, replaced.text);
@@ -47,7 +47,7 @@ test('既存の接続に貼り直すと、IDと名前を保ったまま値を差
 
 test('鍵で動くAIも、接続を任されていればトークンで接続する', async t => {
   const f = await tokenFixture(t);
-  await f.login();
+  await f.signin();
   const agent = await f.issueKey();
   const refused = await paste(f, { service: 'github', fields: { token: 'ghp_agent' } }, { token: agent.token, anonymous: true });
   assert.equal(refused.status, 403);
@@ -60,7 +60,7 @@ test('鍵で動くAIも、接続を任されていればトークンで接続す
 
 test('トークンの項目が定義に合わなければ、接続を作らずに断る', async t => {
   const f = await tokenFixture(t);
-  await f.login();
+  await f.signin();
   for (const fields of [{}, { token: '' }, { token: 'a\nb' }, { token: 'ok', extra: 'x' }]) {
     const refused = await paste(f, { service: 'github', fields });
     assert.equal(refused.status, 400, JSON.stringify(fields));
@@ -75,7 +75,7 @@ test('トークンの項目が定義に合わなければ、接続を作らず�
 
 test('トークンそのものは見せず、ドメインのような秘密でない項目だけを接続の説明に示す', async t => {
   const f = await tokenFixture(t);
-  await f.login();
+  await f.signin();
   const made = await paste(f, { service: 'kintone', fields: { domain: 'example.cybozu.com', token: 'kintone-secret' } });
   assert.equal(made.status, 201, made.text);
   assert.deepEqual(made.json.connection.facts, { domain: 'example.cybozu.com' });
@@ -86,7 +86,7 @@ test('トークンそのものは見せず、ドメインのような秘密で�
 
 test('書き出しには、貼ったトークンの値をそのまま含める', async t => {
   const f = await tokenFixture(t);
-  await f.login();
+  await f.signin();
   await paste(f, { service: 'github', fields: { token: 'ghp_export' } });
   const exported = await f.request('/v1/export');
   assert.equal(exported.status, 200, exported.text);
@@ -95,7 +95,7 @@ test('書き出しには、貼ったトークンの値をそのまま含める',
 
 test('サービスの説明に、トークンで接続するときの項目と作る場所を示す', async t => {
   const f = await tokenFixture(t);
-  await f.login();
+  await f.signin();
   const catalog = (await f.request('/v1/overview')).json.catalog;
   const github = catalog.find(item => item.id === 'github').auth_schemes.token;
   assert.equal(github.console, 'https://github.com/settings/tokens');
@@ -105,7 +105,7 @@ test('サービスの説明に、トークンで接続するときの項目と�
 
 test('トークンでの接続を頼まれた人が貼ると、依頼は叶い、頼んだAIに接続のIDを返す', async t => {
   const f = await tokenFixture(t);
-  await f.login();
+  await f.signin();
   const agent = await f.issueKey();
   const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, anonymous: true,
     data: { authorization_details: [{ type: 'connection', service: 'github', auth_scheme: 'token' }], binding_message: 'リポジトリを読みます。' } });
@@ -117,9 +117,9 @@ test('トークンでの接続を頼まれた人が貼ると、依頼は叶い�
   assert.deepEqual(seen.json.request.result, { connection_id: made.json.connection.id });
 });
 
-test('ログインで接続するサービスでも、サービスが出すキーを貼って接続し、同じ環境変数で渡す', async t => {
+test('サインインで接続するサービスでも、サービスが出すキーを貼って接続し、同じ環境変数で渡す', async t => {
   const f = await tokenFixture(t);
-  await f.login();
+  await f.signin();
   const made = await paste(f, { service: 'openrouter', fields: { token: 'sk-or-v1-pasted' } });
   assert.equal(made.status, 201, made.text);
   assert.equal(made.json.connection.name, 'OpenRouterのトークン');
@@ -128,7 +128,7 @@ test('ログインで接続するサービスでも、サービスが出すキ�
 
 test('サイトやメールと組にして使うトークンは、それぞれを別の環境変数で渡す', async t => {
   const f = await tokenFixture(t);
-  await f.login();
+  await f.signin();
   const made = await paste(f, { service: 'zendesk', fields: { subdomain: 'example', email: 'owner@example.test', token: 'zendesk-token' } });
   assert.equal(made.status, 201, made.text);
   assert.deepEqual((await f.inject(made.json.connection)).json.injection.environment,

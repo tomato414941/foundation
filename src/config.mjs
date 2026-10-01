@@ -30,7 +30,7 @@ export function configuration(env = process.env) {
     dataDir, database, port, bind, encryptionKey, kms, trustedProxies: (env.FOUNDATION_TRUSTED_PROXIES || '').split(',').map(value => value.trim()).filter(Boolean),
     publicOrigin: env.FOUNDATION_PUBLIC_ORIGIN || undefined,
     owners: (env.FOUNDATION_OWNERS || '').split(',').map(value => value.trim()).filter(Boolean),
-    supabase: { url: env.FOUNDATION_SUPABASE_URL || '', key: env.FOUNDATION_SUPABASE_PUBLISHABLE_KEY || '', emailEnabled: env.FOUNDATION_EMAIL_LOGIN_ENABLED === 'true' },
+    supabase: { url: env.FOUNDATION_SUPABASE_URL || '', key: env.FOUNDATION_SUPABASE_PUBLISHABLE_KEY || '', emailEnabled: env.FOUNDATION_EMAIL_SIGNIN_ENABLED === 'true' },
     // Lent machines run on Fly Machines when a runner app, its token and the machine image are all given.
     runner: { token: env.FOUNDATION_FLY_TOKEN || '', app: env.FOUNDATION_FLY_APP || '', image: env.FOUNDATION_FLY_IMAGE || '', region: env.FOUNDATION_FLY_REGION || 'nrt' },
     objects: { bucket: env.FOUNDATION_OBJECTS_BUCKET || '', region: env.FOUNDATION_OBJECTS_REGION || env.FOUNDATION_AWS_REGION || 'ap-northeast-1' },

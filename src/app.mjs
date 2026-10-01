@@ -10,7 +10,7 @@ import { Sessions, OAuthFlows } from './sessions.mjs';
 import { RequestActions } from './request-actions.mjs';
 import { requestView, INTERVAL } from './http-requests.mjs';
 import { fail, HttpError, nameValue } from './errors.mjs';
-import { EmailLogins, LOGIN_TTL } from './email-login.mjs';
+import { EmailSignins, SIGNIN_TTL } from './email-signin.mjs';
 import { Requests } from './requests.mjs';
 import { Settings } from './settings.mjs';
 import { AuditLog } from './audit-log.mjs';
@@ -37,7 +37,7 @@ const VERSION = createRequire(import.meta.url)('../package.json').version;
 const PUBLIC = new URL('../web/', import.meta.url);
 const PAGES = Object.keys(pages);
 const STATIC = new Map(PAGES.map(page => [page, ['index.html', 'text/html; charset=utf-8']]));
-STATIC.set('/login/confirm', ['index.html', 'text/html; charset=utf-8']);
+STATIC.set('/signin/confirm', ['index.html', 'text/html; charset=utf-8']);
 STATIC.set('/app.js', ['app.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/request-view.js', ['request-view.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/workspace-view.js', ['workspace-view.js', 'text/javascript; charset=utf-8']);
@@ -49,7 +49,7 @@ STATIC.set('/favicon.png', ['favicon.png', 'image/png']);
 STATIC.set('/apple-touch-icon.png', ['apple-touch-icon.png', 'image/png']);
 const MAX_BODY = 12_000;
 const SESSION_AGE = 14 * 86400;
-const LOGIN_CONFIRM = '/login/confirm';
+const SIGNIN_CONFIRM = '/signin/confirm';
 const LINK_TTL = 10 * 60_000, LINKED_TTL = 30 * 60_000;
 const REQUEST_PAGE = /^\/requests\/[A-Za-z0-9_-]{43}$/;
 const PRINCIPAL_ID = /^[A-Za-z0-9-]{1,64}$/;
@@ -65,7 +65,7 @@ function returnPath(value = '/') {
   return url.pathname + url.search + url.hash;
 }
 
-function loginEmail(value) {
+function signinEmail(value) {
   if (typeof value !== 'string' || value.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(value.trim())) fail(400, 'invalid_email', 'メールアドレスを確認してください。');
   return value.trim().toLowerCase();
 }
@@ -107,14 +107,14 @@ function principalId(value) {
   return value;
 }
 
-export function createApp({ database = ':memory:', encryptionKey, auth, services: catalog, serviceFetcher, space: spaceBackend = null, publicOrigin, owners: ownerList = [], loginClock, trustedProxies = [], outbound = {}, runner = null, compute = {}, requestInterval = INTERVAL }) {
+export function createApp({ database = ':memory:', encryptionKey, auth, services: catalog, serviceFetcher, space: spaceBackend = null, publicOrigin, owners: ownerList = [], signinClock, trustedProxies = [], outbound = {}, runner = null, compute = {}, requestInterval = INTERVAL }) {
   if (!auth || !Array.isArray(catalog)) throw new Error('Authentication and services are required');
   let external;
   if (publicOrigin) {
     external = new URL(publicOrigin);
     if (external.protocol !== 'https:' || external.username || external.password || external.pathname !== '/' || external.search || external.hash) throw new Error('FOUNDATION_PUBLIC_ORIGIN must be an HTTPS origin without a path');
   }
-  // Who may become an owner here. Empty means anyone who can log in, which is only safe while nobody else can reach it.
+  // Who may become an owner here. Empty means anyone who can sign in, which is only safe while nobody else can reach it.
   const owners = ownerList.length ? new Set(ownerList.map(value => value.trim().toLowerCase()).filter(Boolean)) : null;
   const store = new Store(database, encryptionKey);
   // Behind a reverse proxy every socket has the proxy's address; the client is the last hop the proxy appended.
@@ -140,13 +140,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, connections, apps, resources }, row, origin, { interval: requestInterval, ...options });
   const requestActions = new RequestActions({ store, requests, secrets, connections, services, apps, principals, authorization, auditLog,
     changed: row => { if (row.to_id) void settings.notify(row.to_id, 'request.' + row.status, { request: viewRequest(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() }); } });
-  const logins = new EmailLogins({ now: loginClock });
+  const signins = new EmailSignins({ now: signinClock });
   const refreshing = new Map(), limits = new Map(), disconnects = new Set();
   const timer = setInterval(() => {
     store.sweep();
     principals.sweep();
     void environments.sweep().catch(error => console.error(new Date().toISOString(), 'environment sweep', error));
-    logins.sweep();
+    signins.sweep();
     for (const [key, value] of limits) if (value.until <= Date.now()) limits.delete(key);
   }, 60_000).unref();
   // When each asker last looked at each of its requests, to answer slow_down.
@@ -162,7 +162,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   const cookieToken = (req) => readCookie(req, 'fdn_session');
   function localSession(req) {
     const value = sessions.get(cookieToken(req));
-    if (!value) fail(401, 'login_required', 'ログインしてください。');
+    if (!value) fail(401, 'signin_required', 'サインインしてください。');
     return value;
   }
   async function loggedIn(req) {
@@ -172,7 +172,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         if (!refreshing.has(row.id)) {
           const pending = (async () => {
             const fresh = await auth.refresh(row.value.refresh_token);
-            if (fresh.user.id !== row.owner_id || !sessions.update(row.id, fresh)) fail(401, 'login_required', 'もう一度ログインしてください。');
+            if (fresh.user.id !== row.owner_id || !sessions.update(row.id, fresh)) fail(401, 'signin_required', 'もう一度サインインしてください。');
           })();
           refreshing.set(row.id, pending);
           pending.finally(() => refreshing.delete(row.id)).catch(() => {});
@@ -181,7 +181,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       }
       const fresh = localSession(req);
       const user = await auth.user(fresh.value.access_token);
-      if (user.id !== fresh.owner_id || localSession(req).id !== row.id) fail(401, 'login_required', 'もう一度ログインしてください。');
+      if (user.id !== fresh.owner_id || localSession(req).id !== row.id) fail(401, 'signin_required', 'もう一度サインインしてください。');
       return { user, session: fresh };
     } catch (error) {
       if (error instanceof HttpError && error.status === 401) sessions.remove(cookieToken(req));
@@ -195,7 +195,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   // Authorization may take time. Check the browser again before committing any result.
   async function verifyConnection(req, session, operation, commit) {
     const result = await operation();
-    if (req.aborted || req.socket.destroyed || localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。');
+    if (req.aborted || req.socket.destroyed || localSession(req).id !== session.id) fail(401, 'signin_required', 'サインインしてください。');
     return commit(result);
   }
   const notApproved = () => fail(401, 'not_approved', 'このキーはまだ誰の代わりにも動けないか、失効しています。foundation connect（POST /v1/requests で relation actor を依頼）で承認を依頼し、承認後にお試しください。');
@@ -229,7 +229,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       if (await serveDocs(req, res, path)) return;
       const setNamedCookie = (name, value, age, cookiePath = '/') => res.appendHeader('Set-Cookie', `${name}=${value}; HttpOnly; SameSite=${cookiePath === '/' ? 'Lax' : 'Strict'}; Path=${cookiePath}; Max-Age=${age}${external ? '; Secure' : ''}`);
       const setCookie = (value, age) => setNamedCookie('fdn_session', value, age);
-      const loginToken = readCookie(req, 'fdn_login');
+      const signinToken = readCookie(req, 'fdn_signin');
       if ((STATIC.has(path) || REQUEST_PAGE.test(path)) && method === 'GET') {
         if (REQUEST_PAGE.test(path)) requests.record(path.slice('/requests/'.length), 'page_opened');
         const [filename, type] = STATIC.get(STATIC.has(path) ? path : '/');
@@ -240,7 +240,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
             content = content.toString().replace(/<div id="app">[\s\S]*?<div id="notice"/, () => `<div id="app">${ownerFrame ? workspaceView(path, { pending: true }) : pendingView(path)}</div>\n  <div id="notice"`)
               .replace('<title>Foundation</title>', `<title>${pageTitle(path)}</title>`);
           }
-          res.setHeader('Cache-Control', path === LOGIN_CONFIRM ? 'no-store' : 'private, no-store');
+          res.setHeader('Cache-Control', path === SIGNIN_CONFIRM ? 'no-store' : 'private, no-store');
           res.writeHead(200, { 'content-type': type });
           return res.end(content);
         }
@@ -252,7 +252,6 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         return res.end(content);
       }
       if (at === 'health' && method === 'GET') return send(200, { status: 'ok' });
-      if (path === '/login/callback' && method === 'GET') return redirect('/?login=invalid');
       if (!route && path !== '/mcp') fail(404, 'not_found', '指定された操作が見つかりません。');
       // Every OAuth consent comes back here: the state names the flow, and the flow the service and the app.
       if (at === 'oauthCallback' && method === 'GET') {
@@ -302,42 +301,42 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           return redirect(location('connected'));
         } catch (error) {
           if (progressRequestId && error instanceof HttpError) requests.record(progressRequestId, 'connect_failed', { service: flowService, code: error.code, message: error.message });
-          const codes = { authorization_denied: 'denied', invalid_state: 'expired', login_required: 'expired', account_changed: 'wrong_account', scope_mismatch: 'scope', refresh_missing: 'retry', connection_changed: 'changed', service_response: 'failed' };
+          const codes = { authorization_denied: 'denied', invalid_state: 'expired', signin_required: 'expired', account_changed: 'wrong_account', scope_mismatch: 'scope', refresh_missing: 'retry', connection_changed: 'changed', service_response: 'failed' };
           return redirect(location(codes[error.code] || 'failed'));
         }
       }
       if (req.headers['sec-fetch-site'] === 'cross-site') fail(403, 'cross_site_denied', '外部サイトからの操作は許可されていません。');
       const requestRoute = route?.group === 'requests' ? route.params : null;
       // One tree, one question. A bearer token, when sent, says which principal speaks. Without one the browser
-      // speaks, through its login session or the short connection a single-use link left, and every change it
+      // speaks, through its signin session or the short connection a single-use link left, and every change it
       // asks for must come from Foundation's own pages. Cookies are never read beside a token.
       const token = bearer(req), browser = req.headers.authorization === undefined;
       if (!browser && !token) fail(401, 'invalid_token', 'Bearer形式のキーを指定してください。');
-      // Becoming a principal needs no connection and no login: the request carries nothing to protect.
+      // Becoming a principal needs no connection and no signin: the request carries nothing to protect.
       const becoming = at === 'principals' && method === 'POST' && browser && !cookieToken(req);
       if (browser && !['GET', 'HEAD'].includes(method) && !becoming) requireOrigin(req, origin);
       if (!browser && req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
-      if (at === 'login' && method === 'GET') return send(200, { available: auth.emailEnabled ?? auth.enabled, method: 'email_link', pending: logins.summary(loginToken) });
-      if (at === 'login' && method === 'POST') {
+      if (at === 'signin' && method === 'GET') return send(200, { available: auth.emailEnabled ?? auth.enabled, method: 'email_link', pending: signins.summary(signinToken) });
+      if (at === 'signin' && method === 'POST') {
         const input = await body(req);
-        const email = loginEmail(input?.email);
+        const email = signinEmail(input?.email);
         // Reachable from anywhere means anyone who finds the URL could otherwise make themselves an owner here.
         if (owners && !owners.has(email)) fail(403, 'not_invited', 'このアドレスではご利用いただけません。');
         const destination = returnPath(input.return_to);
         rateLimit('link-send:' + clientAddress(req), 12, 600_000);
-        const { token: pendingToken, row } = logins.reserve(email);
+        const { token: pendingToken, row } = signins.reserve(email);
         try {
-          const redirectUri = origin + LOGIN_CONFIRM + (destination === '/' ? '' : '?' + new URLSearchParams({ return_to: destination }));
+          const redirectUri = origin + SIGNIN_CONFIRM + (destination === '/' ? '' : '?' + new URLSearchParams({ return_to: destination }));
           await auth.sendLink(row.email, redirectUri);
-          logins.sent(pendingToken, loginToken);
-          setNamedCookie('fdn_login', pendingToken, LOGIN_TTL / 1000);
-          return send(202, { pending: logins.summary(pendingToken) });
-        } catch (error) { logins.cancel(pendingToken); throw error; }
+          signins.sent(pendingToken, signinToken);
+          setNamedCookie('fdn_signin', pendingToken, SIGNIN_TTL / 1000);
+          return send(202, { pending: signins.summary(pendingToken) });
+        } catch (error) { signins.cancel(pendingToken); throw error; }
       }
-      if (at === 'verifyLogin' && method === 'POST') {
+      if (at === 'verifySignin' && method === 'POST') {
         requireOrigin(req, origin);
-        rateLimit('login:' + clientAddress(req), 30, 600_000);
-        const input = await body(req), email = loginEmail(input?.email), destination = returnPath(input.return_to);
+        rateLimit('signin:' + clientAddress(req), 30, 600_000);
+        const input = await body(req), email = signinEmail(input?.email), destination = returnPath(input.return_to);
         if (typeof input.token_hash !== 'string' || !/^[A-Za-z0-9_-]{20,2048}$/.test(input.token_hash)) fail(400, 'invalid_link', 'リンクが無効です。最新のメールのリンクを開いてください。');
         if (owners && !owners.has(email)) fail(403, 'not_invited', 'このアドレスではご利用いただけません。');
         // The displayed account is untrusted until the provider returns the matching identity.
@@ -346,32 +345,32 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         try { session = await auth.verifyLink(input.token_hash); }
         catch (error) {
           if (error instanceof HttpError) throw error;
-          fail(503, 'auth_unavailable', 'ログインサービスに接続できません。しばらく待ってからお試しください。');
+          fail(503, 'auth_unavailable', 'サインインサービスに接続できません。しばらく待ってからお試しください。');
         }
         if (session.user.email.toLowerCase() !== email || req.aborted || req.socket.destroyed) {
-          try { await auth.logout(session.access_token); } catch {}
+          try { await auth.signout(session.access_token); } catch {}
           fail(401, 'invalid_link', 'リンクが無効です。最新のメールのリンクを開いてください。');
         }
         const next = sessions.create(session);
         sessions.remove(cookieToken(req));
         setCookie(next, SESSION_AGE);
-        logins.cancel(loginToken);
-        setNamedCookie('fdn_login', '', 0);
+        signins.cancel(signinToken);
+        setNamedCookie('fdn_signin', '', 0);
         return send(200, { ok: true, return_to: destination });
       }
-      if (at === 'login' && method === 'DELETE') {
-        logins.cancel(loginToken); setNamedCookie('fdn_login', '', 0);
+      if (at === 'signin' && method === 'DELETE') {
+        signins.cancel(signinToken); setNamedCookie('fdn_signin', '', 0);
         return send(200, { ok: true });
       }
       if (at === 'session' && method === 'DELETE') {
         const session = sessions.get(cookieToken(req));
-        logins.cancel(loginToken);
+        signins.cancel(signinToken);
         sessions.remove(cookieToken(req));
         setCookie('', 0);
-        setNamedCookie('fdn_login', '', 0);
-        let authLogout = true;
-        if (session) { try { await auth.logout(session.value.access_token); } catch { authLogout = false; } }
-        return send(200, { ok: true, authLogout });
+        setNamedCookie('fdn_signin', '', 0);
+        let authSignout = true;
+        if (session) { try { await auth.signout(session.value.access_token); } catch { authSignout = false; } }
+        return send(200, { ok: true, authSignout });
       }
       // The services Foundation knows, and how it comes to hold a connection for each. Public: a key not yet
       // approved reads it too.
@@ -428,15 +427,15 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       const permit = (name, type, id, holder = type === 'principal' ? id : holderId) => {
         asked_ = { subject, action: { name }, resource: { type, ...(id === undefined ? {} : { id }), holder } };
         if (authorization.allowed(asked_).decision) return;
-        if (subject.via.kind === 'link') fail(401, 'login_required', 'ログインしてください。');
+        if (subject.via.kind === 'link') fail(401, 'signin_required', 'サインインしてください。');
         if (subject.via.kind === 'key' && holder !== subject.id && !principals.relationsOf(subject.id).length) notApproved();
         fail(403, 'forbidden', 'この操作は許可されていません。');
       };
       // Reading an upload may outlive its authorization. Recheck before committing any change: what the subject came in
       // by, and the same question the route asked before reading.
       const still = () => {
-        if (subject.via.kind === 'session') { if (localSession(req).id !== session.id) fail(401, 'login_required', 'ログインしてください。'); }
-        else if (subject.via.kind === 'link') { if (!principals.hasLink(subject.id, subject.via.id)) fail(401, 'login_required', 'このリンクは使えません。元の画面から開き直してください。'); }
+        if (subject.via.kind === 'session') { if (localSession(req).id !== session.id) fail(401, 'signin_required', 'サインインしてください。'); }
+        else if (subject.via.kind === 'link') { if (!principals.hasLink(subject.id, subject.via.id)) fail(401, 'signin_required', 'このリンクは使えません。元の画面から開き直してください。'); }
         else if (!principals.hasKey(subject.id, subject.via.id)) fail(401, 'not_approved', 'このキーは失効しています。');
         if (asked_ && !authorization.allowed(asked_).decision) fail(401, 'not_approved', 'この相手の代わりには動けません。');
       };
@@ -505,7 +504,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
             return send(200, { request: viewRequest(requestActions.grantRelation(id, subject.id, input.user_code), origin) });
           }
           if (pending.type === 'app') {
-            if (!session) fail(401, 'login_required', 'ログインしてください。');
+            if (!session) fail(401, 'signin_required', 'サインインしてください。');
             const input = await inputBody();
             return send(200, { registered: true, ...requestActions.registerApp(id, subject.id, input) });
           }
@@ -520,7 +519,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
-      if (subject.via.kind === 'link') fail(401, 'login_required', 'ログインしてください。');
+      if (subject.via.kind === 'link') fail(401, 'signin_required', 'サインインしてください。');
       // Principals: oneself, and those one owns.
       if (at === 'me') {
         if (method === 'GET') return send(200, { principal: self, ...(subject.via.kind === 'key' ? { key: { id: subject.via.id, ...(subject.via.environment ? { environment: subject.via.environment } : {}) } } : {}), acts_for: actsFor, owners: principals.ownersOf(subject.id), keys: principals.keys(subject.id), requests: requests.list(subject.id, 'pending').map(row => viewRequest(row, origin, { code: true })) });
@@ -593,7 +592,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
             return send(200, { ok: true });
           }
         }
-        // A request link: handed to the principal asked, to answer that one request without a login.
+        // A request link: handed to the principal asked, to answer that one request without a signin.
         if (part === 'links' && !keyId && method === 'POST') {
           permit('issue-link', 'principal', id);
           const input = await inputBody();
@@ -996,7 +995,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       // /v1/resources.
       if (at === 'confirmation' && ['GET', 'POST', 'DELETE'].includes(method)) {
         permit('connect', 'connection');
-        if (!session) fail(401, 'login_required', 'ログインしてください。');
+        if (!session) fail(401, 'signin_required', 'サインインしてください。');
         const state = method === 'GET' ? url.searchParams.get('state') : (await inputBody()).state;
         const flow = flows.peek(session.id, state);
         if (!flow || flow.kind !== 'confirmation') fail(400, 'invalid_state', '接続をやり直してください。');
@@ -1041,7 +1040,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           const saved = requestActions.connect(request?.id, holderId, ref, 'token', result, { requestedBy, previous, name: input.name?.trim() });
           return send(previous ? 200 : 201, { connection: connections.view(saved, { owner: true }) });
         }
-        if (!session) fail(401, 'login_required', 'ログインしてください。');
+        if (!session) fail(401, 'signin_required', 'サインインしてください。');
         const previousState = previous ? connections.state(previous) : null;
         const scopes = requestedScopes(scheme, asked ? asked.scopes ?? [] : scopeList(input.scopes), previousState);
         // Reconnecting keeps the app the connection was made through unless another is named.
@@ -1068,7 +1067,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       if (at === 'completeConnection' && method === 'POST') {
         permit('connect', 'connection');
         const input = await inputBody();
-        if (!session) fail(401, 'login_required', 'ログインしてください。');
+        if (!session) fail(401, 'signin_required', 'サインインしてください。');
         limit('connect', 10);
         const flow = flows.peek(session.id, input.state);
         if (!flow || flow.kind !== 'role') fail(400, 'invalid_state', '接続をやり直してください。');

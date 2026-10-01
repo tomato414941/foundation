@@ -110,7 +110,7 @@ test('アカウントを固定IDで区別し、名前の変更を反映して別
   f.ebay.inspectHandler = () => json(inspected({ username: 'renamed-seller' }));
   const reconnected = await f.connect('personal', { connection_id: a.id });
   assert.equal(reconnected.id, a.id); assert.equal(reconnected.label, 'renamed-seller');
-  await f.login('second@example.test');
+  await f.signin('second@example.test');
   const stranger = await f.issueKey();
   assert.deepEqual((await f.request('/v1/resources?kind=connection', { token: stranger.token })).json.resources, []);
   assert.equal((await f.inject(a, { token: stranger.token })).status, 404);

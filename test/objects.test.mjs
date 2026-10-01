@@ -132,7 +132,7 @@ test('keeps one owner out of another owner\'s room', async (t) => {
   const f = await space(t);
   await f.request('/v1/resources?kind=object&name=private.txt', { method: 'PUT', token: KEY, raw: Buffer.from('secret'), type: 'text/plain' });
   let other;
-  await f.login('other@example.test');
+  await f.signin('other@example.test');
   other = (await f.approveKey('their-ai')).token;
   const listed = await f.request('/v1/resources?kind=object', { token: other });
   assert.deepEqual(listed.json.resources, []);

@@ -98,9 +98,9 @@ test('不正な接続方法の追加を断り、変更前の名前と設定を�
 
 test('他の利用者による接続方法の追加を断り、持ち主のサービスを保護する', async t => {
   const f = await fixture(t), service = (await register(f, 'Notes')).json.resource.id;
-  await f.login('other@example.test');
+  await f.signin('other@example.test');
   const result = await f.request('/v1/resources/' + service, { method: 'PATCH', data: { auth_schemes: { oauth } } });
   assert.equal(result.status, 403, result.text);
-  await f.login();
+  await f.signin();
   assert.deepEqual((await f.request('/v1/resources/' + service)).json.resource.definition.auth_schemes, {});
 });

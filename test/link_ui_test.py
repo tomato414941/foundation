@@ -34,10 +34,10 @@ with sync_playwright() as p:
     owner = browser.new_context().new_page()
     owner.goto(args.base + '/', wait_until='networkidle')
     owner.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
-    owner.get_by_role('button', name='ログインメールを送信', exact=True).click()
+    owner.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(owner.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    owner.goto(args.base + '/login/confirm#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
-    owner.get_by_role('button', name='ログイン', exact=True).click()
+    owner.goto(args.base + '/signin/confirm#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    owner.get_by_role('button', name='サインイン', exact=True).click()
     owner.wait_for_load_state('networkidle')
     owner.set_viewport_size({'width': 1280, 'height': 1000})
     # The registration lives on its own page, reached through the account, not the home.
@@ -80,7 +80,7 @@ with sync_playwright() as p:
     page.goto(link, wait_until='networkidle')
     expect(page.get_by_role('heading', name='npm のアクセストークンを登録する', exact=True)).to_be_visible()
     assert '#' not in page.url, 'the link is taken out of the address bar once spent'
-    expect(page.get_by_role('button', name='ログアウト')).to_have_count(0)
+    expect(page.get_by_role('button', name='サインアウト')).to_have_count(0)
     expect(page.get_by_text('パッケージの公開に使います。', exact=True)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'link-request.png'), full_page=True)
@@ -101,10 +101,10 @@ with sync_playwright() as p:
     again = browser.new_context().new_page()
     again.goto(link, wait_until='networkidle')
     expect(again.get_by_role('heading', name='npm のアクセストークンを登録する', exact=True)).to_have_count(0)
-    expect(again.get_by_role('button', name='ログアウト')).to_have_count(0)
+    expect(again.get_by_role('button', name='サインアウト')).to_have_count(0)
     assert again.get_by_role('link', name='ai-simplicityに戻る').get_attribute('href') == 'https://simplicity.example.test/foundation/again?foundation_request=' + asked['id']
     review(again)
     again.screenshot(path=str(shots / 'link-spent.png'), full_page=True)
     assert not errors, errors
     browser.close()
-print('Link flow passed: a product registered once, its user opened a single-use link with no Foundation login, kept one value for their own key, and the spent link reached nothing.')
+print('Link flow passed: a product registered once, its user opened a single-use link with no Foundation signin, kept one value for their own key, and the spent link reached nothing.')

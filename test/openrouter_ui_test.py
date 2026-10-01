@@ -43,10 +43,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.goto(approval['verification_uri'], wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
-    page.get_by_role('button', name='ログインメールを送信', exact=True).click()
+    page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    page.goto(args.base + '/login/confirm?' + urlencode({'return_to': urlparse(page.url).path}) + '#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
-    page.get_by_role('button', name='ログイン', exact=True).click()
+    page.goto(args.base + '/signin/confirm?' + urlencode({'return_to': urlparse(page.url).path}) + '#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_load_state('networkidle')
     # The key is approved first; the registration is a separate request with no code.
     page.get_by_label('確認コード', exact=True).fill(approval['user_code'])
@@ -126,4 +126,4 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     assert not errors, errors
     context.close()
     browser.close()
-    print('OpenRouter browser flow passed: login, PKCE return/cancellation, explicit approval, CLI resume, delivery into a command, runtime revocation, manual key deletion notice, starting one from the dashboard, mobile. No paid API calls.')
+    print('OpenRouter browser flow passed: signin, PKCE return/cancellation, explicit approval, CLI resume, delivery into a command, runtime revocation, manual key deletion notice, starting one from the dashboard, mobile. No paid API calls.')

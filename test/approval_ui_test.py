@@ -43,14 +43,14 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.goto(request['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_role('heading', name='ログイン', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='サインイン', exact=True)).to_be_visible()
     expect(page.get_by_text('依頼の確認', exact=True)).to_be_visible()
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
-    page.get_by_role('button', name='ログインメールを送信', exact=True).click()
+    page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     callback = context.new_page()
-    callback.goto(args.base + '/login/confirm?' + urlencode({'return_to': urlparse(request['verification_uri']).path}) + '#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
-    callback.get_by_role('button', name='ログイン', exact=True).click()
+    callback.goto(args.base + '/signin/confirm?' + urlencode({'return_to': urlparse(request['verification_uri']).path}) + '#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    callback.get_by_role('button', name='サインイン', exact=True).click()
     expect(callback.get_by_role('heading', name='アクセスを許可する', exact=True)).to_be_visible()
     expect(callback.get_by_text('laptop のAIの依頼', exact=True)).to_be_visible()
     assert callback.url == request['verification_uri']

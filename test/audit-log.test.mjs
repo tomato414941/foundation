@@ -21,7 +21,7 @@ test('複数の利用者の代理を務めるキーの操作履歴を、対象�
   await f.keep('secret', 'first-value', 'fixture-a');
   await deliver(f, key, USER_A, 'first-value');
 
-  await f.login('other@example.test');
+  await f.signin('other@example.test');
   await f.keep('secret', 'second-value', 'fixture-b');
   const asked = await f.request('/v1/requests', {
     method: 'POST', token: key.token, anonymous: true,
@@ -36,7 +36,7 @@ test('複数の利用者の代理を務めるキーの操作履歴を、対象�
 
   const forSecond = await deliveries(f);
   assert.deepEqual(forSecond.map(row => [row.object_id, row.detail.inputs]), [[USER_B, [{ name: 'second-value' }]]]);
-  await f.login();
+  await f.signin();
   const forFirst = await deliveries(f);
   assert.deepEqual(forFirst.map(row => [row.object_id, row.detail.inputs]), [[USER_A, [{ name: 'first-value' }]]]);
 

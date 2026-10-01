@@ -18,11 +18,11 @@ app.server.listen(config.port, config.bind, () => {
   console.log(`Encryption key: ${kms ? 'wrapped by KMS ' + config.kms.keyId : 'plaintext key file or variable'}`);
   if (config.publicOrigin) console.log(`Private preview: ${config.publicOrigin}`);
   console.log(`Supabase Auth: ${auth.enabled ? 'configured' : 'not configured'}`);
-  console.log(`Email login: ${auth.emailEnabled ? 'enabled' : 'disabled'}; Object space: ${config.objects.bucket || 'not configured'}`);
+  console.log(`Email signin: ${auth.emailEnabled ? 'enabled' : 'disabled'}; Object space: ${config.objects.bucket || 'not configured'}`);
   // Which services Foundation's own side is set up for: its OAuth app, or its role.
   console.log('Services with Foundation\'s own app or role: ' + services.filter(entry => Object.values(entry.schemes).some(scheme => scheme.kind !== 'token' && scheme.available)).map(entry => entry.definition.id).join(', '));
   console.log(`Lent machines: ${runner ? 'Fly Machines, app ' + config.runner.app + ' in ' + config.runner.region : 'not configured'}`);
-  console.log(`Owners: ${config.owners.length ? config.owners.join(', ') : 'anyone who can log in'}`);
+  console.log(`Owners: ${config.owners.length ? config.owners.join(', ') : 'anyone who can sign in'}`);
 });
 let closing = false;
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => {

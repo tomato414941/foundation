@@ -94,7 +94,7 @@ test('複数アカウントをメールアドレスで区別し、別の所有�
   assert.notEqual(a.id, b.id);
   assert.equal(a.subject, 'personal@example.test'); assert.equal(b.facts.account_id, 'sub-work');
   assert.equal((await f.inject(b, { token: agent.token })).json.injection.environment.GOOGLE_ACCOUNT_EMAIL, 'work@example.test');
-  await f.login('second@example.test');
+  await f.signin('second@example.test');
   const stranger = await f.issueKey();
   assert.deepEqual((await f.request('/v1/resources?kind=connection', { token: stranger.token })).json.resources, []);
   assert.equal((await f.inject(a, { token: stranger.token })).status, 404);

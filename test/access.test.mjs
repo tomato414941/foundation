@@ -48,14 +48,14 @@ test('自分宛ての未完了依頼を取り消し、他のアカウントの�
   const completed = await f.request('/v1/requests/' + pendingA.id + '/grant', { method: 'POST', data: { entries: [{ name: 'kept', content: 'value' }] } });
   assert.equal(completed.status, 200);
   const nextA = await ask(f, agent, USER_A);
-  await f.login('other@example.test');
+  await f.signin('other@example.test');
   const approval = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'relation', relation: 'actor' }], to: USER_B } });
   assert.equal(approval.status, 201);
   assert.equal((await f.request(`/v1/requests/${approval.json.request.id}/grant`, { method: 'POST', data: { user_code: approval.json.request.user_code } })).status, 200);
   const privateB = await f.keep('secret', 'private-b', 'other-value');
   f.app.principals.relate(agent.id, 'viewer', 'resource', privateB.json.resource.id);
   const pendingB = await ask(f, agent, USER_B);
-  await f.login();
+  await f.signin();
   assert.equal((await revoke(f, agent.id)).status, 200);
   const me = (await f.request('/v1/principals/me', { token: agent.token })).json;
   assert.deepEqual(me.acts_for, [USER_B]);
@@ -67,7 +67,7 @@ test('自分宛ての未完了依頼を取り消し、他のアカウントの�
   }
   assert.equal((await f.request('/v1/requests/' + pendingA.id, { token: agent.token })).json.request.status, 'granted');
   assert.equal((await f.request('/v1/requests/' + pendingB.id, { token: agent.token })).json.request.status, 'pending');
-  await f.login('other@example.test');
+  await f.signin('other@example.test');
   assert.equal((await f.request('/v1/requests/' + pendingB.id + '/grant', { method: 'POST', data: { entries: [{ name: 'requested', content: 'b-value' }] } })).status, 200);
 });
 

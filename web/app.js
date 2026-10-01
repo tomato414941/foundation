@@ -3,16 +3,16 @@ import { pages, brand, pageTitle, workspaceView, pendingView } from './workspace
 
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
 const publicInfo = document.querySelector('#public-info');
-let state = null, toastTimer, loginTimer, revision = 0, refreshController, refreshDeferred = false;
-const isLoginConfirmation = location.pathname === '/login/confirm';
+let state = null, toastTimer, signinTimer, revision = 0, refreshController, refreshDeferred = false;
+const isSigninConfirmation = location.pathname === '/signin/confirm';
 // A fragment is not sent in HTTP requests. Keep the emailed key only in this page's memory.
-const loginLink = isLoginConfirmation ? new URLSearchParams(location.hash.slice(1)) : null;
-const loginReturn = isLoginConfirmation ? new URL(location.href).searchParams.get('return_to') || '/' : '/';
-if (isLoginConfirmation) history.replaceState(null, '', '/login/confirm');
+const signinLink = isSigninConfirmation ? new URLSearchParams(location.hash.slice(1)) : null;
+const signinReturn = isSigninConfirmation ? new URL(location.href).searchParams.get('return_to') || '/' : '/';
+if (isSigninConfirmation) history.replaceState(null, '', '/signin/confirm');
 // Each request has its own URL, including a counterpart asking for access.
 const requestId = location.pathname.match(/^\/requests\/([A-Za-z0-9_-]{43})$/)?.[1];
 const requestApi = requestId && '/v1/requests/' + requestId;
-// Opened through another product's single-use link: there is no Foundation login, only that one request.
+// Opened through another product's single-use link: there is no Foundation signin, only that one request.
 const linkToken = requestId ? new URLSearchParams(location.hash.slice(1)).get('link') : null;
 let linked = false, back = null;
 // Back to the product: its return page with how the request ended, or its refresh page when the link was no good.
@@ -21,14 +21,6 @@ try { linked = Boolean(requestId) && sessionStorage.getItem('linked:' + requestI
 let page = Object.hasOwn(pages, location.pathname) ? location.pathname.slice(1) || 'home' : 'home';
 let pagePath = requestId ? location.pathname : page === 'home' ? '/' : '/' + page;
 let accessRequest = null, requestError = '';
-const loginMessages = {
-  expired: '有効期限が切れています。もう一度ログインメールを送信してください。',
-  invalid: 'リンクが無効か、有効期限が切れています。最新のメールのリンクを開いてください。',
-  busy: 'ログインを確認しています。少し待ってからページを開き直してください。',
-  limited: '操作が続いています。しばらく待ってからお試しください。',
-  unavailable: 'ログインサービスに接続できません。少し待ってからリンクを開き直してください。',
-};
-let loginNotice = loginMessages[new URL(location.href).searchParams.get('login')] || '';
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 // The lent space, laid out the way an object browser is: a prefix acts as a folder, the list is a table
 // you can sort and select in, and everything acts on the level you are looking at. The keys only look
@@ -157,28 +149,28 @@ async function api(path, { method = 'GET', data, signal, headers = {} } = {}) {
   signal?.throwIfAborted();
   if (!response.ok) {
     const error = new Error(result.error?.message || '処理を完了できませんでした。'); error.status = response.status; error.code = result.error?.code; error.details = result.error;
-    if (response.status === 401 && !linked && path !== '/v1/session' && !path.startsWith('/v1/login')) await showLogin();
+    if (response.status === 401 && !linked && path !== '/v1/session' && !path.startsWith('/v1/signin')) await showSignin();
     throw error;
   }
   return result;
 }
-function showLoginConfirmation() {
-  const email = loginLink.get('email') || '', tokenHash = loginLink.get('token_hash') || '';
-  const valid = loginLink.getAll('email').length === 1 && loginLink.getAll('token_hash').length === 1
+function showSigninConfirmation() {
+  const email = signinLink.get('email') || '', tokenHash = signinLink.get('token_hash') || '';
+  const valid = signinLink.getAll('email').length === 1 && signinLink.getAll('token_hash').length === 1
     && email.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(email) && /^[A-Za-z0-9_-]{20,2048}$/.test(tokenHash);
-  app.innerHTML = `<div class="workspace login-shell"><header class="topbar">${brand}</header><main class="login-main"><div class="login-symbol" aria-hidden="true">${icon('mail')}</div>
-    <h1>${valid ? 'ログイン' : 'リンクを確認'}</h1>
-    ${valid ? `<p class="login-address">${esc(email)}</p><form id="confirm-login"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">ログイン ${icon('arrow')}</button></form>
-    <p class="login-footer"><a href="/">別のメールアドレスを使う</a></p>` : '<p class="login-help">メールに届いたリンクを開き直してください。</p><p class="login-footer"><a href="/">ログインメールを送信</a></p>'}</main></div>`;
+  app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand}</header><main class="signin-main"><div class="signin-symbol" aria-hidden="true">${icon('mail')}</div>
+    <h1>${valid ? 'サインイン' : 'リンクを確認'}</h1>
+    ${valid ? `<p class="signin-address">${esc(email)}</p><form id="confirm-signin"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">サインイン ${icon('arrow')}</button></form>
+    <p class="signin-footer"><a href="/">別のメールアドレスを使う</a></p>` : '<p class="signin-help">メールに届いたリンクを開き直してください。</p><p class="signin-footer"><a href="/">サインインメールを送信</a></p>'}</main></div>`;
   if (!valid) return;
-  const form = document.querySelector('#confirm-login'), button = form.querySelector('button');
+  const form = document.querySelector('#confirm-signin'), button = form.querySelector('button');
   form.addEventListener('submit', async event => {
     event.preventDefault();
     if (button.disabled) return;
     button.disabled = true;
     form.querySelector('.form-error').textContent = '';
     try {
-      const result = await api('/v1/login/verify', { method: 'POST', data: { email, token_hash: tokenHash, return_to: loginReturn } });
+      const result = await api('/v1/signin/verify', { method: 'POST', data: { email, token_hash: tokenHash, return_to: signinReturn } });
       location.replace(result.return_to);
     } catch (error) {
       form.querySelector('.form-error').textContent = error.message;
@@ -186,53 +178,53 @@ function showLoginConfirmation() {
     }
   });
 }
-async function showLogin({ email = '', message = loginNotice } = {}) {
-  clearInterval(loginTimer);
+async function showSignin({ email = '', message = '' } = {}) {
+  clearInterval(signinTimer);
   refreshController?.abort();
   const current = ++revision; state = null; refreshDeferred = false; closeDialog();
   document.title = 'Foundation';
   app.innerHTML = pendingView('/');
   let config = { available: false, pending: null };
-  try { config = await api('/v1/login'); }
-  catch (error) { if (current === revision) showRefreshError(error, 'retry-login'); return; }
+  try { config = await api('/v1/signin'); }
+  catch (error) { if (current === revision) showRefreshError(error, 'retry-signin'); return; }
   if (current !== revision) return;
   const pending = config.available ? config.pending : null;
-  app.innerHTML = `<div class="workspace login-shell"><header class="topbar">${brand}</header><main class="login-main"><div class="login-symbol" aria-hidden="true">${icon('mail')}</div>${requestId ? '<p class="login-context">依頼の確認</p>' : ''}<h1>${pending ? 'メールを確認' : 'ログイン'}</h1>
-    ${pending ? `<p class="login-intro" id="email-sent">ログイン用のリンクをお送りしました。</p><p class="login-address">${esc(pending.email)}</p><p class="login-help">メールのリンクからログインしてください。有効期限は15分です。</p>` : ''}
-    <form id="login-form">${pending ? '' : `<label for="login-email">メールアドレス</label><input id="login-email" name="email" type="email" autocomplete="email" required maxlength="254" value="${esc(email)}" ${config.available ? '' : 'disabled'}>`}
-    <p class="form-error" role="alert">${config.available ? esc(message) : '現在ログインを利用できません。'}</p><button class="button ${pending ? 'secondary' : 'primary'} full" type="submit" ${pending ? 'id="resend-link" disabled' : config.available ? '' : 'disabled'}>${pending ? 'メールを再送信' : 'ログインメールを送信'} ${pending ? '' : icon('arrow')}</button></form>
-    ${pending ? '<p class="login-help login-delivery">届かない場合は、迷惑メールフォルダもご確認ください。</p><div class="login-actions"><button class="text-button" type="button" id="change-email">メールアドレスを変更</button></div>' : ''}</main></div>`;
-  if (!requestId && !pending && publicInfo) app.querySelector('.login-main').append(publicInfo);
-  const form = document.querySelector('#login-form');
+  app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand}</header><main class="signin-main"><div class="signin-symbol" aria-hidden="true">${icon('mail')}</div>${requestId ? '<p class="signin-context">依頼の確認</p>' : ''}<h1>${pending ? 'メールを確認' : 'サインイン'}</h1>
+    ${pending ? `<p class="signin-intro" id="email-sent">サインイン用のリンクをお送りしました。</p><p class="signin-address">${esc(pending.email)}</p><p class="signin-help">メールのリンクからサインインしてください。有効期限は15分です。</p>` : ''}
+    <form id="signin-form">${pending ? '' : `<label for="signin-email">メールアドレス</label><input id="signin-email" name="email" type="email" autocomplete="email" required maxlength="254" value="${esc(email)}" ${config.available ? '' : 'disabled'}>`}
+    <p class="form-error" role="alert">${config.available ? esc(message) : '現在サインインを利用できません。'}</p><button class="button ${pending ? 'secondary' : 'primary'} full" type="submit" ${pending ? 'id="resend-link" disabled' : config.available ? '' : 'disabled'}>${pending ? 'メールを再送信' : 'サインインメールを送信'} ${pending ? '' : icon('arrow')}</button></form>
+    ${pending ? '<p class="signin-help signin-delivery">届かない場合は、迷惑メールフォルダもご確認ください。</p><div class="signin-actions"><button class="text-button" type="button" id="change-email">メールアドレスを変更</button></div>' : ''}</main></div>`;
+  if (!requestId && !pending && publicInfo) app.querySelector('.signin-main').append(publicInfo);
+  const form = document.querySelector('#signin-form');
   let busy = false;
   function setBusy(value) {
     busy = value;
-    for (const button of app.querySelectorAll('.login-main button')) button.disabled = value;
+    for (const button of app.querySelectorAll('.signin-main button')) button.disabled = value;
     if (!value && pending) updateResend();
   }
   function updateResend() {
     const resend = document.querySelector('#resend-link');
-    if (current !== revision || !resend) { clearInterval(loginTimer); return; }
+    if (current !== revision || !resend) { clearInterval(signinTimer); return; }
     const seconds = Math.max(0, Math.ceil((pending.resend_at - Date.now()) / 1000));
     resend.disabled = busy || seconds > 0;
     resend.textContent = seconds > 0 ? `再送信まで ${seconds}秒` : 'メールを再送信';
   }
   if (pending) {
-    updateResend(); loginTimer = setInterval(updateResend, 1000);
+    updateResend(); signinTimer = setInterval(updateResend, 1000);
     document.querySelector('#change-email').addEventListener('click', async () => {
       if (busy) return;
       setBusy(true);
-      try { await api('/v1/login', { method: 'DELETE' }); loginNotice = ''; await showLogin({ email: pending.email }); }
+      try { await api('/v1/signin', { method: 'DELETE' }); await showSignin({ email: pending.email }); }
       catch (error) { if (form.isConnected) { form.querySelector('.form-error').textContent = error.message; setBusy(false); } }
     });
   }
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (busy || !config.available || (pending && Date.now() < pending.resend_at)) return;
-    setBusy(true); loginNotice = ''; form.querySelector('.form-error').textContent = '';
+    setBusy(true); form.querySelector('.form-error').textContent = '';
     try {
-      await api('/v1/login', { method: 'POST', data: { email: pending?.email || form.elements.email.value.trim(), return_to: returnTo() } });
-      await showLogin();
+      await api('/v1/signin', { method: 'POST', data: { email: pending?.email || form.elements.email.value.trim(), return_to: returnTo() } });
+      await showSignin();
     } catch (error) {
       if (!form.isConnected) return;
       form.querySelector('.form-error').textContent = error.message; setBusy(false);
@@ -348,7 +340,7 @@ function navigate(url, { restore = false, position } = {}) {
   scrollToPage(position);
 }
 document.addEventListener('click', event => {
-  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || !state || requestId || isLoginConfirmation) return;
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || !state || requestId || isSigninConfirmation) return;
   const link = event.target.closest('a[href]');
   if (!link || link.hasAttribute('download') || (link.target && link.target !== '_self')) return;
   const url = new URL(link.href);
@@ -357,7 +349,7 @@ document.addEventListener('click', event => {
   event.preventDefault();
   if (url.href !== location.href) navigate(url);
 });
-if (!requestId && !isLoginConfirmation) {
+if (!requestId && !isSigninConfirmation) {
   history.scrollRestoration = 'manual';
   window.addEventListener('popstate', event => {
     if (!state) { location.reload(); return; }
@@ -428,7 +420,7 @@ function render() {
       else link.removeAttribute('aria-current');
     });
     document.title = pageTitle(pagePath);
-    app.querySelector('[data-action="logout"]').disabled = false;
+    app.querySelector('[data-action="signout"]').disabled = false;
     app.querySelector('main').removeAttribute('aria-busy');
     app.querySelector('main').innerHTML = inner;
   };
@@ -579,7 +571,7 @@ function bindObjects() {
       const response = await fetch('/v1/resources?' + new URLSearchParams({ kind: 'object', name: key }), { method: 'PUT', credentials: 'same-origin',
         headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
       const result = await response.json();
-      if (response.status === 401) await showLogin();
+      if (response.status === 401) await showSignin();
       if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
       toast(file.name + ' を追加しました。');
       refreshDeferred = true;
@@ -607,7 +599,7 @@ function codeField(enabled = true) {
 //   store     an approved key: the owner puts something into storage, following the AI's instructions.
 function renderRequest() {
   const row = accessRequest;
-  const shell = (content) => `<div class="workspace"><header class="topbar">${brand}${linked ? '' : `<div class="user-menu"><a href="/account"${page === 'account' ? ' aria-current="page"' : ''}>アカウント</a><button class="text-button" data-action="logout">ログアウト</button></div>`}</header><main class="approval-main">${content}</main></div>`;
+  const shell = (content) => `<div class="workspace"><header class="topbar">${brand}${linked ? '' : `<div class="user-menu"><a href="/account"${page === 'account' ? ' aria-current="page"' : ''}>アカウント</a><button class="text-button" data-action="signout">サインアウト</button></div>`}</header><main class="approval-main">${content}</main></div>`;
   const type = detailOf(row).type, asked = detailOf(row);
   if (!row || row.status !== 'pending' || !knownRequestKind(type)) {
     const view = requestResultView(row, requestError);
@@ -1149,7 +1141,7 @@ function bindSecretValue(entry, row) {
     panel.querySelectorAll('button').forEach(button => { button.disabled = true; });
     try {
       const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
-      if (response.status === 401) await showLogin();
+      if (response.status === 401) await showSignin();
       if (!response.ok) throw new Error('値を取得できませんでした。');
       const bytes = new Uint8Array(await response.arrayBuffer());
       if (!panel.isConnected) return false;
@@ -1217,7 +1209,7 @@ function bindSecretValue(entry, row) {
         const response = await fetch(path, { method: 'PUT', credentials: 'same-origin', cache: 'no-store',
           headers: { 'content-type': 'application/octet-stream', 'if-match': etag }, body: bytes });
         const result = await response.json();
-        if (response.status === 401) await showLogin();
+        if (response.status === 401) await showSignin();
         if (!response.ok) throw new Error(result.error?.message || '保存できませんでした。');
         binary = decode(bytes) === null; entry = result.resource; clear();
         state.secrets = state.secrets.map(item => item.id === entry.id ? entry : item);
@@ -1244,8 +1236,8 @@ document.addEventListener('click', async (event) => {
   try {
     if (action === 'close-dialog') closeDialog();
     if (action === 'retry-page') { target.disabled = true; try { await refresh(); } finally { if (target.isConnected) target.disabled = false; } }
-    if (action === 'retry-login') { target.disabled = true; await showLogin(); }
-    if (action === 'logout') { target.disabled = true; await api('/v1/session', { method: 'DELETE', data: {} }); await showLogin(); }
+    if (action === 'retry-signin') { target.disabled = true; await showSignin(); }
+    if (action === 'signout') { target.disabled = true; await api('/v1/session', { method: 'DELETE', data: {} }); await showSignin(); }
     if (action === 'request-connect') {
       target.disabled = true;
       if (accessRequest.auth_scheme === 'role') { await connectByPaste(accessRequest.service, 'role', { requestId }); target.disabled = false; return; }
@@ -1339,7 +1331,7 @@ document.addEventListener('click', async (event) => {
 });
 const resultCode = new URL(location.href).searchParams.get('result');
 const confirmationState = resultCode === 'review' ? new URL(location.href).searchParams.get('state') : null;
-window.addEventListener('pageshow', event => { if (event.persisted && !isLoginConfirmation) void refresh().catch(() => {}); });
+window.addEventListener('pageshow', event => { if (event.persisted && !isSigninConfirmation) void refresh().catch(() => {}); });
 if (linkToken) {
   try {
     await api('/v1/links/exchange', { method: 'POST', data: { request_id: requestId, link: linkToken } });
@@ -1347,11 +1339,11 @@ if (linkToken) {
     try { sessionStorage.setItem('linked:' + requestId, '1'); } catch {}
   } catch (error) { if (!linked) { linked = true; requestError = error.message; } }
 }
-if (isLoginConfirmation) showLoginConfirmation();
+if (isSigninConfirmation) showSigninConfirmation();
 else {
   if ((location.search || linkToken) && resultCode !== 'review') {
     const url = new URL(location.href);
-    for (const key of ['login', 'result', 'state']) url.searchParams.delete(key);
+    for (const key of ['signin', 'result', 'state']) url.searchParams.delete(key);
     if (linkToken) url.hash = '';
     history.replaceState(history.state, '', url);
   }

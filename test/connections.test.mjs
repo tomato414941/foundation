@@ -125,7 +125,7 @@ test('Listing narrows by a literal name prefix, and each owner reaches only thei
   const narrowed = await f.request('/v1/resources?kind=secret&prefix=github', { token, anonymous: true });
   assert.deepEqual(narrowed.json.resources.map(row => row.name), ['github/token', 'github/user']);
 
-  await f.login('other@example.test');
+  await f.signin('other@example.test');
   let other;
   other = (await f.approveKey('other-machine')).token;
   assert.deepEqual((await f.request('/v1/resources?kind=secret', { token: other, anonymous: true })).json.resources, []);
@@ -217,7 +217,7 @@ test('A stale editor respects renames, deletion, recreation, and owner boundarie
   assert.equal((await save()).status, 412);
   assert.equal((await f.read('secret', 'original')).text, 'recreated');
   const current = (await f.read('secret', 'original')).headers.get('etag');
-  await f.login('other@example.test');
+  await f.signin('other@example.test');
   assert.equal((await f.read('secret', 'original')).status, 404);
   assert.equal((await f.request(path, { method: 'PUT', raw: 'other owner', headers: { 'if-match': current } })).status, 412);
   assert.deepEqual((await f.request('/v1/overview')).json.secrets, []);
@@ -294,7 +294,7 @@ test('閲覧を許された相手は、その保有者の値だけを読み、�
   assert.equal(made.status, 201, made.text);
   const granted = await f.request('/v1/relations', { method: 'POST', data: { subject: made.json.principal.id, relation: 'viewer', object_type: 'resource', object_id: kept.json.resource.id } });
   assert.equal(granted.status, 201, granted.text);
-  await f.login('other@example.test');
+  await f.signin('other@example.test');
   await f.request('/v1/resources?kind=secret&name=shared', { method: 'PUT', raw: 'b-value' });
   const allowed = await f.request('/v1/resources/' + kept.json.resource.id + '/content', { token: made.json.token, anonymous: true });
   assert.equal(allowed.status, 200, allowed.text); assert.equal(allowed.text, 'a-value');

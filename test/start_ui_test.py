@@ -43,22 +43,22 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.goto(args.base, wait_until='networkidle')
-    expect(page.get_by_role('heading', name='ログイン', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='サインイン', exact=True)).to_be_visible()
     expect(page.get_by_role('link', name='API仕様', exact=True)).to_have_attribute('href', '/docs')
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 800})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         expect(page.get_by_role('link', name='API仕様', exact=True)).to_be_visible()
-        page.screenshot(path=str(shots / f'login-{width}.png'), full_page=True)
+        page.screenshot(path=str(shots / f'signin-{width}.png'), full_page=True)
     page.set_viewport_size({'width': 1280, 'height': 800})
     email = 'new-user@example.test'
     page.get_by_label('メールアドレス', exact=True).fill(email)
-    page.get_by_role('button', name='ログインメールを送信', exact=True).click()
+    page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     token_hash = hashlib.sha256(email.encode()).hexdigest()
-    page.goto(args.base + '/login/confirm#token_hash=' + token_hash + '&email=' + email,
+    page.goto(args.base + '/signin/confirm#token_hash=' + token_hash + '&email=' + email,
               wait_until='networkidle')
-    page.get_by_role('button', name='ログイン', exact=True).click()
+    page.get_by_role('button', name='サインイン', exact=True).click()
     expect(page.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()
 
     # After sign-in, the home page opens each resource page on desktop and mobile.

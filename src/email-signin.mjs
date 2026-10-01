@@ -1,12 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { fail } from './errors.mjs';
 
-export const LOGIN_TTL = 15 * 60_000;
+export const SIGNIN_TTL = 15 * 60_000;
 const RESEND_WAIT = 60_000;
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 
 // Delivery status is only for the resend screen. The emailed key is verified by Supabase.
-export class EmailLogins {
+export class EmailSignins {
   constructor({ now = Date.now } = {}) { this.now = now; this.pending = new Map(); this.cooldowns = new Map(); }
   sweep() {
     const now = this.now();
@@ -17,16 +17,16 @@ export class EmailLogins {
     this.sweep();
     const now = this.now(), emailKey = digest(email);
     if (this.cooldowns.has(emailKey)) fail(429, 'link_cooldown', '送信から1分ほど待って、もう一度お試しください。');
-    if (this.pending.size >= 1000 || this.cooldowns.size >= 1000) fail(429, 'login_rate_limit', 'しばらく待ってからお試しください。');
+    if (this.pending.size >= 1000 || this.cooldowns.size >= 1000) fail(429, 'signin_rate_limit', 'しばらく待ってからお試しください。');
     const token = randomBytes(32).toString('base64url');
-    const row = { email, expires_at: now + LOGIN_TTL, resend_at: now + RESEND_WAIT, sending: true };
+    const row = { email, expires_at: now + SIGNIN_TTL, resend_at: now + RESEND_WAIT, sending: true };
     this.cooldowns.set(emailKey, row.resend_at);
     this.pending.set(digest(token), row);
     return { token, row };
   }
   sent(token, previous) {
     const row = this.pending.get(digest(token));
-    if (!row || row.expires_at <= this.now()) fail(401, 'login_expired', 'もう一度、ログイン用のメールを送信してください。');
+    if (!row || row.expires_at <= this.now()) fail(401, 'signin_expired', 'もう一度、サインイン用のメールを送信してください。');
     row.sending = false;
     this.cancel(previous);
   }

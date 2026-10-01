@@ -34,15 +34,15 @@ with sync_playwright() as p:
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(args.base)
     page.wait_for_load_state("networkidle")
-    expect(page.get_by_role("heading", name="ログイン", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="サインイン", exact=True)).to_be_visible()
     check_display(page)
-    page.screenshot(path=str(shots / "login.png"), full_page=True)
+    page.screenshot(path=str(shots / "signin.png"), full_page=True)
     for width in [390, 320, 1280]:
         page.set_viewport_size({"width": width, "height": 950})
         check_display(page)
     if args.empty_config:
-        expect(page.get_by_role("button", name="ログインメールを送信", exact=True)).to_be_disabled()
-        expect(page.get_by_text("現在ログインを利用できません。", exact=True)).to_be_visible()
+        expect(page.get_by_role("button", name="サインインメールを送信", exact=True)).to_be_disabled()
+        expect(page.get_by_text("現在サインインを利用できません。", exact=True)).to_be_visible()
         for width in [390, 320]:
             page.set_viewport_size({"width": width, "height": 844})
             check_display(page)
@@ -53,7 +53,7 @@ with sync_playwright() as p:
         raise SystemExit(0)
 
     page.get_by_label("メールアドレス", exact=True).fill("owner@example.test")
-    page.get_by_role("button", name="ログインメールを送信", exact=True).click()
+    page.get_by_role("button", name="サインインメールを送信", exact=True).click()
     expect(page.get_by_role("heading", name="メールを確認", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="再送信まで", exact=False)).to_be_disabled()
     check_display(page)
@@ -65,23 +65,23 @@ with sync_playwright() as p:
             page.screenshot(path=str(shots / "email-link-mobile.png"), full_page=True)
     page.reload(wait_until="networkidle")
     expect(page.get_by_role("heading", name="メールを確認", exact=True)).to_be_visible()
-    assert "fdn_login" not in page.evaluate("document.cookie")
+    assert "fdn_signin" not in page.evaluate("document.cookie")
     assert page.evaluate("localStorage.length === 0 && sessionStorage.length === 0")
     page.get_by_role("button", name="メールアドレスを変更", exact=True).click()
     expect(page.get_by_label("メールアドレス", exact=True)).to_have_value("owner@example.test")
     page.get_by_label("メールアドレス", exact=True).fill("new@example.test")
-    page.get_by_role("button", name="ログインメールを送信", exact=True).click()
+    page.get_by_role("button", name="サインインメールを送信", exact=True).click()
     expect(page.get_by_role("heading", name="メールを確認", exact=True)).to_be_visible()
     expect(page.get_by_text("new@example.test", exact=True)).to_be_visible()
-    page.goto(args.base + "/login/confirm#token_hash=invalid-authorization-key&email=new%40example.test", wait_until="networkidle")
-    page.get_by_role("button", name="ログイン", exact=True).click()
+    page.goto(args.base + "/signin/confirm#token_hash=invalid-authorization-key&email=new%40example.test", wait_until="networkidle")
+    page.get_by_role("button", name="サインイン", exact=True).click()
     expect(page.get_by_text("リンクが無効か、有効期限が切れています。", exact=True)).to_be_visible()
-    assert page.url == args.base + "/login/confirm"
+    assert page.url == args.base + "/signin/confirm"
     # Simulate opening the email's link in another tab of the same browser.
     code = hashlib.sha256(b"new@example.test").hexdigest()
     link_page = context.new_page()
-    link_page.goto(args.base + "/login/confirm#token_hash=" + code + "&email=new%40example.test", wait_until="networkidle")
-    link_page.get_by_role("button", name="ログイン", exact=True).click()
+    link_page.goto(args.base + "/signin/confirm#token_hash=" + code + "&email=new%40example.test", wait_until="networkidle")
+    link_page.get_by_role("button", name="サインイン", exact=True).click()
     expect(link_page.get_by_role("heading", name="Foundation", exact=True)).to_be_visible()
     assert "code=" not in link_page.url and "#" not in link_page.url
     link_page.close()
@@ -95,7 +95,7 @@ with sync_playwright() as p:
     assert "fdn_session" not in page.evaluate("document.cookie")
     page.screenshot(path=str(shots / "empty.png"), full_page=True)
 
-    # Replace only Google's authorization page with a redirect. No Google login/network traffic.
+    # Replace only Google's authorization page with a redirect. No Google signin/network traffic.
     authorization = {"code": "personal", "deny": False, "scope": "openid"}
     def google_consent(route):
         query = parse_qs(urlparse(route.request.url).query)
@@ -237,10 +237,10 @@ with sync_playwright() as p:
     expect(gmail.get_by_role("heading", name="Google", exact=True)).to_have_count(1)
     expect(gmail.get_by_text("work@example.test", exact=True)).to_be_visible()
     assert deliver(connection_id, token_b).status == 404, "processing requires a connected account"
-    page.get_by_role("button", name="ログアウト", exact=True).click()
-    expect(page.get_by_role("heading", name="ログイン", exact=True)).to_be_visible()
+    page.get_by_role("button", name="サインアウト", exact=True).click()
+    expect(page.get_by_role("heading", name="サインイン", exact=True)).to_be_visible()
     assert not errors, errors
-    print("Browser checks passed: email-link signup/login, invalid links, reload, email change, cross-tab login, two connections, explicit processing, delivery, revoke, disconnect, mobile and copy.")
+    print("Browser checks passed: email-link signup/signin, invalid links, reload, email change, cross-tab signin, two connections, explicit processing, delivery, revoke, disconnect, mobile and copy.")
     print("Screenshots:", str(shots))
     caller.dispose()
     context.close()

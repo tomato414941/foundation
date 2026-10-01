@@ -50,7 +50,7 @@ test('CLIからリテラルな名前と接続の出力を明示して、値を�
     assert.equal(refused.out, '');
   }
 });
-const outputSpec = { name: 'login config', as: 'AUTH_FILE', filename: 'auth.json' };
+const outputSpec = { name: 'signin config', as: 'AUTH_FILE', filename: 'auth.json' };
 
 test('コマンドが作った非公開ファイルを名前どおりに保存し、後のコマンドへ渡す', async t => {
   const f = await outputFixture(t);
@@ -82,7 +82,7 @@ test('コマンドが作った非公開ファイルを名前どおりに保存�
 
 test('入力ファイルと出力ファイルを別々に渡し、成功した出力で指定した値を置き換える', async t => {
   const f = await outputFixture(t);
-  await f.request('/v1/resources?kind=secret&name=login%20config', { method: 'PUT', raw: 'previous-secret' });
+  await f.request('/v1/resources?kind=secret&name=signin%20config', { method: 'PUT', raw: 'previous-secret' });
   const input = { name: outputSpec.name, as: 'INPUT_FILE', filename: outputSpec.filename };
   const run = await execute(['exec', '--inputs', JSON.stringify([input]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
     const fs = require('node:fs');
@@ -92,7 +92,7 @@ test('入力ファイルと出力ファイルを別々に渡し、成功した�
   `], f.env);
   assert.equal(run.code, 0, run.err);
   for (const path of JSON.parse(run.out)) await assert.rejects(stat(dirname(path)), { code: 'ENOENT' });
-  const saved = await f.read('secret', 'login config');
+  const saved = await f.read('secret', 'signin config');
   assert.equal(saved.text, 'replacement-secret');
   assert.doesNotMatch(run.out + run.err, /previous-secret|replacement-secret/);
 });
@@ -113,7 +113,7 @@ test('出力指定とFoundationの承認を確認してからコマンドを実�
 
 test('コマンドが失敗すると一時ファイルを片づけて既存の保存値を維持する', async t => {
   const f = await outputFixture(t);
-  await f.request('/v1/resources?kind=secret&name=login%20config', { method: 'PUT', raw: 'previous-secret' });
+  await f.request('/v1/resources?kind=secret&name=signin%20config', { method: 'PUT', raw: 'previous-secret' });
   const input = { name: outputSpec.name, as: 'INPUT_FILE', filename: 'input' };
   const run = await execute(['exec', '--inputs', JSON.stringify([input]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
     require('node:fs').writeFileSync(process.env.AUTH_FILE, 'partial-secret');
@@ -122,7 +122,7 @@ test('コマンドが失敗すると一時ファイルを片づけて既存の�
   `], f.env);
   assert.equal(run.code, 7);
   for (const path of JSON.parse(run.out)) await assert.rejects(stat(dirname(path)), { code: 'ENOENT' });
-  assert.equal((await f.read('secret', 'login config')).text, 'previous-secret');
+  assert.equal((await f.read('secret', 'signin config')).text, 'previous-secret');
   assert.doesNotMatch(run.out + run.err, /partial-secret|previous-secret/);
 });
 
@@ -144,7 +144,7 @@ test('空・過大・公開・リンク・特殊ファイルの出力を安全�
     const run = await execute(['exec', '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `const fs = require('node:fs'), p = process.env.AUTH_FILE; console.log(p); ${script}`], f.env);
     assert.equal(run.code, 1, run.err); assert.match(run.err, expected);
     await assert.rejects(stat(dirname(run.out.trim())), { code: 'ENOENT' });
-    assert.equal((await f.read('secret', 'login config')).status, 404);
+    assert.equal((await f.read('secret', 'signin config')).status, 404);
     assert.doesNotMatch(run.out + run.err, /outside-secret|public-secret/);
   }
   assert.equal(await readFile(outside, 'utf8'), 'outside-secret');
@@ -170,10 +170,10 @@ test('保存に失敗したときだけ復旧用の非公開出力を残し、�
   assert.equal((await stat(outputPath)).mode & 0o777, 0o600);
   assert.deepEqual(await readdir(dirname(outputPath)), [outputSpec.filename]);
   assert.equal(await readFile(outputPath, 'utf8'), 'generated-secret');
-  assert.equal((await f.read('secret', 'login config')).status, 404);
-  const retried = await execute(['api', 'PUT', '/v1/resources?kind=secret&name=login%20config', '--from', outputPath], f.env);
+  assert.equal((await f.read('secret', 'signin config')).status, 404);
+  const retried = await execute(['api', 'PUT', '/v1/resources?kind=secret&name=signin%20config', '--from', outputPath], f.env);
   assert.equal(retried.code, 0, retried.err);
-  assert.equal((await f.read('secret', 'login config')).text, 'generated-secret');
+  assert.equal((await f.read('secret', 'signin config')).text, 'generated-secret');
   assert.doesNotMatch(run.out + run.err + retried.out + retried.err, /generated-secret|input-secret/);
 });
 
@@ -194,7 +194,7 @@ test('中断を子プロセスに伝えて一時ファイルを片づけ、途�
   assert.equal(await done, 1);
   assert.match(err, /interrupted/);
   await assert.rejects(stat(dirname(out.trim())), { code: 'ENOENT' });
-  assert.equal((await f.read('secret', 'login config')).status, 404);
+  assert.equal((await f.read('secret', 'signin config')).status, 404);
 });
 
 test('The runtime hands what is kept to the selected process only', async (t) => {
@@ -347,7 +347,7 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   const delivered = await run(foundation, ['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.GOOGLE_OAUTH_ACCESS_TOKEN!=="google-access-personal"||process.env.GOOGLE_ACCOUNT_EMAIL!=="personal@example.test")process.exit(2);console.log("package-ready")'], env);
   assert.equal(delivered.code, 0, delivered.err);
   assert.equal(delivered.out.trim(), 'package-ready');
-  const output = { name: 'installed login', as: 'NPM_CONFIG_USERCONFIG', filename: 'npmrc' };
+  const output = { name: 'installed signin', as: 'NPM_CONFIG_USERCONFIG', filename: 'npmrc' };
   const saved = await run(foundation, ['exec', '--output', JSON.stringify(output), '--', process.execPath, '-e', `
     const fs = require('node:fs'), cp = require('node:child_process');
     const config = cp.execFileSync('npm', ['config', 'get', 'userconfig'], { encoding: 'utf8' }).trim();
@@ -357,7 +357,7 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   `], env);
   assert.equal(saved.code, 0, saved.err);
   assert.equal(saved.out.trim(), 'output-ready');
-  assert.equal((await f.read('secret', 'installed login')).text, '//registry.npmjs.org/:_authToken=fake-install-token\n');
+  assert.equal((await f.read('secret', 'installed signin')).text, '//registry.npmjs.org/:_authToken=fake-install-token\n');
   assert.doesNotMatch(saved.out + saved.err, /fake-install-token/);
   const moved = await run(foundation, ['api', 'GET', '/openapi.json'], { ...env, FOUNDATION_URL: 'http://127.0.0.1:9' });
   assert.equal(moved.code, 1, 'FOUNDATION_URL wins over the remembered server');

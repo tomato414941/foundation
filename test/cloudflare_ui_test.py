@@ -21,10 +21,10 @@ with sync_playwright() as p:
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.goto(args.base + '/services', wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
-    page.get_by_role('button', name='ログインメールを送信', exact=True).click()
+    page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    page.goto(args.base + '/login/confirm?return_to=%2Fservices#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
-    page.get_by_role('button', name='ログイン', exact=True).click()
+    page.goto(args.base + '/signin/confirm?return_to=%2Fservices#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/services')
     page.wait_for_load_state('networkidle')
     # The way that asks least comes first; pasting a token or using one's own app sit under it.

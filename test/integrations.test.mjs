@@ -29,7 +29,7 @@ async function setup(t) {
     return asked.json.request;
   };
   const link = (account, requestId) => call('/principals/' + account.id + '/links', { method: 'POST', data: { request_id: requestId } });
-  // A browser with no Foundation login: it carries only what the link leaves behind.
+  // A browser with no Foundation signin: it carries only what the link leaves behind.
   const visitor = () => {
     let cookie = '';
     const go = async (path, options = {}) => {

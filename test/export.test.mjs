@@ -32,7 +32,7 @@ test('keeps the export to the owner\'s own session', async (t) => {
   assert.equal(asAKey.status, 403);
   assert.ok(!asAKey.text.includes('sh-secret-value'));
 
-  await f.login('other@example.test');
+  await f.signin('other@example.test');
   const asAnother = await f.request('/v1/export');
   assert.equal(asAnother.status, 200);
   assert.deepEqual(asAnother.json.secrets, []);

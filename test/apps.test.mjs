@@ -99,12 +99,12 @@ test('アプリを消すと、そのアプリの接続は権限を保ったま�
 
 test('線を引かれた人は、そのアプリで自分のアカウントを接続できるが、秘密は読めず、変えるには編集の線が要る', async t => {
   const f = await withApps(t), app = (await f.register('会社のアプリ')).json.resource;
-  await f.login('member@example.test');
+  await f.signin('member@example.test');
   const member = (await f.request('/v1/overview')).json.user.id;
   assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare', app: app.id } })).status, 403);
-  await f.login();
+  await f.signin();
   assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: member, relation: 'viewer', object_type: 'resource', object_id: app.id } })).status, 201);
-  await f.login('member@example.test');
+  await f.signin('member@example.test');
   assert.deepEqual((await f.request('/v1/resources?kind=app')).json.resources.filter(item => !item.foundation).map(item => item.name), ['会社のアプリ']);
   const { url, connection } = await f.connect({ app: app.id }, 'work');
   assert.equal(url.searchParams.get('client_id'), 'work-app-id');
@@ -112,7 +112,7 @@ test('線を引かれた人は、そのアプリで自分のアカウントを�
   assert.equal((await f.request('/v1/resources/' + app.id + '/content')).status, 405);
   assert.equal((await f.request('/v1/resources/' + app.id, { method: 'PATCH', data: { client_id: 'x', client_secret: 'y' } })).status, 403);
   assert.equal((await f.request('/v1/resources/' + app.id, { method: 'DELETE', data: { confirm: true } })).status, 403);
-  await f.login();
+  await f.signin();
   const owner = await f.request('/v1/resources/' + app.id, { method: 'DELETE', data: {} });
   assert.equal(owner.json.error.connections, 1, "the member's connection counts");
   assert.deepEqual(owner.json.error.yours, [], "but is not named to the owner");

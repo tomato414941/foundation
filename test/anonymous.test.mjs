@@ -15,7 +15,7 @@ test('誰にも承認されていない principal は、相手を指定した依
 
 test('承認された相手は、ほかの人を指定して依頼を出せる', async t => {
   const f = await fixture(t), agent = await f.issueKey();
-  await f.login('other@example.test');
+  await f.signin('other@example.test');
   const other = (await f.request('/v1/overview')).json.user.id;
   const named = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: agent.token, data: { ...actor, to: other } });
   assert.equal(named.status, 201, named.text);

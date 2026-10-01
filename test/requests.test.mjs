@@ -29,7 +29,7 @@ const cancel = (f, token) => f.request('/v1/principals/me', { method: 'DELETE', 
 const rowStatus = (f, id) => f.app.store.db.prepare('SELECT status FROM requests WHERE id=?').get(id)?.status;
 
 test('A new key asks only to be approved: no access before approval, the same private key after it', async t => {
-  const f = await fixture(t, { login: false });
+  const f = await fixture(t, { signin: false });
   const { token, row } = await create(f);
   assert.equal(row.requester_name, 'laptop のAI'); assert.equal(row.status, 'pending');
   assert.equal(row.verification_uri, f.base + '/requests/' + row.id);
@@ -41,7 +41,7 @@ test('A new key asks only to be approved: no access before approval, the same pr
   assert.equal((await cancel(f, row.id)).status, 401);
   assert.equal((await cancel(f, key())).status, 401);
   assert.equal((await f.request('/v1/principals/me', { token, anonymous: true })).json.requests[0].id, row.id, 'a runtime may read its own request');
-  await f.login();
+  await f.signin();
   const saved = await f.connection();
   const approved = await approve(f, row);
   assert.equal(approved.status, 200, approved.text);
@@ -86,16 +86,16 @@ test('Request creation is idempotent, and asking for something else makes a new 
 });
 
 test('メール認証後は依頼のページへ戻し、外部への転送を拒否する', async t => {
-  const f = await fixture(t, { login: false }), { row } = await create(f);
+  const f = await fixture(t, { signin: false }), { row } = await create(f);
   for (const return_to of ['https://evil.test/', '//evil.test/', '/keys/x', '/requests/' + row.id + '?next=evil', '/requests/' + row.id + '/..', 42]) {
-    const response = await f.request('/v1/login', { method: 'POST', data: { email: 'owner@example.test', return_to } });
+    const response = await f.request('/v1/signin', { method: 'POST', data: { email: 'owner@example.test', return_to } });
     assert.equal(response.status, 400, String(return_to));
   }
-  const sent = await f.request('/v1/login', { method: 'POST', data: { email: 'owner@example.test', return_to: '/requests/' + row.id } });
+  const sent = await f.request('/v1/signin', { method: 'POST', data: { email: 'owner@example.test', return_to: '/requests/' + row.id } });
   assert.equal(sent.status, 202);
   const url = new URL(f.auth.links.get('owner@example.test').url);
   const keys = new URLSearchParams(url.hash.slice(1));
-  const result = await f.request('/v1/login/verify', { method: 'POST', data: {
+  const result = await f.request('/v1/signin/verify', { method: 'POST', data: {
     email: keys.get('email'), token_hash: keys.get('token_hash'), return_to: url.searchParams.get('return_to'),
   } });
   assert.equal(result.status, 200);
@@ -121,7 +121,7 @@ test('A registration request stays with its owner, completes by registering, and
   const { row, agent: runtime } = await register(f, { authorization_details: [{ type: 'connection', service: 'google' }] });
   assert.equal(row.requester_name, 'laptop');
   const ownerCookie = 'fdn_session=' + f.app.sessions.create(f.auth.value());
-  await f.login('other@example.test');
+  await f.signin('other@example.test');
   assert.equal((await f.request('/v1/requests/' + row.id)).status, 404);
   const flow = new URL((await f.request('/v1/connections', { method: 'POST', headers: { cookie: ownerCookie }, data: { service: 'google', request_id: row.id } })).json.url);
   await f.callback(flow, 'second', { headers: { cookie: ownerCookie } });
@@ -142,7 +142,7 @@ test('A registration request stays with its owner, completes by registering, and
 test('An approval request belongs to the owner who approves it', async t => {
   const f = await fixture(t), { row } = await create(f);
   assert.equal((await approve(f, row)).status, 200);
-  await f.login('other@example.test');
+  await f.signin('other@example.test');
   assert.equal((await f.request('/v1/requests/' + row.id)).status, 404);
   assert.equal((await f.request('/v1/requests/' + row.id + '/deny', { method: 'POST', data: {} })).status, 404);
 });
@@ -287,12 +287,12 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
 });
 
 test('依頼元が認証失敗と再試行の経過を機密入力なしで確認する', async t => {
-  const f = await fixture(t, { login: false }), { token, row } = await create(f);
+  const f = await fixture(t, { signin: false }), { token, row } = await create(f);
   const approval = async () => (await f.request('/v1/requests/' + row.id, { token, anonymous: true })).json.request;
   assert.deepEqual((await approval()).events, []);
   assert.equal((await approval()).user_code, row.user_code, 'the runtime created the request and already knows the code');
   assert.equal((await f.request('/requests/' + row.id, { anonymous: true })).status, 200);
-  await f.login();
+  await f.signin();
   await f.request('/v1/requests/' + row.id);
   assert.equal((await approve(f, row, { user_code: 'ZZZZ-ZZZZ' })).status, 400);
   assert.equal((await approve(f, row)).status, 200);
@@ -366,13 +366,13 @@ test('A key may have several requests open at once, each at its own address, and
 });
 
 test('依頼元は interval 秒をあけて確認し、急ぎすぎると slow_down を受け、決まった依頼はいつでも読める', async t => {
-  const f = await fixture(t, { login: false, requestInterval: 5 }), { token, row } = await create(f);
+  const f = await fixture(t, { signin: false, requestInterval: 5 }), { token, row } = await create(f);
   assert.equal(row.interval, 5);
   const look = () => f.request('/v1/requests/' + row.id, { token, anonymous: true });
   assert.equal((await look()).status, 200);
   const hurried = await look();
   assert.equal(hurried.status, 429); assert.equal(hurried.json.error.code, 'slow_down');
-  await f.login();
+  await f.signin();
   assert.equal((await approve(f, row)).status, 200);
   assert.equal((await look()).json.request.status, 'granted');
   assert.equal((await look()).json.request.status, 'granted', 'what is decided is read again at once');

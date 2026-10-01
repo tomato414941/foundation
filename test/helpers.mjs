@@ -38,7 +38,7 @@ export class FakeAuth {
   constructor() { this.enabled = true; this.refreshes = 0; this.revoked = false; this.links = new Map(); this.codeFactory = () => randomUUID(); this.now = Date.now; }
   value(email = 'owner@example.test') { return { access_token: 'supabase-access-' + email, refresh_token: 'supabase-refresh-' + email, expires_at: Date.now() + 3600_000, user: { id: email === 'owner@example.test' ? USER_A : USER_B, email } }; }
   async sendLink(email, redirectUri) {
-    if (!this.enabled) fail(503, 'auth_unavailable', '現在ログインを利用できません。');
+    if (!this.enabled) fail(503, 'auth_unavailable', '現在サインインを利用できません。');
     if (this.sendHandler) await this.sendHandler(email);
     const code = this.codeFactory(email);
     this.links.set(email, { email, code, expires_at: this.now() + 900_000, url: redirectUri + '#' + new URLSearchParams({ token_hash: code, email }) });
@@ -50,9 +50,9 @@ export class FakeAuth {
     if (this.verifyHandler) await this.verifyHandler(code);
     return this.value(link.email);
   }
-  async user(token) { if (this.revoked || !token.startsWith('supabase-access-')) fail(401, 'login_required', 'ログインしてください。'); return this.value(token.slice('supabase-access-'.length)).user; }
+  async user(token) { if (this.revoked || !token.startsWith('supabase-access-')) fail(401, 'signin_required', 'サインインしてください。'); return this.value(token.slice('supabase-access-'.length)).user; }
   async refresh(token) { this.refreshes++; if (this.refreshHandler) await this.refreshHandler(); return this.value(token.slice('supabase-refresh-'.length)); }
-  async logout() {}
+  async signout() {}
 }
 
 // Seed a connection for a service, including already-expired fixture tokens.
@@ -95,10 +95,10 @@ export async function fixture(t, options = {}) {
     }
     return { status: response.status, json, text, headers: response.headers };
   }
-  async function login(email = 'owner@example.test') {
+  async function signin(email = 'owner@example.test') {
     // The other tests need a verified identity, not a real email delivery or its resend cooldown.
-    await auth.sendLink(email, base + '/login/confirm');
-    const response = await request('/v1/login/verify', { method: 'POST', data: { email, token_hash: auth.links.get(email).code } });
+    await auth.sendLink(email, base + '/signin/confirm');
+    const response = await request('/v1/signin/verify', { method: 'POST', data: { email, token_hash: auth.links.get(email).code } });
     assert.equal(response.status, 200, response.text);
     assert.equal(response.json.return_to, '/');
     cookie = response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
@@ -172,6 +172,6 @@ export async function fixture(t, options = {}) {
     const state = app.connections.state(connection), expires_at = Date.now() - 1;
     app.connections.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
   }
-  if (options.login !== false) await login();
-  return { app, auth, google, base, request, lookup, read, keep, drop, become, login, start, callback, connection, inject, connectionFacts, issueKey, approveKey, expire, close, cookie: () => cookie };
+  if (options.signin !== false) await signin();
+  return { app, auth, google, base, request, lookup, read, keep, drop, become, signin, start, callback, connection, inject, connectionFacts, issueKey, approveKey, expire, close, cookie: () => cookie };
 }

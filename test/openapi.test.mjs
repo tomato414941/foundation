@@ -5,7 +5,7 @@ import { fixture } from './helpers.mjs';
 import { validateSchema } from '../src/api.mjs';
 
 test('公開仕様を標準OpenAPIとして解析し、すべての操作の入力と応答を参照する', async t => {
-  const f = await fixture(t, { login: false });
+  const f = await fixture(t, { signin: false });
   const fetched = await f.request('/openapi.json', { anonymous: true });
   assert.equal(fetched.status, 200);
   const spec = await SwaggerParser.validate(structuredClone(fetched.json));
@@ -26,7 +26,7 @@ test('公開仕様を標準OpenAPIとして解析し、すべての操作の入�
 });
 
 test('公開仕様から操作を見つけ、初回接続・承認・保存・受け渡しを同じHTTP APIで行う', async t => {
-  const f = await fixture(t, { login: false });
+  const f = await fixture(t, { signin: false });
   const spec = (await f.request('/openapi.json', { anonymous: true })).json;
   const call = (operationId, { params = {}, query = {}, ...options } = {}) => {
     for (const [template, item] of Object.entries(spec.paths)) for (const [method, operation] of Object.entries(item)) {
@@ -43,7 +43,7 @@ test('公開仕様から操作を見つけ、初回接続・承認・保存・�
   assert.equal(asked.status, 201);
   const request = asked.json.request;
   assert.equal(new URL(request.verification_uri).pathname, '/requests/' + request.id);
-  await f.login();
+  await f.signin();
   const accepted = await call('grantRequest', { params: { requestId: request.id }, data: { user_code: request.user_code } });
   assert.equal(accepted.json.request.status, 'granted');
   const me = await call('getMe', { token });
@@ -92,7 +92,7 @@ test('省略可能な値にnullを渡した場合も従来の既定値で依頼�
 });
 
 test('API仕様のHTMLと自己ホストしたアセットをキャッシュ再検証付きで配信する', async t => {
-  const f = await fixture(t, { login: false });
+  const f = await fixture(t, { signin: false });
   const page = await f.request('/docs', { anonymous: true });
   for (const path of [...page.text.matchAll(/(?:src|href)="(\/docs\/[^"?#]+)"/g)].map(match => match[1])) {
     const asset = await f.request(path, { anonymous: true });

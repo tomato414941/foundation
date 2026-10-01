@@ -15,7 +15,7 @@ test('メールリンクを送信し、その鍵を検証してセッション�
     assert.ok(options.signal);
     return json(new URL(url).pathname.endsWith('/otp') ? {} : String(url).endsWith('/user') ? user : session);
   });
-  const redirectUri = 'https://foundation.example.test/login/confirm';
+  const redirectUri = 'https://foundation.example.test/signin/confirm';
   await auth.sendLink(user.email, redirectUri);
   assert.equal(new URL(calls[0].url).pathname, '/auth/v1/otp');
   assert.equal(new URL(calls[0].url).searchParams.get('redirect_to'), redirectUri);
@@ -35,10 +35,10 @@ test('メールリンクを送信し、その鍵を検証してセッション�
   assert.match(calls.at(-1).url, /grant_type=refresh_token/);
 });
 
-test('ログアウトしたSupabaseセッションだけを失効する', async () => {
+test('サインアウトしたSupabaseセッションだけを失効する', async () => {
   let last;
   const auth = setup(async (url, options) => { last = { url: String(url), options }; return new Response(null, { status: 204 }); });
-  await auth.logout('test-jwt');
+  await auth.signout('test-jwt');
   assert.match(last.url, /logout\?scope=local/);
   assert.equal(last.options.headers.Authorization, 'Bearer test-jwt');
 });
@@ -46,7 +46,7 @@ test('ログアウトしたSupabaseセッションだけを失効する', async 
 test('不正な鍵と匿名ユーザーを拒否し、上流の秘密情報を伏せて返す', async () => {
   const auth = setup(async () => json({ code: 'invalid_credentials', msg: 'secret-token-in-upstream-error' }, 400));
   await assert.rejects(auth.verifyLink('invalid-email-key'), (error) => error.status === 401 && !error.message.includes('secret-token'));
-  await assert.rejects(auth.sendLink('test@example.test', 'https://foundation.example.test/login/confirm'), (error) => error.status === 503 && !error.message.includes('secret-token'));
+  await assert.rejects(auth.sendLink('test@example.test', 'https://foundation.example.test/signin/confirm'), (error) => error.status === 503 && !error.message.includes('secret-token'));
   const forged = setup(async () => json({ ...user, is_anonymous: true }));
   await assert.rejects(forged.user('forged'), { status: 401 });
 });
@@ -54,7 +54,7 @@ test('不正な鍵と匿名ユーザーを拒否し、上流の秘密情報を�
 test('未設定の認証と特権キーによる設定を拒否する', async () => {
   const absent = new SupabaseAuth();
   assert.equal(absent.enabled, false);
-  await assert.rejects(absent.sendLink('a@example.test', 'https://foundation.example.test/login/confirm'), { status: 503 });
+  await assert.rejects(absent.sendLink('a@example.test', 'https://foundation.example.test/signin/confirm'), { status: 503 });
   await assert.rejects(absent.verifyLink('test-email-key'), { status: 503 });
   assert.throws(() => new SupabaseAuth({ url: 'https://app.supabase.co' }));
   assert.throws(() => new SupabaseAuth({ url: 'https://app.supabase.co', key: 'sb_secret_test' }));
@@ -68,7 +68,7 @@ test('メール送信を無効にしても既存セッションの本人確認�
   const auth = new SupabaseAuth({ url: 'https://example.supabase.co', key: 'sb_publishable_test_only', emailEnabled: false, fetcher: async () => { requests++; return json(user); } });
   assert.equal(auth.enabled, true);
   assert.equal(auth.emailEnabled, false);
-  await assert.rejects(auth.sendLink(user.email, 'https://foundation.example.test/login/confirm'), { status: 503, code: 'email_unavailable' });
+  await assert.rejects(auth.sendLink(user.email, 'https://foundation.example.test/signin/confirm'), { status: 503, code: 'email_unavailable' });
   assert.equal(requests, 0);
   assert.deepEqual(await auth.user('existing-session'), { id: USER_A, email: user.email });
 });

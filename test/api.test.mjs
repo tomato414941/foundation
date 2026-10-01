@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
 import { fixture, USER_A, GMAIL } from './helpers.mjs';
 
-test('Login gives a private state behind a safe session cookie', async (t) => {
+test('Signin gives a private state behind a safe session cookie', async (t) => {
   const f = await fixture(t);
   assert.equal((await f.request('/v1/overview', { anonymous: true })).status, 401);
-  const login = await f.login();
-  assert.match(login.headers.get('set-cookie'), /HttpOnly; SameSite=Lax/);
+  const signin = await f.signin();
+  assert.match(signin.headers.get('set-cookie'), /HttpOnly; SameSite=Lax/);
   const result = await f.request('/v1/overview');
   assert.equal(result.json.user.id, USER_A);
   assert.deepEqual(result.json.secrets, []);
@@ -36,7 +36,7 @@ test('OAuth state is browser-bound and expires; cancel and forged callbacks cann
   const f = await fixture(t);
   const url = await f.start();
   assert.equal((await f.callback(url, 'personal', { anonymous: true })).headers.get('location'), '/services?result=expired');
-  await f.login('second@example.test');
+  await f.signin('second@example.test');
   assert.equal((await f.callback(url)).headers.get('location'), '/services?result=expired');
   const second = await f.start();
   f.app.store.db.prepare('UPDATE oauth_flows SET expires_at=0').run();
@@ -78,7 +78,7 @@ test('Connections expose explicit connection outputs independently of saved name
 
 test('Owners cannot see, disconnect or reach each other\'s connections', async (t) => {
   const f = await fixture(t), first = await f.connection(), runtime = await f.issueKey();
-  await f.login('second@example.test');
+  await f.signin('second@example.test');
   const state = await f.request('/v1/overview');
   assert.deepEqual(state.json.connections.filter(row => row.service !== null), []);
   assert.deepEqual(state.json.secrets, []);
@@ -163,11 +163,11 @@ test('Disconnecting preserves saved values even when service revocation fails, a
 });
 
 test('Where the owners are named, nobody else can make themselves one', async t => {
-  const f = await fixture(t, { owners: ['Owner@Example.test'], login: false });
-  const refused = await f.request('/v1/login', { method: 'POST', data: { email: 'stranger@example.test' } });
+  const f = await fixture(t, { owners: ['Owner@Example.test'], signin: false });
+  const refused = await f.request('/v1/signin', { method: 'POST', data: { email: 'stranger@example.test' } });
   assert.equal(refused.status, 403);
   assert.equal(refused.json.error.code, 'not_invited');
   assert.equal(f.auth.links.size, 0, 'no link is sent to an address that may not be here');
-  await f.login();
-  assert.equal((await f.request('/v1/overview')).json.user.email, 'owner@example.test', 'the named owner logs in as before');
+  await f.signin();
+  assert.equal((await f.request('/v1/overview')).json.user.email, 'owner@example.test', 'the named owner signs in as before');
 });

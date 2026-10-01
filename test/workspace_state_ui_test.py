@@ -21,11 +21,11 @@ with sync_playwright() as p:
     email = 'workspace-state@example.test'
     page.goto(args.base + '/secrets', wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill(email)
-    page.get_by_role('button', name='ログインメールを送信', exact=True).click()
+    page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     fragment = urlencode({'email': email, 'token_hash': hashlib.sha256(email.encode()).hexdigest()})
-    page.goto(args.base + '/login/confirm?return_to=%2Fsecrets#' + fragment, wait_until='networkidle')
-    page.get_by_role('button', name='ログイン', exact=True).click()
+    page.goto(args.base + '/signin/confirm?return_to=%2Fsecrets#' + fragment, wait_until='networkidle')
+    page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/secrets')
     page.wait_for_load_state('networkidle')
 
@@ -109,7 +109,7 @@ with sync_playwright() as p:
     assert saved.text() == 'saved-value'
     print('値の取得中から保存まで編集を継続する。')
 
-    # JavaScriptの開始前から、ログイン済みの各画面はメニュー・見出し・読み込み状態を表示する。
+    # JavaScriptの開始前から、サインイン済みの各画面はメニュー・見出し・読み込み状態を表示する。
     reading = browser.new_context(storage_state=context.storage_state(), java_script_enabled=False,
                                   viewport={'width': 390, 'height': 844})
     initial = reading.new_page()
@@ -121,7 +121,7 @@ with sync_playwright() as p:
     if shots:
         initial.screenshot(path=str(shots / 'initial-mobile.png'), full_page=True)
     reading.close()
-    print('ログイン済みの初回HTMLから画面の枠を表示する。')
+    print('サインイン済みの初回HTMLから画面の枠を表示する。')
 
     # 通信失敗と未認証を区別し、同じ場所で再試行する。
     page.route('**/v1/overview', lambda route: route.fulfill(status=503, json={'error': {'message': '一時的に取得できません。'}}))
@@ -255,27 +255,27 @@ with sync_playwright() as p:
             page.screenshot(path=str(shots / f'objects-{width}.png'), full_page=True)
     context.clear_cookies()
     page.reload(wait_until='networkidle')
-    expect(page.get_by_role('heading', name='ログイン', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='サインイン', exact=True)).to_be_visible()
     expect(page.get_by_label('メールアドレス', exact=True)).to_be_enabled()
-    # フォルダを開く途中にログインしても、同じ場所へ戻る。
-    login_email = 'folder-return@example.test'
-    page.get_by_label('メールアドレス', exact=True).fill(login_email)
-    with page.expect_request(lambda request: request.method == 'POST' and request.url.endswith('/v1/login')) as sent:
-        page.get_by_role('button', name='ログインメールを送信', exact=True).click()
+    # フォルダを開く途中にサインインしても、同じ場所へ戻る。
+    signin_email = 'folder-return@example.test'
+    page.get_by_label('メールアドレス', exact=True).fill(signin_email)
+    with page.expect_request(lambda request: request.method == 'POST' and request.url.endswith('/v1/signin')) as sent:
+        page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     assert sent.value.post_data_json['return_to'] == '/objects?prefix=reports%2F'
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    fragment = urlencode({'email': login_email, 'token_hash': hashlib.sha256(login_email.encode()).hexdigest()})
-    page.goto(args.base + '/login/confirm?' + urlencode({'return_to': '/objects?prefix=reports%2F'}) + '#' + fragment, wait_until='networkidle')
-    page.get_by_role('button', name='ログイン', exact=True).click()
+    fragment = urlencode({'email': signin_email, 'token_hash': hashlib.sha256(signin_email.encode()).hexdigest()})
+    page.goto(args.base + '/signin/confirm?' + urlencode({'return_to': '/objects?prefix=reports%2F'}) + '#' + fragment, wait_until='networkidle')
+    page.get_by_role('button', name='サインイン', exact=True).click()
     expect(page).to_have_url(reports)
     expect(page.get_by_role('navigation', name='パス', exact=True).get_by_text('reports', exact=True)).to_be_visible()
 
-    # ログインの設定取得に失敗した場合も、再試行してフォームへ進む。
+    # サインインの設定取得に失敗した場合も、再試行してフォームへ進む。
     context.clear_cookies()
-    page.route('**/v1/login', lambda route: route.fulfill(status=503, json={'error': {'message': '接続できませんでした。'}}))
+    page.route('**/v1/signin', lambda route: route.fulfill(status=503, json={'error': {'message': '接続できませんでした。'}}))
     page.reload(wait_until='networkidle')
     expect(page.get_by_role('alert')).to_have_text('接続できませんでした。')
-    page.unroute('**/v1/login')
+    page.unroute('**/v1/signin')
     page.get_by_role('button', name='再読み込み', exact=True).click()
     expect(page.get_by_label('メールアドレス', exact=True)).to_be_enabled()
     assert not errors, errors

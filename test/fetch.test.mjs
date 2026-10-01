@@ -183,7 +183,7 @@ test('The HTTPS function retains destination and owner checks, and validates out
   const call = (data, token = key.token) => f.request('/v1/functions/http.request', { method: 'POST', token, data });
   assert.equal((await call({ url: 'https://127.0.0.1/' })).json.error.code, 'invalid_destination');
   assert.equal((await call({ url: 'https://api.example.test/', save: '' })).json.error.code, 'invalid_name');
-  await f.login('second@example.test');
+  await f.signin('second@example.test');
   const other = await f.issueKey();
   const refused = await call({ url: 'https://api.example.test/', ...authorization() }, other.token);
   assert.equal(refused.status, 404);

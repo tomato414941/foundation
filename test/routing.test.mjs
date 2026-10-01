@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, USER_A } from './helpers.mjs';
 
-test('未定義のURLには認証状態によらず404を返し、認証が必要なAPIにはログインを要求する', async t => {
+test('未定義のURLには認証状態によらず404を返し、認証が必要なAPIにはサインインを要求する', async t => {
   const f = await fixture(t);
   for (const anonymous of [true, false]) {
     for (const path of ['/unknown-page', '/v1/unknown-operation']) {
@@ -16,11 +16,11 @@ test('未定義のURLには認証状態によらず404を返し、認証が必�
   }
   const protectedResource = await f.request('/v1/resources?kind=secret', { anonymous: true });
   assert.equal(protectedResource.status, 401);
-  assert.equal(protectedResource.json.error.code, 'login_required');
+  assert.equal(protectedResource.json.error.code, 'signin_required');
 });
 
 test('公開入口のHTMLからAPI仕様へ進める', async t => {
-  const f = await fixture(t, { login: false });
+  const f = await fixture(t, { signin: false });
   const page = await f.request('/', { anonymous: true });
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-type'), /^text\/html/);
@@ -31,8 +31,8 @@ test('公開入口のHTMLからAPI仕様へ進める', async t => {
   assert.match(docs.text, /href="\/openapi.json"/);
 });
 
-test('未ログインのAIへOpenAPIで接続先・認証要件・入力形式を公開する', async t => {
-  const f = await fixture(t, { login: false });
+test('未サインインのAIへOpenAPIで接続先・認証要件・入力形式を公開する', async t => {
+  const f = await fixture(t, { signin: false });
   const page = await f.request('/openapi.json', { anonymous: true, headers: { 'sec-fetch-site': 'cross-site' } });
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-type'), /^application\/json/);
@@ -44,7 +44,7 @@ test('未ログインのAIへOpenAPIで接続先・認証要件・入力形式�
 
 test('OpenAPIに公開用の接続先を示し、HEADでも仕様の形式を確認する', async t => {
   const origin = 'https://foundation.example.test';
-  const f = await fixture(t, { login: false, publicOrigin: origin });
+  const f = await fixture(t, { signin: false, publicOrigin: origin });
   const page = await f.request('/openapi.json', { anonymous: true });
   assert.equal(page.status, 200);
   assert.deepEqual(page.json.servers, [{ url: origin }]);
@@ -65,7 +65,7 @@ test('認証情報と接続の画面をそれぞれのURLから開く', async t 
   }
 });
 
-test('ログイン済みの初回HTMLで行き先の見出しとメニューを表示し、データは認証済みAPIから取得する', async t => {
+test('サインイン済みの初回HTMLで行き先の見出しとメニューを表示し、データは認証済みAPIから取得する', async t => {
   const f = await fixture(t);
   await f.request('/v1/resources?kind=secret&name=private-test-name', { method: 'PUT', raw: 'private-test-value' });
   const page = await f.request('/secrets');
@@ -91,12 +91,12 @@ test('公開アセットの更新確認と再利用を行う', async t => {
   }
 });
 
-test('ログインを終えると開こうとしていた認証情報または接続の画面へ戻る', async t => {
+test('サインインを終えると開こうとしていた認証情報または接続の画面へ戻る', async t => {
   const f = await fixture(t);
   for (const [at, path] of ['/secrets', '/services', '/objects?prefix=reports%2F', '/objects?prefix=%E8%B3%87%E6%96%99+%23%3F%2F', '/principals#apps'].entries()) {
     const email = 'return-' + at + '@example.test';
-    await f.auth.sendLink(email, f.base + '/login/confirm');
-    const result = await f.request('/v1/login/verify', { method: 'POST', data: { email, token_hash: f.auth.links.get(email).code, return_to: path } });
+    await f.auth.sendLink(email, f.base + '/signin/confirm');
+    const result = await f.request('/v1/signin/verify', { method: 'POST', data: { email, token_hash: f.auth.links.get(email).code, return_to: path } });
     assert.equal(result.status, 200, result.text);
     assert.equal(result.json.return_to, path);
   }
@@ -104,7 +104,7 @@ test('ログインを終えると開こうとしていた認証情報または�
 
 test('同じURLでCookieとBearerを受け付け、Bearerがある場合はその所有者として扱う', async t => {
   const f = await fixture(t), first = await f.connection(), key = await f.issueKey();
-  await f.login('second@example.test');
+  await f.signin('second@example.test');
   await f.connection('work');
   const browser = await f.request('/v1/resources?kind=connection');
   assert.equal(browser.json.resources[0].subject, 'work@example.test');

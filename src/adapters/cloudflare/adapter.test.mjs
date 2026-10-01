@@ -94,7 +94,7 @@ test('同じユーザーの認可を別の接続として保存し、指定し�
   assert.equal(same.id, personal.id);
   assert.equal(same.label, 'new@example.test');
   assert.equal((await f.connections()).find(item => item.id === second.id).label, 'personal@example.test');
-  await f.login('second@example.test');
+  await f.signin('second@example.test');
   const stranger = await f.issueKey();
   assert.deepEqual((await f.connections()), []);
   assert.equal((await f.inject(personal, { token: stranger.token })).status, 404);
@@ -302,7 +302,7 @@ test('新規接続の依頼と再接続の依頼を、それぞれ指定され�
     assert.equal(started.json.error.code, 'connection_changed');
   }
   assert.equal(f.cloudflare.exchanges, 2);
-  await f.login('second@example.test');
+  await f.signin('second@example.test');
   const other = await f.issueKey();
   const refused = await f.request('/v1/requests', { method: 'POST', token: other.token, data: {
     authorization_details: [{ type: 'connection', service: 'cloudflare', connection_id: one.id }] } });
@@ -372,7 +372,7 @@ test('取り消された依頼や別のブラウザーでは確認待ちの変�
   assert.equal((await f.request('/v1/connections/confirmation', { method: 'POST', token, data: { state } })).status, 403);
   assert.equal((await f.request('/v1/requests/' + asked.json.request.id, { method: 'DELETE', token, data: {} })).status, 200);
   assert.equal((await f.request('/v1/connections/confirmation', { method: 'POST', data: { state } })).status, 409);
-  await f.login('second@example.test');
+  await f.signin('second@example.test');
   assert.equal((await f.request('/v1/connections/confirmation?state=' + state)).status, 400);
   assert.deepEqual(f.secret(connection), old);
 });

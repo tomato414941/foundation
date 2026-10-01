@@ -47,7 +47,7 @@ test('参照の対象と出力を検証し、不正な指定では接続先に�
     assert.equal(refused.status, 400, JSON.stringify(input));
   }
   assert.equal(f.google.calls.length, calls);
-  await f.login('other@example.test');
+  await f.signin('other@example.test');
   const refused = await f.request('/v1/injections', { method: 'POST', data: { names: [{ id: connection.id, output: 'GOOGLE_OAUTH_ACCESS_TOKEN' }] } });
   assert.equal(refused.status, 404);
   assert.equal(f.google.calls.length, calls);

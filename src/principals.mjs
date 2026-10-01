@@ -21,7 +21,7 @@ export class Principals {
     if (!row) fail(404, 'not_found', '相手が見つかりません。');
     return row;
   }
-  // A principal exists from the first time it is seen: a person by the id their login gave them, anyone else
+  // A principal exists from the first time it is seen: a person by the id their signin gave them, anyone else
   // because someone made it. The maker owns it and may call it by a name of their own (alias).
   ensure(id, name = '') {
     this.db.prepare('INSERT OR IGNORE INTO principals (id,name,created_at) VALUES (?,?,?)').run(id, name, now());

@@ -21,11 +21,11 @@ with sync_playwright() as p:
     email = 'navigation@example.test'
     page.goto(args.base + '/secrets', wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill(email)
-    page.get_by_role('button', name='ログインメールを送信', exact=True).click()
+    page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     fragment = urlencode({'email': email, 'token_hash': hashlib.sha256(email.encode()).hexdigest()})
-    page.goto(args.base + '/login/confirm?return_to=%2Fsecrets#' + fragment, wait_until='networkidle')
-    page.get_by_role('button', name='ログイン', exact=True).click()
+    page.goto(args.base + '/signin/confirm?return_to=%2Fsecrets#' + fragment, wait_until='networkidle')
+    page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/secrets')
     page.wait_for_load_state('networkidle')
     created = context.request.put(args.base + '/v1/resources?kind=object&name=navigation.txt',
@@ -174,14 +174,14 @@ with sync_playwright() as p:
     page.go_back(wait_until='networkidle')
     expect(page.get_by_role('main').get_by_role('link', name='シークレット', exact=False)).to_be_visible()
 
-    # セッションが切れていたらログインへ案内する。
+    # セッションが切れていたらサインインへ案内する。
     context.clear_cookies()
     page.get_by_role('navigation').get_by_role('link', name='サービス', exact=True).click()
-    expect(page.get_by_role('heading', name='ログイン', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='サインイン', exact=True)).to_be_visible()
     expect(page.get_by_label('メールアドレス', exact=True)).to_be_enabled()
     page.go_back(wait_until='networkidle')
-    expect(page.get_by_role('heading', name='ログイン', exact=True)).to_be_visible()
-    print('セッションの終了を確認してログインへ案内する。')
+    expect(page.get_by_role('heading', name='サインイン', exact=True)).to_be_visible()
+    print('セッションの終了を確認してサインインへ案内する。')
     assert not errors, errors
     context.close()
     browser.close()

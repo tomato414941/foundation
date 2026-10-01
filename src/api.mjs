@@ -52,9 +52,9 @@ export const schemas = {
   Error: object({ error: object({ code: string, message: string }, ['code', 'message']) }, ['error']),
   Ok: object({ ok: { const: true } }, ['ok']),
   Empty: object(),
-  Login: object({ email: errorCode(string, 'invalid_email'), return_to: errorCode(string, 'invalid_return') }, ['email']),
-  VerifyLogin: object({ email: errorCode(string, 'invalid_email'), token_hash: errorCode(string, 'invalid_link'), return_to: errorCode(string, 'invalid_return') }, ['email', 'token_hash']),
-  PendingLogin: object({ email: string, expires_at: time, resend_at: time }, ['email', 'expires_at', 'resend_at']),
+  Signin: object({ email: errorCode(string, 'invalid_email'), return_to: errorCode(string, 'invalid_return') }, ['email']),
+  VerifySignin: object({ email: errorCode(string, 'invalid_email'), token_hash: errorCode(string, 'invalid_link'), return_to: errorCode(string, 'invalid_return') }, ['email', 'token_hash']),
+  PendingSignin: object({ email: string, expires_at: time, resend_at: time }, ['email', 'expires_at', 'resend_at']),
   CreatePrincipal: object({ name: string, alias: string, actor: boolean, key: boolean }),
   Rename: object({ name: resourceName }, ['name']),
   Principal: object({ id: principalId, name: string, created_at: iso, alias: nullable(string),
@@ -172,13 +172,13 @@ const etag = { ETag: { description: 'Opaque secret revision. Return it as If-Mat
 // Route names are internal dispatch identifiers, not another copy of URL patterns in the handler.
 export const routes = [
   { name: 'health', path: '/health', methods: { get: op('health', 'Check server health', object({ status: { const: 'ok' } }, ['status']), { security: [] }) } },
-  { name: 'login', path: '/v1/login', methods: {
-    get: op('getLogin', 'Read sign-in availability and pending email', object({ available: boolean, method: { const: 'email_link' }, pending: nullable(ref('PendingLogin')) }, ['available', 'method', 'pending']), { security: [] }),
-    post: op('sendLoginLink', 'Send an email sign-in link', result('pending', ref('PendingLogin')), { input: 'Login', status: 202, security: [], 'x-input-error': 'invalid_email' }),
-    delete: okay('cancelLogin', 'Cancel pending email sign-in', { requestBody: undefined, security: [] }),
+  { name: 'signin', path: '/v1/signin', methods: {
+    get: op('getSignin', 'Read sign-in availability and pending email', object({ available: boolean, method: { const: 'email_link' }, pending: nullable(ref('PendingSignin')) }, ['available', 'method', 'pending']), { security: [] }),
+    post: op('sendSigninLink', 'Send an email sign-in link', result('pending', ref('PendingSignin')), { input: 'Signin', status: 202, security: [], 'x-input-error': 'invalid_email' }),
+    delete: okay('cancelSignin', 'Cancel pending email sign-in', { requestBody: undefined, security: [] }),
   } },
-  { name: 'verifyLogin', path: '/v1/login/verify', methods: { post: op('verifyLogin', 'Redeem an email sign-in link', object({ ok: { const: true }, return_to: string }, ['ok', 'return_to']), { input: 'VerifyLogin', security: [], 'x-input-error': 'invalid_link', description: 'Requires a same-origin browser request, but not the browser that sent the email. Sets an HttpOnly fdn_session cookie.' }) } },
-  { name: 'session', path: '/v1/session', methods: { delete: op('logout', 'End this browser session', object({ ok: { const: true }, authLogout: boolean }, ['ok', 'authLogout']), { security: [] }) } },
+  { name: 'verifySignin', path: '/v1/signin/verify', methods: { post: op('verifySignin', 'Redeem an email sign-in link', object({ ok: { const: true }, return_to: string }, ['ok', 'return_to']), { input: 'VerifySignin', security: [], 'x-input-error': 'invalid_link', description: 'Requires a same-origin browser request, but not the browser that sent the email. Sets an HttpOnly fdn_session cookie.' }) } },
+  { name: 'session', path: '/v1/session', methods: { delete: op('signout', 'End this browser session', object({ ok: { const: true }, authSignout: boolean }, ['ok', 'authSignout']), { security: [] }) } },
   { name: 'catalog', path: '/v1/services', methods: { get: op('listCatalog', 'List built-in services and connection methods', many('services', 'ServiceDescription'), { security: [] }) } },
   { name: 'return', path: '/v1/requests/{requestId}/return', methods: { get: op('getRequestReturn', 'Read the return destination for a request', result('back', object({ name: string, return_url: string, refresh_url: string }, ['name', 'return_url', 'refresh_url'])), { security: [] }) } },
   { name: 'exchangeLink', path: '/v1/links/exchange', methods: { post: okay('exchangeLink', 'Exchange a one-use request link for a request-scoped cookie', { input: object({ link: string, request_id: requestId }, ['link', 'request_id']), security: [], 'x-input-error': 'invalid_link' }) } },

@@ -39,7 +39,7 @@ test('Configuration creates a private encryption key; losing the key fails close
   const dir = await directory(t), env = { FOUNDATION_DATA_DIR: dir };
   const first = configuration(env), second = configuration(env);
   assert.equal(first.supabase.emailEnabled, false);
-  assert.equal(configuration({ ...env, FOUNDATION_EMAIL_LOGIN_ENABLED: 'true' }).supabase.emailEnabled, true);
+  assert.equal(configuration({ ...env, FOUNDATION_EMAIL_SIGNIN_ENABLED: 'true' }).supabase.emailEnabled, true);
   assert.deepEqual(first.encryptionKey, second.encryptionKey);
   assert.equal((await stat(join(dir, 'encryption-key'))).mode & 0o777, 0o600);
   assert.equal((await stat(dir)).mode & 0o777, 0o700);
