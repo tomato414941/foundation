@@ -42,11 +42,11 @@ export class RequestActions {
   // by one already on a line to them or to what it asks about, it is asked where they are.
   relationAsked(fromId, toId, { relation, object_type, object_id }) {
     if (this.firstContact(fromId, toId, { object_type, object_id })) {
-      if (relation !== 'actor' || object_type !== undefined) fail(400, 'invalid_authorization_details', 'まだ関係がない相手に頼めるのは、代わりに動くこと（actor）だけです。');
+      if (relation !== 'agent' || object_type !== undefined) fail(400, 'invalid_authorization_details', 'まだ関係がない相手に頼めるのは、持ち物を使うこと（agent）だけです。');
       return;
     }
     const object = this.objectOf(toId, { relation, object_type, object_id });
-    if (!reaches(relation, object.type, object.kind)) fail(400, 'invalid_authorization_details', '関係の種類を確認してください。');
+    if (!reaches(relation, object.type === 'principal' ? 'principal' : object.kind)) fail(400, 'invalid_authorization_details', '関係の種類を確認してください。');
   }
   // Whether the one asking has no line yet to the one asked, nor to what it asks about.
   firstContact(fromId, toId, { object_type, object_id } = {}) {
@@ -142,7 +142,7 @@ export class RequestActions {
       if (row.type !== 'relation') fail(409, 'wrong_kind', 'この依頼は関係の依頼ではありません。');
       const asked = this.requests.detail(row), object = this.objectOf(toId, asked);
       if (!this.authorization.mayGive(toId, asked.relation, object.type, object.type === 'principal' ? { id: object.id } : object)) fail(403, 'forbidden', 'この関係を引く権限がありません。');
-      if (asked.relation === 'actor' && this.principals.actsFor(row.from_id).includes(object.id)) fail(409, 'request_changed', '依頼元の状態が変わりました。新しい依頼を作ってもらってください。');
+      if (asked.relation === 'agent' && this.principals.actsFor(row.from_id).includes(object.id)) fail(409, 'request_changed', '依頼元の状態が変わりました。新しい依頼を作ってもらってください。');
       if (first && !this.principals.ownersOf(row.from_id).length) this.principals.relate(toId, 'owner', 'principal', row.from_id);
       this.principals.relate(row.from_id, asked.relation, object.type, object.id);
       this.requests.done(id, toId, { relation: asked.relation, object_type: object.type, object_id: object.id });

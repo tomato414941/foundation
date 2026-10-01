@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { digest } from './crypto.mjs';
 import { fail } from './errors.mjs';
-import { ROLES, ACTION } from './authorization.mjs';
+import { declared } from './authorization.mjs';
 
 // A principal is anything that comes to Foundation: a person, an AI, an app, an app's user. One row each,
 // with a name and a beginning, and nothing that says which of those it is. What it may do follows from the
@@ -57,7 +57,9 @@ export class Principals {
 
   // Lines between principals, and from principals onto resources. A resource is pointed at by its id.
   relate(subjectId, relation, objectType, objectId) {
-    if (!(ROLES.includes(relation) || ACTION.test(relation)) || !OBJECT_TYPES.includes(objectType)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
+    // What the schema declares for the object; owner is recorded here too, on making and approving, never drawn as a line.
+    const known = objectType === 'principal' ? relation === 'owner' || declared('principal', relation) : typeof relation === 'string' && /^[a-z_]+$/.test(relation);
+    if (!OBJECT_TYPES.includes(objectType) || !known) fail(400, 'invalid_relation', '関係の種類を確認してください。');
     if (!this.get(subjectId) || (objectType === 'principal' && !this.get(objectId))) fail(404, 'not_found', '相手が見つかりません。');
     if (subjectId === objectId && objectType === 'principal') fail(400, 'invalid_relation', '自分自身との関係は引けません。');
     this.db.prepare('INSERT OR IGNORE INTO relations (subject_id,relation,object_type,object_id,created_at) VALUES (?,?,?,?,?)')
@@ -72,6 +74,10 @@ export class Principals {
     return this.db.prepare(`DELETE FROM relations WHERE subject_id=? AND relation<>'owner' AND (
       (object_type='principal' AND object_id=?) OR (object_type='resource' AND object_id IN (SELECT id FROM resources WHERE holder_id=?)))`)
       .run(subjectId, holderId, holderId).changes;
+  }
+  // Everyone recorded with one relation on one object.
+  subjectsOf(relation, objectType, objectId) {
+    return this.db.prepare('SELECT subject_id FROM relations WHERE relation=? AND object_type=? AND object_id=?').all(relation, objectType, objectId).map(row => row.subject_id);
   }
   has(subjectId, relation, objectType, objectId) {
     return Boolean(this.db.prepare('SELECT 1 FROM relations WHERE subject_id=? AND relation=? AND object_type=? AND object_id=?').get(subjectId, relation, objectType, objectId));
@@ -105,10 +111,10 @@ export class Principals {
   }
   aliasOf(ownerId, principalId) { return this.db.prepare('SELECT alias FROM aliases WHERE owner_id=? AND principal_id=?').get(ownerId, principalId)?.alias ?? null; }
   // Whom this principal acts for, and who acts for it.
-  actsFor(id) { return this.db.prepare("SELECT object_id AS id FROM relations WHERE subject_id=? AND relation='actor' AND object_type='principal'").all(id).map(row => row.id); }
+  actsFor(id) { return this.db.prepare("SELECT object_id AS id FROM relations WHERE subject_id=? AND relation='agent' AND object_type='principal'").all(id).map(row => row.id); }
   actorsOf(id) {
     return this.db.prepare(`SELECT p.id, p.name, p.created_at, r.created_at AS approved_at FROM relations r JOIN principals p ON p.id=r.subject_id
-      WHERE r.relation='actor' AND r.object_type='principal' AND r.object_id=? ORDER BY r.created_at`).all(id).map(row => ({ ...row, keys: this.keys(row.id) }));
+      WHERE r.relation='agent' AND r.object_type='principal' AND r.object_id=? ORDER BY r.created_at`).all(id).map(row => ({ ...row, keys: this.keys(row.id) }));
   }
 
   // Access keys: what a machine (an AI, an app, a lent environment) shows to be a principal. Reaches whatever the

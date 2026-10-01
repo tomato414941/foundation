@@ -39,7 +39,7 @@ test('公開仕様から操作を見つけ、初回接続・承認・保存・�
   const created = await call('createPrincipal', { anonymous: true, data: { name: 'API reader' } });
   assert.equal(created.status, 201);
   const token = created.json.token;
-  const asked = await call('createRequest', { anonymous: true, token, data: { authorization_details: [{ type: 'relation', relation: 'actor' }] } });
+  const asked = await call('createRequest', { anonymous: true, token, data: { authorization_details: [{ type: 'relation', relation: 'agent' }] } });
   assert.equal(asked.status, 201);
   const request = asked.json.request;
   assert.equal(new URL(request.verification_uri).pathname, '/requests/' + request.id);
@@ -82,7 +82,7 @@ test('JSON定義を検証し、バイナリ保存とJSONリソースの入力を
 
 test('省略可能な値にnullを渡した場合も従来の既定値で依頼と接続を扱う', async t => {
   const f = await fixture(t), key = await f.become('defaults');
-  const asked = await f.request('/v1/requests', { method: 'POST', token: key.token, data: { authorization_details: [{ type: 'relation', relation: 'actor' }], steps: null, valid_minutes: null } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token: key.token, data: { authorization_details: [{ type: 'relation', relation: 'agent' }], steps: null, valid_minutes: null } });
   assert.equal(asked.status, 201);
   assert.deepEqual(asked.json.request.steps, []);
   assert.equal(asked.json.request.expires_at - asked.json.request.created_at, 30 * 60_000);

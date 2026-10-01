@@ -8,7 +8,7 @@ const kinds = {
 export const detailOf = row => row?.authorization_details?.[0] ?? {};
 
 export function requestResultView(row, error = '') {
-  const type = detailOf(row).type, acting = type === 'relation' && detailOf(row).relation === 'actor';
+  const type = detailOf(row).type, acting = type === 'relation' && detailOf(row).relation === 'agent';
   const kind = acting ? { ...kinds.relation, done: 'アクセスを許可しました', denied: 'アクセスを許可しませんでした' } : Object.hasOwn(kinds, type) ? kinds[type] : undefined;
   const destination = kind ? { href: kind.href, label: kind.label } : { href: '/', label: 'ホーム' };
   if (!kind) return { ...destination, title: '依頼を確認できません', description: error || '依頼のリンクを開き直してください。', completed: false };

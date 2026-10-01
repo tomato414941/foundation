@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, USER_A } from './helpers.mjs';
 
-const actor = { authorization_details: [{ type: 'relation', relation: 'actor' }] };
+const actor = { authorization_details: [{ type: 'relation', relation: 'agent' }] };
 
 test('誰にも承認されていない principal は、相手を指定した依頼を出せず、相手を指定しない依頼だけを出せる', async t => {
   const f = await fixture(t), stranger = await f.become('stranger');

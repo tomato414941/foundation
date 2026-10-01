@@ -5,7 +5,7 @@ import { fixture, USER_A } from './helpers.mjs';
 import { requestResultView } from '../web/request-view.js';
 
 async function ask(f, token, kind, input) {
-  const answer = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: { actor: 'relation', store: 'secret', connect: 'connection', app: 'app' }[kind], ...(kind === 'actor' ? { relation: 'actor' } : input) }] } });
+  const answer = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: { actor: 'relation', store: 'secret', connect: 'connection', app: 'app' }[kind], ...(kind === 'actor' ? { relation: 'agent' } : input) }] } });
   assert.equal(answer.status, 201, answer.text);
   return answer.json.request;
 }
@@ -71,7 +71,7 @@ test('キー失効時に未完了の依頼を取り消し、同じトークン�
   assert.equal((await f.request('/v1/requests', { token: key.token })).status, 401);
   const again = await f.approveKey('再承認');
   assert.equal((await f.request('/v1/requests/' + doneRequest.id, { token: again.token })).status, 404);
-  assert.deepEqual((await f.request('/v1/requests', { token: again.token })).json.requests.map(row => row.authorization_details[0].relation), ['actor'], 'a newly approved machine is a new principal, with only its own asking behind it');
+  assert.deepEqual((await f.request('/v1/requests', { token: again.token })).json.requests.map(row => row.authorization_details[0].relation), ['agent'], 'a newly approved machine is a new principal, with only its own asking behind it');
   assert.equal((await f.request('/v1/resources?kind=secret', { token: again.token })).json.resources[0].name, 'kept');
 });
 
@@ -79,7 +79,7 @@ test('承認依頼の完了結果を保ち、失効キーの認証を拒否す�
   const f = await fixture(t);
   const approval = await f.approveKey(), token = approval.token;
   const approved = (await f.request('/v1/requests/' + approval.id)).json.request;
-  assert.equal(approved.authorization_details[0].relation, 'actor');
+  assert.equal(approved.authorization_details[0].relation, 'agent');
   assert.equal(approved.status, 'granted');
   await f.request('/v1/principals/' + approved.from, { method: 'DELETE', data: {} });
   assert.deepEqual((await f.request('/v1/requests/' + approval.id)).json.request, approved);

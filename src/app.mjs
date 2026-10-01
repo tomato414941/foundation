@@ -139,7 +139,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   const resources = new Resources(store);
   const principals = new Principals(store), sessions = new Sessions(store), flows = new OAuthFlows(store), emails = new Emails(store);
   const challenges = new Challenges(store, challengeSecret ? { secret: challengeSecret } : {}), webauthn = new WebauthnCredentials(store, challenges);
-  const authorization = new Authorization(principals);
+  const authorization = new Authorization(principals, resources);
   const services = new Services(store, resources, catalog, { authorization, ...(serviceFetcher ? { fetcher: serviceFetcher } : {}) });
   const apps = new Apps(store, resources, services), connections = new Connections(store, resources, services, apps);
   const secrets = new Secrets(store, resources), inputs = new Inputs(secrets, connections);
@@ -628,11 +628,11 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const alias = input.alias === undefined ? undefined : nameValue(input.alias);
         const { made, issued } = store.transaction(() => {
           const made = principals.create(subject.id, { name: input.name === undefined ? (alias ?? '相手') : nameValue(input.name), alias });
-          if (input.actor === true) principals.relate(made.id, 'actor', 'principal', subject.id);
+          if (input.agent === true) principals.relate(made.id, 'agent', 'principal', subject.id);
           const issued = input.key === true ? principals.issueKey(made.id) : null;
           return { made, issued };
         });
-        auditLog.write(subject.id, 'principal.created', 'principal', made.id, { alias: alias ?? null, actor: input.actor === true, key: Boolean(issued) });
+        auditLog.write(subject.id, 'principal.created', 'principal', made.id, { alias: alias ?? null, agent: input.agent === true, key: Boolean(issued) });
         return send(201, { principal: { ...made, alias: alias ?? null, keys: principals.keys(made.id), acts_for: principals.actsFor(made.id) }, ...(issued ? { token: issued.token, key: { id: issued.id, kind: 'key' } } : {}) });
       }
       if (route?.group === 'principals') {
@@ -723,7 +723,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const subjectId = input.subject === undefined ? subject.id : principalId(input.subject);
         if (typeof input.relation !== 'string' || !['principal', 'resource'].includes(input.object_type) || typeof input.object_id !== 'string') fail(400, 'invalid_relation', '関係の指定を確認してください。');
         const object = input.object_type === 'principal' ? { id: principals.at(input.object_id).id } : resources.at(input.object_id);
-        if (!reaches(input.relation, input.object_type, object.kind)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
+        if (!reaches(input.relation, input.object_type === 'principal' ? 'principal' : object.kind)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
         principals.at(subjectId);
         if (method === 'POST') {
           if (!authorization.mayGive(subject.id, input.relation, input.object_type, object)) fail(403, 'forbidden', 'この操作は許可されていません。');

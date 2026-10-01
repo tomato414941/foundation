@@ -1,69 +1,70 @@
-// Who may do what, answered in one place, in the shape of Zanzibar: lines are the only record, and these rules say
-// which lines reach which actions. A subject, an action and a resource go in (the AuthZEN shape); a decision comes
-// out. Routes ask this and nothing else.
-//
-// The subject is a principal. The resource is one a holder holds (with its holder), a principal (its own holder),
-// or a request. An action is reached by the holder itself, by whoever acts for or owns the holder, by a role drawn
-// onto the resource (viewer, editor), or by that one action drawn onto the resource or onto the holder. Owning a
-// principal is managing it (its name, keys, limits, removal), not reaching what it holds. What the subject came in by
-// decides nothing: a request link is bound to its one request where it is recognized, before any question is asked.
-// A line names a role, a named set of actions, or one action written as the rules name it (connection.disconnect).
-export const ROLES = ['owner', 'actor', 'viewer', 'editor'];
-export const ACTION = /^[a-z_]+\.[a-z-]+$/;
-const SELF = (subject, resource) => subject === resource.holder;
-const ACTOR = (subject, resource, principals) => principals.has(subject, 'actor', 'principal', resource.holder);
-const OWNER = (subject, resource, principals) => principals.has(subject, 'owner', 'principal', resource.holder);
-const LINE = relation => Object.assign((subject, resource, principals) => resource.id !== undefined && principals.has(subject, relation, 'resource', resource.id), { role: relation });
+import { readFileSync } from 'node:fs';
+import { rebac, parseSchema } from 'rebac';
 
-const RULES = {
-  // What is done to a principal as a whole, and with all it holds at once.
-  principal: {
-    read: [SELF, OWNER], rename: [SELF, OWNER], remove: [OWNER], list: [SELF],
-    'issue-key': [SELF, OWNER], 'revoke-key': [SELF, OWNER], 'issue-link': [SELF, OWNER],
-    // A WebAuthn credential is added by the principal it proves; taking one away is managing the principal.
-    'add-webauthn-credential': [SELF], 'remove-webauthn-credential': [SELF, OWNER],
-    // Paying for what it uses beyond the free part: the principal itself.
-    payment: [SELF],
-    // Giving a machine this principal's identity: whoever may act as it. Bounding what it may compute: its owner.
-    pass: [SELF, OWNER, ACTOR], limit: [OWNER], relate: [SELF, OWNER], settings: [SELF, OWNER],
-    overview: [SELF], export: [SELF], usage: [SELF, ACTOR, OWNER], shown: [SELF], 'audit-log': [SELF],
-    // Using what it holds without reading it: injecting into a command, calling the built-in functions.
-    inject: [SELF, ACTOR], functions: [SELF, ACTOR], invoke: [SELF, ACTOR],
-  },
-  // Private bytes may be used without disclosing them to the caller. Managed authorizations expose their facts,
-  // not their renewal state. Both can be delivered by an injection.
-  secret: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], content: [SELF, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')],
-    remove: [SELF, ACTOR], rename: [SELF], share: [SELF] },
-  connection: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], rename: [SELF], share: [SELF], connect: [SELF], disconnect: [SELF] },
-  object: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')], remove: [SELF, ACTOR], rename: [SELF], link: [SELF, ACTOR], share: [SELF] },
-  // An app is seen by whoever acts for its holder, used to connect by its holder and anyone on a line to it, and given
-  // new values by its holder or an editor. Its secret is never read: there is no action for it.
-  app: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], use: [SELF, LINE('viewer'), LINE('editor')],
-    write: [SELF, LINE('editor')], remove: [SELF], rename: [SELF], share: [SELF] },
-  // A service a holder described: seen and changed by whoever acts for the holder - it holds nothing secret - and
-  // used by anyone on a line to it.
-  service: { list: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], write: [SELF, ACTOR, LINE('editor')], remove: [SELF, ACTOR], rename: [SELF], share: [SELF] },
-  // A lent machine: opened and used by the holder or whoever acts for them, and by anyone on an editor line; watched
-  // along a viewer line too. Its identity is changed by the holder or whoever acts for them.
-  environment: { list: [SELF, ACTOR], open: [SELF, ACTOR], read: [SELF, ACTOR, LINE('viewer'), LINE('editor')], exec: [SELF, ACTOR, LINE('editor')],
-    identity: [SELF, ACTOR], remove: [SELF, ACTOR], rename: [SELF], share: [SELF] },
-  request: { read: [SELF], grant: [SELF], deny: [SELF], cancel: [SELF] },
-};
+// Who may do what, answered in one place from authorization.zed: relations are the only record, and the schema says
+// what each permission is computed from. A subject, an action and a resource go in (the AuthZEN shape); a decision
+// comes out. Routes ask this and nothing else.
+//
+// Relations are the lines principals drew, kept in the relations table, and what a holder holds, kept with each
+// thing (its holder column, read here as the holder relation). The principal itself is its own `self`. What the
+// subject came in by decides nothing.
+export const SCHEMA = parseSchema(readFileSync(new URL('./authorization.zed', import.meta.url), 'utf8'));
+const PRINCIPAL = SCHEMA.definitions.get('principal');
+// A line names a relation the schema declares on its object's type, other than what only the system records.
+// Recorded by the system, or by making and approving (owner): never drawn as a line.
+const RECORDED_ONLY = new Set(['self', 'holder', 'entry', 'asked', 'owner']);
+export const ROLES = ['owner', 'agent', 'viewer', 'editor'];
+export function declared(objectType, relation) {
+  const definition = SCHEMA.definitions.get(objectType);
+  return Boolean(definition?.relations.has(relation)) && !RECORDED_ONLY.has(relation);
+}
+// What one action's own relation is called: the action, with -s as _s, then _grant.
+export const grantOf = action => action.replace(/-/g, '_') + '_grant';
+const permissionOf = action => action.replace(/-/g, '_');
 
 export class Authorization {
-  constructor(principals) { this.principals = principals; }
+  // principals: the lines. resources: what holders hold (for the holder relation of a thing).
+  constructor(principals, resources) {
+    this.principals = principals; this.resources = resources;
+    this.authz = rebac(SCHEMA, (object, relation) => this.read(object, relation));
+  }
+  // The subjects recorded for one relation on one object. Sync, from the same database as everything else.
+  read(object, relation) {
+    const principal = id => ({ type: 'principal', id });
+    if (object.type === 'principal') {
+      if (relation === 'self') return [principal(object.id)];
+      if (relation === 'entry') return [];
+      return this.principals.subjectsOf(relation, 'principal', object.id).map(principal);
+    }
+    if (object.type === 'request') return relation === 'asked' && object.holder ? [principal(object.holder)] : [];
+    if (relation === 'holder') {
+      const holder = object.holder ?? this.resources.get(object.id)?.holder_id;
+      return holder ? [principal(holder)] : [];
+    }
+    return this.principals.subjectsOf(relation, 'resource', object.id).map(principal);
+  }
+  // Decided synchronously: the reader never waits, so the checker answers at once.
   allowed({ subject, action, resource }) {
     if (!subject?.id || !action?.name || !resource?.type) return { decision: false };
-    const grounds = RULES[resource.type]?.[action.name];
-    if (!grounds) return { decision: false };
-    const holder = resource.holder ?? (resource.type === 'principal' ? resource.id : undefined);
-    if (holder === undefined) return { decision: false };
-    const at = { ...resource, holder }, named = resource.type + '.' + action.name, principals = this.principals;
-    const one = subject.id;
-    return { decision: grounds.some(ground => ground(one, at, principals))
-      || principals.has(one, named, 'principal', holder) || (resource.id !== undefined && principals.has(one, named, 'resource', resource.id)) };
+    const name = permissionOf(action.name), subjectRef = { type: 'principal', id: subject.id };
+    if (resource.type === 'principal') {
+      const id = resource.id ?? resource.holder;
+      if (id === undefined || !PRINCIPAL.permissions.has(name)) return { decision: false };
+      return { decision: this.authz.check({ type: 'principal', id }, name, subjectRef) === true };
+    }
+    const definition = SCHEMA.definitions.get(resource.type);
+    if (resource.id !== undefined) {
+      if (!definition?.permissions.has(name)) return { decision: false };
+      return { decision: this.authz.check({ type: resource.type, id: resource.id, holder: resource.holder }, name, subjectRef) === true };
+    }
+    // No thing yet, only its would-be holder: the type's own permission is asked of the holder's things in general
+    // (what the holder's lines reach), or, where making one is an action on the holder, that is asked of the holder.
+    if (resource.holder === undefined) return { decision: false };
+    if (definition?.permissions.has(name)) return { decision: this.authz.check({ type: resource.type, id: resource.holder, holder: resource.holder }, name, subjectRef) === true };
+    const making = resource.type + '_' + name;
+    if (!PRINCIPAL.permissions.has(making)) return { decision: false };
+    return { decision: this.authz.check({ type: 'principal', id: resource.holder }, making, subjectRef) === true };
   }
-  // The same question for a principal as itself.
   can(principalId, name, type, { id, holder } = {}) {
     return this.allowed({ subject: { id: principalId }, action: { name }, resource: { type, ...(id === undefined ? {} : { id }), holder } }).decision;
   }
@@ -72,34 +73,33 @@ export class Authorization {
   // approving, never from a line drawn.
   mayGive(principalId, relation, objectType, object) {
     if (relation === 'owner') return false;
-    const reached = reaches(relation, objectType, object.kind);
+    const type = objectType === 'principal' ? 'principal' : object.kind;
+    const reached = reaches(relation, type);
     if (!reached) return false;
-    const where = objectType === 'principal' ? { holder: object.id } : { id: object.id, holder: object.holder_id };
-    if (!this.can(principalId, objectType === 'principal' ? 'relate' : 'share', objectType === 'principal' ? 'principal' : object.kind, objectType === 'principal' ? { id: object.id, holder: object.id } : where)) return false;
-    return reached.every(([type, name]) => this.can(principalId, name, type, type === 'principal' ? { id: object.id, holder: object.id } : where));
+    const where = objectType === 'principal' ? { id: object.id, holder: object.id } : { id: object.id, holder: object.holder_id };
+    if (!this.can(principalId, objectType === 'principal' ? 'relate' : 'share', type, where)) return false;
+    return reached.every(([, name]) => this.can(principalId, name, type, where));
   }
 }
 
-// The actions a line reaches, as [type, action] pairs: one action names itself; a role drawn onto a resource reaches
-// what its rules give that role; acting for a principal reaches what the rules give an actor. null when the line
-// cannot be drawn there.
-export function reaches(relation, objectType, kind) {
-  if (ACTION.test(relation)) {
-    const [type, name] = [relation.slice(0, relation.indexOf('.')), relation.slice(relation.indexOf('.') + 1)];
-    if (!RULES[type]?.[name] || (objectType === 'resource' && type !== kind)) return null;
-    return [[type, name]];
-  }
-  if (objectType === 'resource' && (relation === 'viewer' || relation === 'editor')) {
-    return Object.entries(RULES[kind] || {}).filter(([, grounds]) => grounds.some(ground => ground.role === relation)).map(([name]) => [kind, name]);
-  }
-  if (objectType === 'principal' && relation === 'actor') {
-    return Object.entries(RULES).flatMap(([type, actions]) => Object.entries(actions).filter(([, grounds]) => grounds.includes(ACTOR)).map(([name]) => [type, name]));
-  }
-  return null;
+// The actions a line reaches, as [type, action] pairs: the permissions of the object's type whose expression names
+// the relation, directly or through the holder. null when the schema declares no such relation there.
+export function reaches(relation, type) {
+  const definition = SCHEMA.definitions.get(type);
+  if (!definition || !declared(type, relation)) return null;
+  const names = (node, found = new Set()) => {
+    if (node.op === 'this') found.add(node.relation);
+    else if (node.op === 'arrow') { for (const name of names(PRINCIPAL.permissions.get(node.to)?.expression ?? { op: 'nil' })) found.add(node.through + '->' + name); }
+    else if (node.of) for (const part of node.of) names(part, found);
+    return found;
+  };
+  // Through the holder: a relation on the principal (agent, owner) reaches what the holder's permissions reach.
+  const via = type === 'principal' ? [] : [...PRINCIPAL.permissions].filter(([, { expression }]) => names(expression).has(relation)).map(([name]) => 'holder->' + name);
+  const found = [...definition.permissions].filter(([, { expression }]) => { const used = names(expression); return used.has(relation) || via.some(name => used.has(name)); }).map(([name]) => [type, name]);
+  return found.length ? found : null;
 }
 
 // Every rule, flat, for whoever wants to read what is permitted.
 export function rules() {
-  return Object.entries(RULES).flatMap(([type, actions]) => Object.entries(actions)
-    .map(([name, grounds]) => ({ resource: type, action: name, grounds: grounds.map(ground => ground === SELF ? 'self' : ground === ACTOR ? 'actor' : ground === OWNER ? 'owner' : ground.role) })));
+  return [...SCHEMA.definitions].flatMap(([type, { permissions }]) => [...permissions].map(([name, { expression }]) => ({ resource: type, action: name, expression })));
 }

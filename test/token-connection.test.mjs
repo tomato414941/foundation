@@ -51,7 +51,7 @@ test('鍵で動くAIも、接続を任されていればトークンで接続す
   const agent = await f.issueKey();
   const refused = await paste(f, { service: 'github', fields: { token: 'ghp_agent' } }, { token: agent.token, anonymous: true });
   assert.equal(refused.status, 403);
-  const given = await f.request('/v1/relations', { method: 'POST', data: { subject: agent.id, relation: 'connection.connect', object_type: 'principal', object_id: agent.acts_for[0] } });
+  const given = await f.request('/v1/relations', { method: 'POST', data: { subject: agent.id, relation: 'connection_connect_grant', object_type: 'principal', object_id: agent.acts_for[0] } });
   assert.equal(given.status, 201, given.text);
   const made = await paste(f, { service: 'github', fields: { token: 'ghp_agent' } }, { token: agent.token, anonymous: true });
   assert.equal(made.status, 201, made.text);

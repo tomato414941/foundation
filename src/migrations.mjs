@@ -1,6 +1,6 @@
 import { checkDefinition } from './service-definition.mjs';
 
-export const SCHEMA_VERSION = 41;
+export const SCHEMA_VERSION = 42;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -15,6 +15,7 @@ export const STEPS = {
   39: passkeys,
   40: webauthnCredentials,
   41: payment,
+  42: agents,
 };
 
 // A one-time data conversion, never a runtime parser for earlier definitions. Refuse any expression that cannot
@@ -327,6 +328,25 @@ webauthnCredentials.rebuilds = true;
 // what it uses is recorded here before it is sent there, so none of it is lost or sent twice.
 function payment({ db }) {
   db.exec(PAYMENT);
+}
+
+// What was called acting for a principal is using what it holds, not deciding for it: the line is an agent's. A line
+// that named one action (connection.disconnect) is now that action's own relation on the thing (disconnect_grant);
+// one drawn onto a principal has a place only where the action makes something (connection.connect), and is
+// otherwise dropped. Requests say the same.
+function agents({ db }) {
+  db.exec(`
+    UPDATE relations SET relation='agent' WHERE relation='actor';
+    UPDATE relations SET relation='connection_connect_grant' WHERE object_type='principal' AND relation='connection.connect';
+    DELETE FROM relations WHERE object_type='principal' AND relation LIKE '%.%';
+    UPDATE relations SET relation=replace(substr(relation, instr(relation, '.') + 1), '-', '_') || '_grant' WHERE object_type='resource' AND relation LIKE '%.%';
+    UPDATE requests SET detail=json_set(detail, '$.relation', 'agent') WHERE json_extract(detail, '$.relation')='actor';
+    UPDATE requests SET result=json_set(result, '$.relation', 'agent') WHERE json_extract(result, '$.relation')='actor';
+    UPDATE requests SET detail=json_set(detail, '$.relation', replace(substr(json_extract(detail, '$.relation'), instr(json_extract(detail, '$.relation'), '.') + 1), '-', '_') || '_grant')
+      WHERE json_extract(detail, '$.relation') LIKE '%.%';
+    UPDATE requests SET result=json_set(result, '$.relation', replace(substr(json_extract(result, '$.relation'), instr(json_extract(result, '$.relation'), '.') + 1), '-', '_') || '_grant')
+      WHERE json_extract(result, '$.relation') LIKE '%.%';
+  `);
 }
 
 // A session: what proving who one is leaves, for any principal. proof is how (an email reached, a WebAuthn signature),

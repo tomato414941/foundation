@@ -256,7 +256,7 @@ async function main() {
       key = { token };
     }
     if (key?.token) { await upgrade(wanted); token = await prove(); }
-    const answer = me?.acts_for?.length ? null : await send('/v1/requests', { authorization_details: [{ type: 'relation', relation: 'actor' }] });
+    const answer = me?.acts_for?.length ? null : await send('/v1/requests', { authorization_details: [{ type: 'relation', relation: 'agent' }] });
     if (connectTo !== undefined) await saveUrl(url.origin);
     console.log(answer === null ? 'Already approved on ' + url.origin + '.' : JSON.stringify(answer, null, 2));
     console.log('\nKey file: ' + keyPath + '\nServer: ' + url.origin + (connectTo !== undefined ? ' (saved to ' + configPath() + ')' : '') + '\nEverything else is HTTP: Authorization: Bearer $(foundation token)');

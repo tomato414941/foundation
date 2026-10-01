@@ -6,7 +6,7 @@ import { fixture, USER_A, USER_B } from './helpers.mjs';
 const revoke = (f, id, options = {}) => f.request(`/v1/principals/${id}/access`, { method: 'DELETE', data: {}, ...options });
 async function ask(f, agent, to, kind = 'store') {
   const input = kind === 'store' ? { fields: [{ name: 'requested', label: '値', readable: true }] } : { service: 'google' };
-  const result = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: { actor: 'relation', store: 'secret', connect: 'connection', app: 'app' }[kind], ...(kind === 'actor' ? { relation: 'actor' } : input) }], to } });
+  const result = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: { actor: 'relation', store: 'secret', connect: 'connection', app: 'app' }[kind], ...(kind === 'actor' ? { relation: 'agent' } : input) }], to } });
   assert.equal(result.status, 201, result.text);
   return result.json.request;
 }
@@ -49,7 +49,7 @@ test('自分宛ての未完了依頼を取り消し、他のアカウントの�
   assert.equal(completed.status, 200);
   const nextA = await ask(f, agent, USER_A);
   await f.signin('other@example.test');
-  const approval = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'relation', relation: 'actor' }], to: USER_B } });
+  const approval = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'relation', relation: 'agent' }], to: USER_B } });
   assert.equal(approval.status, 201);
   assert.equal((await f.request(`/v1/requests/${approval.json.request.id}/grant`, { method: 'POST', data: { user_code: approval.json.request.user_code } })).status, 200);
   const privateB = await f.keep('secret', 'private-b', 'other-value');
@@ -86,7 +86,7 @@ test('保有者が自分への許可だけを取り消し、相手の所有権�
 test('取り消した相手を同じキーで再承認し、以後に追加したデータも利用する', async t => {
   const f = await fixture(t), agent = await f.issueKey();
   await revoke(f, agent.id);
-  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'relation', relation: 'actor' }], binding_message: '作業の再開' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'relation', relation: 'agent' }], binding_message: '作業の再開' } });
   assert.equal(asked.status, 201);
   assert.equal((await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { user_code: asked.json.request.user_code } })).status, 200);
   await f.keep('secret', 'later', 'later-value');

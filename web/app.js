@@ -782,7 +782,7 @@ const actionWords = relation => ACTION_WORDS[relation] ?? { viewer: '見る', ed
 // A relation asked for: to act for the one answering, asked by a key nobody knows yet and confirmed with its code; or
 // one permission onto something, asked by a key already known.
 function renderApproval(row, shell, expiry) {
-  const asked = detailOf(row), first = row.to === null, acting = asked.relation === 'actor';
+  const asked = detailOf(row), first = row.to === null, acting = asked.relation === 'agent';
   const target = row.object ? `<div><dt>対象</dt><dd>${esc(row.object.name || row.object.id)}</dd></div>` : '';
   const scope = acting ? `${accessScope}<small class="muted block">${accessExclusions}</small>` : `<ul class="access-scope"><li>${esc(actionWords(asked.relation))}</li></ul>`;
   app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, acting ? 'アクセスを許可する' : '権限を渡す', 'device')}
@@ -1055,7 +1055,7 @@ function disconnect(connection) {
 function addKey() {
   openDialog(`<h2 id="dialog-title">アクセスを許可する相手を追加</h2><p>${accessSummary}</p><form><label for="agent-name">名前</label><input id="agent-name" name="name" placeholder="laptop など" required maxlength="80" autocomplete="off"><p class="permission-note">今後追加するものも含め、取り消すまで有効です。</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加してキーを発行</button></form>`);
   bindForm(async (form) => {
-    const result = await api('/v1/principals', { method: 'POST', data: { name: form.get('name'), actor: true, key: true } });
+    const result = await api('/v1/principals', { method: 'POST', data: { name: form.get('name'), agent: true, key: true } });
     await refresh(); if (!state) return;
     openDialog(`<h2 id="dialog-title">${esc(result.principal.name)} のアクセスキー</h2><p>キーは一度だけ表示します。AIを動かす環境の秘密情報として保管してください。</p><label for="agent-token">アクセスキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button><label for="api-url">接続先</label><input id="api-url" readonly value="${esc(location.origin)}/v1"><p class="permission-note">キーを会話や共有ファイルに貼り付けないでください。</p><button class="button primary full" data-action="close-dialog">閉じる</button>`);
   });

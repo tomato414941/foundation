@@ -25,7 +25,7 @@ with sync_playwright() as p:
 
     actor = post('/v1/principals', {'name': 'laptop の作業用AI'})
     token = actor['token']
-    asked = post('/v1/requests', {'authorization_details': [{'type': 'relation', 'relation': 'actor'}], 'binding_message': '保存した認証情報を使って接続を確認します。'}, token)['request']
+    asked = post('/v1/requests', {'authorization_details': [{'type': 'relation', 'relation': 'agent'}], 'binding_message': '保存した認証情報を使って接続を確認します。'}, token)['request']
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))

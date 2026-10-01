@@ -164,7 +164,7 @@ export async function fixture(t, options = {}) {
   }
   async function approveKey(name = 'laptop') {
     const made = await become(name);
-    const asked = await request('/v1/requests', { method: 'POST', anonymous: true, token: made.token, data: { authorization_details: [{ type: 'relation', relation: 'actor' }] } });
+    const asked = await request('/v1/requests', { method: 'POST', anonymous: true, token: made.token, data: { authorization_details: [{ type: 'relation', relation: 'agent' }] } });
     assert.equal(asked.status, 201, asked.text);
     const done = await request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { user_code: asked.json.request.user_code } });
     assert.equal(done.status, 200, done.text);
@@ -184,7 +184,7 @@ export async function fixture(t, options = {}) {
     return found.status === 200 ? request('/v1/resources/' + found.json.resource.id, { method: 'DELETE', data: {}, ...options }) : found;
   }
   async function issueKey(name = 'laptop') {
-    const result = await request('/v1/principals', { method: 'POST', data: { name, actor: true, key: true } });
+    const result = await request('/v1/principals', { method: 'POST', data: { name, agent: true, key: true } });
     assert.equal(result.status, 201, result.text);
     actsFor.set(result.json.token, result.json.principal.acts_for[0]);
     return { ...result.json.principal, token: result.json.token, key_id: result.json.key.id };

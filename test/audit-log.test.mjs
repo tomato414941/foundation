@@ -25,7 +25,7 @@ test('複数の利用者の代理を務めるキーの操作履歴を、対象�
   await f.keep('secret', 'second-value', 'fixture-b');
   const asked = await f.request('/v1/requests', {
     method: 'POST', token: key.token, anonymous: true,
-    data: { authorization_details: [{ type: 'relation', relation: 'actor' }], to: USER_B },
+    data: { authorization_details: [{ type: 'relation', relation: 'agent' }], to: USER_B },
   });
   assert.equal(asked.status, 201, asked.text);
   const accepted = await f.request('/v1/requests/' + asked.json.request.id + '/grant', {
@@ -53,7 +53,7 @@ test('代理の許可を取り消した後も、本人を対象とした操作�
 
   const removed = await f.request('/v1/relations', {
     method: 'DELETE',
-    data: { subject: key.id, relation: 'actor', object_type: 'principal', object_id: USER_A },
+    data: { subject: key.id, relation: 'agent', object_type: 'principal', object_id: USER_A },
   });
   assert.equal(removed.status, 200, removed.text);
   assert.deepEqual(await deliveries(f), before);

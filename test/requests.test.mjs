@@ -8,7 +8,7 @@ const READONLY = 'https://www.googleapis.com/auth/gmail.readonly', SEND = 'https
 
 const key = () => 'fdn_' + randomBytes(32).toString('base64url');
 // A key nobody knows asks to act for whoever opens its request; a key that acts for someone asks them for a registration.
-const asking = { authorization_details: [{ type: 'relation', relation: 'actor' }] };
+const asking = { authorization_details: [{ type: 'relation', relation: 'agent' }] };
 const registration = { authorization_details: [{ type: 'connection', service: 'google' }], binding_message: '届いたメールの確認' };
 const askingWith = ({ name, ...rest } = {}) => ({ ...asking, ...rest });
 async function create(f, token = null, overrides = {}, base = asking) {
@@ -72,7 +72,7 @@ test('A key not yet approved cannot ask for a registration, an approval request 
   assert.equal(bare.status, 400); assert.equal(bare.json.error.code, 'invalid_authorization_details');
   // A key that already acts for someone may still ask to act for another; that is a new request, not a repeat.
   const again = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: approved.token, data: asking });
-  assert.equal(again.status, 201, again.text); assert.equal(again.json.request.authorization_details[0].relation, 'actor'); assert.equal(again.json.request.to, null);
+  assert.equal(again.status, 201, again.text); assert.equal(again.json.request.authorization_details[0].relation, 'agent'); assert.equal(again.json.request.to, null);
 });
 
 test('Request creation is idempotent, and asking for something else makes a new request rather than changing a shared one', async t => {
@@ -381,7 +381,7 @@ test('依頼元は interval 秒をあけて確認し、急ぎすぎると slow_d
 test('代わりに動く AI は持ち主に追加の関係を頼み、持ち主が許可すると関係が引かれ、見知らぬ相手には頼めない', async t => {
   const f = await fixture(t), agent = await f.issueKey(), stranger = await f.become('stranger');
   const connected = await f.connection();
-  const detail = { type: 'relation', relation: 'connection.disconnect', object_type: 'resource', object_id: connected.id };
+  const detail = { type: 'relation', relation: 'disconnect_grant', object_type: 'resource', object_id: connected.id };
   const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, anonymous: true, data: { authorization_details: [detail], binding_message: '重複した接続を片付ける' } });
   assert.equal(asked.status, 201, asked.text);
   assert.equal(asked.json.request.to, USER_A); assert.equal(asked.json.request.user_code, undefined, 'a request from one already known needs no code');
@@ -390,6 +390,6 @@ test('代わりに動く AI は持ち主に追加の関係を頼み、持ち主�
   assert.equal(refused.status, 400, 'a stranger may ask only to act for someone');
   const granted = await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: {} });
   assert.equal(granted.status, 200, granted.text);
-  assert.deepEqual(granted.json.request.result, { relation: 'connection.disconnect', object_type: 'resource', object_id: connected.id });
+  assert.deepEqual(granted.json.request.result, { relation: 'disconnect_grant', object_type: 'resource', object_id: connected.id });
   assert.equal((await f.request('/v1/resources/' + connected.id, { method: 'DELETE', data: { revoke: false }, token: agent.token, anonymous: true, as: USER_A })).status, 200);
 });

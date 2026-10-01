@@ -206,7 +206,8 @@ test('30版のデータベースを、関係も渡した権限も一つの関係
   t.after(() => store.close());
   assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   const lines = store.db.prepare('SELECT * FROM relations ORDER BY relation').all().map(row => ({ ...row }));
-  assert.deepEqual(lines.map(row => row.relation), ['actor', 'object.remove', 'owner', 'principal.export', 'viewer'], 'what was done to a principal as a whole is its own action');
+  // One action drawn onto a thing is that action's own relation; one drawn onto a principal, reaching all it holds, has no place and is dropped (42).
+  assert.deepEqual(lines.map(row => row.relation), ['agent', 'owner', 'remove_grant', 'viewer'], 'what was done to a principal as a whole is its own action');
   assert.deepEqual(Object.keys(lines[0]).sort(), ['created_at', 'object_id', 'object_type', 'relation', 'subject_id'], 'a line is who, which, onto what');
   assert.equal(new Principals(store).aliasOf(USER_A, ai), 'laptop', 'the name an owner gave stays, as the owner\'s record');
   assert.equal(store.db.prepare("SELECT count(*) n FROM sqlite_schema WHERE name='permissions'").get().n, 0);
@@ -282,8 +283,9 @@ test('31版のシークレットと固定トークンを値・ID・共有権限�
   assert.equal(allowed('write', 'single'), false);
   assert.equal(allowed('remove', 'single'), true);
   assert.equal(allowed('rename', 'oauth', 'connection'), true);
-  assert.equal(authorization.can(old.reader, 'list', 'secret', { holder: USER_A }), true);
-  assert.equal(authorization.can(old.reader, 'list', 'connection', { holder: USER_A }), true);
+  // An action that was drawn onto the holder, reaching all they hold, has no place in the schema and is gone (42).
+  assert.equal(authorization.can(old.reader, 'list', 'secret', { holder: USER_A }), false);
+  assert.equal(authorization.can(old.reader, 'list', 'connection', { holder: USER_A }), false);
   assert.equal(store.db.prepare("SELECT status FROM requests WHERE id='request-pending'").get().status, 'cancelled');
   assert.deepEqual(JSON.parse(store.db.prepare("SELECT result FROM requests WHERE id='request-done'").get().result), { connection_id: 'single' });
   assert.deepEqual({ ...store.db.prepare("SELECT type,status,user_code FROM requests WHERE id='request-done'").get() }, { type: 'connection', status: 'granted', user_code: null }, 'a request says what it asks as a detail, and is granted');
@@ -377,4 +379,25 @@ test('39版のパスキーの表はWebAuthnの資格情報の表になり、そ�
     [{ id: 'by-email', proof: 'email', proof_ref: 'owner@example.test' }, { id: 'by-passkey', proof: 'webauthn', proof_ref: 'credential-1' }]);
   assert.equal(next.db.prepare('SELECT count(*) n FROM challenges').get().n, 0);
   assert.deepEqual(next.db.prepare('PRAGMA foreign_key_check').all(), []);
+});
+
+test('41版の代わりに動く線は agent に、一つの操作の線はその操作の関係になり、持ち主へ引いた操作の線は消える', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-42-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
+  const { principals } = modules(store);
+  principals.ensure(USER_A); principals.ensure(USER_B);
+  const line = store.db.prepare('INSERT INTO relations (subject_id,relation,object_type,object_id,created_at) VALUES (?,?,?,?,?)');
+  line.run(USER_B, 'actor', 'principal', USER_A, '2026-01-01'); line.run(USER_A, 'owner', 'principal', USER_B, '2026-01-01');
+  line.run(USER_B, 'connection.disconnect', 'resource', 'c1', '2026-01-01'); line.run(USER_B, 'connection.disconnect', 'principal', USER_A, '2026-01-01');
+  line.run(USER_B, 'viewer', 'resource', 's1', '2026-01-01');
+  store.db.prepare("INSERT INTO requests (id,from_id,to_id,type,detail,binding_message,steps,status,result,created_at,expires_at) VALUES ('r1',?,?,'relation',?,'','[]','granted',?,0,9999999999999)")
+    .run(USER_B, USER_A, JSON.stringify({ relation: 'actor' }), JSON.stringify({ relation: 'actor', object_type: 'principal', object_id: USER_A }));
+  store.db.exec('PRAGMA user_version=41'); store.close();
+  const next = new Store(path, KEY); t.after(() => next.close());
+  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
+  assert.deepEqual(next.db.prepare('SELECT relation, object_type, object_id FROM relations ORDER BY relation, object_id').all().map(row => ({ ...row })),
+    [{ relation: 'agent', object_type: 'principal', object_id: USER_A }, { relation: 'disconnect_grant', object_type: 'resource', object_id: 'c1' },
+      { relation: 'owner', object_type: 'principal', object_id: USER_B }, { relation: 'viewer', object_type: 'resource', object_id: 's1' }]);
+  const request = next.db.prepare("SELECT detail, result FROM requests WHERE id='r1'").get();
+  assert.equal(JSON.parse(request.detail).relation, 'agent'); assert.equal(JSON.parse(request.result).relation, 'agent');
 });
