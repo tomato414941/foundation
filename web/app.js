@@ -1065,7 +1065,7 @@ const principalById = id => (state.actors || []).find(item => item.id === id) ||
 function environmentsSection() {
   const running = state.environments || [], compute = state.compute;
   const minutes = seconds => Math.ceil(seconds / 60).toLocaleString('ja-JP') + ' 分';
-  const status = { starting: '準備中', ready: '待機中', busy: '実行中' };
+  const status = { starting: '準備中', ready: '待機中', busy: '実行中', stopping: '停止確認中（自動再試行）' };
   const identity = id => !id ? '権限なし' : id === state.user.id ? 'あなたとして動作' : (principalById(id)?.name || '登録した相手') + ' として動作';
   const row = item => `<article class="agent-row access-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${esc(status[item.status] || item.status)} · ${esc(identity(item.identity))}</p></div>
     <div class="agent-permissions"><span class="muted">${esc(new Date(item.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで</span></div>

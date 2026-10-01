@@ -1,4 +1,4 @@
-import { fail } from '../errors.mjs';
+import { fail, HttpError } from '../errors.mjs';
 
 // Machines lent on Fly Machines: each one a Firecracker micro-VM, made for one environment and destroyed with it. The
 // runner keeps to the contract in local.mjs; everything else (who may use it, how long it lives, what it costs) is
@@ -26,13 +26,19 @@ export class FlyRunner {
         headers: { authorization: 'Bearer ' + this.token, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     } catch { fail(502, 'runner_unavailable', '実行環境を用意できませんでした。時間をおいて再度お試しください。'); }
+    const creating = method === 'POST' && path === '/machines';
+    if (response.status === 404 && !creating) throw Object.assign(new Error('machine is gone'), { gone: true });
+    if (!response.ok) {
+      const error = new HttpError(502, 'runner_unavailable', '実行環境を用意できませんでした。時間をおいて再度お試しください。');
+      // Explicit request rejection is different from a timeout/5xx: the provider did not accept creation.
+      if (creating && [400, 401, 402, 403, 404, 422, 429].includes(response.status)) error.notCreated = true;
+      throw error;
+    }
     const text = await response.text();
     let data; try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
-    if (response.status === 404) throw Object.assign(new Error('machine is gone'), { gone: true });
-    if (!response.ok) fail(502, 'runner_unavailable', '実行環境を用意できませんでした。時間をおいて再度お試しください。');
     return data;
   }
-  async start({ id, size = 'small', env = {} }) {
+  async start({ id, size = 'small', env = {}, onCreated = () => {} }) {
     const placed = Object.fromEntries(Object.entries(env).map(([name, value]) => [name, String(value).startsWith('~/') ? HOME + '/' + String(value).slice(2) : String(value)]));
     const made = await this.call('POST', '/machines', {
       name: 'env-' + id, region: this.region,
@@ -40,6 +46,7 @@ export class FlyRunner {
         metadata: { foundation_environment: id } },
     });
     if (typeof made.id !== 'string') fail(502, 'runner_unavailable', '実行環境を用意できませんでした。');
+    onCreated(made.id);
     await this.call('GET', '/machines/' + made.id + '/wait?state=started&timeout=60', undefined, { timeoutMs: 70_000 });
     return { machine: made.id, home: HOME };
   }
@@ -96,7 +103,11 @@ export class FlyRunner {
     await this.once(machine, ['sh', '-c', 'rm -f "$HOME/$1"', 'remove', path], 20_000);
   }
   async stop(machine) {
-    try { await this.call('DELETE', '/machines/' + machine + '?force=true'); }
+    try {
+      await this.call('DELETE', '/machines/' + machine + '?force=true');
+      const remaining = await this.call('GET', '/machines/' + machine);
+      if (remaining.state !== 'destroyed') fail(502, 'runner_unavailable', '実行環境の削除を確認できませんでした。');
+    }
     catch (error) { if (!error?.gone) throw error; }
   }
 }

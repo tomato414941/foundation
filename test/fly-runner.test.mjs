@@ -54,3 +54,107 @@ test('Fly の実行基盤は、使い捨てのマシンを作り、中で標準�
   assert.equal(fly.machines.has('m1'), false);
   await runner.stop('m1');
 });
+
+function scriptedFly(steps) {
+  const calls = [];
+  const fetcher = async (url, init) => {
+    const step = steps[calls.length];
+    calls.push({ method: init.method, path: new URL(url).pathname + new URL(url).search });
+    assert.ok(step, 'no unexpected provider call');
+    assert.equal(init.method, step.method);
+    if (step.path) assert.equal(calls.at(-1).path, '/v1/apps/runners' + step.path);
+    step.check?.();
+    if (step.error) throw step.error;
+    return new Response(JSON.stringify(step.body ?? {}), { status: step.status ?? 200 });
+  };
+  const runner = new FlyRunner({ token: 'fly-token', app: 'runners', image: 'registry.fly.io/runners:1', fetcher });
+  return { runner, calls };
+}
+
+test('Fly の削除が失敗したときは、機械が止まったとは答えない', async t => {
+  for (const failure of [
+    { status: 503 },
+    { status: 401 },
+    { error: new Error('connection failed') },
+    { error: new DOMException('request timed out', 'TimeoutError') },
+  ]) await t.test(String(failure.status ?? failure.error.name), async () => {
+    const { runner, calls } = scriptedFly([{ method: 'DELETE', path: '/machines/m1?force=true', ...failure }]);
+    await assert.rejects(runner.stop('m1'), { code: 'runner_unavailable' });
+    assert.equal(calls.length, 1);
+  });
+});
+
+test('Fly の機械が既に消えていれば、何度閉じても成功する', async () => {
+  const { runner, calls } = scriptedFly([
+    { method: 'DELETE', path: '/machines/m1?force=true', status: 404 },
+    { method: 'DELETE', path: '/machines/m1?force=true', status: 404 },
+  ]);
+  await runner.stop('m1');
+  await runner.stop('m1');
+  assert.equal(calls.length, 2);
+});
+
+test('Fly が削除を受け付けても、まだ存在する機械の終了は確定しない', async t => {
+  for (const state of ['started', 'stopping', 'stopped', undefined]) await t.test(String(state), async () => {
+    const { runner, calls } = scriptedFly([
+      { method: 'DELETE', path: '/machines/m1?force=true', status: 202 },
+      { method: 'GET', path: '/machines/m1', body: state ? { state } : {} },
+    ]);
+    await assert.rejects(runner.stop('m1'), { code: 'runner_unavailable' });
+    assert.equal(calls.length, 2);
+  });
+});
+
+test('Fly の削除後の照会で消失または破棄済みを確認できれば終了する', async t => {
+  for (const final of [{ status: 404 }, { body: { state: 'destroyed' } }]) await t.test(String(final.status ?? final.body.state), async () => {
+    const { runner, calls } = scriptedFly([
+      { method: 'DELETE', path: '/machines/m1?force=true', status: 202 },
+      { method: 'GET', path: '/machines/m1', ...final },
+    ]);
+    await runner.stop('m1');
+    assert.equal(calls.length, 2);
+  });
+});
+
+test('Fly の削除後の照会が失敗したときも、終了を確定しない', async t => {
+  for (const failure of [
+    { status: 503 },
+    { error: new Error('connection failed') },
+    { error: new DOMException('request timed out', 'TimeoutError') },
+  ]) await t.test(String(failure.status ?? failure.error.name), async () => {
+    const { runner, calls } = scriptedFly([
+      { method: 'DELETE', path: '/machines/m1?force=true' },
+      { method: 'GET', path: '/machines/m1', ...failure },
+    ]);
+    await assert.rejects(runner.stop('m1'), { code: 'runner_unavailable' });
+    assert.equal(calls.length, 2);
+  });
+});
+
+test('Fly の機械 ID は起動待ちより先に渡され、起動待ちが失敗しても失われない', async t => {
+  for (const wait of [{}, { status: 503 }, { error: new DOMException('request timed out', 'TimeoutError') }])
+    await t.test(String(wait.status ?? wait.error?.name ?? 'success'), async () => {
+      const allocated = [];
+      const { runner, calls } = scriptedFly([
+        { method: 'POST', path: '/machines', body: { id: 'm1' } },
+        { method: 'GET', path: '/machines/m1/wait?state=started&timeout=60',
+          check: () => assert.deepEqual(allocated, ['m1'], 'allocation is recorded before waiting on the machine'), ...wait },
+      ]);
+      const started = runner.start({ id: 'env-1', onCreated: machine => { allocated.push(machine); } });
+      if (wait.status || wait.error) await assert.rejects(started, { code: 'runner_unavailable' });
+      else assert.equal((await started).machine, 'm1');
+      assert.deepEqual(allocated, ['m1']);
+      assert.equal(calls.length, 2);
+    });
+});
+
+test('Fly の作成拒否と、作成結果が不明な失敗を区別する', async t => {
+  for (const status of [400, 401, 402, 403, 404, 422, 429, 408, 409, 500, 503]) await t.test(String(status), async () => {
+    const runner = new FlyRunner({ token: 'fake', app: 'runners', image: 'image', fetcher: async () => new Response('{}', { status }) });
+    await assert.rejects(runner.start({ id: 'env' }), error => {
+      assert.equal(Boolean(error.notCreated), [400, 401, 402, 403, 404, 422, 429].includes(status)); return true;
+    });
+  });
+  const runner = new FlyRunner({ token: 'fake', app: 'runners', image: 'image', fetcher: async () => { throw new Error('network'); } });
+  await assert.rejects(runner.start({ id: 'env' }), error => { assert.equal(error.notCreated, undefined); return true; });
+});

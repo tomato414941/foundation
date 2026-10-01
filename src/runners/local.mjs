@@ -6,23 +6,26 @@ import { randomUUID } from 'node:crypto';
 
 // What a runner promises, whatever it runs on. Foundation keeps everything else - who may use a machine, how long it
 // lives, what it costs - so a runner only has to do these:
-//   start({ id, size, env })            -> { machine, home }   make one machine; env is set for every command, and a
+//   start({ id, size, env, onCreated })            -> { machine, home }   make one machine; env is set for every command, and a
 //                                       value beginning with ~/ names a path under the machine's home
+//                                       call onCreated(machine) as soon as its ID is known, before waiting for ready;
+//                                       reject with notCreated only when creation was definitively rejected
 //   exec(machine, { command, stdin, timeoutMs }) -> { exitCode, stdout, stderr, timedOut }   run one command
 //   put(machine, path, content, mode)   write one file (path relative to home)
 //   remove(machine, path)               remove one file
-//   stop(machine)                       stop the machine and throw it away
+//   stop(machine)                       resolve only once the machine is gone; already gone succeeds
 //
 // This one runs each machine as a directory on this host. It isolates nothing and is for tests and development only.
 const OUTPUT_MAX = 1024 * 1024;
 
 export class LocalRunner {
   constructor() { this.name = 'local'; this.machines = new Map(); }
-  async start({ id, env = {} }) {
-    const home = await mkdtemp(join(tmpdir(), 'foundation-env-'));
+  async start({ id, env = {}, onCreated = () => {} }) {
+    const home = await mkdtemp(join(tmpdir(), 'foundation-env-')).catch(error => { error.notCreated = true; throw error; });
     const machine = id + ':' + randomUUID();
     const placed = Object.fromEntries(Object.entries(env).map(([name, value]) => [name, String(value).startsWith('~/') ? join(home, String(value).slice(2)) : String(value)]));
     this.machines.set(machine, { home, env: placed, running: new Set() });
+    onCreated(machine);
     return { machine, home };
   }
   at(machine) {
@@ -63,8 +66,8 @@ export class LocalRunner {
   async stop(machine) {
     const found = this.machines.get(machine);
     if (!found) return;
-    this.machines.delete(machine);
     for (const child of found.running) child.kill('SIGKILL');
     await rm(found.home, { recursive: true, force: true });
+    this.machines.delete(machine);
   }
 }

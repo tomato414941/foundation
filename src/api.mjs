@@ -117,7 +117,7 @@ export const schemas = {
     generation: integer, expires_at: nullable(time), can_reconnect: boolean, can_revoke: boolean, available: boolean }),
   App: resource('app', { service: ref('ServiceSummary'), foundation: boolean, client_id: string, settings: map(string), connections: integer }),
   Service: resource('service', { definition: object(), service: ref('ServiceDescription'), dependents: integer }),
-  Environment: resource('environment', { size: string, lifetime, identity: nullable(principalId), status: string,
+  Environment: resource('environment', { size: string, lifetime, identity: nullable(principalId), status: { ...choice(['starting', 'ready', 'busy', 'stopping', 'stopped']), description: 'stopping closes access immediately; stop confirmation and failed attempts are retried durably before stopped.' },
     started_at: nullable(iso), last_active_at: nullable(iso), expires_at: nullable(iso) }),
   Resource: { oneOf: ['Secret', 'Object', 'Connection', 'App', 'Service', 'Environment'].map(ref) },
   PatchResource: { ...object({ name: resourceName, auth_schemes: object({ oauth: ref('OAuthDefinition') }), client_id: string, client_secret: string }), description: 'Apps also accept their service-specific top-level client fields, as declared by app_fields.' },
@@ -255,7 +255,7 @@ export const routes = [
   { name: 'environment', group: 'environments', path: '/v1/environments/{resourceId}', methods: {
     get: op('getEnvironment', 'Read an execution environment', one('Environment')),
     patch: op('setEnvironmentIdentity', 'Attach or detach an environment identity', one('Environment'), { input: object({ identity: nullable(principalId) }, ['identity']), 'x-input-error': 'invalid_identity' }),
-    delete: okay('removeEnvironment', 'Close and remove an execution environment'),
+    delete: okay('removeEnvironment', 'Close and remove an execution environment', { description: 'Returns success only after the runner confirms removal. If it cannot yet confirm, returns 503 environment_stopping and retains the environment with access revoked; stopping and removal retry automatically, including after restart.' }),
   } },
   { name: 'commands', group: 'environments', path: '/v1/environments/{resourceId}/commands', methods: { post: op('startCommand', 'Run a command in an environment', one('Command'), { input: 'CommandInput', 'x-input-error': 'invalid_command', responses: { 200: response(one('Command')), 202: response(one('Command'), 'Still running after 20 seconds; poll by command id.'), default: response('Error', 'Failure') } }) } },
   { name: 'command', group: 'environments', path: '/v1/environments/{resourceId}/commands/{commandId}', methods: { get: op('getCommand', 'Read command status and output', one('Command')) } },

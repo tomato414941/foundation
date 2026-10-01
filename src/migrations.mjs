@@ -1,6 +1,6 @@
 import { checkDefinition } from './service-definition.mjs';
 
-export const SCHEMA_VERSION = 42;
+export const SCHEMA_VERSION = 43;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -16,7 +16,28 @@ export const STEPS = {
   40: webauthnCredentials,
   41: payment,
   42: agents,
+  43: durableEnvironmentStops,
 };
+
+// A stop is kept until the runner confirms it. Rebuilding widens the status check without changing resource IDs.
+function durableEnvironmentStops({ db }) {
+  db.exec(`
+    CREATE TABLE environments_next (
+      resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+      size TEXT NOT NULL, lifetime TEXT NOT NULL CHECK(lifetime IN ('exit','idle')), idle_seconds INTEGER NOT NULL, max_seconds INTEGER NOT NULL,
+      identity TEXT, runner TEXT NOT NULL, machine TEXT,
+      status TEXT NOT NULL CHECK(status IN ('starting','ready','busy','stopping','stopped')),
+      started_at INTEGER NOT NULL, last_active_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+      stop_attempts INTEGER NOT NULL DEFAULT 0, stop_retry_at INTEGER,
+      remove_requested INTEGER NOT NULL DEFAULT 0 CHECK(remove_requested IN (0,1))
+    );
+    INSERT INTO environments_next (resource_id,size,lifetime,idle_seconds,max_seconds,identity,runner,machine,status,started_at,last_active_at,expires_at)
+      SELECT resource_id,size,lifetime,idle_seconds,max_seconds,identity,runner,machine,status,started_at,last_active_at,expires_at FROM environments;
+    DROP TABLE environments;
+    ALTER TABLE environments_next RENAME TO environments;
+  `);
+}
+durableEnvironmentStops.rebuilds = true;
 
 // A one-time data conversion, never a runtime parser for earlier definitions. Refuse any expression that cannot
 // be represented faithfully, and let Store roll the entire migration back rather than guess or discard data.
@@ -470,8 +491,10 @@ export const SCHEMA = `
     resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
     size TEXT NOT NULL, lifetime TEXT NOT NULL CHECK(lifetime IN ('exit','idle')), idle_seconds INTEGER NOT NULL, max_seconds INTEGER NOT NULL,
     identity TEXT, runner TEXT NOT NULL, machine TEXT,
-    status TEXT NOT NULL CHECK(status IN ('starting','ready','busy','stopped')),
-    started_at INTEGER NOT NULL, last_active_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    status TEXT NOT NULL CHECK(status IN ('starting','ready','busy','stopping','stopped')),
+    started_at INTEGER NOT NULL, last_active_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+    stop_attempts INTEGER NOT NULL DEFAULT 0, stop_retry_at INTEGER,
+    remove_requested INTEGER NOT NULL DEFAULT 0 CHECK(remove_requested IN (0,1))
   );
   CREATE TABLE environment_commands (
     id TEXT PRIMARY KEY, environment_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE, by_id TEXT NOT NULL,

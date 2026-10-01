@@ -10,6 +10,8 @@ import { Principals } from '../src/principals.mjs';
 import { SCHEMA_VERSION, STEPS } from '../src/migrations.mjs';
 import { OAuth2Client, inject } from '../src/schemes/oauth.mjs';
 import { Authorization } from '../src/authorization.mjs';
+import { Environments } from '../src/environments.mjs';
+import { Payments, Stripe } from '../src/payments.mjs';
 import { KEY, USER_A, USER_B, modules } from './helpers.mjs';
 
 const STORED_SERVICE = { version: 1, name: 'Stored service', auth_schemes: { oauth: {
@@ -400,4 +402,127 @@ test('41版の代わりに動く線は agent に、一つの操作の線はそ�
       { relation: 'owner', object_type: 'principal', object_id: USER_B }, { relation: 'viewer', object_type: 'resource', object_id: 's1' }]);
   const request = next.db.prepare("SELECT detail, result FROM requests WHERE id='r1'").get();
   assert.equal(JSON.parse(request.detail).relation, 'agent'); assert.equal(JSON.parse(request.result).relation, 'agent');
+});
+
+test('40版の環境は ID・コマンド・鍵・使用量を保って停止再試行可能な43版へ移る', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-43-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'state.sqlite'), store = new Store(path, KEY), m = modules(store);
+  m.principals.ensure(USER_A);
+  store.db.exec(`DROP TABLE environments;
+    CREATE TABLE environments (
+      resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+      size TEXT NOT NULL, lifetime TEXT NOT NULL CHECK(lifetime IN ('exit','idle')), idle_seconds INTEGER NOT NULL, max_seconds INTEGER NOT NULL,
+      identity TEXT, runner TEXT NOT NULL, machine TEXT,
+      status TEXT NOT NULL CHECK(status IN ('starting','ready','busy','stopped')),
+      started_at INTEGER NOT NULL, last_active_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    );`);
+  const expires = Date.now() + 3600_000;
+  for (const status of ['starting', 'ready', 'busy', 'stopped']) {
+    m.resources.insert(status, USER_A, 'environment', status);
+    store.db.prepare('INSERT INTO environments VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(status, 'small', 'idle', 30, 3600, USER_A, 'fly', status === 'starting' ? null : 'machine-' + status, status, 10, 20, expires);
+  }
+  m.principals.issueKey(USER_A, { environmentId: 'busy', expiresAt: expires });
+  store.db.prepare("INSERT INTO environment_commands VALUES ('command','busy',?,'[\"true\"]','running',NULL,NULL,NULL,10,NULL)").run(USER_A);
+  store.db.prepare("INSERT INTO compute_usage VALUES (?,'2026-10',23)").run(USER_A);
+  const tables = ['resources', 'environment_commands', 'access_keys', 'compute_usage'];
+  const before = Object.fromEntries(tables.map(table => [table, store.db.prepare('SELECT * FROM ' + table).all()]));
+  const rows = store.db.prepare('SELECT * FROM environments ORDER BY resource_id').all();
+  store.db.exec('DROP TABLE meter_events; DROP TABLE payment_accounts; PRAGMA user_version=40'); store.close();
+  let next = new Store(path, KEY);
+  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
+  for (const table of tables) assert.deepEqual(next.db.prepare('SELECT * FROM ' + table).all(), before[table], table);
+  assert.deepEqual(next.db.prepare('SELECT * FROM environments ORDER BY resource_id').all().map(row => ({ ...row })),
+    rows.map(row => ({ ...row, stop_attempts: 0, stop_retry_at: null, remove_requested: 0 })));
+  next.db.prepare("UPDATE environments SET status='stopping',stop_attempts=1,stop_retry_at=?,remove_requested=1 WHERE resource_id='busy'").run(expires);
+  assert.equal(next.db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
+  assert.deepEqual(next.db.prepare('PRAGMA foreign_key_check').all(), []);
+  next.close(); next = new Store(path, KEY); t.after(() => next.close());
+  assert.equal(next.db.prepare("SELECT status FROM environments WHERE resource_id='busy'").get().status, 'stopping');
+  assert.equal(next.db.prepare("SELECT stop_attempts FROM environments WHERE resource_id='busy'").get().stop_attempts, 1);
+});
+
+test('本番41版の支払い登録と送信済み・未送信イベントは、43版の停止移行で変わらない', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'foundation-payment-stop-migration-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'state.sqlite'), store = new Store(path, KEY), m = modules(store);
+  m.principals.ensure(USER_A);
+  store.db.exec(`DROP TABLE environments;
+    CREATE TABLE environments (
+      resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+      size TEXT NOT NULL, lifetime TEXT NOT NULL CHECK(lifetime IN ('exit','idle')), idle_seconds INTEGER NOT NULL, max_seconds INTEGER NOT NULL,
+      identity TEXT, runner TEXT NOT NULL, machine TEXT,
+      status TEXT NOT NULL CHECK(status IN ('starting','ready','busy','stopped')),
+      started_at INTEGER NOT NULL, last_active_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    );`);
+  for (const status of ['ready', 'stopped']) {
+    m.resources.insert(status, USER_A, 'environment', status);
+    store.db.prepare('INSERT INTO environments VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(status, 'small', 'idle', 30, 3600, null, 'fly', 'machine-' + status, status, 10, 20, Date.now() + 3600_000);
+  }
+  store.db.prepare("INSERT INTO payment_accounts VALUES (?,'cus_1','sub_1','active',1)").run(USER_A);
+  store.db.prepare("INSERT INTO meter_events VALUES ('sent',?,'compute',23,100,200)").run(USER_A);
+  store.db.prepare("INSERT INTO meter_events VALUES ('pending',?,'compute',7,300,NULL)").run(USER_A);
+  store.db.prepare("INSERT INTO compute_usage VALUES (?,'2026-10',30)").run(USER_A);
+  const tables = ['payment_accounts', 'meter_events', 'compute_usage'];
+  const before = Object.fromEntries(tables.map(table => [table, store.db.prepare('SELECT * FROM ' + table).all()]));
+  store.db.exec('PRAGMA user_version=41'); store.close();
+  const next = new Store(path, KEY); t.after(() => next.close());
+  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, 43);
+  for (const table of tables) assert.deepEqual(next.db.prepare('SELECT * FROM ' + table).all(), before[table], table);
+  assert.equal(next.db.prepare("SELECT status FROM environments WHERE resource_id='stopped'").get().status, 'stopped');
+  assert.equal(next.db.prepare("SELECT stop_attempts FROM environments WHERE resource_id='ready'").get().stop_attempts, 0);
+  assert.deepEqual(next.db.prepare('PRAGMA foreign_key_check').all(), []);
+});
+
+test('mainの42版DBは認可と課金を保って43版へ移り、停止の読み取りと再試行が動く', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'foundation-main42-stop-migration-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'state.sqlite'), store = new Store(path, KEY), m = modules(store), now = Date.now();
+  m.principals.ensure(USER_A); m.principals.ensure(USER_B);
+  // All other tables have main's v42 shape. Only environments gained columns/a status in v43.
+  store.db.exec(`DROP TABLE environments;
+    CREATE TABLE environments (
+      resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+      size TEXT NOT NULL, lifetime TEXT NOT NULL CHECK(lifetime IN ('exit','idle')), idle_seconds INTEGER NOT NULL, max_seconds INTEGER NOT NULL,
+      identity TEXT, runner TEXT NOT NULL, machine TEXT,
+      status TEXT NOT NULL CHECK(status IN ('starting','ready','busy','stopped')),
+      started_at INTEGER NOT NULL, last_active_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    );`);
+  m.resources.insert('environment-42', USER_A, 'environment', 'kept environment');
+  store.db.prepare('INSERT INTO environments VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run('environment-42', 'medium', 'idle', 30, 3600, USER_A, 'fake', 'machine-42', 'ready', now - 10_000, now, now + 3600_000);
+  m.principals.issueKey(USER_A, { environmentId: 'environment-42', expiresAt: now + 3600_000 });
+  const line = store.db.prepare('INSERT INTO relations (subject_id,relation,object_type,object_id,created_at) VALUES (?,?,?,?,?)');
+  line.run(USER_B, 'agent', 'principal', USER_A, '2026-01-01');
+  line.run(USER_B, 'exec_grant', 'resource', 'environment-42', '2026-01-01');
+  line.run(USER_A, 'owner', 'principal', USER_B, '2026-01-01');
+  store.db.prepare("INSERT INTO requests (id,from_id,to_id,type,detail,binding_message,steps,status,result,created_at,expires_at) VALUES ('r42',?,?,'relation',?,'','[]','granted',?,0,9999999999999)")
+    .run(USER_B, USER_A, JSON.stringify({ relation: 'agent' }), JSON.stringify({ relation: 'agent', object_type: 'principal', object_id: USER_A }));
+  store.db.prepare("INSERT INTO environment_commands VALUES ('command-42','environment-42',?,'[\"true\"]','done',0,'kept','',?,?)").run(USER_A, now - 1000, now);
+  store.db.prepare("INSERT INTO payment_accounts VALUES (?,'cus_42','sub_42','active',1)").run(USER_A);
+  store.db.prepare("INSERT INTO meter_events VALUES ('sent-42',?,'compute',23,100,200)").run(USER_A);
+  store.db.prepare("INSERT INTO meter_events VALUES ('pending-42',?,'compute',7,300,NULL)").run(USER_A);
+  store.db.prepare('INSERT INTO compute_usage VALUES (?,?,30)').run(USER_A, new Date(now).toISOString().slice(0, 7));
+  const tables = ['resources', 'relations', 'requests', 'environment_commands', 'access_keys', 'payment_accounts', 'meter_events', 'compute_usage'];
+  const before = Object.fromEntries(tables.map(table => [table, store.db.prepare('SELECT * FROM ' + table).all()]));
+  store.db.exec('PRAGMA user_version=42'); store.close();
+  const next = new Store(path, KEY); t.after(() => next.close());
+  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, 43);
+  for (const table of tables) assert.deepEqual(next.db.prepare('SELECT * FROM ' + table).all(), before[table], table);
+  const modules43 = modules(next), payments = new Payments(next, new Stripe());
+  assert.equal(modules43.authorization.can(USER_B, 'exec', 'environment', { id: 'environment-42', holder: USER_A }), true);
+  let calls = 0;
+  const runner = { name: 'fake', async stop(machine) { assert.equal(machine, 'machine-42'); if (++calls === 1) throw new Error('retry'); } };
+  const environments = new Environments({ store: next, ...modules43, payments, runner });
+  const row = environments.get('environment-42');
+  assert.equal(row.stop_attempts, 0); assert.equal(row.stop_retry_at, null); assert.equal(row.remove_requested, 0);
+  await environments.stop(row);
+  assert.equal(environments.get(row.id).status, 'stopping');
+  assert.equal(modules43.principals.keys(USER_A).filter(key => key.environment_id === row.id).length, 0);
+  assert.deepEqual(next.db.prepare('SELECT * FROM meter_events').all(), before.meter_events);
+  await environments.sweep(environments.get(row.id).stop_retry_at);
+  assert.equal(environments.get(row.id).status, 'stopped'); assert.equal(calls, 2);
+  const settled = next.db.prepare('SELECT * FROM meter_events').all(); assert.equal(settled.length, 3);
+  await environments.stop(row); assert.deepEqual(next.db.prepare('SELECT * FROM meter_events').all(), settled);
+  assert.equal(next.db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
+  assert.deepEqual(next.db.prepare('PRAGMA foreign_key_check').all(), []);
 });

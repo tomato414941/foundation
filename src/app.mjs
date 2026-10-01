@@ -614,7 +614,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         if (method === 'DELETE') {
           await inputBody();
           await environments.removeAll(subject.id);
-          const cancelled = store.transaction(() => { const rows = requests.cancelFrom(subject.id, 'requester_left'); resources.removeAll(subject.id); principals.remove(subject.id); return rows; });
+          const cancelled = store.transaction(() => { environments.assertRemoved(subject.id); const rows = requests.cancelFrom(subject.id, 'requester_left'); resources.removeAll(subject.id); principals.remove(subject.id); return rows; });
           for (const row of cancelled) requestActions.changed(row);
           return send(200, { ok: true });
         }
@@ -651,10 +651,13 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           if (method === 'DELETE') {
             permit('remove', 'principal', id);
             await inputBody();
-            requestActions.removePrincipal(subject.id, id);
             if (objects.enabled) for (const row of objects.list(id)) await objects.remove(row);
             await environments.removeAll(id);
-            resources.removeAll(id);
+            store.transaction(() => {
+              environments.assertRemoved(id);
+              requestActions.removePrincipal(subject.id, id);
+              resources.removeAll(id);
+            });
             return send(200, { ok: true });
           }
         }

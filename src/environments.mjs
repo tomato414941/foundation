@@ -13,7 +13,9 @@ import { resourceName } from './resources.mjs';
 export const SIZES = { small: 1, medium: 2, large: 4 };
 export const KEY_PATH = '.foundation/key';
 const COMMAND_PARTS = 200, COMMAND_LENGTH = 100_000, STDIN_MAX = 1024 * 1024, KEPT_OUTPUT = 256 * 1024, STOPPED_KEPT = 3600_000;
-const COLUMNS = 'r.id,r.holder_id,r.kind,r.name,r.created_at,r.updated_at,e.size,e.lifetime,e.idle_seconds,e.max_seconds,e.identity,e.runner,e.machine,e.status,e.started_at,e.last_active_at,e.expires_at';
+// The lease outlasts a runner stop call; crashed attempts become due again without an in-memory queue.
+const STOP_LEASE = 120_000, STOP_RETRY = 5000, STOP_RETRY_MAX = 300_000;
+const COLUMNS = 'r.id,r.holder_id,r.kind,r.name,r.created_at,r.updated_at,e.size,e.lifetime,e.idle_seconds,e.max_seconds,e.identity,e.runner,e.machine,e.status,e.started_at,e.last_active_at,e.expires_at,e.stop_attempts,e.stop_retry_at,e.remove_requested';
 const FROM = 'FROM resources r JOIN environments e ON e.resource_id=r.id';
 const month = (at = Date.now()) => new Date(at).toISOString().slice(0, 7);
 const iso = value => value === null || value === undefined ? null : new Date(value).toISOString();
@@ -29,6 +31,8 @@ export class Environments {
     // Values handed into a machine, kept only in memory, to take out of what its commands print.
     this.revealed = new Map();
     this.pending = new Map();
+    this.stopping = new Map();
+    this.opening = new Set();
   }
   get enabled() { return Boolean(this.runner); }
   check() { if (!this.enabled) fail(503, 'environments_unavailable', '環境は現在使えません。'); }
@@ -99,17 +103,27 @@ export class Environments {
     const name = input.name === undefined ? '環境' : resourceName(input.name);
     const id = randomUUID(), now = Date.now();
     this.store.transaction(() => {
+      this.principals.at(holderId);
       if (this.db.prepare(`SELECT count(*) n ${FROM} WHERE r.holder_id=? AND e.status<>'stopped'`).get(holderId).n >= this.limits.concurrent) fail(429, 'environment_limit', `同時に開ける環境は${this.limits.concurrent}つまでです。`);
       this.within(holderId);
       this.resources.insert(id, holderId, 'environment', name);
       this.db.prepare("INSERT INTO environments (resource_id,size,lifetime,idle_seconds,max_seconds,identity,runner,status,started_at,last_active_at,expires_at) VALUES (?,?,?,?,?,NULL,?,'starting',?,?,?)")
         .run(id, size, end, idle, max, this.runner.name, now, now, now + max * 1000);
     });
+    this.opening.add(id);
     try {
-      const started = await this.runner.start({ id, size, env: { FOUNDATION_URL: origin, FOUNDATION_RUNTIME_KEY_FILE: '~/' + KEY_PATH } });
-      this.db.prepare("UPDATE environments SET machine=?,status='ready' WHERE resource_id=?").run(started.machine, id);
+      const started = await this.runner.start({ id, size, env: { FOUNDATION_URL: origin, FOUNDATION_RUNTIME_KEY_FILE: '~/' + KEY_PATH },
+        onCreated: machine => this.db.prepare('UPDATE environments SET machine=? WHERE resource_id=?').run(machine, id) });
+      this.db.prepare("UPDATE environments SET machine=?,status=CASE WHEN status='starting' THEN 'ready' ELSE status END WHERE resource_id=?").run(started.machine, id);
+      this.opening.delete(id);
+      this.usable(this.get(id));
       if (input.identity) await this.attach(this.get(id), input.identity);
     } catch (error) {
+      this.opening.delete(id);
+      if (error?.notCreated) this.store.transaction(() => {
+        const row = this.get(id);
+        if (row && !row.machine) { this.principals.revokeEnvironmentKeys(id); this.resources.remove(row); }
+      });
       await this.remove(this.get(id)).catch(() => {});
       throw error;
     }
@@ -118,24 +132,33 @@ export class Environments {
 
   // Giving it an identity: a key for that principal, placed inside, living no longer than the machine.
   async attach(row, principalId) {
-    this.usable(row);
-    this.principals.at(principalId);
-    this.principals.revokeEnvironmentKeys(row.id);
-    const key = this.principals.issueKey(principalId, { expiresAt: row.expires_at, environmentId: row.id });
+    const key = this.store.transaction(() => {
+      row = this.usable(row);
+      this.principals.at(principalId);
+      this.principals.revokeEnvironmentKeys(row.id);
+      return this.principals.issueKey(principalId, { expiresAt: row.expires_at, environmentId: row.id });
+    });
     this.reveal(row.id, [key.token]);
     try { await this.runner.put(row.machine, KEY_PATH, key.token + '\n', 0o600); }
     catch (error) { this.principals.revokeEnvironmentKeys(row.id); throw error; }
-    this.db.prepare('UPDATE environments SET identity=? WHERE resource_id=?').run(principalId, row.id);
+    // A stop may have revoked the key while the runner was writing it; never restore that identity afterward.
+    this.usable(this.get(row.id));
+    const changed = this.db.prepare("UPDATE environments SET identity=? WHERE resource_id=? AND status IN ('ready','busy')").run(principalId, row.id);
+    if (!changed.changes) this.usable(this.get(row.id));
     return this.get(row.id);
   }
   async detach(row) {
     this.principals.revokeEnvironmentKeys(row.id);
     this.db.prepare('UPDATE environments SET identity=NULL WHERE resource_id=?').run(row.id);
-    if (row.status !== 'stopped') await this.runner.remove(row.machine, KEY_PATH).catch(() => {});
-    return this.get(row.id);
+    const id = row.id;
+    row = this.get(id);
+    if (row?.machine && ['ready', 'busy'].includes(row.status)) await this.runner?.remove(row.machine, KEY_PATH).catch(() => {});
+    return this.get(id);
   }
   usable(row) {
-    if (row.status === 'stopped' || !row.machine) fail(409, 'environment_stopped', 'この環境は止まっています。新しく開いてください。');
+    row = row && this.get(row.id);
+    if (!row || !['ready', 'busy'].includes(row.status) || !row.machine) fail(409, 'environment_stopped', 'この環境は利用できません。新しく開いてください。');
+    return row;
   }
   // What a command handed into a machine, to be taken out of what it prints.
   reveal(id, values) {
@@ -146,7 +169,7 @@ export class Environments {
 
   // Running one command. It is answered when done; the caller may stop waiting and ask again by its id.
   run(row, byId, input = {}) {
-    this.usable(row);
+    row = this.usable(row);
     const command = input.command;
     if (!Array.isArray(command) || !command.length || command.length > COMMAND_PARTS || command.some(part => typeof part !== 'string' || part.length > COMMAND_LENGTH) || !command[0])
       fail(400, 'invalid_command', 'command は文字列の配列で指定してください。');
@@ -154,17 +177,18 @@ export class Environments {
     const remaining = Math.floor((row.expires_at - Date.now()) / 1000);
     const timeout = input.timeout_seconds ?? Math.min(300, remaining);
     if (!Number.isInteger(timeout) || timeout < 1 || timeout > remaining) fail(400, 'invalid_timeout', `timeout_seconds は1〜${Math.max(1, remaining)}秒です。`);
-    if (row.status === 'busy') fail(409, 'environment_busy', '前のコマンドが終わるまで待ってください。');
     this.within(row.holder_id);
     const id = randomUUID(), now = Date.now();
     this.store.transaction(() => {
+      row = this.usable(row);
+      if (row.status === 'busy') fail(409, 'environment_busy', '前のコマンドが終わるまで待ってください。');
       this.db.prepare("UPDATE environments SET status='busy',last_active_at=? WHERE resource_id=?").run(now, row.id);
       this.db.prepare("INSERT INTO environment_commands (id,environment_id,by_id,command,status,started_at) VALUES (?,?,?,?,'running',?)").run(id, row.id, byId, JSON.stringify(command), now);
     });
     const done = this.runner.exec(row.machine, { command, stdin: input.stdin ?? null, timeoutMs: timeout * 1000 })
       .then(result => this.finish(row.id, id, result), error => this.finish(row.id, id, { exitCode: null, stdout: Buffer.alloc(0), stderr: Buffer.from(String(error.message || 'failed')), failed: true }));
     this.pending.set(id, done);
-    done.finally(() => this.pending.delete(id));
+    done.then(() => this.pending.delete(id), () => this.pending.delete(id));
     return { id, done };
   }
   finish(environmentId, commandId, { exitCode, stdout, stderr, timedOut = false, failed = false }) {
@@ -173,8 +197,10 @@ export class Environments {
     const now = Date.now(), current = this.get(environmentId);
     this.db.prepare('UPDATE environment_commands SET status=?,exit_code=?,stdout=?,stderr=?,ended_at=? WHERE id=?')
       .run(failed ? 'failed' : timedOut ? 'timed_out' : 'done', exitCode, clean(stdout), clean(stderr), now, commandId);
-    if (current && current.status === 'busy') this.db.prepare("UPDATE environments SET status='ready',last_active_at=? WHERE resource_id=?").run(now, environmentId);
-    if (current && current.lifetime === 'exit') return this.stop(this.get(environmentId)).then(() => this.command(environmentId, commandId));
+    if (!current || current.status === 'stopped') this.revealed.delete(environmentId);
+    if (!current) return null;
+    if (current.status === 'busy') this.db.prepare("UPDATE environments SET status='ready',last_active_at=? WHERE resource_id=? AND status='busy'").run(now, environmentId);
+    if (current.lifetime === 'exit') return this.stop(current).then(() => this.get(environmentId) ? this.command(environmentId, commandId) : null);
     return this.command(environmentId, commandId);
   }
   command(environmentId, commandId) {
@@ -190,32 +216,89 @@ export class Environments {
     return this.command(environmentId, commandId);
   }
 
-  // Stopping: the machine is thrown away, its keys die, and what it used is spent. The record of it stays a while so
-  // results can still be read, then goes.
-  async stop(row) {
-    if (!row || row.status === 'stopped') return row;
-    const now = Date.now();
-    this.store.transaction(() => {
-      this.principals.revokeEnvironmentKeys(row.id);
-      this.spend(row, now);
-      this.db.prepare("UPDATE environments SET status='stopped',expires_at=? WHERE resource_id=?").run(now + STOPPED_KEPT, row.id);
+  // A stop first closes access and becomes durable. Only the runner's confirmation settles the computing and
+  // starts retention. Failures stay stopping, with a bounded retry delay; a lease recovers interrupted attempts.
+  async stop(row, { remove = false, now = Date.now() } = {}) {
+    if (!row) return;
+    row = this.store.transaction(() => {
+      const current = this.get(row.id);
+      if (!current) return;
+      if (remove) this.db.prepare('UPDATE environments SET remove_requested=1 WHERE resource_id=?').run(current.id);
+      if (!['stopping', 'stopped'].includes(current.status)) {
+        this.principals.revokeEnvironmentKeys(current.id);
+        this.db.prepare("UPDATE environments SET status='stopping',identity=NULL,stop_retry_at=? WHERE resource_id=?").run(now, current.id);
+      }
+      return this.get(current.id);
     });
-    this.revealed.delete(row.id);
-    if (row.machine) await this.runner?.stop(row.machine).catch(() => {});
-    return this.get(row.id);
+    if (!row || row.status === 'stopped') return row;
+    if (this.stopping.has(row.id)) return this.stopping.get(row.id);
+    // start() may still return a machine. Keep the stop intent so it cannot make the environment ready again.
+    if (!row.machine && this.opening.has(row.id)) return row;
+    const claimed = this.store.transaction(() => {
+      const current = this.get(row.id);
+      if (!current || current.status !== 'stopping' || current.stop_retry_at > now) return;
+      this.db.prepare('UPDATE environments SET stop_attempts=stop_attempts+1,stop_retry_at=? WHERE resource_id=?').run(now + STOP_LEASE, row.id);
+      return this.get(row.id);
+    });
+    if (!claimed) return this.get(row.id);
+    const done = this.tryStop(claimed, now);
+    this.stopping.set(row.id, done);
+    try { return await done; }
+    finally { this.stopping.delete(row.id); }
+  }
+  async tryStop(row, attemptedAt) {
+    try {
+      // No ID can mean the process died before creation answered, not that no machine was allocated.
+      // Retain that uncertain record rather than lose a late creation response or falsely settle its usage.
+      if (!row.machine) throw new Error('machine creation is unconfirmed');
+      if (!this.runner || this.runner.name !== row.runner) throw new Error('runner unavailable');
+      await this.runner.stop(row.machine);
+    } catch (error) {
+      if (!error?.gone) {
+        const delay = Math.min(STOP_RETRY_MAX, STOP_RETRY * 2 ** Math.min(row.stop_attempts - 1, 10));
+        this.db.prepare("UPDATE environments SET stop_retry_at=? WHERE resource_id=? AND status='stopping' AND stop_attempts=?")
+          .run(Math.max(Date.now(), attemptedAt) + delay, row.id, row.stop_attempts);
+        return this.get(row.id);
+      }
+    }
+    return this.store.transaction(() => {
+      const current = this.get(row.id);
+      // Another process may have taken over an expired lease. Only its current attempt may settle the account.
+      if (!current || current.status !== 'stopping' || current.stop_attempts !== row.stop_attempts) return current;
+      const now = Math.max(Date.now(), attemptedAt);
+      this.spend(current, now);
+      this.db.prepare("UPDATE environments SET status='stopped',expires_at=?,stop_retry_at=NULL WHERE resource_id=?").run(now + STOPPED_KEPT, row.id);
+      // Keep redaction values until an already-running command has collected its final output.
+      if (!this.db.prepare("SELECT 1 FROM environment_commands WHERE environment_id=? AND status='running'").get(row.id)) this.revealed.delete(row.id);
+      const stopped = this.get(row.id);
+      if (stopped.remove_requested) this.resources.remove(stopped);
+      return stopped;
+    });
   }
   async remove(row) {
-    if (!row) return;
-    await this.stop(row);
-    this.resources.remove(row);
+    const stopped = await this.stop(row, { remove: true });
+    if (!stopped) return;
+    if (stopped.status !== 'stopped') fail(503, 'environment_stopping', '環境の停止を確認できていません。停止と削除は自動で再試行されます。');
+    this.resources.remove(stopped);
   }
-  async removeAll(holderId) { for (const row of this.list(holderId)) await this.remove(row); }
-  // Machines past their time, idle too long, or stopped long enough ago.
+  async removeAll(holderId) {
+    // Request every stop even if one provider call fails; retain the holder until all machines are gone.
+    const results = await Promise.allSettled(this.list(holderId).map(row => this.remove(row)));
+    const failed = results.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
+  }
+  // Called in the holder-deletion transaction: a concurrent open during provider cleanup must not be cascaded away.
+  assertRemoved(holderId) {
+    if (this.list(holderId).length) fail(409, 'environments_changed', '新しい環境が開かれています。もう一度削除してください。');
+  }
+  // Machines past their time, idle too long, due for a stop retry, or stopped long enough ago.
   async sweep(now = Date.now()) {
-    const rows = this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE e.expires_at<=? OR (e.status='ready' AND e.lifetime='idle' AND e.last_active_at+e.idle_seconds*1000<=?)`).all(now, now);
+    const rows = this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE
+      (e.status='stopping' AND e.stop_retry_at<=?) OR
+      (e.status<>'stopping' AND (e.expires_at<=? OR (e.status='ready' AND e.lifetime='idle' AND e.last_active_at+e.idle_seconds*1000<=?)))`).all(now, now, now);
     for (const row of rows) {
       if (row.status === 'stopped') this.resources.remove(row);
-      else await this.stop(row);
+      else await this.stop(row, { now });
     }
   }
 }
