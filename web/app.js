@@ -117,7 +117,6 @@ const serviceLogo = service => service?.logo ? `<svg viewBox="0 0 24 24" aria-hi
 const icon = (name) => {
   const paths = {
     plus: '<path d="M12 5v14M5 12h14"/>', close: '<path d="m6 6 12 12M6 18 18 6"/>',
-    mail: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m3 7 9 6 9-6"/>',
     device: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>',
     arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>', check: '<path d="m5 12 4 4L19 6"/>',
     lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
@@ -158,7 +157,7 @@ function showSigninConfirmation() {
   const email = signinLink.get('email') || '', tokenHash = signinLink.get('token_hash') || '';
   const valid = signinLink.getAll('email').length === 1 && signinLink.getAll('token_hash').length === 1
     && email.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(email) && /^[A-Za-z0-9_-]{20,2048}$/.test(tokenHash);
-  app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand}</header><main class="signin-main"><div class="signin-symbol" aria-hidden="true">${icon('mail')}</div>
+  app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand}</header><main class="signin-main">
     <h1>${valid ? 'サインイン' : 'リンクを確認'}</h1>
     ${valid ? `<p class="signin-address">${esc(email)}</p><form id="confirm-signin"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">サインイン ${icon('arrow')}</button></form>
     <p class="signin-footer"><a href="/">別のメールアドレスを使う</a></p>` : '<p class="signin-help">メールに届いたリンクを開き直してください。</p><p class="signin-footer"><a href="/">サインインメールを送信</a></p>'}</main></div>`;
@@ -189,7 +188,7 @@ async function showSignin({ email = '', message = '' } = {}) {
   catch (error) { if (current === revision) showRefreshError(error, 'retry-signin'); return; }
   if (current !== revision) return;
   const pending = config.available ? config.pending : null;
-  app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand}</header><main class="signin-main"><div class="signin-symbol" aria-hidden="true">${icon('mail')}</div>${requestId ? '<p class="signin-context">依頼の確認</p>' : ''}<h1>${pending ? 'メールを確認' : 'サインイン'}</h1>
+  app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand}</header><main class="signin-main">${requestId ? '<p class="signin-context">依頼の確認</p>' : ''}<h1>${pending ? 'メールを確認' : 'サインイン'}</h1>
     ${pending ? `<p class="signin-intro" id="email-sent">サインイン用のリンクをお送りしました。</p><p class="signin-address">${esc(pending.email)}</p><p class="signin-help">メールのリンクからサインインしてください。有効期限は15分です。</p>` : ''}
     <form id="signin-form">${pending ? '' : `<label for="signin-email">メールアドレス</label><input id="signin-email" name="email" type="email" autocomplete="email" required maxlength="254" value="${esc(email)}" ${config.available ? '' : 'disabled'}>`}
     <p class="form-error" role="alert">${config.available ? esc(message) : '現在サインインを利用できません。'}</p><button class="button ${pending ? 'secondary' : 'primary'} full" type="submit" ${pending ? 'id="resend-link" disabled' : config.available ? '' : 'disabled'}>${pending ? 'メールを再送信' : 'サインインメールを送信'} ${pending ? '' : icon('arrow')}</button></form>
