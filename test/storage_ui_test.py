@@ -51,7 +51,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     # Whose the key acts for, known once the owner has signed in and allowed it.
     owner = []
     approval = cli('connect', '--name', 'laptop のAI')['request']
-    key = open(key_dir + '/runtime-key').read().strip()
+    # What the agent sends as a bearer: an hour's token its passkey proves, not anything in the key file.
+    key = subprocess.run(['node', 'cli/runtime.mjs', 'token'], env=env, capture_output=True, text=True, timeout=15).stdout.strip()
     # The owner's name for a thing finds its id; the id reaches the thing.
     def held(page, name):
         found = page.request.get(args.base + '/v1/resources?' + urlencode({'kind': 'secret', 'name': name}))

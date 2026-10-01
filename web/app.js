@@ -177,6 +177,29 @@ function showSigninConfirmation() {
     }
   });
 }
+// Passkeys, through the browser's WebAuthn. The server speaks the JSON forms of the options and answers; these turn
+// them into what navigator.credentials takes and back.
+const passkeysWork = () => Boolean(window.PublicKeyCredential && navigator.credentials);
+const bytes = text => Uint8Array.from(atob(text.replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0));
+const text64 = buffer => btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const described = list => (list || []).map(item => ({ ...item, id: bytes(item.id) }));
+async function createPasskey(name) {
+  const { options } = await api('/v1/passkeys/options', { method: 'POST', data: {} });
+  const made = await navigator.credentials.create({ publicKey: { ...options, challenge: bytes(options.challenge), user: { ...options.user, id: bytes(options.user.id) }, excludeCredentials: described(options.excludeCredentials) } });
+  const credential = { id: made.id, rawId: text64(made.rawId), type: made.type, authenticatorAttachment: made.authenticatorAttachment ?? undefined, clientExtensionResults: made.getClientExtensionResults(),
+    response: { clientDataJSON: text64(made.response.clientDataJSON), attestationObject: text64(made.response.attestationObject), transports: made.response.getTransports?.() || [] } };
+  return api('/v1/passkeys', { method: 'POST', data: { name, credential } });
+}
+async function answerPasskey() {
+  const { options } = await api('/v1/signin/passkey/options', { method: 'POST', data: {} });
+  const given = await navigator.credentials.get({ publicKey: { ...options, challenge: bytes(options.challenge), allowCredentials: described(options.allowCredentials) } });
+  return { id: given.id, rawId: text64(given.rawId), type: given.type, clientExtensionResults: given.getClientExtensionResults(),
+    response: { clientDataJSON: text64(given.response.clientDataJSON), authenticatorData: text64(given.response.authenticatorData), signature: text64(given.response.signature),
+      ...(given.response.userHandle ? { userHandle: text64(given.response.userHandle) } : {}) } };
+}
+// What the browser says when the person closes its passkey dialog, or has no passkey here.
+const passkeyDeclined = error => error?.name === 'NotAllowedError' || error?.name === 'AbortError';
+
 async function showSignin({ email = '', message = '' } = {}) {
   clearInterval(signinTimer);
   refreshController?.abort();
@@ -187,11 +210,12 @@ async function showSignin({ email = '', message = '' } = {}) {
   try { config = await api('/v1/signin'); }
   catch (error) { if (current === revision) showRefreshError(error, 'retry-signin'); return; }
   if (current !== revision) return;
-  const pending = config.available ? config.pending : null;
+  const pending = config.available ? config.pending : null, withPasskey = !pending && passkeysWork();
   app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand}</header><main class="signin-main">${requestId ? '<p class="signin-context">依頼の確認</p>' : ''}<h1>${pending ? 'メールを確認' : 'サインイン'}</h1>
     ${pending ? `<p class="signin-intro" id="email-sent">サインイン用のリンクをお送りしました。</p><p class="signin-address">${esc(pending.email)}</p><p class="signin-help">メールのリンクからサインインしてください。有効期限は15分です。</p>` : ''}
+    ${withPasskey ? '<div class="signin-passkey"><button class="button primary full" type="button" id="passkey-signin">パスキーでサインイン</button><p class="form-error" role="alert" id="passkey-error"></p></div>' : ''}
     <form id="signin-form">${pending ? '' : `<label for="signin-email">メールアドレス</label><input id="signin-email" name="email" type="email" autocomplete="email" required maxlength="254" value="${esc(email)}" ${config.available ? '' : 'disabled'}>`}
-    <p class="form-error" role="alert">${config.available ? esc(message) : '現在サインインを利用できません。'}</p><button class="button ${pending ? 'secondary' : 'primary'} full" type="submit" ${pending ? 'id="resend-link" disabled' : config.available ? '' : 'disabled'}>${pending ? 'メールを再送信' : 'サインインメールを送信'} ${pending ? '' : icon('arrow')}</button></form>
+    <p class="form-error" role="alert">${config.available ? esc(message) : '現在サインインを利用できません。'}</p><button class="button ${pending || withPasskey ? 'secondary' : 'primary'} full" type="submit" ${pending ? 'id="resend-link" disabled' : config.available ? '' : 'disabled'}>${pending ? 'メールを再送信' : 'サインインメールを送信'} ${pending ? '' : icon('arrow')}</button></form>
     ${pending ? '<p class="signin-help signin-delivery">届かない場合は、迷惑メールフォルダもご確認ください。</p><div class="signin-actions"><button class="text-button" type="button" id="change-email">メールアドレスを変更</button></div>' : ''}</main></div>`;
   if (!requestId && !pending && publicInfo) app.querySelector('.signin-main').append(publicInfo);
   const form = document.querySelector('#signin-form');
@@ -208,6 +232,18 @@ async function showSignin({ email = '', message = '' } = {}) {
     resend.disabled = busy || seconds > 0;
     resend.textContent = seconds > 0 ? `再送信まで ${seconds}秒` : 'メールを再送信';
   }
+  const passkeyButton = document.querySelector('#passkey-signin');
+  passkeyButton?.addEventListener('click', async () => {
+    if (busy) return;
+    setBusy(true); document.querySelector('#passkey-error').textContent = '';
+    try {
+      const credential = await answerPasskey();
+      location.replace((await api('/v1/signin/passkey', { method: 'POST', data: { credential, return_to: returnTo() } })).return_to);
+    } catch (error) {
+      if (!passkeyButton.isConnected) return;
+      document.querySelector('#passkey-error').textContent = passkeyDeclined(error) ? 'パスキーでサインインできませんでした。' : error.message; setBusy(false);
+    }
+  });
   if (pending) {
     updateResend(); signinTimer = setInterval(updateResend, 1000);
     document.querySelector('#change-email').addEventListener('click', async () => {
@@ -443,7 +479,11 @@ function render() {
   }
   if (page === 'account') {
     // The account itself: who this is, and the few things done to it rather than in it.
+    const passkeyRow = item => `<article class="agent-row" aria-label="${esc(item.name)}"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${item.last_used_at ? '最後に使った日時 ' + esc(keptWhen(item.last_used_at)) : 'まだ使っていません'}</p></div>
+      <div class="agent-actions"><button class="text-button danger" data-action="remove-passkey" data-id="${esc(item.id)}">削除</button></div></article>`;
     shell(`<header class="page-heading"><h1>アカウント</h1><p>${esc(state.user.email)}</p></header>
+      <section class="resource-section" aria-labelledby="passkeys-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="passkeys-title">パスキー</h2><p>顔や指紋、端末のPINでサインインできます。</p></div></div>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} パスキーを追加</button>` : ''}</div>
+        ${(state.passkeys || []).length ? `<div class="agent-list">${state.passkeys.map(passkeyRow).join('')}</div>` : ''}</section>
       <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">データのダウンロード</h2><p>シークレットの値、サービスとの接続、自分で定義したサービス、登録した相手の一覧が JSON ファイルで入ります。オブジェクトは入りません。</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ダウンロード</a></div></section>
       <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">開発者</h2></div></div><a class="button secondary" href="/principals#apps">アプリの登録</a></div></section>`);
     return;
@@ -1225,6 +1265,19 @@ function bindSecretValue(entry, row) {
   };
   show();
 }
+// A passkey for this browser's device or password manager. One kept only on this device is said so: losing the device
+// loses it.
+function addPasskey() {
+  openDialog(`<h2 id="dialog-title">パスキーを追加</h2><form><label for="passkey-name">名前</label><input id="passkey-name" name="name" required maxlength="80" autocomplete="off" value="${esc(navigator.userAgentData?.platform || 'この端末')}">
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加</button></form>`);
+  bindForm(async (form) => {
+    let made;
+    try { made = await createPasskey(String(form.get('name') || '').trim()); }
+    catch (error) { throw passkeyDeclined(error) ? new Error('パスキーを作れませんでした。') : error; }
+    closeDialog(); await refresh();
+    toast(made.backed_up ? 'パスキーを追加しました。' : 'パスキーを追加しました。このパスキーは、この端末にしか保存されていません。');
+  });
+}
 function confirmRemoval(title, body, run, done = '削除しました。', label = '削除する') {
   openDialog(`<h2 id="dialog-title">${esc(title)}</h2><form><p>${esc(body)}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">${esc(label)}</button></div></form>`);
   bindForm(async () => { await run(); closeDialog(); await refresh(); toast(done); });
@@ -1234,6 +1287,11 @@ document.addEventListener('click', async (event) => {
   const { action, id } = target.dataset;
   try {
     if (action === 'close-dialog') closeDialog();
+    if (action === 'add-passkey') addPasskey();
+    if (action === 'remove-passkey') {
+      const item = (state.passkeys || []).find(entry => entry.id === id);
+      if (item) confirmRemoval(item.name + ' を削除しますか？', 'このパスキーではサインインできなくなります。', () => api('/v1/passkeys/' + encodeURIComponent(item.id), { method: 'DELETE', data: {} }));
+    }
     if (action === 'retry-page') { target.disabled = true; try { await refresh(); } finally { if (target.isConnected) target.disabled = false; } }
     if (action === 'retry-signin') { target.disabled = true; await showSignin(); }
     if (action === 'signout') { target.disabled = true; await api('/v1/session', { method: 'DELETE', data: {} }); await showSignin(); }

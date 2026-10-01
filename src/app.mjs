@@ -1007,7 +1007,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // The holder's screen, in one answer.
       if (at === 'overview' && method === 'GET') {
         permit('overview', 'principal', holderId);
-        return send(200, { user: { id: subject.id, email: emails.of(subject.id)[0] ?? null }, principal: self, secrets: secrets.list(holderId).map(row => secrets.view(row)), connections: connections.list(holderId).map(row => connections.view(row, { owner: true })),
+        return send(200, { user: { id: subject.id, email: emails.of(subject.id)[0] ?? null }, principal: self, passkeys: passkeys.list(holderId).map(row => passkeys.view(row)), secrets: secrets.list(holderId).map(row => secrets.view(row)), connections: connections.list(holderId).map(row => connections.view(row, { owner: true })),
           apps: [...apps.list(holderId).map(row => apps.view(row, { owner: true })), ...apps.lent(holderId).map(row => apps.view(row)), ...apps.offeredAll()],
           services: [...services.list(holderId).map(row => services.view(row, { owner: true })), ...services.lent(holderId).map(row => services.view(row))],
           catalog: services.catalogView(), principals: principals.owned(holderId), actors: principals.actorsOf(holderId),

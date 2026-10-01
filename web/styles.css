@@ -160,6 +160,7 @@ dialog .service-grid { max-height: 50dvh; overflow-y: auto; margin-bottom: 12px;
 .agent-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .signin-shell .topbar { border-bottom: 0; }
 .signin-main { width: min(100%, 410px); margin: 55px auto 0; padding: 32px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.signin-passkey { margin-bottom: 20px; }
 .signin-main h1 { font-size: 25px; margin-bottom: 10px; }
 .signin-context { color: var(--accent); font-size: 14px; margin-bottom: 6px; }
 .approval-main { width: min(100%, 620px); margin: 40px auto 0; }
