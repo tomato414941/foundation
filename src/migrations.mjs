@@ -1,6 +1,6 @@
 import { checkDefinition } from './service-definition.mjs';
 
-export const SCHEMA_VERSION = 37;
+export const SCHEMA_VERSION = 38;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -11,6 +11,7 @@ export const STEPS = {
   35: standardReferences,
   36: connectionsWithMethods,
   37: provenHere,
+  38: addressesOnly,
 };
 
 // A one-time data conversion, never a runtime parser for earlier definitions. Refuse any expression that cannot
@@ -274,6 +275,12 @@ function provenHere({ db }) {
 }
 provenHere.rebuilds = true;
 
+// When an address was first proven was kept with it but read by nothing, and for addresses carried over it was only
+// the time of the carrying. When a principal last proved anything is its sessions'.
+function addressesOnly({ db }) {
+  db.exec('ALTER TABLE emails DROP COLUMN verified_at');
+}
+
 // A session: what proving who one is leaves, for any principal. proof is how (an email reached, a key's signature, a
 // passkey), proof_ref which address or key, and proved_at when; an operation that needs a fresh or stronger proof
 // asks again.
@@ -321,9 +328,7 @@ export const SCHEMA = `
     principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
     return_url TEXT NOT NULL, refresh_url TEXT, webhook_url TEXT, webhook_secret TEXT, created_at TEXT NOT NULL
   );
-  CREATE TABLE emails (
-    address TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, verified_at INTEGER NOT NULL
-  );
+  CREATE TABLE emails (address TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE);
   CREATE INDEX emails_principal ON emails(principal_id);
   ${SESSIONS}
   ${CHALLENGES}

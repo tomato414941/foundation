@@ -333,10 +333,23 @@ test('36版のセッションでサインインしていたアドレスは、そ
   store.db.exec("INSERT INTO oauth_flows VALUES ('flow','a1','sealed',0)");
   store.db.exec('PRAGMA user_version=36'); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
-  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, 37);
+  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   assert.deepEqual(next.db.prepare('SELECT address, principal_id FROM emails ORDER BY address').all().map(row => ({ ...row })),
     [{ address: 'other@example.test', principal_id: USER_B }, { address: 'owner@example.test', principal_id: USER_A }]);
   assert.equal(next.db.prepare('SELECT count(*) n FROM sessions').get().n, 0);
   assert.equal(next.db.prepare('SELECT count(*) n FROM oauth_flows').get().n, 0);
   assert.deepEqual(next.db.prepare('PRAGMA foreign_key_check').all(), []);
+});
+
+test('37版のアドレスは、持ち主との結びつきだけを残して38版へ移る', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-38-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
+  modules(store).principals.ensure(USER_A);
+  store.db.exec(`DROP TABLE emails; CREATE TABLE emails (address TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, verified_at INTEGER NOT NULL);
+    CREATE INDEX emails_principal ON emails(principal_id);`);
+  store.db.prepare('INSERT INTO emails VALUES (?,?,?)').run('owner@example.test', USER_A, 1);
+  store.db.exec('PRAGMA user_version=37'); store.close();
+  const next = new Store(path, KEY); t.after(() => next.close());
+  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, 38);
+  assert.deepEqual(next.db.prepare('SELECT * FROM emails').all().map(row => ({ ...row })), [{ address: 'owner@example.test', principal_id: USER_A }]);
 });
