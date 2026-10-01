@@ -8,6 +8,7 @@ import { digest } from './crypto.mjs';
 import { Principals } from './principals.mjs';
 import { Sessions, OAuthFlows, TOKEN_TTL } from './sessions.mjs';
 import { WebauthnCredentials } from './webauthn.mjs';
+import { Payments, Stripe } from './payments.mjs';
 import { Emails } from './emails.mjs';
 import { Challenges, randomSecret } from './challenges.mjs';
 import { RequestActions } from './request-actions.mjs';
@@ -118,7 +119,7 @@ function principalId(value) {
   return value;
 }
 
-export function createApp({ database = ':memory:', encryptionKey, mailer, services: catalog, serviceFetcher, space: spaceBackend = null, publicOrigin, challengeSecret, trustedProxies = [], outbound = {}, runner = null, compute = {}, requestInterval = INTERVAL }) {
+export function createApp({ database = ':memory:', encryptionKey, mailer, services: catalog, serviceFetcher, space: spaceBackend = null, publicOrigin, challengeSecret, stripe = new Stripe(), trustedProxies = [], outbound = {}, runner = null, compute = {}, requestInterval = INTERVAL }) {
   if (!mailer || !Array.isArray(catalog)) throw new Error('A mailer and services are required');
   let external;
   if (publicOrigin) {
@@ -142,9 +143,10 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   const services = new Services(store, resources, catalog, { authorization, ...(serviceFetcher ? { fetcher: serviceFetcher } : {}) });
   const apps = new Apps(store, resources, services), connections = new Connections(store, resources, services, apps);
   const secrets = new Secrets(store, resources), inputs = new Inputs(secrets, connections);
-  const objects = new Objects(spaceBackend, resources, store);
+  const payments = new Payments(store, stripe);
+  const objects = new Objects(spaceBackend, resources, store, payments);
   const requests = new Requests(store), settings = new Settings(store, principals), auditLog = new AuditLog(store);
-  const environments = new Environments({ store, resources, principals, runner, limits: compute });
+  const environments = new Environments({ store, resources, principals, payments, runner, limits: compute });
   const functions = new Functions({ secrets, inputs, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
   const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, connections, apps, resources }, row, origin, { interval: requestInterval, ...options });
@@ -155,6 +157,9 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
     store.sweep();
     principals.sweep();
     void environments.sweep().catch(error => console.error(new Date().toISOString(), 'environment sweep', error));
+    // What payers store, once a day, and whatever is recorded and not yet sent to Stripe.
+    if (objects.enabled) for (const payer of payments.payers()) payments.stored(payer, objects.usage(payer).bytes, Date.now());
+    void payments.send()?.catch(error => console.error(new Date().toISOString(), 'meter events', error));
     for (const [key, value] of limits) if (value.until <= Date.now()) limits.delete(key);
   }, 60_000).unref();
   // When each asker last looked at each of its requests, to answer slow_down.
@@ -238,6 +243,15 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       }
       if (at === 'health' && method === 'GET') return send(200, { status: 'ok' });
       if (!route && path !== '/mcp') fail(404, 'not_found', '指定された操作が見つかりません。');
+      // What Stripe says of a subscription, signed with this endpoint's secret: it is believed for that, not for who sent it.
+      if (at === 'paymentEvents' && method === 'POST') {
+        if (!stripe.enabled) fail(404, 'not_found', '指定された操作が見つかりません。');
+        const chunks = [];
+        let length = 0;
+        for await (const chunk of req) { length += chunk.length; if (length > 512_000) fail(413, 'body_too_large', '送信内容が大きすぎます。'); chunks.push(chunk); }
+        payments.changed(stripe.verify(Buffer.concat(chunks).toString('utf8'), req.headers['stripe-signature']));
+        return send(200, { received: true });
+      }
       // Every OAuth consent comes back here: the state names the flow, and the flow the service and the app.
       if (at === 'oauthCallback' && method === 'GET') {
         let destination = '/services', flowService = null;
@@ -575,6 +589,23 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         webauthn.remove(row);
         auditLog.write(subject.id, 'webauthn_credential.removed', 'principal', row.principal_id, { credential: row.id });
         return send(200, { ok: true });
+      }
+      // Paying for more than the free part: a payment method set on Stripe's page, for the principal itself.
+      if (at === 'payment' && method === 'GET') {
+        permit('payment', 'principal', holderId);
+        return send(200, { payment: payments.view(holderId) });
+      }
+      if (at === 'paymentSetup' && method === 'POST') {
+        permit('payment', 'principal', holderId);
+        await inputBody();
+        return send(200, { url: await payments.setup(holderId, { origin, email: emails.of(holderId)[0] }) });
+      }
+      if (at === 'paymentComplete' && method === 'POST') {
+        permit('payment', 'principal', holderId);
+        const input = await inputBody();
+        const view = await payments.complete(holderId, input.session_id);
+        auditLog.write(subject.id, 'payment.set', 'principal', holderId, {});
+        return send(200, { payment: view });
       }
       if (at === 'me') {
         if (method === 'GET') return send(200, { principal: self, ...(subject.via.kind === 'key' ? { key: { id: subject.via.id, ...(subject.via.environment ? { environment: subject.via.environment } : {}) } } : {}), acts_for: actsFor, owners: principals.ownersOf(subject.id), keys: principals.keys(subject.id), requests: requests.list(subject.id, 'pending').map(row => viewRequest(row, origin, { code: true })) });
@@ -1021,7 +1052,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // The holder's screen, in one answer.
       if (at === 'overview' && method === 'GET') {
         permit('overview', 'principal', holderId);
-        return send(200, { user: { id: subject.id, email: emails.of(subject.id)[0] ?? null }, principal: self, webauthn_credentials: webauthn.list(holderId).map(row => webauthn.view(row)), secrets: secrets.list(holderId).map(row => secrets.view(row)), connections: connections.list(holderId).map(row => connections.view(row, { owner: true })),
+        return send(200, { user: { id: subject.id, email: emails.of(subject.id)[0] ?? null }, principal: self, payment: payments.view(holderId), webauthn_credentials: webauthn.list(holderId).map(row => webauthn.view(row)), secrets: secrets.list(holderId).map(row => secrets.view(row)), connections: connections.list(holderId).map(row => connections.view(row, { owner: true })),
           apps: [...apps.list(holderId).map(row => apps.view(row, { owner: true })), ...apps.lent(holderId).map(row => apps.view(row)), ...apps.offeredAll()],
           services: [...services.list(holderId).map(row => services.view(row, { owner: true })), ...services.lent(holderId).map(row => services.view(row))],
           catalog: services.catalogView(), principals: principals.owned(holderId), actors: principals.actorsOf(holderId),
@@ -1203,7 +1234,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   return {
-    server, store, resources, services, secrets, connections, inputs, apps, objects, environments, principals, sessions, emails, challenges, webauthn, flows, requests, requestActions, settings, auditLog,
+    server, store, resources, services, secrets, connections, inputs, apps, objects, environments, payments, principals, sessions, emails, challenges, webauthn, flows, requests, requestActions, settings, auditLog,
     async close() {
       clearInterval(timer);
       if (server.listening) await new Promise((resolve) => { server.close(resolve); server.closeIdleConnections(); });

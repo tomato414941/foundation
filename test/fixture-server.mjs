@@ -1,6 +1,6 @@
 import { createApp } from '../src/app.mjs';
 import { LocalRunner } from '../src/runners/local.mjs';
-import { FakeMailer, FakeGoogle, KEY } from './helpers.mjs';
+import { FakeMailer, FakeGoogle, KEY, fakeStripe } from './helpers.mjs';
 import { createHash } from 'node:crypto';
 import { FakeOpenRouter } from '../src/adapters/openrouter/fixture.mjs';
 import { googleOauth } from '../src/adapters/google/index.mjs';
@@ -58,7 +58,9 @@ const services = process.env.FOUNDATION_TEST_AWS === '1' ? withGoogle([entry('aw
   : process.env.FOUNDATION_TEST_OPENROUTER === '1' ? withGoogle([entry('openrouter', { oauth: openrouterOauth(new FakeOpenRouter()) })])
   : withGoogle([]);
 // Lent machines as directories on this host: enough to see them on the page, isolating nothing.
-const app = createApp({ encryptionKey: KEY, mailer, challengeSecret, space, services, serviceFetcher: described.fetch, runner: new LocalRunner(), requestInterval: 0 });
+// Paying through a Stripe that answers as Stripe would, when the test asks for it.
+const stripe = process.env.FOUNDATION_TEST_PAYMENT === '1' ? fakeStripe().stripe : undefined;
+const app = createApp({ encryptionKey: KEY, mailer, challengeSecret, space, services, serviceFetcher: described.fetch, runner: new LocalRunner(), requestInterval: 0, ...(stripe ? { stripe } : {}) });
 const port = Number(process.env.FOUNDATION_TEST_PORT || 3418);
 app.server.listen(port, '127.0.0.1', () => console.log('Test fixture: http://127.0.0.1:' + port));
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, async () => { await app.close(); process.exit(0); });

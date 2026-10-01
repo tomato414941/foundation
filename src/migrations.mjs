@@ -1,6 +1,6 @@
 import { checkDefinition } from './service-definition.mjs';
 
-export const SCHEMA_VERSION = 40;
+export const SCHEMA_VERSION = 41;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -14,6 +14,7 @@ export const STEPS = {
   38: addressesOnly,
   39: passkeys,
   40: webauthnCredentials,
+  41: payment,
 };
 
 // A one-time data conversion, never a runtime parser for earlier definitions. Refuse any expression that cannot
@@ -322,6 +323,12 @@ function webauthnCredentials({ db }) {
 }
 webauthnCredentials.rebuilds = true;
 
+// What costs money is paid by whoever uses it: a principal may be a customer of Foundation's Stripe account, and
+// what it uses is recorded here before it is sent there, so none of it is lost or sent twice.
+function payment({ db }) {
+  db.exec(PAYMENT);
+}
+
 // A session: what proving who one is leaves, for any principal. proof is how (an email reached, a WebAuthn signature),
 // proof_ref which address or credential, and proved_at when; an operation that needs a fresh or stronger proof asks
 // again.
@@ -339,6 +346,20 @@ const WEBAUTHN_CREDENTIALS = `
     sign_count INTEGER NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER
   );
   CREATE INDEX webauthn_credentials_principal ON webauthn_credentials(principal_id);`;
+// A principal that pays: its Stripe customer, and the subscription its use is charged to once a payment method is set,
+// with that subscription's status as Stripe last said it.
+// What it used, recorded once (a machine's seconds weighted by its size, or a day's stored megabytes) and sent to
+// Stripe's meter; sent_at says it went.
+const PAYMENT = `
+  CREATE TABLE payment_accounts (
+    principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE, customer_id TEXT NOT NULL UNIQUE, subscription_id TEXT UNIQUE,
+    status TEXT, created_at INTEGER NOT NULL
+  );
+  CREATE TABLE meter_events (
+    id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, meter TEXT NOT NULL CHECK(meter IN ('compute','storage')), value INTEGER NOT NULL,
+    at INTEGER NOT NULL, sent_at INTEGER
+  );
+  CREATE INDEX meter_events_unsent ON meter_events(sent_at) WHERE sent_at IS NULL;`;
 // A single-use value someone must give back to prove something: that they receive at an address (subject). handle
 // lets the browser that asked find what it is waiting for; it proves nothing.
 const CHALLENGES = `
@@ -381,6 +402,7 @@ export const SCHEMA = `
   ${SESSIONS}
   ${CHALLENGES}
   ${WEBAUTHN_CREDENTIALS}
+  ${PAYMENT}
   CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);
   CREATE TABLE requests (
     id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,

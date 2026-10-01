@@ -31,6 +31,8 @@ export function configuration(env = process.env) {
     publicOrigin: env.FOUNDATION_PUBLIC_ORIGIN || undefined,
     // Sign-in links go out through Resend, from this address.
     mail: { key: env.FOUNDATION_RESEND_API_KEY || '', from: env.FOUNDATION_EMAIL_FROM || '' },
+    // Charging for what is used beyond the free part, through Foundation's Stripe account and its two metered prices.
+    stripe: { key: env.FOUNDATION_STRIPE_API_KEY || '', computePrice: env.FOUNDATION_STRIPE_COMPUTE_PRICE || '', storagePrice: env.FOUNDATION_STRIPE_STORAGE_PRICE || '', webhookSecret: env.FOUNDATION_STRIPE_WEBHOOK_SECRET || '' },
     // Lent machines run on Fly Machines when a runner app, its token and the machine image are all given.
     runner: { token: env.FOUNDATION_FLY_TOKEN || '', app: env.FOUNDATION_FLY_APP || '', image: env.FOUNDATION_FLY_IMAGE || '', region: env.FOUNDATION_FLY_REGION || 'nrt' },
     objects: { bucket: env.FOUNDATION_OBJECTS_BUCKET || '', region: env.FOUNDATION_OBJECTS_REGION || env.FOUNDATION_AWS_REGION || 'ap-northeast-1' },

@@ -14,8 +14,12 @@ import { presignAws, serverCredentials, signAws } from './aws-sigv4.mjs';
 // bytes elsewhere later changes nothing an owner or agent sees.
 export const OBJECT_MAX = 25 * 1024 * 1024;
 export const OBJECT_COUNT_MAX = 1000;
-// What one owner may keep in the space Foundation lends. Lending means paying for it, so there is a ceiling.
-export const OBJECT_TOTAL_MAX = 1024 * 1024 * 1024;
+// What one holder may keep: the free part for anyone, and more for one that pays for what it stores - with a ceiling
+// that keeps a mistake from becoming a large bill.
+export const OBJECT_FREE_MAX = 1024 * 1024 * 1024;
+// And what all who do not pay may keep together, so what Foundation stores without anyone paying stays bounded.
+export const OBJECT_FREE_POOL = 20 * 1024 * 1024 * 1024;
+export const OBJECT_TOTAL_MAX = 100 * 1024 * 1024 * 1024;
 export const LINK_MINUTES = 60, MAX_LINK_MINUTES = 7 * 1440;
 // S3 takes any UTF-8 key, and an owner's file is as likely to be called 見積書.pdf as invoice.pdf.
 // What is refused is only what makes a key ambiguous or unsafe to put in a path: control characters,
@@ -90,7 +94,20 @@ const ROOM = 'resources/';
 const COLUMNS = 'h.id,h.holder_id,h.kind,h.name,h.created_at,h.updated_at,o.size,o.type';
 const FROM = 'FROM resources h JOIN objects o ON o.resource_id=h.id';
 export class Objects {
-  constructor(space, resources, store) { this.space = space; this.resources = resources; this.store = store; this.db = store.db; }
+  // payments: whether a holder pays, and so may keep more than the free part.
+  constructor(space, resources, store, payments) { Object.assign(this, { space, resources, store, db: store.db, payments }); }
+  ceiling(holderId) { return this.payments.paying(holderId) ? OBJECT_TOTAL_MAX : OBJECT_FREE_MAX; }
+  freeBytes() {
+    const payers = new Set(this.payments.payers());
+    return this.db.prepare(`SELECT h.holder_id, o.size ${FROM}`).all().filter(row => !payers.has(row.holder_id)).reduce((total, row) => total + row.size, 0);
+  }
+  fits(holderId, bytes, added) {
+    const paying = this.payments.paying(holderId);
+    if (!paying && added > 0 && this.freeBytes() + added > OBJECT_FREE_POOL) fail(402, 'payment_required', '今月の無料枠はすべて使われました。支払い方法を登録すると、続けて使えます。');
+    if (bytes <= this.ceiling(holderId)) return;
+    if (!paying) fail(402, 'payment_required', '無料枠の上限に達しました。続けて使うには支払い方法を登録してください。');
+    fail(409, 'space_full', '置き場の合計が上限に達しました。使わないものを消してください。');
+  }
   get enabled() { return Boolean(this.space?.enabled); }
   check() { if (!this.enabled) fail(503, 'space_unavailable', '置き場は現在使えません。'); }
   minutes(value = LINK_MINUTES) {
@@ -112,7 +129,7 @@ export class Objects {
   usage(holderId) {
     this.check();
     const { count, bytes } = this.db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(o.size),0) AS bytes ${FROM} WHERE h.holder_id=?`).get(holderId);
-    return { count, bytes, count_max: OBJECT_COUNT_MAX, bytes_max: OBJECT_TOTAL_MAX };
+    return { count, bytes, count_max: OBJECT_COUNT_MAX, bytes_max: this.ceiling(holderId) };
   }
   checkContent(content, type) {
     if (!Buffer.isBuffer(content) || content.length > OBJECT_MAX) fail(413, 'object_too_large', '1件あたり25MBまでです。');
@@ -124,7 +141,7 @@ export class Objects {
     this.checkContent(content, type);
     const existing = this.find(holderId, key), { count, bytes } = this.usage(holderId);
     if (count >= OBJECT_COUNT_MAX && !existing) fail(409, 'object_limit', '置けるのは1000件までです。');
-    if (bytes - (existing?.size ?? 0) + content.length > OBJECT_TOTAL_MAX) fail(409, 'space_full', '置き場の合計が上限に達しました。使わないものを消してください。');
+    this.fits(holderId, bytes - (existing?.size ?? 0) + content.length, content.length - (existing?.size ?? 0));
     const id = existing?.id ?? randomUUID();
     await this.space.put(ROOM, id, content, type);
     return this.store.transaction(() => {
@@ -138,7 +155,7 @@ export class Objects {
     this.check();
     this.checkContent(content, type);
     const { bytes } = this.usage(row.holder_id);
-    if (bytes - row.size + content.length > OBJECT_TOTAL_MAX) fail(409, 'space_full', '置き場の合計が上限に達しました。使わないものを消してください。');
+    this.fits(row.holder_id, bytes - row.size + content.length, content.length - row.size);
     await this.space.put(ROOM, row.id, content, type);
     this.db.prepare('UPDATE objects SET size=?,type=? WHERE resource_id=?').run(content.length, type, row.id);
     this.resources.touch(row.id);

@@ -19,10 +19,13 @@ const month = (at = Date.now()) => new Date(at).toISOString().slice(0, 7);
 const iso = value => value === null || value === undefined ? null : new Date(value).toISOString();
 
 export class Environments {
-  // limits: monthlySeconds (the default and the most an owner may allow), concurrent, maxSeconds, idleSeconds.
-  constructor({ store, resources, principals, runner = null, origin = '', limits = {} }) {
-    Object.assign(this, { store, db: store.db, resources, principals, runner, origin });
-    this.limits = { monthlySeconds: 36_000, concurrent: 3, maxSeconds: 3600, idleSeconds: 600, ...limits };
+  // limits: freeSeconds (what anyone may compute each month), monthlySeconds (the default for one that pays, and the
+  // most it may be allowed), concurrent, maxSeconds, idleSeconds. payments: who pays, and what they computed is charged.
+  constructor({ store, resources, principals, payments, runner = null, origin = '', limits = {} }) {
+    Object.assign(this, { store, db: store.db, resources, principals, payments, runner, origin });
+    // The free part is also bounded for all who do not pay together - what they compute in a month and how many
+    // machines they run at once - so what costs Foundation without anyone paying cannot grow past it.
+    this.limits = { freeSeconds: 36_000, freePoolSeconds: 360_000, freeConcurrent: 3, monthlySeconds: 360_000, concurrent: 3, maxSeconds: 3600, idleSeconds: 600, ...limits };
     // Values handed into a machine, kept only in memory, to take out of what its commands print.
     this.revealed = new Map();
     this.pending = new Map();
@@ -43,8 +46,10 @@ export class Environments {
   }
 
   // Computing: what a principal spent this month, counting machines still running, and the most it may spend.
+  ceiling(principalId) { return this.payments.paying(principalId) ? this.limits.monthlySeconds : this.limits.freeSeconds; }
   limitOf(principalId) {
-    return this.db.prepare('SELECT monthly_seconds FROM compute_limits WHERE principal_id=?').get(principalId)?.monthly_seconds ?? this.limits.monthlySeconds;
+    const set = this.db.prepare('SELECT monthly_seconds FROM compute_limits WHERE principal_id=?').get(principalId)?.monthly_seconds;
+    return Math.min(set ?? Infinity, this.ceiling(principalId));
   }
   usage(principalId, now = Date.now()) {
     const spent = this.db.prepare('SELECT seconds FROM compute_usage WHERE principal_id=? AND month=?').get(principalId, month(now))?.seconds ?? 0;
@@ -62,9 +67,22 @@ export class Environments {
     const seconds = Math.ceil((until - row.started_at) / 1000) * SIZES[row.size];
     this.db.prepare('INSERT INTO compute_usage (principal_id,month,seconds) VALUES (?,?,?) ON CONFLICT(principal_id,month) DO UPDATE SET seconds=seconds+excluded.seconds')
       .run(row.holder_id, month(until), seconds);
+    this.payments.computed(row.holder_id, seconds, until);
+  }
+  // What all who do not pay have computed this month, and how many machines they are running now.
+  freeUsage(now = Date.now()) {
+    const payers = new Set(this.payments.payers()), free = id => !payers.has(id);
+    const spent = this.db.prepare('SELECT principal_id, seconds FROM compute_usage WHERE month=?').all(month(now)).filter(row => free(row.principal_id)).reduce((total, row) => total + row.seconds, 0);
+    const running = this.db.prepare(`SELECT r.holder_id, e.size, e.started_at ${FROM} WHERE e.status<>'stopped'`).all().filter(row => free(row.holder_id));
+    return { seconds: spent + running.reduce((total, row) => total + Math.ceil((now - row.started_at) / 1000) * SIZES[row.size], 0), machines: running.length };
   }
   within(holderId) {
+    if (!this.payments.paying(holderId)) {
+      const shared = this.freeUsage();
+      if (shared.seconds >= this.limits.freePoolSeconds || shared.machines >= this.limits.freeConcurrent) fail(402, 'payment_required', '今月の無料枠はすべて使われました。支払い方法を登録すると、続けて使えます。');
+    }
     const { used_seconds, limit_seconds } = this.usage(holderId);
+    if (used_seconds >= limit_seconds && !this.payments.paying(holderId) && limit_seconds === this.limits.freeSeconds) fail(402, 'payment_required', '無料枠の上限に達しました。続けて使うには支払い方法を登録してください。');
     if (used_seconds >= limit_seconds) fail(429, 'compute_limit', '今月の計算時間の上限に達しました。');
   }
 

@@ -175,14 +175,24 @@ test('says what an owner is using and what they may use', async (t) => {
   assert.equal(usage.json.secrets.count_max, 200);
 });
 
-test('refuses to keep more than the space lends', async (t) => {
+test('無料枠を超えて置こうとすると支払い方法を求め、支払う人は上限まで置ける', async (t) => {
   const f = await space(t);
   const owner = (await f.request('/v1/overview')).json.user.id;
-  f.app.store.db.prepare("INSERT INTO resources (id,holder_id,kind,name,created_at,updated_at) VALUES ('big-1',?,'object','big','2026-01-01','2026-01-01')").run(owner);
-  f.app.store.db.prepare("INSERT INTO objects (resource_id,size,type) VALUES ('big-1',?,'text/plain')").run(1024 * 1024 * 1024);
-  const refused = await f.request('/v1/resources?kind=object&name=more.txt', { method: 'PUT', token: KEY, raw: Buffer.from('x'), type: 'text/plain' });
-  assert.equal(refused.status, 409, refused.text);
-  assert.equal(refused.json.error.code, 'space_full');
+  const big = (id, size) => {
+    f.app.store.db.prepare("INSERT INTO resources (id,holder_id,kind,name,created_at,updated_at) VALUES (?,?,'object',?,'2026-01-01','2026-01-01')").run(id, owner, id);
+    f.app.store.db.prepare("INSERT INTO objects (resource_id,size,type) VALUES (?,?,'text/plain')").run(id, size);
+  };
+  const put = name => f.request('/v1/resources?kind=object&name=' + name, { method: 'PUT', token: KEY, raw: Buffer.from('x'), type: 'text/plain' });
+  big('big-1', 1024 * 1024 * 1024);
+  const free = await put('more.txt');
+  assert.equal(free.status, 402, free.text);
+  assert.equal(free.json.error.code, 'payment_required');
+  f.app.store.db.prepare("INSERT INTO payment_accounts (principal_id,customer_id,subscription_id,status,created_at) VALUES (?,'cus_test','sub_test','active',0)").run(owner);
+  assert.equal((await put('more.txt')).status, 200, 'one that pays keeps more');
+  big('big-2', 99 * 1024 * 1024 * 1024);
+  const full = await put('even-more.txt');
+  assert.equal(full.status, 409, full.text);
+  assert.equal(full.json.error.code, 'space_full');
 });
 
 test('置いたものは ID で共有でき、見せられた相手は同じものを読み、編集を許された相手は同じものを書き換える', async (t) => {

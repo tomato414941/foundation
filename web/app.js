@@ -27,6 +27,8 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':
 // like paths, so the levels are worked out from the keys themselves rather than fetched one at a time.
 const prefixOf = url => url.pathname === '/objects' ? url.searchParams.get('prefix') || '' : '';
 const objectsHref = prefix => '/objects' + (prefix ? '?' + new URLSearchParams({ prefix }) : '');
+// Coming back from Stripe's page with a payment method set: the account page finishes it once.
+let paymentReturn = new URL(location.href).searchParams.get('payment');
 const returnTo = () => (page === 'objects' ? objectsHref(objectPrefix) : pagePath) + location.hash;
 let objectPrefix = prefixOf(new URL(location.href)), objectFilter = '', objectLimit = 100, objectSort = 'updated', objectDescending = true, objectSearchPrefix = false;
 let objectChosen = new Set();
@@ -123,6 +125,7 @@ const icon = (name) => {
     database: '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/>',
     cloud: '<path d="M7 18a5 5 0 1 1 1-9.9A6 6 0 0 1 20 10a4 4 0 0 1-1 8Z"/>',
     code: '<path d="m8 8-4 4 4 4m8-8 4 4-4 4m-2-10-4 12"/>',
+    card: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/>',
     key: '<circle cx="8" cy="14" r="4"/><path d="m11 11 8-8m-3 3 2 2m-5 1 2 2"/>',
     note: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>',
     folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
@@ -497,6 +500,12 @@ function render() {
       `);
     return;
   }
+  if (page === 'account' && paymentReturn) {
+    const session = paymentReturn;
+    paymentReturn = null;
+    history.replaceState(null, '', '/account');
+    void api('/v1/payment/complete', { method: 'POST', data: { session_id: session } }).then(async () => { await refresh(); toast('支払い方法を登録しました。'); }, error => toast(error.message));
+  }
   if (page === 'account') {
     // The account itself: who this is, and the few things done to it rather than in it.
     const passkeyRow = item => `<article class="agent-row" aria-label="${esc(item.name)}"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${item.last_used_at ? '最後に使った日時 ' + esc(keptWhen(item.last_used_at)) : 'まだ使っていません'}</p></div>
@@ -504,6 +513,7 @@ function render() {
     shell(`<header class="page-heading"><h1>アカウント</h1><p>${esc(state.user.email)}</p></header>
       <section class="resource-section" aria-labelledby="passkeys-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="passkeys-title">パスキー</h2><p>顔や指紋、端末のPINでサインインできます。</p></div></div>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} パスキーを追加</button>` : ''}</div>
         ${(state.webauthn_credentials || []).length ? `<div class="agent-list">${state.webauthn_credentials.map(passkeyRow).join('')}</div>` : ''}</section>
+      ${state.payment?.available ? `<section class="resource-section" aria-labelledby="payment-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('card')}</span><div><h2 id="payment-title">支払い</h2><p>${state.payment.paying ? '支払い方法を登録済みです。無料枠を超えた分が請求されます。' : '無料枠を超えて使うには、支払い方法を登録します。'}</p></div></div><button class="button secondary" data-action="set-payment">${state.payment.paying ? '支払い方法を変更' : '支払い方法を登録'}</button></div></section>` : ''}
       <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">データのダウンロード</h2><p>シークレットの値、サービスとの接続、自分で定義したサービス、登録した相手の一覧が JSON ファイルで入ります。オブジェクトは入りません。</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ダウンロード</a></div></section>
       <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">開発者</h2></div></div><a class="button secondary" href="/principals#apps">アプリの登録</a></div></section>`);
     return;
@@ -1308,6 +1318,7 @@ document.addEventListener('click', async (event) => {
   try {
     if (action === 'close-dialog') closeDialog();
     if (action === 'add-passkey') addPasskey();
+    if (action === 'set-payment') { target.disabled = true; location.assign((await api('/v1/payment/setup', { method: 'POST', data: {} })).url); }
     if (action === 'remove-passkey') {
       const item = (state.webauthn_credentials || []).find(entry => entry.id === id);
       if (item) confirmRemoval(item.name + ' を削除しますか？', 'このパスキーではサインインできなくなります。', () => api('/v1/webauthn-credentials/' + encodeURIComponent(item.id), { method: 'DELETE', data: {} }));

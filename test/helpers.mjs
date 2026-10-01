@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createApp } from '../src/app.mjs';
+import { Stripe } from '../src/payments.mjs';
 import { fail } from '../src/errors.mjs';
 import { FakeGoogle } from '../src/adapters/google/fixture.mjs';
 export { FakeGoogle } from '../src/adapters/google/fixture.mjs';
@@ -49,6 +50,24 @@ export class FakeMailer {
     return { url: url.href, token: fragment.get('token'), email: fragment.get('email') };
   }
 }
+// Stripe as far as Foundation uses it: customers, a setup page, subscriptions and meter events, with every call kept.
+export function fakeStripe({ sessionStatus = 'complete', otherCustomer = false } = {}) {
+  const calls = [], meterEvents = new Map();
+  const answer = body => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  const fetcher = async (url, options) => {
+    const target = new URL(url), body = Object.fromEntries(new URLSearchParams(options.body ?? ''));
+    calls.push({ method: options.method, path: target.pathname, body, idempotency: options.headers['idempotency-key'] });
+    if (target.pathname === '/v1/customers') return answer({ id: 'cus_1' });
+    if (target.pathname === '/v1/checkout/sessions') return answer({ id: 'cs_test_1', url: 'https://checkout.stripe.com/c/pay/cs_test_1' });
+    if (target.pathname === '/v1/checkout/sessions/cs_test_1') return answer({ id: 'cs_test_1', mode: 'setup', status: sessionStatus, customer: otherCustomer ? 'cus_other' : 'cus_1', setup_intent: { payment_method: 'pm_1' } });
+    if (target.pathname === '/v1/customers/cus_1') return answer({ id: 'cus_1' });
+    if (target.pathname === '/v1/subscriptions') return answer({ id: 'sub_1', status: 'active' });
+    if (target.pathname === '/v1/billing/meter_events') { meterEvents.set(body.identifier, body); return answer({ identifier: body.identifier }); }
+    return new Response('{}', { status: 404 });
+  };
+  return { stripe: new Stripe({ key: 'sk_test_x', computePrice: 'price_compute', storagePrice: 'price_storage', webhookSecret: 'whsec_test', fetcher }), calls, meterEvents };
+}
+
 // Who an address is in these tests: the owner is USER_A and anyone else USER_B, as if they had signed in before.
 export const PEOPLE = email => email === 'owner@example.test' ? USER_A : USER_B;
 

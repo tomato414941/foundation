@@ -22,6 +22,8 @@ const RULES = {
     'issue-key': [SELF, OWNER], 'revoke-key': [SELF, OWNER], 'issue-link': [SELF, OWNER],
     // A WebAuthn credential is added by the principal it proves; taking one away is managing the principal.
     'add-webauthn-credential': [SELF], 'remove-webauthn-credential': [SELF, OWNER],
+    // Paying for what it uses beyond the free part: the principal itself.
+    payment: [SELF],
     // Giving a machine this principal's identity: whoever may act as it. Bounding what it may compute: its owner.
     pass: [SELF, OWNER, ACTOR], limit: [OWNER], relate: [SELF, OWNER], settings: [SELF, OWNER],
     overview: [SELF], export: [SELF], usage: [SELF, ACTOR, OWNER], shown: [SELF], 'audit-log': [SELF],
