@@ -12,7 +12,7 @@ const encryptionKey = await resolveEncryptionKey({ database: config.database, en
 const mailer = new ResendMailer(config.mail);
 const services = builtins();
 const runner = config.runner.token && config.runner.app && config.runner.image ? new FlyRunner(config.runner) : null;
-const app = createApp({ database: config.database, encryptionKey, runner, space: new S3Space(config.objects), publicOrigin: config.publicOrigin, owners: config.owners, trustedProxies: config.trustedProxies, mailer, services });
+const app = createApp({ database: config.database, encryptionKey, runner, space: new S3Space(config.objects), publicOrigin: config.publicOrigin, trustedProxies: config.trustedProxies, mailer, services });
 app.server.listen(config.port, config.bind, () => {
   console.log(`Foundation: http://${config.bind}:${config.port}`);
   console.log(`Encryption key: ${kms ? 'wrapped by KMS ' + config.kms.keyId : 'plaintext key file or variable'}`);
@@ -21,7 +21,6 @@ app.server.listen(config.port, config.bind, () => {
   // Which services Foundation's own side is set up for: its OAuth app, or its role.
   console.log('Services with Foundation\'s own app or role: ' + services.filter(entry => Object.values(entry.schemes).some(scheme => scheme.kind !== 'token' && scheme.available)).map(entry => entry.definition.id).join(', '));
   console.log(`Lent machines: ${runner ? 'Fly Machines, app ' + config.runner.app + ' in ' + config.runner.region : 'not configured'}`);
-  console.log(`Owners: ${config.owners.length ? config.owners.join(', ') : 'anyone who can sign in'}`);
 });
 let closing = false;
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => {

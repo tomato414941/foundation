@@ -162,12 +162,3 @@ test('Disconnecting preserves saved values even when service revocation fails, a
   assert.deepEqual((await f.request('/v1/resources?kind=connection', { token: agent.token })).json.resources, []);
 });
 
-test('Where the owners are named, nobody else can make themselves one', async t => {
-  const f = await fixture(t, { owners: ['Owner@Example.test'], signin: false });
-  const refused = await f.request('/v1/signin', { method: 'POST', data: { email: 'stranger@example.test' } });
-  assert.equal(refused.status, 403);
-  assert.equal(refused.json.error.code, 'not_invited');
-  assert.equal(f.mailer.sent.length, 0, 'no link is sent to an address that may not be here');
-  await f.signin();
-  assert.equal((await f.request('/v1/overview')).json.user.email, 'owner@example.test', 'the named owner signs in as before');
-});

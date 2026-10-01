@@ -118,15 +118,13 @@ function principalId(value) {
   return value;
 }
 
-export function createApp({ database = ':memory:', encryptionKey, mailer, services: catalog, serviceFetcher, space: spaceBackend = null, publicOrigin, owners: ownerList = [], challengeSecret, trustedProxies = [], outbound = {}, runner = null, compute = {}, requestInterval = INTERVAL }) {
+export function createApp({ database = ':memory:', encryptionKey, mailer, services: catalog, serviceFetcher, space: spaceBackend = null, publicOrigin, challengeSecret, trustedProxies = [], outbound = {}, runner = null, compute = {}, requestInterval = INTERVAL }) {
   if (!mailer || !Array.isArray(catalog)) throw new Error('A mailer and services are required');
   let external;
   if (publicOrigin) {
     external = new URL(publicOrigin);
     if (external.protocol !== 'https:' || external.username || external.password || external.pathname !== '/' || external.search || external.hash) throw new Error('FOUNDATION_PUBLIC_ORIGIN must be an HTTPS origin without a path');
   }
-  // Who may become an owner here. Empty means anyone who can sign in, which is only safe while nobody else can reach it.
-  const owners = ownerList.length ? new Set(ownerList.map(value => value.trim().toLowerCase()).filter(Boolean)) : null;
   const store = new Store(database, encryptionKey);
   // Behind a reverse proxy every socket has the proxy's address; the client is the last hop the proxy appended.
   // Only proxies the operator named are believed, otherwise the header is attacker-controlled.
@@ -315,8 +313,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       if (at === 'signin' && method === 'POST') {
         const input = await body(req);
         const email = signinEmail(input?.email);
-        // Reachable from anywhere means anyone who finds the URL could otherwise make themselves an owner here.
-        if (owners && !owners.has(email)) fail(403, 'not_invited', 'このアドレスではご利用いただけません。');
         const destination = returnPath(input.return_to);
         rateLimit('link-send:' + clientAddress(req), 12, 600_000);
         const last = challenges.latest('email', email);
@@ -336,7 +332,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         rateLimit('signin:' + clientAddress(req), 30, 600_000);
         const input = await body(req), email = signinEmail(input?.email), destination = returnPath(input.return_to);
         if (typeof input.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(input.token)) fail(400, 'invalid_link', 'リンクが無効です。最新のメールのリンクを開いてください。');
-        if (owners && !owners.has(email)) fail(403, 'not_invited', 'このアドレスではご利用いただけません。');
         // Giving the link back spends it. Merely opening the confirmation page does not; the page asks first.
         const proof = challenges.take('email', input.token);
         if (!proof || proof.subject !== email || req.aborted || req.socket.destroyed) fail(401, 'invalid_link', 'リンクが無効か、有効期限が切れています。最新のメールのリンクを開いてください。');

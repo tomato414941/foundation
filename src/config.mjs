@@ -29,7 +29,6 @@ export function configuration(env = process.env) {
   return {
     dataDir, database, port, bind, encryptionKey, kms, trustedProxies: (env.FOUNDATION_TRUSTED_PROXIES || '').split(',').map(value => value.trim()).filter(Boolean),
     publicOrigin: env.FOUNDATION_PUBLIC_ORIGIN || undefined,
-    owners: (env.FOUNDATION_OWNERS || '').split(',').map(value => value.trim()).filter(Boolean),
     // Sign-in links go out through Resend, from this address.
     mail: { key: env.FOUNDATION_RESEND_API_KEY || '', from: env.FOUNDATION_EMAIL_FROM || '' },
     // Lent machines run on Fly Machines when a runner app, its token and the machine image are all given.

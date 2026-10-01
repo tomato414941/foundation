@@ -107,17 +107,6 @@ test('リンクを送ったアドレスと違うアドレスでは検証せず�
   assert.equal((await f.request('/v1/overview')).json.user.id, USER_A);
 });
 
-test('利用が許可されたメールアドレスだけでサインインする', async t => {
-  const f = await fixture(t, { signin: false, owners: ['new@example.test'] });
-  assert.equal((await send(f, 'other@example.test')).status, 403);
-  assert.equal(f.mailer.sent.length, 0);
-  const issued = f.app.challenges.issue('email', 'other@example.test', { ttl: 900_000 });
-  assert.equal((await verify(f, { email: 'other@example.test', token: issued })).status, 403);
-  assert.equal((await verify(f, { email: 'new@example.test', token: issued })).status, 401);
-  await send(f);
-  assert.equal((await verify(f)).status, 200);
-});
-
 test('外部サイトからの送信・検証・送信状況の取り消しを拒否する', async t => {
   const f = await fixture(t, { signin: false });
   const data = { email: 'new@example.test' };
