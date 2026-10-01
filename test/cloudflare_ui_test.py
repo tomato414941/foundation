@@ -30,7 +30,7 @@ with sync_playwright() as p:
     # The way that asks least comes first; pasting a token or using one's own app sit under it.
     dialog = start_connect(page, 'Cloudflare')
     expect(dialog.get_by_role('heading', name='Cloudflareに接続', exact=True)).to_be_visible()
-    expect(dialog.get_by_role('button', name='トークンを貼る', exact=True)).to_be_visible()
+    expect(dialog.get_by_role('button', name='トークンを使う', exact=True)).to_be_visible()
     expect(dialog.get_by_role('button', name='自分のOAuthアプリを使う', exact=True)).to_be_visible()
     if shots:
         page.screenshot(path=str(shots / 'cloudflare-consent.png'), full_page=True)

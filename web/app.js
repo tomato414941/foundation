@@ -869,7 +869,7 @@ function addService() {
     filtered: value => { serviceFilter = value; }, choose: service => chooseService(service.id), create: name => defineService({ name }) });
 }
 // How a connection was made, as the holder did it. The words say what the holder does, not the protocol.
-const WAYS = { oauth: 'ログインして許可する', role: 'IAMロールを作る', token: 'トークンを貼る' };
+const WAYS = { oauth: 'ログインして許可する', role: 'IAMロールを作る', token: 'トークンを使う' };
 // The ways a service can be connected, the one that asks least of the holder first: Foundation's own app, a token
 // they paste, then an OAuth app of their own. The first is offered outright; the rest sit under it, lighter.
 function waysOf(service) {
@@ -881,7 +881,7 @@ function waysOf(service) {
   if (!oauth && ownService(service.id)) ways.push('configure');
   return ways;
 }
-const OTHER_WAYS = { oauth: service => service.name + 'の画面でログインする', role: () => 'IAMロールを作る', token: () => 'トークンを貼る', app: () => '自分のOAuthアプリを使う', configure: () => 'OAuthを設定する' };
+const OTHER_WAYS = { oauth: service => service.name + 'の画面でログインする', role: () => 'IAMロールを作る', token: () => 'トークンを使う', app: () => '自分のOAuthアプリを使う', configure: () => 'OAuthを設定する' };
 function otherWays(service, shown) {
   const rest = waysOf(service).filter(way => way !== shown);
   return rest.length ? `<div class="other-ways">${rest.map(way => `<button class="button secondary full" type="button" data-action="choose-way" data-id="${esc(service.id)}" data-way="${way}">${esc(OTHER_WAYS[way](service))}</button>`).join('')}</div>` : '';
