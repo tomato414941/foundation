@@ -1,4 +1,5 @@
 import argparse
+import base64
 import hashlib
 from pathlib import Path
 from urllib.parse import urlencode
@@ -22,7 +23,7 @@ with sync_playwright() as p:
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    fragment = urlencode({'email': 'owner@example.test', 'token_hash': hashlib.sha256(b'owner@example.test').hexdigest()})
+    fragment = urlencode({'email': 'owner@example.test', 'token': base64.urlsafe_b64encode(hashlib.sha256(b'owner@example.test').digest()).rstrip(b'=').decode()})
     page.goto(args.base + '/signin/confirm?return_to=%2Fservices#' + fragment, wait_until='networkidle')
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/services')

@@ -1,4 +1,5 @@
 import argparse
+import base64
 import hashlib
 from pathlib import Path
 from urllib.parse import urlencode
@@ -12,8 +13,8 @@ args = parser.parse_args()
 shots = Path(args.screenshots)
 shots.mkdir(parents=True, exist_ok=True)
 email = 'mobile+signin@example.test'
-key = hashlib.sha256(email.encode()).hexdigest()
-link = args.base + '/signin/confirm?return_to=%2Fsecrets#' + urlencode({'token_hash': key, 'email': email})
+key = base64.urlsafe_b64encode(hashlib.sha256(email.encode()).digest()).rstrip(b'=').decode()
+link = args.base + '/signin/confirm?return_to=%2Fsecrets#' + urlencode({'token': key, 'email': email})
 
 with sync_playwright() as p:
     browser = getattr(p, args.engine).launch(headless=True)
@@ -58,7 +59,7 @@ with sync_playwright() as p:
     # An already used key leaves the current signin intact and explains the failed attempt.
     page.goto(link, wait_until='networkidle')
     page.get_by_role('button', name='サインイン', exact=True).click()
-    expect(page.get_by_role('alert')).to_have_text('リンクが無効か、有効期限が切れています。')
+    expect(page.get_by_role('alert')).to_have_text('リンクが無効か、有効期限が切れています。最新のメールのリンクを開いてください。')
     assert receiver.request.get(args.base + '/v1/overview').json()['user']['email'] == email
     assert not errors, errors
     receiver.close()

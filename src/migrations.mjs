@@ -1,6 +1,6 @@
 import { checkDefinition } from './service-definition.mjs';
 
-export const SCHEMA_VERSION = 36;
+export const SCHEMA_VERSION = 37;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -10,6 +10,7 @@ export const STEPS = {
   34: requestsAsDetails,
   35: standardReferences,
   36: connectionsWithMethods,
+  37: provenHere,
 };
 
 // A one-time data conversion, never a runtime parser for earlier definitions. Refuse any expression that cannot
@@ -252,6 +253,47 @@ function connectionsWithMethods({ db, vault }) {
 }
 connectionsWithMethods.rebuilds = true;
 
+// Proving who one is happens here, the same way for every principal: a session says which proof it rests on and when
+// it was given, and an email address a principal receives at is one such proof. Sessions no longer carry another
+// service's tokens, so the old ones end; the addresses they were signed in with are kept as proven.
+function provenHere({ db }) {
+  const now = Date.now();
+  db.exec(`
+    CREATE TABLE emails (
+      address TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, verified_at INTEGER NOT NULL
+    );
+    CREATE INDEX emails_principal ON emails(principal_id);
+  `);
+  db.prepare('INSERT OR IGNORE INTO emails (address,principal_id,verified_at) SELECT lower(s.email), s.owner_id, ? FROM sessions s JOIN principals p ON p.id=s.owner_id ORDER BY s.expires_at DESC').run(now);
+  db.exec(`
+    DROP TABLE oauth_flows; DROP TABLE sessions;
+    ${SESSIONS}
+    CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);
+    ${CHALLENGES}
+  `);
+}
+provenHere.rebuilds = true;
+
+// A session: what proving who one is leaves, for any principal. proof is how (an email reached, a key's signature, a
+// passkey), proof_ref which address or key, and proved_at when; an operation that needs a fresh or stronger proof
+// asks again.
+const SESSIONS = `
+  CREATE TABLE sessions (
+    id TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+    proof TEXT NOT NULL CHECK(proof IN ('email','key','passkey')), proof_ref TEXT NOT NULL, proved_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX sessions_principal ON sessions(principal_id, expires_at);`;
+// A single-use value someone must give back to prove something: that they receive at an address (subject). handle
+// lets the browser that asked find what it is waiting for; it proves nothing.
+const CHALLENGES = `
+  CREATE TABLE challenges (
+    id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL,
+    created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at);
+  CREATE INDEX challenges_handle ON challenges(handle);`;
+
 export const SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE principals (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
@@ -279,7 +321,12 @@ export const SCHEMA = `
     principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
     return_url TEXT NOT NULL, refresh_url TEXT, webhook_url TEXT, webhook_secret TEXT, created_at TEXT NOT NULL
   );
-  CREATE TABLE sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL, expires_at INTEGER NOT NULL);
+  CREATE TABLE emails (
+    address TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, verified_at INTEGER NOT NULL
+  );
+  CREATE INDEX emails_principal ON emails(principal_id);
+  ${SESSIONS}
+  ${CHALLENGES}
   CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);
   CREATE TABLE requests (
     id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,

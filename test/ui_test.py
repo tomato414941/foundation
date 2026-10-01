@@ -1,4 +1,5 @@
 import argparse
+import base64
 import hashlib
 from pathlib import Path
 import json
@@ -73,14 +74,14 @@ with sync_playwright() as p:
     page.get_by_role("button", name="サインインメールを送信", exact=True).click()
     expect(page.get_by_role("heading", name="メールを確認", exact=True)).to_be_visible()
     expect(page.get_by_text("new@example.test", exact=True)).to_be_visible()
-    page.goto(args.base + "/signin/confirm#token_hash=invalid-authorization-key&email=new%40example.test", wait_until="networkidle")
+    page.goto(args.base + "/signin/confirm#token=invalid-authorization-key&email=new%40example.test", wait_until="networkidle")
     page.get_by_role("button", name="サインイン", exact=True).click()
     expect(page.get_by_text("リンクが無効か、有効期限が切れています。", exact=True)).to_be_visible()
     assert page.url == args.base + "/signin/confirm"
     # Simulate opening the email's link in another tab of the same browser.
-    code = hashlib.sha256(b"new@example.test").hexdigest()
+    code = base64.urlsafe_b64encode(hashlib.sha256(b"new@example.test").digest()).rstrip(b'=').decode()
     link_page = context.new_page()
-    link_page.goto(args.base + "/signin/confirm#token_hash=" + code + "&email=new%40example.test", wait_until="networkidle")
+    link_page.goto(args.base + "/signin/confirm#token=" + code + "&email=new%40example.test", wait_until="networkidle")
     link_page.get_by_role("button", name="サインイン", exact=True).click()
     expect(link_page.get_by_role("heading", name="Foundation", exact=True)).to_be_visible()
     assert "code=" not in link_page.url and "#" not in link_page.url

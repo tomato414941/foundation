@@ -7,10 +7,11 @@ import { Store } from './store.mjs';
 import { digest } from './crypto.mjs';
 import { Principals } from './principals.mjs';
 import { Sessions, OAuthFlows } from './sessions.mjs';
+import { Emails } from './emails.mjs';
+import { Challenges, randomSecret } from './challenges.mjs';
 import { RequestActions } from './request-actions.mjs';
 import { requestView, INTERVAL } from './http-requests.mjs';
 import { fail, HttpError, nameValue } from './errors.mjs';
-import { EmailSignins, SIGNIN_TTL } from './email-signin.mjs';
 import { Requests } from './requests.mjs';
 import { Settings } from './settings.mjs';
 import { AuditLog } from './audit-log.mjs';
@@ -50,6 +51,8 @@ STATIC.set('/apple-touch-icon.png', ['apple-touch-icon.png', 'image/png']);
 const MAX_BODY = 12_000;
 const SESSION_AGE = 14 * 86400;
 const SIGNIN_CONFIRM = '/signin/confirm';
+// An emailed sign-in link lasts a quarter of an hour, and another is sent no sooner than a minute after the last.
+const SIGNIN_TTL = 15 * 60_000, RESEND_WAIT = 60_000;
 const LINK_TTL = 10 * 60_000, LINKED_TTL = 30 * 60_000;
 const REQUEST_PAGE = /^\/requests\/[A-Za-z0-9_-]{43}$/;
 const PRINCIPAL_ID = /^[A-Za-z0-9-]{1,64}$/;
@@ -63,6 +66,13 @@ function returnPath(value = '/') {
   if (url.origin !== 'https://foundation.invalid' || (!PAGES.includes(url.pathname) && !REQUEST_PAGE.test(url.pathname))) invalid();
   if ([...url.searchParams.keys()].some(key => url.pathname !== '/objects' || key !== 'prefix')) invalid();
   return url.pathname + url.search + url.hash;
+}
+
+// What a sign-in link says, in the email that carries it.
+function signinMessage(link) {
+  const href = link.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  return { subject: 'Foundationへのサインイン', text: `Foundationにサインイン\n${link}\n\nリンクは15分間有効です。心当たりがない場合は、このメールを無視してください。`,
+    html: `<p><a href="${href}">Foundationにサインイン</a></p>\n<p>リンクは15分間有効です。心当たりがない場合は、このメールを無視してください。</p>` };
 }
 
 function signinEmail(value) {
@@ -107,8 +117,8 @@ function principalId(value) {
   return value;
 }
 
-export function createApp({ database = ':memory:', encryptionKey, auth, services: catalog, serviceFetcher, space: spaceBackend = null, publicOrigin, owners: ownerList = [], signinClock, trustedProxies = [], outbound = {}, runner = null, compute = {}, requestInterval = INTERVAL }) {
-  if (!auth || !Array.isArray(catalog)) throw new Error('Authentication and services are required');
+export function createApp({ database = ':memory:', encryptionKey, mailer, services: catalog, serviceFetcher, space: spaceBackend = null, publicOrigin, owners: ownerList = [], challengeSecret, trustedProxies = [], outbound = {}, runner = null, compute = {}, requestInterval = INTERVAL }) {
+  if (!mailer || !Array.isArray(catalog)) throw new Error('A mailer and services are required');
   let external;
   if (publicOrigin) {
     external = new URL(publicOrigin);
@@ -127,7 +137,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
     return forwarded.at(-1) || socket;
   };
   const resources = new Resources(store);
-  const principals = new Principals(store), sessions = new Sessions(store), flows = new OAuthFlows(store);
+  const principals = new Principals(store), sessions = new Sessions(store), flows = new OAuthFlows(store), emails = new Emails(store);
+  const challenges = new Challenges(store, challengeSecret ? { secret: challengeSecret } : {});
   const authorization = new Authorization(principals);
   const services = new Services(store, resources, catalog, { authorization, ...(serviceFetcher ? { fetcher: serviceFetcher } : {}) });
   const apps = new Apps(store, resources, services), connections = new Connections(store, resources, services, apps);
@@ -140,13 +151,11 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, connections, apps, resources }, row, origin, { interval: requestInterval, ...options });
   const requestActions = new RequestActions({ store, requests, secrets, connections, services, apps, principals, authorization, auditLog,
     changed: row => { if (row.to_id) void settings.notify(row.to_id, 'request.' + row.status, { request: viewRequest(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() }); } });
-  const signins = new EmailSignins({ now: signinClock });
-  const refreshing = new Map(), limits = new Map(), disconnects = new Set();
+  const limits = new Map(), disconnects = new Set();
   const timer = setInterval(() => {
     store.sweep();
     principals.sweep();
     void environments.sweep().catch(error => console.error(new Date().toISOString(), 'environment sweep', error));
-    signins.sweep();
     for (const [key, value] of limits) if (value.until <= Date.now()) limits.delete(key);
   }, 60_000).unref();
   // When each asker last looked at each of its requests, to answer slow_down.
@@ -160,33 +169,10 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   }
   const readCookie = (req, name) => (req.headers.cookie ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(name + '='))?.slice(name.length + 1);
   const cookieToken = (req) => readCookie(req, 'fdn_session');
-  function localSession(req) {
-    const value = sessions.get(cookieToken(req));
-    if (!value) fail(401, 'signin_required', 'サインインしてください。');
-    return value;
-  }
-  async function loggedIn(req) {
-    const row = localSession(req);
-    try {
-      if (row.value.expires_at <= Date.now() + 60_000) {
-        if (!refreshing.has(row.id)) {
-          const pending = (async () => {
-            const fresh = await auth.refresh(row.value.refresh_token);
-            if (fresh.user.id !== row.owner_id || !sessions.update(row.id, fresh)) fail(401, 'signin_required', 'もう一度サインインしてください。');
-          })();
-          refreshing.set(row.id, pending);
-          pending.finally(() => refreshing.delete(row.id)).catch(() => {});
-        }
-        await refreshing.get(row.id);
-      }
-      const fresh = localSession(req);
-      const user = await auth.user(fresh.value.access_token);
-      if (user.id !== fresh.owner_id || localSession(req).id !== row.id) fail(401, 'signin_required', 'もう一度サインインしてください。');
-      return { user, session: fresh };
-    } catch (error) {
-      if (error instanceof HttpError && error.status === 401) sessions.remove(cookieToken(req));
-      throw error;
-    }
+  function signedIn(req) {
+    const session = sessions.get(cookieToken(req));
+    if (!session) fail(401, 'signin_required', 'サインインしてください。');
+    return session;
   }
   const bearer = req => req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
   function requireOrigin(req, origin) {
@@ -195,7 +181,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   // Authorization may take time. Check the browser again before committing any result.
   async function verifyConnection(req, session, operation, commit) {
     const result = await operation();
-    if (req.aborted || req.socket.destroyed || localSession(req).id !== session.id) fail(401, 'signin_required', 'サインインしてください。');
+    if (req.aborted || req.socket.destroyed || signedIn(req).id !== session.id) fail(401, 'signin_required', 'サインインしてください。');
     return commit(result);
   }
   const notApproved = () => fail(401, 'not_approved', 'このキーはまだ誰の代わりにも動けないか、失効しています。foundation connect（POST /v1/requests で relation actor を依頼）で承認を依頼し、承認後にお試しください。');
@@ -229,7 +215,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       if (await serveDocs(req, res, path)) return;
       const setNamedCookie = (name, value, age, cookiePath = '/') => res.appendHeader('Set-Cookie', `${name}=${value}; HttpOnly; SameSite=${cookiePath === '/' ? 'Lax' : 'Strict'}; Path=${cookiePath}; Max-Age=${age}${external ? '; Secure' : ''}`);
       const setCookie = (value, age) => setNamedCookie('fdn_session', value, age);
-      const signinToken = readCookie(req, 'fdn_signin');
+      const signinHandle = readCookie(req, 'fdn_signin');
       if ((STATIC.has(path) || REQUEST_PAGE.test(path)) && method === 'GET') {
         if (REQUEST_PAGE.test(path)) requests.record(path.slice('/requests/'.length), 'page_opened');
         const [filename, type] = STATIC.get(STATIC.has(path) ? path : '/');
@@ -258,7 +244,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         let destination = '/services', flowService = null;
         const location = code => destination + '?result=' + code + (destination === '/services' && flowService ? '&service=' + encodeURIComponent(flowService) : '');
         try {
-          const { user, session } = await loggedIn(req);
+          const session = signedIn(req), holder = session.principal_id;
           if (url.searchParams.getAll('state').length !== 1 || url.searchParams.getAll('code').length > 1) fail(400, 'invalid_state', '接続をやり直してください。');
           const flow = flows.take(session.id, url.searchParams.get('state'));
           if (!flow || flow.kind) fail(400, 'invalid_state', '接続をやり直してください。');
@@ -267,7 +253,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           const active = apps.scheme(flow.service, flow.app);
           if (flow.requestId) {
             destination = '/requests/' + flow.requestId;
-            requests.forTo(flow.requestId, user.id, true);
+            requests.forTo(flow.requestId, holder, true);
             progressRequestId = flow.requestId;
           }
           if (url.searchParams.has('error')) fail(400, 'authorization_denied', '接続先での認証は許可されませんでした。');
@@ -275,18 +261,18 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
           if (!code || code.length > 8192) fail(400, 'invalid_state', '接続をやり直してください。');
           let previous;
           if (flow.previous) {
-            previous = connections.forService(user.id, flow.previous.id);
+            previous = connections.forService(holder, flow.previous.id);
             if (previous.generation !== flow.previous.generation || previous.status === 'disconnecting') fail(409, 'connection_changed', '接続の状態が変わりました。');
           }
-          if (flow.requestId) requests.forTo(flow.requestId, user.id, true);
+          if (flow.requestId) requests.forTo(flow.requestId, holder, true);
           const previousContext = connections.context(previous);
           const completion = await verifyConnection(req, session,
             () => active.authorization.complete({ code, verifier: flow.verifier, redirectUri: flow.redirectUri }, previousContext),
             result => {
               const changes = previous ? active.authorization.changes?.(result, previousContext) : undefined;
               if (changes?.length) {
-                if (flow.requestId) requests.forTo(flow.requestId, user.id, true);
-                const current = connections.reconnection(user.id, flow.service, 'oauth', previous.id);
+                if (flow.requestId) requests.forTo(flow.requestId, holder, true);
+                const current = connections.reconnection(holder, flow.service, 'oauth', previous.id);
                 if (current.generation !== previous.generation) fail(409, 'connection_changed', '接続の状態が変わりました。');
                 connections.nextState(result);
                 const { credentials: produced, ...kept } = result;
@@ -295,7 +281,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
                 if (flow.requestId) requests.record(flow.requestId, 'connect_review', { service: flow.service });
                 return { confirmation: state };
               }
-              requestActions.connect(flow.requestId, user.id, flow.service, 'oauth', result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, app: flow.app ?? null });
+              requestActions.connect(flow.requestId, holder, flow.service, 'oauth', result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, app: flow.app ?? null });
             });
           if (completion?.confirmation) return redirect(location('review') + '&state=' + completion.confirmation);
           return redirect(location('connected'));
@@ -316,7 +302,13 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       const becoming = at === 'principals' && method === 'POST' && browser && !cookieToken(req);
       if (browser && !['GET', 'HEAD'].includes(method) && !becoming) requireOrigin(req, origin);
       if (!browser && req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
-      if (at === 'signin' && method === 'GET') return send(200, { available: auth.emailEnabled ?? auth.enabled, method: 'email_link', pending: signins.summary(signinToken) });
+      // Signing in by email: a single-use link is sent to the address, and opening it proves receiving there. The
+      // browser that asked keeps only a handle, to show what it is waiting for; the link works in any browser.
+      const waitingFor = handle => {
+        const row = challenges.waiting(handle);
+        return row ? { email: row.subject, expires_at: row.expires_at, resend_at: row.created_at + RESEND_WAIT } : null;
+      };
+      if (at === 'signin' && method === 'GET') return send(200, { available: mailer.enabled, method: 'email_link', pending: waitingFor(signinHandle) });
       if (at === 'signin' && method === 'POST') {
         const input = await body(req);
         const email = signinEmail(input?.email);
@@ -324,53 +316,52 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         if (owners && !owners.has(email)) fail(403, 'not_invited', 'このアドレスではご利用いただけません。');
         const destination = returnPath(input.return_to);
         rateLimit('link-send:' + clientAddress(req), 12, 600_000);
-        const { token: pendingToken, row } = signins.reserve(email);
-        try {
-          const redirectUri = origin + SIGNIN_CONFIRM + (destination === '/' ? '' : '?' + new URLSearchParams({ return_to: destination }));
-          await auth.sendLink(row.email, redirectUri);
-          signins.sent(pendingToken, signinToken);
-          setNamedCookie('fdn_signin', pendingToken, SIGNIN_TTL / 1000);
-          return send(202, { pending: signins.summary(pendingToken) });
-        } catch (error) { signins.cancel(pendingToken); throw error; }
+        const last = challenges.latest('email', email);
+        if (last && last.created_at + RESEND_WAIT > Date.now()) fail(429, 'link_cooldown', '送信から1分ほど待って、もう一度お試しください。');
+        if (!mailer.enabled) fail(503, 'email_unavailable', '現在サインインを利用できません。');
+        const handle = randomSecret();
+        const secret = challenges.issue('email', email, { handle, ttl: SIGNIN_TTL });
+        const link = origin + SIGNIN_CONFIRM + (destination === '/' ? '' : '?' + new URLSearchParams({ return_to: destination })) + '#' + new URLSearchParams({ token: secret, email });
+        try { await mailer.send({ to: email, ...signinMessage(link) }); }
+        catch (error) { challenges.take('email', secret); throw error; }
+        challenges.forget(signinHandle);
+        setNamedCookie('fdn_signin', handle, SIGNIN_TTL / 1000);
+        return send(202, { pending: waitingFor(handle) });
       }
       if (at === 'verifySignin' && method === 'POST') {
         requireOrigin(req, origin);
         rateLimit('signin:' + clientAddress(req), 30, 600_000);
         const input = await body(req), email = signinEmail(input?.email), destination = returnPath(input.return_to);
-        if (typeof input.token_hash !== 'string' || !/^[A-Za-z0-9_-]{20,2048}$/.test(input.token_hash)) fail(400, 'invalid_link', 'リンクが無効です。最新のメールのリンクを開いてください。');
+        if (typeof input.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(input.token)) fail(400, 'invalid_link', 'リンクが無効です。最新のメールのリンクを開いてください。');
         if (owners && !owners.has(email)) fail(403, 'not_invited', 'このアドレスではご利用いただけません。');
-        // The displayed account is untrusted until the provider returns the matching identity.
-        // Merely opening the confirmation page never consumes the key or changes a session.
-        let session;
-        try { session = await auth.verifyLink(input.token_hash); }
-        catch (error) {
-          if (error instanceof HttpError) throw error;
-          fail(503, 'auth_unavailable', 'サインインサービスに接続できません。しばらく待ってからお試しください。');
-        }
-        if (session.user.email.toLowerCase() !== email || req.aborted || req.socket.destroyed) {
-          try { await auth.signout(session.access_token); } catch {}
-          fail(401, 'invalid_link', 'リンクが無効です。最新のメールのリンクを開いてください。');
-        }
-        const next = sessions.create(session);
+        // Giving the link back spends it. Merely opening the confirmation page does not; the page asks first.
+        const proof = challenges.take('email', input.token);
+        if (!proof || proof.subject !== email || req.aborted || req.socket.destroyed) fail(401, 'invalid_link', 'リンクが無効か、有効期限が切れています。最新のメールのリンクを開いてください。');
+        // An address proven for the first time is a new principal's; one proven before is its principal's again.
+        const principalId = store.transaction(() => {
+          const known = emails.principalOf(email);
+          if (known) return known;
+          const made = principals.ensure(randomUUID());
+          emails.add(made.id, email);
+          return made.id;
+        });
+        const next = sessions.create(principalId, { proof: 'email', ref: email });
         sessions.remove(cookieToken(req));
         setCookie(next, SESSION_AGE);
-        signins.cancel(signinToken);
+        challenges.forget(signinHandle);
         setNamedCookie('fdn_signin', '', 0);
         return send(200, { ok: true, return_to: destination });
       }
       if (at === 'signin' && method === 'DELETE') {
-        signins.cancel(signinToken); setNamedCookie('fdn_signin', '', 0);
+        challenges.forget(signinHandle); setNamedCookie('fdn_signin', '', 0);
         return send(200, { ok: true });
       }
       if (at === 'session' && method === 'DELETE') {
-        const session = sessions.get(cookieToken(req));
-        signins.cancel(signinToken);
+        challenges.forget(signinHandle);
         sessions.remove(cookieToken(req));
         setCookie('', 0);
         setNamedCookie('fdn_signin', '', 0);
-        let authSignout = true;
-        if (session) { try { await auth.signout(session.value.access_token); } catch { authSignout = false; } }
-        return send(200, { ok: true, authSignout });
+        return send(200, { ok: true });
       }
       // The services Foundation knows, and how it comes to hold a connection for each. Public: a key not yet
       // approved reads it too.
@@ -393,7 +384,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       }
       // Who is asking, and what they came in by (via). A token is an access key; a browser is the person who logged in,
       // or the one a request link handed to a single request.
-      let subject, session = null, user = null;
+      let subject, session = null;
       const known = browser ? undefined : principals.authenticateKey(token);
       // Anyone may become a principal: one row and one key, issued here and shown once. It reaches nothing until
       // someone draws it a line; what it may do never comes from the making, only from the lines.
@@ -412,9 +403,8 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         const linked = requestRoute?.requestId ? principals.authenticateLink(readCookie(req, 'fdn_link'), requestRoute.requestId) : undefined;
         if (linked) subject = { id: linked.principal.id, via: { kind: 'link', ...linked.link } };
         else {
-          ({ user, session } = await loggedIn(req));
-          principals.ensure(user.id);
-          subject = { id: user.id, via: { kind: 'session', id: session.id } };
+          session = signedIn(req);
+          subject = { id: session.principal_id, via: { kind: 'session', id: session.id } };
         }
       }
       const self = principals.get(subject.id);
@@ -434,7 +424,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       // Reading an upload may outlive its authorization. Recheck before committing any change: what the subject came in
       // by, and the same question the route asked before reading.
       const still = () => {
-        if (subject.via.kind === 'session') { if (localSession(req).id !== session.id) fail(401, 'signin_required', 'サインインしてください。'); }
+        if (subject.via.kind === 'session') { if (signedIn(req).id !== session.id) fail(401, 'signin_required', 'サインインしてください。'); }
         else if (subject.via.kind === 'link') { if (!principals.hasLink(subject.id, subject.via.id)) fail(401, 'signin_required', 'このリンクは使えません。元の画面から開き直してください。'); }
         else if (!principals.hasKey(subject.id, subject.via.id)) fail(401, 'not_approved', 'このキーは失効しています。');
         if (asked_ && !authorization.allowed(asked_).decision) fail(401, 'not_approved', 'この相手の代わりには動けません。');
@@ -966,7 +956,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
       // The holder's screen, in one answer.
       if (at === 'overview' && method === 'GET') {
         permit('overview', 'principal', holderId);
-        return send(200, { user: { id: subject.id, email: user?.email ?? null }, principal: self, secrets: secrets.list(holderId).map(row => secrets.view(row)), connections: connections.list(holderId).map(row => connections.view(row, { owner: true })),
+        return send(200, { user: { id: subject.id, email: emails.of(subject.id)[0] ?? null }, principal: self, secrets: secrets.list(holderId).map(row => secrets.view(row)), connections: connections.list(holderId).map(row => connections.view(row, { owner: true })),
           apps: [...apps.list(holderId).map(row => apps.view(row, { owner: true })), ...apps.lent(holderId).map(row => apps.view(row)), ...apps.offeredAll()],
           services: [...services.list(holderId).map(row => services.view(row, { owner: true })), ...services.lent(holderId).map(row => services.view(row))],
           catalog: services.catalogView(), principals: principals.owned(holderId), actors: principals.actorsOf(holderId),
@@ -982,7 +972,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
         // What renews the others is Foundation's to keep and would be of no use elsewhere. A described service goes
         // out as its definition.
         const kept = secrets.list(holderId).map(row => ({ ...secrets.view(row), content: secrets.content(row).toString('base64'), encoding: 'base64' }));
-        const value = { exported_at: new Date().toISOString(), owner: user?.email ?? null, origin, secrets: kept,
+        const value = { exported_at: new Date().toISOString(), owner: emails.of(subject.id)[0] ?? null, origin, secrets: kept,
           connections: connections.list(holderId).map(row => ({ ...connections.view(row, { owner: true }), fields: connections.handed(row) })),
           services: services.list(holderId).map(row => ({ id: row.id, name: row.name, definition: JSON.parse(row.definition) })), principals: principals.owned(holderId) };
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
@@ -1148,7 +1138,7 @@ export function createApp({ database = ':memory:', encryptionKey, auth, services
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   return {
-    server, store, resources, services, secrets, connections, inputs, apps, objects, environments, principals, sessions, flows, requests, requestActions, settings, auditLog,
+    server, store, resources, services, secrets, connections, inputs, apps, objects, environments, principals, sessions, emails, challenges, flows, requests, requestActions, settings, auditLog,
     async close() {
       clearInterval(timer);
       if (server.listening) await new Promise((resolve) => { server.close(resolve); server.closeIdleConnections(); });

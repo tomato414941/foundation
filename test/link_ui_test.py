@@ -1,4 +1,5 @@
 import argparse
+import base64
 import hashlib
 import json
 import urllib.request
@@ -36,7 +37,7 @@ with sync_playwright() as p:
     owner.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     owner.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(owner.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    owner.goto(args.base + '/signin/confirm#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    owner.goto(args.base + '/signin/confirm#token=' + base64.urlsafe_b64encode(hashlib.sha256(b'owner@example.test').digest()).rstrip(b'=').decode() + '&email=owner%40example.test', wait_until='networkidle')
     owner.get_by_role('button', name='サインイン', exact=True).click()
     owner.wait_for_load_state('networkidle')
     owner.set_viewport_size({'width': 1280, 'height': 1000})

@@ -1,4 +1,5 @@
 import argparse
+import base64
 import hashlib
 from pathlib import Path
 from urllib.parse import urlencode
@@ -23,7 +24,7 @@ with sync_playwright() as p:
     page.get_by_label('メールアドレス', exact=True).fill(email)
     page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    fragment = urlencode({'email': email, 'token_hash': hashlib.sha256(email.encode()).hexdigest()})
+    fragment = urlencode({'email': email, 'token': base64.urlsafe_b64encode(hashlib.sha256(email.encode()).digest()).rstrip(b'=').decode()})
     page.goto(args.base + '/signin/confirm?return_to=%2Fsecrets#' + fragment, wait_until='networkidle')
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/secrets')
@@ -264,7 +265,7 @@ with sync_playwright() as p:
         page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     assert sent.value.post_data_json['return_to'] == '/objects?prefix=reports%2F'
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    fragment = urlencode({'email': signin_email, 'token_hash': hashlib.sha256(signin_email.encode()).hexdigest()})
+    fragment = urlencode({'email': signin_email, 'token': base64.urlsafe_b64encode(hashlib.sha256(signin_email.encode()).digest()).rstrip(b'=').decode()})
     page.goto(args.base + '/signin/confirm?' + urlencode({'return_to': '/objects?prefix=reports%2F'}) + '#' + fragment, wait_until='networkidle')
     page.get_by_role('button', name='サインイン', exact=True).click()
     expect(page).to_have_url(reports)

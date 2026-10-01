@@ -1,6 +1,6 @@
 import { createApp } from '../src/app.mjs';
 import { LocalRunner } from '../src/runners/local.mjs';
-import { FakeAuth, FakeGoogle, KEY } from './helpers.mjs';
+import { FakeMailer, FakeGoogle, KEY } from './helpers.mjs';
 import { createHash } from 'node:crypto';
 import { FakeOpenRouter } from '../src/adapters/openrouter/fixture.mjs';
 import { googleOauth } from '../src/adapters/google/index.mjs';
@@ -37,10 +37,10 @@ const space = {
 };
 
 // Test-only providers. Production never imports this module or creates sample accounts.
-const auth = new FakeAuth(), google = new FakeGoogle();
+const mailer = new FakeMailer(), google = new FakeGoogle();
 // The browser test can simulate opening a delivered link without any real email.
-auth.codeFactory = email => createHash('sha256').update(email).digest('hex');
-if (process.env.FOUNDATION_TEST_EMPTY_CONFIG === '1') { auth.enabled = false; google.enabled = false; }
+const challengeSecret = email => createHash('sha256').update(email).digest('base64url');
+if (process.env.FOUNDATION_TEST_EMPTY_CONFIG === '1') { mailer.enabled = false; google.enabled = false; }
 const withGoogle = entries => [...entries, entry('google', { oauth: googleOauth(google) })];
 // The AWS fixture knows one role, made with the external ID the test reads from the link it is handed.
 export const aws = new FakeAws();
@@ -58,7 +58,7 @@ const services = process.env.FOUNDATION_TEST_AWS === '1' ? withGoogle([entry('aw
   : process.env.FOUNDATION_TEST_OPENROUTER === '1' ? withGoogle([entry('openrouter', { oauth: openrouterOauth(new FakeOpenRouter()) })])
   : withGoogle([]);
 // Lent machines as directories on this host: enough to see them on the page, isolating nothing.
-const app = createApp({ encryptionKey: KEY, auth, space, services, serviceFetcher: described.fetch, runner: new LocalRunner(), requestInterval: 0 });
+const app = createApp({ encryptionKey: KEY, mailer, challengeSecret, space, services, serviceFetcher: described.fetch, runner: new LocalRunner(), requestInterval: 0 });
 const port = Number(process.env.FOUNDATION_TEST_PORT || 3418);
 app.server.listen(port, '127.0.0.1', () => console.log('Test fixture: http://127.0.0.1:' + port));
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, async () => { await app.close(); process.exit(0); });

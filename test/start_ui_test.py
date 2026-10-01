@@ -1,4 +1,5 @@
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -55,8 +56,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     page.get_by_label('メールアドレス', exact=True).fill(email)
     page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    token_hash = hashlib.sha256(email.encode()).hexdigest()
-    page.goto(args.base + '/signin/confirm#token_hash=' + token_hash + '&email=' + email,
+    token = base64.urlsafe_b64encode(hashlib.sha256(email.encode()).digest()).rstrip(b'=').decode()
+    page.goto(args.base + '/signin/confirm#token=' + token + '&email=' + email,
               wait_until='networkidle')
     page.get_by_role('button', name='サインイン', exact=True).click()
     expect(page.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()

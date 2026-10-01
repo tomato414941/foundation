@@ -1,5 +1,6 @@
 import argparse
 from urllib.parse import urlencode, urlparse
+import base64
 import hashlib
 import json
 import os
@@ -41,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-functions-ui-') as key_dir, 
     page.goto(approval['verification_uri'], wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='サインインメールを送信', exact=True).click()
-    page.goto(args.base + '/signin/confirm?' + urlencode({'return_to': urlparse(page.url).path}) + '#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    page.goto(args.base + '/signin/confirm?' + urlencode({'return_to': urlparse(page.url).path}) + '#token=' + base64.urlsafe_b64encode(hashlib.sha256(b'owner@example.test').digest()).rstrip(b'=').decode() + '&email=owner%40example.test', wait_until='networkidle')
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_load_state('networkidle')
     page.get_by_label('確認コード', exact=True).fill(approval['user_code'])

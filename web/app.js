@@ -154,9 +154,9 @@ async function api(path, { method = 'GET', data, signal, headers = {} } = {}) {
   return result;
 }
 function showSigninConfirmation() {
-  const email = signinLink.get('email') || '', tokenHash = signinLink.get('token_hash') || '';
-  const valid = signinLink.getAll('email').length === 1 && signinLink.getAll('token_hash').length === 1
-    && email.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(email) && /^[A-Za-z0-9_-]{20,2048}$/.test(tokenHash);
+  const email = signinLink.get('email') || '', token = signinLink.get('token') || '';
+  const valid = signinLink.getAll('email').length === 1 && signinLink.getAll('token').length === 1
+    && email.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(email) && /^[A-Za-z0-9_-]{43}$/.test(token);
   app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand}</header><main class="signin-main">
     <h1>${valid ? 'サインイン' : 'リンクを確認'}</h1>
     ${valid ? `<p class="signin-address">${esc(email)}</p><form id="confirm-signin"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">サインイン ${icon('arrow')}</button></form>
@@ -169,7 +169,7 @@ function showSigninConfirmation() {
     button.disabled = true;
     form.querySelector('.form-error').textContent = '';
     try {
-      const result = await api('/v1/signin/verify', { method: 'POST', data: { email, token_hash: tokenHash, return_to: signinReturn } });
+      const result = await api('/v1/signin/verify', { method: 'POST', data: { email, token, return_to: signinReturn } });
       location.replace(result.return_to);
     } catch (error) {
       form.querySelector('.form-error').textContent = error.message;

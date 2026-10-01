@@ -45,12 +45,11 @@ export class Principals {
     if (!this.db.prepare('UPDATE principals SET name=? WHERE id=?').run(name, id).changes) fail(404, 'not_found', '相手が見つかりません。');
     return this.get(id);
   }
-  // Removing a principal takes its access keys and lines (by cascade) and its sessions. What it holds is the
+  // Removing a principal takes its access keys, sessions, addresses and lines (by cascade). What it holds is the
   // resources' business, cleared by the caller first; the principals it made stay, as their own; the requests it was
   // part of stay, as records.
   remove(id) {
     return this.store.transaction(() => {
-      this.db.prepare('DELETE FROM sessions WHERE owner_id=?').run(id);
       this.db.prepare('DELETE FROM relations WHERE object_type=? AND object_id=?').run('principal', id);
       return this.db.prepare('DELETE FROM principals WHERE id=?').run(id).changes > 0;
     });
@@ -180,7 +179,8 @@ export class Principals {
       AND NOT EXISTS (SELECT 1 FROM relations r WHERE r.subject_id=principals.id OR (r.object_type='principal' AND r.object_id=principals.id))
       AND NOT EXISTS (SELECT 1 FROM resources h WHERE h.holder_id=principals.id)
       AND NOT EXISTS (SELECT 1 FROM settings s WHERE s.principal_id=principals.id)
-      AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.owner_id=principals.id)
+      AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.principal_id=principals.id)
+      AND NOT EXISTS (SELECT 1 FROM emails e WHERE e.principal_id=principals.id)
       AND NOT EXISTS (SELECT 1 FROM requests q WHERE q.from_id=principals.id AND q.status='pending' AND q.expires_at>?)`).run(cutoff, cutoff, now).changes;
   }
 }

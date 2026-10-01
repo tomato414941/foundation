@@ -13,7 +13,7 @@ test('Signin gives a private state behind a safe session cookie', async (t) => {
   assert.deepEqual(result.json.secrets, []);
   assert.deepEqual(result.json.connections.filter(row => row.service !== null), []);
   assert.equal(result.headers.get('cache-control'), 'no-store');
-  assert.doesNotMatch(result.text, /supabase-access|refresh_token|"secret"|token_hash/);
+  assert.doesNotMatch(result.text, /refresh_token|"secret"|"token"/);
 });
 
 test('OAuth uses state, PKCE, offline consent, native Google URL; callback is one-use', async (t) => {
@@ -167,7 +167,7 @@ test('Where the owners are named, nobody else can make themselves one', async t 
   const refused = await f.request('/v1/signin', { method: 'POST', data: { email: 'stranger@example.test' } });
   assert.equal(refused.status, 403);
   assert.equal(refused.json.error.code, 'not_invited');
-  assert.equal(f.auth.links.size, 0, 'no link is sent to an address that may not be here');
+  assert.equal(f.mailer.sent.length, 0, 'no link is sent to an address that may not be here');
   await f.signin();
   assert.equal((await f.request('/v1/overview')).json.user.email, 'owner@example.test', 'the named owner signs in as before');
 });

@@ -1,4 +1,5 @@
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -9,7 +10,6 @@ from pathlib import Path
 from urllib.parse import urlencode, urlparse
 from playwright.sync_api import sync_playwright, expect
 
-OWNER = '10000000-0000-4000-8000-000000000001'
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--base', required=True)
@@ -42,12 +42,14 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
 
     # Everything but connect and exec is plain HTTP, which is how an agent uses it.
     def api(method, path, body=None, headers=None):
-        if 'as=' not in path: path += ('&' if '?' in path else '?') + 'as=' + OWNER
+        if 'as=' not in path: path += ('&' if '?' in path else '?') + 'as=' + owner[0]
         request = urllib.request.Request(args.base + path, method=method, data=body,
                                          headers={'authorization': 'Bearer ' + key, **(headers or {})})
         with urllib.request.urlopen(request) as response:
             return json.loads(response.read() or b'{}')
 
+    # Whose the key acts for, known once the owner has signed in and allowed it.
+    owner = []
     approval = cli('connect', '--name', 'laptop のAI')['request']
     key = open(key_dir + '/runtime-key').read().strip()
     # The owner's name for a thing finds its id; the id reaches the thing.
@@ -68,12 +70,13 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    page.goto(args.base + '/signin/confirm?' + urlencode({'return_to': urlparse(page.url).path}) + '#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    page.goto(args.base + '/signin/confirm?' + urlencode({'return_to': urlparse(page.url).path}) + '#token=' + base64.urlsafe_b64encode(hashlib.sha256(b'owner@example.test').digest()).rstrip(b'=').decode() + '&email=owner%40example.test', wait_until='networkidle')
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_load_state('networkidle')
     page.get_by_label('確認コード', exact=True).fill(approval['user_code'])
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
+    owner.append(page.request.get(args.base + '/v1/overview').json()['user']['id'])
 
     # Nothing kept yet, and the page says so.
     page.goto(args.base + '/secrets', wait_until='networkidle')

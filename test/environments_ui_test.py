@@ -1,4 +1,5 @@
 import argparse
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -41,7 +42,7 @@ with sync_playwright() as p:
     page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     callback = args.base + '/signin/confirm?' + urlencode({'return_to': '/requests/' + asked['id']})
-    page.goto(callback + '#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    page.goto(callback + '#token=' + base64.urlsafe_b64encode(hashlib.sha256(b'owner@example.test').digest()).rstrip(b'=').decode() + '&email=owner%40example.test', wait_until='networkidle')
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.get_by_label('確認コード', exact=True).fill(asked['user_code'])
     page.get_by_role('button', name='許可する', exact=True).click()

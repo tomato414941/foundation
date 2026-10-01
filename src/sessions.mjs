@@ -3,23 +3,23 @@ import { digest } from './crypto.mjs';
 
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
 
+// What proving who one is leaves, the same for every principal: which proof (an email reached, a key's signature, a
+// passkey), which address or key it was, and when. An operation that wants a fresher or stronger proof asks again.
+export const SESSION_TTL = 14 * 86400_000;
+const SESSIONS_MAX = 20;
 export class Sessions {
-  constructor(store) { this.store = store; this.db = store.db; this.vault = store.vault; }
-  create(value) {
+  constructor(store) { this.store = store; this.db = store.db; }
+  create(principalId, { proof, ref }) {
     this.store.sweep();
-    const token = randomBytes(32).toString('base64url'), id = digest(token);
-    this.db.prepare('DELETE FROM sessions WHERE owner_id=? AND id IN (SELECT id FROM sessions WHERE owner_id=? ORDER BY expires_at DESC LIMIT -1 OFFSET 19)').run(value.user.id, value.user.id);
-    // Whoever signs in is a principal from then on, known here by the id their signin gave them.
-    this.db.prepare('INSERT OR IGNORE INTO principals (id,name,created_at) VALUES (?,?,?)').run(value.user.id, '', new Date().toISOString());
-    this.db.prepare('INSERT INTO sessions VALUES (?,?,?,?,?)').run(id, value.user.id, value.user.email, this.vault.seal(value, `session:${id}`), Date.now() + 14 * 86400_000);
+    const token = randomBytes(32).toString('base64url'), id = digest(token), now = Date.now();
+    this.db.prepare(`DELETE FROM sessions WHERE principal_id=? AND id IN (SELECT id FROM sessions WHERE principal_id=? ORDER BY expires_at DESC LIMIT -1 OFFSET ${SESSIONS_MAX - 1})`).run(principalId, principalId);
+    this.db.prepare('INSERT INTO sessions (id,principal_id,proof,proof_ref,proved_at,created_at,expires_at) VALUES (?,?,?,?,?,?,?)').run(id, principalId, proof, ref, now, now, now + SESSION_TTL);
     return token;
   }
   get(token) {
     if (typeof token !== 'string' || !TOKEN.test(token)) return;
-    const row = this.db.prepare('SELECT * FROM sessions WHERE id=? AND expires_at>?').get(digest(token), Date.now());
-    return row ? { ...row, value: this.vault.open(row.secret, `session:${row.id}`) } : undefined;
+    return this.db.prepare('SELECT * FROM sessions WHERE id=? AND expires_at>?').get(digest(token), Date.now());
   }
-  update(id, value) { return this.db.prepare('UPDATE sessions SET secret=?,email=? WHERE id=? AND owner_id=? AND expires_at>?').run(this.vault.seal(value, `session:${id}`), value.user.email, id, value.user.id, Date.now()).changes > 0; }
   remove(token) { if (typeof token === 'string') this.db.prepare('DELETE FROM sessions WHERE id=?').run(digest(token)); }
 }
 

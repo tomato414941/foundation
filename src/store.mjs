@@ -55,6 +55,7 @@ export class Store {
     this.db.prepare('DELETE FROM request_links WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM access_keys WHERE expires_at IS NOT NULL AND expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(Date.now());
+    this.db.prepare('DELETE FROM challenges WHERE expires_at<=?').run(Date.now());
     this.db.prepare('DELETE FROM requests WHERE expires_at<=?').run(Date.now());
   }
   close() { this.db.close(); }

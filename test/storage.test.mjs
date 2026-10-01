@@ -11,20 +11,21 @@ import { fixture, modules, KEY, USER_A } from './helpers.mjs';
 
 async function directory(t) { const path = await mkdtemp(join(tmpdir(), 'foundation-auth-test-')); t.after(() => rm(path, { recursive: true, force: true })); return path; }
 
-test('Gmail and Supabase secrets are encrypted; keys and cookies never persist in plaintext', async (t) => {
+test('Gmail secrets are encrypted; keys and cookies never persist in plaintext', async (t) => {
   const dir = await directory(t), database = join(dir, 'state.sqlite');
   const f = await fixture(t, { database }), account = await f.connection(), agent = await f.issueKey();
   const cookie = f.cookie();
   await f.start();
   const contents = await readFile(database);
-  for (const value of ['google-access-personal', 'refresh-personal', 'supabase-access-owner', 'supabase-refresh-owner', agent.token, cookie.slice(12)]) assert.ok(!contents.includes(Buffer.from(value)), value);
+  for (const value of ['google-access-personal', 'refresh-personal', agent.token, cookie.slice(12)]) assert.ok(!contents.includes(Buffer.from(value)), value);
   const second = new Store(database, KEY); t.after(() => second.close());
   const persisted = modules(second);
   assert.equal(persisted.connections.state(persisted.connections.held(USER_A, account.id)).private_state.refresh_token, 'refresh-personal');
   assert.ok(persisted.sessions.get(cookie.slice(12)));
   assert.equal(persisted.principals.actsFor(second.db.prepare('SELECT principal_id FROM access_keys WHERE hash=?').get(digest(agent.token)).principal_id)[0], USER_A);
   const tables = second.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((item) => item.name);
-  assert.ok(!tables.some((name) => name !== 'audit_log' && /mail|message|log|body/.test(name)), 'nothing of an email is kept');
+  // emails holds the addresses principals have proven, not anything a mailbox held.
+  assert.ok(!tables.some((name) => !['audit_log', 'emails'].includes(name) && /mail|message|log|body/.test(name)), 'nothing of an email is kept');
   assert.equal((await stat(database)).mode & 0o777, 0o600);
 });
 
@@ -38,8 +39,8 @@ test('Authenticated encryption binds ciphertext to its account and owner', () =>
 test('Configuration creates a private encryption key; losing the key fails closed', async (t) => {
   const dir = await directory(t), env = { FOUNDATION_DATA_DIR: dir };
   const first = configuration(env), second = configuration(env);
-  assert.equal(first.supabase.emailEnabled, false);
-  assert.equal(configuration({ ...env, FOUNDATION_EMAIL_SIGNIN_ENABLED: 'true' }).supabase.emailEnabled, true);
+  assert.deepEqual(first.mail, { key: '', from: '' });
+  assert.deepEqual(configuration({ ...env, FOUNDATION_RESEND_API_KEY: 're_key', FOUNDATION_EMAIL_FROM: 'signin@example.test' }).mail, { key: 're_key', from: 'signin@example.test' });
   assert.deepEqual(first.encryptionKey, second.encryptionKey);
   assert.equal((await stat(join(dir, 'encryption-key'))).mode & 0o777, 0o600);
   assert.equal((await stat(dir)).mode & 0o777, 0o700);

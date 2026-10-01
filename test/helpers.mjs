@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { createApp } from '../src/app.mjs';
 import { fail } from '../src/errors.mjs';
 import { FakeGoogle } from '../src/adapters/google/fixture.mjs';
@@ -34,26 +33,24 @@ export const KEY = Buffer.alloc(32, 7);
 export const USER_A = '10000000-0000-4000-8000-000000000001';
 export const USER_B = '10000000-0000-4000-8000-000000000002';
 export const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
-export class FakeAuth {
-  constructor() { this.enabled = true; this.refreshes = 0; this.revoked = false; this.links = new Map(); this.codeFactory = () => randomUUID(); this.now = Date.now; }
-  value(email = 'owner@example.test') { return { access_token: 'supabase-access-' + email, refresh_token: 'supabase-refresh-' + email, expires_at: Date.now() + 3600_000, user: { id: email === 'owner@example.test' ? USER_A : USER_B, email } }; }
-  async sendLink(email, redirectUri) {
-    if (!this.enabled) fail(503, 'auth_unavailable', '現在サインインを利用できません。');
-    if (this.sendHandler) await this.sendHandler(email);
-    const code = this.codeFactory(email);
-    this.links.set(email, { email, code, expires_at: this.now() + 900_000, url: redirectUri + '#' + new URLSearchParams({ token_hash: code, email }) });
+// Email that is never sent: what would have gone out is kept, and the link in it can be followed.
+export class FakeMailer {
+  constructor() { this.enabled = true; this.sent = []; }
+  async send(message) {
+    if (!this.enabled) fail(503, 'email_unavailable', '現在サインインを利用できません。');
+    if (this.sendHandler) await this.sendHandler(message);
+    this.sent.push(message);
   }
-  async verifyLink(code) {
-    const link = [...this.links.values()].find(value => value.code === code);
-    if (!link || link.expires_at <= this.now()) fail(401, 'invalid_link', 'リンクが無効か、有効期限が切れています。');
-    this.links.delete(link.email);
-    if (this.verifyHandler) await this.verifyHandler(code);
-    return this.value(link.email);
+  // The newest link sent to an address: where it goes, and the token and address it carries.
+  link(email) {
+    const message = this.sent.findLast(item => item.to === email);
+    if (!message) return;
+    const url = new URL(message.text.match(/https?:\/\/\S+/)[0]), fragment = new URLSearchParams(url.hash.slice(1));
+    return { url: url.href, token: fragment.get('token'), email: fragment.get('email') };
   }
-  async user(token) { if (this.revoked || !token.startsWith('supabase-access-')) fail(401, 'signin_required', 'サインインしてください。'); return this.value(token.slice('supabase-access-'.length)).user; }
-  async refresh(token) { this.refreshes++; if (this.refreshHandler) await this.refreshHandler(); return this.value(token.slice('supabase-refresh-'.length)); }
-  async signout() {}
 }
+// Who an address is in these tests: the owner is USER_A and anyone else USER_B, as if they had signed in before.
+export const PEOPLE = email => email === 'owner@example.test' ? USER_A : USER_B;
 
 // Seed a connection for a service, including already-expired fixture tokens.
 export function acquired(store, entries, service, { subject, secret }, scheme = 'oauth') {
@@ -66,9 +63,9 @@ export function acquired(store, entries, service, { subject, secret }, scheme = 
   return { connections, row, run, state };
 }
 export async function fixture(t, options = {}) {
-  const { google = new FakeGoogle(), services = [entry('google', { oauth: googleOauth(google) })], ...rest } = options, auth = options.auth || new FakeAuth();
+  const { google = new FakeGoogle(), services = [entry('google', { oauth: googleOauth(google) })], ...rest } = options, mailer = options.mailer || new FakeMailer();
   // Tests look at a request again at once; the interval between looks is a test of its own.
-  const app = createApp({ encryptionKey: KEY, requestInterval: 0, ...rest, auth, services });
+  const app = createApp({ encryptionKey: KEY, requestInterval: 0, ...rest, mailer, services });
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   let closed = false;
   const close = async () => { if (!closed) { closed = true; await app.close(); } };
@@ -95,10 +92,17 @@ export async function fixture(t, options = {}) {
     }
     return { status: response.status, json, text, headers: response.headers };
   }
+  // An address someone has signed in with before, so it is the same principal each time.
+  function known(email) {
+    if (app.emails.principalOf(email)) return;
+    app.principals.ensure(PEOPLE(email));
+    app.emails.add(PEOPLE(email), email);
+  }
   async function signin(email = 'owner@example.test') {
     // The other tests need a verified identity, not a real email delivery or its resend cooldown.
-    await auth.sendLink(email, base + '/signin/confirm');
-    const response = await request('/v1/signin/verify', { method: 'POST', data: { email, token_hash: auth.links.get(email).code } });
+    known(email);
+    const token = app.challenges.issue('email', email, { ttl: 900_000 });
+    const response = await request('/v1/signin/verify', { method: 'POST', data: { email, token } });
     assert.equal(response.status, 200, response.text);
     assert.equal(response.json.return_to, '/');
     cookie = response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
@@ -173,5 +177,5 @@ export async function fixture(t, options = {}) {
     app.connections.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
   }
   if (options.signin !== false) await signin();
-  return { app, auth, google, base, request, lookup, read, keep, drop, become, signin, start, callback, connection, inject, connectionFacts, issueKey, approveKey, expire, close, cookie: () => cookie };
+  return { app, mailer, known, google, base, request, lookup, read, keep, drop, become, signin, start, callback, connection, inject, connectionFacts, issueKey, approveKey, expire, close, cookie: () => cookie };
 }

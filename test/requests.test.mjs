@@ -93,10 +93,10 @@ test('メール認証後は依頼のページへ戻し、外部への転送を�
   }
   const sent = await f.request('/v1/signin', { method: 'POST', data: { email: 'owner@example.test', return_to: '/requests/' + row.id } });
   assert.equal(sent.status, 202);
-  const url = new URL(f.auth.links.get('owner@example.test').url);
+  const url = new URL(f.mailer.link('owner@example.test').url);
   const keys = new URLSearchParams(url.hash.slice(1));
   const result = await f.request('/v1/signin/verify', { method: 'POST', data: {
-    email: keys.get('email'), token_hash: keys.get('token_hash'), return_to: url.searchParams.get('return_to'),
+    email: keys.get('email'), token: keys.get('token'), return_to: url.searchParams.get('return_to'),
   } });
   assert.equal(result.status, 200);
   assert.equal(result.json.return_to, '/requests/' + row.id);
@@ -120,7 +120,7 @@ test('A registration request stays with its owner, completes by registering, and
   await f.connection();
   const { row, agent: runtime } = await register(f, { authorization_details: [{ type: 'connection', service: 'google' }] });
   assert.equal(row.requester_name, 'laptop');
-  const ownerCookie = 'fdn_session=' + f.app.sessions.create(f.auth.value());
+  const ownerCookie = 'fdn_session=' + f.app.sessions.create(USER_A, { proof: 'email', ref: 'owner@example.test' });
   await f.signin('other@example.test');
   assert.equal((await f.request('/v1/requests/' + row.id)).status, 404);
   const flow = new URL((await f.request('/v1/connections', { method: 'POST', headers: { cookie: ownerCookie }, data: { service: 'google', request_id: row.id } })).json.url);

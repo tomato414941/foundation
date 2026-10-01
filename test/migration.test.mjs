@@ -10,7 +10,7 @@ import { Principals } from '../src/principals.mjs';
 import { SCHEMA_VERSION, STEPS } from '../src/migrations.mjs';
 import { OAuth2Client, inject } from '../src/schemes/oauth.mjs';
 import { Authorization } from '../src/authorization.mjs';
-import { KEY, USER_A, modules } from './helpers.mjs';
+import { KEY, USER_A, USER_B, modules } from './helpers.mjs';
 
 const STORED_SERVICE = { version: 1, name: 'Stored service', auth_schemes: { oauth: {
   authorize: 'https://service.example/authorize', token: 'https://service.example/token', keep: ['id'], ok_field: 'ok',
@@ -40,6 +40,9 @@ async function storedDefinitions(t, definitions) {
     store.db.prepare('UPDATE connections SET state=? WHERE resource_id=?').run(vault.seal(vault.open(row.state, `connection:${row.holder_id}:${row.resource_id}`), `credential:${row.holder_id}:${row.resource_id}`), row.resource_id);
   }
   store.db.exec('DROP INDEX connections_app; ALTER TABLE connections RENAME TO credentials; CREATE INDEX credentials_app ON credentials(app_id) WHERE app_id IS NOT NULL;');
+  store.db.exec(`DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL, expires_at INTEGER NOT NULL);
+    CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);`);
   const snapshots = Object.fromEntries(['resources', 'secrets', 'credentials', 'relations'].map(table => [table, store.db.prepare(`SELECT ${SNAPSHOT_COLUMNS[table] ?? '*'} FROM ${table}`).all()]));
   store.db.exec('PRAGMA user_version=34'); store.close();
   return { path, ids, secret, credential, snapshots };
@@ -312,4 +315,28 @@ test('もう誰も動かしていない形のデータベースは、移行せ�
   db.exec('CREATE TABLE metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE secrets (id TEXT); PRAGMA user_version = 25;');
   db.close();
   assert.throws(() => new Store(path, KEY), /not created by this version/);
+});
+
+test('36版のセッションでサインインしていたアドレスは、その人の確かめたアドレスとして残り、古いセッションは終わる', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-37-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
+  const { principals } = modules(store);
+  principals.ensure(USER_A); principals.ensure(USER_B);
+  store.db.exec(`DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL, expires_at INTEGER NOT NULL);
+    CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);`);
+  const old = store.db.prepare('INSERT INTO sessions VALUES (?,?,?,?,?)');
+  old.run('a1', USER_A, 'Owner@Example.test', 'sealed', Date.now() + 1000);
+  old.run('a2', USER_A, 'owner@example.test', 'sealed', Date.now() + 2000);
+  old.run('b1', USER_B, 'other@example.test', 'sealed', Date.now() - 1000);
+  old.run('gone', 'no-such-principal', 'nobody@example.test', 'sealed', Date.now() + 1000);
+  store.db.exec("INSERT INTO oauth_flows VALUES ('flow','a1','sealed',0)");
+  store.db.exec('PRAGMA user_version=36'); store.close();
+  const next = new Store(path, KEY); t.after(() => next.close());
+  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, 37);
+  assert.deepEqual(next.db.prepare('SELECT address, principal_id FROM emails ORDER BY address').all().map(row => ({ ...row })),
+    [{ address: 'other@example.test', principal_id: USER_B }, { address: 'owner@example.test', principal_id: USER_A }]);
+  assert.equal(next.db.prepare('SELECT count(*) n FROM sessions').get().n, 0);
+  assert.equal(next.db.prepare('SELECT count(*) n FROM oauth_flows').get().n, 0);
+  assert.deepEqual(next.db.prepare('PRAGMA foreign_key_check').all(), []);
 });

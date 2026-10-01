@@ -1,4 +1,5 @@
 import argparse
+import base64
 import hashlib
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -37,7 +38,7 @@ with sync_playwright() as p:
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
-    page.goto(args.base + '/signin/confirm?return_to=%2Fservices#token_hash=' + hashlib.sha256(b'owner@example.test').hexdigest() + '&email=owner%40example.test', wait_until='networkidle')
+    page.goto(args.base + '/signin/confirm?return_to=%2Fservices#token=' + base64.urlsafe_b64encode(hashlib.sha256(b'owner@example.test').digest()).rstrip(b'=').decode() + '&email=owner%40example.test', wait_until='networkidle')
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/services')
     page.wait_for_load_state('networkidle')
