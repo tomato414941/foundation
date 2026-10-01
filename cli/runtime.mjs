@@ -8,23 +8,23 @@ import { homedir, hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { validEnvName } from './env-name.mjs';
-import { createPasskey, answer } from './passkey.mjs';
+import { createCredential, answer } from './webauthn.mjs';
 
 // This program does only what the agent running it cannot do for itself.
 //
 // Everything Foundation offers is plain HTTP, and an agent with the key can call it directly; a command
 // wrapper around those calls would only narrow what the agent is allowed to think of. Two things are left:
-//   connect  say which server, and make this machine's passkey. Its private key has to exist as a private file
+//   connect  say which server, and make this machine's WebAuthn credential. Its private key has to exist as a private file
 //            before anything can be asked, and nothing prints it.
-//   token    prove this machine with its passkey and print a bearer token that lasts an hour, for calling the API.
+//   token    prove this machine with its credential and print a bearer token that lasts an hour, for calling the API.
 //   exec     hand what is kept to a command, or keep a file it creates, without the bytes passing through
 //            the agent. If the agent fetched the values itself they would be in its context.
 // There is also `api`, which is for people and for scripts rather than for agents: it attaches the key to a
 // request and prints what comes back. One escape hatch, so that the API can grow without this program growing
 // a verb for every endpoint, and without deciding for an agent how it ought to use any of them.
-// The key file: this machine's passkey - its id, whose it is, and its private key - kept private. The private key is
-// made here and never leaves; Foundation keeps only the public half. A file from before passkeys holds the access key
-// Foundation issued instead, and is replaced with a passkey the first time it is used.
+// The key file: this machine's WebAuthn credential - its id, whose it is, and its private key - kept private. The
+// private key is made here and never leaves; Foundation keeps only the public half. An older file holds the access key
+// Foundation issued instead, and is replaced with a credential the first time it is used.
 async function readKey(path, { missingOk = false } = {}) {
   let handle;
   try {
@@ -33,10 +33,10 @@ async function readKey(path, { missingOk = false } = {}) {
     if (!info.isFile() || info.size > 4096 || (info.mode & 0o077) || (process.getuid && info.uid !== process.getuid())) throw new Error('Runtime key file must be owned by the current user and private (mode 600).');
     const content = (await handle.readFile('utf8')).trim();
     if (/^fdn_[A-Za-z0-9_-]{43}$/.test(content)) return { token: content };
-    let passkey;
-    try { ({ passkey } = JSON.parse(content)); } catch {}
-    if (typeof passkey?.id !== 'string' || typeof passkey.user !== 'string' || passkey.private_key?.kty !== 'EC') throw new Error('Invalid runtime key file.');
-    return { passkey };
+    let credential;
+    try { ({ webauthn_credential: credential } = JSON.parse(content)); } catch {}
+    if (typeof credential?.id !== 'string' || typeof credential.user !== 'string' || credential.private_key?.kty !== 'EC') throw new Error('Invalid runtime key file.');
+    return { credential };
   } catch (error) {
     if (error.code === 'ENOENT') { if (missingOk) return null; throw new Error('No key yet. Run: foundation connect'); }
     if (error.code === 'ELOOP') throw new Error('Runtime key file must not be a symbolic link.');
@@ -105,7 +105,7 @@ async function outputBytes(path) {
 const HELP = `Usage: foundation <command> [options]
 
 Commands:
-  connect [<url>] [--name <name>]      Make this machine's passkey and ask the owner to approve it.
+  connect [<url>] [--name <name>]      Make this machine's credential and ask the owner to approve it.
                                        With <url>, remember that Foundation server for later commands.
   token                                Print a bearer token for the API, valid for an hour.
   api <METHOD> </path> [--json <body>] [--from <file>] [--type <media-type>]
@@ -122,7 +122,7 @@ API specification:
 Environment:
   FOUNDATION_URL               The server for this run (otherwise the one saved by connect).
   FOUNDATION_AGENT             Your name, such as claude or codex; gives each agent its own key file.
-  FOUNDATION_RUNTIME_KEY_FILE  Where the key file (this machine's passkey) is.
+  FOUNDATION_RUNTIME_KEY_FILE  Where the key file (this machine's credential) is.
 `;
 
 async function main() {
@@ -190,14 +190,14 @@ async function main() {
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
   const publicSpec = action === 'api' && call.method === 'GET' && call.target === '/openapi.json';
   let key = publicSpec ? null : await readKey(keyPath, { missingOk: action === 'connect' }), token = key?.token ?? null;
-  // A passkey proves this machine for an hour at a time: the challenge is answered for the server actually reached.
+  // The credential proves this machine for an hour at a time: the challenge is answered for the server actually reached.
   async function prove() {
-    const begin = await fetch(url.origin + '/v1/signin/passkey/options', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', redirect: 'error', signal: AbortSignal.timeout(30_000) });
+    const begin = await fetch(url.origin + '/v1/signin/webauthn/options', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', redirect: 'error', signal: AbortSignal.timeout(30_000) });
     const { options } = await begin.json();
-    const response = await fetch(url.origin + '/v1/signin/passkey', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ credential: answer(options, key.passkey, url.origin), session: 'token' }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
+    const response = await fetch(url.origin + '/v1/signin/webauthn', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ credential: answer(options, key.credential, url.origin), session: 'token' }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
     const proven = await response.json();
-    if (!response.ok || typeof proven.token !== 'string') throw new Error('Foundation did not accept this machine\'s passkey (' + response.status + ', ' + (proven.error?.code || 'unknown') + ').');
+    if (!response.ok || typeof proven.token !== 'string') throw new Error('Foundation did not accept this machine\'s credential (' + response.status + ', ' + (proven.error?.code || 'unknown') + ').');
     return proven.token;
   }
   async function send(target, payload, { accept, method = 'POST', type = 'application/json' } = {}) {
@@ -207,20 +207,20 @@ async function main() {
     if (!response.ok && !accept?.(data)) throw new Error('Foundation request failed (' + response.status + ', ' + (data.error?.code || 'unknown') + '). ' + (data.error?.message || 'Check the connection and runtime permission.'));
     return data;
   }
-  // A key file from before passkeys: register a passkey with the access key it holds, and keep the passkey instead.
+  // An older key file: register a WebAuthn credential with the access key it holds, and keep the credential instead.
   // A lent machine's key stays as it is; it ends with the machine.
   async function upgrade(label) {
     const me = await send('/v1/principals/me', undefined, { method: 'GET' });
     if (me.key?.environment) return;
-    const { options } = await send('/v1/passkeys/options?as=' + encodeURIComponent(me.principal.id), {});
-    const made = createPasskey(options, url.origin);
-    await send('/v1/passkeys?as=' + encodeURIComponent(me.principal.id), { name: label, credential: made.response });
-    await writeKey(keyPath, JSON.stringify({ passkey: made.passkey }), !process.env.FOUNDATION_RUNTIME_KEY_FILE);
-    key = { passkey: made.passkey };
+    const { options } = await send('/v1/webauthn-credentials/options?as=' + encodeURIComponent(me.principal.id), {});
+    const made = createCredential(options, url.origin);
+    await send('/v1/webauthn-credentials?as=' + encodeURIComponent(me.principal.id), { name: label, credential: made.response });
+    await writeKey(keyPath, JSON.stringify({ webauthn_credential: made.credential }), !process.env.FOUNDATION_RUNTIME_KEY_FILE);
+    key = { credential: made.credential };
   }
   if (key?.token && action !== 'connect') { await upgrade(hostname() + ' の ' + (agentName || 'AI')); }
-  // A passkey this server no longer knows leaves connecting to start over; anything else needs it.
-  if (key?.passkey) {
+  // A credential this server no longer knows leaves connecting to start over; anything else needs it.
+  if (key?.credential) {
     try { token = await prove(); }
     catch (error) { if (action !== 'connect') throw error; key = null; token = null; }
   }

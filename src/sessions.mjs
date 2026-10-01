@@ -3,8 +3,8 @@ import { digest } from './crypto.mjs';
 
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
 
-// What proving who one is leaves, the same for every principal: which proof (an email reached, a key's signature, a
-// passkey), which address or key it was, and when. An operation that wants a fresher or stronger proof asks again.
+// What proving who one is leaves, the same for every principal: which proof (an email reached, a WebAuthn signature),
+// which address or credential it was, and when. An operation that wants a fresher or stronger proof asks again.
 export const SESSION_TTL = 14 * 86400_000;
 // A session handed over as a bearer token, to a program rather than a browser, lasts an hour; the program proves
 // itself again after that.

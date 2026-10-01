@@ -1,6 +1,6 @@
 import { createHash, generateKeyPairSync, createPrivateKey, randomBytes, sign } from 'node:crypto';
 
-// A WebAuthn authenticator in software, for wherever there is no browser: it makes a passkey and answers challenges
+// A WebAuthn authenticator in software, for wherever there is no browser: it makes a credential and answers challenges
 // with it, writing what a browser writes. The origin it signs is the one it is actually talking to, so a challenge
 // relayed from elsewhere is refused there. It reports the user present - the principal running it asked - and never
 // verified, since it checks no face, fingerprint or PIN.
@@ -21,9 +21,9 @@ function cbor(value) {
 const counter = count => { const bytes = Buffer.alloc(4); bytes.writeUInt32BE(count); return bytes; };
 const clientData = (type, challenge, origin) => Buffer.from(JSON.stringify({ type, challenge, origin, crossOrigin: false }));
 
-// Makes a passkey for the options a server gave. Returns what to send back, and what to keep: the passkey's id, its
+// Makes a credential for the options a server gave. Returns what to send back, and what to keep: the credential's id, its
 // private key, and whose it is.
-export function createPasskey(options, origin) {
+export function createCredential(options, origin) {
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const point = publicKey.export({ format: 'jwk' }), id = randomBytes(32);
   const cose = cbor(new Map([[1, 2], [3, -7], [-1, 1], [-2, Buffer.from(point.x, 'base64url')], [-3, Buffer.from(point.y, 'base64url')]]));
@@ -31,14 +31,14 @@ export function createPasskey(options, origin) {
     Buffer.from([id.length >> 8, id.length & 255]), id, cose]);
   const response = { id: b64(id), rawId: b64(id), type: 'public-key', clientExtensionResults: {},
     response: { clientDataJSON: b64(clientData('webauthn.create', options.challenge, origin)), attestationObject: b64(cbor({ fmt: 'none', attStmt: {}, authData })), transports: [] } };
-  return { response, passkey: { id: b64(id), user: options.user.id, private_key: privateKey.export({ format: 'jwk' }) } };
+  return { response, credential: { id: b64(id), user: options.user.id, private_key: privateKey.export({ format: 'jwk' }) } };
 }
 
-// Answers a sign-in challenge with a kept passkey.
-export function answer(options, passkey, origin) {
+// Answers a sign-in challenge with a kept credential.
+export function answer(options, credential, origin) {
   const data = clientData('webauthn.get', options.challenge, origin);
   const authData = Buffer.concat([sha256(options.rpId), Buffer.from([PRESENT]), counter(0)]);
-  const signature = sign('sha256', Buffer.concat([authData, sha256(data)]), createPrivateKey({ key: passkey.private_key, format: 'jwk' }));
-  return { id: passkey.id, rawId: passkey.id, type: 'public-key', clientExtensionResults: {},
-    response: { clientDataJSON: b64(data), authenticatorData: b64(authData), signature: b64(signature), userHandle: passkey.user } };
+  const signature = sign('sha256', Buffer.concat([authData, sha256(data)]), createPrivateKey({ key: credential.private_key, format: 'jwk' }));
+  return { id: credential.id, rawId: credential.id, type: 'public-key', clientExtensionResults: {},
+    response: { clientDataJSON: b64(data), authenticatorData: b64(authData), signature: b64(signature), userHandle: credential.user } };
 }

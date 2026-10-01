@@ -184,14 +184,14 @@ const bytes = text => Uint8Array.from(atob(text.replace(/-/g, '+').replace(/_/g,
 const text64 = buffer => btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const described = list => (list || []).map(item => ({ ...item, id: bytes(item.id) }));
 async function createPasskey(name) {
-  const { options } = await api('/v1/passkeys/options', { method: 'POST', data: {} });
+  const { options } = await api('/v1/webauthn-credentials/options', { method: 'POST', data: {} });
   const made = await navigator.credentials.create({ publicKey: { ...options, challenge: bytes(options.challenge), user: { ...options.user, id: bytes(options.user.id) }, excludeCredentials: described(options.excludeCredentials) } });
   const credential = { id: made.id, rawId: text64(made.rawId), type: made.type, authenticatorAttachment: made.authenticatorAttachment ?? undefined, clientExtensionResults: made.getClientExtensionResults(),
     response: { clientDataJSON: text64(made.response.clientDataJSON), attestationObject: text64(made.response.attestationObject), transports: made.response.getTransports?.() || [] } };
-  return api('/v1/passkeys', { method: 'POST', data: { name, credential } });
+  return api('/v1/webauthn-credentials', { method: 'POST', data: { name, credential } });
 }
 async function answerPasskey() {
-  const { options } = await api('/v1/signin/passkey/options', { method: 'POST', data: {} });
+  const { options } = await api('/v1/signin/webauthn/options', { method: 'POST', data: {} });
   const given = await navigator.credentials.get({ publicKey: { ...options, challenge: bytes(options.challenge), allowCredentials: described(options.allowCredentials) } });
   return { id: given.id, rawId: text64(given.rawId), type: given.type, clientExtensionResults: given.getClientExtensionResults(),
     response: { clientDataJSON: text64(given.response.clientDataJSON), authenticatorData: text64(given.response.authenticatorData), signature: text64(given.response.signature),
@@ -238,7 +238,7 @@ async function showSignin({ email = '', message = '' } = {}) {
     setBusy(true); document.querySelector('#passkey-error').textContent = '';
     try {
       const credential = await answerPasskey();
-      location.replace((await api('/v1/signin/passkey', { method: 'POST', data: { credential, return_to: returnTo() } })).return_to);
+      location.replace((await api('/v1/signin/webauthn', { method: 'POST', data: { credential, return_to: returnTo() } })).return_to);
     } catch (error) {
       if (!passkeyButton.isConnected) return;
       document.querySelector('#passkey-error').textContent = passkeyDeclined(error) ? 'パスキーでサインインできませんでした。' : error.message; setBusy(false);
@@ -483,7 +483,7 @@ function render() {
       <div class="agent-actions"><button class="text-button danger" data-action="remove-passkey" data-id="${esc(item.id)}">削除</button></div></article>`;
     shell(`<header class="page-heading"><h1>アカウント</h1><p>${esc(state.user.email)}</p></header>
       <section class="resource-section" aria-labelledby="passkeys-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="passkeys-title">パスキー</h2><p>顔や指紋、端末のPINでサインインできます。</p></div></div>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} パスキーを追加</button>` : ''}</div>
-        ${(state.passkeys || []).length ? `<div class="agent-list">${state.passkeys.map(passkeyRow).join('')}</div>` : ''}</section>
+        ${(state.webauthn_credentials || []).length ? `<div class="agent-list">${state.webauthn_credentials.map(passkeyRow).join('')}</div>` : ''}</section>
       <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">データのダウンロード</h2><p>シークレットの値、サービスとの接続、自分で定義したサービス、登録した相手の一覧が JSON ファイルで入ります。オブジェクトは入りません。</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ダウンロード</a></div></section>
       <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">開発者</h2></div></div><a class="button secondary" href="/principals#apps">アプリの登録</a></div></section>`);
     return;
@@ -1289,8 +1289,8 @@ document.addEventListener('click', async (event) => {
     if (action === 'close-dialog') closeDialog();
     if (action === 'add-passkey') addPasskey();
     if (action === 'remove-passkey') {
-      const item = (state.passkeys || []).find(entry => entry.id === id);
-      if (item) confirmRemoval(item.name + ' を削除しますか？', 'このパスキーではサインインできなくなります。', () => api('/v1/passkeys/' + encodeURIComponent(item.id), { method: 'DELETE', data: {} }));
+      const item = (state.webauthn_credentials || []).find(entry => entry.id === id);
+      if (item) confirmRemoval(item.name + ' を削除しますか？', 'このパスキーではサインインできなくなります。', () => api('/v1/webauthn-credentials/' + encodeURIComponent(item.id), { method: 'DELETE', data: {} }));
     }
     if (action === 'retry-page') { target.disabled = true; try { await refresh(); } finally { if (target.isConnected) target.disabled = false; } }
     if (action === 'retry-signin') { target.disabled = true; await showSignin(); }

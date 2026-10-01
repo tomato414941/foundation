@@ -1,7 +1,7 @@
 {
   "name": "@tomato414941/foundation",
   "version": "0.16.0",
-  "description": "Foundation CLI: give this machine a passkey, and hand what is kept to a command without it passing through the agent.",
+  "description": "Foundation CLI: give this machine a WebAuthn credential, and hand what is kept to a command without it passing through the agent.",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -12,7 +12,7 @@
   "files": [
     "runtime.mjs",
     "env-name.mjs",
-    "passkey.mjs"
+    "webauthn.mjs"
   ],
   "repository": {
     "type": "git",

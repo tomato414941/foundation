@@ -55,9 +55,9 @@ export const schemas = {
   Signin: object({ email: errorCode(string, 'invalid_email'), return_to: errorCode(string, 'invalid_return') }, ['email']),
   VerifySignin: object({ email: errorCode(string, 'invalid_email'), token: errorCode(string, 'invalid_link'), return_to: errorCode(string, 'invalid_return') }, ['email', 'token']),
   PendingSignin: object({ email: string, expires_at: time, resend_at: time }, ['email', 'expires_at', 'resend_at']),
-  Passkey: object({ id: string, name: string, created_at: iso, last_used_at: nullable(iso) }, ['id', 'name', 'created_at', 'last_used_at']),
-  AddPasskey: object({ name: errorCode(string, 'invalid_name'), credential: { ...object(), description: 'The RegistrationResponseJSON the authenticator made from the options.' } }, ['name', 'credential']),
-  PasskeySignin: object({ credential: { ...object(), description: 'The AuthenticationResponseJSON answering the options.' }, session: choice(['cookie', 'token']), return_to: errorCode(string, 'invalid_return') }, ['credential']),
+  WebauthnCredential: object({ id: string, name: string, created_at: iso, last_used_at: nullable(iso) }, ['id', 'name', 'created_at', 'last_used_at']),
+  AddWebauthnCredential: object({ name: errorCode(string, 'invalid_name'), credential: { ...object(), description: 'The RegistrationResponseJSON the authenticator made from the options.' } }, ['name', 'credential']),
+  WebauthnSignin: object({ credential: { ...object(), description: 'The AuthenticationResponseJSON answering the options.' }, session: choice(['cookie', 'token']), return_to: errorCode(string, 'invalid_return') }, ['credential']),
   CreatePrincipal: object({ name: string, alias: string, actor: boolean, key: boolean }),
   Rename: object({ name: resourceName }, ['name']),
   Principal: object({ id: principalId, name: string, created_at: iso, alias: nullable(string),
@@ -145,10 +145,10 @@ export const schemas = {
   StorageUsage: object({ count: integer, bytes: integer, count_max: integer, bytes_max: integer }, ['count', 'bytes', 'count_max', 'bytes_max']),
   AuditEntry: object({ id, actor_id: string, action: string, object_type: string, object_id: string, detail: object(), at: iso }, ['id', 'actor_id', 'action', 'object_type', 'object_id', 'detail', 'at']),
   Overview: object({ user: object({ id: principalId, email: nullable(string) }, ['id', 'email']), principal: ref('Principal'),
-    passkeys: array(ref('Passkey')), secrets: array(ref('Secret')), connections: array(ref('Connection')), apps: array(ref('App')), services: array(ref('Service')),
+    webauthn_credentials: array(ref('WebauthnCredential')), secrets: array(ref('Secret')), connections: array(ref('Connection')), apps: array(ref('App')), services: array(ref('Service')),
     catalog: array(ref('ServiceDescription')), principals: array(ref('Principal')), actors: array(ref('Principal')), requests: array(ref('Request')),
     functions: array(ref('Function')), settings: nullable(ref('Settings')), environments: array(ref('Environment')), compute: ref('Compute') },
-    ['user', 'principal', 'passkeys', 'secrets', 'connections', 'apps', 'services', 'catalog', 'principals', 'actors', 'requests', 'functions', 'settings', 'environments', 'compute']),
+    ['user', 'principal', 'webauthn_credentials', 'secrets', 'connections', 'apps', 'services', 'catalog', 'principals', 'actors', 'requests', 'functions', 'settings', 'environments', 'compute']),
   Export: object({ exported_at: iso, owner: nullable(string), origin: string,
     secrets: array({ allOf: [ref('Secret'), object({ content: string, encoding: { const: 'base64' } }, ['content', 'encoding'])] }),
     connections: array({ allOf: [ref('Connection'), object({ fields: map(string) })] }), services: array(object({ id, name: string, definition: object() })), principals: array(ref('Principal')) }, ['exported_at', 'owner', 'origin', 'secrets', 'connections', 'services', 'principals']),
@@ -185,15 +185,15 @@ export const routes = [
   { name: 'catalog', path: '/v1/services', methods: { get: op('listCatalog', 'List built-in services and connection methods', many('services', 'ServiceDescription'), { security: [] }) } },
   { name: 'return', path: '/v1/requests/{requestId}/return', methods: { get: op('getRequestReturn', 'Read the return destination for a request', result('back', object({ name: string, return_url: string, refresh_url: string }, ['name', 'return_url', 'refresh_url'])), { security: [] }) } },
   { name: 'exchangeLink', path: '/v1/links/exchange', methods: { post: okay('exchangeLink', 'Exchange a one-use request link for a request-scoped cookie', { input: object({ link: string, request_id: requestId }, ['link', 'request_id']), security: [], 'x-input-error': 'invalid_link' }) } },
-  { name: 'passkeySigninOptions', path: '/v1/signin/passkey/options', methods: { post: op('passkeySigninOptions', 'Start signing in with a passkey', object({ options: object() }, ['options']), { input: 'Empty', security: [], description: 'WebAuthn request options (PublicKeyCredentialRequestOptionsJSON). Any registered passkey may answer.' }) } },
-  { name: 'passkeySignin', path: '/v1/signin/passkey', methods: { post: op('passkeySignin', 'Sign in with a passkey', object({ ok: { const: true }, return_to: string, token: string, expires_at: time }), { input: 'PasskeySignin', security: [], 'x-input-error': 'invalid_passkey',
+  { name: 'webauthnSigninOptions', path: '/v1/signin/webauthn/options', methods: { post: op('webauthnSigninOptions', 'Start signing in with a WebAuthn credential', object({ options: object() }, ['options']), { input: 'Empty', security: [], description: 'WebAuthn request options (PublicKeyCredentialRequestOptionsJSON). Any registered WebAuthn credential may answer.' }) } },
+  { name: 'webauthnSignin', path: '/v1/signin/webauthn', methods: { post: op('webauthnSignin', 'Sign in with a WebAuthn credential', object({ ok: { const: true }, return_to: string, token: string, expires_at: time }), { input: 'WebauthnSignin', security: [], 'x-input-error': 'invalid_webauthn_credential',
     description: 'A browser (session "cookie", the default) gets a session cookie and must send Origin; a program (session "token") gets a bearer session token that lasts an hour.' }) } },
-  { name: 'passkeys', path: '/v1/passkeys', methods: {
-    get: op('listPasskeys', 'List the passkeys a principal proves itself with', object({ passkeys: array(ref('Passkey')) }, ['passkeys']), { parameters: [as] }),
-    post: op('addPasskey', 'Register a passkey', object({ passkey: ref('Passkey'), backed_up: boolean }, ['passkey', 'backed_up']), { input: 'AddPasskey', status: 201, parameters: [as], 'x-input-error': 'invalid_passkey' }),
+  { name: 'webauthnCredentials', path: '/v1/webauthn-credentials', methods: {
+    get: op('listWebauthnCredentials', 'List the WebAuthn credentials a principal proves itself with', object({ webauthn_credentials: array(ref('WebauthnCredential')) }, ['webauthn_credentials']), { parameters: [as] }),
+    post: op('addWebauthnCredential', 'Register a WebAuthn credential', object({ webauthn_credential: ref('WebauthnCredential'), backed_up: boolean }, ['webauthn_credential', 'backed_up']), { input: 'AddWebauthnCredential', status: 201, parameters: [as], 'x-input-error': 'invalid_webauthn_credential' }),
   } },
-  { name: 'passkeyOptions', path: '/v1/passkeys/options', methods: { post: op('passkeyOptions', 'Start registering a passkey', object({ options: object() }, ['options']), { input: 'Empty', parameters: [as], description: 'WebAuthn creation options (PublicKeyCredentialCreationOptionsJSON) for the caller.' }) } },
-  { name: 'passkey', path: '/v1/passkeys/{passkeyId}', methods: { delete: okay('removePasskey', 'Remove a passkey; the sessions it proved end') } },
+  { name: 'webauthnCredentialOptions', path: '/v1/webauthn-credentials/options', methods: { post: op('webauthnCredentialOptions', 'Start registering a WebAuthn credential', object({ options: object() }, ['options']), { input: 'Empty', parameters: [as], description: 'WebAuthn creation options (PublicKeyCredentialCreationOptionsJSON) for the caller.' }) } },
+  { name: 'webauthnCredential', path: '/v1/webauthn-credentials/{credentialId}', methods: { delete: okay('removeWebauthnCredential', 'Remove a WebAuthn credential; the sessions it proved end') } },
   { name: 'me', path: '/v1/principals/me', methods: {
     get: op('getMe', 'Read the caller and its current access', 'Me'), patch: op('renameMe', 'Rename the caller', one('Principal'), { input: 'Rename', 'x-input-error': 'invalid_name' }),
     delete: okay('removeMe', 'Remove the caller and its resources'),
@@ -288,9 +288,9 @@ export const routes = [
   { name: 'export', path: '/v1/export', methods: { get: op('exportData', 'Download the holder’s data, including secret bytes', 'Export', { parameters: [as], description: 'Contains base64 secret content. Handle as private data. Managed connections export metadata, not renewable state.' }) } },
 ];
 
-// A passkey is known by the id its authenticator gave it (base64url, up to 1023 bytes).
-const passkeyId = { type: 'string', pattern: '^[A-Za-z0-9_-]{16,1364}$' };
-const pathSchemas = { principalId, requestId, resourceId: id, keyId: id, commandId: id, passkeyId };
+// A WebAuthn credential is known by the id its authenticator gave it (base64url, up to 1023 bytes).
+const credentialId = { type: 'string', pattern: '^[A-Za-z0-9_-]{16,1364}$' };
+const pathSchemas = { principalId, requestId, resourceId: id, keyId: id, commandId: id, credentialId };
 const compiled = routes.map(route => {
   const names = [...route.path.matchAll(/\{(\w+)\}/g)].map(match => match[1]);
   const pattern = route.path.split(/(\{\w+\})/).map(part => part.startsWith('{')

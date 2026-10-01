@@ -7,7 +7,7 @@ import { Store } from './store.mjs';
 import { digest } from './crypto.mjs';
 import { Principals } from './principals.mjs';
 import { Sessions, OAuthFlows, TOKEN_TTL } from './sessions.mjs';
-import { Passkeys } from './passkeys.mjs';
+import { WebauthnCredentials } from './webauthn.mjs';
 import { Emails } from './emails.mjs';
 import { Challenges, randomSecret } from './challenges.mjs';
 import { RequestActions } from './request-actions.mjs';
@@ -139,7 +139,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   };
   const resources = new Resources(store);
   const principals = new Principals(store), sessions = new Sessions(store), flows = new OAuthFlows(store), emails = new Emails(store);
-  const challenges = new Challenges(store, challengeSecret ? { secret: challengeSecret } : {}), passkeys = new Passkeys(store, challenges);
+  const challenges = new Challenges(store, challengeSecret ? { secret: challengeSecret } : {}), webauthn = new WebauthnCredentials(store, challenges);
   const authorization = new Authorization(principals);
   const services = new Services(store, resources, catalog, { authorization, ...(serviceFetcher ? { fetcher: serviceFetcher } : {}) });
   const apps = new Apps(store, resources, services), connections = new Connections(store, resources, services, apps);
@@ -301,8 +301,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       if (!browser && !token) fail(401, 'invalid_token', 'Bearer形式のキーを指定してください。');
       // Becoming a principal needs no connection and no signin: the request carries nothing to protect.
       const becoming = at === 'principals' && method === 'POST' && browser && !cookieToken(req);
-      // Proving oneself with a passkey carries nothing to protect either; a browser's session is still asked its origin there.
-      const proving = ['passkeySigninOptions', 'passkeySignin'].includes(at);
+      // Proving oneself by WebAuthn carries nothing to protect either; a browser's session is still asked its origin there.
+      const proving = ['webauthnSigninOptions', 'webauthnSignin'].includes(at);
       if (browser && !['GET', 'HEAD'].includes(method) && !becoming && !proving) requireOrigin(req, origin);
       if (!browser && req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
       // Signing in by email: a single-use link is sent to the address, and opening it proves receiving there. The
@@ -355,22 +355,22 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         setNamedCookie('fdn_signin', '', 0);
         return send(200, { ok: true, return_to: destination });
       }
-      // Signing in with a passkey, from anywhere: a browser gets its session as a cookie, a program as an hour's token.
-      if (at === 'passkeySigninOptions' && method === 'POST') {
-        rateLimit('passkey-options:' + clientAddress(req), 60, 600_000);
-        return send(200, { options: await passkeys.authentication({ origin }) });
+      // Signing in by WebAuthn, from anywhere: a browser gets its session as a cookie, a program as an hour's token.
+      if (at === 'webauthnSigninOptions' && method === 'POST') {
+        rateLimit('webauthn-options:' + clientAddress(req), 60, 600_000);
+        return send(200, { options: await webauthn.authentication({ origin }) });
       }
-      if (at === 'passkeySignin' && method === 'POST') {
+      if (at === 'webauthnSignin' && method === 'POST') {
         rateLimit('signin:' + clientAddress(req), 30, 600_000);
         const input = await body(req), asToken = input?.session === 'token';
         if (!asToken) requireOrigin(req, origin);
         const destination = asToken ? '/' : returnPath(input?.return_to);
-        const proven = await passkeys.authenticate(input?.credential, { origin });
+        const proven = await webauthn.authenticate(input?.credential, { origin });
         if (asToken) {
-          const token = sessions.create(proven.principalId, { proof: 'passkey', ref: proven.passkeyId }, { ttl: TOKEN_TTL });
+          const token = sessions.create(proven.principalId, { proof: 'webauthn', ref: proven.credentialId }, { ttl: TOKEN_TTL });
           return send(200, { token, expires_at: Date.now() + TOKEN_TTL });
         }
-        const next = sessions.create(proven.principalId, { proof: 'passkey', ref: proven.passkeyId });
+        const next = sessions.create(proven.principalId, { proof: 'webauthn', ref: proven.credentialId });
         sessions.remove(cookieToken(req));
         setCookie(next, SESSION_AGE);
         return send(200, { ok: true, return_to: destination });
@@ -420,7 +420,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         });
         return send(201, { principal: made.principal, token: made.issued.token, key: { id: made.issued.id } });
       }
-      // A bearer token is an access key, or a session a program was given for proving itself with a passkey.
+      // A bearer token is an access key, or a session a program was given for proving itself by WebAuthn.
       const tokenSession = !browser && !known ? sessions.get(token) : undefined;
       if (!browser && !known && !tokenSession) notApproved();
       if (tokenSession) subject = { id: tokenSession.principal_id, via: { kind: 'session', id: tokenSession.id } };
@@ -537,29 +537,29 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       }
       if (subject.via.kind === 'link') fail(401, 'signin_required', 'サインインしてください。');
       // Principals: oneself, and those one owns.
-      // A principal's passkeys: added by the principal itself, listed by whoever reads it, removed by it or its owner.
-      if (at === 'passkeys' && method === 'GET') {
+      // A principal's WebAuthn credentials: added by the principal itself, listed by whoever reads it, removed by it or its owner.
+      if (at === 'webauthnCredentials' && method === 'GET') {
         permit('read', 'principal', holderId);
-        return send(200, { passkeys: passkeys.list(holderId).map(row => passkeys.view(row)) });
+        return send(200, { webauthn_credentials: webauthn.list(holderId).map(row => webauthn.view(row)) });
       }
-      if (at === 'passkeyOptions' && method === 'POST') {
-        permit('add-passkey', 'principal', holderId);
-        return send(200, { options: await passkeys.registration(holderId, { origin, userName: emails.of(holderId)[0] || self.name || holderId }) });
+      if (at === 'webauthnCredentialOptions' && method === 'POST') {
+        permit('add-webauthn-credential', 'principal', holderId);
+        return send(200, { options: await webauthn.registration(holderId, { origin, userName: emails.of(holderId)[0] || self.name || holderId }) });
       }
-      if (at === 'passkeys' && method === 'POST') {
-        permit('add-passkey', 'principal', holderId);
+      if (at === 'webauthnCredentials' && method === 'POST') {
+        permit('add-webauthn-credential', 'principal', holderId);
         const input = await inputBody();
-        const made = await passkeys.register(holderId, input.credential, { origin, name: input.name });
-        auditLog.write(subject.id, 'passkey.added', 'principal', holderId, { passkey: made.passkey.id });
-        return send(201, { passkey: passkeys.view(made.passkey), backed_up: made.backedUp });
+        const made = await webauthn.register(holderId, input.credential, { origin, name: input.name });
+        auditLog.write(subject.id, 'webauthn_credential.added', 'principal', holderId, { credential: made.credential.id });
+        return send(201, { webauthn_credential: webauthn.view(made.credential), backed_up: made.backedUp });
       }
-      if (at === 'passkey' && method === 'DELETE') {
-        const row = passkeys.get(route.params.passkeyId);
+      if (at === 'webauthnCredential' && method === 'DELETE') {
+        const row = webauthn.get(route.params.credentialId);
         if (!row) fail(404, 'not_found', 'パスキーが見つかりません。');
-        permit('remove-passkey', 'principal', row.principal_id);
+        permit('remove-webauthn-credential', 'principal', row.principal_id);
         still();
-        passkeys.remove(row);
-        auditLog.write(subject.id, 'passkey.removed', 'principal', row.principal_id, { passkey: row.id });
+        webauthn.remove(row);
+        auditLog.write(subject.id, 'webauthn_credential.removed', 'principal', row.principal_id, { credential: row.id });
         return send(200, { ok: true });
       }
       if (at === 'me') {
@@ -1007,7 +1007,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // The holder's screen, in one answer.
       if (at === 'overview' && method === 'GET') {
         permit('overview', 'principal', holderId);
-        return send(200, { user: { id: subject.id, email: emails.of(subject.id)[0] ?? null }, principal: self, passkeys: passkeys.list(holderId).map(row => passkeys.view(row)), secrets: secrets.list(holderId).map(row => secrets.view(row)), connections: connections.list(holderId).map(row => connections.view(row, { owner: true })),
+        return send(200, { user: { id: subject.id, email: emails.of(subject.id)[0] ?? null }, principal: self, webauthn_credentials: webauthn.list(holderId).map(row => webauthn.view(row)), secrets: secrets.list(holderId).map(row => secrets.view(row)), connections: connections.list(holderId).map(row => connections.view(row, { owner: true })),
           apps: [...apps.list(holderId).map(row => apps.view(row, { owner: true })), ...apps.lent(holderId).map(row => apps.view(row)), ...apps.offeredAll()],
           services: [...services.list(holderId).map(row => services.view(row, { owner: true })), ...services.lent(holderId).map(row => services.view(row))],
           catalog: services.catalogView(), principals: principals.owned(holderId), actors: principals.actorsOf(holderId),
@@ -1189,7 +1189,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   return {
-    server, store, resources, services, secrets, connections, inputs, apps, objects, environments, principals, sessions, emails, challenges, passkeys, flows, requests, requestActions, settings, auditLog,
+    server, store, resources, services, secrets, connections, inputs, apps, objects, environments, principals, sessions, emails, challenges, webauthn, flows, requests, requestActions, settings, auditLog,
     async close() {
       clearInterval(timer);
       if (server.listening) await new Promise((resolve) => { server.close(resolve); server.closeIdleConnections(); });

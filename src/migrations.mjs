@@ -1,6 +1,6 @@
 import { checkDefinition } from './service-definition.mjs';
 
-export const SCHEMA_VERSION = 39;
+export const SCHEMA_VERSION = 40;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -13,6 +13,7 @@ export const STEPS = {
   37: provenHere,
   38: addressesOnly,
   39: passkeys,
+  40: webauthnCredentials,
 };
 
 // A one-time data conversion, never a runtime parser for earlier definitions. Refuse any expression that cannot
@@ -285,34 +286,64 @@ function addressesOnly({ db }) {
 // A principal may prove itself with a passkey: a public key it registered, answered with a WebAuthn signature from a
 // browser, a security key or the CLI alike. What is waiting to be answered may now be a passkey's challenge too.
 function passkeys({ db }) {
-  db.exec(`${PASSKEYS}
+  db.exec(`
+    CREATE TABLE passkeys (
+      id TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, public_key BLOB NOT NULL,
+      sign_count INTEGER NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER
+    );
+    CREATE INDEX passkeys_principal ON passkeys(principal_id);
     DROP TABLE challenges;
-    ${CHALLENGES}`);
+    CREATE TABLE challenges (
+      id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','passkey')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL,
+      created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at);
+    CREATE INDEX challenges_handle ON challenges(handle);`);
 }
 passkeys.rebuilds = true;
 
-// A session: what proving who one is leaves, for any principal. proof is how (an email reached, a key's signature, a
-// passkey), proof_ref which address or key, and proved_at when; an operation that needs a fresh or stronger proof
-// asks again.
+// What is kept is a WebAuthn credential, made by a browser, a security key or the CLI - and only some of those are
+// passkeys - so it is called that, as the specification calls it, and a session proved by one says webauthn. A key
+// proof of another kind never came to be. What was waiting to be answered ends.
+function webauthnCredentials({ db }) {
+  db.exec(`
+    DROP INDEX passkeys_principal; ALTER TABLE passkeys RENAME TO webauthn_credentials;
+    CREATE INDEX webauthn_credentials_principal ON webauthn_credentials(principal_id);
+    CREATE TABLE sessions_next (
+      id TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+      proof TEXT NOT NULL CHECK(proof IN ('email','webauthn')), proof_ref TEXT NOT NULL, proved_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    );
+    INSERT INTO sessions_next SELECT id, principal_id, CASE proof WHEN 'passkey' THEN 'webauthn' ELSE proof END, proof_ref, proved_at, created_at, expires_at FROM sessions;
+    DROP TABLE sessions; ALTER TABLE sessions_next RENAME TO sessions;
+    CREATE INDEX sessions_principal ON sessions(principal_id, expires_at);
+    DROP TABLE challenges;
+    ${CHALLENGES}`);
+}
+webauthnCredentials.rebuilds = true;
+
+// A session: what proving who one is leaves, for any principal. proof is how (an email reached, a WebAuthn signature),
+// proof_ref which address or credential, and proved_at when; an operation that needs a fresh or stronger proof asks
+// again.
 const SESSIONS = `
   CREATE TABLE sessions (
     id TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-    proof TEXT NOT NULL CHECK(proof IN ('email','key','passkey')), proof_ref TEXT NOT NULL, proved_at INTEGER NOT NULL,
+    proof TEXT NOT NULL CHECK(proof IN ('email','webauthn')), proof_ref TEXT NOT NULL, proved_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
   );
   CREATE INDEX sessions_principal ON sessions(principal_id, expires_at);`;
-// A passkey: the public key (COSE) of a WebAuthn credential and how many times its authenticator says it has signed.
-const PASSKEYS = `
-  CREATE TABLE passkeys (
+// A WebAuthn credential's record: its public key (COSE) and how many times its authenticator says it has signed.
+const WEBAUTHN_CREDENTIALS = `
+  CREATE TABLE webauthn_credentials (
     id TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, public_key BLOB NOT NULL,
     sign_count INTEGER NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER
   );
-  CREATE INDEX passkeys_principal ON passkeys(principal_id);`;
+  CREATE INDEX webauthn_credentials_principal ON webauthn_credentials(principal_id);`;
 // A single-use value someone must give back to prove something: that they receive at an address (subject). handle
 // lets the browser that asked find what it is waiting for; it proves nothing.
 const CHALLENGES = `
   CREATE TABLE challenges (
-    id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','passkey')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL,
+    id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL,
     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
   );
   CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at);
@@ -349,7 +380,7 @@ export const SCHEMA = `
   CREATE INDEX emails_principal ON emails(principal_id);
   ${SESSIONS}
   ${CHALLENGES}
-  ${PASSKEYS}
+  ${WEBAUTHN_CREDENTIALS}
   CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);
   CREATE TABLE requests (
     id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,
