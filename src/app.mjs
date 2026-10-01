@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { Store } from './store.mjs';
 import { digest } from './crypto.mjs';
 import { Principals } from './principals.mjs';
-import { Sessions, OAuthFlows } from './sessions.mjs';
+import { Sessions, OAuthFlows, TOKEN_TTL } from './sessions.mjs';
+import { Passkeys } from './passkeys.mjs';
 import { Emails } from './emails.mjs';
 import { Challenges, randomSecret } from './challenges.mjs';
 import { RequestActions } from './request-actions.mjs';
@@ -138,7 +139,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   };
   const resources = new Resources(store);
   const principals = new Principals(store), sessions = new Sessions(store), flows = new OAuthFlows(store), emails = new Emails(store);
-  const challenges = new Challenges(store, challengeSecret ? { secret: challengeSecret } : {});
+  const challenges = new Challenges(store, challengeSecret ? { secret: challengeSecret } : {}), passkeys = new Passkeys(store, challenges);
   const authorization = new Authorization(principals);
   const services = new Services(store, resources, catalog, { authorization, ...(serviceFetcher ? { fetcher: serviceFetcher } : {}) });
   const apps = new Apps(store, resources, services), connections = new Connections(store, resources, services, apps);
@@ -300,7 +301,9 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       if (!browser && !token) fail(401, 'invalid_token', 'Bearer形式のキーを指定してください。');
       // Becoming a principal needs no connection and no signin: the request carries nothing to protect.
       const becoming = at === 'principals' && method === 'POST' && browser && !cookieToken(req);
-      if (browser && !['GET', 'HEAD'].includes(method) && !becoming) requireOrigin(req, origin);
+      // Proving oneself with a passkey carries nothing to protect either; a browser's session is still asked its origin there.
+      const proving = ['passkeySigninOptions', 'passkeySignin'].includes(at);
+      if (browser && !['GET', 'HEAD'].includes(method) && !becoming && !proving) requireOrigin(req, origin);
       if (!browser && req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
       // Signing in by email: a single-use link is sent to the address, and opening it proves receiving there. The
       // browser that asked keeps only a handle, to show what it is waiting for; the link works in any browser.
@@ -352,6 +355,26 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         setNamedCookie('fdn_signin', '', 0);
         return send(200, { ok: true, return_to: destination });
       }
+      // Signing in with a passkey, from anywhere: a browser gets its session as a cookie, a program as an hour's token.
+      if (at === 'passkeySigninOptions' && method === 'POST') {
+        rateLimit('passkey-options:' + clientAddress(req), 60, 600_000);
+        return send(200, { options: await passkeys.authentication({ origin }) });
+      }
+      if (at === 'passkeySignin' && method === 'POST') {
+        rateLimit('signin:' + clientAddress(req), 30, 600_000);
+        const input = await body(req), asToken = input?.session === 'token';
+        if (!asToken) requireOrigin(req, origin);
+        const destination = asToken ? '/' : returnPath(input?.return_to);
+        const proven = await passkeys.authenticate(input?.credential, { origin });
+        if (asToken) {
+          const token = sessions.create(proven.principalId, { proof: 'passkey', ref: proven.passkeyId }, { ttl: TOKEN_TTL });
+          return send(200, { token, expires_at: Date.now() + TOKEN_TTL });
+        }
+        const next = sessions.create(proven.principalId, { proof: 'passkey', ref: proven.passkeyId });
+        sessions.remove(cookieToken(req));
+        setCookie(next, SESSION_AGE);
+        return send(200, { ok: true, return_to: destination });
+      }
       if (at === 'signin' && method === 'DELETE') {
         challenges.forget(signinHandle); setNamedCookie('fdn_signin', '', 0);
         return send(200, { ok: true });
@@ -397,8 +420,11 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         });
         return send(201, { principal: made.principal, token: made.issued.token, key: { id: made.issued.id } });
       }
-      if (!browser && !known) notApproved();
-      if (!browser) subject = { id: known.principal.id, via: { kind: 'key', id: known.key.id, ...(known.key.environment ? { environment: known.key.environment } : {}) } };
+      // A bearer token is an access key, or a session a program was given for proving itself with a passkey.
+      const tokenSession = !browser && !known ? sessions.get(token) : undefined;
+      if (!browser && !known && !tokenSession) notApproved();
+      if (tokenSession) subject = { id: tokenSession.principal_id, via: { kind: 'session', id: tokenSession.id } };
+      else if (!browser) subject = { id: known.principal.id, via: { kind: 'key', id: known.key.id, ...(known.key.environment ? { environment: known.key.environment } : {}) } };
       else {
         const linked = requestRoute?.requestId ? principals.authenticateLink(readCookie(req, 'fdn_link'), requestRoute.requestId) : undefined;
         if (linked) subject = { id: linked.principal.id, via: { kind: 'link', ...linked.link } };
@@ -418,13 +444,13 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         asked_ = { subject, action: { name }, resource: { type, ...(id === undefined ? {} : { id }), holder } };
         if (authorization.allowed(asked_).decision) return;
         if (subject.via.kind === 'link') fail(401, 'signin_required', 'サインインしてください。');
-        if (subject.via.kind === 'key' && holder !== subject.id && !principals.relationsOf(subject.id).length) notApproved();
+        if (!browser && holder !== subject.id && !principals.relationsOf(subject.id).length) notApproved();
         fail(403, 'forbidden', 'この操作は許可されていません。');
       };
       // Reading an upload may outlive its authorization. Recheck before committing any change: what the subject came in
       // by, and the same question the route asked before reading.
       const still = () => {
-        if (subject.via.kind === 'session') { if (signedIn(req).id !== session.id) fail(401, 'signin_required', 'サインインしてください。'); }
+        if (subject.via.kind === 'session') { if (sessions.get(browser ? cookieToken(req) : token)?.id !== subject.via.id) fail(401, 'signin_required', 'サインインしてください。'); }
         else if (subject.via.kind === 'link') { if (!principals.hasLink(subject.id, subject.via.id)) fail(401, 'signin_required', 'このリンクは使えません。元の画面から開き直してください。'); }
         else if (!principals.hasKey(subject.id, subject.via.id)) fail(401, 'not_approved', 'このキーは失効しています。');
         if (asked_ && !authorization.allowed(asked_).decision) fail(401, 'not_approved', 'この相手の代わりには動けません。');
@@ -511,6 +537,31 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       }
       if (subject.via.kind === 'link') fail(401, 'signin_required', 'サインインしてください。');
       // Principals: oneself, and those one owns.
+      // A principal's passkeys: added by the principal itself, listed by whoever reads it, removed by it or its owner.
+      if (at === 'passkeys' && method === 'GET') {
+        permit('read', 'principal', holderId);
+        return send(200, { passkeys: passkeys.list(holderId).map(row => passkeys.view(row)) });
+      }
+      if (at === 'passkeyOptions' && method === 'POST') {
+        permit('add-passkey', 'principal', holderId);
+        return send(200, { options: await passkeys.registration(holderId, { origin, userName: emails.of(holderId)[0] || self.name || holderId }) });
+      }
+      if (at === 'passkeys' && method === 'POST') {
+        permit('add-passkey', 'principal', holderId);
+        const input = await inputBody();
+        const made = await passkeys.register(holderId, input.credential, { origin, name: input.name });
+        auditLog.write(subject.id, 'passkey.added', 'principal', holderId, { passkey: made.passkey.id });
+        return send(201, { passkey: passkeys.view(made.passkey), backed_up: made.backedUp });
+      }
+      if (at === 'passkey' && method === 'DELETE') {
+        const row = passkeys.get(route.params.passkeyId);
+        if (!row) fail(404, 'not_found', 'パスキーが見つかりません。');
+        permit('remove-passkey', 'principal', row.principal_id);
+        still();
+        passkeys.remove(row);
+        auditLog.write(subject.id, 'passkey.removed', 'principal', row.principal_id, { passkey: row.id });
+        return send(200, { ok: true });
+      }
       if (at === 'me') {
         if (method === 'GET') return send(200, { principal: self, ...(subject.via.kind === 'key' ? { key: { id: subject.via.id, ...(subject.via.environment ? { environment: subject.via.environment } : {}) } } : {}), acts_for: actsFor, owners: principals.ownersOf(subject.id), keys: principals.keys(subject.id), requests: requests.list(subject.id, 'pending').map(row => viewRequest(row, origin, { code: true })) });
         if (method === 'PATCH') { const input = await inputBody(); return send(200, { principal: principals.rename(subject.id, nameValue(input.name)) }); }
@@ -1138,7 +1189,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   return {
-    server, store, resources, services, secrets, connections, inputs, apps, objects, environments, principals, sessions, emails, challenges, flows, requests, requestActions, settings, auditLog,
+    server, store, resources, services, secrets, connections, inputs, apps, objects, environments, principals, sessions, emails, challenges, passkeys, flows, requests, requestActions, settings, auditLog,
     async close() {
       clearInterval(timer);
       if (server.listening) await new Promise((resolve) => { server.close(resolve); server.closeIdleConnections(); });

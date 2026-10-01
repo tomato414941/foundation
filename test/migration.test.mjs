@@ -40,7 +40,7 @@ async function storedDefinitions(t, definitions) {
     store.db.prepare('UPDATE connections SET state=? WHERE resource_id=?').run(vault.seal(vault.open(row.state, `connection:${row.holder_id}:${row.resource_id}`), `credential:${row.holder_id}:${row.resource_id}`), row.resource_id);
   }
   store.db.exec('DROP INDEX connections_app; ALTER TABLE connections RENAME TO credentials; CREATE INDEX credentials_app ON credentials(app_id) WHERE app_id IS NOT NULL;');
-  store.db.exec(`DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
+  store.db.exec(`DROP TABLE passkeys; DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
     CREATE TABLE sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL, expires_at INTEGER NOT NULL);
     CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);`);
   const snapshots = Object.fromEntries(['resources', 'secrets', 'credentials', 'relations'].map(table => [table, store.db.prepare(`SELECT ${SNAPSHOT_COLUMNS[table] ?? '*'} FROM ${table}`).all()]));
@@ -322,7 +322,7 @@ test('36版のセッションでサインインしていたアドレスは、そ
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
   const { principals } = modules(store);
   principals.ensure(USER_A); principals.ensure(USER_B);
-  store.db.exec(`DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
+  store.db.exec(`DROP TABLE passkeys; DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
     CREATE TABLE sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL, expires_at INTEGER NOT NULL);
     CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);`);
   const old = store.db.prepare('INSERT INTO sessions VALUES (?,?,?,?,?)');
@@ -341,15 +341,15 @@ test('36版のセッションでサインインしていたアドレスは、そ
   assert.deepEqual(next.db.prepare('PRAGMA foreign_key_check').all(), []);
 });
 
-test('37版のアドレスは、持ち主との結びつきだけを残して38版へ移る', async t => {
+test('37版のアドレスは、持ち主との結びつきだけを残して移る', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-38-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
   modules(store).principals.ensure(USER_A);
-  store.db.exec(`DROP TABLE emails; CREATE TABLE emails (address TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, verified_at INTEGER NOT NULL);
+  store.db.exec(`DROP TABLE passkeys; DROP TABLE emails; CREATE TABLE emails (address TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, verified_at INTEGER NOT NULL);
     CREATE INDEX emails_principal ON emails(principal_id);`);
   store.db.prepare('INSERT INTO emails VALUES (?,?,?)').run('owner@example.test', USER_A, 1);
   store.db.exec('PRAGMA user_version=37'); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
-  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, 38);
+  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   assert.deepEqual(next.db.prepare('SELECT * FROM emails').all().map(row => ({ ...row })), [{ address: 'owner@example.test', principal_id: USER_A }]);
 });

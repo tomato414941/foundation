@@ -6,14 +6,17 @@ const TOKEN = /^[A-Za-z0-9_-]{43}$/;
 // What proving who one is leaves, the same for every principal: which proof (an email reached, a key's signature, a
 // passkey), which address or key it was, and when. An operation that wants a fresher or stronger proof asks again.
 export const SESSION_TTL = 14 * 86400_000;
+// A session handed over as a bearer token, to a program rather than a browser, lasts an hour; the program proves
+// itself again after that.
+export const TOKEN_TTL = 3600_000;
 const SESSIONS_MAX = 20;
 export class Sessions {
   constructor(store) { this.store = store; this.db = store.db; }
-  create(principalId, { proof, ref }) {
+  create(principalId, { proof, ref }, { ttl = SESSION_TTL } = {}) {
     this.store.sweep();
     const token = randomBytes(32).toString('base64url'), id = digest(token), now = Date.now();
     this.db.prepare(`DELETE FROM sessions WHERE principal_id=? AND id IN (SELECT id FROM sessions WHERE principal_id=? ORDER BY expires_at DESC LIMIT -1 OFFSET ${SESSIONS_MAX - 1})`).run(principalId, principalId);
-    this.db.prepare('INSERT INTO sessions (id,principal_id,proof,proof_ref,proved_at,created_at,expires_at) VALUES (?,?,?,?,?,?,?)').run(id, principalId, proof, ref, now, now, now + SESSION_TTL);
+    this.db.prepare('INSERT INTO sessions (id,principal_id,proof,proof_ref,proved_at,created_at,expires_at) VALUES (?,?,?,?,?,?,?)').run(id, principalId, proof, ref, now, now, now + ttl);
     return token;
   }
   get(token) {

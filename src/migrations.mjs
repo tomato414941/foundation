@@ -1,6 +1,6 @@
 import { checkDefinition } from './service-definition.mjs';
 
-export const SCHEMA_VERSION = 38;
+export const SCHEMA_VERSION = 39;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -12,6 +12,7 @@ export const STEPS = {
   36: connectionsWithMethods,
   37: provenHere,
   38: addressesOnly,
+  39: passkeys,
 };
 
 // A one-time data conversion, never a runtime parser for earlier definitions. Refuse any expression that cannot
@@ -281,6 +282,15 @@ function addressesOnly({ db }) {
   db.exec('ALTER TABLE emails DROP COLUMN verified_at');
 }
 
+// A principal may prove itself with a passkey: a public key it registered, answered with a WebAuthn signature from a
+// browser, a security key or the CLI alike. What is waiting to be answered may now be a passkey's challenge too.
+function passkeys({ db }) {
+  db.exec(`${PASSKEYS}
+    DROP TABLE challenges;
+    ${CHALLENGES}`);
+}
+passkeys.rebuilds = true;
+
 // A session: what proving who one is leaves, for any principal. proof is how (an email reached, a key's signature, a
 // passkey), proof_ref which address or key, and proved_at when; an operation that needs a fresh or stronger proof
 // asks again.
@@ -291,11 +301,18 @@ const SESSIONS = `
     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
   );
   CREATE INDEX sessions_principal ON sessions(principal_id, expires_at);`;
+// A passkey: the public key (COSE) of a WebAuthn credential and how many times its authenticator says it has signed.
+const PASSKEYS = `
+  CREATE TABLE passkeys (
+    id TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, public_key BLOB NOT NULL,
+    sign_count INTEGER NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER
+  );
+  CREATE INDEX passkeys_principal ON passkeys(principal_id);`;
 // A single-use value someone must give back to prove something: that they receive at an address (subject). handle
 // lets the browser that asked find what it is waiting for; it proves nothing.
 const CHALLENGES = `
   CREATE TABLE challenges (
-    id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL,
+    id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','passkey')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL,
     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
   );
   CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at);
@@ -332,6 +349,7 @@ export const SCHEMA = `
   CREATE INDEX emails_principal ON emails(principal_id);
   ${SESSIONS}
   ${CHALLENGES}
+  ${PASSKEYS}
   CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);
   CREATE TABLE requests (
     id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,

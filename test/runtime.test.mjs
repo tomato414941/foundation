@@ -397,3 +397,26 @@ test('FOUNDATION_AGENT gives each agent its own key file and default name', asyn
   const other = await execute(['exec', ...inputs, '--', process.execPath, '-e', '0'], { ...base, FOUNDATION_AGENT: 'codex' });
   assert.equal(other.code, 1); assert.match(other.err, /not_approved/, 'each key is approved on its own');
 });
+
+test('アクセスキーの鍵ファイルを持つAIは、次に動いたときにパスキーへ移り、鍵ファイルには秘密鍵だけが残る', async t => {
+  const f = await outputFixture(t), before = await readFile(f.env.FOUNDATION_RUNTIME_KEY_FILE, 'utf8');
+  const run = await execute(['api', 'GET', '/v1/principals/me'], f.env);
+  assert.equal(run.code, 0, run.err);
+  assert.equal(JSON.parse(run.out).principal.id, f.runtime.id);
+  const after = JSON.parse(await readFile(f.env.FOUNDATION_RUNTIME_KEY_FILE, 'utf8'));
+  assert.equal(after.passkey.private_key.kty, 'EC');
+  assert.ok(!JSON.stringify(after).includes(before.trim()), 'the access key is no longer kept in the file');
+  assert.equal((await stat(f.env.FOUNDATION_RUNTIME_KEY_FILE)).mode & 0o777, 0o600);
+  const passkeys = (await f.request('/v1/passkeys?as=' + f.runtime.id, { anonymous: true, token: f.runtime.token })).json.passkeys;
+  assert.deepEqual(passkeys.map(item => item.id), [after.passkey.id]);
+  assert.equal(JSON.parse((await execute(['api', 'GET', '/v1/principals/me'], f.env)).out).principal.id, f.runtime.id, 'and the passkey is what proves it from then on');
+});
+
+test('tokenはパスキーで証明して1時間のトークンを出し、それでAPIをそのAIとして呼べる', async t => {
+  const f = await outputFixture(t);
+  const printed = await execute(['token'], f.env);
+  assert.equal(printed.code, 0, printed.err);
+  const me = await f.request('/v1/principals/me', { anonymous: true, token: printed.out.trim() });
+  assert.equal(me.status, 200, me.text);
+  assert.equal(me.json.principal.id, f.runtime.id);
+});

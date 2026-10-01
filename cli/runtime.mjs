@@ -8,43 +8,49 @@ import { homedir, hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { validEnvName } from './env-name.mjs';
+import { createPasskey, answer } from './passkey.mjs';
 
 // This program does only what the agent running it cannot do for itself.
 //
 // Everything Foundation offers is plain HTTP, and an agent with the key can call it directly; a command
 // wrapper around those calls would only narrow what the agent is allowed to think of. Two things are left:
-//   connect  say which server, and make the key. It has to exist as a private file before anything can be asked, and whoever
-//            makes it must not print it.
+//   connect  say which server, and make this machine's passkey. Its private key has to exist as a private file
+//            before anything can be asked, and nothing prints it.
+//   token    prove this machine with its passkey and print a bearer token that lasts an hour, for calling the API.
 //   exec     hand what is kept to a command, or keep a file it creates, without the bytes passing through
 //            the agent. If the agent fetched the values itself they would be in its context.
 // There is also `api`, which is for people and for scripts rather than for agents: it attaches the key to a
 // request and prints what comes back. One escape hatch, so that the API can grow without this program growing
 // a verb for every endpoint, and without deciding for an agent how it ought to use any of them.
-// The key file: what Foundation issued, kept private. Nothing here makes a key; Foundation does, once, when this
-// machine becomes a principal, and the file is the only place it lives afterwards.
+// The key file: this machine's passkey - its id, whose it is, and its private key - kept private. The private key is
+// made here and never leaves; Foundation keeps only the public half. A file from before passkeys holds the access key
+// Foundation issued instead, and is replaced with a passkey the first time it is used.
 async function readKey(path, { missingOk = false } = {}) {
   let handle;
   try {
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const info = await handle.stat();
-    if (!info.isFile() || info.size > 512 || (info.mode & 0o077) || (process.getuid && info.uid !== process.getuid())) throw new Error('Runtime key file must be owned by the current user and private (mode 600).');
-    const token = (await handle.readFile('utf8')).trim();
-    if (!/^fdn_[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('Invalid runtime key file.');
-    return token;
+    if (!info.isFile() || info.size > 4096 || (info.mode & 0o077) || (process.getuid && info.uid !== process.getuid())) throw new Error('Runtime key file must be owned by the current user and private (mode 600).');
+    const content = (await handle.readFile('utf8')).trim();
+    if (/^fdn_[A-Za-z0-9_-]{43}$/.test(content)) return { token: content };
+    let passkey;
+    try { ({ passkey } = JSON.parse(content)); } catch {}
+    if (typeof passkey?.id !== 'string' || typeof passkey.user !== 'string' || passkey.private_key?.kty !== 'EC') throw new Error('Invalid runtime key file.');
+    return { passkey };
   } catch (error) {
     if (error.code === 'ENOENT') { if (missingOk) return null; throw new Error('No key yet. Run: foundation connect'); }
     if (error.code === 'ELOOP') throw new Error('Runtime key file must not be a symbolic link.');
     throw error;
   } finally { await handle?.close(); }
 }
-async function writeKey(path, token, privateDirectory) {
+async function writeKey(path, content, privateDirectory) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   if (privateDirectory) {
     const directory = await stat(dirname(path));
     if ((directory.mode & 0o077) || (process.getuid && directory.uid !== process.getuid())) throw new Error('Foundation key directory must be owned by the current user and private (mode 700).');
   }
   const created = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
-  try { await created.writeFile(token + '\n'); await created.sync(); } finally { await created.close(); }
+  try { await created.writeFile(content + '\n'); await created.sync(); } finally { await created.close(); }
 }
 
 const VERSION = createRequire(import.meta.url)('./package.json').version;
@@ -99,10 +105,11 @@ async function outputBytes(path) {
 const HELP = `Usage: foundation <command> [options]
 
 Commands:
-  connect [<url>] [--name <name>]      Make this machine's key and ask the owner to approve it.
+  connect [<url>] [--name <name>]      Make this machine's passkey and ask the owner to approve it.
                                        With <url>, remember that Foundation server for later commands.
+  token                                Print a bearer token for the API, valid for an hour.
   api <METHOD> </path> [--json <body>] [--from <file>] [--type <media-type>]
-                                       Send one request to the Foundation API with the key attached.
+                                       Send one request to the Foundation API as this machine.
   exec <ENV>=<name> [...] -- <command> [args...]
                                        Run a command with saved values in its environment.
   exec --inputs '<json>' -- <command>  The same, with files, structured inputs, or a connection for a service by id.
@@ -115,7 +122,7 @@ API specification:
 Environment:
   FOUNDATION_URL               The server for this run (otherwise the one saved by connect).
   FOUNDATION_AGENT             Your name, such as claude or codex; gives each agent its own key file.
-  FOUNDATION_RUNTIME_KEY_FILE  Where the key file is.
+  FOUNDATION_RUNTIME_KEY_FILE  Where the key file (this machine's passkey) is.
 `;
 
 async function main() {
@@ -174,13 +181,25 @@ async function main() {
     const content = parsed.values.from !== undefined ? await readFile(parsed.values.from) : parsed.values.json !== undefined ? Buffer.from(parsed.values.json) : method === 'GET' ? undefined : Buffer.from('{}');
     call = { method, target: parsed.positionals[1], body: content,
       type: parsed.values.type || (parsed.values.from !== undefined ? 'application/octet-stream' : 'application/json') };
+  } else if (action === 'token') {
+    if (args.length) throw new Error('Usage: token');
   } else if (!(action === 'exec' && (names.length || output) && command.length)) {
-    throw new Error('Usage: connect [<url>] [--name <name>] | exec [<ENV>=<name> ... | --inputs <json>] [--output <json>] -- <command> [args...] | api <method> </path> [--json <body>] [--from <file>]');
+    throw new Error('Usage: connect [<url>] [--name <name>] | token | exec [<ENV>=<name> ... | --inputs <json>] [--output <json>] -- <command> [args...] | api <method> </path> [--json <body>] [--from <file>]');
   }
   const url = serverUrl(connectTo ?? configured);
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
   const publicSpec = action === 'api' && call.method === 'GET' && call.target === '/openapi.json';
-  let token = publicSpec ? null : await readKey(keyPath, { missingOk: action === 'connect' });
+  let key = publicSpec ? null : await readKey(keyPath, { missingOk: action === 'connect' }), token = key?.token ?? null;
+  // A passkey proves this machine for an hour at a time: the challenge is answered for the server actually reached.
+  async function prove() {
+    const begin = await fetch(url.origin + '/v1/signin/passkey/options', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', redirect: 'error', signal: AbortSignal.timeout(30_000) });
+    const { options } = await begin.json();
+    const response = await fetch(url.origin + '/v1/signin/passkey', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ credential: answer(options, key.passkey, url.origin), session: 'token' }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
+    const proven = await response.json();
+    if (!response.ok || typeof proven.token !== 'string') throw new Error('Foundation did not accept this machine\'s passkey (' + response.status + ', ' + (proven.error?.code || 'unknown') + ').');
+    return proven.token;
+  }
   async function send(target, payload, { accept, method = 'POST', type = 'application/json' } = {}) {
     const response = await fetch(url.origin + target, { method, headers: { authorization: 'Bearer ' + token, ...(payload === undefined ? {} : { 'content-type': type }) },
       body: payload === undefined ? undefined : type === 'application/json' ? JSON.stringify(payload) : payload, redirect: 'error', signal: AbortSignal.timeout(30_000) });
@@ -188,7 +207,25 @@ async function main() {
     if (!response.ok && !accept?.(data)) throw new Error('Foundation request failed (' + response.status + ', ' + (data.error?.code || 'unknown') + '). ' + (data.error?.message || 'Check the connection and runtime permission.'));
     return data;
   }
-  // One request, with the key attached and the answer printed as it came. Nothing here knows the endpoints.
+  // A key file from before passkeys: register a passkey with the access key it holds, and keep the passkey instead.
+  // A lent machine's key stays as it is; it ends with the machine.
+  async function upgrade(label) {
+    const me = await send('/v1/principals/me', undefined, { method: 'GET' });
+    if (me.key?.environment) return;
+    const { options } = await send('/v1/passkeys/options?as=' + encodeURIComponent(me.principal.id), {});
+    const made = createPasskey(options, url.origin);
+    await send('/v1/passkeys?as=' + encodeURIComponent(me.principal.id), { name: label, credential: made.response });
+    await writeKey(keyPath, JSON.stringify({ passkey: made.passkey }), !process.env.FOUNDATION_RUNTIME_KEY_FILE);
+    key = { passkey: made.passkey };
+  }
+  if (key?.token && action !== 'connect') { await upgrade(hostname() + ' の ' + (agentName || 'AI')); }
+  // A passkey this server no longer knows leaves connecting to start over; anything else needs it.
+  if (key?.passkey) {
+    try { token = await prove(); }
+    catch (error) { if (action !== 'connect') throw error; key = null; token = null; }
+  }
+  if (action === 'token') { console.log(token); return; }
+  // One request, as this machine, and the answer printed as it came. Nothing here knows the endpoints.
   if (action === 'api') {
     if (!publicSpec && !/[?&]as=/.test(call.target)) {
       const me = await send('/v1/principals/me', undefined, { method: 'GET', accept: () => true });
@@ -211,16 +248,18 @@ async function main() {
     let me = null;
     if (token) me = await send('/v1/principals/me', undefined, { method: 'GET', accept: data => data.error?.code === 'not_approved' });
     if (!token || me?.error) {
+      key = null;
       const response = await fetch(url.origin + '/v1/principals', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: wanted }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
       const made = await response.json();
       if (!response.ok || !/^fdn_[A-Za-z0-9_-]{43}$/.test(made.token ?? '')) throw new Error('Foundation did not issue a key (' + response.status + ', ' + (made.error?.code || 'unknown') + ').');
-      await writeKey(keyPath, made.token, !process.env.FOUNDATION_RUNTIME_KEY_FILE);
       token = made.token; me = null;
+      key = { token };
     }
+    if (key?.token) { await upgrade(wanted); token = await prove(); }
     const answer = me?.acts_for?.length ? null : await send('/v1/requests', { authorization_details: [{ type: 'relation', relation: 'actor' }] });
     if (connectTo !== undefined) await saveUrl(url.origin);
     console.log(answer === null ? 'Already approved on ' + url.origin + '.' : JSON.stringify(answer, null, 2));
-    console.log('\nKey file: ' + keyPath + '\nServer: ' + url.origin + (connectTo !== undefined ? ' (saved to ' + configPath() + ')' : '') + '\nEverything else is HTTP: Authorization: Bearer <the contents of that file>');
+    console.log('\nKey file: ' + keyPath + '\nServer: ' + url.origin + (connectTo !== undefined ? ' (saved to ' + configPath() + ')' : '') + '\nEverything else is HTTP: Authorization: Bearer $(foundation token)');
     return;
   }
   // Nothing runs before someone has accepted this key: a key that acts for nobody reaches only its own empty resources,

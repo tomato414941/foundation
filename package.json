@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@fedify/uri-template": "2.3.10",
+    "@simplewebauthn/server": "14.0.3",
     "ajv": "8.20.0",
     "swagger-ui-dist": "5.33.0"
   },

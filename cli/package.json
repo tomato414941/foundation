@@ -1,7 +1,7 @@
 {
   "name": "@tomato414941/foundation",
-  "version": "0.15.0",
-  "description": "Foundation CLI: make a key, and hand what is kept to a command without it passing through the agent.",
+  "version": "0.16.0",
+  "description": "Foundation CLI: give this machine a passkey, and hand what is kept to a command without it passing through the agent.",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -11,7 +11,8 @@
   },
   "files": [
     "runtime.mjs",
-    "env-name.mjs"
+    "env-name.mjs",
+    "passkey.mjs"
   ],
   "repository": {
     "type": "git",
