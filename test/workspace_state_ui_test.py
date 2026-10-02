@@ -4,11 +4,14 @@ import hashlib
 from pathlib import Path
 from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright, expect
+from ui_flows import allow_foundation, plain, virtual_authenticator, make_key, unlock, injected
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--base', required=True)
 parser.add_argument('--screenshots')
 args = parser.parse_args()
+# Passkeys need a hostname.
+args.base = args.base.replace('127.0.0.1', 'localhost')
 shots = Path(args.screenshots) if args.screenshots else None
 if shots:
     shots.mkdir(parents=True, exist_ok=True)
@@ -19,6 +22,7 @@ with sync_playwright() as p:
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
+    virtual_authenticator(context, page)
     email = 'workspace-state@example.test'
     page.goto(args.base + '/secrets', wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill(email)
@@ -29,10 +33,13 @@ with sync_playwright() as p:
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/secrets')
     page.wait_for_load_state('networkidle')
+    allow_foundation(context.request, args.base)
+    # Values are edited with the owner's key, from a passkey.
+    make_key(page, args.base)
 
     def keep(kind, name, value='fixture-only'):
         result = context.request.put(args.base + '/v1/resources?' + urlencode({'kind': kind, 'name': name}),
-                                     data=value, headers={'Origin': args.base, 'content-type': 'text/plain'})
+                                     data=plain(value) if kind == 'secret' else value, headers={'Origin': args.base, 'content-type': 'application/json' if kind == 'secret' else 'text/plain'})
         assert result.ok, result.text()
         return result.json()['resource']
 
@@ -51,7 +58,7 @@ with sync_playwright() as p:
     value_resource = keep('secret', 'value-draft')
     for name in ['root.txt', 'reports/one.txt', 'reports/sub/two.txt', '資料 #?/three.txt']:
         keep('object', name)
-    page.reload(wait_until='networkidle')
+    unlock(page, args.base)
 
     # 名前と値を別々に編集中、フォーカスを外しても取得結果から入力を保護する。
     go('サービス')
@@ -106,7 +113,7 @@ with sync_playwright() as p:
     value_form.get_by_role('button', name='保存', exact=True).click()
     expect(page.get_by_role('heading', name='arrived-during-value-load', exact=True)).to_be_visible()
     expect(value_row.get_by_role('button', name='値を編集', exact=True)).to_be_focused()
-    saved = context.request.get(args.base + '/v1/resources/' + value_resource['id'] + '/content')
+    saved = injected(context.request, args.base, 'value-draft')
     assert saved.text() == 'saved-value'
     print('値の取得中から保存まで編集を継続する。')
 
@@ -135,6 +142,8 @@ with sync_playwright() as p:
     page.unroute('**/v1/overview')
     page.get_by_role('button', name='再読み込み', exact=True).click()
     expect(page.get_by_role('heading', name='saved-name', exact=True)).to_be_visible()
+    # 読み込み直した画面では、鍵を開き直してから値を編集する。
+    unlock(page, args.base)
 
     # キャッシュ済みの画面と編集中の値は、背景通信の失敗時にも操作を続けられる。
     go('サービス')

@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright, expect
+from ui_flows import allow_foundation, plain
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--base', required=True)
@@ -29,6 +30,7 @@ with sync_playwright() as p:
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/secrets')
     page.wait_for_load_state('networkidle')
+    allow_foundation(context.request, args.base)
     created = context.request.put(args.base + '/v1/resources?kind=object&name=navigation.txt',
                                   data='fixture-only', headers={'Origin': args.base, 'content-type': 'text/plain'})
     assert created.ok, created.status
@@ -59,7 +61,7 @@ with sync_playwright() as p:
         field.fill('Slack')
         if width == 1280:
             created = context.request.put(args.base + '/v1/resources?kind=secret&name=background-example',
-                                          data='fixture-only', headers={'Origin': args.base, 'content-type': 'text/plain'})
+                                          data=plain('fixture-only'), headers={'Origin': args.base, 'content-type': 'application/json'})
             assert created.ok, created.status
         assert pending, '最新情報の確認を進める'
         for route in pending:
@@ -140,7 +142,7 @@ with sync_playwright() as p:
 
     # ほかのクライアントで追加された情報を、移動時に取り込む。
     created = context.request.put(args.base + '/v1/resources?kind=secret&name=navigation-example',
-                                  data='fixture-only', headers={'Origin': args.base, 'content-type': 'text/plain'})
+                                  data=plain('fixture-only'), headers={'Origin': args.base, 'content-type': 'application/json'})
     assert created.ok, created.status
     go('サービス')
     go('シークレット')

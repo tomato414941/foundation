@@ -8,11 +8,14 @@ import subprocess
 import tempfile
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
+from ui_flows import virtual_authenticator, make_key, unlock, hand_to_foundation
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--base', required=True)
 parser.add_argument('--screenshots', required=True)
 args = parser.parse_args()
+# Passkeys need a hostname.
+args.base = args.base.replace('127.0.0.1', 'localhost')
 shots = Path(args.screenshots)
 shots.mkdir(parents=True, exist_ok=True)
 runtime = Path(__file__).resolve().parents[1] / 'cli' / 'runtime.mjs'
@@ -43,6 +46,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
+    virtual_authenticator(context, page)
     page.goto(args.base, wait_until='networkidle')
     expect(page.get_by_role('heading', name='サインイン', exact=True)).to_be_visible()
     expect(page.get_by_role('link', name='API仕様', exact=True)).to_have_attribute('href', '/docs')
@@ -123,7 +127,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     assert approved.returncode == 0, approved.stderr
     assert len(json.loads(approved.stdout)['acts_for']) == 1
 
-    page.goto(args.base + '/secrets', wait_until='networkidle')
+    # Secrets need a key, from a passkey; the AI uses them through Foundation, handed over here.
+    make_key(page, args.base)
+    unlock(page, args.base)
+    hand_to_foundation(page)
     page.get_by_role('button', name='追加', exact=True).click()
     form = page.get_by_role('dialog')
     form.get_by_label('名前', exact=True).fill('onboarding-demo')

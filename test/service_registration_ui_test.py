@@ -4,11 +4,14 @@ import hashlib
 from pathlib import Path
 from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright, expect
+from ui_flows import virtual_authenticator, make_key, unlock, hand_to_foundation
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--base', required=True)
 parser.add_argument('--screenshots')
 args = parser.parse_args()
+# Passkeys need a hostname.
+args.base = args.base.replace('127.0.0.1', 'localhost')
 shots = Path(args.screenshots) if args.screenshots else None
 if shots:
     shots.mkdir(parents=True, exist_ok=True)
@@ -107,7 +110,11 @@ with sync_playwright() as p:
     expect(dialog).not_to_be_visible()
     expect(page.get_by_role('article', name='追加のアプリ', exact=True)).to_be_visible()
 
-    page.goto(args.base + '/secrets', wait_until='networkidle')
+    # A secret needs the holder's key, from a passkey.
+    virtual_authenticator(context, page)
+    make_key(page, args.base)
+    unlock(page, args.base)
+    hand_to_foundation(page)
     page.get_by_role('button', name='追加', exact=True).click()
     dialog.get_by_label('名前', exact=True).fill('任意の名前/a')
     dialog.get_by_label('値', exact=True).fill('fixture-private-token')

@@ -1,5 +1,11 @@
 import { requestResultView, knownRequestKind, detailOf } from './request-view.js';
 import { pages, brand, pageTitle, workspaceView, pendingView } from './workspace-view.js';
+import * as sealing from './sealing.js';
+// The holder's own key: unwrapped by a passkey (its PRF output) and held only in this page, which seals what it
+// keeps and opens what was sealed for it. Nothing of it is written anywhere.
+let own = null, keyUnavailable = false;
+const PRF_INPUT = new TextEncoder().encode('foundation-key');
+const b64 = sealing.toBase64url, unb64 = sealing.fromBase64url;
 
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
 const publicInfo = document.querySelector('#public-info');
@@ -186,15 +192,47 @@ const passkeysWork = () => Boolean(window.PublicKeyCredential && navigator.crede
 const bytes = text => Uint8Array.from(atob(text.replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0));
 const text64 = buffer => btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const described = list => (list || []).map(item => ({ ...item, id: bytes(item.id) }));
+// What a passkey yields for the key (PRF), when it does; the results never go to the server.
+const yieldedBy = made => { const first = made.getClientExtensionResults().prf?.results?.first; return first ? new Uint8Array(first) : null; };
 async function makePasskey(options) {
-  const made = await navigator.credentials.create({ publicKey: { ...options, challenge: bytes(options.challenge), user: { ...options.user, id: bytes(options.user.id) }, excludeCredentials: described(options.excludeCredentials) } });
-  return { id: made.id, rawId: text64(made.rawId), type: made.type, authenticatorAttachment: made.authenticatorAttachment ?? undefined, clientExtensionResults: made.getClientExtensionResults(),
-    response: { clientDataJSON: text64(made.response.clientDataJSON), attestationObject: text64(made.response.attestationObject), transports: made.response.getTransports?.() || [] } };
+  const made = await navigator.credentials.create({ publicKey: { ...options, challenge: bytes(options.challenge), user: { ...options.user, id: bytes(options.user.id) }, excludeCredentials: described(options.excludeCredentials), extensions: { prf: { eval: { first: PRF_INPUT } } } } });
+  return { yielded: yieldedBy(made), credential: { id: made.id, rawId: text64(made.rawId), type: made.type, authenticatorAttachment: made.authenticatorAttachment ?? undefined, clientExtensionResults: {},
+    response: { clientDataJSON: text64(made.response.clientDataJSON), attestationObject: text64(made.response.attestationObject), transports: made.response.getTransports?.() || [] } } };
+}
+// The key behind this passkey: unwrapped with what it yields; made and wrapped, when the principal has none yet.
+async function unlockWith(credentialId, yielded) {
+  own = null; keyUnavailable = false;
+  if (!yielded) { keyUnavailable = true; return; }
+  const { key } = await api('/v1/key');
+  if (!key.public_key) {
+    const made = await sealing.generateKey();
+    await api('/v1/key', { method: 'PUT', data: { public_key: b64(made.publicKey), wraps: { [credentialId]: b64(await sealing.wrap(made.privateKey, yielded)) } } });
+    own = made; return;
+  }
+  const wrapped = key.wraps?.[credentialId];
+  if (!wrapped) { keyUnavailable = true; return; }
+  own = { privateKey: await sealing.unwrap(unb64(wrapped), yielded), publicKey: unb64(key.public_key) };
+}
+// Opening the key again, after the page was loaded anew: any passkey of the holder's, asked here for what it yields.
+async function unlockKey() {
+  const given = await navigator.credentials.get({ publicKey: { challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: location.hostname, allowCredentials: [], userVerification: 'preferred', extensions: { prf: { eval: { first: PRF_INPUT } } } } });
+  await unlockWith(given.id, yieldedBy(given));
+}
+// Where to go once signed in: within the workspace without leaving the page, so the key just opened stays.
+async function arrive(path) {
+  const url = new URL(path, location.origin);
+  if (!own || !Object.hasOwn(pages, url.pathname) || requestId) { location.replace(path); return; }
+  history.replaceState(null, '', url.href);
+  pagePath = url.pathname; page = pagePath.slice(1) || 'home'; objectPrefix = prefixOf(url);
+  await refresh();
 }
 const deviceName = () => navigator.userAgentData?.platform || 'この端末';
 async function createPasskey(name) {
   const { options } = await api('/v1/webauthn-credentials/options', { method: 'POST', data: {} });
-  return api('/v1/webauthn-credentials', { method: 'POST', data: { name, credential: await makePasskey(options) } });
+  const { credential, yielded } = await makePasskey(options);
+  // With the key open here, it is wrapped for the new passkey too, so that one opens it as well.
+  const wrap = own && yielded ? { wrap: b64(await sealing.wrap(own.privateKey, yielded)) } : {};
+  return api('/v1/webauthn-credentials', { method: 'POST', data: { name, credential, ...wrap } });
 }
 // Starting with a passkey alone: the passkey made here makes the principal, signed in at once.
 function startWithPasskey() {
@@ -205,19 +243,23 @@ function startWithPasskey() {
     let made;
     try {
       const { options } = await api('/v1/principals/options', { method: 'POST', data: { name } });
-      made = await api('/v1/principals', { method: 'POST', data: { name, webauthn_credential: { name: deviceName(), credential: await makePasskey(options) }, return_to: returnTo() } });
+      const { credential, yielded } = await makePasskey(options);
+      // The principal's key, made with its first passkey and wrapped for it.
+      const key = yielded ? await sealing.generateKey() : null;
+      made = await api('/v1/principals', { method: 'POST', data: { name, webauthn_credential: { name: deviceName(), credential, ...(key ? { wrap: b64(await sealing.wrap(key.privateKey, yielded)) } : {}) }, ...(key ? { public_key: b64(key.publicKey) } : {}), return_to: returnTo() } });
+      own = key; keyUnavailable = !key;
     } catch (error) { throw passkeyDeclined(error) ? new Error('パスキーを作れませんでした。') : error; }
-    if (made.backed_up) { location.replace(made.return_to); return; }
+    if (made.backed_up) { closeDialog(); await arrive(made.return_to); return; }
     openDialog(`<h2 id="dialog-title">パスキーを作成しました</h2><p>このパスキーは、この端末にしか保存されていません。</p><button class="button primary full" type="button" id="start-continue">続ける</button>`);
-    dialog.querySelector('#start-continue').addEventListener('click', () => location.replace(made.return_to));
+    dialog.querySelector('#start-continue').addEventListener('click', () => { closeDialog(); void arrive(made.return_to); });
   });
 }
 async function answerPasskey() {
   const { options } = await api('/v1/signin/webauthn/options', { method: 'POST', data: {} });
-  const given = await navigator.credentials.get({ publicKey: { ...options, challenge: bytes(options.challenge), allowCredentials: described(options.allowCredentials) } });
-  return { id: given.id, rawId: text64(given.rawId), type: given.type, clientExtensionResults: given.getClientExtensionResults(),
+  const given = await navigator.credentials.get({ publicKey: { ...options, challenge: bytes(options.challenge), allowCredentials: described(options.allowCredentials), extensions: { prf: { eval: { first: PRF_INPUT } } } } });
+  return { yielded: yieldedBy(given), credential: { id: given.id, rawId: text64(given.rawId), type: given.type, clientExtensionResults: {},
     response: { clientDataJSON: text64(given.response.clientDataJSON), authenticatorData: text64(given.response.authenticatorData), signature: text64(given.response.signature),
-      ...(given.response.userHandle ? { userHandle: text64(given.response.userHandle) } : {}) } };
+      ...(given.response.userHandle ? { userHandle: text64(given.response.userHandle) } : {}) } } };
 }
 // What the browser says when the person closes its passkey dialog, or has no passkey here.
 const passkeyDeclined = error => error?.name === 'NotAllowedError' || error?.name === 'AbortError';
@@ -260,8 +302,10 @@ async function showSignin({ email = '', message = '' } = {}) {
     if (busy) return;
     setBusy(true); document.querySelector('#passkey-error').textContent = '';
     try {
-      const credential = await answerPasskey();
-      location.replace((await api('/v1/signin/webauthn', { method: 'POST', data: { credential, return_to: returnTo() } })).return_to);
+      const { credential, yielded } = await answerPasskey();
+      const signed = await api('/v1/signin/webauthn', { method: 'POST', data: { credential, return_to: returnTo() } });
+      await unlockWith(credential.id, yielded);
+      await arrive(signed.return_to);
     } catch (error) {
       if (!passkeyButton.isConnected) return;
       document.querySelector('#passkey-error').textContent = passkeyDeclined(error) ? 'パスキーでサインインできませんでした。' : error.message; setBusy(false);
@@ -467,7 +511,8 @@ function secretRow(entry) {
     <div class="secret-field"><span class="secret-field-label">値</span><section class="secret-value-panel" aria-label="値"></section></div>
     <footer class="secret-footer"><p class="secret-meta">${secretMeta(entry)}</p><div class="secret-actions"><button class="text-button danger" data-action="drop-secret" data-name="${esc(entry.name)}">削除</button></div></footer></article>`;
 }
-const secretMeta = entry => `<span>${esc(kiloBytes(entry.size))}</span><span>更新 ${esc(keptWhen(entry.updated_at))}</span>`;
+// The value's own size: what is kept is it with the seal's 28 bytes.
+const secretMeta = entry => `<span>${esc(kiloBytes(entry.size - 28))}</span><span>更新 ${esc(keptWhen(entry.updated_at))}</span>`;
 function render() {
   if (!state) return;
   if (requestId) { renderRequest(); return; }
@@ -562,11 +607,19 @@ function render() {
   if (page === 'secrets') {
     const focused = document.activeElement, focusedRow = focused.closest('.secret-row')?.getAttribute('aria-label');
     const focusedAction = focused.getAttribute('aria-label') || focused.dataset.action;
-    const kept = secrets();
+    const kept = secrets(), handed = (state.actors || []).some(item => item.id === state.foundation?.principal_id);
+    // What the page can do here: nothing with a value until the holder's key is open.
+    const keyLine = own ? '' : !(state.webauthn_credentials || []).length
+      ? `<div class="access-empty key-state"><p>シークレットを使うにはパスキーが必要です。</p>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} パスキーを追加</button>` : ''}</div>`
+      : keyUnavailable ? '<div class="access-empty key-state"><p>このパスキーでは鍵を使えません。</p></div>'
+        : `<div class="access-empty key-state"><button class="button secondary" data-action="unlock-key">${icon('lock')} パスキーで鍵を開く</button></div>`;
+    const foundationLine = handed ? '' : `<div class="access-empty key-state"><p>AIが使うには Foundation に渡します。</p><button class="button secondary" data-action="allow-foundation"${own ? '' : ' disabled'}>Foundation に渡す</button></div>`;
     shell(`<header class="page-heading page-heading-actions"><h1>シークレット</h1>
-      <button class="button secondary" data-action="add-secret">${icon('plus')} 追加</button></header>
+      <button class="button secondary" data-action="add-secret"${own ? '' : ' disabled'}>${icon('plus')} 追加</button></header>
+      ${keyLine}${foundationLine}
       <section class="resource-section" aria-label="シークレット">
         ${kept.length ? `<div class="agent-list">${kept.map(secretRow).join('')}</div>` : '<div class="access-empty"><p>シークレットはありません。</p></div>'}</section>`);
+    if (own) void receiveFromFoundation();
     app.querySelectorAll('.secret-row').forEach(row => bindSecretValue(kept.find(item => item.name === row.getAttribute('aria-label')), row));
     if (focusedRow && focusedAction && !focused.isConnected) {
       const row = [...app.querySelectorAll('.secret-row')].find(item => item.getAttribute('aria-label') === focusedRow);
@@ -757,7 +810,8 @@ function renderStore(row, shell, expiry) {
     nameInput.addEventListener('input', update);
   });
   bindForm(async (data) => {
-    const entries = asked.map((_, at) => ({ name: String(data.get('name-' + at) ?? ''), content: String(data.get('value-' + at) ?? '') }));
+    const entries = [];
+    for (const [at] of asked.entries()) entries.push({ name: String(data.get('name-' + at) ?? ''), ...await sealFor(new TextEncoder().encode(String(data.get('value-' + at) ?? '')), row.recipients || []) });
     try { await api(`/v1/requests/${row.id}/grant`, { method: 'POST', data: { entries } }); }
     catch (error) { if ([401, 404].includes(error.status)) await refresh(); throw error; }
     await refresh(); toast('登録しました。');
@@ -802,6 +856,7 @@ function renderApproval(row, shell, expiry) {
     const errorElement = form.querySelector('[role="alert"]'); errorElement.textContent = '';
     try {
       await api(`${requestApi}/grant`, { method: 'POST', data: first ? { user_code: form.elements.confirmationCode.value } : {} });
+      await handEnvelope(row);
       await refresh();
     } catch (error) { if (form.isConnected) { errorElement.textContent = error.message; submit.disabled = false; } }
   });
@@ -1127,6 +1182,56 @@ function revokeAccess(item) {
   openDialog(`<h2 id="dialog-title">アクセス許可を取り消しますか？</h2><p>${esc(item.name)}</p><form><p>あなたのデータへのアクセスを停止し、あなた宛ての未完了の依頼を取り消します。</p><p class="permission-note">取得済みの外部サービスの認証情報は、接続先で失効させてください。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">許可を取り消す</button></div></form>`);
   bindForm(async () => { await api(`/v1/principals/${item.id}/access`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('アクセス許可を取り消しました。'); });
 }
+// Sealing for everyone a secret of the holder's is for: those the server names (the holder, and Foundation when it
+// acts for them), and whoever already had the secret's key.
+async function sealFor(bytes, recipients) {
+  const contentKey = sealing.newContentKey(), envelopes = {};
+  for (const item of recipients) envelopes[item.principal_id] = b64(await sealing.seal(contentKey, unb64(item.public_key)));
+  return { content: b64(await sealing.sealContent(contentKey, bytes)), envelopes };
+}
+// The secret's key, from the envelope made for the holder.
+const openKey = kept => sealing.open(unb64(kept.envelope), own.privateKey, own.publicKey);
+let receiving = false;
+// Secrets sealed for Foundation and not yet for the holder's key - as those kept before the holder had one -
+// are handed to the holder by Foundation, from its own envelope, as soon as the key is open.
+async function receiveFromFoundation() {
+  const me = state.user.id, foundation = state.foundation?.principal_id;
+  const waiting = secrets().filter(item => !item.recipients.includes(me) && item.recipients.includes(foundation));
+  if (!waiting.length || receiving) return;
+  receiving = true;
+  try {
+    for (const item of waiting) await api('/v1/resources/' + item.id + '/envelopes/' + me, { method: 'POST', data: {} });
+    await refresh();
+  } catch (error) { toast(error.message); } finally { receiving = false; }
+}
+// Foundation made the holder's agent: a line, and an envelope for everything kept so far.
+async function allowFoundation(button) {
+  const foundation = state.foundation.principal_id;
+  button.disabled = true;
+  try {
+    await api('/v1/relations', { method: 'POST', data: { subject: foundation, relation: 'agent', object_type: 'principal', object_id: state.user.id } });
+    const { key } = await api('/v1/principals/' + foundation + '/public-key');
+    for (const item of secrets()) {
+      if (item.recipients.includes(foundation)) continue;
+      const kept = await api('/v1/resources/' + item.id + '/content');
+      if (!kept.envelope) continue;
+      await api('/v1/resources/' + item.id + '/envelopes/' + foundation, { method: 'PUT', data: { wrapped: b64(await sealing.seal(await openKey(kept), unb64(key.public_key))) } });
+    }
+    await refresh();
+  } catch (error) { toast(error.message); if (button.isConnected) button.disabled = false; }
+}
+// A line drawn onto a secret reaches its bytes only with an envelope: Foundation makes one from its own, or the
+// holder's key does here.
+async function handEnvelope(row) {
+  if (row.object?.kind !== 'secret' || !['viewer', 'editor', 'content_grant', 'write_grant', 'share_grant'].includes(detailOf(row).relation)) return;
+  const path = '/v1/resources/' + row.object.id + '/envelopes/' + row.from;
+  try { await api(path, { method: 'POST', data: {} }); return; } catch (error) { if (!own || error.code !== 'not_sealed_for_foundation') { toast(error.message); return; } }
+  try {
+    const kept = await api('/v1/resources/' + row.object.id + '/content'), { key } = await api('/v1/principals/' + row.from + '/public-key');
+    if (!kept.envelope || !key.public_key) return;
+    await api(path, { method: 'PUT', data: { wrapped: b64(await sealing.seal(await openKey(kept), unb64(key.public_key))) } });
+  } catch (error) { toast(error.message); }
+}
 // One confirmation, for removing something a key kept. Nothing here can be undone, and nothing reaches the service.
 // The name and the way it reaches a command, changed without the value ever being handed back.
 // Something the owner has in hand, put there without an agent asking for it first.
@@ -1137,10 +1242,8 @@ function addSecret() {
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加</button></form>`);
   bindForm(async (form) => {
     const name = form.get('name');
-    const response = await fetch('/v1/resources?' + new URLSearchParams({ kind: 'secret', name }),
-      { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'text/plain' }, body: String(form.get('value')) });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
+    const { recipients } = await api('/v1/recipients');
+    await api('/v1/resources?' + new URLSearchParams({ kind: 'secret', name }), { method: 'PUT', data: await sealFor(new TextEncoder().encode(String(form.get('value'))), recipients) });
     closeDialog(); await refresh(); toast(name + ' を追加しました。');
   });
 }
@@ -1195,10 +1298,10 @@ function editSecret(entry, trigger) {
 }
 function bindSecretValue(entry, row) {
   const path = '/v1/resources/' + entry.id + '/content', panel = row.querySelector('.secret-value-panel');
-  let value = null, text = null, etag = null, revealed = false, binary = false, busy = false;
+  let value = null, text = null, etag = null, recipients = [], revealed = false, binary = false, busy = false;
   const lock = locked => row.querySelectorAll('[data-action]').forEach(button => { button.disabled = locked; });
   const clear = () => { value = null; text = null; etag = null; revealed = false; };
-  const control = (action, label, glyph) => `<button type="button" class="icon-button" data-value-action="${action}" aria-label="${label}" title="${label}">${icon(glyph)}</button>`;
+  const control = (action, label, glyph) => `<button type="button" class="icon-button" data-value-action="${action}" aria-label="${label}" title="${label}"${own ? '' : ' disabled'}>${icon(glyph)}</button>`;
   const decode = bytes => {
     try {
       const decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
@@ -1212,9 +1315,11 @@ function bindSecretValue(entry, row) {
       const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
       if (response.status === 401) await showSignin();
       if (!response.ok) throw new Error('値を取得できませんでした。');
-      const bytes = new Uint8Array(await response.arrayBuffer());
+      const kept = await response.json();
+      if (!kept.envelope || !own) throw new Error('値を取得できませんでした。');
+      const bytes = await sealing.openContent(await openKey(kept), unb64(kept.content));
       if (!panel.isConnected) return false;
-      value = bytes; text = decode(value); binary = text === null; etag = response.headers.get('etag');
+      value = bytes; text = decode(value); binary = text === null; etag = response.headers.get('etag'); recipients = kept.recipients;
       return true;
     } catch (error) {
       if (panel.isConnected) panel.querySelector('[role="alert"]').textContent = error instanceof TypeError ? '接続できませんでした。' : error.message;
@@ -1228,7 +1333,7 @@ function bindSecretValue(entry, row) {
     lock(false);
     panel.innerHTML = `<div class="secret-value-line">${binary ? `<span class="secret-file">${icon('note')}ファイル</span>`
       : `<pre class="kept-document${revealed ? '' : ' secret-mask'}" aria-label="${revealed ? '値' : '値（非表示）'}">${revealed ? esc(text) : '••••••••'}</pre>`}<div class="secret-value-actions">${binary
-      ? `<a class="icon-button" href="${path}" download aria-label="ダウンロード" title="ダウンロード">${icon('download')}</a>`
+      ? control('download', 'ダウンロード', 'download')
       : control('reveal', revealed ? '値を隠す' : '値を表示', revealed ? 'eye-off' : 'eye') + control('copy', 'コピー', 'copy')}${control('edit', '値を編集', 'edit')}</div></div><p class="form-error" role="alert"></p>`;
     panel.querySelectorAll('[data-value-action]').forEach(button => button.addEventListener('click', async () => {
       if (busy) return;
@@ -1237,6 +1342,12 @@ function bindSecretValue(entry, row) {
       try {
         if (!await load()) return;
         if (action === 'edit') { edit(); return; }
+        if (action === 'download') {
+          const url = URL.createObjectURL(new Blob([value])), link = document.createElement('a');
+          link.href = url; link.download = entry.name.split('/').pop(); link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          clear(); show('download'); return;
+        }
         if (action === 'reveal') { revealed = !binary; show(binary ? 'edit' : 'reveal'); return; }
         if (binary) { clear(); show('edit'); return; }
         const copied = text;
@@ -1275,8 +1386,11 @@ function bindSecretValue(entry, row) {
       try {
         if (!etag) throw new Error('編集をやり直してから保存してください。');
         const bytes = binary ? new Uint8Array(await file.arrayBuffer()) : content;
+        // Sealed anew, for everyone who had it and everyone it is for now.
+        const named = (await api('/v1/recipients')).recipients;
+        const sealed = await sealFor(bytes, [...recipients, ...named.filter(item => !recipients.some(one => one.principal_id === item.principal_id))]);
         const response = await fetch(path, { method: 'PUT', credentials: 'same-origin', cache: 'no-store',
-          headers: { 'content-type': 'application/octet-stream', 'if-match': etag }, body: bytes });
+          headers: { 'content-type': 'application/json', 'if-match': etag }, body: JSON.stringify(sealed) });
         const result = await response.json();
         if (response.status === 401) await showSignin();
         if (!response.ok) throw new Error(result.error?.message || '保存できませんでした。');
@@ -1318,6 +1432,13 @@ document.addEventListener('click', async (event) => {
   try {
     if (action === 'close-dialog') closeDialog();
     if (action === 'add-passkey') addPasskey();
+    if (action === 'unlock-key') {
+      target.disabled = true;
+      try { await unlockKey(); } catch (error) { if (!passkeyDeclined(error)) toast(error.message); }
+      if (target.isConnected) target.disabled = false;
+      render();
+    }
+    if (action === 'allow-foundation') await allowFoundation(target);
     if (action === 'set-payment') { target.disabled = true; location.assign((await api('/v1/payment/setup', { method: 'POST', data: {} })).url); }
     if (action === 'remove-passkey') {
       const item = (state.webauthn_credentials || []).find(entry => entry.id === id);

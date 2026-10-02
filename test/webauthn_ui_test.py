@@ -35,7 +35,7 @@ with sync_playwright() as p:
     device = context.new_cdp_session(page)
     device.send('WebAuthn.enable')
     device.send('WebAuthn.addVirtualAuthenticator', {'options': {'protocol': 'ctap2', 'transport': 'internal', 'hasResidentKey': True,
-                                                                 'hasUserVerification': True, 'isUserVerified': True, 'automaticPresenceSimulation': True}})
+                                                                 'hasUserVerification': True, 'isUserVerified': True, 'automaticPresenceSimulation': True, 'hasPrf': True}})
 
     # Signed in by email first, the account page offers to add a passkey.
     page.goto(base + '/account', wait_until='networkidle')
@@ -77,7 +77,7 @@ with sync_playwright() as p:
     other = newcomer.new_cdp_session(fresh)
     other.send('WebAuthn.enable')
     other.send('WebAuthn.addVirtualAuthenticator', {'options': {'protocol': 'ctap2', 'transport': 'internal', 'hasResidentKey': True,
-                                                                'hasUserVerification': True, 'isUserVerified': True, 'automaticPresenceSimulation': True}})
+                                                                'hasUserVerification': True, 'isUserVerified': True, 'automaticPresenceSimulation': True, 'hasPrf': True}})
     fresh.goto(base, wait_until='networkidle')
     fresh.get_by_role('button', name='パスキーで始める', exact=True).click()
     started = fresh.get_by_role('dialog')

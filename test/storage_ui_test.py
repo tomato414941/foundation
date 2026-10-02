@@ -9,12 +9,15 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 from playwright.sync_api import sync_playwright, expect
+from ui_flows import virtual_authenticator, make_key, unlock, hand_to_foundation, plain, injected
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--base', required=True)
 parser.add_argument('--screenshots', required=True)
 args = parser.parse_args()
+# Passkeys need a hostname.
+args.base = args.base.replace('127.0.0.1', 'localhost')
 shots = Path(args.screenshots)
 shots.mkdir(parents=True, exist_ok=True)
 SECRET = 'ghp_kept-ui-fixture-value'
@@ -43,6 +46,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     # Everything but connect and exec is plain HTTP, which is how an agent uses it.
     def api(method, path, body=None, headers=None):
         if 'as=' not in path: path += ('&' if '?' in path else '?') + 'as=' + owner[0]
+        # A secret placed by the key is handed to Foundation to seal, as the key cannot.
+        if body is not None and method == 'PUT' and ('kind=secret' in path or path.endswith('/content')): body, headers = plain(body).encode(), {'content-type': 'application/json'}
         request = urllib.request.Request(args.base + path, method=method, data=body,
                                          headers={'authorization': 'Bearer ' + key, **(headers or {})})
         with urllib.request.urlopen(request) as response:
@@ -59,10 +64,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
         assert found.status == 200, found.text()
         return found.json()['resource']['id']
     def read(page, name):
-        return page.request.get(args.base + '/v1/resources/' + held(page, name) + '/content')
+        return injected(page.request, args.base, name)
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(viewport={'width': 1280, 'height': 1000}, permissions=['clipboard-read', 'clipboard-write'])
     page = context.new_page()
+    virtual_authenticator(context, page)
     errors = []
     value_reads = []
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -79,16 +85,19 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
     owner.append(page.request.get(args.base + '/v1/overview').json()['user']['id'])
 
-    # Nothing kept yet, and the page says so.
+    # Nothing kept yet, and the page says so. The owner's key, from a passkey, and Foundation handed what is kept.
+    make_key(page, args.base)
     page.goto(args.base + '/secrets', wait_until='networkidle')
     expect(page.get_by_role('heading', name='シークレット', exact=True)).to_be_visible()
     expect(page.get_by_text('シークレットはありません。', exact=False)).to_be_visible()
+    unlock(page, args.base)
+    hand_to_foundation(page)
     review(page)
 
     # The key keeps two things, with no request and no approval: one handed to a command, one only read back.
     api('PUT', '/v1/resources?kind=secret&name=github/gh-token', SECRET.encode(), {'content-type': 'text/plain'})
     api('PUT', '/v1/resources?kind=secret&name=release/2026-09-23', json.dumps({'step': 'レビュー待ち'}).encode(), {'content-type': 'application/json'})
-    page.reload(wait_until='networkidle')
+    unlock(page, args.base)
 
     github = page.get_by_role('article', name='github/gh-token', exact=True)
     release = page.get_by_role('article', name='release/2026-09-23', exact=True)
@@ -320,12 +329,12 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     # Binary values stay files: download exact bytes, then replace them with a selected file.
     binary = b'\x00\xff\x01fixture'
     api('PUT', '/v1/resources?kind=secret&name=binary', binary)
-    page.reload(wait_until='networkidle')
+    unlock(page, args.base)
     binary_row = page.get_by_role('article', name='binary', exact=True)
     binary_row.get_by_role('button', name='値を表示', exact=True).click()
     expect(binary_row.get_by_text('ファイル', exact=True)).to_be_visible()
     with page.expect_download() as download_info:
-        binary_row.get_by_role('link', name='ダウンロード', exact=True).click()
+        binary_row.get_by_role('button', name='ダウンロード', exact=True).click()
     assert Path(download_info.value.path()).read_bytes() == binary
     binary_row.get_by_role('button', name='値を編集', exact=True).click()
     replaced = b'\x00\xfe\x01replacement'

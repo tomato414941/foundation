@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 from playwright.sync_api import sync_playwright, expect
+from ui_flows import allow_foundation, plain, injected
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--base', required=True)
@@ -52,7 +53,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
         assert found.status == 200, found.text()
         return found.json()['resource']['id']
     def read(page, name):
-        return page.request.get(args.base + '/v1/resources/' + held(page, name) + '/content')
+        return injected(page.request, args.base, name)
     context = browser.new_context(viewport={'width': 1280, 'height': 1000})
     page = context.new_page()
     errors = []
@@ -67,6 +68,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     page.get_by_label('確認コード', exact=True).fill(approval['user_code'])
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
+    # What the owner keeps is used by the AI through Foundation, made the owner's agent.
+    allow_foundation(page.request, args.base)
 
     # A longer purpose reads vertically on desktop as well as narrow screens.
     purpose = 'Foundationに預けた認証情報でnpmアカウントへの接続を確認します。パッケージの公開や変更は行いません。'
@@ -88,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # A rotation: the AI declares a replacement, the page says so, and renaming it makes it a new value instead.
-    kept = page.request.put(args.base + '/v1/resources?kind=secret&name=npm token', headers={'content-type': 'text/plain', 'origin': args.base}, data='old-token')
+    kept = page.request.put(args.base + '/v1/resources?kind=secret&name=npm token', headers={'content-type': 'application/json', 'origin': args.base}, data=plain('old-token'))
     assert kept.status == 200
     rotation = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
         'authorization_details': [{'type': 'secret', 'fields': {'name': 'npm token', 'label': 'npmアクセストークン', 'replace': True}}], 'binding_message': '期限切れのトークンを新しいものに入れ替えます。'}))['request']
@@ -138,7 +141,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
 
     # Another value may be saved after the request page opens. The submitted name is checked again.
     existing = page.request.put(args.base + '/v1/resources?kind=secret&name=cloudflare/cloudflare-api-token',
-                               headers={'content-type': 'text/plain', 'origin': args.base}, data='existing-value')
+                               headers={'content-type': 'application/json', 'origin': args.base}, data=plain('existing-value'))
     assert existing.status == 200
     value.fill(SECRET)
     page.get_by_role('button', name='登録する', exact=True).click()

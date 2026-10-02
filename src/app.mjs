@@ -45,6 +45,7 @@ STATIC.set('/signin/confirm', ['index.html', 'text/html; charset=utf-8']);
 STATIC.set('/app.js', ['app.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/request-view.js', ['request-view.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/workspace-view.js', ['workspace-view.js', 'text/javascript; charset=utf-8']);
+STATIC.set('/sealing.js', ['sealing.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/styles.css', ['styles.css', 'text/css; charset=utf-8']);
 STATIC.set('/service-logos.svg', ['service-logos.svg', 'image/svg+xml']);
 // The logo as images, for browsers that do not take the page's SVG icon (Safari asks for these by name).

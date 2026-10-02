@@ -5,6 +5,7 @@ import json
 import urllib.request
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
+from ui_flows import allow_foundation
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--base', required=True)
@@ -69,6 +70,9 @@ with sync_playwright() as p:
     # The product makes its user's account and key; the user's AI asks for something to keep.
     user = call('/v1/principals', product, 'POST', {'alias': 'user-1'})['principal']
     key = call('/v1/principals/' + user['id'] + '/keys', product, 'POST', {})['token']
+    # What the user keeps is injected by Foundation's principal, which the user makes their agent.
+    overview = call('/v1/overview', key)
+    call('/v1/relations', key, 'POST', {'subject': overview['foundation']['principal_id'], 'relation': 'agent', 'object_type': 'principal', 'object_id': overview['user']['id']})
     asked = call('/v1/requests', key, 'POST', {'authorization_details': [{'type': 'secret', 'fields': {'name': 'npm-token', 'label': 'npm のアクセストークン', 'site': 'https://www.npmjs.com/'}}],
                                              'binding_message': 'パッケージの公開に使います。', 'steps': ['npmjs.com でアクセストークンを作ります。', '表示されたトークンをここに貼ります。']})['request']
     link = call('/v1/principals/' + user['id'] + '/links', product, 'POST', {'request_id': asked['id']})['url']

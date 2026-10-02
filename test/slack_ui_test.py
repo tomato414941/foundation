@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 from ui_flows import start_connect
 from playwright.sync_api import sync_playwright, expect
+from ui_flows import allow_foundation
 
 # Slack, against the fixture server with FOUNDATION_TEST_SLACK=1, where Foundation has no Slack app of its own: the
 # owner adds their Slack app, connects a workspace through it with the bot scopes they choose, sees the workspace and
@@ -88,7 +89,9 @@ with sync_playwright() as p:
     dialog.get_by_role('button', name='接続を解除', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(connections.get_by_text('個人のワークスペース', exact=True)).to_have_count(0)
-    # An AI asks for a Slack token; the owner makes it at Slack and hands it over on the request's page.
+    # An AI asks for a Slack token; the owner makes it at Slack and hands it over on the request's page, sealed for
+    # Foundation, which the owner has made their agent.
+    allow_foundation(page.request, args.base)
     request = page.evaluate("""async () => {
       const key = await (await fetch('/v1/principals', {method: 'POST', headers: {'content-type': 'application/json'},
         body: JSON.stringify({name: 'UI test agent', agent: true, key: true})})).json();
