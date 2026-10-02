@@ -6,7 +6,7 @@ import { fixture } from '../../test/helpers.mjs';
 import { OAuth2Client } from './oauth.mjs';
 import { checkDefinition } from '../service-definition.mjs';
 
-// A service the catalog does not know, described by its holder: plain OAuth 2.0 at the fake's addresses.
+// A service the catalog does not know, described by its owner: plain OAuth 2.0 at the fake's addresses.
 const OAUTH = { authorize: SERVICE.authorize_url, token: SERVICE.token_url, scopes: { base: [] }, identity: { url: SERVICE.userinfo_url },
   revoke: { url: SERVICE.revoke_url, style: 'rfc7009' }, injection: { OAUTH_ACCESS_TOKEN: '/access_token', OAUTH_EXPIRES_AT: '/expires_at' } };
 const DEFINITION = { name: 'Notes', api: 'https://service.example/api', auth_schemes: { oauth: OAUTH } };

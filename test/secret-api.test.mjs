@@ -28,11 +28,11 @@ test('APIキーだけの主体も自分のシークレットを持ち、他の�
   const response = await f.request('/v1/resources?kind=secret&name=token', { ...options, method: 'PUT', raw: 'private-token' });
   assert.equal(response.status, 200, response.text);
   const saved = response.json.resource;
-  assert.equal(saved.holder_id, key.id);
+  assert.equal(saved.owner_id, key.id);
   assert.equal((await f.read('secret', 'token', options)).text, 'private-token');
   assert.equal((await f.request('/v1/resources/' + saved.id + '/content')).status, 403);
   const owner = (await f.keep('secret', 'token', 'owner-private')).json.resource;
-  assert.equal(owner.holder_id, USER_A);
+  assert.equal(owner.owner_id, USER_A);
   assert.equal((await f.request('/v1/resources/' + owner.id + '/content', options)).status, 401);
 });
 

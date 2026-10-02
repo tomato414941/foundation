@@ -28,8 +28,8 @@ export const GMAIL = { readonly: [GMAIL_SCOPE + 'readonly'], metadata: [GMAIL_SC
 
 // The modules a server is made of, over one store, with the services given (each an entry of the catalog).
 export function modules(store, entries = []) {
-  const principals = new Principals(store), authorization = new Authorization(principals);
-  const resources = new Resources(store), services = new Services(store, resources, entries, { authorization }), apps = new Apps(store, resources, services);
+  const principals = new Principals(store), resources = new Resources(store), authorization = new Authorization(principals, resources);
+  const services = new Services(store, resources, entries, { authorization }), apps = new Apps(store, resources, services);
   const keys = new Keys(store), secrets = new Secrets(store, resources, keys), connections = new Connections(store, resources, services, apps);
   return { resources, services, apps, secrets, keys, connections, inputs: new Inputs(secrets, connections, row => secrets.open(row)), principals, authorization, sessions: new Sessions(store), flows: new OAuthFlows(store) };
 }
@@ -98,7 +98,7 @@ export async function fixture(t, options = {}) {
   // `data` is sent as JSON; `raw` is sent as given, with `type` as its content type.
   // A token that acts for exactly one principal names them on every call, as the CLI and the MCP tool do.
   const actsFor = new Map();
-  // Secrets are sealed by the client: a test that places one as `raw` has it sealed here, for the holder's
+  // Secrets are sealed by the client: a test that places one as `raw` has it sealed here, for the owner's
   // recipients and the caller, with a key the caller publishes on first use; one that reads a secret gets its
   // bytes opened with that key, as a client would.
   const subjects = new Map(), published = new Set();
@@ -131,13 +131,13 @@ export async function fixture(t, options = {}) {
   }
   const secretPath = path => /^\/v1\/resources\?.*kind=secret/.test(path) || (path.match(/^\/v1\/resources\/([^/?]+)\/content/) && app.resources.get(RegExp.$1)?.kind === 'secret');
   async function request(path, { method = 'GET', data, raw, type = 'application/octet-stream', token, anonymous = false, headers = {}, as } = {}) {
-    const holder = as ?? (token && actsFor.get(token)) ?? new URL(path, base).searchParams.get('as') ?? undefined;
-    if (holder && !/[?&]as=/.test(path)) path += (path.includes('?') ? '&' : '?') + 'as=' + holder;
+    const owner = as ?? (token && actsFor.get(token)) ?? new URL(path, base).searchParams.get('as') ?? undefined;
+    if (owner && !/[?&]as=/.test(path)) path += (path.includes('?') ? '&' : '?') + 'as=' + owner;
     if (method === 'PUT' && raw !== undefined && secretPath(path)) {
       // Over what is there, the new key goes to everyone who had the old one.
       let existing = null;
-      try { existing = path.match(/^\/v1\/resources\/([^/?]+)\/content/) ? app.resources.get(RegExp.$1) : app.secrets.find(holder ?? await subjectOf({ token, anonymous }), new URL(path, base).searchParams.get('name')); } catch {}
-      data = await sealed(raw, { token, anonymous, as: holder }, undefined, existing ? app.keys.recipientKeys(existing.id) : []); raw = undefined;
+      try { existing = path.match(/^\/v1\/resources\/([^/?]+)\/content/) ? app.resources.get(RegExp.$1) : app.secrets.find(owner ?? await subjectOf({ token, anonymous }), new URL(path, base).searchParams.get('name')); } catch {}
+      data = await sealed(raw, { token, anonymous, as: owner }, undefined, existing ? app.keys.recipientKeys(existing.id) : []); raw = undefined;
     }
     // Answering a store request: each entry sealed for whom the request says.
     if (method === 'POST' && data?.entries && /^\/v1\/requests\/[^/]+\/grant/.test(path)) {
@@ -186,10 +186,10 @@ export async function fixture(t, options = {}) {
     const handed = await request('/v1/resources/' + resourceId + '/envelopes/' + own.id, { method: 'POST', data: {} });
     assert.equal(handed.status, 200, handed.text);
   }
-  // Foundation's principal made the holder's agent: what the holder keeps is sealed for it too, and injected by it.
+  // Foundation's principal made the owner's agent: what the owner keeps is sealed for it too, and injected by it.
   async function allowFoundation(options = {}) {
-    const holder = options.as ?? (options.token && actsFor.get(options.token)) ?? await subjectOf(options);
-    const drawn = await request('/v1/relations', { ...options, method: 'POST', data: { subject: app.keys.agentId, relation: 'agent', object_type: 'principal', object_id: holder } });
+    const owner = options.as ?? (options.token && actsFor.get(options.token)) ?? await subjectOf(options);
+    const drawn = await request('/v1/relations', { ...options, method: 'POST', data: { subject: app.keys.agentId, relation: 'agent', object_type: 'principal', object_id: owner } });
     assert.equal(drawn.status, 201, drawn.text);
   }
   // Connecting Google, asking to read Gmail unless other scopes are given.
@@ -239,7 +239,7 @@ export async function fixture(t, options = {}) {
     return { ...asked.json.request, token: made.token, principal_id: made.id };
   }
   // A key the owner makes from the dashboard: a principal that acts for them, carrying a key.
-  // Resources by name: the holder's name finds the id, and the id reaches the thing.
+  // Resources by name: the owner's name finds the id, and the id reaches the thing.
   const lookup = (kind, name, options = {}) => request('/v1/resources?' + new URLSearchParams({ kind, name }), options);
   async function read(kind, name, options = {}) {
     const found = await lookup(kind, name, options);

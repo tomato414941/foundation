@@ -45,13 +45,13 @@ const withGoogle = entries => [...entries, entry('google', { oauth: googleOauth(
 // The AWS fixture knows one role, made with the external ID the test reads from the link it is handed.
 export const aws = new FakeAws();
 aws.lenient = true;
-// A service no one knows but its holder, answering plain OAuth 2.0 at service.example.
+// A service no one knows but its owner, answering plain OAuth 2.0 at service.example.
 const described = new FakeOAuth2Service();
 const services = process.env.FOUNDATION_TEST_AWS === '1' ? withGoogle([entry('aws', { role: awsRole(aws) })])
   : process.env.FOUNDATION_TEST_CLOUDFLARE === '1' ? withGoogle([entry('cloudflare', { oauth: cloudflareOauth(new FakeCloudflare()) })])
   : process.env.FOUNDATION_TEST_EBAY === '1' ? withGoogle([entry('ebay', { oauth: ebayOauth(new FakeEbay()) })])
   : process.env.FOUNDATION_TEST_GITHUB === '1' ? withGoogle([entry('github', { oauth: githubOauth(new FakeGitHub()) })])
-  // Like production today: Foundation has no Slack app of its own, so the holder brings theirs or a token.
+  // Like production today: Foundation has no Slack app of its own, so the owner brings theirs or a token.
   : process.env.FOUNDATION_TEST_SLACK === '1' ? withGoogle([new FakeSlack({ configured: false }).entry()])
   // Every service Foundation knows, none with an app of Foundation's own but Google: what a new deployment shows.
   : process.env.FOUNDATION_TEST_SERVICES === '1' ? [...builtins({}).filter(item => item.definition.id !== 'google'), entry('google', { oauth: googleOauth(google) })]

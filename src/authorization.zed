@@ -1,9 +1,9 @@
 // Who may do what, as relations and what they compute. A relation is a recorded fact: a line someone drew, or what
-// a holder holds. A permission is computed from them and never recorded. Routes ask one permission and nothing
+// a owner holds. A permission is computed from them and never recorded. Routes ask one permission and nothing
 // else; the names here are the ones they ask by.
 //
 // People and AIs are the same principal. What a principal reaches comes only from these lines; nothing from how it
-// came in. Owning a principal is managing it, not reaching what it holds. The holder of a thing decides for it; an
+// came in. Owning a principal is managing it, not reaching what it holds. The owner of a thing decides for it; an
 // agent uses it; a viewer sees it; an editor changes it; and any single action can be given on its own.
 
 definition credential {}
@@ -46,7 +46,7 @@ definition principal {
   relation inject_grant: principal
   relation functions_grant: principal
   relation invoke_grant: principal
-  // An action on something that does not exist yet is an action on the holder, named by what it would make.
+  // An action on something that does not exist yet is an action on the owner, named by what it would make.
   relation connection_connect_grant: principal
 
   permission read = manage + read_grant
@@ -76,9 +76,9 @@ definition principal {
   permission connection_connect = decide + connection_connect_grant
 }
 
-// Private bytes: used by whoever may use what the holder holds, read only by whoever may see them.
+// Private bytes: used by whoever may use what the owner holds, read only by whoever may see them.
 definition secret {
-  relation holder: principal
+  relation owner: principal
   relation viewer: principal
   relation editor: principal
   relation list_grant: principal
@@ -89,19 +89,19 @@ definition secret {
   relation rename_grant: principal
   relation share_grant: principal
 
-  permission list = holder->use + list_grant
-  permission read = holder->use + viewer + editor + read_grant
-  permission content = holder->disclose + viewer + editor + content_grant
-  permission write = holder->use + editor + write_grant
-  permission remove = holder->use + remove_grant
-  permission rename = holder->decide + rename_grant
-  permission share = holder->decide + share_grant
+  permission list = owner->use + list_grant
+  permission read = owner->use + viewer + editor + read_grant
+  permission content = owner->disclose + viewer + editor + content_grant
+  permission write = owner->use + editor + write_grant
+  permission remove = owner->use + remove_grant
+  permission rename = owner->decide + rename_grant
+  permission share = owner->decide + share_grant
 }
 
-// What a service lets the holder do, through a scheme: used by injecting, never read; disconnected by whoever
-// decides for the holder. Connecting one makes it, and is an action on the holder (connection_connect).
+// What a service lets the owner do, through a scheme: used by injecting, never read; disconnected by whoever
+// decides for the owner. Connecting one makes it, and is an action on the owner (connection_connect).
 definition connection {
-  relation holder: principal
+  relation owner: principal
   relation viewer: principal
   relation editor: principal
   relation list_grant: principal
@@ -110,15 +110,15 @@ definition connection {
   relation share_grant: principal
   relation disconnect_grant: principal
 
-  permission list = holder->use + list_grant
-  permission read = holder->use + viewer + editor + read_grant
-  permission rename = holder->decide + rename_grant
-  permission share = holder->decide + share_grant
-  permission disconnect = holder->decide + disconnect_grant
+  permission list = owner->use + list_grant
+  permission read = owner->use + viewer + editor + read_grant
+  permission rename = owner->decide + rename_grant
+  permission share = owner->decide + share_grant
+  permission disconnect = owner->decide + disconnect_grant
 }
 
 definition object {
-  relation holder: principal
+  relation owner: principal
   relation viewer: principal
   relation editor: principal
   relation list_grant: principal
@@ -129,19 +129,19 @@ definition object {
   relation link_grant: principal
   relation share_grant: principal
 
-  permission list = holder->use + list_grant
-  permission read = holder->use + viewer + editor + read_grant
-  permission write = holder->use + editor + write_grant
-  permission remove = holder->use + remove_grant
-  permission rename = holder->decide + rename_grant
-  permission link = holder->use + link_grant
-  permission share = holder->decide + share_grant
+  permission list = owner->use + list_grant
+  permission read = owner->use + viewer + editor + read_grant
+  permission write = owner->use + editor + write_grant
+  permission remove = owner->use + remove_grant
+  permission rename = owner->decide + rename_grant
+  permission link = owner->use + link_grant
+  permission share = owner->decide + share_grant
 }
 
-// An OAuth app: used to connect by whoever decides for the holder and anyone on a line to it; its secret is never
+// An OAuth app: used to connect by whoever decides for the owner and anyone on a line to it; its secret is never
 // read, so there is no action for that.
 definition app {
-  relation holder: principal
+  relation owner: principal
   relation viewer: principal
   relation editor: principal
   relation list_grant: principal
@@ -152,18 +152,18 @@ definition app {
   relation rename_grant: principal
   relation share_grant: principal
 
-  permission list = holder->use + list_grant
-  permission read = holder->use + viewer + editor + read_grant
-  permission use = holder->decide + viewer + editor + use_grant
-  permission write = holder->decide + editor + write_grant
-  permission remove = holder->decide + remove_grant
-  permission rename = holder->decide + rename_grant
-  permission share = holder->decide + share_grant
+  permission list = owner->use + list_grant
+  permission read = owner->use + viewer + editor + read_grant
+  permission use = owner->decide + viewer + editor + use_grant
+  permission write = owner->decide + editor + write_grant
+  permission remove = owner->decide + remove_grant
+  permission rename = owner->decide + rename_grant
+  permission share = owner->decide + share_grant
 }
 
-// A service a holder described: it holds nothing secret, so whoever uses the holder's things may change it too.
+// A service a owner described: it holds nothing secret, so whoever uses the owner's things may change it too.
 definition service {
-  relation holder: principal
+  relation owner: principal
   relation viewer: principal
   relation editor: principal
   relation list_grant: principal
@@ -173,17 +173,17 @@ definition service {
   relation rename_grant: principal
   relation share_grant: principal
 
-  permission list = holder->use + list_grant
-  permission read = holder->use + viewer + editor + read_grant
-  permission write = holder->use + editor + write_grant
-  permission remove = holder->use + remove_grant
-  permission rename = holder->decide + rename_grant
-  permission share = holder->decide + share_grant
+  permission list = owner->use + list_grant
+  permission read = owner->use + viewer + editor + read_grant
+  permission write = owner->use + editor + write_grant
+  permission remove = owner->use + remove_grant
+  permission rename = owner->decide + rename_grant
+  permission share = owner->decide + share_grant
 }
 
-// A lent machine: opened and used by whoever uses the holder's things and by editors, watched by viewers too.
+// A lent machine: opened and used by whoever uses the owner's things and by editors, watched by viewers too.
 definition environment {
-  relation holder: principal
+  relation owner: principal
   relation viewer: principal
   relation editor: principal
   relation list_grant: principal
@@ -195,14 +195,14 @@ definition environment {
   relation rename_grant: principal
   relation share_grant: principal
 
-  permission list = holder->use + list_grant
-  permission open = holder->use + open_grant
-  permission read = holder->use + viewer + editor + read_grant
-  permission exec = holder->use + editor + exec_grant
-  permission identity = holder->use + identity_grant
-  permission remove = holder->use + remove_grant
-  permission rename = holder->decide + rename_grant
-  permission share = holder->decide + share_grant
+  permission list = owner->use + list_grant
+  permission open = owner->use + open_grant
+  permission read = owner->use + viewer + editor + read_grant
+  permission exec = owner->use + editor + exec_grant
+  permission identity = owner->use + identity_grant
+  permission remove = owner->use + remove_grant
+  permission rename = owner->decide + rename_grant
+  permission share = owner->decide + share_grant
 }
 
 // A request: answered by whoever decides for the one asked.

@@ -4,10 +4,10 @@ import { FOUNDATION_APP, takesApps } from './apps.mjs';
 import { randomUUID } from 'node:crypto';
 
 // What a principal holds for a service, by one of its schemes: OAuth renewal state, the role short-lived keys are
-// obtained with, or a token the holder pasted. Arbitrary private bytes are secrets (secrets.mjs); nothing moves one
+// obtained with, or a token the owner pasted. Arbitrary private bytes are secrets (secrets.mjs); nothing moves one
 // into the other.
 export const CONNECTION_LIMIT = 50;
-const COLUMNS = 'r.id,r.holder_id,r.kind,r.name,r.created_at,r.updated_at,c.service,c.auth_scheme,c.app_id,c.subject,c.status,c.generation';
+const COLUMNS = 'r.id,r.owner_id,r.kind,r.name,r.created_at,r.updated_at,c.service,c.auth_scheme,c.app_id,c.subject,c.status,c.generation';
 const FROM = 'FROM resources r JOIN connections c ON c.resource_id=r.id';
 const invalidResult = () => fail(502, 'service_response', '接続先からの応答を確認できませんでした。');
 
@@ -18,12 +18,12 @@ export class Connections {
   }
   // The scheme as it speaks for this connection: through the app it was made with, for OAuth.
   schemeFor(row) { return row.auth_scheme === 'oauth' ? this.apps.scheme(row.service, row.app_id) : this.services.scheme(row.service, row.auth_scheme); }
-  binding(row) { return `connection:${row.holder_id}:${row.id}`; }
+  binding(row) { return `connection:${row.owner_id}:${row.id}`; }
 
   get(id) { return typeof id === 'string' ? this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.id=?`).get(id) : undefined; }
-  held(holderId, id) { const row = this.get(id); return row && row.holder_id === holderId ? row : undefined; }
-  list(holderId, { service, prefix } = {}) {
-    const where = ['r.holder_id=?'], params = [holderId];
+  held(ownerId, id) { const row = this.get(id); return row && row.owner_id === ownerId ? row : undefined; }
+  list(ownerId, { service, prefix } = {}) {
+    const where = ['r.owner_id=?'], params = [ownerId];
     if (service !== undefined) { where.push('c.service=?'); params.push(service); }
     if (prefix !== undefined) { where.push('substr(r.name,1,length(?))=? COLLATE BINARY'); params.push(String(prefix), String(prefix)); }
     return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE ${where.join(' AND ')} ORDER BY r.name,r.created_at,r.id`).all(...params);
@@ -42,45 +42,45 @@ export class Connections {
       || (result.expiresAt !== null && !(Number.isFinite(result.expiresAt) && result.expiresAt > Date.now()))) invalidResult();
     return { private_state: result.privateState, facts: result.facts, expires_at: result.expiresAt, ...(requested ? { requested_scopes: requested } : {}) };
   }
-  forService(holderId, id) {
+  forService(ownerId, id) {
     if (typeof id !== 'string' || !id || id.length > 200 || /[\x00-\x1f\x7f]/.test(id)) fail(400, 'invalid_connection', '接続のIDを指定してください。');
-    const row = this.held(holderId, id);
+    const row = this.held(ownerId, id);
     if (!row) fail(404, 'not_found', '接続が見つかりません。');
     return row;
   }
   // The connection a new authorization replaces: the same service and scheme, still there, and one that can be.
-  reconnection(holderId, serviceRef, schemeId, id) {
-    const row = this.forService(holderId, id);
+  reconnection(ownerId, serviceRef, schemeId, id) {
+    const row = this.forService(ownerId, id);
     if (row.service !== serviceRef || row.auth_scheme !== schemeId) fail(400, 'invalid_service', 'サービスか接続の方法が一致しません。');
     if (this.services.scheme(serviceRef, schemeId).canReconnect === false) fail(400, 'new_connection_required', '新しく登録してください。');
     if (row.status === 'disconnecting') fail(409, 'connection_changed', '接続の解除が進行中です。');
     return row;
   }
   // app: the app it was made through - a held app's id, or Foundation's - for a scheme authorized through apps;
-  // none otherwise. name: what the holder calls a pasted token; the service cannot say whose it is.
-  save(holderId, serviceRef, schemeId, result, { previous, scopes, app = FOUNDATION_APP, name } = {}) {
+  // none otherwise. name: what the owner calls a pasted token; the service cannot say whose it is.
+  save(ownerId, serviceRef, schemeId, result, { previous, scopes, app = FOUNDATION_APP, name } = {}) {
     const scheme = this.services.scheme(serviceRef, schemeId);
     const state = this.nextState(result, { requested: scopes });
     const said = scheme.kind === 'token' ? name ?? (previous ? null : this.services.summary(serviceRef).name + 'のトークン') : state.facts.label || result.subject;
     const label = said === null ? null : String(said).slice(0, 80) || this.services.summary(serviceRef).name;
-    return this.keep(holderId, { service: serviceRef, scheme: schemeId, app: takesApps(scheme) ? app : null, subject: result.subject, label, state }, previous);
+    return this.keep(ownerId, { service: serviceRef, scheme: schemeId, app: takesApps(scheme) ? app : null, subject: result.subject, label, state }, previous);
   }
   // Identity and renewal state belong to the connection, independently of requests. previous is the managed
   // authorization being connected again.
-  keep(holderId, { service, scheme, app = null, subject, label, state }, previous) {
+  keep(ownerId, { service, scheme, app = null, subject, label, state }, previous) {
     return this.store.transaction(() => {
-      const existing = previous ? this.held(holderId, previous.id) : undefined;
+      const existing = previous ? this.held(ownerId, previous.id) : undefined;
       if (previous) {
         if (!existing || existing.generation !== previous.generation) fail(409, 'connection_changed', '状態が変わりました。もう一度お試しください。');
-        this.reconnection(holderId, service, scheme, existing.id);
+        this.reconnection(ownerId, service, scheme, existing.id);
       }
-      if (!previous && this.list(holderId).length >= CONNECTION_LIMIT) fail(409, 'connection_limit', `登録できる接続は${CONNECTION_LIMIT}件までです。`);
-      const id = existing?.id ?? randomUUID(), sealed = this.vault.seal(state, `connection:${holderId}:${id}`);
+      if (!previous && this.list(ownerId).length >= CONNECTION_LIMIT) fail(409, 'connection_limit', `登録できる接続は${CONNECTION_LIMIT}件までです。`);
+      const id = existing?.id ?? randomUUID(), sealed = this.vault.seal(state, `connection:${ownerId}:${id}`);
       if (existing) {
         this.db.prepare("UPDATE connections SET service=?,auth_scheme=?,app_id=?,subject=?,state=?,status='usable',generation=generation+1 WHERE resource_id=?").run(service, scheme, app, subject, sealed, id);
         if (label !== null) this.resources.rename(existing, label);
       } else {
-        this.resources.insert(id, holderId, 'connection', label);
+        this.resources.insert(id, ownerId, 'connection', label);
         this.db.prepare("INSERT INTO connections (resource_id,service,auth_scheme,app_id,subject,status,state) VALUES (?,?,?,?,?,'usable',?)").run(id, service, scheme, app, subject, sealed);
       }
       return this.get(id);
@@ -97,16 +97,16 @@ export class Connections {
     this.db.prepare("UPDATE connections SET status='reconnect_required',generation=generation+1 WHERE resource_id=? AND generation=? AND status='usable'").run(row.id, row.generation);
     this.resources.touch(row.id);
   }
-  disconnect(holderId, id) {
+  disconnect(ownerId, id) {
     return this.store.transaction(() => {
-      const row = this.forService(holderId, id);
+      const row = this.forService(ownerId, id);
       this.db.prepare("UPDATE connections SET status='disconnecting',generation=generation+1 WHERE resource_id=?").run(row.id);
       this.resources.touch(row.id);
       return row;
     });
   }
   current(row) {
-    const current = this.held(row.holder_id, row.id);
+    const current = this.held(row.owner_id, row.id);
     if (!current || current.generation !== row.generation) fail(409, 'connection_changed', '接続の状態が変わりました。');
     if (current.status !== 'usable') fail(409, 'reconnect_required', 'この接続は利用できません。接続し直してください。');
     return current;
@@ -159,10 +159,10 @@ export class Connections {
     const result = await this.obtain(row);
     return { values: result.values, expires_at: result.state.expires_at, facts: { ...result.state.facts, ...scopeFacts(result.state) } };
   }
-  // What is said of a connection. The holder sees everything but the sealed state; whoever acts for them sees what
+  // What is said of a connection. The owner sees everything but the sealed state; whoever acts for them sees what
   // they need to use it. Whether disconnecting can also take it back at the service is as the app it was made
   // through can.
-  // What the holder pasted, for a token; what renews the others is Foundation's to keep and of no use elsewhere.
+  // What the owner pasted, for a token; what renews the others is Foundation's to keep and of no use elsewhere.
   handed(row) {
     if (row.auth_scheme !== 'token') return undefined;
     return this.state(row).private_state.fields;

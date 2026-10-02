@@ -45,7 +45,7 @@ const command = { command: errorCode({ ...array(string), minItems: 1 }, 'invalid
 const environment = { name: resourceName, size: errorCode(nullable(choice(['small', 'medium', 'large'])), 'invalid_size'), lifetime, identity: errorCode(nullable(principalId), 'invalid_principal') };
 const oauthFields = array(object({ name: string, label: string, required: boolean, placeholder: string, note: string, pattern: string, leading: boolean }, ['name', 'label']));
 const tokenFields = array(object({ name: string, label: string, required: boolean, placeholder: string, note: string, pattern: string, secret: boolean }, ['name', 'label']));
-const resourceBase = { id: string, kind: choice(KINDS), name: string, holder_id: principalId, created_at: iso, updated_at: iso, lines: array(object({ subject_id: principalId, relation: string, created_at: iso }, ['subject_id', 'relation', 'created_at'])) };
+const resourceBase = { id: string, kind: choice(KINDS), name: string, owner_id: principalId, created_at: iso, updated_at: iso, lines: array(object({ subject_id: principalId, relation: string, created_at: iso }, ['subject_id', 'relation', 'created_at'])) };
 const resource = (kind, fields) => object({ ...resourceBase, kind: { const: kind }, ...fields }, ['id', 'kind', 'name']);
 
 export const schemas = {
@@ -109,12 +109,12 @@ export const schemas = {
     injection: { ...map(pointer), description: 'Environment variable names mapped to JSON Pointers selecting a declared field.' }, hint: string }, ['fields', 'injection']),
   ServiceDefinition: { ...object({ name: string, api: string, docs: string, console: string,
     auth_schemes: { ...object({ oauth: ref('OAuthDefinition'), token: ref('TokenDefinition') }), additionalProperties: false } }, ['name']),
-    additionalProperties: false, description: 'A holder-defined service. auth_schemes may be empty; catalog adapters and role schemes cannot be registered here. URLs use RFC 6570; response selectors and injection values use RFC 6901 JSON Pointers. Endpoint variables come from declared app fields/client_id; identity URLs may also use access_token and kept fields, and revocation URLs access_token/refresh_token.' },
+    additionalProperties: false, description: 'A owner-defined service. auth_schemes may be empty; catalog adapters and role schemes cannot be registered here. URLs use RFC 6570; response selectors and injection values use RFC 6901 JSON Pointers. Endpoint variables come from declared app fields/client_id; identity URLs may also use access_token and kept fields, and revocation URLs access_token/refresh_token.' },
   AppInput: appValues,
   Secret: resource('secret', { size: integer, recipients: { ...array(principalId), description: 'Principals an envelope was made for: those that can open it.' } }),
   SecretInput: { anyOf: [
     object({ content: { ...string, description: 'The bytes sealed with the secret\'s own key, base64url.' }, envelopes: { ...map(string), description: 'The secret\'s key sealed per recipient (principal id to base64url envelope). Added to those kept.' } }, ['content']),
-    object({ plain: { ...string, description: 'The bytes as they are, base64url, for Foundation\'s principal to seal for the holder and itself. Only where it is the holder\'s agent (otherwise foundation_not_agent).' } }, ['plain']),
+    object({ plain: { ...string, description: 'The bytes as they are, base64url, for Foundation\'s principal to seal for the owner and itself. Only where it is the owner\'s agent (otherwise foundation_not_agent).' } }, ['plain']),
   ], description: 'Sealed by the client, which opens nothing to the server; or, by a client that cannot seal, handed to Foundation\'s principal to seal. See /v1/recipients for whom to seal for.' },
   SecretContent: object({ content: string, envelope: { ...nullable(string), description: 'The caller\'s own envelope, when one was made for it.' }, recipients: { ...array(ref('Recipient')), description: 'Those with an envelope: a writer sealing with a new key seals it for each of them again.' } }, ['content', 'envelope', 'recipients']),
   PrincipalKey: object({ principal_id: principalId, public_key: nullable(string), wraps: { ...map(string), description: 'For the caller\'s own key: the private key wrapped per WebAuthn credential id, as kept.' } }, ['principal_id', 'public_key']),
@@ -209,8 +209,8 @@ export const routes = [
     get: op('getKey', 'Read the caller\'s public key and its private key wrapped per credential', object({ key: ref('PrincipalKey') }, ['key'])),
     put: op('publishKey', 'Publish the caller\'s public key, once', object({ key: ref('PrincipalKey') }, ['key']), { input: 'PublishKey', 'x-input-error': 'invalid_key', description: 'A principal has one key; envelopes are made for it. Replacing it is refused (key_exists).' }),
   } },
-  { name: 'recipients', path: '/v1/recipients', methods: { get: op('listRecipients', 'Whom a secret kept by the holder is sealed for', object({ recipients: array(ref('Recipient')) }, ['recipients']), { parameters: [as], description: 'The holder, and Foundation\'s principal when it is the holder\'s agent, each with a public key. Make an envelope for each when placing a secret.' }) } },
-  { name: 'payment', path: '/v1/payment', methods: { get: op('getPayment', 'Read whether the holder pays for use beyond the free part', object({ payment: ref('Payment') }, ['payment']), { parameters: [as] }) } },
+  { name: 'recipients', path: '/v1/recipients', methods: { get: op('listRecipients', 'Whom a secret kept by the owner is sealed for', object({ recipients: array(ref('Recipient')) }, ['recipients']), { parameters: [as], description: 'The owner, and Foundation\'s principal when it is the owner\'s agent, each with a public key. Make an envelope for each when placing a secret.' }) } },
+  { name: 'payment', path: '/v1/payment', methods: { get: op('getPayment', 'Read whether the owner pays for use beyond the free part', object({ payment: ref('Payment') }, ['payment']), { parameters: [as] }) } },
   { name: 'paymentEvents', path: '/v1/payment/events', methods: { post: op('paymentEvents', 'Receive Stripe events', object({ received: { const: true } }, ['received']), { input: object(), security: [], 'x-input-error': 'invalid_signature',
     description: 'For Stripe only: events signed with the endpoint secret (Stripe-Signature). Subscription changes set whether a principal pays.' }) } },
   { name: 'paymentSetup', path: '/v1/payment/setup', methods: { post: op('setUpPayment', 'Start setting a payment method', object({ url: string }, ['url']), { input: 'Empty', parameters: [as],
@@ -238,7 +238,7 @@ export const routes = [
   { name: 'accessKey', group: 'principals', path: '/v1/principals/{principalId}/keys/{keyId}', methods: { delete: okay('revokeKey', 'Revoke a key') } },
   { name: 'publicKey', group: 'principals', path: '/v1/principals/{principalId}/public-key', methods: { get: op('getPublicKey', 'Read a principal\'s public key', object({ key: ref('PrincipalKey') }, ['key'])) } },
   { name: 'links', group: 'principals', path: '/v1/principals/{principalId}/links', methods: { post: op('issueLink', 'Issue a one-use link for a store request', object({ link: object({ id, request_id: requestId, expires_at: time }, ['id', 'request_id', 'expires_at']), url: string, expires_at: time }, ['link', 'url', 'expires_at']), { input: object({ request_id: string }, ['request_id']), status: 201, 'x-input-error': 'invalid_request' }) } },
-  { name: 'access', group: 'principals', path: '/v1/principals/{principalId}/access', methods: { delete: okay('revokeAccess', 'Revoke a principal’s access to the holder', { parameters: [as] }) } },
+  { name: 'access', group: 'principals', path: '/v1/principals/{principalId}/access', methods: { delete: okay('revokeAccess', 'Revoke a principal’s access to the owner', { parameters: [as] }) } },
   { name: 'compute', group: 'principals', path: '/v1/principals/{principalId}/compute', methods: {
     get: op('getCompute', 'Read monthly compute usage and allowance', one('Compute')),
     put: op('setCompute', 'Set a principal’s monthly compute allowance', one('Compute'), { input: object({ monthly_seconds: integer }, ['monthly_seconds']), 'x-input-error': 'invalid_limit' }),
@@ -250,7 +250,7 @@ export const routes = [
   } },
   { name: 'requests', group: 'requests', path: '/v1/requests', methods: {
     get: op('listRequests', 'List sent or received requests', many('requests', 'Request'), { parameters: [query('status', choice(['pending', 'granted', 'denied', 'cancelled'])), query('to', string, 'Use me for received requests; otherwise lists sent requests.')] }),
-    post: op('createRequest', 'Ask someone for a relation, secrets, a connected service or a registered app', one('Request'), { input: 'CreateRequest', status: 201, parameters: [as], 'x-input-error': 'invalid_authorization_details', description: 'authorization_details holds one detail (RFC 9396). A relation with no object, asked of nobody, is how a principal nobody knows asks to act for whoever answers; it returns a user_code to show beside verification_uri (as in RFC 8628). Otherwise the request goes to to, the holder of the object, or the holder selected by as, who answers where they are (as in CIBA); binding_message tells them why. Poll GET /v1/requests/{requestId} no more often than interval seconds; faster polling is answered with slow_down, and an expired request with expired_token. Do not collect secrets in chat.' }),
+    post: op('createRequest', 'Ask someone for a relation, secrets, a connected service or a registered app', one('Request'), { input: 'CreateRequest', status: 201, parameters: [as], 'x-input-error': 'invalid_authorization_details', description: 'authorization_details holds one detail (RFC 9396). A relation with no object, asked of nobody, is how a principal nobody knows asks to act for whoever answers; it returns a user_code to show beside verification_uri (as in RFC 8628). Otherwise the request goes to to, the owner of the object, or the owner selected by as, who answers where they are (as in CIBA); binding_message tells them why. Poll GET /v1/requests/{requestId} no more often than interval seconds; faster polling is answered with slow_down, and an expired request with expired_token. Do not collect secrets in chat.' }),
   } },
   { name: 'request', group: 'requests', path: '/v1/requests/{requestId}', methods: {
     get: op('getRequest', 'Read a request and its outcome', one('Request'), { security: [...secure, { requestLink: [] }] }),
@@ -314,8 +314,8 @@ export const routes = [
   { name: 'httpRequest', path: '/v1/functions/http.request', methods: { post: op('httpRequest', 'Send an HTTPS request using saved values', 'FetchResult', { input: 'FetchInput', parameters: [as], description: 'Use bindings to place referenced values at JSON Pointer targets in headers or body. Ordinary strings are literal. json and form are encoded after binding; body is raw text or base64. URLs cannot be binding targets. Public HTTPS only, redirects are returned without following, request/response body limit 1 MiB. Bound values are redacted from the response. save stores the response body as a secret under that name and omits it from the response.' }) } },
   { name: 'usage', path: '/v1/usage', methods: { get: op('getUsage', 'Read storage usage and limits', 'Usage', { parameters: [as] }) } },
   { name: 'audit', path: '/v1/audit-log', methods: { get: op('getAuditLog', 'Read the caller’s audit records', many('entries', 'AuditEntry')) } },
-  { name: 'overview', path: '/v1/overview', methods: { get: op('getOverview', 'Read the holder’s workspace', 'Overview', { parameters: [as] }) } },
-  { name: 'export', path: '/v1/export', methods: { get: op('exportData', 'Download the holder’s data, including secret bytes', 'Export', { parameters: [as], description: 'Contains base64 secret content. Handle as private data. Managed connections export metadata, not renewable state.' }) } },
+  { name: 'overview', path: '/v1/overview', methods: { get: op('getOverview', 'Read the owner’s workspace', 'Overview', { parameters: [as] }) } },
+  { name: 'export', path: '/v1/export', methods: { get: op('exportData', 'Download the owner’s data, including secret bytes', 'Export', { parameters: [as], description: 'Contains base64 secret content. Handle as private data. Managed connections export metadata, not renewable state.' }) } },
 ];
 
 // A WebAuthn credential is known by the id its authenticator gave it (base64url, up to 1023 bytes).

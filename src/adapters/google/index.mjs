@@ -10,7 +10,7 @@ export function googleOauth(client) {
   return {
     kind: 'oauth', available: client.enabled, variables: ['GOOGLE_OAUTH_ACCESS_TOKEN', 'CLOUDSDK_AUTH_ACCESS_TOKEN', 'GOOGLE_ACCOUNT_EMAIL', 'GOOGLE_OAUTH_EXPIRES_AT'],
     scopes: { base: GOOGLE_BASE_SCOPES, documentationUrl: GOOGLE_SCOPE_DOCS },
-    // The holder may bring their own OAuth app: the same scheme, built around their client.
+    // The owner may bring their own OAuth app: the same scheme, built around their client.
     oauthClient: client, withClient: googleOauth,
     authorization: {
       begin: (context, previous) => client.authorize({ ...context, email: previous?.subject }),

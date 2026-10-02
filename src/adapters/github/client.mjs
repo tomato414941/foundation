@@ -4,7 +4,7 @@ import { fail } from '../../errors.mjs';
 export const GITHUB_API = 'https://api.github.com';
 export const GITHUB_DOCS = 'https://docs.github.com/rest';
 export const GITHUB_SETTINGS = 'https://github.com/settings/applications';
-// GitHub needs no scope to say who the user is; every scope is the holder's choice.
+// GitHub needs no scope to say who the user is; every scope is the owner's choice.
 export const GITHUB_BASE_SCOPES = [];
 export const GITHUB_SCOPE_DOCS = 'https://docs.github.com/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps';
 const hash = value => createHash('sha256').update(value).digest('hex');

@@ -68,12 +68,12 @@ export class Principals {
   unrelate(subjectId, relation, objectType, objectId) {
     return this.db.prepare('DELETE FROM relations WHERE subject_id=? AND relation=? AND object_type=? AND object_id=?').run(subjectId, relation, objectType, objectId).changes > 0;
   }
-  // Stop this principal's access to one holder: every line onto the holder, but the holder's ownership of it, and
-  // onto what the holder has. Its identity and keys remain.
-  revokeAccess(subjectId, holderId) {
+  // Stop this principal's access to one owner: every line onto the owner, but the owner's ownership of it, and
+  // onto what the owner has. Its identity and keys remain.
+  revokeAccess(subjectId, ownerId) {
     return this.db.prepare(`DELETE FROM relations WHERE subject_id=? AND relation<>'owner' AND (
-      (object_type='principal' AND object_id=?) OR (object_type='resource' AND object_id IN (SELECT id FROM resources WHERE holder_id=?)))`)
-      .run(subjectId, holderId, holderId).changes;
+      (object_type='principal' AND object_id=?) OR (object_type='resource' AND object_id IN (SELECT id FROM resources WHERE owner_id=?)))`)
+      .run(subjectId, ownerId, ownerId).changes;
   }
   // Everyone recorded with one relation on one object.
   subjectsOf(relation, objectType, objectId) {
@@ -92,7 +92,7 @@ export class Principals {
   }
   // What others hold and show to this principal, with the line it is shown along.
   shownTo(id) {
-    return this.db.prepare(`SELECT x.id, x.holder_id, x.kind, x.name, COALESCE(o.size, s.size) AS size, o.type, x.updated_at, l.relation FROM relations l JOIN resources x ON x.id=l.object_id
+    return this.db.prepare(`SELECT x.id, x.owner_id, x.kind, x.name, COALESCE(o.size, s.size) AS size, o.type, x.updated_at, l.relation FROM relations l JOIN resources x ON x.id=l.object_id
       LEFT JOIN objects o ON o.resource_id=x.id LEFT JOIN secrets s ON s.resource_id=x.id
       WHERE l.subject_id=? AND l.object_type='resource' ORDER BY l.created_at`).all(id);
   }

@@ -28,7 +28,7 @@ export class RequestActions {
       const previous = definition.connection_id === undefined ? undefined : this.connections.reconnection(toId, ref, definition.auth_scheme, definition.connection_id);
       if (definition.app !== undefined && definition.app !== 'foundation') {
         const app = this.apps.get(definition.app);
-        if (!app || !this.authorization.can(toId, 'use', 'app', { id: app.id, holder: app.holder_id })) fail(404, 'not_found', 'アプリが見つかりません。');
+        if (!app || !this.authorization.can(toId, 'use', 'app', { id: app.id, owner: app.owner_id })) fail(404, 'not_found', 'アプリが見つかりません。');
         if (app.service !== ref) fail(400, 'app_mismatch', 'このアプリは別のサービスのものです。');
       } else if (takesApps(scheme) && !(definition.app === undefined && previous?.app_id) && !scheme.oauthClient.enabled) {
         fail(409, 'app_required', 'このサービスにはFoundationのアプリがありません。先にOAuthアプリの登録を依頼してください（type "app"）。');
@@ -60,13 +60,13 @@ export class RequestActions {
     if (object_type === undefined) return { type: 'principal', id: toId };
     if (object_type === 'principal') return { type: 'principal', id: this.principals.at(object_id).id };
     const held = this.secrets.resources.at(object_id);
-    if (held.holder_id !== toId) fail(400, 'invalid_authorization_details', '依頼する相手の持ち物を指定してください。');
-    return { type: 'resource', id: held.id, kind: held.kind, holder_id: held.holder_id };
+    if (held.owner_id !== toId) fail(400, 'invalid_authorization_details', '依頼する相手の持ち物を指定してください。');
+    return { type: 'resource', id: held.id, kind: held.kind, owner_id: held.owner_id };
   }
   // Where one value will go: new under a free name, or in place of what a replacement names. Nothing
   // else: a request never overwrites what it did not declare it would.
-  placement(holderId, asked, name) {
-    const existing = this.secrets.find(holderId, name), replacing = asked.replace && name === asked.name;
+  placement(ownerId, asked, name) {
+    const existing = this.secrets.find(ownerId, name), replacing = asked.replace && name === asked.name;
     if (replacing && !existing) fail(409, 'name_missing', `「${name}」という保存値はありません。置き換えではなく、新しく預ける依頼にしてください。`);
     if (!replacing && existing) fail(409, 'name_taken', `「${name}」はすでに使われています。別の保存名を入力してください。`);
     return replacing ? existing : null;
@@ -114,20 +114,20 @@ export class RequestActions {
     return JSON.parse(done.result);
   }
   // previous: the managed authorization this one replaces.
-  connect(id, holderId, service, scheme, result, { requestedBy = '', previous, scopes, app = null, name } = {}) {
+  connect(id, ownerId, service, scheme, result, { requestedBy = '', previous, scopes, app = null, name } = {}) {
     const saved = this.store.transaction(() => {
       if (id) {
-        const row = this.requests.forTo(id, holderId, true);
+        const row = this.requests.forTo(id, ownerId, true);
         const input = this.requests.detail(row);
         if (row.type !== 'connection' || input.service !== service || input.auth_scheme !== scheme) fail(409, 'wrong_kind', '依頼された方法で接続してください。');
         if (input.connection_id !== previous?.id) fail(409, 'connection_changed', '依頼された接続を選んでください。');
       }
-      const saved = this.connections.save(holderId, service, scheme, result, { previous, scopes, app, name });
-      this.auditLog.write(holderId, previous ? 'connection.renewed' : 'connection.created', 'connection', saved.id, { service, auth_scheme: scheme, requested_by: requestedBy || null, request: id || null });
+      const saved = this.connections.save(ownerId, service, scheme, result, { previous, scopes, app, name });
+      this.auditLog.write(ownerId, previous ? 'connection.renewed' : 'connection.created', 'connection', saved.id, { service, auth_scheme: scheme, requested_by: requestedBy || null, request: id || null });
       if (id) {
-        this.requests.done(id, holderId, { connection_id: saved.id });
+        this.requests.done(id, ownerId, { connection_id: saved.id });
         this.requests.record(id, 'connected', { service });
-        this.auditLog.write(holderId, 'request.granted', 'request', id, { type: 'connection', service });
+        this.auditLog.write(ownerId, 'request.granted', 'request', id, { type: 'connection', service });
       }
       return saved;
     });
@@ -170,11 +170,11 @@ export class RequestActions {
     this.changed(row);
     return row;
   }
-  revokeAccess(holderId, fromId) {
+  revokeAccess(ownerId, fromId) {
     const cancelled = this.store.transaction(() => {
-      const removed = this.principals.revokeAccess(fromId, holderId);
-      const rows = this.requests.cancelFrom(fromId, 'access_revoked', holderId);
-      if (removed || rows.length) this.auditLog.write(holderId, 'access.revoked', 'principal', fromId, {});
+      const removed = this.principals.revokeAccess(fromId, ownerId);
+      const rows = this.requests.cancelFrom(fromId, 'access_revoked', ownerId);
+      if (removed || rows.length) this.auditLog.write(ownerId, 'access.revoked', 'principal', fromId, {});
       return rows;
     });
     for (const row of cancelled) this.changed(row);

@@ -12,12 +12,12 @@ export function requestView({ requests, services, principals, settings, connecti
   if (['connection', 'app'].includes(row.type)) { try { service = services.describe(asked.service); } catch {} }
   // The scheme a connection will be made by: the one asked for, or the service's first.
   const scheme = row.type === 'connection' && service ? asked.auth_scheme ?? Object.keys(service.auth_schemes)[0] : undefined;
-  // The app a connection will be made through, by the name its holder gave it: the one asked for, or Foundation's.
+  // The app a connection will be made through, by the name its owner gave it: the one asked for, or Foundation's.
   const app = scheme === 'oauth' && service.auth_schemes.oauth?.takes_apps ? apps.reference(asked.app ?? 'foundation') : undefined;
   const target = service && asked.connection_id ? connections.held(row.to_id, asked.connection_id) : undefined;
   const back = row.to_id ? settings.returnUrlFor(row.to_id) : undefined;
   const verification_uri = back ? back + (back.includes('?') ? '&' : '?') + 'foundation_request=' + row.id : origin + '/requests/' + row.id;
-  // What a relation is asked onto, by the name its holder knows it by.
+  // What a relation is asked onto, by the name its owner knows it by.
   let object;
   if (row.type === 'relation' && asked.object_type === 'principal') object = { type: 'principal', id: asked.object_id, name: principals.get(asked.object_id)?.name ?? '' };
   if (row.type === 'relation' && asked.object_type === 'resource') { const held = resources.get(asked.object_id); object = { type: 'resource', id: asked.object_id, kind: held?.kind ?? null, name: held?.name ?? '' }; }

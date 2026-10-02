@@ -8,16 +8,16 @@ import { appFieldsOf, takesApps } from './apps.mjs';
 
 // A service is where a connection works: what it is called, where its API and documentation are, where an app or a
 // token for it is made, and the schemes by which Foundation comes to hold a connection for it. Foundation's catalog
-// knows services by id; a holder may describe one the catalog does not know, as a resource of kind service, known by
+// knows services by id; a owner may describe one the catalog does not know, as a resource of kind service, known by
 // its resource id. Both are the same shape (service-definition.mjs) and are used the same way.
-const COLUMNS = 'r.id,r.holder_id,r.kind,r.name,r.created_at,r.updated_at,s.definition';
+const COLUMNS = 'r.id,r.owner_id,r.kind,r.name,r.created_at,r.updated_at,s.definition';
 const FROM = 'FROM resources r JOIN services s ON s.resource_id=r.id';
 const UUID = /^[0-9a-f-]{36}$/;
 export const SERVICES_MAX = 100;
 
 export class Services {
   // entries: the catalog as it runs, each { definition, schemes } (catalog.mjs). fetcher: the network for services
-  // holders describe, replaced in tests.
+  // owners describe, replaced in tests.
   constructor(store, resources, entries, { fetcher, authorization } = {}) {
     this.authorization = authorization;
     this.store = store; this.db = store.db; this.resources = resources; this.fetcher = fetcher;
@@ -26,13 +26,13 @@ export class Services {
   }
   catalogIds() { return [...this.catalog.keys()]; }
   row(id) { return typeof id === 'string' && UUID.test(id) ? this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.id=?`).get(id) : undefined; }
-  find(holderId, name) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.holder_id=? AND r.name=?`).get(holderId, resourceName(name)); }
-  list(holderId) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.holder_id=? ORDER BY r.name, r.id`).all(holderId); }
+  find(ownerId, name) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.owner_id=? AND r.name=?`).get(ownerId, resourceName(name)); }
+  list(ownerId) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.owner_id=? ORDER BY r.name, r.id`).all(ownerId); }
   // Those others hold that a line reaches, where the rules let this principal read them.
   lent(principalId) {
     return this.db.prepare(`SELECT DISTINCT ${COLUMNS} ${FROM} JOIN relations l ON l.object_type='resource' AND l.object_id=r.id
-      WHERE l.subject_id=? AND r.holder_id<>? ORDER BY r.name, r.id`).all(principalId, principalId)
-      .filter(row => this.authorization.can(principalId, 'read', 'service', { id: row.id, holder: row.holder_id }));
+      WHERE l.subject_id=? AND r.owner_id<>? ORDER BY r.name, r.id`).all(principalId, principalId)
+      .filter(row => this.authorization.can(principalId, 'read', 'service', { id: row.id, owner: row.owner_id }));
   }
   // A service by reference: the catalog's id, or a described service's resource id. principalId, when given, must
   // be one the rules let read a described one.
@@ -41,7 +41,7 @@ export class Services {
     const entry = this.catalog.get(ref);
     if (entry) return { ref, definition: entry.definition, catalog: true };
     const row = this.row(ref);
-    if (!row || (principalId !== undefined && !this.authorization.can(principalId, 'read', 'service', { id: row.id, holder: row.holder_id }))) fail(404, 'not_found', 'サービスが見つかりません。');
+    if (!row || (principalId !== undefined && !this.authorization.can(principalId, 'read', 'service', { id: row.id, owner: row.owner_id }))) fail(404, 'not_found', 'サービスが見つかりません。');
     return { ref, definition: JSON.parse(row.definition), catalog: false, row };
   }
   // The schemes of a service as they run. A described service's are built from its definition and kept until it
@@ -91,27 +91,27 @@ export class Services {
   }
   catalogView() { return this.catalogIds().map(ref => this.describe(ref)); }
 
-  // Describing a service: the holder's definition, checked as the catalog's are. The same name again replaces it;
+  // Describing a service: the owner's definition, checked as the catalog's are. The same name again replaces it;
   // connections made for it go on under the new definition.
-  put(holderId, name, input) {
+  put(ownerId, name, input) {
     resourceName(name);
     const definition = definitionInput(input);
     return this.store.transaction(() => {
-      const existing = this.find(holderId, name);
-      if (!existing && this.list(holderId).length >= SERVICES_MAX) fail(409, 'service_limit', `定義できるサービスは${SERVICES_MAX}件までです。`);
+      const existing = this.find(ownerId, name);
+      if (!existing && this.list(ownerId).length >= SERVICES_MAX) fail(409, 'service_limit', `定義できるサービスは${SERVICES_MAX}件までです。`);
       const id = existing?.id ?? randomUUID();
       if (existing) {
         this.db.prepare('UPDATE services SET definition=? WHERE resource_id=?').run(JSON.stringify(definition), id);
         this.resources.touch(id);
       } else {
-        this.resources.insert(id, holderId, 'service', name);
+        this.resources.insert(id, ownerId, 'service', name);
         this.db.prepare('INSERT INTO services (resource_id,definition) VALUES (?,?)').run(id, JSON.stringify(definition));
       }
       this.built.delete(id);
       return this.row(id);
     });
   }
-  write(row, input) { return this.put(row.holder_id, row.name, input); }
+  write(row, input) { return this.put(row.owner_id, row.name, input); }
   // Adding a method does not replace a definition read earlier, or alter an existing method.
   addSchemes(row, added) {
     return this.store.transaction(() => {
@@ -129,12 +129,12 @@ export class Services {
   }
   rename(row, name) {
     resourceName(name);
-    if (name !== row.name && this.find(row.holder_id, name)) fail(409, 'name_taken', 'その名前はすでに使われています。');
+    if (name !== row.name && this.find(row.owner_id, name)) fail(409, 'name_taken', 'その名前はすでに使われています。');
     return this.row(this.resources.rename(row, name).id);
   }
   // What refers to a described service: connections and apps, whoever holds them.
   dependents(row) {
-    return this.db.prepare(`SELECT r.id, r.holder_id, r.kind, r.name FROM resources r LEFT JOIN connections c ON c.resource_id=r.id LEFT JOIN apps a ON a.resource_id=r.id
+    return this.db.prepare(`SELECT r.id, r.owner_id, r.kind, r.name FROM resources r LEFT JOIN connections c ON c.resource_id=r.id LEFT JOIN apps a ON a.resource_id=r.id
       WHERE c.service=? OR a.service=? ORDER BY r.created_at`).all(row.id, row.id);
   }
   // A service something still refers to stays: removing it would leave connections no scheme can use.

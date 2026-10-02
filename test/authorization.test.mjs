@@ -12,21 +12,21 @@ test('答えは subject・action・resource から decision だけを返し、�
   principals.relate(key.id, 'agent', 'principal', person.id);
   const ask = (subject, name, resource) => authorization.allowed({ subject, action: { name }, resource }).decision;
   const me = { id: person.id, via: { kind: 'session' } }, actor = { id: key.id, via: { kind: 'key' } }, stranger = { id: other.id, via: { kind: 'key' } };
-  assert.equal(ask(me, 'content', { type: 'secret', id: 'x', holder: person.id }), true, 'the holder');
-  assert.equal(ask(actor, 'list', { type: 'secret', holder: person.id }), true, 'one who acts for the holder reaches their things');
-  assert.equal(ask(actor, 'read', { type: 'secret', id: 'x', holder: person.id }), true, 'and sees what each is');
-  assert.equal(ask(actor, 'content', { type: 'secret', id: 'x', holder: person.id }), false, 'but reads what one holds only along a line to it');
-  assert.equal(ask(stranger, 'content', { type: 'secret', id: 'x', holder: person.id }), false, 'nobody else');
-  assert.equal(ask(actor, 'rename', { type: 'secret', id: 'x', holder: person.id }), false, 'renaming is the holder\'s alone');
+  assert.equal(ask(me, 'content', { type: 'secret', id: 'x', owner: person.id }), true, 'the owner');
+  assert.equal(ask(actor, 'list', { type: 'secret', owner: person.id }), true, 'one who acts for the owner reaches their things');
+  assert.equal(ask(actor, 'read', { type: 'secret', id: 'x', owner: person.id }), true, 'and sees what each is');
+  assert.equal(ask(actor, 'content', { type: 'secret', id: 'x', owner: person.id }), false, 'but reads what one holds only along a line to it');
+  assert.equal(ask(stranger, 'content', { type: 'secret', id: 'x', owner: person.id }), false, 'nobody else');
+  assert.equal(ask(actor, 'rename', { type: 'secret', id: 'x', owner: person.id }), false, 'renaming is the owner\'s alone');
   principals.relate(other.id, 'viewer', 'resource', 'x');
-  assert.equal(ask(stranger, 'content', { type: 'secret', id: 'x', holder: person.id }), true, 'a line drawn onto the thing itself');
-  assert.equal(ask(stranger, 'content', { type: 'secret', id: 'y', holder: person.id }), false, 'and only that thing');
-  assert.equal(ask(stranger, 'write', { type: 'secret', id: 'x', holder: person.id }), false);
+  assert.equal(ask(stranger, 'content', { type: 'secret', id: 'x', owner: person.id }), true, 'a line drawn onto the thing itself');
+  assert.equal(ask(stranger, 'content', { type: 'secret', id: 'y', owner: person.id }), false, 'and only that thing');
+  assert.equal(ask(stranger, 'write', { type: 'secret', id: 'x', owner: person.id }), false);
   assert.equal(ask(me, 'remove', { type: 'principal', id: key.id }), true, 'the owner');
   assert.equal(ask(actor, 'remove', { type: 'principal', id: key.id }), false, 'not oneself');
   assert.equal(ask(actor, 'rename', { type: 'principal', id: key.id }), true, 'oneself, for a name');
-  assert.equal(ask(actor, 'connect', { type: 'connection', holder: person.id }), false, 'connecting is the holder\'s unless given');
-  assert.equal(ask(me, 'connect', { type: 'connection', holder: person.id }), true);
+  assert.equal(ask(actor, 'connect', { type: 'connection', owner: person.id }), false, 'connecting is the owner\'s unless given');
+  assert.equal(ask(me, 'connect', { type: 'connection', owner: person.id }), true);
   assert.deepEqual(authorization.allowed({}), { decision: false });
   assert.ok(rules().some(rule => rule.resource === 'connection' && rule.action === 'rename'), 'every permission is readable');
   store.close();
@@ -42,7 +42,7 @@ test('ルートは同じ問いを立て、許されない主体には 403、依�
   }
   assert.equal((await f.request('/v1/resources?kind=connection', { token: key.token, anonymous: true })).status, 200, 'what both may do still works');
   assert.equal((await f.request('/v1/resources?kind=connection')).status, 200);
-  assert.equal((await f.request('/v1/functions')).status, 200, 'the holder may do what those acting for them may');
+  assert.equal((await f.request('/v1/functions')).status, 200, 'the owner may do what those acting for them may');
   assert.equal((await f.request('/v1/principals/' + key.id, { method: 'DELETE', token: key.token, anonymous: true, data: {} })).status, 403, 'nobody removes what they do not own');
   const stranger = await f.request('/v1/principals/' + USER_A, { token: key.token, anonymous: true });
   assert.equal(stranger.status, 403);
@@ -91,7 +91,7 @@ test('来かたによらず、同じ関係なら同じ答えを返す', () => {
   const store = new Store(':memory:', KEY), principals = new Principals(store), authorization = new Authorization(principals, new Resources(store));
   const person = principals.ensure('person');
   const ask = (via, name, resource) => authorization.allowed({ subject: { id: person.id, via: { kind: via } }, action: { name }, resource }).decision;
-  for (const [name, resource] of [['connect', { type: 'connection', holder: person.id }], ['disconnect', { type: 'connection', id: 'x', holder: person.id }], ['export', { type: 'principal', id: person.id }]]) {
+  for (const [name, resource] of [['connect', { type: 'connection', owner: person.id }], ['disconnect', { type: 'connection', id: 'x', owner: person.id }], ['export', { type: 'principal', id: person.id }]]) {
     assert.equal(ask('key', name, resource), ask('session', name, resource), name);
     assert.equal(ask('key', name, resource), true, name);
   }
@@ -104,8 +104,8 @@ test('所有者は所有する相手を管理するが、その持ち物には�
   const ask = (name, resource) => authorization.allowed({ subject: { id: person.id, via: { kind: 'key' } }, action: { name }, resource }).decision;
   assert.equal(ask('issue-key', { type: 'principal', id: ai.id }), true);
   assert.equal(ask('remove', { type: 'principal', id: ai.id }), true);
-  assert.equal(ask('content', { type: 'connection', id: 'x', holder: ai.id }), false);
+  assert.equal(ask('content', { type: 'connection', id: 'x', owner: ai.id }), false);
   principals.relate(person.id, 'agent', 'principal', ai.id);
-  assert.equal(ask('list', { type: 'connection', holder: ai.id }), true, '届かせるには代理の関係を別に引く');
+  assert.equal(ask('list', { type: 'connection', owner: ai.id }), true, '届かせるには代理の関係を別に引く');
   store.close();
 });

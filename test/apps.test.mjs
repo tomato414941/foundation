@@ -9,7 +9,7 @@ import { googleOauth } from '../src/adapters/google/index.mjs';
 
 const WORK = { service: 'cloudflare', client_id: 'work-app-id', client_secret: 'work-app-secret' };
 
-// Foundation's own Cloudflare app is configured here too; the holder's apps sit beside it.
+// Foundation's own Cloudflare app is configured here too; the owner's apps sit beside it.
 async function withApps(t, { offered = true } = {}) {
   const cloudflare = new FakeCloudflare();
   if (!offered) { cloudflare.enabled = false; cloudflare.clientId = ''; cloudflare.clientSecret = ''; }
@@ -83,7 +83,7 @@ test('アプリを消すと、そのアプリの接続は権限を保ったま�
   assert.deepEqual(stopped.facts.requested_scopes, ['dns.write', 'offline_access', 'user-details.read']);
   assert.equal((await f.inject(connection)).status, 409);
   const other = (await f.register('個人用', { ...WORK, client_id: 'personal-app-id' })).json.resource;
-  // Changing the app a connection goes through is shown to the holder before it is kept.
+  // Changing the app a connection goes through is shown to the owner before it is kept.
   const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare', connection_id: connection.id, app: other.id } });
   const url = new URL(started.json.url);
   assert.equal(url.searchParams.get('client_id'), 'personal-app-id');

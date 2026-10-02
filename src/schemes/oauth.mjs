@@ -5,7 +5,7 @@ import { valueAt } from '../json-pointer.mjs';
 import { uriTemplate, templateVariables } from '../uri-template.mjs';
 
 // OAuth 2.0 as services actually speak it. Most follow RFC 6749; where one departs, the departure is a setting of the
-// service's definition (catalog/*.json, or one a holder wrote) rather than code of its own:
+// service's definition (catalog/*.json, or one a owner wrote) rather than code of its own:
 //   authorize, token          RFC 6570 URL templates for consent and token exchange
 //   authorize_params          anything else the consent screen needs (Dropbox: token_access_type=offline)
 //   scope_separator           how scopes are joined (Slack, Linear, Shopify: ",")
@@ -210,7 +210,7 @@ export function inject(injection, values) {
 }
 
 // Foundation's own app for a service, when its configuration holds FOUNDATION_<ID>_CLIENT_ID and _SECRET. A service
-// whose addresses are the holder's own site (a kintone domain, a Shopify shop) has none: only the holder's app can
+// whose addresses are the owner's own site (a kintone domain, a Shopify shop) has none: only the owner's app can
 // name the site.
 export function oauthSettings(definition, env = {}) {
   const prefix = 'FOUNDATION_' + definition.id.toUpperCase().replace(/-/g, '_') + '_';

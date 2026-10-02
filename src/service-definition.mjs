@@ -4,14 +4,14 @@ import { destination } from './fetch.mjs';
 import { pointerTokens } from './json-pointer.mjs';
 import { uriTemplate, templateVariables } from './uri-template.mjs';
 
-// What a service is, as data: the same shape whether Foundation's catalog holds it (catalog/*.json) or a holder
+// What a service is, as data: the same shape whether Foundation's catalog holds it (catalog/*.json) or a owner
 // wrote it for a service the catalog does not know. Every field is read by something - the page, an AI, or the
 // scheme that connects - and nothing else may be in it. The catalog alone may name code (an adapter) for a scheme
 // that data cannot describe.
 //
 //   { id?, name, logo?, api?, docs?, console?, auth_schemes?: { oauth?, role?, token? } }
 //
-// id and logo are the catalog's; a holder's service is known by its resource id. console is where an app or a
+// id and logo are the catalog's; a owner's service is known by its resource id. console is where an app or a
 // token for the service is made. The OAuth scheme is described in schemes/oauth.mjs, the token one in schemes/token.mjs.
 export const SCHEMES = ['oauth', 'role', 'token'];
 const ID = /^[a-z][a-z0-9-]{0,39}$/, FIELD = /^[a-z][a-z0-9_]{0,39}$/;
@@ -27,7 +27,7 @@ const pointer = (value, where) => {
   try { return pointerTokens(value); } catch { bad('must be a JSON Pointer', where); }
 };
 const pointers = (value, where) => { const items = [].concat(value); if (!items.length) bad('must select a value', where); for (const [at, one] of items.entries()) pointer(one, where + '[' + at + ']'); };
-// An address Foundation will call: an RFC 6570 template expanded from declared app or token fields. One a holder
+// An address Foundation will call: an RFC 6570 template expanded from declared app or token fields. One a owner
 // wrote must be a public host as well (it is checked again, resolved, whenever it is called).
 let publicOnly = false;
 const address = (value, where, known = []) => {
@@ -135,7 +135,7 @@ function role(value, where, { catalog }) {
   if (value.hint !== undefined) text(value.hint, where + '.hint', 2000);
 }
 
-// A token the holder pastes: the fields it takes (secret: the token itself, never shown again), where one is made,
+// A token the owner pastes: the fields it takes (secret: the token itself, never shown again), where one is made,
 // what to do there (instructions, for the person; hint is for an AI), and which variables an AI is handed.
 function token(value, where) {
   object(value, where); only(value, ['fields', 'console', 'instructions', 'injection', 'hint'], where);
@@ -147,7 +147,7 @@ function token(value, where) {
   if (value.hint !== undefined) text(value.hint, where + '.hint', 2000);
 }
 
-// Throws on anything that does not hold; the catalog's are checked at start, a holder's when written.
+// Throws on anything that does not hold; the catalog's are checked at start, a owner's when written.
 export function checkDefinition(value, { catalog = false } = {}) {
   publicOnly = !catalog;
   object(value, 'definition');
@@ -165,7 +165,7 @@ export function checkDefinition(value, { catalog = false } = {}) {
   if (value.auth_schemes.token !== undefined) token(value.auth_schemes.token, 'definition.auth_schemes.token');
   return value;
 }
-// A holder's definition, checked as a request is: a refusal says where.
+// A owner's definition, checked as a request is: a refusal says where.
 export function definitionInput(value) {
   try { return checkDefinition(value); }
   catch (error) { if (error.where) fail(400, 'invalid_definition', 'サービスの定義を確認してください（' + error.message + '）。', { where: error.where }); throw error; }

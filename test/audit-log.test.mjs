@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, USER_A, USER_B } from './helpers.mjs';
 
-async function deliver(f, key, holder, name) {
+async function deliver(f, key, owner, name) {
   const response = await f.request('/v1/injections', {
-    method: 'POST', token: key.token, anonymous: true, as: holder,
+    method: 'POST', token: key.token, anonymous: true, as: owner,
     data: { names: [{ name, as: 'VALUE' }] },
   });
   assert.equal(response.status, 200, response.text);

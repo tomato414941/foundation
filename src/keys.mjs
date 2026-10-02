@@ -6,7 +6,7 @@ import { generateKey, open, seal, newContentKey, sealContent, openContent } from
 // private key is its own, kept wrapped here per WebAuthn credential (so a credential's PRF unwraps it) or
 // nowhere. A secret's key is kept once per recipient, sealed for their public key: an envelope. The server
 // opens nothing with these. The one exception is Foundation's own principal, the agent: it has a key like any
-// other, kept sealed here, and opens what was sealed for it when a holder has made it their agent - to inject
+// other, kept sealed here, and opens what was sealed for it when a owner has made it their agent - to inject
 // into a command, to send a request. That key is the one thing the server can open with.
 const AGENT_NAME = 'Foundation';
 const KEY_LENGTH = 32;

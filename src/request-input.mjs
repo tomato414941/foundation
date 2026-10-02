@@ -17,7 +17,7 @@ export function requestDetails(value) {
 export function requestInput(type, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'invalid_authorization_details', '依頼の内容を指定してください。');
   // Connecting: which service and by which scheme, optionally which existing connection it replaces, and the
-  // service's scopes the AI needs. app: the app to connect through - one the holder may use, by id - or Foundation's
+  // service's scopes the AI needs. app: the app to connect through - one the owner may use, by id - or Foundation's
   // own when left out.
   if (type === 'connection' && Object.keys(input).every(key => ['service', 'auth_scheme', 'connection_id', 'scopes', 'app'].includes(key)) && typeof input.service === 'string'
     && (input.auth_scheme === undefined || SCHEMES.includes(input.auth_scheme))
@@ -26,7 +26,7 @@ export function requestInput(type, input) {
     return { service: input.service, ...(input.auth_scheme === undefined ? {} : { auth_scheme: input.auth_scheme }), ...(input.connection_id === undefined ? {} : { connection_id: input.connection_id }),
       ...(scopes.length ? { scopes } : {}), ...(app ? { app } : {}) };
   }
-  // Registering an app: the holder types its ID and secret on the request page; the asker learns only its id.
+  // Registering an app: the owner types its ID and secret on the request page; the asker learns only its id.
   if (type === 'app' && Object.keys(input).every(key => ['service', 'name'].includes(key)) && typeof input.service === 'string'
     && (input.name === undefined || typeof input.name === 'string')) {
     return { service: input.service, ...(input.name === undefined ? {} : { name: resourceName(input.name) }) };

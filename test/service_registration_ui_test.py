@@ -110,7 +110,7 @@ with sync_playwright() as p:
     expect(dialog).not_to_be_visible()
     expect(page.get_by_role('article', name='追加のアプリ', exact=True)).to_be_visible()
 
-    # A secret needs the holder's key, from a passkey.
+    # A secret needs the owner's key, from a passkey.
     virtual_authenticator(context, page)
     make_key(page, args.base)
     unlock(page, args.base)

@@ -61,7 +61,7 @@ with sync_playwright() as p:
         page.screenshot(path=str(shots / 'add-app.png'), full_page=True)
     dialog.get_by_role('button', name='追加', exact=True).click()
     expect(dialog).not_to_be_visible()
-    # Each app is listed under its service, by the name its holder gave it.
+    # Each app is listed under its service, by the name its owner gave it.
     expect(apps.locator('.agent-row').filter(has=page.get_by_text('仕事用', exact=True)).get_by_role('heading', name='Cloudflare', exact=True)).to_be_visible()
 
     # Connecting through it: the app is chosen in the dialog, and the consent screen is asked by that app.

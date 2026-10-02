@@ -1,8 +1,8 @@
 import { fail } from '../errors.mjs';
 import { inject } from './oauth.mjs';
 
-// A token the holder made at the service and pastes here: the definition says which fields it takes and what an AI
-// is handed. Foundation does not ask the service whose it is; nothing renews it, and it lasts until the holder
+// A token the owner made at the service and pastes here: the definition says which fields it takes and what an AI
+// is handed. Foundation does not ask the service whose it is; nothing renews it, and it lasts until the owner
 // replaces it here or revokes it at the service.
 export const FIELD_MAX = 8192;
 const invalid = label => fail(400, 'invalid_fields', `${label}を確認してください。`);

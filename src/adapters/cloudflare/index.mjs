@@ -9,10 +9,10 @@ export function cloudflareOauth(client) {
   return {
     kind: 'oauth', available: client.enabled, variables: ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_OAUTH_EXPIRES_AT'],
     scopes: { base: CLOUDFLARE_BASE_SCOPES, documentationUrl: CLOUDFLARE_SCOPE_DOCS },
-    // The holder may bring their own OAuth app: the same scheme, built around their client.
+    // The owner may bring their own OAuth app: the same scheme, built around their client.
     oauthClient: client, withClient: cloudflareOauth,
     authorization: {
-      // Reconnecting shows the holder what changed (the accounts it reaches, its scopes, its app) before it is kept.
+      // Reconnecting shows the owner what changed (the accounts it reaches, its scopes, its app) before it is kept.
       changes: (result, previous) => client.changes(result.privateState, previous.privateState),
       begin: context => client.authorize(context),
       complete: async (context, previous) => result(await client.exchange(context, previous)),

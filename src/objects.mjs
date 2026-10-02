@@ -14,7 +14,7 @@ import { presignAws, serverCredentials, signAws } from './aws-sigv4.mjs';
 // bytes elsewhere later changes nothing an owner or agent sees.
 export const OBJECT_MAX = 25 * 1024 * 1024;
 export const OBJECT_COUNT_MAX = 1000;
-// What one holder may keep: the free part for anyone, and more for one that pays for what it stores - with a ceiling
+// What one owner may keep: the free part for anyone, and more for one that pays for what it stores - with a ceiling
 // that keeps a mistake from becoming a large bill.
 export const OBJECT_FREE_MAX = 1024 * 1024 * 1024;
 // And what all who do not pay may keep together, so what Foundation stores without anyone paying stays bounded.
@@ -89,22 +89,22 @@ export class S3Space {
   }
 }
 
-// The holder-facing space. Every call names a resource; where the bytes live is the space's business.
+// The owner-facing space. Every call names a resource; where the bytes live is the space's business.
 const ROOM = 'resources/';
-const COLUMNS = 'h.id,h.holder_id,h.kind,h.name,h.created_at,h.updated_at,o.size,o.type';
+const COLUMNS = 'h.id,h.owner_id,h.kind,h.name,h.created_at,h.updated_at,o.size,o.type';
 const FROM = 'FROM resources h JOIN objects o ON o.resource_id=h.id';
 export class Objects {
-  // payments: whether a holder pays, and so may keep more than the free part.
+  // payments: whether a owner pays, and so may keep more than the free part.
   constructor(space, resources, store, payments) { Object.assign(this, { space, resources, store, db: store.db, payments }); }
-  ceiling(holderId) { return this.payments.paying(holderId) ? OBJECT_TOTAL_MAX : OBJECT_FREE_MAX; }
+  ceiling(ownerId) { return this.payments.paying(ownerId) ? OBJECT_TOTAL_MAX : OBJECT_FREE_MAX; }
   freeBytes() {
     const payers = new Set(this.payments.payers());
-    return this.db.prepare(`SELECT h.holder_id, o.size ${FROM}`).all().filter(row => !payers.has(row.holder_id)).reduce((total, row) => total + row.size, 0);
+    return this.db.prepare(`SELECT h.owner_id, o.size ${FROM}`).all().filter(row => !payers.has(row.owner_id)).reduce((total, row) => total + row.size, 0);
   }
-  fits(holderId, bytes, added) {
-    const paying = this.payments.paying(holderId);
+  fits(ownerId, bytes, added) {
+    const paying = this.payments.paying(ownerId);
     if (!paying && added > 0 && this.freeBytes() + added > OBJECT_FREE_POOL) fail(402, 'payment_required', '今月の無料枠はすべて使われました。支払い方法を登録すると、続けて使えます。');
-    if (bytes <= this.ceiling(holderId)) return;
+    if (bytes <= this.ceiling(ownerId)) return;
     if (!paying) fail(402, 'payment_required', '無料枠の上限に達しました。続けて使うには支払い方法を登録してください。');
     fail(409, 'space_full', '置き場の合計が上限に達しました。使わないものを消してください。');
   }
@@ -115,38 +115,38 @@ export class Objects {
     return value;
   }
   get(id) { return typeof id === 'string' ? this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE h.id=?`).get(id) : undefined; }
-  find(holderId, key) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE h.holder_id=? AND h.name=?`).get(holderId, objectKey(key)); }
-  at(holderId, key) {
-    const row = this.find(holderId, key);
+  find(ownerId, key) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE h.owner_id=? AND h.name=?`).get(ownerId, objectKey(key)); }
+  at(ownerId, key) {
+    const row = this.find(ownerId, key);
     if (!row) fail(404, 'not_found', 'その名前のものは置かれていません。');
     return row;
   }
-  list(holderId, under = '') {
+  list(ownerId, under = '') {
     this.check();
     if (typeof under !== 'string' || under.length > 200 || under.includes('..')) fail(400, 'invalid_prefix', '絞り込みの指定を確認してください。');
-    return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE h.holder_id=? AND substr(h.name,1,length(?))=? COLLATE BINARY ORDER BY h.name`).all(holderId, under, under);
+    return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE h.owner_id=? AND substr(h.name,1,length(?))=? COLLATE BINARY ORDER BY h.name`).all(ownerId, under, under);
   }
-  usage(holderId) {
+  usage(ownerId) {
     this.check();
-    const { count, bytes } = this.db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(o.size),0) AS bytes ${FROM} WHERE h.holder_id=?`).get(holderId);
-    return { count, bytes, count_max: OBJECT_COUNT_MAX, bytes_max: this.ceiling(holderId) };
+    const { count, bytes } = this.db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(o.size),0) AS bytes ${FROM} WHERE h.owner_id=?`).get(ownerId);
+    return { count, bytes, count_max: OBJECT_COUNT_MAX, bytes_max: this.ceiling(ownerId) };
   }
   checkContent(content, type) {
     if (!Buffer.isBuffer(content) || content.length > OBJECT_MAX) fail(413, 'object_too_large', '1件あたり25MBまでです。');
     if (typeof type !== 'string' || type.length > 100 || !TYPE.test(type)) fail(400, 'invalid_type', '種類 (Content-Type) を確認してください。');
   }
-  async put(holderId, key, content, type) {
+  async put(ownerId, key, content, type) {
     this.check();
     objectKey(key);
     this.checkContent(content, type);
-    const existing = this.find(holderId, key), { count, bytes } = this.usage(holderId);
+    const existing = this.find(ownerId, key), { count, bytes } = this.usage(ownerId);
     if (count >= OBJECT_COUNT_MAX && !existing) fail(409, 'object_limit', '置けるのは1000件までです。');
-    this.fits(holderId, bytes - (existing?.size ?? 0) + content.length, content.length - (existing?.size ?? 0));
+    this.fits(ownerId, bytes - (existing?.size ?? 0) + content.length, content.length - (existing?.size ?? 0));
     const id = existing?.id ?? randomUUID();
     await this.space.put(ROOM, id, content, type);
     return this.store.transaction(() => {
       if (existing) { this.db.prepare('UPDATE objects SET size=?,type=? WHERE resource_id=?').run(content.length, type, id); this.resources.touch(id); }
-      else { this.resources.insert(id, holderId, 'object', key); this.db.prepare('INSERT INTO objects (resource_id,size,type) VALUES (?,?,?)').run(id, content.length, type); }
+      else { this.resources.insert(id, ownerId, 'object', key); this.db.prepare('INSERT INTO objects (resource_id,size,type) VALUES (?,?,?)').run(id, content.length, type); }
       return this.get(id);
     });
   }
@@ -154,8 +154,8 @@ export class Objects {
   async write(row, content, type) {
     this.check();
     this.checkContent(content, type);
-    const { bytes } = this.usage(row.holder_id);
-    this.fits(row.holder_id, bytes - row.size + content.length, content.length - row.size);
+    const { bytes } = this.usage(row.owner_id);
+    this.fits(row.owner_id, bytes - row.size + content.length, content.length - row.size);
     await this.space.put(ROOM, row.id, content, type);
     this.db.prepare('UPDATE objects SET size=?,type=? WHERE resource_id=?').run(content.length, type, row.id);
     this.resources.touch(row.id);
@@ -168,7 +168,7 @@ export class Objects {
   }
   rename(row, key) {
     const wanted = objectKey(key);
-    if (wanted !== row.name && this.find(row.holder_id, wanted)) fail(409, 'name_taken', 'その名前はすでに使われています。');
+    if (wanted !== row.name && this.find(row.owner_id, wanted)) fail(409, 'name_taken', 'その名前はすでに使われています。');
     return this.get(this.resources.rename(row, wanted).id);
   }
   // The bytes go from the space, then the resource goes with its lines.

@@ -9,7 +9,7 @@ export function ebayOauth(client) {
   return {
     kind: 'oauth', available: client.enabled, variables: ['EBAY_ACCESS_TOKEN', 'EBAY_ACCOUNT_ID', 'EBAY_USERNAME', 'EBAY_OAUTH_EXPIRES_AT'],
     scopes: { base: EBAY_BASE_SCOPES, documentationUrl: EBAY_SCOPE_DOCS },
-    // The holder may bring their own OAuth app: the same scheme, built around their client. eBay names the
+    // The owner may bring their own OAuth app: the same scheme, built around their client. eBay names the
     // redirect by the app's RuName, which the catalog asks for.
     oauthClient: client, withClient: ebayOauth,
     authorization: {

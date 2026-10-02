@@ -13,8 +13,8 @@ def start_connect(page, service, way=None):
     return dialog
 
 
-# Secrets are sealed by the browser with the holder's key, which a passkey yields; what a test places through the
-# API is handed to Foundation's principal to seal, once the holder has made it their agent; and what is kept is read
+# Secrets are sealed by the browser with the owner's key, which a passkey yields; what a test places through the
+# API is handed to Foundation's principal to seal, once the owner has made it their agent; and what is kept is read
 # back the way a command gets it, injected.
 import base64
 import json
@@ -27,7 +27,7 @@ def b64url(data):
 
 
 def virtual_authenticator(context, page):
-    """Chromium's virtual authenticator as the device's passkey, yielding a PRF so the holder's key can be made from it.
+    """Chromium's virtual authenticator as the device's passkey, yielding a PRF so the owner's key can be made from it.
     WebAuthn needs a hostname: pages using this reach the fixture as localhost."""
     cdp = context.new_cdp_session(page)
     cdp.send('WebAuthn.enable')
@@ -37,7 +37,7 @@ def virtual_authenticator(context, page):
 
 
 def make_key(page, base, name='テスト端末'):
-    """A passkey added from the account page makes the holder's key; the page keeps it open until it is loaded anew."""
+    """A passkey added from the account page makes the owner's key; the page keeps it open until it is loaded anew."""
     page.goto(base + '/account', wait_until='networkidle')
     page.get_by_role('button', name='パスキーを追加').click()
     dialog = page.get_by_role('dialog')
@@ -56,13 +56,13 @@ def unlock(page, base):
 
 
 def hand_to_foundation(page):
-    """Foundation made the holder's agent from the secrets page, with the key open."""
+    """Foundation made the owner's agent from the secrets page, with the key open."""
     page.get_by_role('button', name='Foundation に渡す', exact=True).click()
     expect(page.get_by_text('AIが使うには Foundation に渡します。', exact=True)).to_have_count(0)
 
 
 def allow_foundation(request, base, headers=None):
-    """The same, through the API, for a holder signed in without a key."""
+    """The same, through the API, for a owner signed in without a key."""
     overview = request.get(base + '/v1/overview', headers=headers or {}).json()
     drawn = request.post(base + '/v1/relations', data=json.dumps({'subject': overview['foundation']['principal_id'], 'relation': 'agent', 'object_type': 'principal', 'object_id': overview['user']['id']}),
                          headers={'content-type': 'application/json', 'origin': base, **(headers or {})})

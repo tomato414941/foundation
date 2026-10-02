@@ -3,8 +3,8 @@ import { fail } from './errors.mjs';
 import { redact } from './fetch.mjs';
 import { resourceName } from './resources.mjs';
 
-// A machine lent to a holder: a shell, files and the network. It is a resource, not a principal, and by itself it can
-// reach nothing of Foundation's. The holder may give it an identity: a principal it acts as inside, the way a cloud
+// A machine lent to a owner: a shell, files and the network. It is a resource, not a principal, and by itself it can
+// reach nothing of Foundation's. The owner may give it an identity: a principal it acts as inside, the way a cloud
 // machine is given a role. Only a principal the giver may act as can be given; the machine then holds a key for it
 // that dies with the machine.
 //
@@ -15,7 +15,7 @@ export const KEY_PATH = '.foundation/key';
 const COMMAND_PARTS = 200, COMMAND_LENGTH = 100_000, STDIN_MAX = 1024 * 1024, KEPT_OUTPUT = 256 * 1024, STOPPED_KEPT = 3600_000;
 // The lease outlasts a runner stop call; crashed attempts become due again without an in-memory queue.
 const STOP_LEASE = 120_000, STOP_RETRY = 5000, STOP_RETRY_MAX = 300_000;
-const COLUMNS = 'r.id,r.holder_id,r.kind,r.name,r.created_at,r.updated_at,e.size,e.lifetime,e.idle_seconds,e.max_seconds,e.identity,e.runner,e.machine,e.status,e.started_at,e.last_active_at,e.expires_at,e.stop_attempts,e.stop_retry_at,e.remove_requested';
+const COLUMNS = 'r.id,r.owner_id,r.kind,r.name,r.created_at,r.updated_at,e.size,e.lifetime,e.idle_seconds,e.max_seconds,e.identity,e.runner,e.machine,e.status,e.started_at,e.last_active_at,e.expires_at,e.stop_attempts,e.stop_retry_at,e.remove_requested';
 const FROM = 'FROM resources r JOIN environments e ON e.resource_id=r.id';
 const month = (at = Date.now()) => new Date(at).toISOString().slice(0, 7);
 const iso = value => value === null || value === undefined ? null : new Date(value).toISOString();
@@ -43,7 +43,7 @@ export class Environments {
     if (!row) fail(404, 'not_found', '見つかりません。');
     return row;
   }
-  list(holderId) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.holder_id=? ORDER BY r.created_at,r.id`).all(holderId); }
+  list(ownerId) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.owner_id=? ORDER BY r.created_at,r.id`).all(ownerId); }
   view(row) {
     return { ...this.resources.view(row), size: row.size, lifetime: { end: row.lifetime, idle_seconds: row.idle_seconds, max_seconds: row.max_seconds },
       identity: row.identity, status: row.status, started_at: iso(row.started_at), last_active_at: iso(row.last_active_at), expires_at: iso(row.expires_at) };
@@ -57,7 +57,7 @@ export class Environments {
   }
   usage(principalId, now = Date.now()) {
     const spent = this.db.prepare('SELECT seconds FROM compute_usage WHERE principal_id=? AND month=?').get(principalId, month(now))?.seconds ?? 0;
-    const running = this.db.prepare(`SELECT e.size,e.started_at ${FROM} WHERE r.holder_id=? AND e.status<>'stopped'`).all(principalId)
+    const running = this.db.prepare(`SELECT e.size,e.started_at ${FROM} WHERE r.owner_id=? AND e.status<>'stopped'`).all(principalId)
       .reduce((total, row) => total + Math.ceil((now - row.started_at) / 1000) * SIZES[row.size], 0);
     return { month: month(now), used_seconds: spent + running, limit_seconds: this.limitOf(principalId) };
   }
@@ -70,28 +70,28 @@ export class Environments {
   spend(row, until) {
     const seconds = Math.ceil((until - row.started_at) / 1000) * SIZES[row.size];
     this.db.prepare('INSERT INTO compute_usage (principal_id,month,seconds) VALUES (?,?,?) ON CONFLICT(principal_id,month) DO UPDATE SET seconds=seconds+excluded.seconds')
-      .run(row.holder_id, month(until), seconds);
-    this.payments.computed(row.holder_id, seconds, until);
+      .run(row.owner_id, month(until), seconds);
+    this.payments.computed(row.owner_id, seconds, until);
   }
   // What all who do not pay have computed this month, and how many machines they are running now.
   freeUsage(now = Date.now()) {
     const payers = new Set(this.payments.payers()), free = id => !payers.has(id);
     const spent = this.db.prepare('SELECT principal_id, seconds FROM compute_usage WHERE month=?').all(month(now)).filter(row => free(row.principal_id)).reduce((total, row) => total + row.seconds, 0);
-    const running = this.db.prepare(`SELECT r.holder_id, e.size, e.started_at ${FROM} WHERE e.status<>'stopped'`).all().filter(row => free(row.holder_id));
+    const running = this.db.prepare(`SELECT r.owner_id, e.size, e.started_at ${FROM} WHERE e.status<>'stopped'`).all().filter(row => free(row.owner_id));
     return { seconds: spent + running.reduce((total, row) => total + Math.ceil((now - row.started_at) / 1000) * SIZES[row.size], 0), machines: running.length };
   }
-  within(holderId) {
-    if (!this.payments.paying(holderId)) {
+  within(ownerId) {
+    if (!this.payments.paying(ownerId)) {
       const shared = this.freeUsage();
       if (shared.seconds >= this.limits.freePoolSeconds || shared.machines >= this.limits.freeConcurrent) fail(402, 'payment_required', '今月の無料枠はすべて使われました。支払い方法を登録すると、続けて使えます。');
     }
-    const { used_seconds, limit_seconds } = this.usage(holderId);
-    if (used_seconds >= limit_seconds && !this.payments.paying(holderId) && limit_seconds === this.limits.freeSeconds) fail(402, 'payment_required', '無料枠の上限に達しました。続けて使うには支払い方法を登録してください。');
+    const { used_seconds, limit_seconds } = this.usage(ownerId);
+    if (used_seconds >= limit_seconds && !this.payments.paying(ownerId) && limit_seconds === this.limits.freeSeconds) fail(402, 'payment_required', '無料枠の上限に達しました。続けて使うには支払い方法を登録してください。');
     if (used_seconds >= limit_seconds) fail(429, 'compute_limit', '今月の計算時間の上限に達しました。');
   }
 
   // Opening one. The identity is checked by the caller: it must be one the opener may act as.
-  async open(holderId, input = {}, origin = this.origin) {
+  async open(ownerId, input = {}, origin = this.origin) {
     this.check();
     const size = input.size ?? 'small';
     if (!Object.hasOwn(SIZES, size)) fail(400, 'invalid_size', 'size は small / medium / large のいずれかです。');
@@ -103,10 +103,10 @@ export class Environments {
     const name = input.name === undefined ? '環境' : resourceName(input.name);
     const id = randomUUID(), now = Date.now();
     this.store.transaction(() => {
-      this.principals.at(holderId);
-      if (this.db.prepare(`SELECT count(*) n ${FROM} WHERE r.holder_id=? AND e.status<>'stopped'`).get(holderId).n >= this.limits.concurrent) fail(429, 'environment_limit', `同時に開ける環境は${this.limits.concurrent}つまでです。`);
-      this.within(holderId);
-      this.resources.insert(id, holderId, 'environment', name);
+      this.principals.at(ownerId);
+      if (this.db.prepare(`SELECT count(*) n ${FROM} WHERE r.owner_id=? AND e.status<>'stopped'`).get(ownerId).n >= this.limits.concurrent) fail(429, 'environment_limit', `同時に開ける環境は${this.limits.concurrent}つまでです。`);
+      this.within(ownerId);
+      this.resources.insert(id, ownerId, 'environment', name);
       this.db.prepare("INSERT INTO environments (resource_id,size,lifetime,idle_seconds,max_seconds,identity,runner,status,started_at,last_active_at,expires_at) VALUES (?,?,?,?,?,NULL,?,'starting',?,?,?)")
         .run(id, size, end, idle, max, this.runner.name, now, now, now + max * 1000);
     });
@@ -177,7 +177,7 @@ export class Environments {
     const remaining = Math.floor((row.expires_at - Date.now()) / 1000);
     const timeout = input.timeout_seconds ?? Math.min(300, remaining);
     if (!Number.isInteger(timeout) || timeout < 1 || timeout > remaining) fail(400, 'invalid_timeout', `timeout_seconds は1〜${Math.max(1, remaining)}秒です。`);
-    this.within(row.holder_id);
+    this.within(row.owner_id);
     const id = randomUUID(), now = Date.now();
     this.store.transaction(() => {
       row = this.usable(row);
@@ -281,15 +281,15 @@ export class Environments {
     if (stopped.status !== 'stopped') fail(503, 'environment_stopping', '環境の停止を確認できていません。停止と削除は自動で再試行されます。');
     this.resources.remove(stopped);
   }
-  async removeAll(holderId) {
-    // Request every stop even if one provider call fails; retain the holder until all machines are gone.
-    const results = await Promise.allSettled(this.list(holderId).map(row => this.remove(row)));
+  async removeAll(ownerId) {
+    // Request every stop even if one provider call fails; retain the owner until all machines are gone.
+    const results = await Promise.allSettled(this.list(ownerId).map(row => this.remove(row)));
     const failed = results.find(result => result.status === 'rejected');
     if (failed) throw failed.reason;
   }
-  // Called in the holder-deletion transaction: a concurrent open during provider cleanup must not be cascaded away.
-  assertRemoved(holderId) {
-    if (this.list(holderId).length) fail(409, 'environments_changed', '新しい環境が開かれています。もう一度削除してください。');
+  // Called in the owner-deletion transaction: a concurrent open during provider cleanup must not be cascaded away.
+  assertRemoved(ownerId) {
+    if (this.list(ownerId).length) fail(409, 'environments_changed', '新しい環境が開かれています。もう一度削除してください。');
   }
   // Machines past their time, idle too long, due for a stop retry, or stopped long enough ago.
   async sweep(now = Date.now()) {

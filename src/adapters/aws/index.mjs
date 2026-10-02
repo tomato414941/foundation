@@ -4,7 +4,7 @@ import { fail } from '../../errors.mjs';
 export const configuration = env => ({ roleArn: env.FOUNDATION_AWS_ROLE_ARN || '', region: env.FOUNDATION_AWS_REGION || 'ap-northeast-1', templateBucket: env.FOUNDATION_AWS_TEMPLATE_BUCKET || '' });
 export const create = env => awsRole(new AwsClient(configuration(env)));
 
-// The first delegated grant: nothing of the account holder's is kept but the name of a role they made for
+// The first delegated grant: nothing of the account owner's is kept but the name of a role they made for
 // Foundation. Each use asks AWS for an hour of credentials.
 export function awsRole(client) {
   const result = assumed => ({
@@ -19,7 +19,7 @@ export function awsRole(client) {
     kind: 'role', available: client.enabled,
     variables: ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION', 'AWS_REGION'],
     authorization: {
-      // The holder makes the role from the link; what Foundation must remember until they come back is the external ID.
+      // The owner makes the role from the link; what Foundation must remember until they come back is the external ID.
       begin: async () => {
         const { url, externalId } = await client.prepare();
         return { url, memo: { external_id: externalId } };

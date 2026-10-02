@@ -39,10 +39,10 @@ function injectable(content, { env, filename }) {
 // Foundation's principal opening what was sealed for it, where it may.
 export class Inputs {
   constructor(secrets, connections, open) { Object.assign(this, { secrets, connections, open }); }
-  resolve(holderId, reference) {
+  resolve(ownerId, reference) {
     const ref = inputReference(reference);
-    const row = Object.hasOwn(ref, 'name') ? this.secrets.find(holderId, ref.name)
-      : this.secrets.held(holderId, ref.id) || this.connections.held(holderId, ref.id);
+    const row = Object.hasOwn(ref, 'name') ? this.secrets.find(ownerId, ref.name)
+      : this.secrets.held(ownerId, ref.id) || this.connections.held(ownerId, ref.id);
     if (!row) fail(404, 'not_found', '見つかりません。');
     if (row.kind === 'secret' && ref.output !== undefined) fail(400, 'invalid_input', 'シークレットには output を指定できません。');
     if (row.kind !== 'secret' && ref.output !== undefined && !this.connections.services.scheme(row.service, row.auth_scheme).variables.includes(ref.output)) {
@@ -52,13 +52,13 @@ export class Inputs {
   }
   // Each input and destination is explicit. A secret needs `as`; a scheme's outputs have names of their own, and
   // `as` may rename a single output, whether selected explicitly or supplied alone by the scheme.
-  async inject(holderId, asked) {
+  async inject(ownerId, asked) {
     const wanted = Array.isArray(asked) ? asked : [];
     if (!wanted.length || wanted.length > 16) fail(400, 'invalid_names', '渡すものを1〜16件で指定してください。');
     const rows = wanted.map(item => {
       if (!item || typeof item !== 'object' || Array.isArray(item)) fail(400, 'invalid_names', '渡すものは name または id を持つオブジェクトで指定してください。');
       const { as, filename, ...reference } = item;
-      return { item, row: this.resolve(holderId, reference) };
+      return { item, row: this.resolve(ownerId, reference) };
     });
     const environment = {}, files = [], taken = new Map(), filenames = new Set(), obtained = new Map();
     let expires = null;
@@ -94,8 +94,8 @@ export class Inputs {
     return { injection: { environment, files }, expires_at: expires };
   }
   // A single value. Connections require an explicit output even if they currently yield only one.
-  async text(holderId, reference, cache = new Map()) {
-    const row = this.resolve(holderId, reference);
+  async text(ownerId, reference, cache = new Map()) {
+    const row = this.resolve(ownerId, reference);
     if (row.kind === 'secret') return this.open(row);
     if (reference.output === undefined) fail(400, 'invalid_input', '接続から使う値を output で指定してください。');
     if (!cache.has(row.id)) cache.set(row.id, await this.connections.derive(row));

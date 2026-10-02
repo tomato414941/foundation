@@ -3,7 +3,7 @@ import { GoogleOAuth, validGoogleToken } from '../google-oauth.mjs';
 
 export const EMAIL_SCOPE = 'https://www.googleapis.com/auth/userinfo.email';
 export const PROFILE_SCOPE = 'https://www.googleapis.com/auth/userinfo.profile';
-// Foundation needs to know which Google account authorized, and nothing more; every other scope is the holder's
+// Foundation needs to know which Google account authorized, and nothing more; every other scope is the owner's
 // choice (Gmail, Drive, Cloud Platform, ...).
 export const GOOGLE_BASE_SCOPES = ['openid', EMAIL_SCOPE];
 export const GOOGLE_SCOPE_DOCS = 'https://developers.google.com/identity/protocols/oauth2/scopes';
@@ -11,8 +11,8 @@ export const GOOGLE_API = 'https://www.googleapis.com';
 export const GOOGLE_DOCS = 'https://developers.google.com/apis-explorer';
 const USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
 
-// One Google account, authorized for whatever scopes the holder allowed. The account is named by its address,
-// which is also how the holder picks it on Google's screen.
+// One Google account, authorized for whatever scopes the owner allowed. The account is named by its address,
+// which is also how the owner picks it on Google's screen.
 export class GoogleClient extends GoogleOAuth {
   constructor(config = {}, options = {}) { super(config, options, { setting: 'Google', code: 'google_unavailable', name: 'Google' }); }
   authorize({ email, ...context }) { return super.authorize({ ...context, loginHint: email }); }

@@ -9,7 +9,7 @@ export function githubOauth(client) {
   return {
     kind: 'oauth', available: client.enabled, variables: ['GH_TOKEN', 'GITHUB_TOKEN'],
     scopes: { base: GITHUB_BASE_SCOPES, documentationUrl: GITHUB_SCOPE_DOCS },
-    // The holder may bring their own OAuth app: the same scheme, built around their client.
+    // The owner may bring their own OAuth app: the same scheme, built around their client.
     oauthClient: client, withClient: githubOauth,
     authorization: {
       begin: context => client.authorize(context),

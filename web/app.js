@@ -1,7 +1,7 @@
 import { requestResultView, knownRequestKind, detailOf } from './request-view.js';
 import { pages, brand, pageTitle, workspaceView, pendingView } from './workspace-view.js';
 import * as sealing from './sealing.js';
-// The holder's own key: unwrapped by a passkey (its PRF output) and held only in this page, which seals what it
+// The owner's own key: unwrapped by a passkey (its PRF output) and held only in this page, which seals what it
 // keeps and opens what was sealed for it. Nothing of it is written anywhere.
 let own = null, keyUnavailable = false;
 const PRF_INPUT = new TextEncoder().encode('foundation-key');
@@ -213,7 +213,7 @@ async function unlockWith(credentialId, yielded) {
   if (!wrapped) { keyUnavailable = true; return; }
   own = { privateKey: await sealing.unwrap(unb64(wrapped), yielded), publicKey: unb64(key.public_key) };
 }
-// Opening the key again, after the page was loaded anew: any passkey of the holder's, asked here for what it yields.
+// Opening the key again, after the page was loaded anew: any passkey of the owner's, asked here for what it yields.
 async function unlockKey() {
   const given = await navigator.credentials.get({ publicKey: { challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: location.hostname, allowCredentials: [], userVerification: 'preferred', extensions: { prf: { eval: { first: PRF_INPUT } } } } });
   await unlockWith(given.id, yieldedBy(given));
@@ -461,13 +461,13 @@ if (!requestId && !isSigninConfirmation) {
     navigate(new URL(location.href), { restore: true, position: event.state?.scroll });
   });
 }
-// What the holder let Foundation use: secrets they handed over, and connections for services.
+// What the owner let Foundation use: secrets they handed over, and connections for services.
 const secrets = () => state.secrets || [];
 const connected = () => state.connections || [];
-// Every service the holder can connect: those Foundation knows, and those they (or someone for them) described.
+// Every service the owner can connect: those Foundation knows, and those they (or someone for them) described.
 const allServices = () => [...(state.catalog || []), ...(state.services || []).map(row => row.service)];
 const serviceById = id => allServices().find(item => item.id === id);
-const ownService = id => (state.services || []).find(row => row.id === id && row.holder_id === state.user.id);
+const ownService = id => (state.services || []).find(row => row.id === id && row.owner_id === state.user.id);
 const unconnectedServices = () => (state.services || []).filter(row => !connected().some(connection => connection.service.id === row.id));
 function rememberService(row) {
   state.services = [...(state.services || []).filter(item => item.id !== row.id), row];
@@ -501,7 +501,7 @@ function accountDetails(connection) {
   const names = accounts ? accounts.items.map(item => item.name).join('、') || 'なし' : '未確認';
   return `<p class="muted">確認できたアカウント：${esc(names)}${accounts && !accounts.complete ? '（一部）' : ''}</p>`;
 }
-// What the holder gave: the scopes the service granted, and any asked for but not granted.
+// What the owner gave: the scopes the service granted, and any asked for but not granted.
 function scopeDetails(facts) {
   const granted = facts?.scopes || [], missing = facts?.missing_scopes || [];
   if (!granted.length && !missing.length) return '';
@@ -594,7 +594,7 @@ function render() {
     return;
   }
   if (page === 'services') {
-    // The services the holder's AI may use, by service. Adding one is a way in, not the page itself; the OAuth apps
+    // The services the owner's AI may use, by service. Adding one is a way in, not the page itself; the OAuth apps
     // connections go through are there when needed, folded away.
     const connections = connected(), waiting = unconnectedServices();
     const rows = [...connections.map(connection => ({ name: connection.service.name, label: connection.label, html: connectionRow(connection) })),
@@ -612,7 +612,7 @@ function render() {
     const focused = document.activeElement, focusedRow = focused.closest('.secret-row')?.getAttribute('aria-label');
     const focusedAction = focused.getAttribute('aria-label') || focused.dataset.action;
     const kept = secrets(), handed = (state.actors || []).some(item => item.id === state.foundation?.principal_id);
-    // What the page can do here: nothing with a value until the holder's key is open.
+    // What the page can do here: nothing with a value until the owner's key is open.
     const keyLine = own ? '' : !(state.webauthn_credentials || []).length
       ? `<div class="access-empty key-state"><p>シークレットを使うにはパスキーが必要です。</p>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} パスキーを追加</button>` : ''}</div>`
       : keyUnavailable ? '<div class="access-empty key-state"><p>このパスキーでは鍵を使えません。</p></div>'
@@ -763,7 +763,7 @@ function renderRequest() {
     await refresh();
   }, app.querySelector('.register-body'));
 }
-// The scopes a request asks the service for, as the service names them; the holder sees each before agreeing.
+// The scopes a request asks the service for, as the service names them; the owner sees each before agreeing.
 function requestedScopesView(row, scheme) {
   const detail = detailOf(row), asked = detail.scopes || [];
   if (!scheme.scopes) return '';
@@ -825,7 +825,7 @@ const accessSummary = '保存データの取得・変更・削除と、接続済
 const accessScope = '<ul class="access-scope"><li>認証情報とオブジェクトの取得・追加・更新・削除</li><li>接続済みサービスの利用とファンクションの実行</li></ul>';
 const accessExclusions = '接続の追加・解除、他の相手への権限付与、アカウント管理は含みません。';
 const accessDetails = () => `<details class="access-permissions"><summary>許可の詳細</summary>${accessScope}<p>${accessExclusions}</p></details>`;
-// What one action lets its holder do, in the words of whoever grants it.
+// What one action lets its owner do, in the words of whoever grants it.
 const ACTION_WORDS = {
   'secret.list': 'シークレットの一覧を見る', 'secret.read': 'シークレットの情報を見る', 'secret.content': 'シークレットの値を読む', 'secret.write': 'シークレットの値を書き換える', 'secret.remove': 'シークレットを削除する',
   'connection.list': 'サービスとの接続の一覧を見る', 'connection.read': 'サービスとの接続の情報を見る', 'connection.connect': 'サービスに接続する', 'connection.disconnect': 'サービスとの接続を解除する',
@@ -884,7 +884,7 @@ function bindForm(handler, container = dialog) {
     catch (error) { if (form.isConnected) { form.querySelector('.form-error').textContent = error.message; button.disabled = false; } }
   });
 }
-// What the holder decides when connecting: which of the service's scopes to give, and which OAuth app to connect
+// What the owner decides when connecting: which of the service's scopes to give, and which OAuth app to connect
 // through - Foundation's, one of their own, or one someone lent them.
 const appsFor = serviceId => (state.apps || []).filter(app => app.service?.id === serviceId);
 const oauthUsable = service => Boolean(service?.auth_schemes.oauth && (service.auth_schemes.oauth.foundation_app || (!service.auth_schemes.oauth.takes_apps && service.auth_schemes.oauth.available) || appsFor(service.id).length));
@@ -899,15 +899,15 @@ function connectChoices(service, connectionId, appId) {
   return scopes + `<label for="connect-app">OAuthアプリ</label><select id="connect-app" name="app">${apps.map(app => `<option value="${esc(app.id)}"${app.id === chosen ? ' selected' : ''}>${esc(app.name)}</option>`).join('')}</select>
     <p class="permission-note">${esc(service.name)}の同意画面には、このアプリの名前が出ます。ほかの人から共有されたアプリは、その人を信頼できる場合だけ使ってください。</p>`;
 }
-// OAuth apps: what OAuth connections go through. Foundation's are there for anyone; the holder may add their own,
+// OAuth apps: what OAuth connections go through. Foundation's are there for anyone; the owner may add their own,
 // and then decides at the service what can be granted and what name the consent screen shows.
-// Whether the holder opened the apps; kept while the page is drawn again.
+// Whether the owner opened the apps; kept while the page is drawn again.
 let appsOpen = false;
 function appsSection() {
   // By service, so a service's own app and Foundation's for it sit side by side; Foundation's comes first.
   const apps = [...(state.apps || [])].sort((a, b) => (a.service?.name || '').localeCompare(b.service?.name || '', 'ja') || Number(b.foundation) - Number(a.foundation) || a.name.localeCompare(b.name, 'ja'));
   const row = app => {
-    const mine = !app.foundation && app.holder_id === state.principal?.id;
+    const mine = !app.foundation && app.owner_id === state.principal?.id;
     const detail = app.foundation ? '誰でも使えます。' : mine ? `クライアントID ${esc(app.client_id)}・接続 ${esc(String(app.connections ?? 0))}件` : 'ほかの人から使うことを許可されたアプリ';
     return `<article class="agent-row"><div class="connection-identity">${serviceLogo(app.service)}<div class="agent-name"><h3>${esc(app.service?.name || '')}</h3><p>${esc(app.name)}</p></div></div>
       <div class="agent-permissions"><span class="muted">${detail}</span></div>
@@ -962,7 +962,7 @@ function removeApp(app) {
     toast(result.connections_stopped ? `削除しました。${result.connections_stopped}件の接続がつなぎ直し待ちになりました。` : '削除しました。');
   });
 }
-// Adding a service: find it among those Foundation knows and those the holder described, or describe one it does not.
+// Adding a service: find it among those Foundation knows and those the owner described, or describe one it does not.
 let serviceFilter = '';
 function servicePicker({ title, services, query = '', choose, create, filtered = () => {} }) {
   const sorted = [...services].sort((a, b) => a.name.localeCompare(b.name, 'ja'));
@@ -988,9 +988,9 @@ function addService() {
   servicePicker({ title: 'サービスを追加', services: allServices().filter(service => Object.keys(service.auth_schemes).length || ownService(service.id)), query: serviceFilter,
     filtered: value => { serviceFilter = value; }, choose: service => chooseService(service.id), create: name => defineService({ name }) });
 }
-// How a connection was made, as the holder did it. The words say what the holder does, not the protocol.
+// How a connection was made, as the owner did it. The words say what the owner does, not the protocol.
 const WAYS = { oauth: 'ログインして許可する', role: 'IAMロールを作る', token: 'トークンを使う' };
-// The ways a service can be connected, the one that asks least of the holder first: Foundation's own app, a token
+// The ways a service can be connected, the one that asks least of the owner first: Foundation's own app, a token
 // they paste, then an OAuth app of their own. The first is offered outright; the rest sit under it, lighter.
 function waysOf(service) {
   const oauth = service.auth_schemes.oauth, ways = [];
@@ -1195,18 +1195,18 @@ function revokeAccess(item) {
   openDialog(`<h2 id="dialog-title">アクセス許可を取り消しますか？</h2><p>${esc(item.name)}</p><form><p>あなたのデータへのアクセスを停止し、あなた宛ての未完了の依頼を取り消します。</p><p class="permission-note">取得済みの外部サービスの認証情報は、接続先で失効させてください。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">許可を取り消す</button></div></form>`);
   bindForm(async () => { await api(`/v1/principals/${item.id}/access`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('アクセス許可を取り消しました。'); });
 }
-// Sealing for everyone a secret of the holder's is for: those the server names (the holder, and Foundation when it
+// Sealing for everyone a secret of the owner's is for: those the server names (the owner, and Foundation when it
 // acts for them), and whoever already had the secret's key.
 async function sealFor(bytes, recipients) {
   const contentKey = sealing.newContentKey(), envelopes = {};
   for (const item of recipients) envelopes[item.principal_id] = b64(await sealing.seal(contentKey, unb64(item.public_key)));
   return { content: b64(await sealing.sealContent(contentKey, bytes)), envelopes };
 }
-// The secret's key, from the envelope made for the holder.
+// The secret's key, from the envelope made for the owner.
 const openKey = kept => sealing.open(unb64(kept.envelope), own.privateKey, own.publicKey);
 let receiving = false;
-// Secrets sealed for Foundation and not yet for the holder's key - as those kept before the holder had one -
-// are handed to the holder by Foundation, from its own envelope, as soon as the key is open.
+// Secrets sealed for Foundation and not yet for the owner's key - as those kept before the owner had one -
+// are handed to the owner by Foundation, from its own envelope, as soon as the key is open.
 async function receiveFromFoundation() {
   const me = state.user.id, foundation = state.foundation?.principal_id;
   const waiting = secrets().filter(item => !item.recipients.includes(me) && item.recipients.includes(foundation));
@@ -1217,7 +1217,7 @@ async function receiveFromFoundation() {
     await refresh();
   } catch (error) { toast(error.message); } finally { receiving = false; }
 }
-// Foundation made the holder's agent: a line, and an envelope for everything kept so far.
+// Foundation made the owner's agent: a line, and an envelope for everything kept so far.
 async function allowFoundation(button) {
   const foundation = state.foundation.principal_id;
   button.disabled = true;
@@ -1234,7 +1234,7 @@ async function allowFoundation(button) {
   } catch (error) { toast(error.message); if (button.isConnected) button.disabled = false; }
 }
 // A line drawn onto a secret reaches its bytes only with an envelope: Foundation makes one from its own, or the
-// holder's key does here.
+// owner's key does here.
 async function handEnvelope(row) {
   if (row.object?.kind !== 'secret' || !['viewer', 'editor', 'content_grant', 'write_grant', 'share_grant'].includes(detailOf(row).relation)) return;
   const path = '/v1/resources/' + row.object.id + '/envelopes/' + row.from;

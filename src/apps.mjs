@@ -12,7 +12,7 @@ import { resourceName } from './resources.mjs';
 // app stops them, as removing it at the service would, and they wait to be connected again through another.
 //
 // An app is used by Foundation alone. What it holds is either said (its client ID, and whatever else is not secret)
-// or sealed (its client secret): nobody reads a sealed value back, not its holder and not anyone given a line to it.
+// or sealed (its client secret): nobody reads a sealed value back, not its owner and not anyone given a line to it.
 // A viewer line lets someone connect their own accounts through the app; an editor line also lets them change it.
 export const FOUNDATION_APP = 'foundation';
 // What any app holds. A service adds what it needs as well (eBay: its RuName; kintone: its domain).
@@ -20,7 +20,7 @@ export const APP_FIELDS = [
   { name: 'client_id', label: 'クライアントID', required: true },
   { name: 'client_secret', label: 'クライアントシークレット', required: true, sealed: true },
 ];
-const COLUMNS = 'r.id,r.holder_id,r.kind,r.name,r.created_at,r.updated_at,a.service,a.client_id,a.settings';
+const COLUMNS = 'r.id,r.owner_id,r.kind,r.name,r.created_at,r.updated_at,a.service,a.client_id,a.settings';
 const FROM = 'FROM resources r JOIN apps a ON a.resource_id=r.id';
 const camel = name => name.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 
@@ -42,20 +42,20 @@ export class Apps {
   constructor(store, resources, services) {
     Object.assign(this, { store, resources, services, db: store.db, vault: store.vault });
   }
-  binding(row) { return `app:${row.holder_id}:${row.id}`; }
+  binding(row) { return `app:${row.owner_id}:${row.id}`; }
   get(id) { return typeof id === 'string' ? this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.id=?`).get(id) : undefined; }
   at(id) {
     const row = this.get(id);
     if (!row) fail(404, 'not_found', 'アプリが見つかりません。');
     return row;
   }
-  find(holderId, name) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.holder_id=? AND r.name=?`).get(holderId, resourceName(name)); }
-  // A holder's own apps, and those others drew them a line to.
-  list(holderId) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.holder_id=? ORDER BY a.service, r.name, r.id`).all(holderId); }
+  find(ownerId, name) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.owner_id=? AND r.name=?`).get(ownerId, resourceName(name)); }
+  // A owner's own apps, and those others drew them a line to.
+  list(ownerId) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.owner_id=? ORDER BY a.service, r.name, r.id`).all(ownerId); }
   lent(principalId) {
     return this.db.prepare(`SELECT DISTINCT ${COLUMNS} ${FROM} JOIN relations l ON l.object_type='resource' AND l.object_id=r.id
-      WHERE l.subject_id=? AND r.holder_id<>? ORDER BY a.service, r.name, r.id`).all(principalId, principalId)
-      .filter(row => this.services.authorization.can(principalId, 'read', 'app', { id: row.id, holder: row.holder_id }));
+      WHERE l.subject_id=? AND r.owner_id<>? ORDER BY a.service, r.name, r.id`).all(principalId, principalId)
+      .filter(row => this.services.authorization.can(principalId, 'read', 'app', { id: row.id, owner: row.owner_id }));
   }
 
   // What an app of this service holds.
@@ -76,28 +76,28 @@ export class Apps {
     return { said, sealed };
   }
   // Registering an app, or giving one of the same name new values (a rotated secret). Its connections go on.
-  put(holderId, { name, service, ...input }) {
+  put(ownerId, { name, service, ...input }) {
     resourceName(name);
-    const { ref } = this.services.get(service, holderId), { said: { client_id, ...settings }, sealed } = this.values(ref, input);
+    const { ref } = this.services.get(service, ownerId), { said: { client_id, ...settings }, sealed } = this.values(ref, input);
     return this.store.transaction(() => {
-      const existing = this.find(holderId, name);
+      const existing = this.find(ownerId, name);
       if (existing && existing.service !== ref) fail(409, 'name_taken', 'その名前は別のサービスのアプリに使われています。');
-      const id = existing?.id ?? randomUUID(), secret = this.vault.seal(sealed, this.binding({ id, holder_id: holderId }));
+      const id = existing?.id ?? randomUUID(), secret = this.vault.seal(sealed, this.binding({ id, owner_id: ownerId }));
       if (existing) {
         this.db.prepare('UPDATE apps SET client_id=?, settings=?, secret=? WHERE resource_id=?').run(client_id, JSON.stringify(settings), secret, id);
         this.resources.touch(id);
       } else {
-        this.resources.insert(id, holderId, 'app', name);
+        this.resources.insert(id, ownerId, 'app', name);
         this.db.prepare('INSERT INTO apps (resource_id,service,client_id,settings,secret) VALUES (?,?,?,?,?)').run(id, ref, client_id, JSON.stringify(settings), secret);
       }
       return this.get(id);
     });
   }
   // New values for the same app, by id: what an editor may do.
-  write(row, input) { return this.put(row.holder_id, { name: row.name, service: row.service, ...input }); }
+  write(row, input) { return this.put(row.owner_id, { name: row.name, service: row.service, ...input }); }
   rename(row, name) {
     resourceName(name);
-    if (name !== row.name && this.find(row.holder_id, name)) fail(409, 'name_taken', 'その名前はすでに使われています。');
+    if (name !== row.name && this.find(row.owner_id, name)) fail(409, 'name_taken', 'その名前はすでに使われています。');
     return this.get(this.resources.rename(row, name).id);
   }
   // Everything the app holds, as the scheme's client takes it.
@@ -115,7 +115,7 @@ export class Apps {
   }
   // The connections made through an app, whoever holds them.
   dependents(row) {
-    return this.db.prepare(`SELECT r.id, r.holder_id, r.name FROM connections c JOIN resources r ON r.id=c.resource_id WHERE c.app_id=? AND c.status<>'disconnecting' ORDER BY r.created_at`).all(row.id);
+    return this.db.prepare(`SELECT r.id, r.owner_id, r.name FROM connections c JOIN resources r ON r.id=c.resource_id WHERE c.app_id=? AND c.status<>'disconnecting' ORDER BY r.created_at`).all(row.id);
   }
   // Removing an app is what removing it at the service does: its connections can no longer renew. They stay, with
   // their scopes and without an app, waiting to be connected again through another.

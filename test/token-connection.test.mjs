@@ -55,7 +55,7 @@ test('鍵で動くAIも、接続を任されていればトークンで接続す
   assert.equal(given.status, 201, given.text);
   const made = await paste(f, { service: 'github', fields: { token: 'ghp_agent' } }, { token: agent.token, anonymous: true });
   assert.equal(made.status, 201, made.text);
-  assert.equal(made.json.connection.holder_id, agent.acts_for[0]);
+  assert.equal(made.json.connection.owner_id, agent.acts_for[0]);
 });
 
 test('トークンの項目が定義に合わなければ、接続を作らずに断る', async t => {

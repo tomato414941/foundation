@@ -13,7 +13,7 @@ test('環境は何の ID も持たずに開き、コマンドを動かしても 
   const opened = await f.request('/v1/environments', { method: 'POST', token: agent.token, data: { name: 'scratch' } });
   assert.equal(opened.status, 201, opened.text);
   const environment = opened.json.environment;
-  assert.equal(environment.kind, 'environment'); assert.equal(environment.identity, null); assert.equal(environment.holder_id, USER_A);
+  assert.equal(environment.kind, 'environment'); assert.equal(environment.identity, null); assert.equal(environment.owner_id, USER_A);
   const ran = await f.request('/v1/environments/' + environment.id + '/commands', { method: 'POST', token: agent.token,
     data: { command: node("const fs = require('node:fs');", "console.log('sum', 1 + 2, fs.existsSync(process.env.FOUNDATION_RUNTIME_KEY_FILE));") } });
   assert.equal(ran.status, 200, ran.text);

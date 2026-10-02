@@ -307,14 +307,14 @@ async function main() {
   if (!own && !current.acts_for?.length) throw new Error('Foundation request failed (401, not_approved). This key acts for nobody yet' + (current.requests?.[0] ? '; it is waiting for approval at ' + current.requests[0].verification_uri : '') + '.');
   // Whose resources a run reaches: the one this key acts for, the one named when it acts for several, or its own.
   const acting = current.acts_for ?? [];
-  const holder = process.env.FOUNDATION_AS || (acting.length === 1 ? acting[0] : null);
-  if (!holder && acting.length > 1) throw new Error('This key acts for several principals. Set FOUNDATION_AS=<principal id> to say which one this run is for.');
-  const forHolder = target => holder ? target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(holder) : target;
-  // A secret is sealed here, with a key of its own, for each of the holder's recipients: the server keeps what it
+  const owner = process.env.FOUNDATION_AS || (acting.length === 1 ? acting[0] : null);
+  if (!owner && acting.length > 1) throw new Error('This key acts for several principals. Set FOUNDATION_AS=<principal id> to say which one this run is for.');
+  const forHolder = target => owner ? target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(owner) : target;
+  // A secret is sealed here, with a key of its own, for each of the owner's recipients: the server keeps what it
   // cannot open. This machine is not among them; it places the bytes and does not read them back.
   const sealedFor = async bytes => {
     const { recipients } = await send(forHolder('/v1/recipients'), undefined, { method: 'GET' });
-    if (!Array.isArray(recipients) || !recipients.length) throw new Error('Nobody can open a secret kept for this holder yet: the holder needs a key, or Foundation needs to act for them.');
+    if (!Array.isArray(recipients) || !recipients.length) throw new Error('Nobody can open a secret kept for this owner yet: the owner needs a key, or Foundation needs to act for them.');
     const contentKey = newContentKey();
     return { content: sealContent(contentKey, bytes).toString('base64url'), envelopes: Object.fromEntries(recipients.map(item => [item.principal_id, seal(contentKey, Buffer.from(item.public_key, 'base64url')).toString('base64url')])) };
   };

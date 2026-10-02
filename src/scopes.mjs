@@ -1,6 +1,6 @@
 import { fail } from './errors.mjs';
 
-// Scopes are the service's own words for what a connection may do. The holder decides which ones their AI gets:
+// Scopes are the service's own words for what a connection may do. The owner decides which ones their AI gets:
 // Foundation passes what was asked to the service's consent screen and never chooses among them. A scheme names
 // only the few it needs to know who authorized (its base); everything else comes from the request.
 export const SCOPES_MAX = 100;

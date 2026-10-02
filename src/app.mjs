@@ -64,7 +64,7 @@ const PRINCIPAL_ID = /^[A-Za-z0-9-]{1,64}$/;
 // A revision of the encrypted record, never a fingerprint of the plaintext value.
 const secretTag = row => '"' + digest(JSON.stringify([row.id, row.name, row.size, row.updated_at])) + '"';
 // A secret's bytes as the client sealed them (content: iv, tag and ciphertext, so at least 29 bytes for one byte
-// kept), or as they are (plain), for Foundation's principal to seal where it is the holder's agent.
+// kept), or as they are (plain), for Foundation's principal to seal where it is the owner's agent.
 function sealedInput(input) {
   const plain = input?.plain !== undefined, content = keyBytes(plain ? input.plain : input?.content);
   if (!content || (!plain && content.length < 29)) fail(400, 'invalid_values', '入力内容を確認してください。');
@@ -154,9 +154,9 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   const services = new Services(store, resources, catalog, { authorization, ...(serviceFetcher ? { fetcher: serviceFetcher } : {}) });
   const apps = new Apps(store, resources, services), connections = new Connections(store, resources, services, apps);
   const keys = new Keys(store), secrets = new Secrets(store, resources, keys);
-  // Opening a secret to use it in Foundation's name: only for a holder that made Foundation's principal its agent.
-  const agentFor = holderId => { if (!authorization.can(keys.agentId, 'inject', 'principal', { id: holderId })) fail(403, 'foundation_not_agent', 'Foundation はこの持ち主の代わりに動く許可がありません。'); };
-  const opener = row => { agentFor(row.holder_id); return secrets.open(row); };
+  // Opening a secret to use it in Foundation's name: only for a owner that made Foundation's principal its agent.
+  const agentFor = ownerId => { if (!authorization.can(keys.agentId, 'inject', 'principal', { id: ownerId })) fail(403, 'foundation_not_agent', 'Foundation はこの持ち主の代わりに動く許可がありません。'); };
+  const opener = row => { agentFor(row.owner_id); return secrets.open(row); };
   const inputs = new Inputs(secrets, connections, opener);
   const payments = new Payments(store, stripe);
   const objects = new Objects(spaceBackend, resources, store, payments);
@@ -272,7 +272,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         let destination = '/services', flowService = null;
         const location = code => destination + '?result=' + code + (destination === '/services' && flowService ? '&service=' + encodeURIComponent(flowService) : '');
         try {
-          const session = signedIn(req), holder = session.principal_id;
+          const session = signedIn(req), owner = session.principal_id;
           if (url.searchParams.getAll('state').length !== 1 || url.searchParams.getAll('code').length > 1) fail(400, 'invalid_state', '接続をやり直してください。');
           const flow = flows.take(session.id, url.searchParams.get('state'));
           if (!flow || flow.kind) fail(400, 'invalid_state', '接続をやり直してください。');
@@ -281,7 +281,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           const active = apps.scheme(flow.service, flow.app);
           if (flow.requestId) {
             destination = '/requests/' + flow.requestId;
-            requests.forTo(flow.requestId, holder, true);
+            requests.forTo(flow.requestId, owner, true);
             progressRequestId = flow.requestId;
           }
           if (url.searchParams.has('error')) fail(400, 'authorization_denied', '接続先での認証は許可されませんでした。');
@@ -289,18 +289,18 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           if (!code || code.length > 8192) fail(400, 'invalid_state', '接続をやり直してください。');
           let previous;
           if (flow.previous) {
-            previous = connections.forService(holder, flow.previous.id);
+            previous = connections.forService(owner, flow.previous.id);
             if (previous.generation !== flow.previous.generation || previous.status === 'disconnecting') fail(409, 'connection_changed', '接続の状態が変わりました。');
           }
-          if (flow.requestId) requests.forTo(flow.requestId, holder, true);
+          if (flow.requestId) requests.forTo(flow.requestId, owner, true);
           const previousContext = connections.context(previous);
           const completion = await verifyConnection(req, session,
             () => active.authorization.complete({ code, verifier: flow.verifier, redirectUri: flow.redirectUri }, previousContext),
             result => {
               const changes = previous ? active.authorization.changes?.(result, previousContext) : undefined;
               if (changes?.length) {
-                if (flow.requestId) requests.forTo(flow.requestId, holder, true);
-                const current = connections.reconnection(holder, flow.service, 'oauth', previous.id);
+                if (flow.requestId) requests.forTo(flow.requestId, owner, true);
+                const current = connections.reconnection(owner, flow.service, 'oauth', previous.id);
                 if (current.generation !== previous.generation) fail(409, 'connection_changed', '接続の状態が変わりました。');
                 connections.nextState(result);
                 const { credentials: produced, ...kept } = result;
@@ -309,7 +309,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
                 if (flow.requestId) requests.record(flow.requestId, 'connect_review', { service: flow.service });
                 return { confirmation: state };
               }
-              requestActions.connect(flow.requestId, holder, flow.service, 'oauth', result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, app: flow.app ?? null });
+              requestActions.connect(flow.requestId, owner, flow.service, 'oauth', result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, app: flow.app ?? null });
             });
           if (completion?.confirmation) return redirect(location('review') + '&state=' + completion.confirmation);
           return redirect(location('connected'));
@@ -487,13 +487,13 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // the same question as any other, answered from the lines.
       const actsFor = principals.actsFor(subject.id);
       const asked = url.searchParams.get('as');
-      const holderId = asked ? principalId(asked) : subject.id;
+      const ownerId = asked ? principalId(asked) : subject.id;
       let asked_ = null;
-      const permit = (name, type, id, holder = type === 'principal' ? id : holderId) => {
-        asked_ = { subject, action: { name }, resource: { type, ...(id === undefined ? {} : { id }), holder } };
+      const permit = (name, type, id, owner = type === 'principal' ? id : ownerId) => {
+        asked_ = { subject, action: { name }, resource: { type, ...(id === undefined ? {} : { id }), owner } };
         if (authorization.allowed(asked_).decision) return;
         if (subject.via.kind === 'link') fail(401, 'signin_required', 'サインインしてください。');
-        if (!browser && holder !== subject.id && !principals.relationsOf(subject.id).length) notApproved();
+        if (!browser && owner !== subject.id && !principals.relationsOf(subject.id).length) notApproved();
         fail(403, 'forbidden', 'この操作は許可されていません。');
       };
       // Reading an upload may outlive its authorization. Recheck before committing any change: what the subject came in
@@ -516,10 +516,10 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
           const { type, detail } = requestDetails(input.authorization_details);
           // Whom it asks: the one named; for a relation onto something, whoever holds it; for a relation onto nothing,
-          // nobody yet - whoever answers; otherwise the holder this principal acts as.
-          const holderOf = () => detail.object_type === 'principal' ? detail.object_id : resources.at(detail.object_id).holder_id;
+          // nobody yet - whoever answers; otherwise the owner this principal acts as.
+          const ownerOf = () => detail.object_type === 'principal' ? detail.object_id : resources.at(detail.object_id).owner_id;
           const toId = input.to !== undefined ? principalId(input.to)
-            : type === 'relation' ? (detail.object_type === undefined ? null : holderOf()) : holderId;
+            : type === 'relation' ? (detail.object_type === undefined ? null : ownerOf()) : ownerId;
           if (toId !== null && !principals.get(toId)) fail(404, 'not_found', '相手が見つかりません。');
           // Someone nobody has taken on yet may only ask whoever opens the page it hands over; naming a person would let
           // anyone put a request in front of them. Once it is on a line with someone, it is known, and may name.
@@ -588,19 +588,19 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // Principals: oneself, and those one owns.
       // A principal's WebAuthn credentials: added by the principal itself, listed by whoever reads it, removed by it or its owner.
       if (at === 'webauthnCredentials' && method === 'GET') {
-        permit('read', 'principal', holderId);
-        return send(200, { webauthn_credentials: webauthn.list(holderId).map(row => webauthn.view(row)) });
+        permit('read', 'principal', ownerId);
+        return send(200, { webauthn_credentials: webauthn.list(ownerId).map(row => webauthn.view(row)) });
       }
       if (at === 'webauthnCredentialOptions' && method === 'POST') {
-        permit('add-webauthn-credential', 'principal', holderId);
-        return send(200, { options: await webauthn.registration(holderId, { origin, userName: emails.of(holderId)[0] || self.name || holderId }) });
+        permit('add-webauthn-credential', 'principal', ownerId);
+        return send(200, { options: await webauthn.registration(ownerId, { origin, userName: emails.of(ownerId)[0] || self.name || ownerId }) });
       }
       if (at === 'webauthnCredentials' && method === 'POST') {
-        permit('add-webauthn-credential', 'principal', holderId);
+        permit('add-webauthn-credential', 'principal', ownerId);
         const input = await inputBody();
-        const made = await webauthn.register(input.credential, { origin, name: input.name, principalId: holderId });
+        const made = await webauthn.register(input.credential, { origin, name: input.name, principalId: ownerId });
         if (input.wrap !== undefined) keys.keepWrap(made.credential.id, input.wrap);
-        auditLog.write(subject.id, 'webauthn_credential.added', 'principal', holderId, { credential: made.credential.id });
+        auditLog.write(subject.id, 'webauthn_credential.added', 'principal', ownerId, { credential: made.credential.id });
         return send(201, { webauthn_credential: webauthn.view(made.credential), backed_up: made.backedUp });
       }
       if (at === 'webauthnCredential' && method === 'DELETE') {
@@ -638,27 +638,27 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         auditLog.write(subject.id, 'key.published', 'principal', subject.id, {});
         return send(200, { key: keys.view(subject.id, { own: true }) });
       }
-      // Whom to seal a secret of the holder's for: the holder, and Foundation's principal when it acts for them.
+      // Whom to seal a secret of the owner's for: the owner, and Foundation's principal when it acts for them.
       if (at === 'recipients' && method === 'GET') {
         permit('write', 'secret');
-        const ids = [holderId, ...(authorization.can(keys.agentId, 'inject', 'principal', { id: holderId }) ? [keys.agentId] : [])];
+        const ids = [ownerId, ...(authorization.can(keys.agentId, 'inject', 'principal', { id: ownerId }) ? [keys.agentId] : [])];
         return send(200, { recipients: ids.map(id => ({ principal_id: id, public_key: keys.publicKeyOf(id) })).filter(item => item.public_key).map(item => ({ ...item, public_key: item.public_key.toString('base64url') })) });
       }
       // Paying for more than the free part: a payment method set on Stripe's page, for the principal itself.
       if (at === 'payment' && method === 'GET') {
-        permit('payment', 'principal', holderId);
-        return send(200, { payment: payments.view(holderId) });
+        permit('payment', 'principal', ownerId);
+        return send(200, { payment: payments.view(ownerId) });
       }
       if (at === 'paymentSetup' && method === 'POST') {
-        permit('payment', 'principal', holderId);
+        permit('payment', 'principal', ownerId);
         await inputBody();
-        return send(200, { url: await payments.setup(holderId, { origin, email: emails.of(holderId)[0] }) });
+        return send(200, { url: await payments.setup(ownerId, { origin, email: emails.of(ownerId)[0] }) });
       }
       if (at === 'paymentComplete' && method === 'POST') {
-        permit('payment', 'principal', holderId);
+        permit('payment', 'principal', ownerId);
         const input = await inputBody();
-        const view = await payments.complete(holderId, input.session_id);
-        auditLog.write(subject.id, 'payment.set', 'principal', holderId, {});
+        const view = await payments.complete(ownerId, input.session_id);
+        auditLog.write(subject.id, 'payment.set', 'principal', ownerId, {});
         return send(200, { payment: view });
       }
       if (at === 'me') {
@@ -693,10 +693,10 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const id = route.params.principalId === 'me' ? subject.id : route.params.principalId, part = at === 'principal' ? null : at === 'accessKey' ? 'keys' : at, keyId = route.params.keyId;
         const target = principals.at(id);
         if (part === 'access' && !keyId && method === 'DELETE') {
-          permit('relate', 'principal', holderId);
-          if (id === holderId) fail(400, 'invalid_principal', '自分自身のアクセスは取り消せません。');
+          permit('relate', 'principal', ownerId);
+          if (id === ownerId) fail(400, 'invalid_principal', '自分自身のアクセスは取り消せません。');
           await inputBody();
-          requestActions.revokeAccess(holderId, id);
+          requestActions.revokeAccess(ownerId, id);
           return send(200, { ok: true });
         }
         if (part === 'publicKey' && method === 'GET') return send(200, { key: keys.view(id) });
@@ -791,13 +791,13 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         }
         if (subjectId !== subject.id) {
           if (input.object_type === 'principal') permit('relate', 'principal', object.id);
-          else permit('share', object.kind, object.id, object.holder_id);
+          else permit('share', object.kind, object.id, object.owner_id);
         }
         principals.unrelate(subjectId, input.relation, input.object_type, input.object_id);
         auditLog.write(subject.id, 'relation.removed', input.object_type, input.object_id, { subject: subjectId, relation: input.relation });
         return send(200, { ok: true });
       }
-      // Lent machines. An environment is a resource: opened by the holder or whoever acts for them, reached by its id,
+      // Lent machines. An environment is a resource: opened by the owner or whoever acts for them, reached by its id,
       // shared along lines, and able to reach nothing of Foundation's unless given an identity it may act as.
       const passable = identity => {
         if (identity === undefined || identity === null) return null;
@@ -806,7 +806,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         permit('pass', 'principal', id);
         return id;
       };
-      if (at === 'environments' && method === 'GET') { permit('list', 'environment'); return send(200, { environments: environments.list(holderId).map(row => environments.view(row)) }); }
+      if (at === 'environments' && method === 'GET') { permit('list', 'environment'); return send(200, { environments: environments.list(ownerId).map(row => environments.view(row)) }); }
       if ((at === 'environments' || at === 'runs') && method === 'POST') {
         permit('open', 'environment');
         environments.check();
@@ -814,7 +814,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const input = await inputBody(1024 * 1024 + 20_000);
         const identity = passable(input.identity);
         const run = at === 'runs';
-        const opened = await environments.open(holderId, { ...input, identity, ...(run ? { lifetime: { ...(input.lifetime ?? {}), end: 'exit' } } : {}) }, origin);
+        const opened = await environments.open(ownerId, { ...input, identity, ...(run ? { lifetime: { ...(input.lifetime ?? {}), end: 'exit' } } : {}) }, origin);
         auditLog.write(subject.id, 'environment.opened', 'resource', opened.id, { identity, size: opened.size, lifetime: opened.lifetime });
         if (!run) return send(201, { environment: environments.view(opened) });
         const started = environments.run(opened, subject.id, input);
@@ -826,9 +826,9 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         ? environments.at(route.params.resourceId) : null;
       if (environmentHeld && (route.group === 'environments' || method === 'DELETE')) {
         const held = environmentHeld, commands = at === 'commands' || at === 'command';
-        if (!commands && method === 'GET') { permit('read', 'environment', held.id, held.holder_id); return send(200, { environment: environments.view(held) }); }
+        if (!commands && method === 'GET') { permit('read', 'environment', held.id, held.owner_id); return send(200, { environment: environments.view(held) }); }
         if (!commands && method === 'PATCH') {
-          permit('identity', 'environment', held.id, held.holder_id);
+          permit('identity', 'environment', held.id, held.owner_id);
           const input = await inputBody();
           if (!Object.hasOwn(input, 'identity')) fail(400, 'invalid_identity', 'identity を指定してください（外すときは null）。');
           const identity = passable(input.identity);
@@ -837,14 +837,14 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           return send(200, { environment: environments.view(changed) });
         }
         if (!commands && method === 'DELETE') {
-          permit('remove', 'environment', held.id, held.holder_id);
+          permit('remove', 'environment', held.id, held.owner_id);
           await inputBody();
           await environments.remove(held);
           auditLog.write(subject.id, 'environment.closed', 'resource', held.id, {});
           return send(200, { ok: true });
         }
         if (at === 'commands' && method === 'POST') {
-          permit('exec', 'environment', held.id, held.holder_id);
+          permit('exec', 'environment', held.id, held.owner_id);
           const input = await inputBody(1024 * 1024 + 20_000);
           const started = environments.run(held, subject.id, input);
           auditLog.write(subject.id, 'environment.command', 'resource', held.id, { command: String(input.command?.[0] ?? '').slice(0, 100) });
@@ -852,18 +852,18 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           return send(answered.status === 'running' ? 202 : 200, { command: answered });
         }
         if (at === 'command' && method === 'GET') {
-          permit('read', 'environment', held.id, held.holder_id);
+          permit('read', 'environment', held.id, held.owner_id);
           return send(200, { command: environments.command(held.id, route.params.commandId) });
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
       // Resources. Each has an id, and that is how lines, the audit log and the calls below refer to it. A name is
-      // how the holder calls one: a way to find or place a thing, not its identity. A connection says what it is
+      // how the owner calls one: a way to find or place a thing, not its identity. A connection says what it is
       // and where it works; an object says its size and type; neither says anything of its content here.
-      const shown = row => row.kind === 'connection' ? connections.view(connections.get(row.id), { owner: subject.id === row.holder_id })
+      const shown = row => row.kind === 'connection' ? connections.view(connections.get(row.id), { owner: subject.id === row.owner_id })
         : row.kind === 'secret' ? secrets.view(secrets.get(row.id))
-        : row.kind === 'app' ? apps.view(apps.get(row.id), { owner: subject.id === row.holder_id })
-        : row.kind === 'service' ? services.view(services.row(row.id), { owner: subject.id === row.holder_id })
+        : row.kind === 'app' ? apps.view(apps.get(row.id), { owner: subject.id === row.owner_id })
+        : row.kind === 'service' ? services.view(services.row(row.id), { owner: subject.id === row.owner_id })
         : row.kind === 'environment' ? environments.view(environments.get(row.id)) : objects.view(objects.get(row.id));
       const resourceKind = required => {
         const kind = url.searchParams.get('kind') ?? undefined;
@@ -876,68 +876,68 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const kinds = kind ? [kind] : KINDS;
         for (const one of kinds) permit('list', one);
         if (name !== undefined) {
-          const found = (kinds.includes('secret') && secrets.find(holderId, name)) || (kinds.includes('object') && objects.enabled && objects.find(holderId, name))
-            || (kinds.includes('service') && services.find(holderId, name)) || (kinds.includes('app') && apps.find(holderId, name));
+          const found = (kinds.includes('secret') && secrets.find(ownerId, name)) || (kinds.includes('object') && objects.enabled && objects.find(ownerId, name))
+            || (kinds.includes('service') && services.find(ownerId, name)) || (kinds.includes('app') && apps.find(ownerId, name));
           if (!found) fail(404, 'not_found', '見つかりません。');
           return send(200, { resource: shown(found) });
         }
         const rows = [];
-        if (kinds.includes('secret')) rows.push(...secrets.list(holderId, { prefix }));
+        if (kinds.includes('secret')) rows.push(...secrets.list(ownerId, { prefix }));
         if (kinds.includes('connection')) {
           const service = url.searchParams.get('service') ?? undefined;
-          rows.push(...connections.list(holderId, { service, prefix }).filter(row => subject.id === holderId || row.status !== 'disconnecting'));
+          rows.push(...connections.list(ownerId, { service, prefix }).filter(row => subject.id === ownerId || row.status !== 'disconnecting'));
         }
-        if (kinds.includes('object')) { if (kind === 'object') objects.check(); if (objects.enabled) { limit('objects', 60); rows.push(...objects.list(holderId, prefix ?? '')); } }
-        if (kinds.includes('app')) rows.push(...apps.list(holderId), ...apps.lent(holderId));
-        if (kinds.includes('service')) rows.push(...services.list(holderId), ...services.lent(holderId));
-        if (kinds.includes('environment')) rows.push(...environments.list(holderId));
+        if (kinds.includes('object')) { if (kind === 'object') objects.check(); if (objects.enabled) { limit('objects', 60); rows.push(...objects.list(ownerId, prefix ?? '')); } }
+        if (kinds.includes('app')) rows.push(...apps.list(ownerId), ...apps.lent(ownerId));
+        if (kinds.includes('service')) rows.push(...services.list(ownerId), ...services.lent(ownerId));
+        if (kinds.includes('environment')) rows.push(...environments.list(ownerId));
         // Apps are listed with those Foundation offers, which anyone may connect through and nobody holds.
         return send(200, { resources: [...rows.map(shown), ...(kind === 'app' ? apps.offeredAll() : [])] });
       }
-      // Placing a thing by name: the holder's name for it. The same name, same kind, replaces what is there. A
-      // secret placed this way is the holder's bytes. Managed authorizations are made at /v1/connections.
+      // Placing a thing by name: the owner's name for it. The same name, same kind, replaces what is there. A
+      // secret placed this way is the owner's bytes. Managed authorizations are made at /v1/connections.
       if (at === 'resources' && method === 'PUT') {
         const kind = resourceKind(true), name = url.searchParams.get('name');
         if (name === null) fail(400, 'invalid_name', '名前を指定してください。');
-        // An app is registered by its holder, as values: which service, its client ID and secret. The same name
+        // An app is registered by its owner, as values: which service, its client ID and secret. The same name
         // again gives it new values, and its connections go on through it.
         if (kind === 'app') {
-          const existing = apps.find(holderId, name);
+          const existing = apps.find(ownerId, name);
           permit('write', 'app', existing?.id);
           limit('apps', 30);
           const input = await inputBody();
-          services.get(input.service, holderId);
-          const saved = apps.put(holderId, { ...input, name });
+          services.get(input.service, ownerId);
+          const saved = apps.put(ownerId, { ...input, name });
           auditLog.write(subject.id, existing ? 'app.changed' : 'app.created', 'resource', saved.id, { service: saved.service });
           return send(200, { resource: shown(saved) });
         }
         // A service is described as its definition; it holds nothing secret.
         if (kind === 'service') {
-          const existing = services.find(holderId, name);
+          const existing = services.find(ownerId, name);
           permit('write', 'service', existing?.id);
           limit('services', 30);
           const input = await inputBody();
           const saved = store.transaction(() => {
-            if (req.headers['if-none-match'] === '*' && services.find(holderId, name)) fail(412, 'name_taken', '同じ名前のサービスがあります。一覧から選んでください。');
-            return services.put(holderId, name, input);
+            if (req.headers['if-none-match'] === '*' && services.find(ownerId, name)) fail(412, 'name_taken', '同じ名前のサービスがあります。一覧から選んでください。');
+            return services.put(ownerId, name, input);
           });
           auditLog.write(subject.id, existing ? 'service.changed' : 'service.created', 'resource', saved.id, {});
           return send(200, { resource: shown(saved) });
         }
         if (!['secret', 'object'].includes(kind)) fail(405, 'method_not_allowed', 'この操作は利用できません。');
-        const existing = kind === 'secret' ? secrets.find(holderId, name) : (objects.check(), objects.find(holderId, name));
+        const existing = kind === 'secret' ? secrets.find(ownerId, name) : (objects.check(), objects.find(ownerId, name));
         permit('write', kind, existing?.id);
         limit(kind === 'secret' ? 'secrets' : 'objects', kind === 'secret' ? 120 : 60);
-        // A thing made for the holder by someone else is one its maker may read and write: a line says so.
-        const line = saved => { if (!existing && subject.id !== holderId) principals.relate(subject.id, 'editor', 'resource', saved.id); };
+        // A thing made for the owner by someone else is one its maker may read and write: a line says so.
+        const line = saved => { if (!existing && subject.id !== ownerId) principals.relate(subject.id, 'editor', 'resource', saved.id); };
         if (kind === 'secret') {
           const input = await inputBody(SECRET_MAX * 2), { content, plain } = sealedInput(input);
-          if (plain) agentFor(holderId);
+          if (plain) agentFor(ownerId);
           const saved = store.transaction(() => {
             const match = req.headers['if-match'];
-            const current = match === undefined ? null : secrets.find(holderId, name);
+            const current = match === undefined ? null : secrets.find(ownerId, name);
             if (match !== undefined && (!current || match !== secretTag(current))) fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
-            const saved = plain ? secrets.putAs(holderId, { name, content }) : secrets.put(holderId, { name, content, envelopes: input.envelopes });
+            const saved = plain ? secrets.putAs(ownerId, { name, content }) : secrets.put(ownerId, { name, content, envelopes: input.envelopes });
             line(saved);
             res.setHeader('etag', secretTag(saved));
             return saved;
@@ -945,7 +945,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           return send(200, { resource: shown(saved) });
         }
         const content = await inputBytes(OBJECT_MAX);
-        const saved = await objects.put(holderId, name, content, req.headers['content-type'] || 'application/octet-stream');
+        const saved = await objects.put(ownerId, name, content, req.headers['content-type'] || 'application/octet-stream');
         still();
         line(saved);
         return send(200, { resource: shown(saved) });
@@ -953,7 +953,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       if (route?.group === 'resources') {
         const held = resources.at(route.params.resourceId), part = at === 'content' ? '/content' : at === 'objectLink' ? '/link' : at === 'envelopes' ? '/envelopes' : null;
         const connection = held.kind === 'connection' ? connections.get(held.id) : null, secret = held.kind === 'secret' ? secrets.get(held.id) : null;
-        // An app: renamed by its holder; given new values by its holder or an editor; removed by its holder, which
+        // An app: renamed by its owner; given new values by its owner or an editor; removed by its owner, which
         // stops the connections made through it. Its secret is never read back, by anyone.
         if (held.kind === 'app') {
           const app = apps.at(held.id);
@@ -962,34 +962,34 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
             const input = await inputBody();
             const { name, ...values } = input;
             let row = app;
-            if (name !== undefined) { permit('rename', 'app', app.id, app.holder_id); row = apps.rename(row, name); }
+            if (name !== undefined) { permit('rename', 'app', app.id, app.owner_id); row = apps.rename(row, name); }
             if (Object.keys(values).length) {
-              permit('write', 'app', app.id, app.holder_id);
+              permit('write', 'app', app.id, app.owner_id);
               row = apps.write(row, values);
               auditLog.write(subject.id, 'app.changed', 'resource', app.id, { service: app.service });
             }
             return send(200, { resource: shown(row) });
           }
           if (method === 'DELETE') {
-            permit('remove', 'app', app.id, app.holder_id);
+            permit('remove', 'app', app.id, app.owner_id);
             const input = await inputBody(), dependents = apps.dependents(app);
             // Removing an app stops what was connected through it; that is said, and agreed to, first.
             if (dependents.length && input.confirm !== true) {
               fail(409, 'app_in_use', `このアプリで作った接続が${dependents.length}件あります。削除すると、つなぎ直すまで使えなくなります。`,
-                { connections: dependents.length, yours: dependents.filter(row => row.holder_id === app.holder_id).map(row => ({ id: row.id, name: row.name })) });
+                { connections: dependents.length, yours: dependents.filter(row => row.owner_id === app.owner_id).map(row => ({ id: row.id, name: row.name })) });
             }
             apps.remove(app);
             auditLog.write(subject.id, 'app.removed', 'resource', app.id, { service: app.service, connections_stopped: dependents.length });
             return send(200, { ok: true, connections_stopped: dependents.length });
           }
         }
-        // A service a holder described: its definition is read, replaced and renamed; it is removed once nothing
+        // A service a owner described: its definition is read, replaced and renamed; it is removed once nothing
         // refers to it.
         if (held.kind === 'service') {
           const row = services.row(held.id);
           if (part) fail(405, 'method_not_allowed', 'この操作は利用できません。');
           if (method === 'PUT') {
-            permit('write', 'service', row.id, row.holder_id);
+            permit('write', 'service', row.id, row.owner_id);
             const saved = services.write(row, await inputBody());
             auditLog.write(subject.id, 'service.changed', 'resource', row.id, {});
             return send(200, { resource: shown(saved) });
@@ -997,8 +997,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           if (method === 'PATCH') {
             const input = await inputBody();
             if (Object.keys(input).some(key => !['name', 'auth_schemes'].includes(key)) || !Object.keys(input).length) fail(400, 'invalid_fields', '変更する項目を確認してください。');
-            if (input.name !== undefined) permit('rename', 'service', row.id, row.holder_id);
-            if (input.auth_schemes !== undefined) permit('write', 'service', row.id, row.holder_id);
+            if (input.name !== undefined) permit('rename', 'service', row.id, row.owner_id);
+            if (input.auth_schemes !== undefined) permit('write', 'service', row.id, row.owner_id);
             const saved = store.transaction(() => {
               let current = services.row(row.id);
               if (input.name !== undefined) current = services.rename(current, input.name);
@@ -1009,7 +1009,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
             return send(200, { resource: shown(saved) });
           }
           if (method === 'DELETE') {
-            permit('remove', 'service', row.id, row.holder_id);
+            permit('remove', 'service', row.id, row.owner_id);
             await inputBody();
             services.remove(row);
             auditLog.write(subject.id, 'service.removed', 'resource', row.id, {});
@@ -1017,13 +1017,13 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           }
         }
         if (!part && method === 'GET') {
-          permit('read', held.kind, held.id, held.holder_id);
-          return send(200, { resource: { ...shown(held), ...(held.holder_id === subject.id ? { lines: principals.linesOnto(held.id) } : {}) } });
+          permit('read', held.kind, held.id, held.owner_id);
+          return send(200, { resource: { ...shown(held), ...(held.owner_id === subject.id ? { lines: principals.linesOnto(held.id) } : {}) } });
         }
-        // Renaming changes what the holder calls it and nothing else: lines, the audit log and the content stay.
+        // Renaming changes what the owner calls it and nothing else: lines, the audit log and the content stay.
         if (!part && method === 'PATCH') {
           const input = await inputBody();
-          permit('rename', held.kind, held.id, held.holder_id);
+          permit('rename', held.kind, held.id, held.owner_id);
           if (held.kind === 'object') return send(200, { resource: shown(objects.rename(objects.get(held.id), input.name)) });
           if (secret) return send(200, { resource: shown(secrets.rename(secret, input.name)) });
           return send(200, { resource: shown(connections.rename(connection, input.name)) });
@@ -1031,7 +1031,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         // Removing a connection for a service disconnects it: Foundation stops obtaining from it and, when asked,
         // asks the service to revoke it. Removing always succeeds; the revocation's outcome is reported.
         if (!part && method === 'DELETE' && connection) {
-          permit('disconnect', 'connection', held.id, held.holder_id);
+          permit('disconnect', 'connection', held.id, held.owner_id);
           const input = await inputBody();
           if (typeof input.revoke !== 'boolean') fail(400, 'invalid_revoke', 'サービス側の許可を取り消すか選んでください。');
           let scheme = null;
@@ -1039,7 +1039,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           if (disconnects.has(connection.id)) fail(409, 'disconnect_in_progress', '接続を解除しています。');
           disconnects.add(connection.id);
           try {
-            const previous = connections.disconnect(held.holder_id, connection.id);
+            const previous = connections.disconnect(held.owner_id, connection.id);
             let revoked = null;
             if (input.revoke && typeof scheme?.revoke === 'function') {
               try { await scheme.revoke(connections.context(previous).privateState); revoked = true; }
@@ -1051,7 +1051,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           } finally { disconnects.delete(connection.id); }
         }
         if (!part && method === 'DELETE') {
-          permit('remove', held.kind, held.id, held.holder_id);
+          permit('remove', held.kind, held.id, held.owner_id);
           await inputBody();
           if (secret) secrets.remove(secret); else { await objects.remove(objects.get(held.id)); still(); }
           return send(200, { ok: true });
@@ -1060,7 +1060,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         // what it yields is derived when it is injected.
         if (part === '/content' && method === 'GET') {
           if (connection) fail(405, 'method_not_allowed', 'この接続に読める中身はありません。使うには /v1/injections を使います。');
-          permit(secret ? 'content' : 'read', held.kind, held.id, held.holder_id);
+          permit(secret ? 'content' : 'read', held.kind, held.id, held.owner_id);
           const disposition = `attachment; filename="resource.bin"; filename*=UTF-8''${encodeURIComponent(held.name.split('/').pop()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}`;
           if (secret) {
             res.setHeader('etag', secretTag(secret));
@@ -1073,11 +1073,11 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         }
         if (part === '/content' && method === 'PUT') {
           if (connection) fail(405, 'method_not_allowed', 'この接続の中身は書き換えられません。');
-          permit('write', held.kind, held.id, held.holder_id);
+          permit('write', held.kind, held.id, held.owner_id);
           if (secret) {
             limit('secrets', 120);
             const input = await inputBody(SECRET_MAX * 2), { content, plain } = sealedInput(input);
-            if (plain) agentFor(held.holder_id);
+            if (plain) agentFor(held.owner_id);
             const saved = store.transaction(() => {
               const match = req.headers['if-match'], current = secrets.get(held.id);
               if (!current) fail(404, 'not_found', '見つかりません。');
@@ -1098,7 +1098,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         // principal from its own envelope - and taken back the same way.
         if (part === '/envelopes') {
           if (!secret) fail(405, 'method_not_allowed', 'この操作は利用できません。');
-          permit('share', 'secret', held.id, held.holder_id);
+          permit('share', 'secret', held.id, held.owner_id);
           const recipient = principals.at(route.params.principalId).id, input = await inputBody();
           if (method === 'PUT') keys.keepEnvelope(held.id, recipient, input.wrapped);
           else if (method === 'POST') keys.resealFor(held.id, recipient);
@@ -1109,7 +1109,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         }
         if (part === '/link' && method === 'POST') {
           if (held.kind !== 'object') fail(405, 'method_not_allowed', 'この操作は利用できません。');
-          permit('link', 'object', held.id, held.holder_id);
+          permit('link', 'object', held.id, held.owner_id);
           const input = await inputBody();
           limit('objects', 60);
           const link = await objects.link(objects.get(held.id), input.minutes);
@@ -1119,28 +1119,28 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
       if (at === 'audit' && method === 'GET') { permit('audit-log', 'principal', subject.id); return send(200, { entries: auditLog.list(subject.id) }); }
-      // The holder's screen, in one answer.
+      // The owner's screen, in one answer.
       if (at === 'overview' && method === 'GET') {
-        permit('overview', 'principal', holderId);
-        return send(200, { user: { id: subject.id, email: emails.of(subject.id)[0] ?? null }, principal: self, payment: payments.view(holderId), webauthn_credentials: webauthn.list(holderId).map(row => webauthn.view(row)), secrets: secrets.list(holderId).map(row => secrets.view(row)), connections: connections.list(holderId).map(row => connections.view(row, { owner: true })),
-          apps: [...apps.list(holderId).map(row => apps.view(row, { owner: true })), ...apps.lent(holderId).map(row => apps.view(row)), ...apps.offeredAll()],
-          services: [...services.list(holderId).map(row => services.view(row, { owner: true })), ...services.lent(holderId).map(row => services.view(row))],
-          catalog: services.catalogView(), principals: principals.owned(holderId), actors: principals.actorsOf(holderId),
-          requests: requests.listTo(holderId, 'pending').map(row => viewRequest(row, origin)), functions: FUNCTIONS, settings: settings.get(holderId) ?? null,
-          // Machines lent to the holder and still running, and the computing they spend.
-          environments: environments.list(holderId).filter(row => row.status !== 'stopped').map(row => environments.view(row)), compute: environments.usage(holderId), foundation: { principal_id: keys.agentId } });
+        permit('overview', 'principal', ownerId);
+        return send(200, { user: { id: subject.id, email: emails.of(subject.id)[0] ?? null }, principal: self, payment: payments.view(ownerId), webauthn_credentials: webauthn.list(ownerId).map(row => webauthn.view(row)), secrets: secrets.list(ownerId).map(row => secrets.view(row)), connections: connections.list(ownerId).map(row => connections.view(row, { owner: true })),
+          apps: [...apps.list(ownerId).map(row => apps.view(row, { owner: true })), ...apps.lent(ownerId).map(row => apps.view(row)), ...apps.offeredAll()],
+          services: [...services.list(ownerId).map(row => services.view(row, { owner: true })), ...services.lent(ownerId).map(row => services.view(row))],
+          catalog: services.catalogView(), principals: principals.owned(ownerId), actors: principals.actorsOf(ownerId),
+          requests: requests.listTo(ownerId, 'pending').map(row => viewRequest(row, origin)), functions: FUNCTIONS, settings: settings.get(ownerId) ?? null,
+          // Machines lent to the owner and still running, and the computing they spend.
+          environments: environments.list(ownerId).filter(row => row.status !== 'stopped').map(row => environments.view(row)), compute: environments.usage(ownerId), foundation: { principal_id: keys.agentId } });
       }
-      // Everything, in one file, for the holder alone. Lending someone a place to keep things means they can take
+      // Everything, in one file, for the owner alone. Lending someone a place to keep things means they can take
       // them away again; without this the promise is words.
       if (at === 'export' && method === 'GET') {
-        permit('export', 'principal', holderId);
+        permit('export', 'principal', ownerId);
         // A secret goes out as it is kept, sealed, with its envelopes; a connection with what is known of it, and a token with what was pasted.
         // What renews the others is Foundation's to keep and would be of no use elsewhere. A described service goes
         // out as its definition.
-        const kept = secrets.list(holderId).map(row => ({ ...secrets.view(row), content: secrets.content(row).toString('base64url'), encoding: 'base64url', envelopes: keys.envelopesOf(row.id) }));
+        const kept = secrets.list(ownerId).map(row => ({ ...secrets.view(row), content: secrets.content(row).toString('base64url'), encoding: 'base64url', envelopes: keys.envelopesOf(row.id) }));
         const value = { exported_at: new Date().toISOString(), owner: emails.of(subject.id)[0] ?? null, origin, secrets: kept,
-          connections: connections.list(holderId).map(row => ({ ...connections.view(row, { owner: true }), fields: connections.handed(row) })),
-          services: services.list(holderId).map(row => ({ id: row.id, name: row.name, definition: JSON.parse(row.definition) })), principals: principals.owned(holderId) };
+          connections: connections.list(ownerId).map(row => ({ ...connections.view(row, { owner: true }), fields: connections.handed(row) })),
+          services: services.list(ownerId).map(row => ({ id: row.id, name: row.name, definition: JSON.parse(row.definition) })), principals: principals.owned(ownerId) };
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
           'content-disposition': `attachment; filename="foundation-${new Date().toISOString().slice(0, 10)}.json"` });
         return res.end(JSON.stringify(value, null, 2));
@@ -1157,12 +1157,12 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         if (!flow || flow.kind !== 'confirmation') fail(400, 'invalid_state', '接続をやり直してください。');
         progressRequestId = flow.requestId || null;
         if (method === 'DELETE') { flows.drop(session.id, state); return send(200, { ok: true }); }
-        const previous = connections.reconnection(holderId, flow.service, flow.scheme, flow.previous.id);
+        const previous = connections.reconnection(ownerId, flow.service, flow.scheme, flow.previous.id);
         if (previous.generation !== flow.previous.generation) fail(409, 'connection_changed', '接続の状態が変わりました。');
-        if (flow.requestId) requests.forTo(flow.requestId, holderId, true);
+        if (flow.requestId) requests.forTo(flow.requestId, ownerId, true);
         if (method === 'GET') return send(200, { connection: connections.view(previous, { owner: true }), changes: flow.changes });
         still();
-        const saved = requestActions.connect(flow.requestId, holderId, flow.service, flow.scheme, flow.result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, app: flow.app ?? null });
+        const saved = requestActions.connect(flow.requestId, ownerId, flow.service, flow.scheme, flow.result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, app: flow.app ?? null });
         flows.drop(session.id, state);
         return send(200, { connection: connections.view(saved, { owner: true }) });
       }
@@ -1170,22 +1170,22 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         permit('connect', 'connection');
         const input = await inputBody();
         limit('connect', 10);
-        const request = input.request_id === undefined ? null : requests.forTo(input.request_id, holderId, true);
+        const request = input.request_id === undefined ? null : requests.forTo(input.request_id, ownerId, true);
         progressRequestId = request?.id || null;
         const asked = request ? requests.detail(request) : null;
         if (request && request.type !== 'connection') fail(409, 'approval_only', 'この依頼は接続の依頼ではありません。');
-        // The service, the scheme, the scopes and the app are the request's when there is one: what the holder saw is
+        // The service, the scheme, the scopes and the app are the request's when there is one: what the owner saw is
         // what happens.
-        const { ref, definition } = services.get(asked ? asked.service : input.service, holderId);
+        const { ref, definition } = services.get(asked ? asked.service : input.service, ownerId);
         const schemeId = asked ? asked.auth_scheme : input.auth_scheme ?? Object.keys(definition.auth_schemes)[0];
         if (request && input.service !== undefined && input.service !== ref) fail(400, 'scope_mismatch', '依頼されたサービスで接続してください。');
         const scheme = services.scheme(ref, schemeId);
         if (request) requests.record(request.id, 'connect_started', { service: ref });
         // Who asked for it, as they were called then. One started from the page was asked by no one.
-        const requestedBy = request ? principals.get(request.from_id)?.name ?? '' : subject.id === holderId ? '' : self.name;
+        const requestedBy = request ? principals.get(request.from_id)?.name ?? '' : subject.id === ownerId ? '' : self.name;
         const target = asked ? asked.connection_id : input.connection_id;
         if (request && input.connection_id !== undefined && input.connection_id !== target) fail(409, 'connection_changed', '依頼された接続を選んでください。');
-        const previous = target === undefined ? undefined : connections.reconnection(holderId, ref, schemeId, target);
+        const previous = target === undefined ? undefined : connections.reconnection(ownerId, ref, schemeId, target);
         // A token is pasted here by whoever may connect; there is no other site to go to and come back from. Pasting
         // one for an existing connection replaces its value.
         if (schemeId === 'token') {
@@ -1193,7 +1193,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 80 || /[\x00-\x1f\x7f]/.test(input.name))) fail(400, 'invalid_name', '名前は80文字までで指定してください。');
           const result = await scheme.authorization.complete({ fields: input.fields });
           still();
-          const saved = requestActions.connect(request?.id, holderId, ref, 'token', result, { requestedBy, previous, name: input.name?.trim() });
+          const saved = requestActions.connect(request?.id, ownerId, ref, 'token', result, { requestedBy, previous, name: input.name?.trim() });
           return send(previous ? 200 : 201, { connection: connections.view(saved, { owner: true }) });
         }
         if (!session) fail(401, 'signin_required', 'サインインしてください。');
@@ -1203,11 +1203,11 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const named = asked ? asked.app : appReference(input.app);
         if (named !== undefined && !takesApps(scheme)) fail(400, 'app_unsupported', 'この接続方法はアプリを通しません。');
         const appId = takesApps(scheme) ? named ?? previous?.app_id ?? FOUNDATION_APP : null;
-        if (appId && appId !== FOUNDATION_APP) permit('use', 'app', appId, apps.at(appId).holder_id);
+        if (appId && appId !== FOUNDATION_APP) permit('use', 'app', appId, apps.at(appId).owner_id);
         const active = schemeId === 'oauth' ? apps.scheme(ref, appId) : scheme;
         still();
         const flow = { service: ref, requestedBy, requestId: request?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null, scopes, app: appId };
-        // A role is made by the holder in the service's own console, then named here; what Foundation must remember
+        // A role is made by the owner in the service's own console, then named here; what Foundation must remember
         // meanwhile (the external ID it chose) travels in the flow, and the flow lasts until the answer is right.
         if (schemeId === 'role') {
           const started = await active.authorization.begin({ origin }, connections.context(previous));
@@ -1228,21 +1228,21 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const flow = flows.peek(session.id, input.state);
         if (!flow || flow.kind !== 'role') fail(400, 'invalid_state', '接続をやり直してください。');
         const scheme = services.scheme(flow.service, 'role');
-        const previous = flow.previous ? connections.forService(holderId, flow.previous.id) : undefined;
+        const previous = flow.previous ? connections.forService(ownerId, flow.previous.id) : undefined;
         if (previous && previous.generation !== flow.previous.generation) fail(409, 'connection_changed', '接続の状態が変わりました。');
-        if (flow.requestId) { requests.forTo(flow.requestId, holderId, true); progressRequestId = flow.requestId; }
+        if (flow.requestId) { requests.forTo(flow.requestId, ownerId, true); progressRequestId = flow.requestId; }
         const fields = input.fields && typeof input.fields === 'object' && !Array.isArray(input.fields) ? input.fields : {};
         const saved = await verifyConnection(req, session,
           () => scheme.authorization.complete({ fields, memo: flow.memo }, connections.context(previous)),
-          result => requestActions.connect(flow.requestId, holderId, flow.service, 'role', result, { requestedBy: flow.requestedBy, previous }));
+          result => requestActions.connect(flow.requestId, ownerId, flow.service, 'role', result, { requestedBy: flow.requestedBy, previous }));
         flows.drop(session.id, input.state);
         return send(200, { connection: connections.view(saved, { owner: true }) });
       }
-      // What this holder is using, and what they may use. Lending has a cost, so both sides can see it.
+      // What this owner is using, and what they may use. Lending has a cost, so both sides can see it.
       if (at === 'usage' && method === 'GET') {
-        permit('usage', 'principal', holderId);
-        const kept = secrets.usage(holderId);
-        const space = objects.enabled ? await objects.usage(holderId) : null;
+        permit('usage', 'principal', ownerId);
+        const kept = secrets.usage(ownerId);
+        const space = objects.enabled ? await objects.usage(ownerId) : null;
         still();
         return send(200, { secrets: { ...kept, count_max: SECRET_COUNT_MAX, bytes_max: SECRET_TOTAL_MAX },
           objects: space ? { count: space.count, bytes: space.bytes, count_max: space.count_max, bytes_max: space.bytes_max } : null });
@@ -1250,24 +1250,24 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // Injecting derives what each connection yields now: a secret its bytes, one for a service what its scheme
       // obtains. This is the one place a connection reaches a service.
       if (at === 'injections' && method === 'POST') {
-        permit('inject', 'principal', holderId);
+        permit('inject', 'principal', ownerId);
         const input = await inputBody();
         limit('issue', 30);
         const names = Array.isArray(input.names) ? input.names : [];
-        const { injection, expires_at } = await inputs.inject(holderId, names);
+        const { injection, expires_at } = await inputs.inject(ownerId, names);
         still();
         // Handed into a lent machine: what it prints is cleaned of these.
         if (subject.via.environment) environments.reveal(subject.via.environment, [...Object.values(injection.environment), ...injection.files.map(file => Buffer.from(file.content, 'base64').toString('utf8'))]);
-        auditLog.write(subject.id, 'injection', 'principal', holderId, { inputs: names.map(({ as, filename, ...reference }) => reference) });
+        auditLog.write(subject.id, 'injection', 'principal', ownerId, { inputs: names.map(({ as, filename, ...reference }) => reference) });
         return send(200, { injection, expires_at, expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
       }
-      if (at === 'functions' && method === 'GET') { permit('functions', 'principal', holderId); return send(200, { functions: FUNCTIONS }); }
+      if (at === 'functions' && method === 'GET') { permit('functions', 'principal', ownerId); return send(200, { functions: FUNCTIONS }); }
       if (at === 'httpRequest' && method === 'POST') {
-        permit('invoke', 'principal', holderId);
+        permit('invoke', 'principal', ownerId);
         const input = await inputBody(FETCH_BODY_MAX * 2);
         limit('fetch', 30);
-        const result = await functions.request({ holderId, still }, input, [url.hostname, ...(external ? [external.hostname] : [])]);
-        auditLog.write(subject.id, 'function', 'principal', holderId, { function: 'http.request', target: String(input.url).slice(0, 200), status: result.response?.status ?? null });
+        const result = await functions.request({ ownerId, still }, input, [url.hostname, ...(external ? [external.hostname] : [])]);
+        auditLog.write(subject.id, 'function', 'principal', ownerId, { function: 'http.request', target: String(input.url).slice(0, 200), status: result.response?.status ?? null });
         return send(200, result);
       }
       // The MCP door. It carries no capability of its own: a tool call is the same request to the same

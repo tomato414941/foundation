@@ -46,7 +46,7 @@ test('宛先は持ち主と、持ち主の代わりに動くFoundationで、Foun
   const cookie = session.headers.getSetCookie()[0].split(';')[0], as = { headers: { cookie }, anonymous: true };
   const made = generateKey();
   assert.equal((await f.request('/v1/key', { ...as, method: 'PUT', data: { public_key: b64(made.publicKey) } })).status, 200);
-  assert.deepEqual((await f.request('/v1/recipients', as)).json.recipients, [{ principal_id: USER_A, public_key: b64(made.publicKey) }], 'nobody but the holder');
+  assert.deepEqual((await f.request('/v1/recipients', as)).json.recipients, [{ principal_id: USER_A, public_key: b64(made.publicKey) }], 'nobody but the owner');
   const sealed = await f.sealed('mine', as, [{ principal_id: USER_A, public_key: b64(made.publicKey) }]);
   const kept = await f.request('/v1/resources?kind=secret&name=mine', { ...as, method: 'PUT', data: sealed });
   assert.equal(kept.status, 200, kept.text);
@@ -64,7 +64,7 @@ test('宛先は持ち主と、持ち主の代わりに動くFoundationで、Foun
   assert.equal(handed.status, 200, handed.text);
   assert.deepEqual((await f.request('/v1/injections', { ...as, method: 'POST', data: { names: [{ name: 'mine', as: 'MINE' }] } })).json.injection.environment, { MINE: 'mine' });
 });
-// The holder opens its own envelope and seals the key for one more recipient, as a client does.
+// The owner opens its own envelope and seals the key for one more recipient, as a client does.
 function resealed(sealed, own, recipientPublicKey) {
   const contentKey = open(Buffer.from(sealed.envelopes[USER_A], 'base64url'), own.privateKey);
   return seal(contentKey, recipientPublicKey);

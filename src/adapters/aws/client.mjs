@@ -14,7 +14,7 @@ const invalidResponse = () => fail(502, 'service_response', 'AWSからの応答�
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const tag = (xml, name) => { const match = new RegExp('<' + name + '>([^<]*)</' + name + '>').exec(xml); return match ? match[1] : undefined; };
 
-// Rather than a key of the account holder's, Foundation is trusted to assume a role they made. The role names
+// Rather than a key of the account owner's, Foundation is trusted to assume a role they made. The role names
 // Foundation's own role as the only principal that may assume it, and an external ID that Foundation chose for
 // this connection and checks on every use. What is kept is the role's name and that ID: nothing that works
 // anywhere else, and nothing that works without Foundation's own identity.
@@ -25,7 +25,7 @@ export class AwsClient {
     this.template = template ?? (() => readFileSync(new URL('../../../deploy/aws-connection.yaml', import.meta.url), 'utf8'));
   }
   check() { if (!this.enabled) fail(503, 'aws_unavailable', '現在AWSに接続できません。'); }
-  // The account holder makes the role in their own console, from a template Foundation keeps in its bucket and
+  // The account owner makes the role in their own console, from a template Foundation keeps in its bucket and
   // hands over as a one-hour link. The external ID is made here and travels only through that link.
   async prepare() {
     this.check();

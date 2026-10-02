@@ -2,7 +2,7 @@ import { checkDefinition } from './service-definition.mjs';
 import { ensureAgent } from './keys.mjs';
 import { newContentKey, sealContent, seal } from '../cli/envelope.mjs';
 
-export const SCHEMA_VERSION = 44;
+export const SCHEMA_VERSION = 45;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -20,6 +20,7 @@ export const STEPS = {
   42: agents,
   43: durableEnvironmentStops,
   44: envelopes,
+  45: ownerOfResources,
 };
 
 // A stop is kept until the runner confirms it. Rebuilding widens the status check without changing resource IDs.
@@ -399,6 +400,15 @@ const KEYS = `
   );
   CREATE INDEX envelopes_principal ON envelopes(principal_id);`;
 
+// What a resource records of who has it is its owner, as a principal records its own: one name for the one relation
+// that is made rather than drawn, and is what a transfer changes.
+function ownerOfResources({ db }) {
+  db.exec(`
+    ALTER TABLE resources RENAME COLUMN holder_id TO owner_id;
+    DROP INDEX resources_holder; CREATE INDEX resources_owner ON resources(owner_id, kind, name);
+  `);
+}
+
 // A session: what proving who one is leaves, for any principal. proof is how (an email reached, a WebAuthn signature),
 // proof_ref which address or credential, and proved_at when; an operation that needs a fresh or stronger proof asks
 // again.
@@ -483,22 +493,22 @@ export const SCHEMA = `
   );
   CREATE INDEX requests_from ON requests(from_id, created_at);
   CREATE INDEX requests_to ON requests(to_id, created_at);
-  -- What a holder holds: one row each, and a row in the table of its kind.
+  -- What a owner holds: one row each, and a row in the table of its kind.
   CREATE TABLE resources (
-    id TEXT PRIMARY KEY, holder_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('secret','connection','object','app','service','environment')), name TEXT NOT NULL,
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('secret','connection','object','app','service','environment')), name TEXT NOT NULL,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   );
-  CREATE INDEX resources_holder ON resources(holder_id, kind, name);
-  CREATE UNIQUE INDEX resources_secret_name ON resources(holder_id, name) WHERE kind='secret';
-  CREATE UNIQUE INDEX resources_object_name ON resources(holder_id, name) WHERE kind='object';
-  CREATE UNIQUE INDEX resources_app_name ON resources(holder_id, name) WHERE kind='app';
-  CREATE UNIQUE INDEX resources_service_name ON resources(holder_id, name) WHERE kind='service';
-  -- Private bytes the holder keeps, for no service in particular: sealed by the client with the secret's own key.
+  CREATE INDEX resources_owner ON resources(owner_id, kind, name);
+  CREATE UNIQUE INDEX resources_secret_name ON resources(owner_id, name) WHERE kind='secret';
+  CREATE UNIQUE INDEX resources_object_name ON resources(owner_id, name) WHERE kind='object';
+  CREATE UNIQUE INDEX resources_app_name ON resources(owner_id, name) WHERE kind='app';
+  CREATE UNIQUE INDEX resources_service_name ON resources(owner_id, name) WHERE kind='service';
+  -- Private bytes the owner keeps, for no service in particular: sealed by the client with the secret's own key.
   CREATE TABLE secrets (
     resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
     size INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, content BLOB NOT NULL
   );
-  -- A way into a service as some account: by OAuth, a role, or a token the holder gave. The account is known when the
+  -- A way into a service as some account: by OAuth, a role, or a token the owner gave. The account is known when the
   -- method can say; the state is what the method keeps, sealed.
   CREATE TABLE connections (
     resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
@@ -513,9 +523,9 @@ export const SCHEMA = `
     resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
     service TEXT NOT NULL, client_id TEXT NOT NULL, secret BLOB NOT NULL, settings TEXT NOT NULL DEFAULT '{}'
   );
-  -- A service a holder described, for one Foundation's catalog does not know.
+  -- A service a owner described, for one Foundation's catalog does not know.
   CREATE TABLE services (resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE, definition TEXT NOT NULL);
-  -- A machine lent to a holder: what it is, how long it lives, who it acts as inside (if anyone), and where it runs.
+  -- A machine lent to a owner: what it is, how long it lives, who it acts as inside (if anyone), and where it runs.
   CREATE TABLE environments (
     resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
     size TEXT NOT NULL, lifetime TEXT NOT NULL CHECK(lifetime IN ('exit','idle')), idle_seconds INTEGER NOT NULL, max_seconds INTEGER NOT NULL,

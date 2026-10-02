@@ -49,7 +49,7 @@ test('公開仕様から操作を見つけ、初回接続・承認・保存・�
   const me = await call('getMe', { token });
   const as = me.json.acts_for[0];
   assert.ok(as);
-  // A client that cannot seal hands the bytes to Foundation's principal, which seals them as the holder's agent.
+  // A client that cannot seal hands the bytes to Foundation's principal, which seals them as the owner's agent.
   const plain = text => ({ plain: Buffer.from(text).toString('base64url') });
   const saved = await call('putResource', { token, query: { as, kind: 'secret', name: 'api/config' }, data: plain('{"demo":"value"}') });
   assert.equal(saved.status, 200, saved.text);

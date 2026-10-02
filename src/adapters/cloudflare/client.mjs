@@ -5,7 +5,7 @@ export const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
 export const CLOUDFLARE_DOCS = 'https://developers.cloudflare.com/api/';
 export const CLOUDFLARE_SETTINGS = 'https://dash.cloudflare.com/?to=/profile/access-management/authorization';
 // Cloudflare's self-managed clients use the dot-delimited IDs from GET /oauth/scopes. Foundation itself needs only to
-// know who authorized and to keep the grant renewable; the rest is whatever the holder chose to give.
+// know who authorized and to keep the grant renewable; the rest is whatever the owner chose to give.
 export const CLOUDFLARE_BASE_SCOPES = ['offline_access', 'user-details.read'];
 export const CLOUDFLARE_SCOPE_DOCS = 'https://developers.cloudflare.com/fundamentals/oauth/';
 const OAUTH = 'https://dash.cloudflare.com/oauth2';

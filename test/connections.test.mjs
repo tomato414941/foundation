@@ -31,15 +31,15 @@ test('Stored names and caller-selected environment variables are independent', a
   assert.equal(kept.status, 200, kept.text);
   assert.match(kept.json.resource.id, /^[0-9a-f-]{36}$/, 'a held thing has an id of its own');
   assert.deepEqual({ ...kept.json.resource, id: undefined, created_at: 0, updated_at: 0 },
-    { id: undefined, kind: 'secret', name: 'github/gh-token', holder_id: USER_A, created_at: 0, updated_at: 0, size: secret.length + 28, recipients: kept.json.resource.recipients });
-  assert.ok([USER_A, f.app.keys.agentId].every(id => kept.json.resource.recipients.includes(id)), 'sealed for the holder and for Foundation, which acts for them');
+    { id: undefined, kind: 'secret', name: 'github/gh-token', owner_id: USER_A, created_at: 0, updated_at: 0, size: secret.length + 28, recipients: kept.json.resource.recipients });
+  assert.ok([USER_A, f.app.keys.agentId].every(id => kept.json.resource.recipients.includes(id)), 'sealed for the owner and for Foundation, which acts for them');
   assert.doesNotMatch(kept.text, new RegExp(secret), 'writing never echoes the bytes back');
 
   const listed = await f.request('/v1/resources?kind=secret', { token, anonymous: true });
   assert.deepEqual(listed.json.resources.map(row => row.name), ['github/gh-token']);
   assert.doesNotMatch(listed.text, new RegExp(secret), 'listing tells what is kept, never the bytes');
 
-  // What the key kept it may read back, along the line drawn for it; the holder can take that line away.
+  // What the key kept it may read back, along the line drawn for it; the owner can take that line away.
   assert.equal((await f.read('secret', 'github/gh-token', { token, anonymous: true })).status, 200);
   const keyId = (await f.request('/v1/principals/me', { token, anonymous: true })).json.principal.id;
   assert.equal((await f.request('/v1/relations', { method: 'DELETE', data: { subject: keyId, relation: 'editor', object_type: 'resource', object_id: kept.json.resource.id } })).status, 200);
