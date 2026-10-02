@@ -433,7 +433,7 @@ test('40版の環境は ID・コマンド・鍵・使用量を保って停止再
   const tables = ['resources', 'environment_commands', 'access_keys', 'compute_usage'];
   const before = Object.fromEntries(tables.map(table => [table, store.db.prepare('SELECT * FROM ' + table).all()]));
   const rows = store.db.prepare('SELECT * FROM environments ORDER BY resource_id').all();
-  store.db.exec('DROP TABLE meter_events; DROP TABLE payment_accounts; PRAGMA user_version=40'); store.close();
+  store.db.exec("DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; PRAGMA user_version=40"); store.close();
   let next = new Store(path, KEY);
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   for (const table of tables) assert.deepEqual(next.db.prepare('SELECT * FROM ' + table).all(), before[table], table);
@@ -470,9 +470,9 @@ test('本番41版の支払い登録と送信済み・未送信イベントは、
   store.db.prepare("INSERT INTO compute_usage VALUES (?,'2026-10',30)").run(USER_A);
   const tables = ['payment_accounts', 'meter_events', 'compute_usage'];
   const before = Object.fromEntries(tables.map(table => [table, store.db.prepare('SELECT * FROM ' + table).all()]));
-  store.db.exec('PRAGMA user_version=41'); store.close();
+  store.db.exec("DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; PRAGMA user_version=41"); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
-  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, 43);
+  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   for (const table of tables) assert.deepEqual(next.db.prepare('SELECT * FROM ' + table).all(), before[table], table);
   assert.equal(next.db.prepare("SELECT status FROM environments WHERE resource_id='stopped'").get().status, 'stopped');
   assert.equal(next.db.prepare("SELECT stop_attempts FROM environments WHERE resource_id='ready'").get().stop_attempts, 0);
@@ -511,7 +511,7 @@ test('mainの42版DBは認可と課金を保って43版へ移り、停止の読�
   const before = Object.fromEntries(tables.map(table => [table, store.db.prepare('SELECT * FROM ' + table).all()]));
   store.db.exec("DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; PRAGMA user_version=42"); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
-  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, 43);
+  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   for (const table of tables) assert.deepEqual(next.db.prepare('SELECT * FROM ' + table).all(), before[table], table);
   const modules43 = modules(next), payments = new Payments(next, new Stripe());
   assert.equal(modules43.authorization.can(USER_B, 'exec', 'environment', { id: 'environment-42', holder: USER_A }), true);
