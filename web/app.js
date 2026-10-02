@@ -559,11 +559,13 @@ function render() {
     const passkeyRow = item => `<article class="agent-row" aria-label="${esc(item.name)}"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${item.last_used_at ? '最後に使った日時 ' + esc(keptWhen(item.last_used_at)) : 'まだ使っていません'}</p></div>
       <div class="agent-actions"><button class="text-button danger" data-action="remove-passkey" data-id="${esc(item.id)}">削除</button></div></article>`;
     shell(`<header class="page-heading"><h1>アカウント</h1><p>${esc(state.user.email || '')}</p></header>
+      <section class="resource-section" aria-labelledby="id-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="id-title">ID</h2><p><code>${esc(state.user.id)}</code></p></div></div><button class="button secondary" data-action="copy-id">${icon('copy')} IDをコピー</button></div></section>
       <section class="resource-section" aria-labelledby="name-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('edit')}</span><div><h2 id="name-title">名前</h2><p>${esc(state.principal.name || '')}</p></div></div><button class="button secondary" data-action="rename-me">名前を変更</button></div></section>
       <section class="resource-section" aria-labelledby="passkeys-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="passkeys-title">パスキー</h2><p>顔や指紋、端末のPINでサインインできます。</p></div></div>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} パスキーを追加</button>` : ''}</div>
         ${(state.webauthn_credentials || []).length ? `<div class="agent-list">${state.webauthn_credentials.map(passkeyRow).join('')}</div>` : ''}</section>
       ${state.payment?.available ? `<section class="resource-section" aria-labelledby="payment-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('card')}</span><div><h2 id="payment-title">支払い</h2><p>${state.payment.paying ? '支払い方法を登録済みです。無料枠を超えた分が請求されます。' : '無料枠を超えて使うには、支払い方法を登録します。'}</p></div></div><button class="button secondary" data-action="set-payment">${state.payment.paying ? '支払い方法を変更' : '支払い方法を登録'}</button></div></section>` : ''}
       <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">データのダウンロード</h2><p>シークレットの値、サービスとの接続、自分で定義したサービス、登録した相手の一覧が JSON ファイルで入ります。オブジェクトは入りません。</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ダウンロード</a></div></section>
+      <section class="resource-section" aria-labelledby="transfer-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('arrow')}</span><div><h2 id="transfer-title">持ち物をすべて渡す</h2></div></div><button class="button secondary" data-action="transfer-all">渡す</button></div></section>
       <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">開発者</h2></div></div><a class="button secondary" href="/principals#apps">アプリの登録</a></div></section>`);
     return;
   }
@@ -1158,6 +1160,33 @@ function renameMe() {
     closeDialog(); await refresh();
   });
 }
+// Everything the account has, given to another principal: each resource and each owned principal, one by one, as
+// the API gives them. A secret goes with an envelope made here when the key is open; otherwise Foundation makes one.
+function transferAll() {
+  openDialog(`<h2 id="dialog-title">持ち物をすべて渡す</h2><form><label for="transfer-to">渡す相手の ID</label><input id="transfer-to" name="to" required maxlength="64" autocomplete="off" spellcheck="false"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">渡す</button></form>`);
+  bindForm(async (form) => {
+    const to = String(form.get('to') || '').trim();
+    const { key } = await api('/v1/principals/' + encodeURIComponent(to) + '/public-key');
+    let objects = [];
+    try { objects = (await api('/v1/resources?kind=object')).resources; } catch {}
+    const things = [...secrets(), ...connected(), ...objects, ...(state.apps || []).filter(item => !item.foundation && item.owner_id === state.user.id), ...(state.services || []).filter(item => item.owner_id === state.user.id)];
+    const failures = [];
+    for (const item of things) {
+      let envelope;
+      if (item.kind === 'secret' && own && key.public_key) {
+        try { const kept = await api('/v1/resources/' + item.id + '/content'); if (kept.envelope) envelope = b64(await sealing.seal(await openKey(kept), unb64(key.public_key))); } catch {}
+      }
+      try { await api('/v1/resources/' + item.id + '/transfer', { method: 'POST', data: { to, ...(envelope ? { envelope } : {}) } }); }
+      catch (error) { failures.push(item.name + '：' + error.message); }
+    }
+    for (const item of (state.principals || []).filter(item => item.id !== to)) {
+      try { await api('/v1/principals/' + item.id + '/transfer', { method: 'POST', data: { to } }); }
+      catch (error) { failures.push(item.name + '：' + error.message); }
+    }
+    if (failures.length) throw new Error(failures.join('\n'));
+    closeDialog(); await refresh();
+  });
+}
 async function issueKey(item) {
   const result = await api(`/v1/principals/${item.id}/keys`, { method: 'POST', data: {} });
   await refresh();
@@ -1545,6 +1574,8 @@ document.addEventListener('click', async (event) => {
     if (action === 'remove-principal') removePrincipal(principalById(id));
     if (action === 'rename-principal') renamePrincipal(principalById(id));
     if (action === 'rename-me') renameMe();
+    if (action === 'copy-id') { try { await navigator.clipboard.writeText(state.user.id); toast('コピーしました。'); } catch { toast('コピーできませんでした。'); } }
+    if (action === 'transfer-all') transferAll();
     if (action === 'copy-token') {
       const token = document.querySelector('#agent-token');
       try { await navigator.clipboard.writeText(token.value); toast('キーをコピーしました。'); }
