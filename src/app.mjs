@@ -35,15 +35,24 @@ import { FUNCTIONS, Functions } from './functions.mjs';
 import { matchRoute, openapi, validateBody } from './api.mjs';
 import { serveDocs } from './api-docs.mjs';
 import { Authorization, reaches } from './authorization.mjs';
-import { pages, pageTitle, workspaceView, pendingView } from '../web/workspace-view.js';
+import { pages, brand, languagePicker, pageTitle, workspaceView, pendingView } from '../web/workspace-view.js';
+import { createI18n, isLocale, resolveLocale } from '../web/i18n.js';
+import { IMPORT_MAP, escapeHtml, localizeErrorMessage } from './web-i18n.mjs';
 
-const VERSION = createRequire(import.meta.url)('../package.json').version;
+const require = createRequire(import.meta.url);
+const VERSION = require('../package.json').version;
+const I18NEXT = require.resolve('i18next/package.json').replace(/package\.json$/, 'dist/esm/i18next.js');
+const IMPORT_MAP_HASH = Buffer.from(digest(IMPORT_MAP), 'hex').toString('base64');
 
 const PUBLIC = new URL('../web/', import.meta.url);
 const PAGES = Object.keys(pages);
 const STATIC = new Map(PAGES.map(page => [page, ['index.html', 'text/html; charset=utf-8']]));
 STATIC.set('/signin/confirm', ['index.html', 'text/html; charset=utf-8']);
 STATIC.set('/app.js', ['app.js', 'text/javascript; charset=utf-8']);
+for (const filename of ['i18n.js', 'service-i18n.js', 'locales/shared.js', 'locales/client.js', 'locales/server.js', 'locales/services.js']) {
+  STATIC.set('/' + filename, [filename, 'text/javascript; charset=utf-8']);
+}
+STATIC.set('/vendor/i18next.js', [I18NEXT, 'text/javascript; charset=utf-8']);
 STATIC.set('/request-view.js', ['request-view.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/workspace-view.js', ['workspace-view.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/sealing.js', ['sealing.js', 'text/javascript; charset=utf-8']);
@@ -205,6 +214,12 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   }
   const notApproved = () => fail(401, 'not_approved', 'このキーはまだ誰の代わりにも動けないか、失効しています。foundation connect（POST /v1/requests で relation actor を依頼）で承認を依頼し、承認後にお試しください。');
   const server = createServer(async (req, res) => {
+    const locale = resolveLocale({ cookie: req.headers.cookie, acceptLanguage: req.headers['accept-language'] });
+    const t = createI18n(locale).t;
+    // JSON messages change only when the Web client explicitly opts in. Cookies and
+    // Accept-Language alone never change the public API's historical message contract.
+    const webLocale = req.headers['x-foundation-locale'];
+    const webT = isLocale(webLocale) ? (webLocale === locale ? t : createI18n(webLocale).t) : null;
     const send = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
     const redirect = (path) => { res.writeHead(303, { location: path }); res.end(); };
     res.setHeader('Cache-Control', 'no-store');
@@ -212,7 +227,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
     if (external) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+    res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self' 'sha256-${IMPORT_MAP_HASH}'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`);
     let progressRequestId = null;
     try {
       const port = server.address()?.port;
@@ -238,13 +253,17 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       if ((STATIC.has(path) || REQUEST_PAGE.test(path)) && method === 'GET') {
         if (REQUEST_PAGE.test(path)) requests.record(path.slice('/requests/'.length), 'page_opened');
         const [filename, type] = STATIC.get(STATIC.has(path) ? path : '/');
-        let content = await readFile(fileURLToPath(new URL(filename, PUBLIC)));
+        let content = await readFile(filename === I18NEXT ? I18NEXT : fileURLToPath(new URL(filename, PUBLIC)));
         if (filename === 'index.html') {
           const ownerFrame = PAGES.includes(path) && Boolean(sessions.get(cookieToken(req)));
-          if (ownerFrame || path !== '/') {
-            content = content.toString().replace(/<div id="app">[\s\S]*?<div id="notice"/, () => `<div id="app">${ownerFrame ? workspaceView(path, { pending: true }) : pendingView(path)}</div>\n  <div id="notice"`)
-              .replace('<title>Foundation</title>', `<title>${pageTitle(path)}</title>`);
-          }
+          const frame = ownerFrame ? workspaceView(path, { pending: true, t, locale })
+            : path !== '/' ? pendingView(path, { t, locale })
+              : `<div class="workspace signin-shell"><header class="topbar">${brand(t)}${languagePicker(t, locale)}</header><main class="signin-main"><h1>Foundation</h1><footer id="public-info" class="public-info"><a href="/docs" data-i18n="server.docs.api">${escapeHtml(t('server.docs.api'))}</a></footer></main></div>`;
+          const slots = { locale, title: escapeHtml(pageTitle(path, t)), importmap: IMPORT_MAP,
+            app: frame, noscript: escapeHtml(t('server.noscript.signin')) };
+          content = content.toString().replace(/\{\{foundation-(locale|title|importmap|app|noscript)\}\}/g, (_, key) => slots[key]);
+          res.setHeader('Content-Language', locale);
+          res.setHeader('Vary', 'Accept-Language, Cookie');
           res.setHeader('Cache-Control', path === SIGNIN_CONFIRM ? 'no-store' : 'private, no-store');
           res.writeHead(200, { 'content-type': type });
           return res.end(content);
@@ -1318,7 +1337,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
     } catch (error) {
       if (!(error instanceof HttpError)) console.error(new Date().toISOString(), req.method, req.url, error);
       if (progressRequestId && error instanceof HttpError && !res.headersSent) requests.record(progressRequestId, 'connect_failed', { code: error.code, message: error.message });
-      if (!res.headersSent) send(error instanceof HttpError ? error.status : 500, { error: { code: error instanceof HttpError ? error.code : 'internal_error', message: error instanceof HttpError ? error.message : '処理を完了できませんでした。',
+      const message = error instanceof HttpError ? error.message : '処理を完了できませんでした。';
+      if (!res.headersSent) send(error instanceof HttpError ? error.status : 500, { error: { code: error instanceof HttpError ? error.code : 'internal_error', message: webT ? localizeErrorMessage(message, webT) : message,
         ...(error instanceof HttpError && error.extra ? error.extra : {}) } });
       else res.end();
     }

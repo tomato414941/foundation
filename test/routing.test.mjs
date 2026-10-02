@@ -24,7 +24,7 @@ test('公開入口のHTMLからAPI仕様へ進める', async t => {
   const page = await f.request('/', { anonymous: true });
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-type'), /^text\/html/);
-  const link = page.text.match(/<a href="([^"]+)">API仕様<\/a>/);
+  const link = page.text.match(/<a href="([^"]+)"[^>]*>API仕様<\/a>/);
   assert.ok(link, 'HTMLのリンクからAPI仕様へ進める');
   const docs = await f.request(link[1], { anonymous: true });
   assert.equal(docs.status, 200);

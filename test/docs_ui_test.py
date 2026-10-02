@@ -12,7 +12,7 @@ shots.mkdir(parents=True, exist_ok=True)
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
-    context = browser.new_context(viewport={'width': 1280, 'height': 900})
+    context = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 900})
     page = context.new_page()
     errors, requests = [], []
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -43,7 +43,7 @@ with sync_playwright() as p:
     expect(health.locator('.live-responses-table')).to_contain_text('200')
     expect(health.locator('.live-responses-table')).to_contain_text('"status": "ok"')
     assert not errors, errors
-    reading = browser.new_context(java_script_enabled=False)
+    reading = browser.new_context(locale='ja-JP', java_script_enabled=False)
     plain = reading.new_page()
     plain.goto(args.base + '/docs', wait_until='networkidle')
     plain.get_by_role('link', name='OpenAPI JSON', exact=True).click()

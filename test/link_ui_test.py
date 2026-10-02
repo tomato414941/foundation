@@ -33,7 +33,7 @@ def review(page):
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
     # The owner of Foundation registers the product once.
-    owner = browser.new_context().new_page()
+    owner = browser.new_context(locale='ja-JP').new_page()
     owner.goto(args.base + '/', wait_until='networkidle')
     owner.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     owner.get_by_role('button', name='サインインメールを送信', exact=True).click()
@@ -78,7 +78,7 @@ with sync_playwright() as p:
     link = call('/v1/principals/' + user['id'] + '/links', product, 'POST', {'request_id': asked['id']})['url']
 
     # The user, who has never signed up for Foundation, opens the link the product handed them.
-    context = browser.new_context(viewport={'width': 1280, 'height': 1000})
+    context = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 1000})
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -103,7 +103,7 @@ with sync_playwright() as p:
     assert delivered['injection']['environment']['NPM_TOKEN'] == SECRET
 
     # The same link opened again reaches nothing.
-    again = browser.new_context().new_page()
+    again = browser.new_context(locale='ja-JP').new_page()
     again.goto(link, wait_until='networkidle')
     expect(again.get_by_role('heading', name='npm のアクセストークンを登録する', exact=True)).to_have_count(0)
     expect(again.get_by_role('button', name='サインアウト')).to_have_count(0)

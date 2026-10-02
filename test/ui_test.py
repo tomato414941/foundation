@@ -29,7 +29,7 @@ def check_display(page):
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
-    context = browser.new_context(viewport={"width": 1280, "height": 950})
+    context = browser.new_context(locale='ja-JP', viewport={"width": 1280, "height": 950})
     page = context.new_page()
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))

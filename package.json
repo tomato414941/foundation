@@ -11,16 +11,18 @@
     "start": "node --env-file-if-exists=.env src/server.mjs",
     "dev": "node --env-file-if-exists=.env --watch src/server.mjs",
     "test": "node --test test/*.test.mjs src/adapters/*/*.test.mjs src/schemes/*.test.mjs",
-    "check": "for source in src/*.mjs src/adapters/*.mjs src/adapters/*/*.mjs src/schemes/*.mjs src/runners/*.mjs cli/*.mjs web/*.js; do node --check \"$source\" || exit; done"
+    "check": "for source in src/*.mjs src/adapters/*.mjs src/adapters/*/*.mjs src/schemes/*.mjs src/runners/*.mjs cli/*.mjs web/*.js web/locales/*.js; do node --check \"$source\" || exit; done"
   },
   "dependencies": {
     "@fedify/uri-template": "2.3.10",
     "@simplewebauthn/server": "14.0.3",
     "ajv": "8.20.0",
+    "i18next": "26.4.2",
     "rebac": "file:vendor/rebac-0.0.0.tgz",
     "swagger-ui-dist": "5.33.0"
   },
   "devDependencies": {
-    "@apidevtools/swagger-parser": "13.1.0"
+    "@apidevtools/swagger-parser": "13.1.0",
+    "jsdom": "30.1.1"
   }
 }

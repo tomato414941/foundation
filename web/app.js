@@ -1,6 +1,11 @@
 import { requestResultView, knownRequestKind, detailOf } from './request-view.js';
-import { pages, brand, pageTitle, workspaceView, pendingView } from './workspace-view.js';
+import { pages, brand, pageTitle, workspaceView, pendingView, languagePicker } from './workspace-view.js';
 import * as sealing from './sealing.js';
+import { createI18n, formatDate, formatNumber, compareText, isLocale } from './i18n.js';
+import { localizeService } from './service-i18n.js';
+const i18n = createI18n(document.documentElement.lang);
+const t = (key, options) => i18n.t(key, options);
+Object.defineProperty(t, 'locale', { get: () => i18n.language });
 // The owner's own key: unwrapped by a passkey (its PRF output) and held only in this page, which seals what it
 // keeps and opens what was sealed for it. Nothing of it is written anywhere.
 let own = null, keyUnavailable = false;
@@ -9,6 +14,99 @@ const b64 = sealing.toBase64url, unb64 = sealing.fromBase64url;
 
 const app = document.querySelector('#app'), dialog = document.querySelector('#dialog'), notice = document.querySelector('#notice');
 const publicInfo = document.querySelector('#public-info');
+// Language changes are local to this page. Editing dialogs and operations keep their
+// original nodes and closures until complete; no secret value is copied or serialized.
+let pendingLocale = null, changingLocale = false, signinBusy = false, activeOperations = 0, initializing = true;
+const editedForms = new WeakSet();
+const localeStatus = document.createElement('p');
+localeStatus.className = 'language-status';
+localeStatus.setAttribute('role', 'status');
+localeStatus.setAttribute('aria-live', 'polite');
+localeStatus.hidden = true;
+notice.after(localeStatus);
+function syncLanguagePickers() {
+  document.querySelectorAll('[data-action="change-language"]').forEach(select => { select.value = pendingLocale || i18n.language; });
+}
+function languageChangeBlocked() {
+  const hasEdits = [...document.forms].some(form => editedForms.has(form));
+  return initializing || editingPage() || hasEdits || signinBusy || activeOperations > 0 || Boolean(app.querySelector('#confirm-signin button:disabled'));
+}
+function localizePublicInfo() {
+  publicInfo?.querySelectorAll('[data-i18n]').forEach(element => { element.textContent = t(element.dataset.i18n); });
+}
+async function applyPendingLanguage() {
+  if (!pendingLocale || changingLocale || languageChangeBlocked()) return;
+  const locale = pendingLocale;
+  pendingLocale = null; changingLocale = true;
+  const email = app.querySelector('#signin-email')?.value || '';
+  const showingSignin = Boolean(app.querySelector('#signin-form'));
+  const message = app.querySelector('#signin-form .form-error')?.textContent || '';
+  const confirmationError = app.querySelector('#confirm-signin .form-error')?.textContent || '';
+  try {
+    await i18n.changeLanguage(locale);
+    document.documentElement.lang = locale;
+    document.cookie = 'foundation_locale=' + locale + '; Path=/; SameSite=Lax; Max-Age=31536000' + (location.protocol === 'https:' ? '; Secure' : '');
+    localizePublicInfo();
+    if (isSigninConfirmation) {
+      showSigninConfirmation();
+      const error = app.querySelector('#confirm-signin .form-error');
+      if (error) error.textContent = confirmationError;
+    } else if (state) {
+      app.innerHTML = workspaceView(pagePath, { t });
+      render();
+    } else if (showingSignin) await showSignin({ email, message });
+    else {
+      app.innerHTML = pendingView(pagePath, { t });
+      await refresh();
+    }
+    localeStatus.hidden = true;
+  } catch (error) { toast(error.message); }
+  finally {
+    changingLocale = false; syncLanguagePickers();
+    if (pendingLocale) queueMicrotask(() => { void applyPendingLanguage(); });
+  }
+}
+document.addEventListener('input', event => {
+  const form = event.target.form;
+  if (form && form.id !== 'signin-form') editedForms.add(form);
+});
+document.addEventListener('invalid', event => {
+  const field = event.target;
+  if (typeof field.setCustomValidity !== 'function') return;
+  field.setCustomValidity('');
+  const validity = field.validity;
+  const key = validity.valueMissing ? 'client.validation.required' : validity.typeMismatch ? (field.type === 'email' ? 'client.validation.email' : 'client.validation.url')
+    : validity.tooLong ? 'client.validation.tooLong' : validity.rangeUnderflow ? 'client.validation.minimum' : validity.rangeOverflow ? 'client.validation.maximum' : 'client.validation.invalid';
+  field.setCustomValidity(t(key, { count: field.maxLength, minimum: field.min, maximum: field.max }));
+}, true);
+document.addEventListener('input', event => {
+  if (typeof event.target.setCustomValidity === 'function') event.target.setCustomValidity('');
+});
+document.addEventListener('submit', event => {
+  if (event.target instanceof HTMLFormElement) editedForms.add(event.target);
+}, true);
+document.addEventListener('change', event => {
+  const picker = event.target.closest('[data-action="change-language"]');
+  if (!picker) {
+    if (event.target.form && event.target.form.id !== 'signin-form') editedForms.add(event.target.form);
+    return;
+  }
+  if (!isLocale(picker.value)) { syncLanguagePickers(); return; }
+  if (picker.value === i18n.language) {
+    pendingLocale = null; localeStatus.hidden = true; syncLanguagePickers(); return;
+  }
+  pendingLocale = picker.value;
+  if (languageChangeBlocked()) {
+    localeStatus.textContent = t('client.language.deferred'); localeStatus.hidden = false;
+    syncLanguagePickers();
+  } else void applyPendingLanguage();
+});
+// A settled edit/operation removes its old form. Observe that lifecycle without
+// touching any input, including password/file fields and the current selection.
+new MutationObserver(() => {
+  if (pendingLocale && !changingLocale) queueMicrotask(() => { void applyPendingLanguage(); });
+}).observe(app, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'aria-busy', 'class'] });
+
 let state = null, toastTimer, signinTimer, revision = 0, refreshController, refreshDeferred = false;
 const isSigninConfirmation = location.pathname === '/signin/confirm';
 // A fragment is not sent in HTTP requests. Keep the emailed key only in this page's memory.
@@ -49,30 +147,30 @@ function levelOf(objects) {
     found.count++; found.bytes += item.size; found.updated_at = Math.max(found.updated_at, item.updated_at);
     folders.set(name, found);
   }
-  return { folders: [...folders.values()].sort((a, b) => a.name.localeCompare(b.name)), files };
+  return { folders: [...folders.values()].sort((a, b) => compareText(a.name, b.name, i18n.language)), files };
 }
 // Only worth showing once you have stepped into something; at the top there is nowhere to go back to.
 function crumbs() {
   const parts = objectPrefix.split('/').filter(Boolean);
   if (!parts.length) return '';
-  const links = ['<a class="text-button" href="/objects">すべて</a>'];
+  const links = [`<a class="text-button" href="/objects">${esc(t('client.common.all'))}</a>`];
   let walked = '';
   for (const [at, part] of parts.entries()) {
     walked += part + '/';
     links.push(at === parts.length - 1 ? `<span aria-current="location">${esc(part)}</span>`
       : `<a class="text-button" href="${esc(objectsHref(walked))}">${esc(part)}</a>`);
   }
-  return `<nav class="crumbs" aria-label="パス">${links.join('<span aria-hidden="true">›</span>')}</nav>`;
+  return `<nav class="crumbs" aria-label="${esc(t('client.objects.path'))}">${links.join('<span aria-hidden="true">›</span>')}</nav>`;
 }
 const kindOf = name => { const cut = name.lastIndexOf('.'); return cut > 0 ? name.slice(cut + 1).toLowerCase() : '—'; };
 function sortFiles(files) {
-  const by = { name: (a, b) => a.name.localeCompare(b.name), size: (a, b) => a.size - b.size, updated: (a, b) => a.updated_at - b.updated_at };
+  const by = { name: (a, b) => compareText(a.name, b.name, i18n.language), size: (a, b) => a.size - b.size, updated: (a, b) => a.updated_at - b.updated_at };
   return [...files].sort((a, b) => (objectDescending ? -1 : 1) * by[objectSort](a, b));
 }
 function spaceSection() {
   const space = state.space;
-  if (space === undefined) return '<section class="resource-section object-browser" aria-busy="true"><div class="content-loading" role="status" aria-label="読み込み中"><span></span><span></span><span></span></div></section>';
-  if (!space || !space.available) return '<section class="resource-section object-browser"><div class="access-empty"><p>置き場は現在使えません。</p><button class="text-button" data-action="retry-page">再読み込み</button></div></section>';
+  if (space === undefined) return `<section class="resource-section object-browser" aria-busy="true"><div class="content-loading" role="status" aria-label="${esc(t('client.common.loading'))}"><span></span><span></span><span></span></div></section>`;
+  if (!space || !space.available) return `<section class="resource-section object-browser"><div class="access-empty"><p>${esc(t('client.objects.unavailable'))}</p><button class="text-button" data-action="retry-page">${esc(t('client.common.reload'))}</button></div></section>`;
   const needle = objectFilter.trim().toLowerCase();
   const matching = !needle ? space.objects
     : objectSearchPrefix ? space.objects.filter(item => item.key.slice(objectPrefix.length).toLowerCase().startsWith(needle))
@@ -83,24 +181,24 @@ function spaceSection() {
   const here = [...folders.map(item => objectPrefix + item.name), ...shown.map(item => item.key)];
   const allChosen = here.length > 0 && here.every(key => objectChosen.has(key));
   const column = (key, label) => `<button class="column-head" data-action="sort-objects" data-sort="${key}">${label}${objectSort === key ? (objectDescending ? ' ↓' : ' ↑') : ''}</button>`;
-  const rows = folders.map(item => `<tr><td><input type="checkbox" data-action="choose-object" data-key="${esc(objectPrefix + item.name)}" ${objectChosen.has(objectPrefix + item.name) ? 'checked' : ''} aria-label="${esc(item.name)} を選ぶ"></td>
+  const rows = folders.map(item => `<tr><td><input type="checkbox" data-action="choose-object" data-key="${esc(objectPrefix + item.name)}" ${objectChosen.has(objectPrefix + item.name) ? 'checked' : ''} aria-label="${esc(t('client.objects.selectName', { name: item.name }))}"></td>
       <td class="object-name"><span class="object-mark" aria-hidden="true">${icon('folder')}</span><a class="link-button" href="${esc(objectsHref(objectPrefix + item.name))}">${esc(item.name.slice(0, -1))}</a></td>
-      <td>フォルダ</td><td>${esc(kiloBytes(item.bytes))}</td><td>${item.count} 件</td></tr>`).join('')
-    + shown.map(item => `<tr><td><input type="checkbox" data-action="choose-object" data-key="${esc(item.key)}" ${objectChosen.has(item.key) ? 'checked' : ''} aria-label="${esc(item.name)} を選ぶ"></td>
+      <td>${esc(t('client.objects.folder'))}</td><td>${esc(kiloBytes(item.bytes))}</td><td>${esc(t('client.common.itemCount', { count: item.count }))}</td></tr>`).join('')
+    + shown.map(item => `<tr><td><input type="checkbox" data-action="choose-object" data-key="${esc(item.key)}" ${objectChosen.has(item.key) ? 'checked' : ''} aria-label="${esc(t('client.objects.selectName', { name: item.name }))}"></td>
       <td class="object-name"><span class="object-mark" aria-hidden="true">${icon('note')}</span><a href="/v1/resources/${esc(item.id)}/content" download>${esc(item.name)}</a></td>
       <td>${esc(kindOf(item.name))}</td><td>${esc(kiloBytes(item.size))}</td><td>${esc(keptWhen(item.updated_at))}</td></tr>`).join('');
-  const body = space.objects.length === 0 ? '<div class="access-empty"><p>まだ何も置かれていません。AIに頼むか、ここから追加できます。</p></div>'
-    : here.length === 0 ? `<div class="access-empty"><p>${needle ? `「${esc(objectFilter)}」に当てはまるものはありません。` : 'ここには何もありません。'}</p></div>`
+  const body = space.objects.length === 0 ? `<div class="access-empty"><p>${esc(t('client.objects.empty'))}</p></div>`
+    : here.length === 0 ? `<div class="access-empty"><p>${needle ? esc(t('client.objects.noMatches', { filter: objectFilter })) : t('client.objects.emptyFolder')}</p></div>`
     : `<div class="object-table-wrap"><table class="object-table"><thead><tr>
-        <th><input type="checkbox" data-action="choose-all" ${allChosen ? 'checked' : ''} aria-label="この画面のものをすべて選ぶ"></th>
-        <th>${column('name', '名前')}</th><th>種類</th><th>${column('size', 'サイズ')}</th><th>${column('updated', '更新')}</th></tr></thead>
+        <th><input type="checkbox" data-action="choose-all" ${allChosen ? 'checked' : ''} aria-label="${esc(t('client.objects.selectAllVisible'))}"></th>
+        <th>${column('name', t('client.common.name'))}</th><th>${esc(t('client.objects.type'))}</th><th>${column('size', t('client.objects.size'))}</th><th>${column('updated', t('client.objects.updated'))}</th></tr></thead>
         <tbody>${rows}</tbody></table></div>${paging(sorted.length, shown.length)}`;
   const chosen = chosenKeys();
-  const tools = `<div class="object-tools"><input class="filter-field" id="object-filter" type="search" placeholder="${objectSearchPrefix ? 'この場所を接頭辞で探す' : '名前で絞り込む'}" value="${esc(objectFilter)}" autocomplete="off" aria-label="絞り込む">
-    <button class="text-button" data-action="toggle-search">${objectSearchPrefix ? '部分一致にする' : '接頭辞で探す'}</button>
-    <button class="button secondary" data-action="copy-url" ${chosen.length === 1 && !chosen[0].endsWith('/') ? '' : 'disabled'}>URLをコピー</button>
-    <button class="button secondary danger" data-action="drop-chosen" ${chosen.length ? '' : 'disabled'}>削除${chosen.length ? `（${chosen.length}）` : ''}</button></div>`;
-  return `<section class="resource-section object-browser" aria-label="置いてあるもの"><div class="object-location"><div class="object-count">オブジェクト（${space.usage?.count ?? space.objects.length}）</div>${crumbs()}</div>${tools}<div class="object-results">${body}</div></section>`;
+  const tools = `<div class="object-tools"><input class="filter-field" id="object-filter" type="search" placeholder="${objectSearchPrefix ? t('client.objects.searchHereByPrefix') : t('client.objects.filterByName')}" value="${esc(objectFilter)}" autocomplete="off" aria-label="${esc(t('client.objects.filter'))}">
+    <button class="text-button" data-action="toggle-search">${objectSearchPrefix ? t('client.objects.matchAnywhere') : t('client.objects.searchByPrefix')}</button>
+    <button class="button secondary" data-action="copy-url" ${chosen.length === 1 && !chosen[0].endsWith('/') ? '' : 'disabled'}>${esc(t('client.objects.copyUrl'))}</button>
+    <button class="button secondary danger" data-action="drop-chosen" ${chosen.length ? '' : 'disabled'}>${esc(chosen.length ? t('client.objects.deleteSelected', { count: chosen.length }) : t('client.common.delete'))}</button></div>`;
+  return `<section class="resource-section object-browser" aria-label="${esc(t('client.objects.storedItems'))}"><div class="object-location"><div class="object-count">${esc(t('client.objects.count', { count: space.usage?.count ?? space.objects.length }))}</div>${crumbs()}</div>${tools}<div class="object-results">${body}</div></section>`;
 }
 // A folder chosen means everything under it.
 function chosenKeys() {
@@ -114,9 +212,9 @@ function chosenKeys() {
 }
 function paging(total, showing) {
   if (total <= objectLimit && objectLimit === 100) return '';
-  return `<div class="object-paging"><span>${showing} / ${total} 件</span>
-    ${total > showing ? `<button class="button secondary" data-action="more-objects">さらに100件</button>` : ''}
-    ${objectLimit > 100 ? `<button class="text-button" data-action="less-objects">最初の100件に戻す</button>` : ''}</div>`;
+  return `<div class="object-paging"><span>${esc(t('client.objects.showingCount', { showing, count: total }))}</span>
+    ${total > showing ? `<button class="button secondary" data-action="more-objects">${esc(t('client.objects.showNextHundred'))}</button>` : ''}
+    ${objectLimit > 100 ? `<button class="text-button" data-action="less-objects">${esc(t('client.objects.showFirstHundred'))}</button>` : ''}</div>`;
 }
 
 // A service by its logo, when the page has one for it, or else by its initial.
@@ -144,32 +242,33 @@ const icon = (name) => {
   };
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 };
-const revocationNote = '停止後も、受け渡し済みの認証情報は有効期限まで使える場合があります。期限のないキーは、接続先で削除するまで無効になりません。';
+const revocationNote = () => t('client.access.revocationNote');
 function toast(text) {
   clearTimeout(toastTimer); notice.textContent = text; notice.hidden = false;
   toastTimer = setTimeout(() => { notice.hidden = true; }, 5500);
 }
 async function api(path, { method = 'GET', data, signal, headers = {} } = {}) {
   let response;
-  try { response = await fetch(path, { method, signal, credentials: 'same-origin', cache: 'no-store', headers: { ...(data !== undefined ? { 'content-type': 'application/json' } : {}), ...headers }, ...(data !== undefined ? { body: JSON.stringify(data) } : {}) }); }
-  catch (error) { if (signal?.aborted) throw error; throw new Error('接続できませんでした。通信状況を確認してください。'); }
+  try { response = await fetch(path, { method, signal, credentials: 'same-origin', cache: 'no-store', headers: { 'X-Foundation-Locale': i18n.language, ...(data !== undefined ? { 'content-type': 'application/json' } : {}), ...headers }, ...(data !== undefined ? { body: JSON.stringify(data) } : {}) }); }
+  catch (error) { if (signal?.aborted) throw error; throw new Error(t('client.errors.networkCheck')); }
   const result = await response.json();
   signal?.throwIfAborted();
   if (!response.ok) {
-    const error = new Error(result.error?.message || '処理を完了できませんでした。'); error.status = response.status; error.code = result.error?.code; error.details = result.error;
+    const error = new Error(result.error?.message || t('client.errors.requestFailed')); error.status = response.status; error.code = result.error?.code; error.details = result.error;
     if (response.status === 401 && !linked && path !== '/v1/session' && !path.startsWith('/v1/signin')) await showSignin();
     throw error;
   }
   return result;
 }
 function showSigninConfirmation() {
+  document.title = t('client.signin.title') + ' · Foundation';
   const email = signinLink.get('email') || '', token = signinLink.get('token') || '';
   const valid = signinLink.getAll('email').length === 1 && signinLink.getAll('token').length === 1
     && email.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(email) && /^[A-Za-z0-9_-]{43}$/.test(token);
-  app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand}</header><main class="signin-main">
-    <h1>${valid ? 'サインイン' : 'リンクを確認'}</h1>
-    ${valid ? `<p class="signin-address">${esc(email)}</p><form id="confirm-signin"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">サインイン ${icon('arrow')}</button></form>
-    <p class="signin-footer"><a href="/">別のメールアドレスを使う</a></p>` : '<p class="signin-help">メールに届いたリンクを開き直してください。</p><p class="signin-footer"><a href="/">サインインメールを送信</a></p>'}</main></div>`;
+  app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand(t)}${languagePicker(t, i18n.language)}</header><main class="signin-main">
+    <h1>${valid ? t('client.signin.title') : t('client.signin.checkLink')}</h1>
+    ${valid ? `<p class="signin-address">${esc(email)}</p><form id="confirm-signin"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.signin.title'))} ${icon('arrow')}</button></form>
+    <p class="signin-footer"><a href="/">${esc(t('client.signin.useAnotherEmail'))}</a></p>` : `<p class="signin-help">${esc(t('client.signin.reopenEmailLink'))}</p><p class="signin-footer"><a href="/">${esc(t('client.signin.sendEmail'))}</a></p>`}</main></div>`;
   if (!valid) return;
   const form = document.querySelector('#confirm-signin'), button = form.querySelector('button');
   form.addEventListener('submit', async event => {
@@ -182,7 +281,7 @@ function showSigninConfirmation() {
       location.replace(result.return_to);
     } catch (error) {
       form.querySelector('.form-error').textContent = error.message;
-      button.disabled = false;
+      button.disabled = false; editedForms.delete(form); void applyPendingLanguage();
     }
   });
 }
@@ -221,12 +320,13 @@ async function unlockKey() {
 // Where to go once signed in: within the workspace without leaving the page, so the key just opened stays.
 async function arrive(path) {
   const url = new URL(path, location.origin);
-  if (!own || !Object.hasOwn(pages, url.pathname) || requestId) { location.replace(path); return; }
+  if (!own || !Object.hasOwn(pages, url.pathname) || requestId) { signinBusy = false; location.replace(path); return; }
   history.replaceState(null, '', url.href);
   pagePath = url.pathname; page = pagePath.slice(1) || 'home'; objectPrefix = prefixOf(url);
-  await refresh();
+  try { await refresh(); }
+  finally { signinBusy = false; void applyPendingLanguage(); }
 }
-const deviceName = () => navigator.userAgentData?.platform || 'この端末';
+const deviceName = () => navigator.userAgentData?.platform || t('client.passkey.thisDevice');
 async function createPasskey(name) {
   const { options } = await api('/v1/webauthn-credentials/options', { method: 'POST', data: {} });
   const { credential, yielded } = await makePasskey(options);
@@ -246,7 +346,7 @@ async function startWithPasskey() {
   made = await api('/v1/principals', { method: 'POST', data: { name: options.user.name, webauthn_credential: { name: deviceName(), credential, ...(key ? { wrap: b64(await sealing.wrap(key.privateKey, yielded)) } : {}) }, ...(key ? { public_key: b64(key.publicKey) } : {}), return_to: returnTo() } });
   own = key; keyUnavailable = !key;
   if (made.backed_up) { await arrive(made.return_to); return; }
-  openDialog(`<h2 id="dialog-title">パスキーを作成しました</h2><p>このパスキーは、この端末にしか保存されていません。</p><button class="button primary full" type="button" id="start-continue">続ける</button>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.passkey.created'))}</h2><p>${esc(t('client.passkey.deviceOnly'))}</p><button class="button primary full" type="button" id="start-continue">${esc(t('client.common.continue'))}</button>`);
   dialog.querySelector('#start-continue').addEventListener('click', () => { closeDialog(); void arrive(made.return_to); });
 }
 async function answerPasskey() {
@@ -260,28 +360,29 @@ async function answerPasskey() {
 const passkeyDeclined = error => error?.name === 'NotAllowedError' || error?.name === 'AbortError';
 
 async function showSignin({ email = '', message = '' } = {}) {
-  clearInterval(signinTimer);
+  clearInterval(signinTimer); signinBusy = false;
   refreshController?.abort();
   const current = ++revision; state = null; refreshDeferred = false; closeDialog();
   document.title = 'Foundation';
-  app.innerHTML = pendingView('/');
+  app.innerHTML = pendingView('/', { t });
   let config = { available: false, pending: null };
   try { config = await api('/v1/signin'); }
   catch (error) { if (current === revision) showRefreshError(error, 'retry-signin'); return; }
   if (current !== revision) return;
   const pending = config.available ? config.pending : null, withPasskey = !pending && passkeysWork();
-  app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand}</header><main class="signin-main">${requestId ? '<p class="signin-context">依頼の確認</p>' : ''}<h1>${pending ? 'メールを確認' : 'サインイン'}</h1>
-    ${pending ? `<p class="signin-intro" id="email-sent">サインイン用のリンクをお送りしました。</p><p class="signin-address">${esc(pending.email)}</p><p class="signin-help">メールのリンクからサインインしてください。有効期限は15分です。</p>` : ''}
-    ${withPasskey ? '<div class="signin-passkey"><button class="button primary full" type="button" id="passkey-signin">パスキーでサインイン</button><p class="form-error" role="alert" id="passkey-error"></p><button class="text-button full" type="button" id="passkey-start">パスキーで始める</button></div>' : ''}
-    <form id="signin-form">${pending ? '' : `<label for="signin-email">メールアドレス</label><input id="signin-email" name="email" type="email" autocomplete="email" required maxlength="254" value="${esc(email)}" ${config.available ? '' : 'disabled'}>`}
-    <p class="form-error" role="alert">${config.available ? esc(message) : '現在サインインを利用できません。'}</p><button class="button ${pending || withPasskey ? 'secondary' : 'primary'} full" type="submit" ${pending ? 'id="resend-link" disabled' : config.available ? '' : 'disabled'}>${pending ? 'メールを再送信' : 'サインインメールを送信'} ${pending ? '' : icon('arrow')}</button></form>
-    ${pending ? '<p class="signin-help signin-delivery">届かない場合は、迷惑メールフォルダもご確認ください。</p><div class="signin-actions"><button class="text-button" type="button" id="change-email">メールアドレスを変更</button></div>' : ''}</main></div>`;
+  app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand(t)}${languagePicker(t, i18n.language)}</header><main class="signin-main">${requestId ? `<p class="signin-context">${esc(t('client.request.review'))}</p>` : ''}<h1>${pending ? t('client.signin.checkEmail') : t('client.signin.title')}</h1>
+    ${pending ? `<p class="signin-intro" id="email-sent">${esc(t('client.signin.linkSent'))}</p><p class="signin-address">${esc(pending.email)}</p><p class="signin-help">${esc(t('client.signin.emailInstructions'))}</p>` : ''}
+    ${withPasskey ? `<div class="signin-passkey"><button class="button primary full" type="button" id="passkey-signin">${esc(t('client.signin.withPasskey'))}</button><p class="form-error" role="alert" id="passkey-error"></p><button class="text-button full" type="button" id="passkey-start">${esc(t('client.signin.startWithPasskey'))}</button></div>` : ''}
+    <form id="signin-form">${pending ? '' : `<label for="signin-email">${esc(t('client.signin.emailAddress'))}</label><input id="signin-email" name="email" type="email" autocomplete="email" required maxlength="254" value="${esc(email)}" ${config.available ? '' : 'disabled'}>`}
+    <p class="form-error" role="alert">${config.available ? esc(message) : t('client.signin.unavailable')}</p><button class="button ${pending || withPasskey ? 'secondary' : 'primary'} full" type="submit" ${pending ? 'id="resend-link" disabled' : config.available ? '' : 'disabled'}>${pending ? t('client.signin.resendEmail') : t('client.signin.sendEmail')} ${pending ? '' : icon('arrow')}</button></form>
+    ${pending ? `<p class="signin-help signin-delivery">${esc(t('client.signin.checkSpam'))}</p><div class="signin-actions"><button class="text-button" type="button" id="change-email">${esc(t('client.signin.changeEmail'))}</button></div>` : ''}</main></div>`;
   if (!requestId && !pending && publicInfo) app.querySelector('.signin-main').append(publicInfo);
   const form = document.querySelector('#signin-form');
   let busy = false;
   function setBusy(value) {
-    busy = value;
+    busy = value; signinBusy = value;
     for (const button of app.querySelectorAll('.signin-main button')) button.disabled = value;
+    if (!value) { editedForms.delete(form); void applyPendingLanguage(); }
     if (!value && pending) updateResend();
   }
   function updateResend() {
@@ -289,7 +390,7 @@ async function showSignin({ email = '', message = '' } = {}) {
     if (current !== revision || !resend) { clearInterval(signinTimer); return; }
     const seconds = Math.max(0, Math.ceil((pending.resend_at - Date.now()) / 1000));
     resend.disabled = busy || seconds > 0;
-    resend.textContent = seconds > 0 ? `再送信まで ${seconds}秒` : 'メールを再送信';
+    resend.textContent = seconds > 0 ? t('client.signin.resendCountdown', { count: seconds }) : t('client.signin.resendEmail');
   }
   document.querySelector('#passkey-start')?.addEventListener('click', async () => {
     if (busy) return;
@@ -297,7 +398,7 @@ async function showSignin({ email = '', message = '' } = {}) {
     try { await startWithPasskey(); }
     catch (error) {
       if (!app.querySelector('#passkey-start')) return;
-      document.querySelector('#passkey-error').textContent = passkeyDeclined(error) ? 'パスキーを作れませんでした。' : error.message; setBusy(false);
+      document.querySelector('#passkey-error').textContent = passkeyDeclined(error) ? t('client.passkey.createFailed') : error.message; setBusy(false);
     }
   });
   const passkeyButton = document.querySelector('#passkey-signin');
@@ -311,7 +412,7 @@ async function showSignin({ email = '', message = '' } = {}) {
       await arrive(signed.return_to);
     } catch (error) {
       if (!passkeyButton.isConnected) return;
-      document.querySelector('#passkey-error').textContent = passkeyDeclined(error) ? 'パスキーでサインインできませんでした。' : error.message; setBusy(false);
+      document.querySelector('#passkey-error').textContent = passkeyDeclined(error) ? t('client.passkey.signinFailed') : error.message; setBusy(false);
     }
   });
   if (pending) {
@@ -346,6 +447,7 @@ async function loadSpace(signal) {
 // These elements live for the whole edit/operation, including blur, network waits and failed saves.
 const editingPage = () => dialog.open || Boolean(app.querySelector('.secret-name-editor, .secret-value-panel.editing, .secret-value-panel[aria-busy="true"], [data-uploading]'));
 function resumeRefresh() {
+  queueMicrotask(() => { void applyPendingLanguage(); });
   const current = revision;
   queueMicrotask(() => {
     if (!refreshDeferred || !state || current !== revision || editingPage()) return;
@@ -354,20 +456,20 @@ function resumeRefresh() {
   });
 }
 function showRefreshError(error, action = 'retry-page') {
-  if (!state && !app.querySelector('main[aria-busy]')) app.innerHTML = pendingView(pagePath);
+  if (!state && !app.querySelector('main[aria-busy]')) app.innerHTML = pendingView(pagePath, { t });
   const main = app.querySelector('main');
   main.removeAttribute('aria-busy');
   main.querySelector('.content-loading')?.remove();
   main.querySelector('.object-browser[aria-busy]')?.removeAttribute('aria-busy');
   let alert = app.querySelector('.page-error');
   if (!alert) { alert = document.createElement('div'); alert.className = 'page-error'; main.before(alert); }
-  alert.innerHTML = `<p role="alert">${esc(error.message)}</p><button class="text-button" data-action="${action}">再読み込み</button>`;
+  alert.innerHTML = `<p role="alert">${esc(error.message)}</p><button class="text-button" data-action="${action}">${esc(t('client.common.reload'))}</button>`;
 }
 async function refresh({ background = false } = {}) {
   if (linked) {
     try { back = back || (await api('/v1/requests/' + requestId + '/return')).back; } catch {}
     try { accessRequest = (await api(requestApi)).request; requestError = ''; }
-    catch (error) { accessRequest = null; requestError = error.status === 401 ? 'このリンクはもう使えません。元の画面から開き直してください。' : error.message; }
+    catch (error) { accessRequest = null; requestError = error.status === 401 ? t('client.request.linkExpired') : error.message; }
     state = { user: { email: '' }, secrets: [], connections: [], actors: [], principals: [], catalog: [], services: [], apps: [], space: null };
     render();
     return;
@@ -418,7 +520,7 @@ async function refresh({ background = false } = {}) {
     throw error;
   }
 }
-const spaceSummary = space => space === undefined ? '…' : space?.available ? `${space.usage.count} 件・${kiloBytes(space.usage.bytes)} / ${kiloBytes(space.usage.bytes_max)}` : '使えません';
+const spaceSummary = space => space === undefined ? '…' : space?.available ? t('client.objects.summary', { count: space.usage.count, used: kiloBytes(space.usage.bytes), limit: kiloBytes(space.usage.bytes_max) }) : t('client.common.unavailable');
 
 // Ordinary links still open directly or in a new tab. Within the signed-in workspace, keep the frame.
 function scrollToPage(position = [0, 0]) {
@@ -463,9 +565,31 @@ if (!requestId && !isSigninConfirmation) {
 }
 // What the owner let Foundation use: secrets they handed over, and connections for services.
 const secrets = () => state.secrets || [];
-const connected = () => state.connections || [];
+const connected = () => (state.connections || []).map(presentConnection);
 // Every service the owner can connect: those Foundation knows, and those they (or someone for them) described.
-const allServices = () => [...(state.catalog || []), ...(state.services || []).map(row => row.service)];
+const allServices = () => [...(state.catalog || []), ...(state.services || []).map(row => row.service)].map(service => localizeService(service, i18n.language));
+const presentService = service => service?.removed ? { ...service, name: t('client.service.removed') } : localizeService(service, i18n.language);
+const presentApp = app => app?.foundation ? { ...app, name: t('client.apps.foundationName') } : app;
+function presentConnection(connection) {
+  let label = connection.label;
+  // This fingerprint label is adapter-owned. Never translate owner-chosen names.
+  if (connection.service?.catalog && connection.service.id === 'openrouter' && connection.auth_scheme === 'oauth') {
+    const fingerprint = connection.facts?.management_url?.match(/^https:\/\/openrouter\.ai\/keys\/([a-f0-9]{12})[a-f0-9]*$/)?.[1];
+    if (fingerprint && connection.label === connection.facts?.label) label = t('server.label.keyFingerprint', { fingerprint });
+  }
+  return { ...connection, label, service: presentService(connection.service), app: presentApp(connection.app) };
+}
+// Confirmation change captions belong to the built-in adapter, unlike account
+// names and permission values. Match only in that known presentation context.
+function presentedChanges(review) {
+  if (!review.connection?.service?.catalog || review.connection.service.id !== 'cloudflare') return review.changes;
+  const labels = ['server.label.oauthApp', 'server.label.permissions', 'server.label.observedAccounts'];
+  return review.changes.map(change => {
+    const key = labels.find(key => change.label === t(key, { lng: 'ja' }) || change.label === t(key, { lng: 'en' }));
+    const values = items => key === 'server.label.observedAccounts' && items.length === 1 && items[0] === t('server.label.unverified', { lng: 'ja' }) ? [t('server.label.unverified')] : items;
+    return key ? { ...change, label: t(key), before: values(change.before), after: values(change.after) } : change;
+  });
+}
 const serviceById = id => allServices().find(item => item.id === id);
 const ownService = id => (state.services || []).find(row => row.id === id && row.owner_id === state.user.id);
 const unconnectedServices = () => (state.services || []).filter(row => !connected().some(connection => connection.service.id === row.id));
@@ -474,66 +598,66 @@ function rememberService(row) {
   refreshDeferred = true;
   return row.service;
 }
-const keptWhen = value => new Date(value).toLocaleString('ja-JP');
-const kiloBytes = size => size < 1024 ? size + ' バイト' : size < 1024 * 1024 ? Math.round(size / 1024) + ' KB'
-  : size < 1024 * 1024 * 1024 ? Math.round(size / (1024 * 1024)) + ' MB' : (size / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-const statusName = status => ({ usable: '利用できます', reconnect_required: '接続し直しが必要です', disconnecting: '解除しています' }[status] || '確認が必要です');
+const keptWhen = value => formatDate(value, i18n.language);
+const kiloBytes = size => size < 1024 ? t('client.common.bytes', { count: size }) : size < 1024 * 1024 ? formatNumber(Math.round(size / 1024), i18n.language) + ' KB'
+  : size < 1024 * 1024 * 1024 ? formatNumber(Math.round(size / (1024 * 1024)), i18n.language) + ' MB' : formatNumber(size / (1024 * 1024 * 1024), i18n.language, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' GB';
+const statusName = status => ({ usable: t('client.connection.usable'), reconnect_required: t('client.connection.reconnectRequired'), disconnecting: t('client.connection.disconnecting') }[status] || t('client.connection.reviewRequired'));
 // One connection for a service: which service, which account, and what is wrong when something is.
 function connectionRow(connection) {
   const warning = connection.status !== 'usable';
   const account = connection.label;
-  const app = connection.app === null ? '<p class="muted warning-text">使っていたOAuthアプリが削除されました</p>'
-    : connection.app && !connection.app.foundation ? `<p class="muted">OAuthアプリ：${esc(connection.app.name)}</p>` : '';
-  const way = connection.auth_scheme === 'role' ? '<p class="muted">IAMロール</p>' : connection.auth_scheme === 'token' ? '<p class="muted">トークン</p>' + tokenFacts(connection) : '';
+  const app = connection.app === null ? `<p class="muted warning-text">${esc(t('client.oauth.appDeleted'))}</p>`
+    : connection.app && !connection.app.foundation ? `<p class="muted">${esc(t('client.connections.oauthAppName', { name: connection.app.name }))}</p>` : '';
+  const way = connection.auth_scheme === 'role' ? `<p class="muted">${esc(t('client.connection.iamRole'))}</p>` : connection.auth_scheme === 'token' ? `<p class="muted">${esc(t('client.connection.token'))}</p>` + tokenFacts(connection) : '';
   return `<article class="agent-row connection-row"><div class="connection-identity">${serviceLogo(connection.service)}<div class="agent-name"><h3>${esc(connection.service.name)}</h3>${account && account !== connection.service.name ? `<p class="connection-account">${esc(account)}</p>` : ''}</div></div>
     <div class="connection-details">${warning ? `<p class="connection-status warning-text">${esc(statusName(connection.status))}</p>` : ''}${way}${app}${accountDetails(connection)}${scopeDetails(connection.facts)}</div>
-    <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}">${connection.auth_scheme === 'token' ? '値を差し替える' : '接続し直す'}</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">接続を解除</button></div></article>`;
+    <div class="agent-actions">${connection.can_reconnect ? `<button class="text-button" data-action="reconnect" data-id="${esc(connection.id)}">${connection.auth_scheme === 'token' ? t('client.connection.replaceValue') : t('client.connection.reconnect')}</button>` : ''}<button class="text-button danger" data-action="disconnect" data-id="${esc(connection.id)}">${esc(t('client.connection.disconnect'))}</button></div></article>`;
 }
 // What a token connection says of itself: the fields that are not the token, by the names the service gives them.
 function tokenFacts(connection) {
-  const fields = serviceById(connection.service.id)?.auth_schemes.token?.fields || [];
-  return fields.filter(field => connection.facts[field.name]).map(field => `<p class="muted">${esc(field.label)}：${esc(connection.facts[field.name])}</p>`).join('');
+  const fields = serviceById(connection.service.id)?.auth_schemes?.token?.fields || [];
+  return fields.filter(field => connection.facts[field.name]).map(field => `<p class="muted">${esc(t('client.connections.fieldFact', { label: field.label, value: connection.facts[field.name] }))}</p>`).join('');
 }
 // The accounts a service said a connection reaches, when it says; null is not yet known.
 function accountDetails(connection) {
   if (!Object.hasOwn(connection.facts || {}, 'observed_accounts')) return '';
   const accounts = connection.facts.observed_accounts;
-  const names = accounts ? accounts.items.map(item => item.name).join('、') || 'なし' : '未確認';
-  return `<p class="muted">確認できたアカウント：${esc(names)}${accounts && !accounts.complete ? '（一部）' : ''}</p>`;
+  const names = accounts ? new Intl.ListFormat(i18n.language, { style: 'long', type: 'conjunction' }).format(accounts.items.map(item => item.name)) || t('client.common.none') : t('client.common.unverified');
+  return `<p class="muted">${esc(accounts && !accounts.complete ? t('client.connections.accountsPartial', { names }) : t('client.connections.accounts', { names }))}</p>`;
 }
 // What the owner gave: the scopes the service granted, and any asked for but not granted.
 function scopeDetails(facts) {
   const granted = facts?.scopes || [], missing = facts?.missing_scopes || [];
   if (!granted.length && !missing.length) return '';
   const list = scopes => `<ul class="scope-list">${scopes.map(scope => `<li><code>${esc(scope)}</code></li>`).join('')}</ul>`;
-  return `<details class="scope-details"><summary>許可している権限（${granted.length}件）</summary>${list(granted)}</details>`
-    + (missing.length ? `<details class="scope-details"><summary class="warning-text">許可されなかった権限（${missing.length}件）</summary>${list(missing)}</details>` : '');
+  return `<details class="scope-details"><summary>${esc(t('client.connections.grantedScopes', { count: granted.length }))}</summary>${list(granted)}</details>`
+    + (missing.length ? `<details class="scope-details"><summary class="warning-text">${esc(t('client.connections.missingScopes', { count: missing.length }))}</summary>${list(missing)}</details>` : '');
 }
 function secretRow(entry) {
-  return `<article class="secret-row" aria-label="${esc(entry.name)}"><div class="secret-field"><span class="secret-field-label">名前</span><div class="agent-name secret-title"><h3>${esc(entry.name)}</h3><button class="icon-button" data-action="copy-name" data-name="${esc(entry.name)}" aria-label="名前をコピー" title="名前をコピー">${icon('copy')}</button><button class="icon-button" data-action="edit-secret" data-name="${esc(entry.name)}" aria-label="名前を編集" title="名前を編集">${icon('edit')}</button></div></div>
-    <div class="secret-field"><span class="secret-field-label">値</span><section class="secret-value-panel" aria-label="値"></section></div>
-    <footer class="secret-footer"><p class="secret-meta">${secretMeta(entry)}</p><div class="secret-actions"><button class="text-button danger" data-action="drop-secret" data-name="${esc(entry.name)}">削除</button></div></footer></article>`;
+  return `<article class="secret-row" aria-label="${esc(entry.name)}"><div class="secret-field"><span class="secret-field-label">${esc(t('client.common.name'))}</span><div class="agent-name secret-title"><h3>${esc(entry.name)}</h3><button class="icon-button" data-action="copy-name" data-name="${esc(entry.name)}" aria-label="${esc(t('client.secret.copyName'))}" title="${esc(t('client.secret.copyName'))}">${icon('copy')}</button><button class="icon-button" data-action="edit-secret" data-name="${esc(entry.name)}" aria-label="${esc(t('client.common.editName'))}" title="${esc(t('client.common.editName'))}">${icon('edit')}</button></div></div>
+    <div class="secret-field"><span class="secret-field-label">${esc(t('client.secret.value'))}</span><section class="secret-value-panel" aria-label="${esc(t('client.secret.value'))}"></section></div>
+    <footer class="secret-footer"><p class="secret-meta">${secretMeta(entry)}</p><div class="secret-actions"><button class="text-button danger" data-action="drop-secret" data-name="${esc(entry.name)}">${esc(t('client.common.delete'))}</button></div></footer></article>`;
 }
 // The value's own size: what is kept is it with the seal's 28 bytes.
-const secretMeta = entry => `<span>${esc(kiloBytes(entry.size - 28))}</span><span>更新 ${esc(keptWhen(entry.updated_at))}</span>`;
+const secretMeta = entry => `<span>${esc(kiloBytes(entry.size - 28))}</span><span>${esc(t('client.secrets.updatedAt', { date: keptWhen(entry.updated_at) }))}</span>`;
 function render() {
   if (!state) return;
   if (requestId) { renderRequest(); return; }
   const shell = inner => {
-    if (!app.querySelector('.page-nav')) app.innerHTML = workspaceView(pagePath);
+    if (!app.querySelector('.page-nav')) app.innerHTML = workspaceView(pagePath, { t });
     app.querySelector('.topbar').querySelectorAll('a').forEach(link => {
       if (link.getAttribute('href') === pagePath) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     });
-    document.title = pageTitle(pagePath);
+    document.title = pageTitle(pagePath, t);
     app.querySelector('[data-action="signout"]').disabled = false;
     app.querySelector('main').removeAttribute('aria-busy');
     app.querySelector('main').innerHTML = inner;
   };
   if (page === 'objects') {
     if (!app.querySelector('#space-upload')) {
-      shell(`<header class="page-heading page-heading-actions"><div><h1>オブジェクト</h1><p id="object-usage"></p></div>
-        <button class="button secondary" type="button" data-action="upload-object">${icon('plus')} 追加</button><input id="space-upload" type="file" hidden></header>${spaceSection()}`);
+      shell(`<header class="page-heading page-heading-actions"><div><h1>${esc(t('client.objects.title'))}</h1><p id="object-usage"></p></div>
+        <button class="button secondary" type="button" data-action="upload-object">${icon('plus')} ${esc(t('client.common.add'))}</button><input id="space-upload" type="file" hidden></header>${spaceSection()}`);
       bindObjects();
     }
     updateObjects();
@@ -541,9 +665,9 @@ function render() {
   }
   if (page === 'functions') {
     // Available operations, independent of their invocations.
-    const known = { 'http.request': ['HTTPS リクエスト', '預けたものを使ってHTTPSリクエストを送ります。'] };
-    shell(`<header class="page-heading"><h1>ファンクション</h1></header>
-      <section class="resource-section" aria-labelledby="functions-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="functions-title">処理</h2></div></div></div>
+    const known = { 'http.request': [t('client.functions.httpRequest'), t('client.functions.httpRequestDescription')] };
+    shell(`<header class="page-heading"><h1>${esc(t('client.functions.title'))}</h1></header>
+      <section class="resource-section" aria-labelledby="functions-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="functions-title">${esc(t('client.functions.operations'))}</h2></div></div></div>
       <div class="agent-list">${(state.functions || []).map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(known[item.id]?.[0] || item.id)}</h3><p><code>${esc(item.id)}</code></p></div><div class="agent-permissions"><span class="muted">${esc(known[item.id]?.[1] || item.description)}</span></div><div class="agent-actions"></div></article>`).join('')}</div></section>
       `);
     return;
@@ -552,21 +676,21 @@ function render() {
     const session = paymentReturn;
     paymentReturn = null;
     history.replaceState(null, '', '/account');
-    void api('/v1/payment/complete', { method: 'POST', data: { session_id: session } }).then(async () => { await refresh(); toast('支払い方法を登録しました。'); }, error => toast(error.message));
+    void api('/v1/payment/complete', { method: 'POST', data: { session_id: session } }).then(async () => { await refresh(); toast(t('client.payment.added')); }, error => toast(error.message));
   }
   if (page === 'account') {
     // The account itself: who this is, and the few things done to it rather than in it.
-    const passkeyRow = item => `<article class="agent-row" aria-label="${esc(item.name)}"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${item.last_used_at ? '最後に使った日時 ' + esc(keptWhen(item.last_used_at)) : 'まだ使っていません'}</p></div>
-      <div class="agent-actions"><button class="text-button danger" data-action="remove-passkey" data-id="${esc(item.id)}">削除</button></div></article>`;
-    shell(`<header class="page-heading"><h1>アカウント</h1><p>${esc(state.user.email || '')}</p></header>
-      <section class="resource-section" aria-labelledby="id-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="id-title">ID</h2><p><code>${esc(state.user.id)}</code></p></div></div><button class="button secondary" data-action="copy-id">${icon('copy')} IDをコピー</button></div></section>
-      <section class="resource-section" aria-labelledby="name-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('edit')}</span><div><h2 id="name-title">名前</h2><p>${esc(state.principal.name || '')}</p></div></div><button class="button secondary" data-action="rename-me">名前を変更</button></div></section>
-      <section class="resource-section" aria-labelledby="passkeys-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="passkeys-title">パスキー</h2><p>顔や指紋、端末のPINでサインインできます。</p></div></div>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} パスキーを追加</button>` : ''}</div>
+    const passkeyRow = item => `<article class="agent-row" aria-label="${esc(item.name)}"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${item.last_used_at ? esc(t('client.account.passkeyLastUsed', { date: keptWhen(item.last_used_at) })) : t('client.passkey.neverUsed')}</p></div>
+      <div class="agent-actions"><button class="text-button danger" data-action="remove-passkey" data-id="${esc(item.id)}">${esc(t('client.common.delete'))}</button></div></article>`;
+    shell(`<header class="page-heading"><h1>${esc(t('client.account.title'))}</h1><p>${esc(state.user.email || '')}</p></header>
+      <section class="resource-section" aria-labelledby="id-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="id-title">${esc(t('client.account.id'))}</h2><p><code>${esc(state.user.id)}</code></p></div></div><button class="button secondary" data-action="copy-id">${icon('copy')} ${esc(t('client.account.copyId'))}</button></div></section>
+      <section class="resource-section" aria-labelledby="name-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('edit')}</span><div><h2 id="name-title">${esc(t('client.common.name'))}</h2><p>${esc(state.principal.name || '')}</p></div></div><button class="button secondary" data-action="rename-me">${esc(t('client.common.changeName'))}</button></div></section>
+      <section class="resource-section" aria-labelledby="passkeys-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="passkeys-title">${esc(t('client.passkey.title'))}</h2><p>${esc(t('client.passkey.description'))}</p></div></div>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} ${esc(t('client.passkey.add'))}</button>` : ''}</div>
         ${(state.webauthn_credentials || []).length ? `<div class="agent-list">${state.webauthn_credentials.map(passkeyRow).join('')}</div>` : ''}</section>
-      ${state.payment?.available ? `<section class="resource-section" aria-labelledby="payment-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('card')}</span><div><h2 id="payment-title">支払い</h2><p>${state.payment.paying ? '支払い方法を登録済みです。無料枠を超えた分が請求されます。' : '無料枠を超えて使うには、支払い方法を登録します。'}</p></div></div><button class="button secondary" data-action="set-payment">${state.payment.paying ? '支払い方法を変更' : '支払い方法を登録'}</button></div></section>` : ''}
-      <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">データのダウンロード</h2><p>シークレットの値、サービスとの接続、自分で定義したサービス、登録した相手の一覧が JSON ファイルで入ります。オブジェクトは入りません。</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ダウンロード</a></div></section>
-      <section class="resource-section" aria-labelledby="transfer-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('arrow')}</span><div><h2 id="transfer-title">持ち物をすべて渡す</h2></div></div><button class="button secondary" data-action="transfer-all">渡す</button></div></section>
-      <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">開発者</h2></div></div><a class="button secondary" href="/principals#apps">アプリの登録</a></div></section>`);
+      ${state.payment?.available ? `<section class="resource-section" aria-labelledby="payment-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('card')}</span><div><h2 id="payment-title">${esc(t('client.payment.title'))}</h2><p>${state.payment.paying ? t('client.payment.registeredNote') : t('client.payment.addMethodNote')}</p></div></div><button class="button secondary" data-action="set-payment">${state.payment.paying ? t('client.payment.changeMethod') : t('client.payment.addMethod')}</button></div></section>` : ''}
+      <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">${esc(t('client.account.downloadData'))}</h2><p>${esc(t('client.account.exportDescription'))}</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ${esc(t('client.common.download'))}</a></div></section>
+      <section class="resource-section" aria-labelledby="transfer-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('arrow')}</span><div><h2 id="transfer-title">${esc(t('client.transferAll.title'))}</h2></div></div><button class="button secondary" data-action="transfer-all">${esc(t('client.transferAll.action'))}</button></div></section>
+      <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">${esc(t('client.account.developers'))}</h2></div></div><a class="button secondary" href="/principals#apps">${esc(t('client.integration.registration'))}</a></div></section>`);
     return;
   }
   if (page === 'home') {
@@ -576,23 +700,23 @@ function render() {
     const lastUsed = keys.flatMap(key => key.keys.map(item => item.last_used_at)).filter(Boolean).sort().at(-1);
     shell(`<header class="page-heading"><h1>Foundation</h1></header>
       <div class="home-cards">
-        ${card('/services', 'サービス', `${connections.length + unconnectedServices().length} 件`)}
-        ${card('/secrets', 'シークレット', `${kept.length} 件`)}
-        ${card('/objects', 'オブジェクト', spaceSummary(space))}
-        ${card('/principals', 'アクセス管理', keys.length ? `許可済み ${keys.length} 件${lastUsed ? '・最終利用 ' + new Date(lastUsed).toLocaleString('ja-JP') : ''}` : 'ありません')}
-        ${card('/functions', 'ファンクション', `${state.functions?.length || 0} 種類`)}
+        ${card('/services', t('client.service.title'), t('client.common.itemCount', { count: connections.length + unconnectedServices().length }))}
+        ${card('/secrets', t('client.secret.title'), t('client.common.itemCount', { count: kept.length }))}
+        ${card('/objects', t('client.objects.title'), spaceSummary(space))}
+        ${card('/principals', t('client.access.title'), keys.length ? lastUsed ? t('client.home.accessLastUsed', { count: keys.length, date: formatDate(lastUsed, i18n.language) }) : t('client.home.accessCount', { count: keys.length }) : t('client.common.noItems'))}
+        ${card('/functions', t('client.functions.title'), t('client.home.functionCount', { count: state.functions?.length || 0 }))}
       </div>`);
     return;
   }
   if (page === 'principals') {
     const actors = state.actors || [], others = (state.principals || []).filter(item => !actors.some(actor => actor.id === item.id));
-    const used = item => { const at = item.keys.map(c => c.last_used_at).filter(Boolean).sort().at(-1); return at ? '最終利用 ' + esc(new Date(at).toLocaleString('ja-JP')) : 'まだ利用されていません'; };
-    const row = (item, allowed) => `<article class="agent-row access-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${used(item)}</p></div><div class="agent-permissions"><span class="muted">${allowed ? '許可 ' + esc(new Date(item.approved_at).toLocaleDateString('ja-JP')) : '全体へのアクセス許可なし'}</span></div><div class="agent-actions"><button class="text-button" data-action="principal-details" data-id="${esc(item.id)}">詳細</button>${allowed ? `<button class="text-button danger" data-action="revoke-access" data-id="${esc(item.id)}">取り消す</button>` : ''}</div></article>`;
-    shell(`<header class="page-heading"><h1>アクセス管理</h1></header>
-      <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><h2 id="access-title">登録した相手</h2></div><button class="button secondary" data-action="add-key">${icon('plus')} 追加</button></div>
-      ${actors.length || others.length ? `<div class="agent-list">${actors.map(item => row(item, true)).join('')}${others.map(item => row(item, false)).join('')}</div>` : '<div class="access-empty"><p>登録した相手はいません。</p></div>'}</section>
+    const used = item => { const at = item.keys.map(c => c.last_used_at).filter(Boolean).sort().at(-1); return at ? esc(t('client.principals.lastUsed', { date: formatDate(at, i18n.language) })) : t('client.access.neverUsed'); };
+    const row = (item, allowed) => `<article class="agent-row access-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${used(item)}</p></div><div class="agent-permissions"><span class="muted">${allowed ? esc(t('client.principals.approvedAt', { date: formatDate(item.approved_at, i18n.language, { year: 'numeric', month: 'numeric', day: 'numeric' }) })) : t('client.access.noFullAccess')}</span></div><div class="agent-actions"><button class="text-button" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.details'))}</button>${allowed ? `<button class="text-button danger" data-action="revoke-access" data-id="${esc(item.id)}">${esc(t('client.access.revoke'))}</button>` : ''}</div></article>`;
+    shell(`<header class="page-heading"><h1>${esc(t('client.access.title'))}</h1></header>
+      <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><h2 id="access-title">${esc(t('client.access.registeredPrincipals'))}</h2></div><button class="button secondary" data-action="add-key">${icon('plus')} ${esc(t('client.common.add'))}</button></div>
+      ${actors.length || others.length ? `<div class="agent-list">${actors.map(item => row(item, true)).join('')}${others.map(item => row(item, false)).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.access.empty'))}</p></div>`}</section>
       ${environmentsSection()}
-      <div class="integration-entry" id="apps"><button class="text-button" data-action="add-integration">アプリを登録</button></div>`);
+      <div class="integration-entry" id="apps"><button class="text-button" data-action="add-integration">${esc(t('client.integration.register'))}</button></div>`);
     return;
   }
   if (page === 'services') {
@@ -601,11 +725,11 @@ function render() {
     const connections = connected(), waiting = unconnectedServices();
     const rows = [...connections.map(connection => ({ name: connection.service.name, label: connection.label, html: connectionRow(connection) })),
       ...waiting.map(row => ({ name: row.service.name, label: '', html: `<article class="agent-row connection-row" aria-label="${esc(row.service.name)}"><div class="connection-identity">${serviceLogo(row.service)}<div class="agent-name"><h3>${esc(row.service.name)}</h3></div></div>
-        <div class="connection-details"><p class="muted">未接続</p></div><div class="agent-actions"><button class="text-button" data-action="choose-service" data-id="${esc(row.id)}">接続を追加</button>${ownService(row.id) ? `<button class="text-button danger" data-action="remove-service" data-id="${esc(row.id)}">削除</button>` : ''}</div></article>` }))]
-      .sort((a, b) => a.name.localeCompare(b.name, 'ja') || a.label.localeCompare(b.label, 'ja'));
-    shell(`<header class="page-heading page-heading-actions"><h1>サービス</h1><button class="button secondary" data-action="add-service">${icon('plus')} サービスを追加</button></header>
-      <section class="resource-section" aria-label="サービス">
-        ${rows.length ? `<div class="agent-list">${rows.map(row => row.html).join('')}</div>` : '<div class="access-empty"><p>接続はありません。</p></div>'}</section>
+        <div class="connection-details"><p class="muted">${esc(t('client.connection.notConnected'))}</p></div><div class="agent-actions"><button class="text-button" data-action="choose-service" data-id="${esc(row.id)}">${esc(t('client.connection.add'))}</button>${ownService(row.id) ? `<button class="text-button danger" data-action="remove-service" data-id="${esc(row.id)}">${esc(t('client.common.delete'))}</button>` : ''}</div></article>` }))]
+      .sort((a, b) => compareText(a.name, b.name, i18n.language) || compareText(a.label, b.label, i18n.language));
+    shell(`<header class="page-heading page-heading-actions"><h1>${esc(t('client.service.title'))}</h1><button class="button secondary" data-action="add-service">${icon('plus')} ${esc(t('client.service.add'))}</button></header>
+      <section class="resource-section" aria-label="${esc(t('client.service.title'))}">
+        ${rows.length ? `<div class="agent-list">${rows.map(row => row.html).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.connection.empty'))}</p></div>`}</section>
       ${appsSection()}`);
     app.querySelector('#oauth-apps').addEventListener('toggle', event => { appsOpen = event.currentTarget.open; });
     return;
@@ -616,15 +740,15 @@ function render() {
     const kept = secrets(), handed = (state.actors || []).some(item => item.id === state.foundation?.principal_id);
     // What the page can do here: nothing with a value until the owner's key is open.
     const keyLine = own ? '' : !(state.webauthn_credentials || []).length
-      ? `<div class="access-empty key-state"><p>シークレットを使うにはパスキーが必要です。</p>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} パスキーを追加</button>` : ''}</div>`
-      : keyUnavailable ? '<div class="access-empty key-state"><p>このパスキーでは鍵を使えません。</p></div>'
-        : `<div class="access-empty key-state"><button class="button secondary" data-action="unlock-key">${icon('lock')} パスキーで鍵を開く</button></div>`;
-    const foundationLine = handed ? '' : `<div class="access-empty key-state"><p>AIが使うには Foundation に渡します。</p><button class="button secondary" data-action="allow-foundation"${own ? '' : ' disabled'}>Foundation に渡す</button></div>`;
-    shell(`<header class="page-heading page-heading-actions"><h1>シークレット</h1>
-      <button class="button secondary" data-action="add-secret"${own ? '' : ' disabled'}>${icon('plus')} 追加</button></header>
+      ? `<div class="access-empty key-state"><p>${esc(t('client.secret.passkeyRequired'))}</p>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} ${esc(t('client.passkey.add'))}</button>` : ''}</div>`
+      : keyUnavailable ? `<div class="access-empty key-state"><p>${esc(t('client.secret.keyUnavailable'))}</p></div>`
+        : `<div class="access-empty key-state"><button class="button secondary" data-action="unlock-key">${icon('lock')} ${esc(t('client.secret.unlockWithPasskey'))}</button></div>`;
+    const foundationLine = handed ? '' : `<div class="access-empty key-state"><p>${esc(t('client.secret.shareFoundationNote'))}</p><button class="button secondary" data-action="allow-foundation"${own ? '' : ' disabled'}>${esc(t('client.secret.shareFoundation'))}</button></div>`;
+    shell(`<header class="page-heading page-heading-actions"><h1>${esc(t('client.secret.title'))}</h1>
+      <button class="button secondary" data-action="add-secret"${own ? '' : ' disabled'}>${icon('plus')} ${esc(t('client.common.add'))}</button></header>
       ${keyLine}${foundationLine}
-      <section class="resource-section" aria-label="シークレット">
-        ${kept.length ? `<div class="agent-list">${kept.map(secretRow).join('')}</div>` : '<div class="access-empty"><p>シークレットはありません。</p></div>'}</section>`);
+      <section class="resource-section" aria-label="${esc(t('client.secret.title'))}">
+        ${kept.length ? `<div class="agent-list">${kept.map(secretRow).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.secret.empty'))}</p></div>`}</section>`);
     if (own) void receiveFromFoundation();
     app.querySelectorAll('.secret-row').forEach(row => bindSecretValue(kept.find(item => item.name === row.getAttribute('aria-label')), row));
     if (focusedRow && focusedAction && !focused.isConnected) {
@@ -644,11 +768,11 @@ function updateObjectSelection() {
   }
   const chosen = chosenKeys(), copy = app.querySelector('[data-action="copy-url"]'), drop = app.querySelector('[data-action="drop-chosen"]');
   if (copy) copy.disabled = chosen.length !== 1 || chosen[0].endsWith('/');
-  if (drop) { drop.disabled = chosen.length === 0; drop.textContent = '削除' + (chosen.length ? `（${chosen.length}）` : ''); }
+  if (drop) { drop.disabled = chosen.length === 0; drop.textContent = chosen.length ? t('client.objects.deleteSelected', { count: chosen.length }) : t('client.common.delete'); }
 }
 function updateObjects() {
   const usage = state.space?.usage, description = app.querySelector('#object-usage');
-  description.textContent = usage ? `${kiloBytes(usage.bytes)} / ${kiloBytes(usage.bytes_max)}・${usage.count} / ${usage.count_max} 件` : '';
+  description.textContent = usage ? t('client.objects.usage', { used: kiloBytes(usage.bytes), limit: kiloBytes(usage.bytes_max), count: usage.count, maximum: usage.count_max }) : '';
   description.hidden = !usage;
   const upload = app.querySelector('#space-upload');
   upload.disabled = state.space === undefined || upload.hasAttribute('data-uploading');
@@ -667,9 +791,9 @@ function updateObjects() {
   const filter = app.querySelector('#object-filter');
   if (filter) {
     if (filter.value !== objectFilter) filter.value = objectFilter;
-    filter.placeholder = objectSearchPrefix ? 'この場所を接頭辞で探す' : '名前で絞り込む';
+    filter.placeholder = objectSearchPrefix ? t('client.objects.searchHereByPrefix') : t('client.objects.filterByName');
     filter.oninput = () => { objectFilter = filter.value; objectLimit = 100; updateObjects(); };
-    app.querySelector('[data-action="toggle-search"]').textContent = objectSearchPrefix ? '部分一致にする' : '接頭辞で探す';
+    app.querySelector('[data-action="toggle-search"]').textContent = objectSearchPrefix ? t('client.objects.matchAnywhere') : t('client.objects.searchByPrefix');
   }
   updateObjectSelection();
   if (identity && !focus.isConnected) {
@@ -689,7 +813,7 @@ function bindObjects() {
     try {
       if ((state.space?.objects || []).some(item => item.key === key)) {
         const go = await new Promise(resolve => {
-          openDialog(`<h2 id="dialog-title">${esc(file.name)} を置き換えますか？</h2><form><p>同じ名前のものが置かれています。前のものは戻せません。</p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button primary">置き換える</button></div></form>`);
+          openDialog(`<h2 id="dialog-title">${esc(t('client.objects.replaceTitle', { name: file.name }))}</h2><form><p>${esc(t('client.objects.replaceWarning'))}</p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">${esc(t('client.common.cancel'))}</button><button type="submit" class="button primary">${esc(t('client.common.replace'))}</button></div></form>`);
           const cancelled = () => resolve(false);
           dialog.addEventListener('close', cancelled, { once: true });
           dialog.querySelector('form').onsubmit = event => { event.preventDefault(); dialog.removeEventListener('close', cancelled); resolve(true); closeDialog(); };
@@ -697,11 +821,11 @@ function bindObjects() {
         if (!go) return;
       }
       const response = await fetch('/v1/resources?' + new URLSearchParams({ kind: 'object', name: key }), { method: 'PUT', credentials: 'same-origin',
-        headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
+        headers: { 'X-Foundation-Locale': i18n.language, 'content-type': file.type || 'application/octet-stream' }, body: file });
       const result = await response.json();
       if (response.status === 401) await showSignin();
-      if (!response.ok) throw new Error(result.error?.message || '追加できませんでした。');
-      toast(file.name + ' を追加しました。');
+      if (!response.ok) throw new Error(result.error?.message || t('client.errors.addFailed'));
+      toast(t('client.common.addedName', { name: file.name }));
       refreshDeferred = true;
     } catch (error) { toast(error.message); }
     finally {
@@ -714,52 +838,53 @@ function bindObjects() {
 const siteLink = value => { try { const url = new URL(value); return `<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer"><strong>${esc(url.host)}</strong>${esc(url.pathname === '/' ? '' : url.pathname)} ↗</a>`; } catch { return esc(value); } };
 // Guidance the requesting AI wrote for its owner. Framed as the AI's words; line breaks kept, nothing else interpreted.
 // The steps the requesting AI wrote for the owner to follow, shown as the numbered list they are.
-const stepsBlock = steps => steps?.length ? `<section class="ai-guidance"><h3>手順</h3><ol class="guidance-steps">${steps.map(step => `<li>${esc(step)}</li>`).join('')}</ol></section>` : '';
-const requestHeading = (row, title, symbol = 'lock') => `${state?.user?.email ? `<p class="request-account">${esc(state.user.email)}</p>` : ''}<header class="approval-heading"><span class="approval-symbol">${icon(symbol)}</span><div><p class="approval-eyebrow">${esc(row.requester_name)}の依頼</p><h1>${esc(title)}</h1></div></header>`;
-const requestPurpose = row => row.binding_message ? `<div class="approval-purpose"><dt>目的</dt><dd>${esc(row.binding_message)}</dd></div>` : '';
+const stepsBlock = steps => steps?.length ? `<section class="ai-guidance"><h3>${esc(t('client.request.steps'))}</h3><ol class="guidance-steps">${steps.map(step => `<li>${esc(step)}</li>`).join('')}</ol></section>` : '';
+const requestHeading = (row, title, symbol = 'lock') => `${state?.user?.email ? `<p class="request-account">${esc(state.user.email)}</p>` : ''}<header class="approval-heading"><span class="approval-symbol">${icon(symbol)}</span><div><p class="approval-eyebrow">${esc(t('client.requests.requester', { name: row.requester_name }))}</p><h1>${esc(title)}</h1></div></header>`;
+const requestPurpose = row => row.binding_message ? `<div class="approval-purpose"><dt>${esc(t('client.request.purpose'))}</dt><dd>${esc(row.binding_message)}</dd></div>` : '';
 const codeComplete = form => /^[0-9A-Z]{8}$/.test((form.elements.confirmationCode?.value || '').toUpperCase().replace(/[^0-9A-Z]/g, ''));
 function codeField(enabled = true) {
-  return `<label for="confirmation-code">確認コード</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">依頼元から受け取ったコードを入力してください。</p>`;
+  return `<label for="confirmation-code">${esc(t('client.request.confirmationCode'))}</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">${esc(t('client.request.codeInstructions'))}</p>`;
 }
 // The link of a request shows the one screen its kind calls for:
 //   approve   a key not yet approved: the owner accepts it with the code. Nothing is registered here.
 //   connect   an approved key: Foundation performs the connection itself. No code.
 //   store     an approved key: the owner puts something into storage, following the AI's instructions.
 function renderRequest() {
+  document.title = t('client.request.review') + ' · Foundation';
   const row = accessRequest;
-  const shell = (content) => `<div class="workspace"><header class="topbar">${brand}${linked ? '' : `<div class="user-menu"><a href="/account"${page === 'account' ? ' aria-current="page"' : ''}>アカウント</a><button class="text-button" data-action="signout">サインアウト</button></div>`}</header><main class="approval-main">${content}</main></div>`;
+  const shell = (content) => `<div class="workspace"><header class="topbar">${brand(t)}${languagePicker(t, i18n.language)}${linked ? '' : `<div class="user-menu"><a href="/account"${page === 'account' ? ' aria-current="page"' : ''}>${esc(t('client.account.title'))}</a><button class="text-button" data-action="signout">${esc(t('client.signin.signout'))}</button></div>`}</header><main class="approval-main">${content}</main></div>`;
   const type = detailOf(row).type, asked = detailOf(row);
   if (!row || row.status !== 'pending' || !knownRequestKind(type)) {
-    const view = requestResultView(row, requestError);
-    const subject = view.completed ? type === 'secret' ? row.result.names.join('、') : type === 'connection' ? connected().find(item => item.id === row.result.connection_id)?.label : row.requester_name : '';
-    const link = !linked ? '<a class="button secondary" href="' + view.href + '">' + view.label + ' ' + icon('arrow') + '</a>'
-      : back ? '<a class="button secondary" href="' + esc(backTo(row)) + '">' + esc(back.name) + 'に戻る</a>' : '';
-    app.innerHTML = shell('<section class="approval-card approval-result"><span class="approval-symbol">' + icon(view.completed ? 'check' : 'lock') + '</span><h1>' + view.title + '</h1>' + (subject ? '<p>' + esc(subject) + '</p>' : '') + (view.description ? '<p>' + esc(view.description) + '</p>' : '') + link + '</section>');
+    const view = requestResultView(row, requestError, t);
+    const subject = view.completed ? type === 'secret' ? new Intl.ListFormat(i18n.language).format(row.result.names) : type === 'connection' ? connected().find(item => item.id === row.result.connection_id)?.label : row.requester_name : '';
+    const link = !linked ? '<a class="button secondary" href="' + view.href + '">' + esc(view.label) + ' ' + icon('arrow') + '</a>'
+      : back ? '<a class="button secondary" href="' + esc(backTo(row)) + '">' + esc(t('client.requests.returnTo', { name: back.name })) + '</a>' : '';
+    app.innerHTML = shell('<section class="approval-card approval-result"><span class="approval-symbol">' + icon(view.completed ? 'check' : 'lock') + '</span><h1>' + esc(view.title) + '</h1>' + (subject ? '<p>' + esc(subject) + '</p>' : '') + (view.description ? '<p>' + esc(view.description) + '</p>' : '') + link + '</section>');
     return;
   }
-  const expiry = `<p class="request-expiry">${type === 'relation' ? '承認期限：' : '依頼の期限：'}${esc(new Date(row.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))}</p>`;
+  const expiry = `<p class="request-expiry">${esc(type === 'relation' ? t('client.requests.approvalExpiry', { time: formatDate(row.expires_at, i18n.language, { hour: '2-digit', minute: '2-digit' }) }) : t('client.requests.requestExpiry', { time: formatDate(row.expires_at, i18n.language, { hour: '2-digit', minute: '2-digit' }) }))}</p>`;
   if (type === 'relation') { renderApproval(row, shell, expiry); return; }
   if (type === 'secret') { renderStore(row, shell, expiry); return; }
   if (type === 'app') { renderAppRequest(row, shell, expiry); return; }
-  const service = row.service;
+  const service = localizeService(row.service, i18n.language);
   if (!service) {
-    app.innerHTML = shell(`<section class="approval-card"><h1>接続</h1><p>このサービスには現在接続できません。</p><button class="text-button full" data-action="deny-request">接続しない</button>${expiry}</section>`);
+    app.innerHTML = shell(`<section class="approval-card"><h1>${esc(t('client.connection.title'))}</h1><p>${esc(t('client.connection.serviceUnavailable'))}</p><button class="text-button full" data-action="deny-request">${esc(t('client.connection.decline'))}</button>${expiry}</section>`);
     return;
   }
   const way = row.auth_scheme, scheme = service.auth_schemes[way], name = service.name;
-  const reconnecting = Boolean(asked.connection_id), title = reconnecting ? name + 'に接続し直す' : name + 'に接続';
-  const facts = `<dl class="approval-facts">${requestPurpose(row)}${row.connection ? `<div><dt>更新する接続</dt><dd>${esc(row.connection.label)}${accountDetails(row.connection)}</dd></div>` : ''}
-    <div><dt>方法</dt><dd>${WAYS[way]}${way === 'oauth' ? requestedScopesView(row, scheme) : ''}</dd></div>${row.app && !row.app.foundation ? `<div><dt>OAuthアプリ</dt><dd>${esc(row.app.name)}</dd></div>` : ''}</dl>`;
+  const reconnecting = Boolean(asked.connection_id), title = reconnecting ? t('client.connections.reconnectName', { name }) : t('client.connections.connectName', { name });
+  const facts = `<dl class="approval-facts">${requestPurpose(row)}${row.connection ? `<div><dt>${esc(t('client.connection.connectionToUpdate'))}</dt><dd>${esc(row.connection.label)}${accountDetails(row.connection)}</dd></div>` : ''}
+    <div><dt>${esc(t('client.connection.method'))}</dt><dd>${WAYS()[way]}${way === 'oauth' ? requestedScopesView(row, scheme) : ''}</dd></div>${row.app && !row.app.foundation ? `<div><dt>${esc(t('client.oauth.app'))}</dt><dd>${esc(row.app.name)}</dd></div>` : ''}</dl>`;
   let body;
-  if (reconnecting && !row.connection) body = '<p class="form-error" role="status">更新する接続が見つかりません。</p>';
-  else if (row.app === null) body = '<p class="form-error" role="status">使うOAuthアプリが見つかりません。</p>';
-  else if (!scheme.available && (way !== 'oauth' || row.app?.foundation || !scheme.takes_apps)) body = `<p class="form-error" role="status">現在${esc(name)}に接続できません。</p>`;
-  else if (way === 'token') body = `${serviceLink(scheme.console, name + 'でトークンを作る')}${instructions(scheme)}<form id="token-request-form">${pastedFields(scheme, 'request-token')}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${reconnecting ? '差し替える' : '接続する'}</button></form>`;
-  else body = `<button class="button primary full request-connect" type="button" data-action="request-connect">${esc(way === 'role' ? 'IAMロールを作る' : name + 'の画面へ')} ${icon('arrow')}</button>`;
+  if (reconnecting && !row.connection) body = `<p class="form-error" role="status">${esc(t('client.connection.updateTargetMissing'))}</p>`;
+  else if (row.app === null) body = `<p class="form-error" role="status">${esc(t('client.oauth.appMissing'))}</p>`;
+  else if (!scheme.available && (way !== 'oauth' || row.app?.foundation || !scheme.takes_apps)) body = `<p class="form-error" role="status">${esc(t('client.connections.unavailableName', { name }))}</p>`;
+  else if (way === 'token') body = `${serviceLink(scheme.console, t('client.connections.createToken', { name }))}${instructions(scheme)}<form id="token-request-form">${pastedFields(scheme, 'request-token')}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${reconnecting ? t('client.common.replaceValue') : t('client.connection.connect')}</button></form>`;
+  else body = `<button class="button primary full request-connect" type="button" data-action="request-connect">${esc(way === 'role' ? t('client.connection.createIamRole') : t('client.connections.goToService', { name }))} ${icon('arrow')}</button>`;
   app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, title)}${facts}
     ${stepsBlock(row.steps)}
     <div class="register-body">${body}</div>
-    <button class="text-button full" type="button" data-action="deny-request">接続しない</button>${expiry}</section>`);
+    <button class="text-button full" type="button" data-action="deny-request">${esc(t('client.connection.decline'))}</button>${expiry}</section>`);
   if (way === 'token' && app.querySelector('#token-request-form')) bindForm(async (form) => {
     await api('/v1/connections', { method: 'POST', data: { request_id: row.id, fields: pastedValues(scheme, form) } });
     await refresh();
@@ -769,22 +894,22 @@ function renderRequest() {
 function requestedScopesView(row, scheme) {
   const detail = detailOf(row), asked = detail.scopes || [];
   if (!scheme.scopes) return '';
-  if (!asked.length) return `<small class="muted block">${detail.connection_id ? '今許可している権限のまま接続し直します。' : '本人確認のための権限だけを頼みます。'}</small>`;
-  return `<small class="muted block">${detail.connection_id ? '今の権限に加えて、' : ''}次の権限を頼みます。</small><ul class="scope-list">${asked.map(scope => `<li><code>${esc(scope)}</code></li>`).join('')}</ul>`;
+  if (!asked.length) return `<small class="muted block">${detail.connection_id ? t('client.connection.reconnectSamePermissions') : t('client.connection.identityPermissionsOnly')}</small>`;
+  return `<small class="muted block">${esc(detail.connection_id ? t('client.requests.additionalScopes') : t('client.requests.requestedScopes'))}</small><ul class="scope-list">${asked.map(scope => `<li><code>${esc(scope)}</code></li>`).join('')}</ul>`;
 }
 // The owner registers an OAuth app for a key: its values go into the app, and the key learns only which app it is.
 function renderAppRequest(row, shell, expiry) {
-  const service = row.service;
+  const service = localizeService(row.service, i18n.language);
   if (!service?.auth_schemes.oauth?.takes_apps) {
-    app.innerHTML = shell(`<section class="approval-card"><h1>OAuthアプリの登録</h1><p>このサービスでは、OAuthアプリを登録できません。</p><button class="text-button full" data-action="deny-request">登録しない</button>${expiry}</section>`);
+    app.innerHTML = shell(`<section class="approval-card"><h1>${esc(t('client.oauth.registration'))}</h1><p>${esc(t('client.oauth.registrationUnavailable'))}</p><button class="text-button full" data-action="deny-request">${esc(t('client.common.declineRegistration'))}</button>${expiry}</section>`);
     return;
   }
-  const title = service.name + 'のOAuthアプリを登録';
+  const title = t('client.apps.registerService', { name: service.name });
   app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, title)}
     <dl class="approval-facts">${requestPurpose(row)}</dl>${stepsBlock(row.steps)}
-    <form id="app-request-form"><label for="request-app-name">名前</label><input id="request-app-name" name="name" required maxlength="200" autocomplete="off" value="${esc(detailOf(row).name || service.name + 'のアプリ')}">
-      ${appFields(service, 'request-app')}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>
-    <button class="text-button full" type="button" data-action="deny-request">登録しない</button>${expiry}</section>`);
+    <form id="app-request-form"><label for="request-app-name">${esc(t('client.common.name'))}</label><input id="request-app-name" name="name" required maxlength="200" autocomplete="off" value="${esc(detailOf(row).name || t('client.apps.defaultName', { name: service.name }))}">
+      ${appFields(service, 'request-app')}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.register'))} ${icon('arrow')}</button></form>
+    <button class="text-button full" type="button" data-action="deny-request">${esc(t('client.common.declineRegistration'))}</button>${expiry}</section>`);
   bindForm(async (form) => {
     const values = Object.fromEntries(service.auth_schemes.oauth.app_fields.map(({ name }) => [name, String(form.get(name) || '')]));
     await api('/v1/requests/' + row.id + '/grant', { method: 'POST', data: { name: String(form.get('name') || ''), ...values } });
@@ -795,7 +920,7 @@ function renderAppRequest(row, shell, expiry) {
 // Foundation shows only where it will go and how it will be handed over.
 function renderStore(row, shell, expiry) {
   const asked = detailOf(row).fields, replacing = asked.some(one => one.replace);
-  const title = asked.length === 1 ? `${asked[0].label}を${replacing ? '置き換える' : '登録する'}` : `${asked.length}件を${replacing ? '置き換える' : '登録する'}`;
+  const title = asked.length === 1 ? replacing ? t('client.requests.replaceField', { name: asked[0].label }) : t('client.requests.storeField', { name: asked[0].label }) : replacing ? t('client.requests.replaceFields', { count: asked.length }) : t('client.requests.storeFields', { count: asked.length });
   const site = asked.find(one => one.site)?.site;
   const field = (one, at) => one.multiline
     ? `<textarea id="stored-${at}" name="value-${at}" rows="6" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>`
@@ -803,16 +928,16 @@ function renderStore(row, shell, expiry) {
   app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, title)}
     <dl class="approval-facts">${requestPurpose(row)}</dl>
     ${stepsBlock(row.steps)}
-    ${site ? `<a class="button secondary full setup-link" href="${esc(site)}" target="_blank" rel="noopener noreferrer"><span>${esc(new URL(site).host)} を開く ↗</span></a>` : ''}
-    <form id="store-request-form">${asked.map((one, at) => `<div class="declared-field"><label for="stored-name-${at}">保存名</label><input id="stored-name-${at}" name="name-${at}" value="${esc(one.name)}" aria-describedby="stored-label-${at}" required maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">${one.replace ? `<p class="permission-note replace-note" id="replace-note-${at}" data-name="${esc(one.name)}">既存の「${esc(one.name)}」を置き換えます。</p>` : ''}<label id="stored-label-${at}" for="stored-${at}">${esc(one.label)}</label>${field(one, at)}</div>`).join('')}
-    <p class="permission-note">接続先での有効性や権限は確認しません。登録した値は、アクセスを許可した相手が利用できます。</p>
+    ${site ? `<a class="button secondary full setup-link" href="${esc(site)}" target="_blank" rel="noopener noreferrer"><span>${esc(t('client.requests.openSite', { host: new URL(site).host }))}</span></a>` : ''}
+    <form id="store-request-form">${asked.map((one, at) => `<div class="declared-field"><label for="stored-name-${at}">${esc(t('client.secret.storageName'))}</label><input id="stored-name-${at}" name="name-${at}" value="${esc(one.name)}" aria-describedby="stored-label-${at}" required maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">${one.replace ? `<p class="permission-note replace-note" id="replace-note-${at}" data-name="${esc(one.name)}">${esc(t('client.requests.replaceExisting', { name: one.name }))}</p>` : ''}<label id="stored-label-${at}" for="stored-${at}">${esc(one.label)}</label>${field(one, at)}</div>`).join('')}
+    <p class="permission-note">${esc(t('client.secret.validationNote'))}</p>
     <p class="form-error" role="alert"></p>
-    <button class="button primary full" type="submit">登録する ${icon('arrow')}</button></form>
-    <button class="text-button full" type="button" data-action="deny-request">登録しない</button>${expiry}</section>`);
+    <button class="button primary full" type="submit">${esc(t('client.common.register'))} ${icon('arrow')}</button></form>
+    <button class="text-button full" type="button" data-action="deny-request">${esc(t('client.common.declineRegistration'))}</button>${expiry}</section>`);
   // A replacement the owner renames becomes a new value; the note says which it is now.
   app.querySelectorAll('.replace-note').forEach(note => {
     const nameInput = note.parentElement.querySelector('input[name^="name-"]');
-    const update = () => { note.textContent = nameInput.value === note.dataset.name ? `既存の「${note.dataset.name}」を置き換えます。` : `「${note.dataset.name}」はそのまま残り、「${nameInput.value}」として新しく保管します。`; };
+    const update = () => { note.textContent = nameInput.value === note.dataset.name ? t('client.requests.replaceExisting', { name: note.dataset.name }) : t('client.requests.storeRenamed', { previous: note.dataset.name, name: nameInput.value }); };
     nameInput.addEventListener('input', update);
   });
   bindForm(async (data) => {
@@ -820,38 +945,39 @@ function renderStore(row, shell, expiry) {
     for (const [at] of asked.entries()) entries.push({ name: String(data.get('name-' + at) ?? ''), ...await sealFor(new TextEncoder().encode(String(data.get('value-' + at) ?? '')), row.recipients || []) });
     try { await api(`/v1/requests/${row.id}/grant`, { method: 'POST', data: { entries } }); }
     catch (error) { if ([401, 404].includes(error.status)) await refresh(); throw error; }
-    await refresh(); toast('登録しました。');
+    await refresh(); toast(t('client.common.registered'));
   }, app);
 }
-const accessSummary = '保存データの取得・変更・削除と、接続済みサービスの利用を許可します。';
-const accessScope = '<ul class="access-scope"><li>認証情報とオブジェクトの取得・追加・更新・削除</li><li>接続済みサービスの利用とファンクションの実行</li></ul>';
-const accessExclusions = '接続の追加・解除、他の相手への権限付与、アカウント管理は含みません。';
-const accessDetails = () => `<details class="access-permissions"><summary>許可の詳細</summary>${accessScope}<p>${accessExclusions}</p></details>`;
+const accessSummary = () => t('client.access.summary');
+const accessScope = () => `<ul class="access-scope"><li>${esc(t('client.access.dataScope'))}</li><li>${esc(t('client.access.serviceScope'))}</li></ul>`;
+const accessExclusions = () => t('client.access.exclusions');
+const accessDetails = () => `<details class="access-permissions"><summary>${esc(t('client.access.permissionDetails'))}</summary>${accessScope()}<p>${accessExclusions()}</p></details>`;
 // What one action lets its owner do, in the words of whoever grants it.
-const ACTION_WORDS = {
-  'secret.list': 'シークレットの一覧を見る', 'secret.read': 'シークレットの情報を見る', 'secret.content': 'シークレットの値を読む', 'secret.write': 'シークレットの値を書き換える', 'secret.remove': 'シークレットを削除する',
-  'connection.list': 'サービスとの接続の一覧を見る', 'connection.read': 'サービスとの接続の情報を見る', 'connection.connect': 'サービスに接続する', 'connection.disconnect': 'サービスとの接続を解除する',
-  'object.list': 'オブジェクトの一覧を見る', 'object.read': 'オブジェクトを読む', 'object.write': 'オブジェクトを書き換える', 'object.remove': 'オブジェクトを削除する', 'object.link': 'オブジェクトの共有リンクを作る',
-  'app.use': 'このOAuthアプリで接続する', 'app.write': 'OAuthアプリの設定を変える', 'app.remove': 'OAuthアプリを削除する',
-  'service.write': 'サービスの定義を変える', 'service.remove': 'サービスの定義を削除する',
-  'environment.open': '計算機を立ち上げる', 'environment.exec': '計算機でコマンドを実行する', 'environment.remove': '計算機を片付ける',
-  'principal.export': 'データを書き出す', 'principal.audit-log': '操作の記録を見る', 'principal.relate': '他の相手に権限を渡す', 'principal.issue-key': 'キーを発行する',
-  'principal.inject': '保存した値をコマンドに渡す', 'principal.invoke': 'ファンクションを実行する',
-};
-const actionWords = relation => ACTION_WORDS[relation] ?? { viewer: '見る', editor: '見る・変える' }[relation] ?? relation.replace(/^[a-z_]+\./, '').replace(/-/g, ' ');
+const ACTION_WORDS = () => ({
+  transfer_grant: t('client.permissions.transfer'),
+  'secret.list': t('client.permissions.secretList'), 'secret.read': t('client.permissions.secretRead'), 'secret.content': t('client.permissions.secretContent'), 'secret.write': t('client.permissions.secretWrite'), 'secret.remove': t('client.permissions.secretRemove'),
+  'connection.list': t('client.permissions.connectionList'), 'connection.read': t('client.permissions.connectionRead'), 'connection.connect': t('client.permissions.connectionConnect'), 'connection.disconnect': t('client.permissions.connectionDisconnect'),
+  'object.list': t('client.permissions.objectList'), 'object.read': t('client.permissions.objectRead'), 'object.write': t('client.permissions.objectWrite'), 'object.remove': t('client.permissions.objectRemove'), 'object.link': t('client.permissions.objectLink'),
+  'app.use': t('client.permissions.appUse'), 'app.write': t('client.permissions.appWrite'), 'app.remove': t('client.permissions.appRemove'),
+  'service.write': t('client.permissions.serviceWrite'), 'service.remove': t('client.permissions.serviceRemove'),
+  'environment.open': t('client.permissions.environmentOpen'), 'environment.exec': t('client.permissions.environmentExec'), 'environment.remove': t('client.permissions.environmentRemove'),
+  'principal.export': t('client.permissions.principalExport'), 'principal.audit-log': t('client.permissions.principalAuditLog'), 'principal.relate': t('client.permissions.principalRelate'), 'principal.issue-key': t('client.permissions.principalIssueKey'),
+  'principal.inject': t('client.permissions.principalInject'), 'principal.invoke': t('client.permissions.principalInvoke'),
+});
+const actionWords = relation => ACTION_WORDS()[relation] ?? { viewer: t('client.permissions.viewer'), editor: t('client.permissions.editor') }[relation] ?? relation.replace(/^[a-z_]+\./, '').replace(/-/g, ' ');
 // A relation asked for: to act for the one answering, asked by a key nobody knows yet and confirmed with its code; or
 // one permission onto something, asked by a key already known.
 function renderApproval(row, shell, expiry) {
   const asked = detailOf(row), first = row.to === null, acting = asked.relation === 'agent';
-  const target = row.object ? `<div><dt>対象</dt><dd>${esc(row.object.name || row.object.id)}</dd></div>` : '';
-  const scope = acting ? `${accessScope}<small class="muted block">${accessExclusions}</small>` : `<ul class="access-scope"><li>${esc(actionWords(asked.relation))}</li></ul>`;
-  app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, acting ? 'アクセスを許可する' : '権限を渡す', 'device')}
-    <dl class="approval-facts">${requestPurpose(row)}<div><dt>権限</dt><dd>${scope}</dd></div>${target}
-    <div><dt>期間</dt><dd>${acting ? '今後追加するものも含め、' : ''}取り消すまで有効です。</dd></div></dl>
+  const target = row.object ? `<div><dt>${esc(t('client.access.target'))}</dt><dd>${esc(row.object.name || row.object.id)}</dd></div>` : '';
+  const scope = acting ? `${accessScope()}<small class="muted block">${accessExclusions()}</small>` : `<ul class="access-scope"><li>${esc(actionWords(asked.relation))}</li></ul>`;
+  app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, acting ? t('client.access.allowAccess') : t('client.access.grantPermissions'), 'device')}
+    <dl class="approval-facts">${requestPurpose(row)}<div><dt>${esc(t('client.access.permissions'))}</dt><dd>${scope}</dd></div>${target}
+    <div><dt>${esc(t('client.access.durationLabel'))}</dt><dd>${esc(acting ? t('client.access.durationAll') : t('client.access.duration'))}</dd></div></dl>
     <form id="access-request-form">${first ? codeField() : ''}
     <p class="form-error" role="alert"></p>
-    <button class="button primary full" type="submit"${first ? ' disabled' : ''}>許可する ${icon('arrow')}</button></form>
-    <button class="text-button full" type="button" data-action="deny-request">許可しない</button>${expiry}</section>`);
+    <button class="button primary full" type="submit"${first ? ' disabled' : ''}>${esc(t('client.access.allow'))} ${icon('arrow')}</button></form>
+    <button class="text-button full" type="button" data-action="deny-request">${esc(t('client.access.decline'))}</button>${expiry}</section>`);
   const form = document.querySelector('#access-request-form'), submit = form.querySelector('[type="submit"]');
   const update = () => { submit.disabled = first && !codeComplete(form); };
   form.addEventListener('change', update); form.addEventListener('input', update);
@@ -868,7 +994,7 @@ function renderApproval(row, shell, expiry) {
   });
 }
 function openDialog(content) {
-  dialog.innerHTML = `<button class="dialog-close icon-button" data-action="close-dialog" aria-label="閉じる">${icon('close')}</button>${content}`;
+  dialog.innerHTML = `<button class="dialog-close icon-button" data-action="close-dialog" aria-label="${esc(t('client.common.close'))}">${icon('close')}</button>${content}`;
   if (!dialog.open) dialog.showModal();
 }
 function closeDialog() {
@@ -888,18 +1014,18 @@ function bindForm(handler, container = dialog) {
 }
 // What the owner decides when connecting: which of the service's scopes to give, and which OAuth app to connect
 // through - Foundation's, one of their own, or one someone lent them.
-const appsFor = serviceId => (state.apps || []).filter(app => app.service?.id === serviceId);
+const appsFor = serviceId => (state.apps || []).filter(app => app.service?.id === serviceId).map(presentApp);
 const oauthUsable = service => Boolean(service?.auth_schemes.oauth && (service.auth_schemes.oauth.foundation_app || (!service.auth_schemes.oauth.takes_apps && service.auth_schemes.oauth.available) || appsFor(service.id).length));
 function connectChoices(service, connectionId, appId) {
   const scheme = service.auth_schemes.oauth, reconnecting = connectionId ? connected().find(item => item.id === connectionId) : null;
-  const scopes = scheme.scopes ? `<label for="connect-scopes">${reconnecting ? '追加で許可する権限' : '許可する権限'}（1行に1つ）</label>
-    <textarea id="connect-scopes" name="scopes" rows="3" autocomplete="off" spellcheck="false" placeholder="${esc(service.name)}の権限名"></textarea>
-    <p class="permission-note">${reconnecting ? '今許可している権限はそのまま残ります。' : ''}本人確認のため${scheme.scopes.base.length ? esc(scheme.scopes.base.join('、')) + 'も頼みます。' : '追加で頼む権限はありません。'}${scheme.scopes.documentation_url ? `<a href="${esc(scheme.scopes.documentation_url)}" target="_blank" rel="noopener noreferrer">権限の一覧 ↗</a>` : ''}</p>` : '';
+  const scopes = scheme.scopes ? `<label for="connect-scopes">${esc(reconnecting ? t('client.connections.additionalScopesLabel') : t('client.connections.scopesLabel'))}</label>
+    <textarea id="connect-scopes" name="scopes" rows="3" autocomplete="off" spellcheck="false" placeholder="${esc(t('client.connections.scopePlaceholder', { name: service.name }))}"></textarea>
+    <p class="permission-note">${reconnecting ? esc(t('client.connections.keepScopes')) + ' ' : ''}${esc(scheme.scopes.base.length ? t('client.connections.baseScopes', { scopes: new Intl.ListFormat(i18n.language).format(scheme.scopes.base) }) : t('client.connections.noBaseScopes'))} ${scheme.scopes.documentation_url ? `<a href="${esc(scheme.scopes.documentation_url)}" target="_blank" rel="noopener noreferrer">${esc(t('client.connection.permissionReference'))}</a>` : ''}</p>` : '';
   const apps = appsFor(service.id);
   if (!scheme.takes_apps || !apps.length) return scopes;
   const chosen = appId || reconnecting?.app?.id || (apps.find(app => app.foundation) || apps[0]).id;
-  return scopes + `<label for="connect-app">OAuthアプリ</label><select id="connect-app" name="app">${apps.map(app => `<option value="${esc(app.id)}"${app.id === chosen ? ' selected' : ''}>${esc(app.name)}</option>`).join('')}</select>
-    <p class="permission-note">${esc(service.name)}の同意画面には、このアプリの名前が出ます。ほかの人から共有されたアプリは、その人を信頼できる場合だけ使ってください。</p>`;
+  return scopes + `<label for="connect-app">${esc(t('client.oauth.app'))}</label><select id="connect-app" name="app">${apps.map(app => `<option value="${esc(app.id)}"${app.id === chosen ? ' selected' : ''}>${esc(app.name)}</option>`).join('')}</select>
+    <p class="permission-note">${esc(t('client.apps.consentNotice', { name: service.name }))}</p>`;
 }
 // OAuth apps: what OAuth connections go through. Foundation's are there for anyone; the owner may add their own,
 // and then decides at the service what can be granted and what name the consent screen shows.
@@ -907,72 +1033,72 @@ function connectChoices(service, connectionId, appId) {
 let appsOpen = false;
 function appsSection() {
   // By service, so a service's own app and Foundation's for it sit side by side; Foundation's comes first.
-  const apps = [...(state.apps || [])].sort((a, b) => (a.service?.name || '').localeCompare(b.service?.name || '', 'ja') || Number(b.foundation) - Number(a.foundation) || a.name.localeCompare(b.name, 'ja'));
+  const apps = (state.apps || []).map(presentApp).sort((a, b) => compareText(a.service?.name || '', b.service?.name || '', i18n.language) || Number(b.foundation) - Number(a.foundation) || compareText(a.name, b.name, i18n.language));
   const row = app => {
     const mine = !app.foundation && app.owner_id === state.principal?.id;
-    const detail = app.foundation ? '誰でも使えます。' : mine ? `クライアントID ${esc(app.client_id)}・接続 ${esc(String(app.connections ?? 0))}件` : 'ほかの人から使うことを許可されたアプリ';
+    const detail = app.foundation ? t('client.oauth.availableToEveryone') : mine ? esc(t('client.apps.connectionCount', { id: app.client_id, count: app.connections ?? 0 })) : t('client.oauth.sharedApp');
     return `<article class="agent-row"><div class="connection-identity">${serviceLogo(app.service)}<div class="agent-name"><h3>${esc(app.service?.name || '')}</h3><p>${esc(app.name)}</p></div></div>
       <div class="agent-permissions"><span class="muted">${detail}</span></div>
-      <div class="agent-actions">${mine ? `<button class="text-button" data-action="change-app" data-id="${esc(app.id)}">シークレットを変更</button><button class="text-button danger" data-action="remove-app" data-id="${esc(app.id)}">削除</button>` : ''}</div></article>`;
+      <div class="agent-actions">${mine ? `<button class="text-button" data-action="change-app" data-id="${esc(app.id)}">${esc(t('client.oauth.changeSecret'))}</button><button class="text-button danger" data-action="remove-app" data-id="${esc(app.id)}">${esc(t('client.common.delete'))}</button>` : ''}</div></article>`;
   };
-  return `<details class="resource-section folded-section" id="oauth-apps" aria-labelledby="oauth-apps-title"${appsOpen ? ' open' : ''}><summary><h2 id="oauth-apps-title">OAuthアプリ</h2></summary>
-    <div class="section-heading"><p>ログインして許可する接続は、いずれかのOAuthアプリを通ります。</p><button class="button secondary" data-action="add-app">${icon('plus')} OAuthアプリを追加</button></div>
-    ${apps.length ? `<div class="agent-list">${apps.map(row).join('')}</div>` : '<div class="access-empty"><p>OAuthアプリはありません。</p></div>'}</details>`;
+  return `<details class="resource-section folded-section" id="oauth-apps" aria-labelledby="oauth-apps-title"${appsOpen ? ' open' : ''}><summary><h2 id="oauth-apps-title">${esc(t('client.oauth.app'))}</h2></summary>
+    <div class="section-heading"><p>${esc(t('client.oauth.explanation'))}</p><button class="button secondary" data-action="add-app">${icon('plus')} ${esc(t('client.oauth.add'))}</button></div>
+    ${apps.length ? `<div class="agent-list">${apps.map(row).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.oauth.empty'))}</p></div>`}</details>`;
 }
 // The fields an app of this service needs, and where its registration at the service must send people back.
-const appFields = (service, prefix = 'app') => `${service.auth_schemes.oauth.app_fields.map(field => `<label for="${prefix}-${field.name}">${esc(field.label)}${field.required ? '' : '（任意）'}</label><input id="${prefix}-${field.name}" name="${field.name}"${field.required ? ' required' : ''} autocomplete="off" spellcheck="false"${field.sealed ? ' type="password"' : ''}${field.placeholder ? ` placeholder="${esc(field.placeholder)}"` : ''}>${field.note ? `<p class="permission-note">${esc(field.note)}</p>` : ''}`).join('')}
-  <p class="permission-note">${esc(service.name)}でアプリを作るとき、リダイレクトURLに <code>${esc(location.origin + '/oauth/callback')}</code> を登録してください。${service.console ? `<a href="${esc(service.console)}" target="_blank" rel="noopener noreferrer">アプリを作る画面 ↗</a>` : ''}</p>`;
+const appFields = (service, prefix = 'app') => `${service.auth_schemes.oauth.app_fields.map(field => `<label for="${prefix}-${field.name}">${esc(field.required ? field.label : t('client.common.optionalLabel', { label: field.label }))}</label><input id="${prefix}-${field.name}" name="${field.name}"${field.required ? ' required' : ''} autocomplete="off" spellcheck="false"${field.sealed ? ' type="password"' : ''}${field.placeholder ? ` placeholder="${esc(field.placeholder)}"` : ''}>${field.note ? `<p class="permission-note">${esc(field.note)}</p>` : ''}`).join('')}
+  <p class="permission-note">${esc(t('client.apps.redirectInstruction', { name: service.name, url: location.origin + '/oauth/callback' }))} ${service.console ? `<a href="${esc(service.console)}" target="_blank" rel="noopener noreferrer">${esc(t('client.oauth.openAppConsole'))}</a>` : ''}</p>`;
 const takingApps = () => allServices().filter(service => service.auth_schemes.oauth?.takes_apps);
 function addApp(serviceId, then) {
   const accepting = takingApps();
   const initial = accepting.find(service => service.id === serviceId) || accepting[0];
   if (!initial) return;
-  const body = service => `<label for="app-name">名前</label><input id="app-name" name="name" required maxlength="200" autocomplete="off" value="${esc(service.name)}のアプリ">${appFields(service)}`;
-  openDialog(`<h2 id="dialog-title">OAuthアプリを追加</h2><p>自分で作ったOAuthアプリを通して接続できます。許可できる権限や、同意画面に出る名前は、アプリの設定で決まります。</p>
-    <form><label for="app-service">サービス</label><select id="app-service" name="service">${accepting.map(service => `<option value="${esc(service.id)}"${service.id === initial.id ? ' selected' : ''}>${esc(service.name)}</option>`).join('')}</select>
-    <div class="app-body">${body(initial)}</div><p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加</button></form>`);
+  const body = service => `<label for="app-name">${esc(t('client.common.name'))}</label><input id="app-name" name="name" required maxlength="200" autocomplete="off" value="${esc(t('client.apps.defaultName', { name: service.name }))}">${appFields(service)}`;
+  openDialog(`<h2 id="dialog-title">${esc(t('client.oauth.add'))}</h2><p>${esc(t('client.oauth.addDescription'))}</p>
+    <form><label for="app-service">${esc(t('client.service.title'))}</label><select id="app-service" name="service">${accepting.map(service => `<option value="${esc(service.id)}"${service.id === initial.id ? ' selected' : ''}>${esc(service.name)}</option>`).join('')}</select>
+    <div class="app-body">${body(initial)}</div><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.add'))}</button></form>`);
   const choice = dialog.querySelector('#app-service');
   choice.addEventListener('change', () => { dialog.querySelector('.app-body').innerHTML = body(accepting.find(service => service.id === choice.value)); });
   bindForm(async (form) => {
     const service = accepting.find(item => item.id === form.get('service')), name = String(form.get('name') || '');
     const values = Object.fromEntries(service.auth_schemes.oauth.app_fields.map(({ name }) => [name, String(form.get(name) || '')]));
     await api('/v1/resources?kind=app&name=' + encodeURIComponent(name), { method: 'PUT', data: { service: service.id, ...values } });
-    closeDialog(); await refresh(); toast(name + ' を追加しました。');
+    closeDialog(); await refresh(); toast(t('client.common.addedName', { name: name }));
     then?.(service.id);
   });
 }
 function changeApp(app) {
   const service = serviceById(app.service.id);
-  openDialog(`<h2 id="dialog-title">${esc(app.name)} のシークレットを変更</h2><p>このアプリの接続は、そのまま使えます。</p><form>${appFields(service, 'change')}
-    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">変更</button></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.apps.changeSecretTitle', { name: app.name }))}</h2><p>${esc(t('client.oauth.connectionsUnchanged'))}</p><form>${appFields(service, 'change')}
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.change'))}</button></form>`);
   dialog.querySelector('#change-client_id').value = app.client_id;
   bindForm(async (form) => {
     await api('/v1/resources/' + app.id, { method: 'PATCH', data: Object.fromEntries(service.auth_schemes.oauth.app_fields.map(({ name }) => [name, String(form.get(name) || '')])) });
-    closeDialog(); await refresh(); toast('変更しました。');
+    closeDialog(); await refresh(); toast(t('client.common.changed'));
   });
 }
 // Removing an app stops the connections made through it, as removing it at the service would.
 function removeApp(app) {
   const count = app.connections ?? 0;
-  openDialog(`<h2 id="dialog-title">${esc(app.name)} を削除しますか？</h2><form>
-    <p>${count ? `このアプリで作った接続が${esc(String(count))}件あります。削除すると、別のアプリでつなぎ直すまで使えなくなります。` : 'このアプリで作った接続はありません。'}</p>
-    <p class="permission-note">${esc(app.service?.name || '')}側のアプリは残ります。不要ならそちらでも削除してください。</p><p class="form-error" role="alert"></p>
-    <div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">削除</button></div></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.common.deleteNameTitle', { name: app.name }))}</h2><form>
+    <p>${count ? esc(t('client.apps.removeConnectionsWarning', { count })) : t('client.oauth.noConnectionsThroughApp')}</p>
+    <p class="permission-note">${esc(t('client.apps.remoteAppRemains', { name: app.service?.name || '' }))}</p><p class="form-error" role="alert"></p>
+    <div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">${esc(t('client.common.cancel'))}</button><button type="submit" class="button destructive">${esc(t('client.common.delete'))}</button></div></form>`);
   bindForm(async () => {
     const result = await api('/v1/resources/' + app.id, { method: 'DELETE', data: { confirm: true } });
     closeDialog(); await refresh();
-    toast(result.connections_stopped ? `削除しました。${result.connections_stopped}件の接続がつなぎ直し待ちになりました。` : '削除しました。');
+    toast(result.connections_stopped ? t('client.apps.deletedConnections', { count: result.connections_stopped }) : t('client.common.deleted'));
   });
 }
 // Adding a service: find it among those Foundation knows and those the owner described, or describe one it does not.
 let serviceFilter = '';
 function servicePicker({ title, services, query = '', choose, create, filtered = () => {} }) {
-  const sorted = [...services].sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+  const sorted = [...services].sort((a, b) => compareText(a.name, b.name, i18n.language));
   openDialog(`<h2 id="dialog-title">${esc(title)}</h2>
-    <input id="service-filter" type="search" aria-label="サービスを探す" placeholder="サービスを探す" value="${esc(query)}" autocomplete="off">
+    <input id="service-filter" type="search" aria-label="${esc(t('client.service.search'))}" placeholder="${esc(t('client.service.search'))}" value="${esc(query)}" autocomplete="off">
     <div class="service-grid">${sorted.map(service => `<button class="service-choice" data-id="${esc(service.id)}" data-name="${esc(service.name.toLowerCase())}">${serviceLogo(service)}<span>${esc(service.name)}</span></button>`).join('')}</div>
-    <p class="permission-note" id="service-none" hidden>見つかりません。</p>
-    <button class="text-button" id="create-service">一覧にないサービスを追加</button>`);
+    <p class="permission-note" id="service-none" hidden>${esc(t('client.service.notFound'))}</p>
+    <button class="text-button" id="create-service">${esc(t('client.service.addUnlisted'))}</button>`);
   const filter = dialog.querySelector('#service-filter');
   const apply = () => {
     const word = filter.value.trim().toLowerCase();
@@ -987,11 +1113,11 @@ function servicePicker({ title, services, query = '', choose, create, filtered =
   apply(); if (matchMedia('(pointer: fine)').matches) filter.focus();
 }
 function addService() {
-  servicePicker({ title: 'サービスを追加', services: allServices().filter(service => Object.keys(service.auth_schemes).length || ownService(service.id)), query: serviceFilter,
+  servicePicker({ title: t('client.service.add'), services: allServices().filter(service => Object.keys(service.auth_schemes).length || ownService(service.id)), query: serviceFilter,
     filtered: value => { serviceFilter = value; }, choose: service => chooseService(service.id), create: name => defineService({ name }) });
 }
 // How a connection was made, as the owner did it. The words say what the owner does, not the protocol.
-const WAYS = { oauth: 'ログインして許可する', role: 'IAMロールを作る', token: 'トークンを使う' };
+const WAYS = () => ({ oauth: t('client.connection.signinAndAllow'), role: t('client.connection.createIamRole'), token: t('client.connection.useToken') });
 // The ways a service can be connected, the one that asks least of the owner first: Foundation's own app, a token
 // they paste, then an OAuth app of their own. The first is offered outright; the rest sit under it, lighter.
 function waysOf(service) {
@@ -1003,7 +1129,7 @@ function waysOf(service) {
   if (!oauth && ownService(service.id)) ways.push('configure');
   return ways;
 }
-const OTHER_WAYS = { oauth: service => service.name + 'の画面でログインする', role: () => 'IAMロールを作る', token: () => 'トークンを使う', app: () => '自分のOAuthアプリを使う', configure: () => 'OAuthを設定する' };
+const OTHER_WAYS = { oauth: service => t('client.connections.signInService', { name: service.name }), role: () => t('client.connection.createIamRole'), token: () => t('client.connection.useToken'), app: () => t('client.connection.useOwnOAuthApp'), configure: () => t('client.oauth.configure') };
 function otherWays(service, shown) {
   const rest = waysOf(service).filter(way => way !== shown);
   return rest.length ? `<div class="other-ways">${rest.map(way => `<button class="button secondary full" type="button" data-action="choose-way" data-id="${esc(service.id)}" data-way="${way}">${esc(OTHER_WAYS[way](service))}</button>`).join('')}</div>` : '';
@@ -1013,7 +1139,7 @@ function chooseService(serviceId) {
   if (!service) return;
   const [first] = waysOf(service);
   if (first) connectBy(service, first);
-  else openDialog(`<h2 id="dialog-title">${esc(service.name)}に接続</h2><p>このサービスには、まだ接続する方法がありません。</p>`);
+  else openDialog(`<h2 id="dialog-title">${esc(t('client.connections.connectName', { name: service.name }))}</h2><p>${esc(t('client.service.noConnectionMethods'))}</p>`);
 }
 function connectBy(service, way, connectionId) {
   if (way === 'configure') configureOAuth(service);
@@ -1029,8 +1155,8 @@ function connect(serviceId, connectionId, appId, shown = 'oauth') {
   const service = serviceById(serviceId);
   if (!service) return;
   if (!oauthUsable(service)) { addApp(service.id, id => connect(id, connectionId)); return; }
-  openDialog(`<h2 id="dialog-title">${esc(service.name)}に${connectionId ? '接続し直す' : '接続'}</h2><p>${esc(service.name)}の画面でログインし、アクセスを許可します。</p><form>
-    ${connectChoices(service, connectionId, appId)}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(service.name)}の画面へ ${icon('arrow')}</button></form>${connectionId ? '' : otherWays(service, shown)}`);
+  openDialog(`<h2 id="dialog-title">${esc(t(connectionId ? 'client.connections.reconnectName' : 'client.connections.connectName', { name: service.name }))}</h2><p>${esc(t('client.connections.signInGrant', { name: service.name }))}</p><form>
+    ${connectChoices(service, connectionId, appId)}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.connections.goToService', { name: service.name }))} ${icon('arrow')}</button></form>${connectionId ? '' : otherWays(service, shown)}`);
   bindForm(async (form) => {
     const scopes = String(form.get('scopes') || '').split(/\s+/).filter(Boolean), app = String(form.get('app') || '');
     const result = await api('/v1/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'oauth', ...(connectionId ? { connection_id: connectionId } : {}),
@@ -1041,7 +1167,7 @@ function connect(serviceId, connectionId, appId, shown = 'oauth') {
 // Made at the service and pasted here: a token, or a role made from a link Foundation prepares. The service says
 // what is pasted and what to do there first; the link is its page for tokens, or one made for this connection.
 // Pasting a token again replaces its value.
-const pastedFields = (scheme, prefix) => scheme.fields.map(field => `<label for="${prefix}-${esc(field.name)}">${esc(field.label)}${field.required === false ? '（任意）' : ''}</label><input id="${prefix}-${esc(field.name)}" name="${esc(field.name)}"${field.required === false ? '' : ' required'}${field.secret ? ' type="password"' : ''} autocomplete="off" spellcheck="false"${field.placeholder ? ` placeholder="${esc(field.placeholder)}"` : ''}>${field.note ? `<p class="permission-note">${esc(field.note)}</p>` : ''}`).join('');
+const pastedFields = (scheme, prefix) => scheme.fields.map(field => `<label for="${prefix}-${esc(field.name)}">${esc(field.required === false ? t('client.common.optionalLabel', { label: field.label }) : field.label)}</label><input id="${prefix}-${esc(field.name)}" name="${esc(field.name)}"${field.required === false ? '' : ' required'}${field.secret ? ' type="password"' : ''} autocomplete="off" spellcheck="false"${field.placeholder ? ` placeholder="${esc(field.placeholder)}"` : ''}>${field.note ? `<p class="permission-note">${esc(field.note)}</p>` : ''}`).join('');
 const pastedValues = (scheme, form) => Object.fromEntries(scheme.fields.map(field => [field.name, String(form.get(field.name) || '').trim()]).filter(([, value]) => value));
 const serviceLink = (href, label) => href ? `<a class="button secondary full" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>` : '';
 const instructions = scheme => scheme.instructions ? `<p class="permission-note">${esc(scheme.instructions)}</p>` : '';
@@ -1050,9 +1176,9 @@ async function connectByPaste(service, way, { connectionId, requestId } = {}) {
   // A role's link is made for this connection; what is pasted finishes that flow.
   const started = way === 'role' ? await api('/v1/connections', { method: 'POST', data: requestId ? { request_id: requestId } : { service: service.id, auth_scheme: 'role', ...(connectionId ? { connection_id: connectionId } : {}) } }) : null;
   const words = way === 'role'
-    ? { title: name + 'でIAMロールを作る', link: service.name + 'の画面を開く', paste: 'できあがった値を貼り付けます。', submit: '接続する ' + icon('arrow') }
-    : { title: replacing ? esc(replacing.label) + 'の値を差し替える' : name + 'にトークンで接続', lead: name + 'で作ったトークンを貼り付けます。', link: service.name + 'でトークンを作る', submit: replacing ? '差し替える' : '接続する' };
-  const naming = way === 'token' && !replacing ? `<label for="pasted-name">名前</label><input id="pasted-name" name="name" maxlength="80" autocomplete="off" value="${name}のトークン">` : '';
+    ? { title: esc(t('client.connections.createRole', { name: service.name })), link: t('client.connections.openService', { name: service.name }), paste: t('client.connection.pasteCreatedValue'), submit: esc(t('client.connection.connect')) + ' ' + icon('arrow') }
+    : { title: replacing ? esc(t('client.connections.replaceValueTitle', { name: replacing.label })) : esc(t('client.connections.tokenTitle', { name: service.name })), lead: esc(t('client.connections.tokenLead', { name: service.name })), link: t('client.connections.createToken', { name: service.name }), submit: replacing ? t('client.common.replaceValue') : t('client.connection.connect') };
+  const naming = way === 'token' && !replacing ? `<label for="pasted-name">${esc(t('client.common.name'))}</label><input id="pasted-name" name="name" maxlength="80" autocomplete="off" value="${esc(t('client.connections.tokenDefaultName', { name: service.name }))}">` : '';
   openDialog(`<h2 id="dialog-title">${words.title}</h2>${words.lead ? `<p>${words.lead}</p>` : ''}${serviceLink(started ? started.url : scheme.console, words.link)}${instructions(scheme)}
     <form>${words.paste ? `<p>${words.paste}</p>` : ''}${naming}${pastedFields(scheme, 'pasted')}
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${words.submit}</button></form>${replacing || requestId ? '' : otherWays(service, way)}`);
@@ -1060,7 +1186,7 @@ async function connectByPaste(service, way, { connectionId, requestId } = {}) {
     const fields = pastedValues(scheme, form), label = String(form.get('name') || '').trim();
     if (started) await api('/v1/connections/complete', { method: 'POST', data: { state: started.state, fields } });
     else await api('/v1/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'token', fields, ...(replacing ? { connection_id: replacing.id } : label ? { name: label } : {}) } });
-    closeDialog(); await refresh(); toast(replacing && !started ? '差し替えました。' : service.name + 'に接続しました。');
+    closeDialog(); await refresh(); toast(replacing && !started ? t('client.connection.valueReplaced') : t('client.connections.connectedName', { name: service.name }));
   });
 }
 async function addServiceScheme(service, way, definition) {
@@ -1069,9 +1195,9 @@ async function addServiceScheme(service, way, definition) {
 }
 // Registering the service and choosing how to connect it are separate steps.
 function defineService({ name = '', created } = {}) {
-  openDialog(`<h2 id="dialog-title">サービスを追加</h2><form>
-    <label for="define-name">サービス名</label><input id="define-name" name="name" required maxlength="80" autocomplete="off" placeholder="例: Notes" value="${esc(name)}">
-    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加</button></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.service.add'))}</h2><form>
+    <label for="define-name">${esc(t('client.service.name'))}</label><input id="define-name" name="name" required maxlength="80" autocomplete="off" placeholder="${esc(t('client.service.namePlaceholder'))}" value="${esc(name)}">
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.add'))}</button></form>`);
   bindForm(async (form) => {
     const name = String(form.get('name') || '').trim();
     const result = await api('/v1/resources?kind=service&name=' + encodeURIComponent(name), {
@@ -1079,16 +1205,16 @@ function defineService({ name = '', created } = {}) {
     });
     const service = rememberService(result.resource);
     if (created) { created(service); return; }
-    closeDialog(); await refresh(); toast(name + ' を追加しました。');
+    closeDialog(); await refresh(); toast(t('client.common.addedName', { name: name }));
   });
 }
 function configureOAuth(service) {
-  openDialog(`<h2 id="dialog-title">${esc(service.name)}のOAuth設定</h2><form>
-    <label for="define-authorize">認可エンドポイントのURL</label><input id="define-authorize" name="authorize" required autocomplete="off" spellcheck="false" placeholder="https://example.com/oauth/authorize">
-    <label for="define-token">トークンエンドポイントのURL</label><input id="define-token" name="token" required autocomplete="off" spellcheck="false" placeholder="https://example.com/oauth/token">
-    <label for="define-identity">利用者情報のURL（任意）</label><input id="define-identity" name="identity" autocomplete="off" spellcheck="false"><p class="permission-note">入れると、接続したアカウントを確かめ、一覧に名前を出します。</p>
-    <label for="define-revoke">取り消しのURL（任意）</label><input id="define-revoke" name="revoke" autocomplete="off" spellcheck="false"><p class="permission-note">入れると、接続の解除のときにサービス側の許可も取り消せます。</p>
-    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">次へ ${icon('arrow')}</button></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.services.oauthSettings', { name: service.name }))}</h2><form>
+    <label for="define-authorize">${esc(t('client.oauth.authorizationUrl'))}</label><input id="define-authorize" name="authorize" required autocomplete="off" spellcheck="false" placeholder="https://example.com/oauth/authorize">
+    <label for="define-token">${esc(t('client.oauth.tokenUrl'))}</label><input id="define-token" name="token" required autocomplete="off" spellcheck="false" placeholder="https://example.com/oauth/token">
+    <label for="define-identity">${esc(t('client.oauth.identityUrl'))}</label><input id="define-identity" name="identity" autocomplete="off" spellcheck="false"><p class="permission-note">${esc(t('client.oauth.identityUrlNote'))}</p>
+    <label for="define-revoke">${esc(t('client.oauth.revocationUrl'))}</label><input id="define-revoke" name="revoke" autocomplete="off" spellcheck="false"><p class="permission-note">${esc(t('client.oauth.revocationUrlNote'))}</p>
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.next'))} ${icon('arrow')}</button></form>`);
   bindForm(async (form) => {
     const value = name => String(form.get(name) || '').trim();
     const oauth = { authorize: value('authorize'), token: value('token'), scopes: { base: [] },
@@ -1101,38 +1227,38 @@ function configureOAuth(service) {
 // Disconnect only this connection; secrets kept by hand remain.
 function disconnect(connection) {
   const revoke = connection.can_revoke
-    ? `<label class="check"><input type="checkbox" name="revoke" checked> ${esc(connection.service.name)}側の許可も取り消す</label>`
-    : `<p class="permission-note">${esc(connection.service.name)}側の${({ role: 'IAMロール', token: 'トークン' })[connection.auth_scheme] || '許可'}は残ります。不要なら${esc(connection.service.name)}で削除してください。</p>`;
-  openDialog(`<h2 id="dialog-title">${esc(connection.label)} の接続を解除しますか？</h2><form>
-    <p>この接続から認証情報を取得できなくなります。シークレットに預けた値は残ります。</p>
-    <p class="permission-note">${esc(revocationNote)}</p>${revoke}<p class="form-error" role="alert"></p>
-    <div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">接続を解除</button></div></form>`);
+    ? `<label class="check"><input type="checkbox" name="revoke" checked> ${esc(t('client.connections.revokeRemote', { name: connection.service.name }))}</label>`
+    : `<p class="permission-note">${esc(t(connection.auth_scheme === 'role' ? 'client.connections.remoteRoleRemains' : connection.auth_scheme === 'token' ? 'client.connections.remoteTokenRemains' : 'client.connections.remotePermissionRemains', { name: connection.service.name }))}</p>`;
+  openDialog(`<h2 id="dialog-title">${esc(t('client.connections.disconnectTitle', { name: connection.label }))}</h2><form>
+    <p>${esc(t('client.connection.disconnectWarning'))}</p>
+    <p class="permission-note">${esc(revocationNote())}</p>${revoke}<p class="form-error" role="alert"></p>
+    <div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">${esc(t('client.common.cancel'))}</button><button type="submit" class="button destructive">${esc(t('client.connection.disconnect'))}</button></div></form>`);
   bindForm(async (form) => {
     const result = await api('/v1/resources/' + encodeURIComponent(connection.id), { method: 'DELETE', data: { revoke: form.get('revoke') === 'on' } });
     closeDialog(); await refresh();
-    toast(result.service_revoked === false ? '解除しました。サービス側の許可は取り消せませんでした。' : '解除しました。');
+    toast(result.service_revoked === false ? t('client.connection.disconnectedWithoutRevoking') : t('client.connection.disconnected'));
   });
 }
 function addKey() {
-  openDialog(`<h2 id="dialog-title">アクセスを許可する相手を追加</h2><p>${accessSummary}</p><form><label for="agent-name">名前</label><input id="agent-name" name="name" placeholder="laptop など" required maxlength="80" autocomplete="off"><p class="permission-note">今後追加するものも含め、取り消すまで有効です。</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加してキーを発行</button></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.access.addPrincipal'))}</h2><p>${accessSummary()}</p><form><label for="agent-name">${esc(t('client.common.name'))}</label><input id="agent-name" name="name" placeholder="${esc(t('client.access.namePlaceholder'))}" required maxlength="80" autocomplete="off"><p class="permission-note">${esc(t('client.access.durationIncludingFuture'))}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.access.addAndIssueKey'))}</button></form>`);
   bindForm(async (form) => {
     const result = await api('/v1/principals', { method: 'POST', data: { name: form.get('name'), agent: true, key: true } });
     await refresh(); if (!state) return;
-    openDialog(`<h2 id="dialog-title">${esc(result.principal.name)} のアクセスキー</h2><p>キーは一度だけ表示します。AIを動かす環境の秘密情報として保管してください。</p><label for="agent-token">アクセスキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button><label for="api-url">接続先</label><input id="api-url" readonly value="${esc(location.origin)}/v1"><p class="permission-note">キーを会話や共有ファイルに貼り付けないでください。</p><button class="button primary full" data-action="close-dialog">閉じる</button>`);
+    openDialog(`<h2 id="dialog-title">${esc(t('client.principals.accessKeyTitle', { name: result.principal.name }))}</h2><p>${esc(t('client.access.keyStorageWarning'))}</p><label for="agent-token">${esc(t('client.access.key'))}</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">${esc(t('client.access.copyKey'))}</button><label for="api-url">${esc(t('client.access.endpoint'))}</label><input id="api-url" readonly value="${esc(location.origin)}/v1"><p class="permission-note">${esc(t('client.access.keySharingWarning'))}</p><button class="button primary full" data-action="close-dialog">${esc(t('client.common.close'))}</button>`);
   });
 }
 const principalById = id => (state.actors || []).find(item => item.id === id) || (state.principals || []).find(item => item.id === id);
 // Machines lent to this account and still running: who each acts as, until when, and the month's computing.
 function environmentsSection() {
   const running = state.environments || [], compute = state.compute;
-  const minutes = seconds => Math.ceil(seconds / 60).toLocaleString('ja-JP') + ' 分';
-  const status = { starting: '準備中', ready: '待機中', busy: '実行中', stopping: '停止確認中（自動再試行）' };
-  const identity = id => !id ? '権限なし' : id === state.user.id ? 'あなたとして動作' : (principalById(id)?.name || '登録した相手') + ' として動作';
+  const minutes = seconds => t('client.environments.minutes', { count: Math.ceil(seconds / 60) });
+  const status = { starting: t('client.environment.starting'), ready: t('client.environment.ready'), busy: t('client.environment.busy'), stopping: t('client.environment.stopping') };
+  const identity = id => !id ? t('client.environment.noPermissions') : id === state.user.id ? t('client.environment.actingAsYou') : t('client.environments.actingAs', { name: principalById(id)?.name || t('client.principals.registeredPerson') });
   const row = item => `<article class="agent-row access-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${esc(status[item.status] || item.status)} · ${esc(identity(item.identity))}</p></div>
-    <div class="agent-permissions"><span class="muted">${esc(new Date(item.expires_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }))} まで</span></div>
-    <div class="agent-actions"><button class="text-button danger" data-action="close-environment" data-id="${esc(item.id)}">閉じる</button></div></article>`;
-  return `<section class="resource-section" aria-labelledby="environments-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><h2 id="environments-title">環境</h2></div>${compute ? `<span class="muted">今月の計算時間 ${esc(minutes(compute.used_seconds))} / ${esc(minutes(compute.limit_seconds))}</span>` : ''}</div>
-    ${running.length ? `<div class="agent-list">${running.map(row).join('')}</div>` : '<div class="access-empty"><p>開いている環境はありません。</p></div>'}</section>`;
+    <div class="agent-permissions"><span class="muted">${esc(t('client.environments.until', { time: formatDate(item.expires_at, i18n.language, { hour: '2-digit', minute: '2-digit' }) }))}</span></div>
+    <div class="agent-actions"><button class="text-button danger" data-action="close-environment" data-id="${esc(item.id)}">${esc(t('client.common.close'))}</button></div></article>`;
+  return `<section class="resource-section" aria-labelledby="environments-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><h2 id="environments-title">${esc(t('client.environment.title'))}</h2></div>${compute ? `<span class="muted">${esc(t('client.environments.monthlyCompute', { used: minutes(compute.used_seconds), limit: minutes(compute.limit_seconds) }))}</span>` : ''}</div>
+    ${running.length ? `<div class="agent-list">${running.map(row).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.environment.empty'))}</p></div>`}</section>`;
 }
 async function principalDetails(id) {
   const owned = (state.principals || []).some(item => item.id === id);
@@ -1140,19 +1266,19 @@ async function principalDetails(id) {
   if (!item) return;
   const allowed = owned ? item.acts_for.includes(state.user.id) : true;
   const keys = item.keys;
-  openDialog(`<div class="principal-heading"><h2 id="dialog-title">${esc(item.name)}</h2>${owned ? `<button class="icon-button" data-action="rename-principal" data-id="${esc(id)}" aria-label="名前を編集" title="名前を編集">${icon('edit')}</button>` : ''}</div>
-    <p>${allowed ? 'アクセス許可済み' : '全体へのアクセス許可なし'}</p>
-    ${allowed ? `<p>${accessSummary.replace('許可します。', '許可しています。')}</p>${accessDetails()}` : ''}
-    ${owned ? `<section class="principal-keys"><div class="section-heading"><h3>アクセスキー</h3><button class="text-button" data-action="issue-key" data-id="${esc(id)}">キーを発行</button></div>
-      ${keys.length ? `<ul class="connection-list">${keys.map(key => `<li><div><code>${esc(key.id.slice(0, 8))}</code><p>${key.environment_id ? '環境用（閉じると消えます）' : '発行 ' + esc(new Date(key.created_at).toLocaleString('ja-JP'))}</p></div><button class="text-button danger" data-action="revoke-key" data-id="${esc(id)}" data-key="${esc(key.id)}">失効</button></li>`).join('')}</ul>` : '<p class="muted">キーはありません。</p>'}</section>
-      <div class="principal-delete"><button class="text-button danger" data-action="remove-principal" data-id="${esc(id)}">登録を削除</button></div>` : ''}`);
+  openDialog(`<div class="principal-heading"><h2 id="dialog-title">${esc(item.name)}</h2>${owned ? `<button class="icon-button" data-action="rename-principal" data-id="${esc(id)}" aria-label="${esc(t('client.common.editName'))}" title="${esc(t('client.common.editName'))}">${icon('edit')}</button>` : ''}</div>
+    <p>${allowed ? t('client.access.allowed') : t('client.access.noFullAccess')}</p>
+    ${allowed ? `<p>${t('client.access.grantedSummary')}</p>${accessDetails()}` : ''}
+    ${owned ? `<section class="principal-keys"><div class="section-heading"><h3>${esc(t('client.access.key'))}</h3><button class="text-button" data-action="issue-key" data-id="${esc(id)}">${esc(t('client.access.issueKey'))}</button></div>
+      ${keys.length ? `<ul class="connection-list">${keys.map(key => `<li><div><code>${esc(key.id.slice(0, 8))}</code><p>${key.environment_id ? t('client.access.environmentKey') : esc(t('client.principals.keyIssuedAt', { date: formatDate(key.created_at, i18n.language) }))}</p></div><button class="text-button danger" data-action="revoke-key" data-id="${esc(id)}" data-key="${esc(key.id)}">${esc(t('client.access.revokeKey'))}</button></li>`).join('')}</ul>` : `<p class="muted">${esc(t('client.access.noKeys'))}</p>`}</section>
+      <div class="principal-delete"><button class="text-button danger" data-action="remove-principal" data-id="${esc(id)}">${esc(t('client.access.deleteRegistration'))}</button></div>` : ''}`);
 }
 function renamePrincipal(item) {
-  openDialog(`<h2 id="dialog-title">名前を変更</h2><form><label for="agent-name">名前</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off" value="${esc(item.name)}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.common.changeName'))}</h2><form><label for="agent-name">${esc(t('client.common.name'))}</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off" value="${esc(item.name)}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.save'))}</button></form>`);
   bindForm(async (form) => { await api(`/v1/principals/${item.id}`, { method: 'PATCH', data: { name: form.get('name') } }); await refresh(); await principalDetails(item.id); });
 }
 function renameMe() {
-  openDialog(`<h2 id="dialog-title">名前を変更</h2><form><label for="my-name">名前</label><input id="my-name" name="name" required maxlength="80" autocomplete="name" value="${esc(state.principal.name || '')}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.common.changeName'))}</h2><form><label for="my-name">${esc(t('client.common.name'))}</label><input id="my-name" name="name" required maxlength="80" autocomplete="name" value="${esc(state.principal.name || '')}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.save'))}</button></form>`);
   bindForm(async (form) => {
     const { principal } = await api('/v1/principals/me', { method: 'PATCH', data: { name: form.get('name') } });
     // The device's passkey list is told the new name too, where the browser can (the WebAuthn signal API).
@@ -1163,7 +1289,7 @@ function renameMe() {
 // Everything the account has, given to another principal: each resource and each owned principal, one by one, as
 // the API gives them. A secret goes with an envelope made here when the key is open; otherwise Foundation makes one.
 function transferAll() {
-  openDialog(`<h2 id="dialog-title">持ち物をすべて渡す</h2><form><label for="transfer-to">渡す相手の ID</label><input id="transfer-to" name="to" required maxlength="64" autocomplete="off" spellcheck="false"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">渡す</button></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.transferAll.title'))}</h2><form><label for="transfer-to">${esc(t('client.transferAll.recipientId'))}</label><input id="transfer-to" name="to" required maxlength="64" autocomplete="off" spellcheck="false"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.transferAll.action'))}</button></form>`);
   bindForm(async (form) => {
     const to = String(form.get('to') || '').trim();
     const { key } = await api('/v1/principals/' + encodeURIComponent(to) + '/public-key');
@@ -1177,11 +1303,11 @@ function transferAll() {
         try { const kept = await api('/v1/resources/' + item.id + '/content'); if (kept.envelope) envelope = b64(await sealing.seal(await openKey(kept), unb64(key.public_key))); } catch {}
       }
       try { await api('/v1/resources/' + item.id + '/transfer', { method: 'POST', data: { to, ...(envelope ? { envelope } : {}) } }); }
-      catch (error) { failures.push(item.name + '：' + error.message); }
+      catch (error) { failures.push(t('client.transferAll.itemFailure', { name: item.name, message: error.message })); }
     }
     for (const item of (state.principals || []).filter(item => item.id !== to)) {
       try { await api('/v1/principals/' + item.id + '/transfer', { method: 'POST', data: { to } }); }
-      catch (error) { failures.push(item.name + '：' + error.message); }
+      catch (error) { failures.push(t('client.transferAll.itemFailure', { name: item.name, message: error.message })); }
     }
     if (failures.length) throw new Error(failures.join('\n'));
     closeDialog(); await refresh();
@@ -1190,20 +1316,20 @@ function transferAll() {
 async function issueKey(item) {
   const result = await api(`/v1/principals/${item.id}/keys`, { method: 'POST', data: {} });
   await refresh();
-  openDialog(`<h2 id="dialog-title">${esc(item.name)} のアクセスキー</h2><p>キーは一度だけ表示します。</p><label for="agent-token">アクセスキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button><button class="button primary full" data-action="principal-details" data-id="${esc(item.id)}">完了</button>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.principals.accessKeyTitle', { name: item.name }))}</h2><p>${esc(t('client.access.keyShownOnce'))}</p><label for="agent-token">${esc(t('client.access.key'))}</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">${esc(t('client.access.copyKey'))}</button><button class="button primary full" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.done'))}</button>`);
 }
 function revokeKey(item, key) {
-  openDialog(`<h2 id="dialog-title">このキーを失効させますか？</h2><p>${esc(item.name)} · ${esc(key.slice(0, 8))}</p><form><p>このキーは使えなくなります。他のキーとアクセス許可は残ります。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="principal-details" data-id="${esc(item.id)}">キャンセル</button><button type="submit" class="button destructive">失効させる</button></div></form>`);
-  bindForm(async () => { await api(`/v1/principals/${item.id}/keys/${key}`, { method: 'DELETE', data: {} }); await refresh(); await principalDetails(item.id); toast('キーを失効させました。'); });
+  openDialog(`<h2 id="dialog-title">${esc(t('client.access.confirmRevokeKey'))}</h2><p>${esc(item.name)} · ${esc(key.slice(0, 8))}</p><form><p>${esc(t('client.access.revokeKeyWarning'))}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.cancel'))}</button><button type="submit" class="button destructive">${esc(t('client.access.confirmRevoke'))}</button></div></form>`);
+  bindForm(async () => { await api(`/v1/principals/${item.id}/keys/${key}`, { method: 'DELETE', data: {} }); await refresh(); await principalDetails(item.id); toast(t('client.access.keyRevoked')); });
 }
 function addIntegration() {
-  openDialog(`<h2 id="dialog-title">アプリを登録</h2><form>
-    <label for="integration-name">名前</label><input id="integration-name" name="name" placeholder="アプリの名前" required maxlength="80" autocomplete="off">
-    <label for="integration-return">戻り先のURL</label><input id="integration-return" name="return_url" type="url" required placeholder="https://example.com/foundation" autocomplete="off">
-    <p class="permission-note">依頼はこのページで開かれ、終わるとここに戻ります。</p>
-    <label for="integration-refresh">リンクが使えないときの戻り先（省略可）</label><input id="integration-refresh" name="refresh_url" type="url" autocomplete="off">
-    <label for="integration-webhook">完了の通知先（省略可）</label><input id="integration-webhook" name="webhook_url" type="url" autocomplete="off">
-    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">アプリキーを発行</button></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.integration.register'))}</h2><form>
+    <label for="integration-name">${esc(t('client.common.name'))}</label><input id="integration-name" name="name" placeholder="${esc(t('client.integration.namePlaceholder'))}" required maxlength="80" autocomplete="off">
+    <label for="integration-return">${esc(t('client.integration.returnUrl'))}</label><input id="integration-return" name="return_url" type="url" required placeholder="https://example.com/foundation" autocomplete="off">
+    <p class="permission-note">${esc(t('client.integration.returnUrlNote'))}</p>
+    <label for="integration-refresh">${esc(t('client.integration.refreshUrl'))}</label><input id="integration-refresh" name="refresh_url" type="url" autocomplete="off">
+    <label for="integration-webhook">${esc(t('client.integration.webhookUrl'))}</label><input id="integration-webhook" name="webhook_url" type="url" autocomplete="off">
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.integration.issueKey'))}</button></form>`);
   bindForm(async (form) => {
     // An app is a principal of this person's making, with settings for handing its users back, and a key of its own.
     const made = (await api('/v1/principals', { method: 'POST', data: { name: form.get('name') } })).principal;
@@ -1211,18 +1337,18 @@ function addIntegration() {
     const issued = await api(`/v1/principals/${made.id}/keys`, { method: 'POST', data: {} });
     const result = { ...made, token: issued.token, webhook_secret: settings.webhook_secret };
     await refresh(); if (!state) return;
-    openDialog(`<h2 id="dialog-title">${esc(result.name)} のアプリキー</h2><p>キーは一度だけ表示します。</p><label for="agent-token">アプリキー</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">キーをコピー</button>
-      ${result.webhook_secret ? `<label for="webhook-secret">通知の署名キー</label><textarea id="webhook-secret" rows="2" readonly spellcheck="false">${esc(result.webhook_secret)}</textarea><p class="permission-note">通知が本物かどうかを、この値で確かめます。</p>` : ''}
-      <button class="button primary full" data-action="close-dialog">閉じる</button>`);
+    openDialog(`<h2 id="dialog-title">${esc(t('client.integrations.keyTitle', { name: result.name }))}</h2><p>${esc(t('client.access.keyShownOnce'))}</p><label for="agent-token">${esc(t('client.integration.key'))}</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">${esc(t('client.access.copyKey'))}</button>
+      ${result.webhook_secret ? `<label for="webhook-secret">${esc(t('client.integration.webhookSecret'))}</label><textarea id="webhook-secret" rows="2" readonly spellcheck="false">${esc(result.webhook_secret)}</textarea><p class="permission-note">${esc(t('client.integration.webhookSecretNote'))}</p>` : ''}
+      <button class="button primary full" data-action="close-dialog">${esc(t('client.common.close'))}</button>`);
   });
 }
 function removePrincipal(item) {
-  openDialog(`<h2 id="dialog-title">登録を削除しますか？</h2><p>${esc(item.name)}</p><form><p>この相手の全キーと、この相手自身の保存データを削除します。他のアカウントへのアクセスも失われます。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="principal-details" data-id="${esc(item.id)}">キャンセル</button><button type="submit" class="button destructive">削除する</button></div></form>`);
-  bindForm(async () => { await api(`/v1/principals/${item.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('登録を削除しました。'); });
+  openDialog(`<h2 id="dialog-title">${esc(t('client.access.confirmDeleteRegistration'))}</h2><p>${esc(item.name)}</p><form><p>${esc(t('client.access.deleteRegistrationWarning'))}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.cancel'))}</button><button type="submit" class="button destructive">${esc(t('client.common.confirmDelete'))}</button></div></form>`);
+  bindForm(async () => { await api(`/v1/principals/${item.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast(t('client.access.registrationDeleted')); });
 }
 function revokeAccess(item) {
-  openDialog(`<h2 id="dialog-title">アクセス許可を取り消しますか？</h2><p>${esc(item.name)}</p><form><p>あなたのデータへのアクセスを停止し、あなた宛ての未完了の依頼を取り消します。</p><p class="permission-note">取得済みの外部サービスの認証情報は、接続先で失効させてください。</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">許可を取り消す</button></div></form>`);
-  bindForm(async () => { await api(`/v1/principals/${item.id}/access`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast('アクセス許可を取り消しました。'); });
+  openDialog(`<h2 id="dialog-title">${esc(t('client.access.confirmRevokeAccess'))}</h2><p>${esc(item.name)}</p><form><p>${esc(t('client.access.revokeAccessWarning'))}</p><p class="permission-note">${esc(t('client.access.revokeExternalCredentials'))}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">${esc(t('client.common.cancel'))}</button><button type="submit" class="button destructive">${esc(t('client.access.revokePermission'))}</button></div></form>`);
+  bindForm(async () => { await api(`/v1/principals/${item.id}/access`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast(t('client.access.revoked')); });
 }
 // Sealing for everyone a secret of the owner's is for: those the server names (the owner, and Foundation when it
 // acts for them), and whoever already had the secret's key.
@@ -1278,15 +1404,15 @@ async function handEnvelope(row) {
 // The name and the way it reaches a command, changed without the value ever being handed back.
 // Something the owner has in hand, put there without an agent asking for it first.
 function addSecret() {
-  openDialog(`<h2 id="dialog-title">シークレットを追加</h2>
-    <form><label for="new-name">名前</label><input id="new-name" name="name" required maxlength="200" placeholder="任意の名前" autocomplete="off" spellcheck="false">
-    <label for="new-value">値</label><textarea id="new-value" name="value" rows="4" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>
-    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加</button></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.secret.add'))}</h2>
+    <form><label for="new-name">${esc(t('client.common.name'))}</label><input id="new-name" name="name" required maxlength="200" placeholder="${esc(t('client.secret.namePlaceholder'))}" autocomplete="off" spellcheck="false">
+    <label for="new-value">${esc(t('client.secret.value'))}</label><textarea id="new-value" name="value" rows="4" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.add'))}</button></form>`);
   bindForm(async (form) => {
     const name = form.get('name');
     const { recipients } = await api('/v1/recipients');
     await api('/v1/resources?' + new URLSearchParams({ kind: 'secret', name }), { method: 'PUT', data: await sealFor(new TextEncoder().encode(String(form.get('value'))), recipients) });
-    closeDialog(); await refresh(); toast(name + ' を追加しました。');
+    closeDialog(); await refresh(); toast(t('client.common.addedName', { name: name }));
   });
 }
 function editSecret(entry, trigger) {
@@ -1294,10 +1420,10 @@ function editSecret(entry, trigger) {
   const row = trigger.closest('.secret-row'), heading = row.querySelector('h3');
   const actions = [...row.querySelectorAll('button')];
   const form = document.createElement('form');
-  form.className = 'secret-name-editor'; form.setAttribute('aria-label', '名前の変更');
-  form.innerHTML = `<div class="secret-name-field"><input name="name" aria-label="名前" required maxlength="200" value="${esc(entry.name)}" autocomplete="off" autocapitalize="off" spellcheck="false">
-    <button class="icon-button save-name" type="submit" aria-label="保存" title="保存">${icon('check')}</button>
-    <button class="icon-button" type="button" aria-label="キャンセル" title="キャンセル">${icon('close')}</button></div><p class="form-error" role="alert"></p>`;
+  form.className = 'secret-name-editor'; form.setAttribute('aria-label', t('client.common.rename'));
+  form.innerHTML = `<div class="secret-name-field"><input name="name" aria-label="${esc(t('client.common.name'))}" required maxlength="200" value="${esc(entry.name)}" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <button class="icon-button save-name" type="submit" aria-label="${esc(t('client.common.save'))}" title="${esc(t('client.common.save'))}">${icon('check')}</button>
+    <button class="icon-button" type="button" aria-label="${esc(t('client.common.cancel'))}" title="${esc(t('client.common.cancel'))}">${icon('close')}</button></div><p class="form-error" role="alert"></p>`;
   heading.hidden = true; heading.after(form); row.classList.add('renaming');
   actions.forEach(button => { button.disabled = true; });
   trigger.hidden = true;
@@ -1328,7 +1454,7 @@ function editSecret(entry, trigger) {
       const next = template.content.firstElementChild;
       row.replaceWith(next); bindSecretValue(saved, next);
       next.querySelector('[data-action="edit-secret"]').focus();
-      toast('名前を変更しました。');
+      toast(t('client.common.renamed'));
       resumeRefresh();
     } catch (failure) { if (form.isConnected) { error.textContent = failure.message; input.focus(); } }
     finally {
@@ -1354,17 +1480,17 @@ function bindSecretValue(entry, row) {
     busy = true; lock(true); panel.setAttribute('aria-busy', 'true');
     panel.querySelectorAll('button').forEach(button => { button.disabled = true; });
     try {
-      const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
+      const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store', headers: { 'X-Foundation-Locale': i18n.language } });
       if (response.status === 401) await showSignin();
-      if (!response.ok) throw new Error('値を取得できませんでした。');
+      if (!response.ok) throw new Error(t('client.secret.loadFailed'));
       const kept = await response.json();
-      if (!kept.envelope || !own) throw new Error('値を取得できませんでした。');
+      if (!kept.envelope || !own) throw new Error(t('client.secret.loadFailed'));
       const bytes = await sealing.openContent(await openKey(kept), unb64(kept.content));
       if (!panel.isConnected) return false;
       value = bytes; text = decode(value); binary = text === null; etag = response.headers.get('etag'); recipients = kept.recipients;
       return true;
     } catch (error) {
-      if (panel.isConnected) panel.querySelector('[role="alert"]').textContent = error instanceof TypeError ? '接続できませんでした。' : error.message;
+      if (panel.isConnected) panel.querySelector('[role="alert"]').textContent = error instanceof TypeError ? t('client.errors.connectionFailed') : error.message;
       return false;
     } finally {
       busy = false; lock(false); panel.removeAttribute('aria-busy');
@@ -1373,10 +1499,10 @@ function bindSecretValue(entry, row) {
   };
   const show = (focus) => {
     lock(false);
-    panel.innerHTML = `<div class="secret-value-line">${binary ? `<span class="secret-file">${icon('note')}ファイル</span>`
-      : `<pre class="kept-document${revealed ? '' : ' secret-mask'}" aria-label="${revealed ? '値' : '値（非表示）'}">${revealed ? esc(text) : '••••••••'}</pre>`}<div class="secret-value-actions">${binary
-      ? control('download', 'ダウンロード', 'download')
-      : control('reveal', revealed ? '値を隠す' : '値を表示', revealed ? 'eye-off' : 'eye') + control('copy', 'コピー', 'copy')}${control('edit', '値を編集', 'edit')}</div></div><p class="form-error" role="alert"></p>`;
+    panel.innerHTML = `<div class="secret-value-line">${binary ? `<span class="secret-file">${icon('note')}${esc(t('client.common.file'))}</span>`
+      : `<pre class="kept-document${revealed ? '' : ' secret-mask'}" aria-label="${revealed ? t('client.secret.value') : t('client.secret.hiddenValue')}">${revealed ? esc(text) : '••••••••'}</pre>`}<div class="secret-value-actions">${binary
+      ? control('download', t('client.common.download'), 'download')
+      : control('reveal', revealed ? t('client.secret.hideValue') : t('client.secret.showValue'), revealed ? 'eye-off' : 'eye') + control('copy', t('client.common.copy'), 'copy')}${control('edit', t('client.secret.editValue'), 'edit')}</div></div><p class="form-error" role="alert"></p>`;
     panel.querySelectorAll('[data-value-action]').forEach(button => button.addEventListener('click', async () => {
       if (busy) return;
       const action = button.dataset.valueAction;
@@ -1394,18 +1520,18 @@ function bindSecretValue(entry, row) {
         if (binary) { clear(); show('edit'); return; }
         const copied = text;
         if (!revealed) clear();
-        try { await navigator.clipboard.writeText(copied); toast('コピーしました。'); }
-        catch { if (panel.isConnected) panel.querySelector('[role="alert"]').textContent = 'コピーできませんでした。'; }
+        try { await navigator.clipboard.writeText(copied); toast(t('client.common.copied')); }
+        catch { if (panel.isConnected) panel.querySelector('[role="alert"]').textContent = t('client.errors.copyFailed'); }
       } finally { resumeRefresh(); }
     }));
     if (focus) panel.querySelector(`[data-value-action="${focus}"]`)?.focus();
   };
   const edit = () => {
     lock(true); panel.classList.add('editing');
-    panel.innerHTML = `<form aria-label="値の編集">${binary
-      ? '<input type="file" name="file" aria-label="ファイル" required>'
-      : '<textarea name="value" aria-label="値" rows="6" required autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>'}
-      <p class="form-error" role="alert"></p><div class="dialog-actions"><button class="button secondary" type="button">キャンセル</button><button class="button primary" type="submit">保存</button></div></form>`;
+    panel.innerHTML = `<form aria-label="${esc(t('client.secret.valueEditor'))}">${binary
+      ? `<input type="file" name="file" aria-label="${esc(t('client.common.file'))}" required>`
+      : `<textarea name="value" aria-label="${esc(t('client.secret.value'))}" rows="6" required autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>`}
+      <p class="form-error" role="alert"></p><div class="dialog-actions"><button class="button secondary" type="button">${esc(t('client.common.cancel'))}</button><button class="button primary" type="submit">${esc(t('client.common.save'))}</button></div></form>`;
     const form = panel.querySelector('form'), input = form.querySelector('textarea, input'), cancel = form.querySelector('[type="button"]'), save = form.querySelector('[type="submit"]'), error = form.querySelector('[role="alert"]');
     if (!binary) input.value = text;
     const initial = input.value;
@@ -1422,26 +1548,26 @@ function bindSecretValue(entry, row) {
       const file = binary ? input.files[0] : null;
       if (binary && !file) return;
       const content = binary ? file : new TextEncoder().encode(input.value);
-      if ((binary ? file.size : content.length) > 1024 * 1024) { error.textContent = '1件あたり1MBまでです。'; return; }
+      if ((binary ? file.size : content.length) > 1024 * 1024) { error.textContent = t('client.secret.sizeLimit'); return; }
       saving = true; error.textContent = ''; save.disabled = true; cancel.disabled = true; input.disabled = true;
       panel.setAttribute('aria-busy', 'true');
       try {
-        if (!etag) throw new Error('編集をやり直してから保存してください。');
+        if (!etag) throw new Error(t('client.secret.restartEdit'));
         const bytes = binary ? new Uint8Array(await file.arrayBuffer()) : content;
         // Sealed anew, for everyone who had it and everyone it is for now.
         const named = (await api('/v1/recipients')).recipients;
         const sealed = await sealFor(bytes, [...recipients, ...named.filter(item => !recipients.some(one => one.principal_id === item.principal_id))]);
         const response = await fetch(path, { method: 'PUT', credentials: 'same-origin', cache: 'no-store',
-          headers: { 'content-type': 'application/json', 'if-match': etag }, body: JSON.stringify(sealed) });
+          headers: { 'X-Foundation-Locale': i18n.language, 'content-type': 'application/json', 'if-match': etag }, body: JSON.stringify(sealed) });
         const result = await response.json();
         if (response.status === 401) await showSignin();
-        if (!response.ok) throw new Error(result.error?.message || '保存できませんでした。');
+        if (!response.ok) throw new Error(result.error?.message || t('client.errors.saveFailed'));
         binary = decode(bytes) === null; entry = result.resource; clear();
         state.secrets = state.secrets.map(item => item.id === entry.id ? entry : item);
         if (!panel.isConnected) return;
         row.querySelector('.secret-meta').innerHTML = secretMeta(entry); panel.classList.remove('editing');
-        show('edit'); toast('保存しました。'); resumeRefresh();
-      } catch (failure) { if (form.isConnected) error.textContent = failure instanceof TypeError ? '接続できませんでした。' : failure.message; }
+        show('edit'); toast(t('client.common.saved')); resumeRefresh();
+      } catch (failure) { if (form.isConnected) error.textContent = failure instanceof TypeError ? t('client.errors.connectionFailed') : failure.message; }
       finally {
         saving = false; save.disabled = false; cancel.disabled = false; input.disabled = false;
         panel.removeAttribute('aria-busy');
@@ -1454,23 +1580,24 @@ function bindSecretValue(entry, row) {
 // A passkey for this browser's device or password manager. One kept only on this device is said so: losing the device
 // loses it.
 function addPasskey() {
-  openDialog(`<h2 id="dialog-title">パスキーを追加</h2><form><label for="passkey-name">名前</label><input id="passkey-name" name="name" required maxlength="80" autocomplete="off" value="${esc(deviceName())}">
-    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">追加</button></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.passkey.add'))}</h2><form><label for="passkey-name">${esc(t('client.common.name'))}</label><input id="passkey-name" name="name" required maxlength="80" autocomplete="off" value="${esc(deviceName())}">
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.add'))}</button></form>`);
   bindForm(async (form) => {
     let made;
     try { made = await createPasskey(String(form.get('name') || '').trim()); }
-    catch (error) { throw passkeyDeclined(error) ? new Error('パスキーを作れませんでした。') : error; }
+    catch (error) { throw passkeyDeclined(error) ? new Error(t('client.passkey.createFailed')) : error; }
     closeDialog(); await refresh();
-    toast(made.backed_up ? 'パスキーを追加しました。' : 'パスキーを追加しました。このパスキーは、この端末にしか保存されていません。');
+    toast(made.backed_up ? t('client.passkey.added') : t('client.passkey.addedDeviceOnly'));
   });
 }
-function confirmRemoval(title, body, run, done = '削除しました。', label = '削除する') {
-  openDialog(`<h2 id="dialog-title">${esc(title)}</h2><form><p>${esc(body)}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">キャンセル</button><button type="submit" class="button destructive">${esc(label)}</button></div></form>`);
+function confirmRemoval(title, body, run, done = t('client.common.deleted'), label = t('client.common.confirmDelete')) {
+  openDialog(`<h2 id="dialog-title">${esc(title)}</h2><form><p>${esc(body)}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">${esc(t('client.common.cancel'))}</button><button type="submit" class="button destructive">${esc(label)}</button></div></form>`);
   bindForm(async () => { await run(); closeDialog(); await refresh(); toast(done); });
 }
 document.addEventListener('click', async (event) => {
   const target = event.target.closest('[data-action]'); if (!target || target.disabled) return;
   const { action, id } = target.dataset;
+  activeOperations++;
   try {
     if (action === 'close-dialog') closeDialog();
     if (action === 'add-passkey') addPasskey();
@@ -1484,14 +1611,14 @@ document.addEventListener('click', async (event) => {
     if (action === 'set-payment') { target.disabled = true; location.assign((await api('/v1/payment/setup', { method: 'POST', data: {} })).url); }
     if (action === 'remove-passkey') {
       const item = (state.webauthn_credentials || []).find(entry => entry.id === id);
-      if (item) confirmRemoval(item.name + ' を削除しますか？', 'このパスキーではサインインできなくなります。', () => api('/v1/webauthn-credentials/' + encodeURIComponent(item.id), { method: 'DELETE', data: {} }));
+      if (item) confirmRemoval(t('client.common.deleteNameTitle', { name: item.name }), t('client.passkey.deleteWarning'), () => api('/v1/webauthn-credentials/' + encodeURIComponent(item.id), { method: 'DELETE', data: {} }));
     }
     if (action === 'retry-page') { target.disabled = true; try { await refresh(); } finally { if (target.isConnected) target.disabled = false; } }
     if (action === 'retry-signin') { target.disabled = true; await showSignin(); }
     if (action === 'signout') { target.disabled = true; await api('/v1/session', { method: 'DELETE', data: {} }); await showSignin(); }
     if (action === 'request-connect') {
       target.disabled = true;
-      if (accessRequest.auth_scheme === 'role') { await connectByPaste(accessRequest.service, 'role', { requestId }); target.disabled = false; return; }
+      if (accessRequest.auth_scheme === 'role') { await connectByPaste(localizeService(accessRequest.service, i18n.language), 'role', { requestId }); target.disabled = false; return; }
       location.assign((await api('/v1/connections', { method: 'POST', data: { request_id: requestId } })).url);
     }
     if (action === 'deny-request') {
@@ -1504,7 +1631,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'choose-way') connectBy(serviceById(id), target.dataset.way);
     if (action === 'remove-service') {
       const entry = ownService(id);
-      if (entry) confirmRemoval(entry.service.name + ' を削除しますか？', 'サービスの登録を削除します。', () => api('/v1/resources/' + entry.id, { method: 'DELETE', data: {} }));
+      if (entry) confirmRemoval(t('client.common.deleteNameTitle', { name: entry.service.name }), t('client.service.deleteWarning'), () => api('/v1/resources/' + entry.id, { method: 'DELETE', data: {} }));
     }
     if (action === 'reconnect') {
       const connection = connected().find(item => item.id === id);
@@ -1516,7 +1643,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'disconnect') disconnect(connected().find(item => item.id === target.dataset.id));
     if (action === 'drop-secret') {
       const name = target.dataset.name, entry = secrets().find(item => item.name === name);
-      confirmRemoval(name + ' を削除しますか？', 'AIはこれを使えなくなります。元には戻せません。', () => api('/v1/resources/' + entry.id, { method: 'DELETE', data: {} }));
+      confirmRemoval(t('client.common.deleteNameTitle', { name: name }), t('client.secret.deleteWarning'), () => api('/v1/resources/' + entry.id, { method: 'DELETE', data: {} }));
     }
     if (action === 'upload-object') app.querySelector('#space-upload').click();
     if (action === 'more-objects') { objectLimit += 100; render(); }
@@ -1541,10 +1668,10 @@ document.addEventListener('click', async (event) => {
       target.disabled = true;
       try {
         const result = await api('/v1/resources/' + state.space.objects.find(item => item.key === key).id + '/link', { method: 'POST', data: { minutes: 60 } });
-        try { await navigator.clipboard.writeText(result.url); toast('URLをコピーしました。1時間で切れます。'); }
+        try { await navigator.clipboard.writeText(result.url); toast(t('client.objects.linkCopied')); }
         catch {
-          openDialog(`<h2 id="dialog-title">取り出し用のURL</h2><p>${esc(key)} を、このURLを知っている人なら誰でも取り出せます。1時間で切れます。</p>
-            <label for="object-link">URL</label><input id="object-link" readonly value="${esc(result.url)}"><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">閉じる</button></div>`);
+          openDialog(`<h2 id="dialog-title">${esc(t('client.objects.downloadUrl'))}</h2><p>${esc(t('client.objects.publicLinkNotice', { name: key }))}</p>
+            <label for="object-link">URL</label><input id="object-link" readonly value="${esc(result.url)}"><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">${esc(t('client.common.close'))}</button></div>`);
           document.querySelector('#object-link')?.select();
         }
       } catch (error) { toast(error.message); }
@@ -1552,20 +1679,20 @@ document.addEventListener('click', async (event) => {
     }
     if (action === 'drop-chosen') {
       const keys = chosenKeys();
-      confirmRemoval(keys.length === 1 ? keys[0] + ' を削除しますか？' : keys.length + '件を削除しますか？', '置き場から消えます。元には戻せません。',
+      confirmRemoval(keys.length === 1 ? t('client.common.deleteNameTitle', { name: keys[0] }) : t('client.objects.deleteCountTitle', { count: keys.length }), t('client.objects.deleteWarning'),
         async () => { for (const key of keys) await api('/v1/resources/' + state.space.objects.find(item => item.key === key).id, { method: 'DELETE', data: {} }); objectChosen = new Set(); });
     }
     if (action === 'add-secret') addSecret();
     if (action === 'copy-name') {
-      try { await navigator.clipboard.writeText(target.dataset.name); toast('コピーしました。'); }
-      catch { toast('コピーできませんでした。'); }
+      try { await navigator.clipboard.writeText(target.dataset.name); toast(t('client.common.copied')); }
+      catch { toast(t('client.errors.copyFailed')); }
     }
     if (action === 'edit-secret') editSecret(secrets().find(item => item.name === target.dataset.name), target);
     if (action === 'add-key') addKey();
     if (action === 'revoke-access') revokeAccess(principalById(id));
     if (action === 'close-environment') {
       const item = (state.environments || []).find(row => row.id === id);
-      if (item) confirmRemoval(item.name + ' を閉じますか？', '中のファイルは消え、この環境に渡した鍵は使えなくなります。', () => api('/v1/environments/' + item.id, { method: 'DELETE', data: {} }), '閉じました。', '環境を閉じる');
+      if (item) confirmRemoval(t('client.environments.closeTitle', { name: item.name }), t('client.environment.closeWarning'), () => api('/v1/environments/' + item.id, { method: 'DELETE', data: {} }), t('client.environment.closed'), t('client.environment.close'));
     }
     if (action === 'principal-details') await principalDetails(id);
     if (action === 'issue-key') { target.disabled = true; await issueKey(principalById(id)); }
@@ -1574,14 +1701,15 @@ document.addEventListener('click', async (event) => {
     if (action === 'remove-principal') removePrincipal(principalById(id));
     if (action === 'rename-principal') renamePrincipal(principalById(id));
     if (action === 'rename-me') renameMe();
-    if (action === 'copy-id') { try { await navigator.clipboard.writeText(state.user.id); toast('コピーしました。'); } catch { toast('コピーできませんでした。'); } }
+    if (action === 'copy-id') { try { await navigator.clipboard.writeText(state.user.id); toast(t('client.common.copied')); } catch { toast(t('client.errors.copyFailed')); } }
     if (action === 'transfer-all') transferAll();
     if (action === 'copy-token') {
       const token = document.querySelector('#agent-token');
-      try { await navigator.clipboard.writeText(token.value); toast('キーをコピーしました。'); }
-      catch { token.select(); toast('キーを選択しました。コピーしてください。'); }
+      try { await navigator.clipboard.writeText(token.value); toast(t('client.access.keyCopied')); }
+      catch { token.select(); toast(t('client.access.keySelected')); }
     }
   } catch (error) { if (target.isConnected) target.disabled = false; toast(error.message); }
+  finally { activeOperations--; void applyPendingLanguage(); }
 });
 const resultCode = new URL(location.href).searchParams.get('result');
 const confirmationState = resultCode === 'review' ? new URL(location.href).searchParams.get('state') : null;
@@ -1605,21 +1733,23 @@ else {
   if (state && !requestId) scrollToPage(history.state?.scroll);
 }
 // What came back from an OAuth round trip, in words that hold for any service.
-const resultMessages = { connected: '接続しました。', denied: '接続をキャンセルしました。', expired: '接続の手続きが切れました。もう一度お試しください。',
-  wrong_account: '更新する接続と同じユーザーやIAMロールを選んでください。', scope: '要求した権限と許可された権限が一致しません。',
-  retry: '継続利用の許可を取得できませんでした。もう一度接続してください。', changed: '接続の状態が変わりました。もう一度お試しください。', failed: '接続できませんでした。もう一度お試しください。' };
+const resultMessages = { connected: t('client.connection.connected'), denied: t('client.connection.cancelled'), expired: t('client.connection.sessionExpired'),
+  wrong_account: t('client.connection.wrongAccount'), scope: t('client.connection.scopeMismatch'),
+  retry: t('client.connection.ongoingAccessFailed'), changed: t('client.connection.stateChanged'), failed: t('client.connection.failedRetry') };
 if (resultCode === 'review') {
   try {
     const review = await api('/v1/connections/confirmation?state=' + encodeURIComponent(confirmationState));
-    const values = items => items.length ? items.map(esc).join('<br>') : 'なし';
-    openDialog(`<h2 id="dialog-title">接続の変更を確認</h2><p>${esc(review.connection.service.name)} · ${esc(review.connection.label)}</p>
-      <dl class="approval-facts">${review.changes.map(change => `<div><dt>${esc(change.label)}</dt><dd><p>変更前：${values(change.before)}</p><p>変更後：${values(change.after)}</p></dd></div>`).join('')}</dl>
-      <p class="permission-note">更新すると、この接続を使うAIにも変更後の権限が渡ります。キャンセルしても、接続先で許可した内容は残ります。</p>
-      <form><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="cancel-connection-review">キャンセル</button><button type="submit" class="button primary">この内容で更新</button></div></form>`);
+    const values = items => items.length ? items.join('\n') : t('client.common.none');
+    openDialog(`<h2 id="dialog-title">${esc(t('client.connection.reviewChanges'))}</h2><p>${esc(review.connection.service.name)} · ${esc(review.connection.label)}</p>
+      <dl class="approval-facts">${presentedChanges(review).map(change => `<div><dt>${esc(change.label)}</dt><dd><p>${esc(t('client.connections.beforeValues', { values: values(change.before) })).replace(/\n/g, '<br>')}</p><p>${esc(t('client.connections.afterValues', { values: values(change.after) })).replace(/\n/g, '<br>')}</p></dd></div>`).join('')}</dl>
+      <p class="permission-note">${esc(t('client.connection.updatePermissionWarning'))}</p>
+      <form><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="cancel-connection-review">${esc(t('client.common.cancel'))}</button><button type="submit" class="button primary">${esc(t('client.connection.confirmUpdate'))}</button></div></form>`);
     document.querySelector('[data-action="cancel-connection-review"]').addEventListener('click', async () => {
       try { await api('/v1/connections/confirmation', { method: 'DELETE', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); }
       catch (error) { toast(error.message); }
     });
-    bindForm(async () => { await api('/v1/connections/confirmation', { method: 'POST', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); await refresh(); toast('接続を更新しました。'); });
+    bindForm(async () => { await api('/v1/connections/confirmation', { method: 'POST', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); await refresh(); toast(t('client.connection.updated')); });
   } catch (error) { toast(error.message); }
-} else if (resultCode) toast(resultMessages[resultCode] || '接続を確認し、もう一度お試しください。');
+} else if (resultCode) toast(resultMessages[resultCode] || t('client.connection.checkAndRetry'));
+initializing = false;
+void applyPendingLanguage();

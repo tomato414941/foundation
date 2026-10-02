@@ -16,7 +16,7 @@ shots.mkdir(parents=True, exist_ok=True)
 
 with sync_playwright() as p:
     browser = getattr(p, args.engine).launch(headless=True)
-    context = browser.new_context(viewport={'width': 1280, 'height': 900}, reduced_motion='reduce')
+    context = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 900}, reduced_motion='reduce')
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))

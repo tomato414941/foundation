@@ -30,7 +30,7 @@ def review(page):
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
-    page = browser.new_page(viewport={'width': 1280, 'height': 1000})
+    page = browser.new_page(locale='ja-JP', viewport={'width': 1280, 'height': 1000})
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.goto(args.base + '/services', wait_until='networkidle')

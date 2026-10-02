@@ -18,8 +18,8 @@ link = args.base + '/signin/confirm?return_to=%2Fsecrets#' + urlencode({'token':
 
 with sync_playwright() as p:
     browser = getattr(p, args.engine).launch(headless=True)
-    sender = browser.new_context(viewport={'width': 1280, 'height': 900})
-    receiver = browser.new_context(viewport={'width': 390, 'height': 844})
+    sender = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 900})
+    receiver = browser.new_context(locale='ja-JP', viewport={'width': 390, 'height': 844})
     start = sender.new_page()
     start.goto(args.base, wait_until='networkidle')
     start.get_by_label('メールアドレス', exact=True).fill(email)

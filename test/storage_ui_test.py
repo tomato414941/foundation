@@ -66,7 +66,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     def read(page, name):
         return injected(page.request, args.base, name)
     browser = p.chromium.launch(headless=True)
-    context = browser.new_context(viewport={'width': 1280, 'height': 1000}, permissions=['clipboard-read', 'clipboard-write'])
+    context = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 1000}, permissions=['clipboard-read', 'clipboard-write'])
     page = context.new_page()
     virtual_authenticator(context, page)
     errors = []

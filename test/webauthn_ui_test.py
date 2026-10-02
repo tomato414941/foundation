@@ -28,7 +28,7 @@ def review(page):
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
-    context = browser.new_context(viewport={'width': 390, 'height': 844})
+    context = browser.new_context(locale='ja-JP', viewport={'width': 390, 'height': 844})
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -71,7 +71,7 @@ with sync_playwright() as p:
     expect(page.get_by_role('heading', name='サインイン', exact=True)).to_be_visible()
 
     # Someone new starts with a passkey alone, in a browser of their own.
-    newcomer = browser.new_context(viewport={'width': 390, 'height': 844})
+    newcomer = browser.new_context(locale='ja-JP', viewport={'width': 390, 'height': 844})
     fresh = newcomer.new_page()
     fresh.on('pageerror', lambda error: errors.append(str(error)))
     other = newcomer.new_cdp_session(fresh)

@@ -1,31 +1,22 @@
 <!doctype html>
-<html lang="ja">
+<html lang="{{foundation-locale}}">
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
-    <title>Foundation</title>
+    <title>{{foundation-title}}</title>
   <link rel="service-desc" href="/openapi.json" type="application/vnd.oai.openapi+json">
   <link rel="help" href="/docs" type="text/html">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='11' fill='%23121212'/%3E%3Cg fill='%23f5f5f5' color='%23f5f5f5'%3E%3Cpath d='M11 37V11H37M11 24H24' fill='none' stroke='currentColor' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round' opacity='.6'/%3E%3Ccircle cx='37' cy='24' r='3' opacity='.3'/%3E%3Ccircle cx='24' cy='37' r='3' opacity='.3'/%3E%3Ccircle cx='37' cy='37' r='3' opacity='.3'/%3E%3Ccircle cx='11' cy='11' r='4'/%3E%3Ccircle cx='24' cy='11' r='4'/%3E%3Ccircle cx='37' cy='11' r='4'/%3E%3Ccircle cx='11' cy='24' r='4'/%3E%3Ccircle cx='24' cy='24' r='4'/%3E%3Ccircle cx='11' cy='37' r='4'/%3E%3C/g%3E%3C/svg%3E">
     <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link rel="stylesheet" href="/styles.css">
+    <script type="importmap">{{foundation-importmap}}</script>
     <script type="module" src="/app.js"></script>
   </head>
   <body>
-    <div id="app">
-      <div class="workspace signin-shell">
-        <header class="topbar"><a class="brand" href="/" aria-label="Foundation ホーム"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 48 48" fill="currentColor"><path d="M11 37V11H37M11 24H24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" opacity=".6"/><circle cx="37" cy="24" r="3" opacity=".3"/><circle cx="24" cy="37" r="3" opacity=".3"/><circle cx="37" cy="37" r="3" opacity=".3"/><circle cx="11" cy="11" r="4"/><circle cx="24" cy="11" r="4"/><circle cx="37" cy="11" r="4"/><circle cx="11" cy="24" r="4"/><circle cx="24" cy="24" r="4"/><circle cx="11" cy="37" r="4"/></svg></span>Foundation</a></header>
-        <main class="signin-main">
-          <h1>Foundation</h1>
-          <footer id="public-info" class="public-info">
-        <a href="/docs">API仕様</a>
-          </footer>
-          <noscript><p class="signin-help">サインインにはJavaScriptを有効にしてください。</p></noscript>
-        </main>
-      </div>
-    </div>
+    <div id="app">{{foundation-app}}</div>
+    <noscript><p class="signin-help">{{foundation-noscript}}</p></noscript>
     <div id="notice" role="status" aria-live="polite" hidden></div>
     <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
   </body>

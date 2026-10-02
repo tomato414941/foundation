@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
 
     browser = p.chromium.launch(headless=True)
     # The public entry links to the specification even without JavaScript.
-    reading = browser.new_context(java_script_enabled=False)
+    reading = browser.new_context(locale='ja-JP', java_script_enabled=False)
     entry = reading.new_page()
     entry.goto(args.base, wait_until='networkidle')
     expect(entry.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()
@@ -42,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     expect(entry.locator('body')).to_contain_text('/v1/principals')
     reading.close()
 
-    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    context = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 800})
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))

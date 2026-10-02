@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
         return found.json()['resource']['id']
     def read(page, name):
         return injected(page.request, args.base, name)
-    context = browser.new_context(viewport={'width': 1280, 'height': 1000})
+    context = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 1000})
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))

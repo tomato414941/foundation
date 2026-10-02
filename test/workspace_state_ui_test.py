@@ -18,7 +18,7 @@ if shots:
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
-    context = browser.new_context(viewport={'width': 1280, 'height': 900})
+    context = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 900})
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -118,7 +118,7 @@ with sync_playwright() as p:
     print('値の取得中から保存まで編集を継続する。')
 
     # JavaScriptの開始前から、サインイン済みの各画面はメニュー・見出し・読み込み状態を表示する。
-    reading = browser.new_context(storage_state=context.storage_state(), java_script_enabled=False,
+    reading = browser.new_context(locale='ja-JP', storage_state=context.storage_state(), java_script_enabled=False,
                                   viewport={'width': 390, 'height': 844})
     initial = reading.new_page()
     for path, title in [('/', 'Foundation'), ('/secrets', 'シークレット'), ('/objects?prefix=reports%2F', 'オブジェクト')]:

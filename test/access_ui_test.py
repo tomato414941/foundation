@@ -15,7 +15,7 @@ shots.mkdir(parents=True, exist_ok=True)
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
-    context = browser.new_context(viewport={'width': 1280, 'height': 1000})
+    context = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 1000})
     caller = p.request.new_context(base_url=args.base, extra_http_headers={'origin': args.base})
 
     def post(path, data, token=None):

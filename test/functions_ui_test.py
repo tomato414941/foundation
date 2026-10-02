@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-functions-ui-') as key_dir, 
 
     approval = json.loads(cli('connect', '--name', 'laptop のAI').split('\n\nKey file')[0])['request']
     browser = p.chromium.launch(headless=True)
-    page = browser.new_context(viewport={'width': 1280, 'height': 1000}).new_page()
+    page = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 1000}).new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.goto(approval['verification_uri'], wait_until='networkidle')
