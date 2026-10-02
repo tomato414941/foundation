@@ -56,11 +56,12 @@ export function outputNames(save, available) {
   });
 }
 
-// The caller chooses the names. This writes exactly those outputs, atomically, as secrets.
+// The caller chooses the names. This writes exactly those outputs, atomically, as secrets sealed by Foundation's
+// principal for the holder and itself.
 export function saveOutputs(secrets, ownerId, names, values) {
   return secrets.store.transaction(() => names.map(({ output, name }) => {
     const value = values.get(output);
     if (!value) fail(502, 'service_response', '指定された出力が返されませんでした。');
-    return secrets.put(ownerId, { name, content: value.content });
+    return secrets.putAs(ownerId, { name, content: value.content });
   }));
 }

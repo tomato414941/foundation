@@ -49,15 +49,17 @@ test('公開仕様から操作を見つけ、初回接続・承認・保存・�
   const me = await call('getMe', { token });
   const as = me.json.acts_for[0];
   assert.ok(as);
-  const saved = await call('putResource', { token, query: { as, kind: 'secret', name: 'api/config' }, raw: '{"demo":"value"}', type: 'application/json' });
-  assert.equal(saved.status, 200);
+  // A client that cannot seal hands the bytes to Foundation's principal, which seals them as the holder's agent.
+  const plain = text => ({ plain: Buffer.from(text).toString('base64url') });
+  const saved = await call('putResource', { token, query: { as, kind: 'secret', name: 'api/config' }, data: plain('{"demo":"value"}') });
+  assert.equal(saved.status, 200, saved.text);
   const resourceId = saved.json.resource.id;
   const content = await call('getContent', { token, params: { resourceId } });
-  assert.equal(content.text, '{"demo":"value"}');
+  assert.equal(content.status, 200); assert.equal(content.json.envelope, null, 'the key reads what is kept, sealed, and has no envelope of its own');
   const etag = content.headers.get('etag');
-  const updated = await call('putContent', { token, params: { resourceId }, raw: 'next', headers: { 'if-match': etag } });
-  assert.equal(updated.status, 200);
-  const conflict = await call('putContent', { token, params: { resourceId }, raw: 'stale', headers: { 'if-match': etag } });
+  const updated = await call('putContent', { token, params: { resourceId }, data: plain('next'), headers: { 'if-match': etag } });
+  assert.equal(updated.status, 200, updated.text);
+  const conflict = await call('putContent', { token, params: { resourceId }, data: plain('stale'), headers: { 'if-match': etag } });
   assert.equal(conflict.status, 412);
   assert.equal(conflict.json.error.code, 'secret_changed');
   const delivered = await call('inject', { token, query: { as }, data: { names: [{ id: resourceId, as: 'CONFIG_FILE', filename: 'config.json' }] } });
@@ -75,7 +77,7 @@ test('JSON定義を検証し、バイナリ保存とJSONリソースの入力を
   const binary = Buffer.from([0, 255, 10, 1]);
   const saved = await f.request('/v1/resources?kind=secret&name=binary', { method: 'PUT', raw: binary });
   assert.equal(saved.status, 200);
-  assert.equal(saved.json.resource.size, binary.length);
+  assert.equal(saved.json.resource.size, binary.length + 28, 'sealed: iv and tag with the bytes');
   const delivery = await f.request('/v1/injections', { method: 'POST', data: { names: [{ name: 'binary', as: 'BINARY_FILE', filename: 'data.bin' }] } });
   assert.deepEqual(Buffer.from(delivery.json.injection.files[0].content, 'base64'), binary);
 });

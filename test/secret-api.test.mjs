@@ -25,11 +25,9 @@ test('WebとAPIキーが同じAPIで固定トークンを保存・更新し、�
 
 test('APIキーだけの主体も自分のシークレットを持ち、他の主体の値を保護する', async t => {
   const f = await fixture(t), key = await f.become(), options = { token: key.token, anonymous: true };
-  const response = await fetch(f.base + '/v1/resources?kind=secret&name=token', { method: 'PUT', headers: {
-    authorization: 'Bearer ' + key.token, 'content-type': 'application/octet-stream',
-  }, body: 'private-token' });
-  assert.equal(response.status, 200, await response.clone().text());
-  const saved = (await response.json()).resource;
+  const response = await f.request('/v1/resources?kind=secret&name=token', { ...options, method: 'PUT', raw: 'private-token' });
+  assert.equal(response.status, 200, response.text);
+  const saved = response.json.resource;
   assert.equal(saved.holder_id, key.id);
   assert.equal((await f.read('secret', 'token', options)).text, 'private-token');
   assert.equal((await f.request('/v1/resources/' + saved.id + '/content')).status, 403);
@@ -48,7 +46,7 @@ test('複数の値を個別のシークレットとして保存し、一度に�
   assert.deepEqual(delivered.json.injection.environment, { ACCOUNT_ID: 'account-one', API_TOKEN: 'private-token' });
 });
 
-test('CLIとMCPが共通APIで固定トークンを保存し、同じIDの値を取得・利用する', async t => {
+test('CLIは封をして、MCPはFoundationに封をさせて固定トークンを保存し、同じIDの値を取得・利用する', async t => {
   const f = await fixture(t), key = await f.issueKey();
   const directory = await mkdtemp(join(tmpdir(), 'foundation-secret-api-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -56,7 +54,7 @@ test('CLIとMCPが共通APIで固定トークンを保存し、同じIDの値を
   await writeFile(keyPath, key.token, { mode: 0o600 });
   await writeFile(input, 'cli-private', { mode: 0o600 });
   const cli = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['cli/runtime.mjs', 'api', 'PUT', '/v1/resources?kind=secret&name=CLI', '--from', input], {
+    const child = spawn(process.execPath, ['cli/runtime.mjs', 'keep', 'CLI', '--from', input], {
       env: { ...process.env, FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath },
     });
     let out = '', err = '';
@@ -69,7 +67,7 @@ test('CLIとMCPが共通APIで固定トークンを保存し、同じIDの値を
   const call = (method, path, body, body_encoding = 'json') => f.request('/mcp', { method: 'POST', token: key.token, anonymous: true, data: {
     jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'foundation_api', arguments: { method, path, body, body_encoding } },
   } });
-  const mcp = await call('PUT', '/v1/resources?kind=secret&name=MCP', 'mcp-private', 'text');
+  const mcp = await call('PUT', '/v1/resources?kind=secret&name=MCP', { plain: Buffer.from('mcp-private').toString('base64url') });
   assert.equal(mcp.json.result.isError, undefined, mcp.text);
   const saved = mcp.json.result.structuredContent.resource;
   assert.equal(saved.kind, 'secret');

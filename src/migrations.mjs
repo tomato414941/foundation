@@ -1,6 +1,8 @@
 import { checkDefinition } from './service-definition.mjs';
+import { ensureAgent } from './keys.mjs';
+import { newContentKey, sealContent, seal } from '../cli/envelope.mjs';
 
-export const SCHEMA_VERSION = 43;
+export const SCHEMA_VERSION = 44;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -17,6 +19,7 @@ export const STEPS = {
   41: payment,
   42: agents,
   43: durableEnvironmentStops,
+  44: envelopes,
 };
 
 // A stop is kept until the runner confirms it. Rebuilding widens the status check without changing resource IDs.
@@ -370,6 +373,32 @@ function agents({ db }) {
   `);
 }
 
+// A secret is sealed for those it was handed to, with a key of its own, and the server keeps no way to open it
+// but Foundation's own principal's key. What the server held until now it had been opening for its holders, to
+// inject; so each is sealed for Foundation's principal, which becomes those holders' agent, and the holders seal
+// it for themselves when they have keys.
+function envelopes({ db, vault }) {
+  db.exec(KEYS);
+  const agent = ensureAgent(db, vault), at = new Date().toISOString();
+  for (const row of db.prepare('SELECT s.resource_id, s.content, r.holder_id FROM secrets s JOIN resources r ON r.id=s.resource_id').all()) {
+    const content = vault.openBytes(row.content, `secret:${row.holder_id}:${row.resource_id}`), contentKey = newContentKey(), sealed = sealContent(contentKey, content);
+    db.prepare('UPDATE secrets SET content=?, size=? WHERE resource_id=?').run(sealed, sealed.length, row.resource_id);
+    db.prepare('INSERT INTO envelopes (resource_id,principal_id,wrapped) VALUES (?,?,?)').run(row.resource_id, agent, seal(contentKey, db.prepare('SELECT public_key FROM principal_keys WHERE principal_id=?').get(agent).public_key));
+    db.prepare('INSERT OR IGNORE INTO relations (subject_id,relation,object_type,object_id,created_at) VALUES (?,?,?,?,?)').run(agent, 'agent', 'principal', row.holder_id, at);
+  }
+}
+
+// A principal's one public key; its private key wrapped per credential, as the client made it; and each secret's
+// key sealed per recipient. Bytes the server keeps and gives back, never opens.
+const KEYS = `
+  CREATE TABLE principal_keys (principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE, public_key BLOB NOT NULL, created_at TEXT NOT NULL);
+  CREATE TABLE key_wraps (credential_id TEXT PRIMARY KEY REFERENCES webauthn_credentials(id) ON DELETE CASCADE, wrapped BLOB NOT NULL);
+  CREATE TABLE envelopes (
+    resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+    wrapped BLOB NOT NULL, PRIMARY KEY (resource_id, principal_id)
+  );
+  CREATE INDEX envelopes_principal ON envelopes(principal_id);`;
+
 // A session: what proving who one is leaves, for any principal. proof is how (an email reached, a WebAuthn signature),
 // proof_ref which address or credential, and proved_at when; an operation that needs a fresh or stronger proof asks
 // again.
@@ -464,7 +493,7 @@ export const SCHEMA = `
   CREATE UNIQUE INDEX resources_object_name ON resources(holder_id, name) WHERE kind='object';
   CREATE UNIQUE INDEX resources_app_name ON resources(holder_id, name) WHERE kind='app';
   CREATE UNIQUE INDEX resources_service_name ON resources(holder_id, name) WHERE kind='service';
-  -- Private bytes the holder keeps, for no service in particular.
+  -- Private bytes the holder keeps, for no service in particular: sealed by the client with the secret's own key.
   CREATE TABLE secrets (
     resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
     size INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, content BLOB NOT NULL
@@ -511,5 +540,6 @@ export const SCHEMA = `
   );
   CREATE INDEX audit_log_actor ON audit_log(actor_id, at);
   CREATE INDEX audit_log_object ON audit_log(object_type, object_id, at);
+  ${KEYS}
   PRAGMA user_version = ${SCHEMA_VERSION};
 `;

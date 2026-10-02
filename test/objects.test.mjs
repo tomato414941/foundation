@@ -171,7 +171,7 @@ test('says what an owner is using and what they may use', async (t) => {
   assert.equal(usage.json.objects.bytes, 5);
   assert.equal(usage.json.objects.bytes_max, 1024 * 1024 * 1024);
   assert.equal(usage.json.secrets.count, 1);
-  assert.equal(usage.json.secrets.bytes, 3);
+  assert.equal(usage.json.secrets.bytes, 31, 'as kept: sealed');
   assert.equal(usage.json.secrets.count_max, 200);
 });
 

@@ -1,4 +1,5 @@
 import { fail } from './errors.mjs';
+import { bytes as keyBytes } from './keys.mjs';
 import { resourceName } from './resources.mjs';
 import { takesApps } from './apps.mjs';
 import { reaches } from './authorization.mjs';
@@ -75,14 +76,15 @@ export class RequestActions {
       const row = this.requests.forTo(id, toId, true);
       if (row.type !== 'secret') fail(409, 'wrong_kind', 'この依頼は保管の依頼ではありません。');
       const asked = this.requests.detail(row).fields;
-      if (!Array.isArray(entries) || entries.length !== asked.length || entries.some(entry => !entry || typeof entry.content !== 'string' || !entry.content)) fail(400, 'invalid_values', '入力内容を確認してください。');
+      if (!Array.isArray(entries) || entries.length !== asked.length || entries.some(entry => !entry || typeof entry.content !== 'string')) fail(400, 'invalid_values', '入力内容を確認してください。');
+      const sealed = entries.map(entry => { const content = keyBytes(entry.content); if (!content || content.length < 29) fail(400, 'invalid_values', '入力内容を確認してください。'); return content; });
       const names = entries.map(entry => resourceName(entry.name));
       if (new Set(names).size !== names.length) fail(400, 'duplicate_names', '保存名が重複しています。別の名前を入力してください。');
       // The one asked may have given a replacement another name; then the existing value stays and this one is new.
       const targets = asked.map((one, at) => this.placement(toId, one, names[at]));
       for (const [at, one] of asked.entries()) {
         const existing = targets[at];
-        const saved = this.secrets.put(toId, { name: names[at], content: Buffer.from(entries[at].content, 'utf8') });
+        const saved = this.secrets.put(toId, { name: names[at], content: sealed[at], envelopes: entries[at].envelopes });
         // Asked to read it back, the asker is put on a line to it; a value that already existed keeps its lines as they were.
         if (!existing && one.readable) this.principals.relate(row.from_id, 'viewer', 'resource', saved.id);
       }

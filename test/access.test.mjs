@@ -17,6 +17,8 @@ test('アクセス許可と個別の閲覧・編集権限を取り消し、相�
   const written = await f.keep('secret', 'written', 'actor-value', { token: agent.token });
   f.app.principals.relate(agent.id, 'viewer', 'resource', given.json.resource.id);
   f.app.principals.relate(other.id, 'viewer', 'resource', given.json.resource.id);
+  await f.handEnvelope(given.json.resource.id, { token: agent.token });
+  await f.handEnvelope(given.json.resource.id, { token: other.token });
   await f.keep('secret', 'own', 'own-value', { token: agent.token, as: agent.id });
   const second = await f.request(`/v1/principals/${agent.id}/keys`, { method: 'POST', data: {} });
   assert.equal(second.status, 201);
@@ -54,6 +56,7 @@ test('自分宛ての未完了依頼を取り消し、他のアカウントの�
   assert.equal((await f.request(`/v1/requests/${approval.json.request.id}/grant`, { method: 'POST', data: { user_code: approval.json.request.user_code } })).status, 200);
   const privateB = await f.keep('secret', 'private-b', 'other-value');
   f.app.principals.relate(agent.id, 'viewer', 'resource', privateB.json.resource.id);
+  await f.handEnvelope(privateB.json.resource.id, { token: agent.token });
   const pendingB = await ask(f, agent, USER_B);
   await f.signin();
   assert.equal((await revoke(f, agent.id)).status, 200);
@@ -147,16 +150,16 @@ test('アップロード中にアクセスを取り消すと保存を拒否し�
   const started = new Promise(resolve => f.app.server.once('request', req => req.once('readable', resolve)));
   let upload;
   const completed = new Promise((resolve, reject) => {
-    upload = httpRequest(f.base + '/v1/resources?kind=secret&name=value&as=' + USER_A, { method: 'PUT', headers: { 'content-type': 'text/plain', authorization: 'Bearer ' + agent.token } }, res => {
+    upload = httpRequest(f.base + '/v1/resources?kind=secret&name=value&as=' + USER_A, { method: 'PUT', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + agent.token } }, res => {
       const chunks = []; res.on('data', chunk => chunks.push(chunk));
       res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString() })); res.on('error', reject);
     });
     upload.on('error', reject);
   });
   t.after(() => upload.destroy());
-  upload.write('replacement-'); await started;
+  upload.write('{"plain":"cmVwbGFjZW1lbnQt'); await started;
   assert.equal((await revoke(f, agent.id)).status, 200);
-  upload.end('value');
+  upload.end('dmFsdWU"}');
   assert.equal((await completed).status, 401);
   assert.equal((await f.read('secret', 'value')).text, 'original');
 });

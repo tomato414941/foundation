@@ -129,7 +129,7 @@ test('解釈できないAuthorizationが付いた要求をCookieで代用せず�
 test('Cookieによる更新は同一Originに限定し、CLIのBearerではOriginなしで更新する', async t => {
   const f = await fixture(t), key = await f.issueKey(), path = '/v1/resources?kind=secret&name=url-review&as=' + USER_A;
   const request = async headers => {
-    const response = await fetch(f.base + path, { method: 'PUT', headers: { 'content-type': 'application/octet-stream', ...headers }, body: 'fixture-value' });
+    const response = await fetch(f.base + path, { method: 'PUT', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ plain: Buffer.from('fixture-value').toString('base64url') }) });
     await response.arrayBuffer();
     return response.status;
   };

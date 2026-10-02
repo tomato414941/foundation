@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture } from './helpers.mjs';
+import { open, openContent } from '../cli/envelope.mjs';
+import { fixture, USER_A } from './helpers.mjs';
 
 let KEY;
 
@@ -17,8 +18,12 @@ test('hands the owner everything they have, secrets included', async (t) => {
   assert.equal(value.owner, 'owner@example.test');
   const byPath = Object.fromEntries(value.secrets.map(entry => [entry.name, entry]));
   assert.deepEqual(Object.keys(byPath).sort(), ['keys/token', 'notes/plan']);
-  assert.equal(Buffer.from(byPath['notes/plan'].content, 'base64').toString(), 'read me');
-  assert.equal(Buffer.from(byPath['keys/token'].content, 'base64').toString(), 'sh-secret-value');
+  // Sealed as kept: opened with the owner's own key, from the envelope made for them.
+  const own = await f.keyOf({});
+  const opened = entry => openContent(open(Buffer.from(entry.envelopes[USER_A], 'base64url'), own.privateKey), Buffer.from(entry.content, 'base64url')).toString();
+  assert.equal(byPath['notes/plan'].encoding, 'base64url');
+  assert.equal(opened(byPath['notes/plan']), 'read me');
+  assert.equal(opened(byPath['keys/token']), 'sh-secret-value');
   
   assert.equal(value.principals.length, 1);
 });

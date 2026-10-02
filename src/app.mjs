@@ -22,6 +22,7 @@ import { appReference, requestDetails } from './request-input.mjs';
 import { Apps, FOUNDATION_APP, takesApps } from './apps.mjs';
 import { Connections } from './connections.mjs';
 import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX } from './secrets.mjs';
+import { Keys, bytes as keyBytes } from './keys.mjs';
 import { Inputs } from './inputs.mjs';
 import { Services } from './services.mjs';
 import { Objects, OBJECT_MAX } from './objects.mjs';
@@ -60,6 +61,14 @@ const REQUEST_PAGE = /^\/requests\/[A-Za-z0-9_-]{43}$/;
 const PRINCIPAL_ID = /^[A-Za-z0-9-]{1,64}$/;
 // A revision of the encrypted record, never a fingerprint of the plaintext value.
 const secretTag = row => '"' + digest(JSON.stringify([row.id, row.name, row.size, row.updated_at])) + '"';
+// A secret's bytes as the client sealed them (content: iv, tag and ciphertext, so at least 29 bytes for one byte
+// kept), or as they are (plain), for Foundation's principal to seal where it is the holder's agent.
+function sealedInput(input) {
+  const plain = input?.plain !== undefined, content = keyBytes(plain ? input.plain : input?.content);
+  if (!content || (!plain && content.length < 29)) fail(400, 'invalid_values', '入力内容を確認してください。');
+  if (content.length > SECRET_MAX) fail(413, 'too_large', '1件あたり1MBまでです。');
+  return { content, plain };
+}
 
 function returnPath(value = '/') {
   const invalid = () => fail(400, 'invalid_return', 'リンクを開き直してください。');
@@ -142,14 +151,18 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   const authorization = new Authorization(principals, resources);
   const services = new Services(store, resources, catalog, { authorization, ...(serviceFetcher ? { fetcher: serviceFetcher } : {}) });
   const apps = new Apps(store, resources, services), connections = new Connections(store, resources, services, apps);
-  const secrets = new Secrets(store, resources), inputs = new Inputs(secrets, connections);
+  const keys = new Keys(store), secrets = new Secrets(store, resources, keys);
+  // Opening a secret to use it in Foundation's name: only for a holder that made Foundation's principal its agent.
+  const agentFor = holderId => { if (!authorization.can(keys.agentId, 'inject', 'principal', { id: holderId })) fail(403, 'foundation_not_agent', 'Foundation はこの持ち主の代わりに動く許可がありません。'); };
+  const opener = row => { agentFor(row.holder_id); return secrets.open(row); };
+  const inputs = new Inputs(secrets, connections, opener);
   const payments = new Payments(store, stripe);
   const objects = new Objects(spaceBackend, resources, store, payments);
   const requests = new Requests(store), settings = new Settings(store, principals), auditLog = new AuditLog(store);
   const environments = new Environments({ store, resources, principals, payments, runner, limits: compute });
   const functions = new Functions({ secrets, inputs, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
-  const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, connections, apps, resources }, row, origin, { interval: requestInterval, ...options });
+  const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, connections, apps, resources, keys, authorization }, row, origin, { interval: requestInterval, ...options });
   const requestActions = new RequestActions({ store, requests, secrets, connections, services, apps, principals, authorization, auditLog,
     changed: row => { if (row.to_id) void settings.notify(row.to_id, 'request.' + row.status, { request: viewRequest(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() }); } });
   const limits = new Map(), disconnects = new Set();
@@ -434,7 +447,11 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           const asToken = input.session === 'token', given = input.webauthn_credential, name = nameValue(input.name);
           if (!asToken) requireOrigin(req, origin);
           const destination = asToken ? '/' : returnPath(input.return_to);
-          const made = await webauthn.register(given?.credential, { origin, name: given?.name, make: id => principals.ensure(id, name) });
+          const made = await webauthn.register(given?.credential, { origin, name: given?.name, make: id => {
+            principals.ensure(id, name);
+            if (input.public_key !== undefined) keys.publish(id, input.public_key);
+          } });
+          if (given.wrap !== undefined) keys.keepWrap(made.credential.id, given.wrap);
           auditLog.write(made.principalId, 'principal.created', 'principal', made.principalId, { webauthn_credential: made.credential.id });
           const proof = { proof: 'webauthn', ref: made.credential.id }, principal = principals.get(made.principalId);
           const answer = { principal, webauthn_credential: webauthn.view(made.credential), backed_up: made.backedUp };
@@ -578,6 +595,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         permit('add-webauthn-credential', 'principal', holderId);
         const input = await inputBody();
         const made = await webauthn.register(input.credential, { origin, name: input.name, principalId: holderId });
+        if (input.wrap !== undefined) keys.keepWrap(made.credential.id, input.wrap);
         auditLog.write(subject.id, 'webauthn_credential.added', 'principal', holderId, { credential: made.credential.id });
         return send(201, { webauthn_credential: webauthn.view(made.credential), backed_up: made.backedUp });
       }
@@ -589,6 +607,39 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         webauthn.remove(row);
         auditLog.write(subject.id, 'webauthn_credential.removed', 'principal', row.principal_id, { credential: row.id });
         return send(200, { ok: true });
+      }
+      if (at === 'webauthnCredentialWrap' && method === 'PUT') {
+        const row = webauthn.get(route.params.credentialId);
+        if (!row) fail(404, 'not_found', 'パスキーが見つかりません。');
+        permit('add-webauthn-credential', 'principal', row.principal_id);
+        const input = await inputBody();
+        keys.keepWrap(row.id, input.wrapped);
+        return send(200, { ok: true });
+      }
+      // The caller's key: the public half published once, the private half kept wrapped per credential. What this
+      // session proved with is the credential whose wrap is given back.
+      if (at === 'key') {
+        const credentialId = session?.proof === 'webauthn' ? session.proof_ref : null;
+        if (method === 'GET') return send(200, { key: keys.view(subject.id, credentialId) });
+        if (method !== 'PUT') fail(405, 'method_not_allowed', 'この操作は利用できません。');
+        const input = await inputBody();
+        const wraps = input.wraps === undefined ? [] : Object.entries(input.wraps);
+        if (input.wraps !== undefined && (!input.wraps || typeof input.wraps !== 'object' || Array.isArray(input.wraps))) fail(400, 'invalid_wrap', '包んだ鍵を確認してください。');
+        store.transaction(() => {
+          keys.publish(subject.id, input.public_key);
+          for (const [id, wrapped] of wraps) {
+            if (webauthn.get(id)?.principal_id !== subject.id) fail(404, 'not_found', 'パスキーが見つかりません。');
+            keys.keepWrap(id, wrapped);
+          }
+        });
+        auditLog.write(subject.id, 'key.published', 'principal', subject.id, {});
+        return send(200, { key: keys.view(subject.id, credentialId) });
+      }
+      // Whom to seal a secret of the holder's for: the holder, and Foundation's principal when it acts for them.
+      if (at === 'recipients' && method === 'GET') {
+        permit('write', 'secret');
+        const ids = [holderId, ...(authorization.can(keys.agentId, 'inject', 'principal', { id: holderId }) ? [keys.agentId] : [])];
+        return send(200, { recipients: ids.map(id => ({ principal_id: id, public_key: keys.publicKeyOf(id) })).filter(item => item.public_key).map(item => ({ ...item, public_key: item.public_key.toString('base64url') })) });
       }
       // Paying for more than the free part: a payment method set on Stripe's page, for the principal itself.
       if (at === 'payment' && method === 'GET') {
@@ -636,7 +687,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         return send(201, { principal: { ...made, alias: alias ?? null, keys: principals.keys(made.id), acts_for: principals.actsFor(made.id) }, ...(issued ? { token: issued.token, key: { id: issued.id, kind: 'key' } } : {}) });
       }
       if (route?.group === 'principals') {
-        const id = route.params.principalId === 'me' ? subject.id : route.params.principalId, part = at === 'principal' ? null : at === 'key' ? 'keys' : at, keyId = route.params.keyId;
+        const id = route.params.principalId === 'me' ? subject.id : route.params.principalId, part = at === 'principal' ? null : at === 'accessKey' ? 'keys' : at, keyId = route.params.keyId;
         const target = principals.at(id);
         if (part === 'access' && !keyId && method === 'DELETE') {
           permit('relate', 'principal', holderId);
@@ -645,6 +696,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           requestActions.revokeAccess(holderId, id);
           return send(200, { ok: true });
         }
+        if (part === 'publicKey' && method === 'GET') return send(200, { key: keys.view(id, null) });
         if (!part) {
           if (method === 'GET') { permit('read', 'principal', id); return send(200, { principal: { ...target, keys: principals.keys(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id) } }); }
           if (method === 'PATCH') { permit('rename', 'principal', id); const input = await inputBody(); return send(200, { principal: principals.rename(id, nameValue(input.name)) }); }
@@ -873,29 +925,30 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const existing = kind === 'secret' ? secrets.find(holderId, name) : (objects.check(), objects.find(holderId, name));
         permit('write', kind, existing?.id);
         limit(kind === 'secret' ? 'secrets' : 'objects', kind === 'secret' ? 120 : 60);
-        const content = await inputBytes(kind === 'secret' ? SECRET_MAX : OBJECT_MAX);
-        if (kind === 'secret' && !content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
         // A thing made for the holder by someone else is one its maker may read and write: a line says so.
         const line = saved => { if (!existing && subject.id !== holderId) principals.relate(subject.id, 'editor', 'resource', saved.id); };
         if (kind === 'secret') {
+          const input = await inputBody(SECRET_MAX * 2), { content, plain } = sealedInput(input);
+          if (plain) agentFor(holderId);
           const saved = store.transaction(() => {
             const match = req.headers['if-match'];
             const current = match === undefined ? null : secrets.find(holderId, name);
             if (match !== undefined && (!current || match !== secretTag(current))) fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
-            const saved = secrets.put(holderId, { name, content });
+            const saved = plain ? secrets.putAs(holderId, { name, content }) : secrets.put(holderId, { name, content, envelopes: input.envelopes });
             line(saved);
             res.setHeader('etag', secretTag(saved));
             return saved;
           });
           return send(200, { resource: shown(saved) });
         }
+        const content = await inputBytes(OBJECT_MAX);
         const saved = await objects.put(holderId, name, content, req.headers['content-type'] || 'application/octet-stream');
         still();
         line(saved);
         return send(200, { resource: shown(saved) });
       }
       if (route?.group === 'resources') {
-        const held = resources.at(route.params.resourceId), part = at === 'content' ? '/content' : at === 'objectLink' ? '/link' : null;
+        const held = resources.at(route.params.resourceId), part = at === 'content' ? '/content' : at === 'objectLink' ? '/link' : at === 'envelopes' ? '/envelopes' : null;
         const connection = held.kind === 'connection' ? connections.get(held.id) : null, secret = held.kind === 'secret' ? secrets.get(held.id) : null;
         // An app: renamed by its holder; given new values by its holder or an editor; removed by its holder, which
         // stops the connections made through it. Its secret is never read back, by anyone.
@@ -1007,10 +1060,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           permit(secret ? 'content' : 'read', held.kind, held.id, held.holder_id);
           const disposition = `attachment; filename="resource.bin"; filename*=UTF-8''${encodeURIComponent(held.name.split('/').pop()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}`;
           if (secret) {
-            const content = secrets.content(secret);
             res.setHeader('etag', secretTag(secret));
-            res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': content.length, 'content-disposition': disposition });
-            return res.end(content);
+            return send(200, { content: secrets.content(secret).toString('base64url'), envelope: keys.envelopeOf(secret.id, subject.id)?.toString('base64url') ?? null, recipients: keys.recipientKeys(secret.id) });
           }
           const found = await objects.read(objects.get(held.id));
           still();
@@ -1022,13 +1073,13 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           permit('write', held.kind, held.id, held.holder_id);
           if (secret) {
             limit('secrets', 120);
-            const content = await inputBytes(SECRET_MAX);
-            if (!content.length) fail(400, 'invalid_values', '入力内容を確認してください。');
+            const input = await inputBody(SECRET_MAX * 2), { content, plain } = sealedInput(input);
+            if (plain) agentFor(held.holder_id);
             const saved = store.transaction(() => {
               const match = req.headers['if-match'], current = secrets.get(held.id);
               if (!current) fail(404, 'not_found', '見つかりません。');
               if (match !== undefined && match !== secretTag(current)) fail(412, 'secret_changed', 'ほかの操作で変更されています。開き直して確認してください。');
-              const saved = secrets.write(current, content);
+              const saved = plain ? secrets.writeAs(current, content) : secrets.write(current, content, input.envelopes);
               res.setHeader('etag', secretTag(saved));
               return saved;
             });
@@ -1039,6 +1090,19 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           const saved = await objects.write(objects.get(held.id), content, req.headers['content-type'] || 'application/octet-stream');
           still();
           return send(200, { resource: shown(saved) });
+        }
+        // Envelopes: the secret's key, sealed for one more recipient by whoever may share it - or by Foundation's
+        // principal from its own envelope - and taken back the same way.
+        if (part === '/envelopes') {
+          if (!secret) fail(405, 'method_not_allowed', 'この操作は利用できません。');
+          permit('share', 'secret', held.id, held.holder_id);
+          const recipient = principals.at(route.params.principalId).id, input = await inputBody();
+          if (method === 'PUT') keys.keepEnvelope(held.id, recipient, input.wrapped);
+          else if (method === 'POST') keys.resealFor(held.id, recipient);
+          else if (method === 'DELETE') { if (!keys.dropEnvelope(held.id, recipient)) fail(404, 'not_found', '封筒がありません。'); }
+          else fail(405, 'method_not_allowed', 'この操作は利用できません。');
+          auditLog.write(subject.id, method === 'DELETE' ? 'envelope.dropped' : 'envelope.kept', 'resource', held.id, { recipient });
+          return send(200, { ok: true });
         }
         if (part === '/link' && method === 'POST') {
           if (held.kind !== 'object') fail(405, 'method_not_allowed', 'この操作は利用できません。');
@@ -1061,16 +1125,16 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           catalog: services.catalogView(), principals: principals.owned(holderId), actors: principals.actorsOf(holderId),
           requests: requests.listTo(holderId, 'pending').map(row => viewRequest(row, origin)), functions: FUNCTIONS, settings: settings.get(holderId) ?? null,
           // Machines lent to the holder and still running, and the computing they spend.
-          environments: environments.list(holderId).filter(row => row.status !== 'stopped').map(row => environments.view(row)), compute: environments.usage(holderId) });
+          environments: environments.list(holderId).filter(row => row.status !== 'stopped').map(row => environments.view(row)), compute: environments.usage(holderId), foundation: { principal_id: keys.agentId } });
       }
       // Everything, in one file, for the holder alone. Lending someone a place to keep things means they can take
       // them away again; without this the promise is words.
       if (at === 'export' && method === 'GET') {
         permit('export', 'principal', holderId);
-        // A secret goes out with its bytes; a connection with what is known of it, and a token with what was pasted.
+        // A secret goes out as it is kept, sealed, with its envelopes; a connection with what is known of it, and a token with what was pasted.
         // What renews the others is Foundation's to keep and would be of no use elsewhere. A described service goes
         // out as its definition.
-        const kept = secrets.list(holderId).map(row => ({ ...secrets.view(row), content: secrets.content(row).toString('base64'), encoding: 'base64' }));
+        const kept = secrets.list(holderId).map(row => ({ ...secrets.view(row), content: secrets.content(row).toString('base64url'), encoding: 'base64url', envelopes: keys.envelopesOf(row.id) }));
         const value = { exported_at: new Date().toISOString(), owner: emails.of(subject.id)[0] ?? null, origin, secrets: kept,
           connections: connections.list(holderId).map(row => ({ ...connections.view(row, { owner: true }), fields: connections.handed(row) })),
           services: services.list(holderId).map(row => ({ id: row.id, name: row.name, definition: JSON.parse(row.definition) })), principals: principals.owned(holderId) };
@@ -1237,7 +1301,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   return {
-    server, store, resources, services, secrets, connections, inputs, apps, objects, environments, payments, principals, sessions, emails, challenges, webauthn, flows, requests, requestActions, settings, auditLog,
+    server, store, resources, services, secrets, keys, connections, inputs, apps, objects, environments, payments, principals, sessions, emails, challenges, webauthn, flows, requests, requestActions, settings, auditLog,
     async close() {
       clearInterval(timer);
       if (server.listening) await new Promise((resolve) => { server.close(resolve); server.closeIdleConnections(); });

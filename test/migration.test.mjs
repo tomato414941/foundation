@@ -21,13 +21,17 @@ const STORED_SERVICE = { version: 1, name: 'Stored service', auth_schemes: { oau
 } } };
 
 // A connection's state is sealed under its name, so it is compared by what it opens to instead.
-const SNAPSHOT_COLUMNS = { credentials: 'resource_id,service,auth_scheme,app_id,subject,status,generation' };
+// A secret's bytes are sealed anew by 43, so they are compared by what they open to instead.
+const m2 = store => modules(store);
+const SNAPSHOT_COLUMNS = { credentials: 'resource_id,service,auth_scheme,app_id,subject,status,generation', secrets: 'resource_id,generation' };
 
 async function storedDefinitions(t, definitions) {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-reference-migration-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY), m = modules(store);
-  const secret = m.secrets.put(USER_A, { name: 'token#work', content: Buffer.from([0, 255, 10, 42]) });
+  const secret = m.secrets.putAs(USER_A, { name: 'token#work', content: Buffer.from([0, 255, 10, 42]) });
+  // Back to how a secret was kept before 43: sealed by the server under its name.
+  store.db.prepare('UPDATE secrets SET content=? WHERE resource_id=?').run(new Vault(KEY).sealBytes(Buffer.from([0, 255, 10, 42]), `secret:${USER_A}:${secret.id}`), secret.id);
   const ids = definitions.map((definition, i) => {
     const id = '12345678-1234-4234-8234-' + String(i + 1).padStart(12, '0');
     m.resources.insert(id, USER_A, 'service', 'Service ' + i);
@@ -42,7 +46,7 @@ async function storedDefinitions(t, definitions) {
     store.db.prepare('UPDATE connections SET state=? WHERE resource_id=?').run(vault.seal(vault.open(row.state, `connection:${row.holder_id}:${row.resource_id}`), `credential:${row.holder_id}:${row.resource_id}`), row.resource_id);
   }
   store.db.exec('DROP INDEX connections_app; ALTER TABLE connections RENAME TO credentials; CREATE INDEX credentials_app ON credentials(app_id) WHERE app_id IS NOT NULL;');
-  store.db.exec(`DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
+  store.db.exec(`DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
     CREATE TABLE sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL, expires_at INTEGER NOT NULL);
     CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);`);
   const snapshots = Object.fromEntries(['resources', 'secrets', 'credentials', 'relations'].map(table => [table, store.db.prepare(`SELECT ${SNAPSHOT_COLUMNS[table] ?? '*'} FROM ${table}`).all()]));
@@ -55,7 +59,8 @@ test('保存済みのサービス定義を標準参照に変換し、値・ID・
   const store = new Store(old.path, KEY);
   for (const [table, expected] of Object.entries(old.snapshots)) {
     const now = table === 'credentials' ? 'connections' : table;
-    assert.deepEqual(store.db.prepare(`SELECT ${SNAPSHOT_COLUMNS[table] ?? '*'} FROM ${now}`).all(), expected, table);
+    // 43 adds one line: Foundation's principal as agent of each holder whose secrets it had been opening.
+    assert.deepEqual(store.db.prepare(`SELECT ${SNAPSHOT_COLUMNS[table] ?? '*'} FROM ${now}`).all().filter(row => !(table === 'relations' && row.relation === 'agent' && row.subject_id === m2(store).keys.agentId)), expected, table);
   }
   const definition = JSON.parse(store.db.prepare('SELECT definition FROM services WHERE resource_id=?').get(old.ids[0]).definition);
   const oauth = definition.auth_schemes.oauth;
@@ -74,7 +79,7 @@ test('保存済みのサービス定義を標準参照に変換し、値・ID・
   const reopened = new Store(old.path, KEY); t.after(() => reopened.close());
   assert.deepEqual(reopened.db.prepare('SELECT definition FROM services ORDER BY resource_id').all(), text);
   const m = modules(reopened);
-  assert.deepEqual(m.secrets.content(m.secrets.get(old.secret.id)), Buffer.from([0, 255, 10, 42]));
+  assert.deepEqual(m.secrets.open(m.secrets.get(old.secret.id)), Buffer.from([0, 255, 10, 42]));
   assert.equal(m.connections.state(m.connections.get(old.credential.id)).private_state.refresh_token, 'kept-refresh');
 });
 
@@ -267,12 +272,12 @@ test('31版のシークレットと固定トークンを値・ID・共有権限�
   const store = new Store(old.path, KEY); t.after(() => store.close());
   const { secrets, connections, services, principals, authorization } = modules(store);
   assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
-  assert.deepEqual(secrets.content(secrets.get('plain')), bytes);
+  assert.deepEqual(secrets.open(secrets.get('plain')), bytes);
   assert.equal(secrets.get('plain').name, 'same name');
   assert.equal(secrets.get('plain').generation, 7);
   assert.equal(secrets.get('single').name, 'same name (single)');
-  assert.equal(secrets.content(secrets.get('single')).toString(), 'single-token');
-  assert.deepEqual(JSON.parse(secrets.content(secrets.get('multi')).toString()), fields);
+  assert.equal(secrets.open(secrets.get('single')).toString(), 'single-token');
+  assert.deepEqual(JSON.parse(secrets.open(secrets.get('multi')).toString()), fields);
   assert.deepEqual(connections.state(connections.get('oauth')), managed);
   assert.equal(connections.get('oauth').generation, 7);
   assert.equal(connections.state(connections.get('role')).private_state.role_arn, 'arn:aws:iam::123456789012:role/fixture');
@@ -326,7 +331,7 @@ test('36版のセッションでサインインしていたアドレスは、そ
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
   const { principals } = modules(store);
   principals.ensure(USER_A); principals.ensure(USER_B);
-  store.db.exec(`DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
+  store.db.exec(`DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
     CREATE TABLE sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL, expires_at INTEGER NOT NULL);
     CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);`);
   const old = store.db.prepare('INSERT INTO sessions VALUES (?,?,?,?,?)');
@@ -349,7 +354,7 @@ test('37版のアドレスは、持ち主との結びつきだけを残して移
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-38-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
   modules(store).principals.ensure(USER_A);
-  store.db.exec(`DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE emails; CREATE TABLE emails (address TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, verified_at INTEGER NOT NULL);
+  store.db.exec(`DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE emails; CREATE TABLE emails (address TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, verified_at INTEGER NOT NULL);
     CREATE INDEX emails_principal ON emails(principal_id);`);
   store.db.prepare('INSERT INTO emails VALUES (?,?,?)').run('owner@example.test', USER_A, 1);
   store.db.exec('PRAGMA user_version=37'); store.close();
@@ -362,7 +367,7 @@ test('39版のパスキーの表はWebAuthnの資格情報の表になり、そ�
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-40-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
   modules(store).principals.ensure(USER_A);
-  store.db.exec(`DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
+  store.db.exec(`DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
     CREATE TABLE passkeys (id TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, public_key BLOB NOT NULL,
       sign_count INTEGER NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER);
     CREATE INDEX passkeys_principal ON passkeys(principal_id);
@@ -394,7 +399,7 @@ test('41版の代わりに動く線は agent に、一つの操作の線はそ�
   line.run(USER_B, 'viewer', 'resource', 's1', '2026-01-01');
   store.db.prepare("INSERT INTO requests (id,from_id,to_id,type,detail,binding_message,steps,status,result,created_at,expires_at) VALUES ('r1',?,?,'relation',?,'','[]','granted',?,0,9999999999999)")
     .run(USER_B, USER_A, JSON.stringify({ relation: 'actor' }), JSON.stringify({ relation: 'actor', object_type: 'principal', object_id: USER_A }));
-  store.db.exec('PRAGMA user_version=41'); store.close();
+  store.db.exec("DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; PRAGMA user_version=41"); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   assert.deepEqual(next.db.prepare('SELECT relation, object_type, object_id FROM relations ORDER BY relation, object_id').all().map(row => ({ ...row })),
@@ -504,7 +509,7 @@ test('mainの42版DBは認可と課金を保って43版へ移り、停止の読�
   store.db.prepare('INSERT INTO compute_usage VALUES (?,?,30)').run(USER_A, new Date(now).toISOString().slice(0, 7));
   const tables = ['resources', 'relations', 'requests', 'environment_commands', 'access_keys', 'payment_accounts', 'meter_events', 'compute_usage'];
   const before = Object.fromEntries(tables.map(table => [table, store.db.prepare('SELECT * FROM ' + table).all()]));
-  store.db.exec('PRAGMA user_version=42'); store.close();
+  store.db.exec("DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; PRAGMA user_version=42"); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, 43);
   for (const table of tables) assert.deepEqual(next.db.prepare('SELECT * FROM ' + table).all(), before[table], table);
@@ -524,5 +529,30 @@ test('mainの42版DBは認可と課金を保って43版へ移り、停止の読�
   const settled = next.db.prepare('SELECT * FROM meter_events').all(); assert.equal(settled.length, 3);
   await environments.stop(row); assert.deepEqual(next.db.prepare('SELECT * FROM meter_events').all(), settled);
   assert.equal(next.db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
+
+test('43版のシークレットはそれぞれの鍵で封じ直され、開いていたFoundationの封筒だけが残り、Foundationは持ち主の代わりに動く線を得る', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-43-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'state.sqlite'), store = new Store(path, KEY), vault = new Vault(KEY);
+  const { principals, resources } = modules(store);
+  principals.ensure(USER_A); principals.ensure(USER_B);
+  // Two secrets of the owner's and one of another's, sealed as the server did before 43; the other keeps none.
+  const kept = [['s1', USER_A, 'one'], ['s2', USER_A, 'two'], ['s3', USER_B, 'three']];
+  for (const [id, holder, value] of kept) {
+    resources.insert(id, holder, 'secret', id);
+    store.db.prepare('INSERT INTO secrets (resource_id,size,content) VALUES (?,?,?)').run(id, value.length, vault.sealBytes(Buffer.from(value), `secret:${holder}:${id}`));
+  }
+  store.db.exec("DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; PRAGMA user_version=43");
+  store.close();
+  const next = new Store(path, KEY); t.after(() => next.close());
+  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
+  const m = modules(next);
+  for (const [id, , value] of kept) {
+    assert.equal(m.secrets.open(m.secrets.get(id)).toString(), value);
+    assert.deepEqual(m.keys.recipientsOf(id), [m.keys.agentId], 'sealed for Foundation alone until the holder seals it for a key of their own');
+    assert.equal(m.secrets.get(id).size, value.length + 28);
+  }
+  assert.deepEqual(next.db.prepare("SELECT subject_id, object_id FROM relations WHERE relation='agent' ORDER BY object_id").all().map(row => ({ ...row })),
+    [{ subject_id: m.keys.agentId, object_id: USER_A }, { subject_id: m.keys.agentId, object_id: USER_B }]);
+  assert.equal(next.db.prepare("SELECT name FROM principals WHERE id=?").get(m.keys.agentId).name, 'Foundation');
   assert.deepEqual(next.db.prepare('PRAGMA foreign_key_check').all(), []);
 });

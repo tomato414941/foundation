@@ -35,9 +35,10 @@ function injectable(content, { env, filename }) {
 }
 
 // A delivery operation can take private bytes or obtain current connections. Storage does not choose how a
-// secret is used: its caller names the destination every time.
+// secret is used: its caller names the destination every time. A secret's bytes come through `open`, which is
+// Foundation's principal opening what was sealed for it, where it may.
 export class Inputs {
-  constructor(secrets, connections) { Object.assign(this, { secrets, connections }); }
+  constructor(secrets, connections, open) { Object.assign(this, { secrets, connections, open }); }
   resolve(holderId, reference) {
     const ref = inputReference(reference);
     const row = Object.hasOwn(ref, 'name') ? this.secrets.find(holderId, ref.name)
@@ -79,7 +80,7 @@ export class Inputs {
       const filename = item.filename === undefined || item.filename === null || item.filename === '' ? null : item.filename;
       if (row.kind === 'secret') {
         if (!item.as) fail(400, 'no_variable', '渡す環境変数名を as で指定してください。');
-        place(row, item.as, filename, this.secrets.content(row));
+        place(row, item.as, filename, this.open(row));
         continue;
       }
       if (!obtained.has(row.id)) obtained.set(row.id, await this.connections.derive(row));
@@ -95,7 +96,7 @@ export class Inputs {
   // A single value. Connections require an explicit output even if they currently yield only one.
   async text(holderId, reference, cache = new Map()) {
     const row = this.resolve(holderId, reference);
-    if (row.kind === 'secret') return this.secrets.content(row);
+    if (row.kind === 'secret') return this.open(row);
     if (reference.output === undefined) fail(400, 'invalid_input', '接続から使う値を output で指定してください。');
     if (!cache.has(row.id)) cache.set(row.id, await this.connections.derive(row));
     const derived = cache.get(row.id);

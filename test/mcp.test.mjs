@@ -34,12 +34,12 @@ test('MCPで文字列とバイナリの保存値を指定の符号化で共通AP
   const f = await connected(t);
   const call = args => modern(f, { jsonrpc: '2.0', id: 40, method: 'tools/call', params: { name: 'foundation_api', arguments: args } });
   const bytes = Buffer.from([0, 255, 1, 10]);
-  const stored = await call({ method: 'PUT', path: '/v1/resources?kind=secret&name=file', body: bytes.toString('base64'), body_encoding: 'base64' });
+  const stored = await call({ method: 'PUT', path: '/v1/resources?kind=secret&name=file', body: { plain: bytes.toString('base64url') } });
   assert.equal(stored.json.result.isError, undefined, stored.text);
   const id = stored.json.result.structuredContent.resource.id;
   const delivered = await call({ method: 'POST', path: '/v1/injections', body: { names: [{ id, as: 'CONFIG_FILE', filename: 'config.bin' }] } });
   assert.deepEqual(Buffer.from(delivered.json.result.structuredContent.injection.files[0].content, 'base64'), bytes);
-  for (const [body, body_encoding] of [['%%%', 'base64'], [42, 'text'], ['x', 'unknown']]) {
+  for (const [body, body_encoding] of [[{ plain: '%%%' }, 'json'], [42, 'text'], ['x', 'unknown']]) {
     const refused = await call({ method: 'PUT', path: '/v1/resources?kind=secret&name=file', body, body_encoding });
     assert.equal(refused.json.result.isError, true, refused.text);
   }

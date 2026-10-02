@@ -175,7 +175,7 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
   const binary = await f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/bytes', save: 'binary' } });
   assert.equal(binary.status, 200);
   const owner = f.app.principals.actsFor(key.id)[0];
-  assert.deepEqual(f.app.secrets.content(f.app.secrets.find(owner, 'binary')), Buffer.from([0, 255, 1]));
+  assert.deepEqual(f.app.secrets.open(f.app.secrets.find(owner, 'binary')), Buffer.from([0, 255, 1]));
 });
 
 test('The HTTPS function retains destination and owner checks, and validates output names before sending', async t => {

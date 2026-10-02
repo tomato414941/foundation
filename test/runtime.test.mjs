@@ -69,7 +69,7 @@ test('コマンドが作った非公開ファイルを名前どおりに保存�
   assert.equal(direct.status, 403); assert.equal(direct.json.error.code, 'forbidden');
   const owner = await f.read('secret', output.name);
   assert.equal(owner.status, 200);
-  assert.deepEqual(f.app.secrets.content(f.app.secrets.find(USER_A, output.name)), content);
+  assert.deepEqual(f.app.secrets.open(f.app.secrets.find(USER_A, output.name)), content);
   const used = await execute(['exec', '--inputs', JSON.stringify([output]), '--', process.execPath, '-e', `
     const fs = require('node:fs');
     if (!fs.readFileSync(process.env.AUTH_FILE).equals(Buffer.from('${content.toString('base64')}', 'base64'))) process.exit(2);
@@ -162,7 +162,7 @@ test('保存に失敗したときだけ復旧用の非公開出力を残し、�
   `], f.env);
   f.app.secrets.put = put;
   assert.equal(run.code, 1); assert.match(run.err, /retained for recovery/);
-  assert.ok(run.err.includes('foundation api PUT "/v1/resources?kind=secret&name=<URL-encoded-name>" --from <file>'));
+  assert.ok(run.err.includes('foundation keep <name> --from <file>'));
   const [inputPath, outputPath] = JSON.parse(run.out);
   assert.ok(run.err.includes(outputPath));
   await assert.rejects(stat(dirname(inputPath)), { code: 'ENOENT' });
@@ -171,7 +171,7 @@ test('保存に失敗したときだけ復旧用の非公開出力を残し、�
   assert.deepEqual(await readdir(dirname(outputPath)), [outputSpec.filename]);
   assert.equal(await readFile(outputPath, 'utf8'), 'generated-secret');
   assert.equal((await f.read('secret', 'signin config')).status, 404);
-  const retried = await execute(['api', 'PUT', '/v1/resources?kind=secret&name=signin%20config', '--from', outputPath], f.env);
+  const retried = await execute(['keep', 'signin config', '--from', outputPath], f.env);
   assert.equal(retried.code, 0, retried.err);
   assert.equal((await f.read('secret', 'signin config')).text, 'generated-secret');
   assert.doesNotMatch(run.out + run.err + retried.out + retried.err, /generated-secret|input-secret/);

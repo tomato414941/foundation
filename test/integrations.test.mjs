@@ -82,6 +82,8 @@ test('Replacing a key revokes the one it replaces, and an app revokes only its o
 test('A request from such a user is opened on the app\'s page, and a single-use link reaches that request alone', async t => {
   const { f, account, ask, link, visitor } = await setup(t);
   const { account: user, key } = await account('user-1');
+  // What the user keeps is injected by Foundation's principal, which the user has made their agent.
+  f.app.principals.relate(f.app.keys.agentId, 'agent', 'principal', user.id);
   const request = await ask(key), other = await ask(await (async () => (await account('user-2')).key)());
   assert.equal(request.verification_uri, 'https://simplicity.example.test/foundation?foundation_request=' + request.id);
   const made = await link(user, request.id);
@@ -98,7 +100,8 @@ test('A request from such a user is opened on the app\'s page, and a single-use 
   assert.equal((await go('/v1/requests/' + request.id)).json.request.id, request.id);
   assert.equal((await go('/v1/overview')).status, 401, 'the link reaches no other screen');
   assert.equal((await go('/v1/requests/' + other.id)).status, 401);
-  const stored = await go('/v1/requests/' + request.id + '/grant', { method: 'POST', data: { entries: [{ name: 'npm-api-token', content: 'npm_value' }] } });
+  const shown = (await go('/v1/requests/' + request.id)).json.request;
+  const stored = await go('/v1/requests/' + request.id + '/grant', { method: 'POST', data: { entries: [{ name: 'npm-api-token', ...await f.sealed('npm_value', { anonymous: true }, shown.recipients) }] } });
   assert.equal(stored.status, 200, stored.text);
   assert.deepEqual((await go('/v1/requests/' + request.id)).json.request.result.names, ['npm-api-token']);
   const delivered = await f.request('/v1/injections', { method: 'POST', anonymous: true, token: key.token, data: { names: [{ name: 'npm-api-token', as: 'NPM_TOKEN' }] } });
@@ -195,7 +198,7 @@ test('As with Stripe, an app gives a return page, a refresh page and a signed we
   const link = new URLSearchParams(new URL(made.url).hash.slice(1)).get('link');
   const claimed = await fetch(f.base + '/v1/links/exchange', { method: 'POST', headers: { 'content-type': 'application/json', origin: f.base }, body: JSON.stringify({ request_id: first.id, link }) });
   const cookie = claimed.headers.getSetCookie()[0].split(';')[0];
-  assert.equal((await f.request('/v1/requests/' + first.id + '/grant', { method: 'POST', anonymous: true, headers: { cookie }, data: { entries: [{ name: 'npm-token', content: 'value' }] } })).status, 200);
+  assert.equal((await f.request('/v1/requests/' + first.id + '/grant', { method: 'POST', anonymous: true, headers: { cookie }, data: { entries: [{ name: 'npm-token', content: 'value' }] } })).status, 200, 'sealed for the one asked and Foundation');
   // The first request's name is now taken, so the next asks for another.
   const second = await ask('npm-token-next');
   await f.request('/v1/requests/' + second.id, { method: 'DELETE', anonymous: true, token: key.token, data: {} });

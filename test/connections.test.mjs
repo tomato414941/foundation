@@ -31,7 +31,8 @@ test('Stored names and caller-selected environment variables are independent', a
   assert.equal(kept.status, 200, kept.text);
   assert.match(kept.json.resource.id, /^[0-9a-f-]{36}$/, 'a held thing has an id of its own');
   assert.deepEqual({ ...kept.json.resource, id: undefined, created_at: 0, updated_at: 0 },
-    { id: undefined, kind: 'secret', name: 'github/gh-token', holder_id: USER_A, created_at: 0, updated_at: 0, size: secret.length });
+    { id: undefined, kind: 'secret', name: 'github/gh-token', holder_id: USER_A, created_at: 0, updated_at: 0, size: secret.length + 28, recipients: kept.json.resource.recipients });
+  assert.ok([USER_A, f.app.keys.agentId].every(id => kept.json.resource.recipients.includes(id)), 'sealed for the holder and for Foundation, which acts for them');
   assert.doesNotMatch(kept.text, new RegExp(secret), 'writing never echoes the bytes back');
 
   const listed = await f.request('/v1/resources?kind=secret', { token, anonymous: true });
@@ -294,6 +295,7 @@ test('閲覧を許された相手は、その保有者の値だけを読み、�
   assert.equal(made.status, 201, made.text);
   const granted = await f.request('/v1/relations', { method: 'POST', data: { subject: made.json.principal.id, relation: 'viewer', object_type: 'resource', object_id: kept.json.resource.id } });
   assert.equal(granted.status, 201, granted.text);
+  await f.handEnvelope(kept.json.resource.id, { token: made.json.token, anonymous: true });
   await f.signin('other@example.test');
   await f.request('/v1/resources?kind=secret&name=shared', { method: 'PUT', raw: 'b-value' });
   const allowed = await f.request('/v1/resources/' + kept.json.resource.id + '/content', { token: made.json.token, anonymous: true });

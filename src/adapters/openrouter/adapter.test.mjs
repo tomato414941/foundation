@@ -47,7 +47,7 @@ test('OpenRouter exchanges only PKCE code, preserves real expiry and zero budget
   assert.deepEqual(Object.keys(body).sort(), ['code', 'code_challenge_method', 'code_verifier']);
   assert.equal(createHash('sha256').update(body.code_verifier).digest('base64url'), url.searchParams.get('code_challenge'));
   assert.equal(f.openrouter.calls[1].url, OPENROUTER_API + '/key');
-  assert.equal(f.app.principals.actorsOf(USER_A).length, 0, 'connecting alone grants no runtime');
+  assert.deepEqual(f.app.principals.actorsOf(USER_A).map(item => item.name), ['Foundation'], 'connecting alone grants no runtime');
 });
 
 test('OpenRouter callback cannot use another session, forged state, or a denied authorization', async t => {
@@ -82,8 +82,9 @@ test('承認したキーに認証情報と提供元の有効期限を渡し、�
   assert.deepEqual(issued.json.injection.environment, { OPENROUTER_API_KEY: f.openrouter.key() });
   assert.equal(issued.json.expires_at, null);
   assert.equal(issued.json.expires_in, null);
-  assert.ok(f.app.principals.actorsOf(USER_A)[0].keys[0].last_used_at);
-  await f.request('/v1/principals/' + f.app.principals.actorsOf(USER_A)[0].id, { method: 'DELETE', data: {} });
+  const machine = f.app.principals.actorsOf(USER_A).find(item => item.keys.length);
+  assert.ok(machine.keys[0].last_used_at);
+  await f.request('/v1/principals/' + machine.id, { method: 'DELETE', data: {} });
   assert.equal((await connection(f, account, token)).status, 401);
 });
 

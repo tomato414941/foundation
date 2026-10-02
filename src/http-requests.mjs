@@ -5,7 +5,7 @@ export const INTERVAL = 5;
 
 // A request as anyone sees it: who asks (by name), what for, and where it is answered. The one asked by an
 // app's user is sent to that app's own page, which knows who they are.
-export function requestView({ requests, services, principals, settings, connections, apps, resources }, row, origin, { events = false, code = false, interval = INTERVAL } = {}) {
+export function requestView({ requests, services, principals, settings, connections, apps, resources, keys, authorization }, row, origin, { events = false, code = false, interval = INTERVAL } = {}) {
   const value = requests.summary(row, { includeEvents: events, includeCode: code });
   const from = principals.get(row.from_id), asked = requests.detail(row);
   let service;
@@ -21,7 +21,11 @@ export function requestView({ requests, services, principals, settings, connecti
   let object;
   if (row.type === 'relation' && asked.object_type === 'principal') object = { type: 'principal', id: asked.object_id, name: principals.get(asked.object_id)?.name ?? '' };
   if (row.type === 'relation' && asked.object_type === 'resource') { const held = resources.get(asked.object_id); object = { type: 'resource', id: asked.object_id, kind: held?.kind ?? null, name: held?.name ?? '' }; }
-  return { ...value, requester_name: from?.name ?? row.requester_name, verification_uri, interval, ...(object ? { object } : {}),
+  // Whom what is kept for a store request is sealed for: the one asked, Foundation's principal when it acts for them,
+  // and the asker when it asked to read any of it back; each with a key.
+  const recipients = row.type === 'secret' && row.to_id ? [row.to_id, ...(authorization.can(keys.agentId, 'inject', 'principal', { id: row.to_id }) ? [keys.agentId] : []), ...(asked.fields.some(one => one.readable) ? [row.from_id] : [])]
+    .map(id => ({ principal_id: id, public_key: keys.publicKeyOf(id)?.toString('base64url') })).filter(one => one.public_key) : undefined;
+  return { ...value, requester_name: from?.name ?? row.requester_name, verification_uri, interval, ...(object ? { object } : {}), ...(recipients ? { recipients } : {}),
     ...(service ? { service, ...(scheme ? { auth_scheme: scheme } : {}), ...(asked.connection_id ? { connection: target ? connections.view(target) : null } : {}) } : {}),
     ...(app !== undefined ? { app } : {}),
     ...(row.type === 'secret' ? { store: asked.fields } : {}) };

@@ -12,7 +12,8 @@
   "files": [
     "runtime.mjs",
     "env-name.mjs",
-    "webauthn.mjs"
+    "webauthn.mjs",
+    "envelope.mjs"
   ],
   "repository": {
     "type": "git",

@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { validEnvName } from './env-name.mjs';
 import { createCredential, answer } from './webauthn.mjs';
+import { newContentKey, sealContent, seal, open as openEnvelope, openContent, generateKey } from './envelope.mjs';
 
 // This program does only what the agent running it cannot do for itself.
 //
@@ -22,9 +23,10 @@ import { createCredential, answer } from './webauthn.mjs';
 // There is also `api`, which is for people and for scripts rather than for agents: it attaches the key to a
 // request and prints what comes back. One escape hatch, so that the API can grow without this program growing
 // a verb for every endpoint, and without deciding for an agent how it ought to use any of them.
-// The key file: this machine's WebAuthn credential - its id, whose it is, and its private key - kept private. The
-// private key is made here and never leaves; Foundation keeps only the public half. An older file holds the access key
-// Foundation issued instead, and is replaced with a credential the first time it is used.
+// The key file: this machine's WebAuthn credential - its id, whose it is, and its private key - kept private, and
+// the machine's own key for what is sealed for it (envelope.mjs). Both private halves are made here and never leave;
+// Foundation keeps only the public halves. An older file holds the access key Foundation issued instead, and is
+// replaced with a credential the first time it is used.
 async function readKey(path, { missingOk = false } = {}) {
   let handle;
   try {
@@ -33,10 +35,11 @@ async function readKey(path, { missingOk = false } = {}) {
     if (!info.isFile() || info.size > 4096 || (info.mode & 0o077) || (process.getuid && info.uid !== process.getuid())) throw new Error('Runtime key file must be owned by the current user and private (mode 600).');
     const content = (await handle.readFile('utf8')).trim();
     if (/^fdn_[A-Za-z0-9_-]{43}$/.test(content)) return { token: content };
-    let credential;
-    try { ({ webauthn_credential: credential } = JSON.parse(content)); } catch {}
+    let credential, own;
+    try { ({ webauthn_credential: credential, key: own } = JSON.parse(content)); } catch {}
     if (typeof credential?.id !== 'string' || typeof credential.user !== 'string' || credential.private_key?.kty !== 'EC') throw new Error('Invalid runtime key file.');
-    return { credential };
+    if (own !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(own?.private_key ?? '')) throw new Error('Invalid runtime key file.');
+    return { credential, own };
   } catch (error) {
     if (error.code === 'ENOENT') { if (missingOk) return null; throw new Error('No key yet. Run: foundation connect'); }
     if (error.code === 'ELOOP') throw new Error('Runtime key file must not be a symbolic link.');
@@ -114,6 +117,8 @@ Commands:
                                        Run a command with saved values in its environment.
   exec --inputs '<json>' -- <command>  The same, with files, structured inputs, or a connection for a service by id.
   exec --output '<json>' -- <command>  Also save a file the command writes.
+  keep <name> --from <file>            Save a file as a secret, sealed here for whoever may open it.
+  read <name>                          Print a secret this machine was handed an envelope for.
   version                              Print the version.
 
 API specification:
@@ -181,10 +186,19 @@ async function main() {
     const content = parsed.values.from !== undefined ? await readFile(parsed.values.from) : parsed.values.json !== undefined ? Buffer.from(parsed.values.json) : method === 'GET' ? undefined : Buffer.from('{}');
     call = { method, target: parsed.positionals[1], body: content,
       type: parsed.values.type || (parsed.values.from !== undefined ? 'application/octet-stream' : 'application/json') };
+  } else if (action === 'keep') {
+    const parsed = parseArgs({ args, options: { from: { type: 'string' } }, strict: true, allowPositionals: true });
+    if (parsed.positionals.length !== 1 || parsed.values.from === undefined) throw new Error('Usage: keep <name> --from <file>');
+    const content = await readFile(parsed.values.from);
+    if (!content.length || content.length > 1024 * 1024) throw new Error('A secret must contain 1 byte to 1MB.');
+    call = { name: parsed.positionals[0], body: content };
+  } else if (action === 'read') {
+    if (args.length !== 1) throw new Error('Usage: read <name>');
+    call = { name: args[0] };
   } else if (action === 'token') {
     if (args.length) throw new Error('Usage: token');
   } else if (!(action === 'exec' && (names.length || output) && command.length)) {
-    throw new Error('Usage: connect [<url>] [--name <name>] | token | exec [<ENV>=<name> ... | --inputs <json>] [--output <json>] -- <command> [args...] | api <method> </path> [--json <body>] [--from <file>]');
+    throw new Error('Usage: connect [<url>] [--name <name>] | token | exec [<ENV>=<name> ... | --inputs <json>] [--output <json>] -- <command> [args...] | keep <name> --from <file> | read <name> | api <method> </path> [--json <body>] [--from <file>]');
   }
   const url = serverUrl(connectTo ?? configured);
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
@@ -218,10 +232,20 @@ async function main() {
     await writeKey(keyPath, JSON.stringify({ webauthn_credential: made.credential }), !process.env.FOUNDATION_RUNTIME_KEY_FILE);
     key = { credential: made.credential };
   }
+  // This machine's own key, made and published once it is a principal here: what is sealed for it opens with this.
+  // A key published elsewhere for this principal stays as it is; then nothing sealed for it opens here.
+  async function publishKey() {
+    if (key.own) return;
+    const made = generateKey();
+    const published = await send('/v1/key', { public_key: made.publicKey.toString('base64url') }, { method: 'PUT', accept: data => data.error?.code === 'key_exists' });
+    if (published.error) return;
+    key.own = { private_key: made.privateKey.toString('base64url') };
+    await writeKey(keyPath, JSON.stringify({ webauthn_credential: key.credential, key: key.own }), !process.env.FOUNDATION_RUNTIME_KEY_FILE);
+  }
   if (key?.token && action !== 'connect') { await upgrade(hostname() + ' の ' + (agentName || 'AI')); }
   // A credential this server no longer knows leaves connecting to start over; anything else needs it.
   if (key?.credential) {
-    try { token = await prove(); }
+    try { token = await prove(); await publishKey(); }
     catch (error) { if (action !== 'connect') throw error; key = null; token = null; }
   }
   if (action === 'token') { console.log(token); return; }
@@ -255,11 +279,23 @@ async function main() {
       token = made.token; me = null;
       key = { token };
     }
-    if (key?.token) { await upgrade(wanted); token = await prove(); }
+    if (key?.token) { await upgrade(wanted); token = await prove(); await publishKey(); }
     const answer = me?.acts_for?.length ? null : await send('/v1/requests', { authorization_details: [{ type: 'relation', relation: 'agent' }] });
     if (connectTo !== undefined) await saveUrl(url.origin);
     console.log(answer === null ? 'Already approved on ' + url.origin + '.' : JSON.stringify(answer, null, 2));
     console.log('\nKey file: ' + keyPath + '\nServer: ' + url.origin + (connectTo !== undefined ? ' (saved to ' + configPath() + ')' : '') + '\nEverything else is HTTP: Authorization: Bearer $(foundation token)');
+    return;
+  }
+  // Reading a secret this machine was handed an envelope for: its own, or one shown to it along a line.
+  if (action === 'read') {
+    if (!key.own) throw new Error('This machine has no key of its own here, so nothing sealed for it can be opened.');
+    const own = await send('/v1/resources?kind=secret&name=' + encodeURIComponent(call.name), undefined, { method: 'GET', accept: () => true });
+    const resource = own.resource ?? (await send('/v1/resources?shown=me', undefined, { method: 'GET' })).resources.find(item => item.kind === 'secret' && item.name === call.name);
+    if (!resource) throw new Error('No secret named ' + JSON.stringify(call.name) + ' is kept by this machine or shown to it.');
+    const kept = await send('/v1/resources/' + resource.id + '/content', undefined, { method: 'GET' });
+    if (!kept.envelope) throw new Error('No envelope was made for this machine: it may read about this secret, but was not handed its key.');
+    const contentKey = openEnvelope(Buffer.from(kept.envelope, 'base64url'), Buffer.from(key.own.private_key, 'base64url'));
+    process.stdout.write(openContent(contentKey, Buffer.from(kept.content, 'base64url')));
     return;
   }
   // Nothing runs before someone has accepted this key: a key that acts for nobody reaches only its own empty resources,
@@ -274,6 +310,20 @@ async function main() {
   const holder = process.env.FOUNDATION_AS || (acting.length === 1 ? acting[0] : null);
   if (!holder && acting.length > 1) throw new Error('This key acts for several principals. Set FOUNDATION_AS=<principal id> to say which one this run is for.');
   const forHolder = target => holder ? target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(holder) : target;
+  // A secret is sealed here, with a key of its own, for each of the holder's recipients: the server keeps what it
+  // cannot open. This machine is not among them; it places the bytes and does not read them back.
+  const sealedFor = async bytes => {
+    const { recipients } = await send(forHolder('/v1/recipients'), undefined, { method: 'GET' });
+    if (!Array.isArray(recipients) || !recipients.length) throw new Error('Nobody can open a secret kept for this holder yet: the holder needs a key, or Foundation needs to act for them.');
+    const contentKey = newContentKey();
+    return { content: sealContent(contentKey, bytes).toString('base64url'), envelopes: Object.fromEntries(recipients.map(item => [item.principal_id, seal(contentKey, Buffer.from(item.public_key, 'base64url')).toString('base64url')])) };
+  };
+  if (action === 'keep') {
+    const saved = await send(forHolder('/v1/resources?kind=secret&name=' + encodeURIComponent(call.name)), await sealedFor(call.body), { method: 'PUT' });
+    try { await send('/v1/relations', { relation: 'editor', object_type: 'resource', object_id: saved.resource.id }, { method: 'DELETE' }); } catch {}
+    console.log(JSON.stringify(saved));
+    return;
+  }
   let injection;
   if (names.length) ({ injection } = await send(forHolder('/v1/injections'), { names }));
   else injection = { environment: {}, files: [] };
@@ -305,7 +355,7 @@ async function main() {
       }
     }
   };
-  const recovery = () => 'Foundation could not confirm the output was saved. The private output file is retained for recovery: ' + outputPath + '\nRetry with foundation api PUT "/v1/resources?kind=secret&name=<URL-encoded-name>" --from <file>, then remove that recovery file.';
+  const recovery = () => 'Foundation could not confirm the output was saved. The private output file is retained for recovery: ' + outputPath + '\nRetry with foundation keep <name> --from <file>, then remove that recovery file.';
   process.once('exit', cleanup);
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => {
     interrupted = true;
@@ -344,7 +394,7 @@ async function main() {
       retainOutput = true;
       // The command wrote it; the agent never saw it, and keeps it that way: the line drawn for the one who kept it is declined.
       let saved;
-      try { saved = await send(forHolder('/v1/resources?kind=secret&name=' + encodeURIComponent(output.name)), bytes, { method: 'PUT', type: 'application/octet-stream' }); }
+      try { saved = await send(forHolder('/v1/resources?kind=secret&name=' + encodeURIComponent(output.name)), await sealedFor(bytes), { method: 'PUT' }); }
       catch { throw new Error(recovery()); }
       try { await send('/v1/relations', { relation: 'editor', object_type: 'resource', object_id: saved.resource.id }, { method: 'DELETE' }); } catch {}
       retainOutput = false;

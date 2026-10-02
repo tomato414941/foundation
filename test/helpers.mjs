@@ -10,6 +10,10 @@ export { entry } from '../src/catalog.mjs';
 import { Connections } from '../src/connections.mjs';
 import { Secrets } from '../src/secrets.mjs';
 import { Inputs } from '../src/inputs.mjs';
+import { Keys } from '../src/keys.mjs';
+import { generateKey, newContentKey, sealContent, openContent, seal, open } from '../cli/envelope.mjs';
+// One private key per principal for the whole run, as a client keeps its own: a second fixture over the same database still opens with it.
+const privateKeys = new Map();
 import { Services } from '../src/services.mjs';
 import { Apps } from '../src/apps.mjs';
 import { Resources } from '../src/resources.mjs';
@@ -26,8 +30,8 @@ export const GMAIL = { readonly: [GMAIL_SCOPE + 'readonly'], metadata: [GMAIL_SC
 export function modules(store, entries = []) {
   const principals = new Principals(store), authorization = new Authorization(principals);
   const resources = new Resources(store), services = new Services(store, resources, entries, { authorization }), apps = new Apps(store, resources, services);
-  const secrets = new Secrets(store, resources), connections = new Connections(store, resources, services, apps);
-  return { resources, services, apps, secrets, connections, inputs: new Inputs(secrets, connections), principals, authorization, sessions: new Sessions(store), flows: new OAuthFlows(store) };
+  const keys = new Keys(store), secrets = new Secrets(store, resources, keys), connections = new Connections(store, resources, services, apps);
+  return { resources, services, apps, secrets, keys, connections, inputs: new Inputs(secrets, connections, row => secrets.open(row)), principals, authorization, sessions: new Sessions(store), flows: new OAuthFlows(store) };
 }
 
 export const KEY = Buffer.alloc(32, 7);
@@ -94,13 +98,60 @@ export async function fixture(t, options = {}) {
   // `data` is sent as JSON; `raw` is sent as given, with `type` as its content type.
   // A token that acts for exactly one principal names them on every call, as the CLI and the MCP tool do.
   const actsFor = new Map();
+  // Secrets are sealed by the client: a test that places one as `raw` has it sealed here, for the holder's
+  // recipients and the caller, with a key the caller publishes on first use; one that reads a secret gets its
+  // bytes opened with that key, as a client would.
+  const subjects = new Map(), published = new Set();
+  const b64 = buffer => Buffer.from(buffer).toString('base64url');
+  async function subjectOf(options) {
+    const who = options.token ?? options.headers?.cookie ?? (options.anonymous ? null : cookie);
+    if (!who) return null;
+    if (!subjects.has(who)) { const me = await request('/v1/principals/me', { ...options, method: 'GET', data: undefined, raw: undefined }); subjects.set(who, me.json?.principal?.id ?? null); }
+    return subjects.get(who);
+  }
+  async function keyOf(options) {
+    const id = await subjectOf(options);
+    if (!id) return null;
+    if (!privateKeys.has(id)) privateKeys.set(id, generateKey());
+    if (!published.has(id)) {
+      const response = await request('/v1/key', { ...options, method: 'PUT', data: { public_key: b64(privateKeys.get(id).publicKey) }, raw: undefined });
+      if (response.status !== 200 && response.json?.error?.code !== 'key_exists') return null;
+      published.add(id);
+    }
+    return { id, ...privateKeys.get(id) };
+  }
+  async function sealed(content, options, recipients, also = []) {
+    const own = await keyOf(options);
+    if (!recipients) { const listed = await request('/v1/recipients', { ...options, method: 'GET', data: undefined, raw: undefined }); recipients = listed.status === 200 ? listed.json.recipients : []; }
+    recipients = [...recipients, ...also.filter(one => !recipients.some(item => item.principal_id === one.principal_id))];
+    // The placer is a recipient too: placing something new for another makes it the thing's editor.
+    if (own && !recipients.some(item => item.principal_id === own.id)) recipients.push({ principal_id: own.id, public_key: b64(own.publicKey) });
+    const contentKey = newContentKey();
+    return { content: b64(sealContent(contentKey, Buffer.from(content))), envelopes: Object.fromEntries(recipients.map(item => [item.principal_id, b64(seal(contentKey, Buffer.from(item.public_key, 'base64url')))])) };
+  }
+  const secretPath = path => /^\/v1\/resources\?.*kind=secret/.test(path) || (path.match(/^\/v1\/resources\/([^/?]+)\/content/) && app.resources.get(RegExp.$1)?.kind === 'secret');
   async function request(path, { method = 'GET', data, raw, type = 'application/octet-stream', token, anonymous = false, headers = {}, as } = {}) {
-    const holder = as ?? (token && actsFor.get(token));
+    const holder = as ?? (token && actsFor.get(token)) ?? new URL(path, base).searchParams.get('as') ?? undefined;
     if (holder && !/[?&]as=/.test(path)) path += (path.includes('?') ? '&' : '?') + 'as=' + holder;
+    if (method === 'PUT' && raw !== undefined && secretPath(path)) {
+      // Over what is there, the new key goes to everyone who had the old one.
+      let existing = null;
+      try { existing = path.match(/^\/v1\/resources\/([^/?]+)\/content/) ? app.resources.get(RegExp.$1) : app.secrets.find(holder ?? await subjectOf({ token, anonymous }), new URL(path, base).searchParams.get('name')); } catch {}
+      data = await sealed(raw, { token, anonymous, as: holder }, undefined, existing ? app.keys.recipientKeys(existing.id) : []); raw = undefined;
+    }
+    // Answering a store request: each entry sealed for whom the request says.
+    if (method === 'POST' && data?.entries && /^\/v1\/requests\/[^/]+\/grant/.test(path)) {
+      const shown = await request(path.replace(/\/grant.*$/, ''), { method: 'GET', token, anonymous, headers });
+      data = { ...data, entries: await Promise.all(data.entries.map(async entry => typeof entry.content === 'string' && entry.envelopes === undefined ? { ...entry, ...await sealed(entry.content, { token, anonymous, headers }, shown.json?.request?.recipients ?? []) } : entry)) };
+    }
     const body = raw !== undefined ? raw : data !== undefined ? JSON.stringify(data) : undefined;
     const response = await fetch(base + path, { method, redirect: 'manual', headers: { ...(!anonymous && cookie ? { cookie } : {}), ...(method !== 'GET' ? { origin: options.publicOrigin || base } : {}), ...(body !== undefined ? { 'content-type': raw !== undefined ? type : 'application/json' } : {}), ...(token ? { authorization: 'Bearer ' + token } : {}), ...headers }, ...(body !== undefined ? { body } : {}) });
-    const text = await response.text();
+    let text = await response.text();
     let json; try { json = JSON.parse(text); } catch {}
+    if (method === 'GET' && response.ok && json?.envelope && secretPath(path)) {
+      const own = await keyOf({ token, anonymous, headers });
+      if (own) text = openContent(open(Buffer.from(json.envelope, 'base64url'), own.privateKey), Buffer.from(json.content, 'base64url')).toString('utf8');
+    }
     const operation = matchRoute(new URL(path, base).pathname, method)?.operation;
     const described = operation?.responses[response.status] ?? operation?.responses.default;
     const schema = described?.content?.['application/json']?.schema;
@@ -125,7 +176,21 @@ export async function fixture(t, options = {}) {
     assert.equal(response.status, 200, response.text);
     assert.equal(response.json.return_to, '/');
     cookie = response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
+    await allowFoundation();
+    await keyOf({});
     return response;
+  }
+  // The caller's envelope for a secret, sealed by Foundation's principal from its own: for a line drawn without one.
+  async function handEnvelope(resourceId, options = {}) {
+    const own = await keyOf(options);
+    const handed = await request('/v1/resources/' + resourceId + '/envelopes/' + own.id, { method: 'POST', data: {} });
+    assert.equal(handed.status, 200, handed.text);
+  }
+  // Foundation's principal made the holder's agent: what the holder keeps is sealed for it too, and injected by it.
+  async function allowFoundation(options = {}) {
+    const holder = options.as ?? (options.token && actsFor.get(options.token)) ?? await subjectOf(options);
+    const drawn = await request('/v1/relations', { ...options, method: 'POST', data: { subject: app.keys.agentId, relation: 'agent', object_type: 'principal', object_id: holder } });
+    assert.equal(drawn.status, 201, drawn.text);
   }
   // Connecting Google, asking to read Gmail unless other scopes are given.
   async function start({ connection_id, scopes = GMAIL.readonly } = {}) {
@@ -160,6 +225,8 @@ export async function fixture(t, options = {}) {
   async function become(name = 'laptop') {
     const made = await request('/v1/principals', { method: 'POST', anonymous: true, data: { name } });
     assert.equal(made.status, 201, made.text);
+    // A machine publishes its key as soon as it has a credential, as the CLI does.
+    await keyOf({ token: made.json.token, anonymous: true });
     return { id: made.json.principal.id, token: made.json.token };
   }
   async function approveKey(name = 'laptop') {
@@ -187,6 +254,7 @@ export async function fixture(t, options = {}) {
     const result = await request('/v1/principals', { method: 'POST', data: { name, agent: true, key: true } });
     assert.equal(result.status, 201, result.text);
     actsFor.set(result.json.token, result.json.principal.acts_for[0]);
+    await keyOf({ token: result.json.token, anonymous: true });
     return { ...result.json.principal, token: result.json.token, key_id: result.json.key.id };
   }
   // Ages a connection past its expiry in both the envelope and the scheme's private state.
@@ -196,5 +264,5 @@ export async function fixture(t, options = {}) {
     app.connections.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
   }
   if (options.signin !== false) await signin();
-  return { app, mailer, known, google, base, request, lookup, read, keep, drop, become, signin, start, callback, connection, inject, connectionFacts, issueKey, approveKey, expire, close, cookie: () => cookie };
+  return { app, mailer, known, google, base, request, lookup, read, keep, drop, become, signin, start, callback, connection, inject, connectionFacts, issueKey, approveKey, expire, close, allowFoundation, handEnvelope, keyOf, sealed, cookie: () => cookie };
 }

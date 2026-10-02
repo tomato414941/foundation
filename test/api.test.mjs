@@ -82,7 +82,7 @@ test('Owners cannot see, disconnect or reach each other\'s connections', async (
   const state = await f.request('/v1/overview');
   assert.deepEqual(state.json.connections.filter(row => row.service !== null), []);
   assert.deepEqual(state.json.secrets, []);
-  assert.deepEqual(state.json.actors, []);
+  assert.deepEqual(state.json.actors.map(item => item.name), ['Foundation']);
   assert.equal((await f.request('/v1/resources/' + encodeURIComponent(first.id), { method: 'DELETE', data: { revoke: true } })).status, 403);
   const intruder = await f.issueKey('intruder');
   assert.deepEqual((await f.request('/v1/resources?kind=connection', { token: intruder.token })).json.resources, []);

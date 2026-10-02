@@ -88,13 +88,18 @@ test('承認依頼の完了結果を保ち、失効キーの認証を拒否す�
 
 test('APIの認証成功をキーの最終利用として記録する', async t => {
   const f = await fixture(t), key = await f.issueKey();
-  assert.equal((await f.request('/v1/overview')).json.actors[0].keys[0].last_used_at, null);
+  const mine = async () => (await f.request('/v1/overview')).json.actors.find(item => item.id === key.id).keys[0];
+  // Issued and used once already: the machine published its key with it.
+  const first = (await mine()).last_used_at;
+  assert.ok(first);
+  await new Promise(resolve => setTimeout(resolve, 5));
   const before = Date.now();
   assert.equal((await f.request('/v1/resources?kind=connection', { token: key.token })).status, 200);
-  const current = (await f.request('/v1/overview')).json.actors[0].keys[0];
+  const current = await mine();
   assert.ok(Date.parse(current.last_used_at) >= before);
+  assert.ok(Date.parse(current.last_used_at) > Date.parse(first));
   assert.ok(Date.parse(current.last_used_at) <= Date.now());
-  assert.equal((await f.request('/v1/overview')).json.actors[0].keys[0].last_used_at, current.last_used_at);
+  assert.equal((await mine()).last_used_at, current.last_used_at);
 });
 
 for (const identity of ['キー', 'セッション']) test(`アップロード中に${identity}が失効した場合は保存を拒否して元の値を維持する`, async t => {
@@ -104,7 +109,7 @@ for (const identity of ['キー', 'セッション']) test(`アップロード�
   let upload;
   const completed = new Promise((resolve, reject) => {
     upload = httpRequest(f.base + '/v1/resources?kind=secret&name=value', { method: 'PUT', headers: {
-      'content-type': 'application/octet-stream',
+      'content-type': 'application/json',
       ...(identity === 'キー' ? { authorization: 'Bearer ' + key.token } : { cookie: f.cookie(), origin: f.base }),
     } }, res => {
       const chunks = [];
@@ -115,14 +120,14 @@ for (const identity of ['キー', 'セッション']) test(`アップロード�
     upload.on('error', reject);
   });
   t.after(() => upload.destroy());
-  upload.write('replacement-');
+  upload.write('{"plain":"cmVwbGFjZW1lbnQt');
   await started;
   if (identity === 'キー') await f.request('/v1/principals/' + key.id, { method: 'DELETE', data: {} });
   else await f.request('/v1/session', { method: 'DELETE' });
-  upload.end('value');
+  upload.end('dmFsdWU"}');
   const result = await completed;
   assert.equal(result.status, 401, result.text);
-  assert.equal(f.app.secrets.content(f.app.secrets.at(USER_A, 'value')).toString(), 'original');
+  assert.equal(f.app.secrets.open(f.app.secrets.at(USER_A, 'value')).toString(), 'original');
 });
 
 test('保存と依頼完了を一緒に確定し、失敗した場合は再試行可能にする', async t => {
@@ -130,12 +135,13 @@ test('保存と依頼完了を一緒に確定し、失敗した場合は再試�
   const request = await ask(f, key.token, 'store', { fields: [{ name: 'value', label: '値' }] });
   const original = f.app.requests.done;
   f.app.requests.done = () => { throw new Error('fixture completion failure'); };
-  assert.throws(() => f.app.requestActions.save(request.id, USER_A, [{ name: 'value', content: 'fixture-value' }]), /fixture completion failure/);
+  const entry = { name: 'value', ...await f.sealed('fixture-value', {}) };
+  assert.throws(() => f.app.requestActions.save(request.id, USER_A, [entry]), /fixture completion failure/);
   assert.equal(f.app.requests.get(request.id).status, 'pending');
   assert.deepEqual(f.app.secrets.list(USER_A), []);
   f.app.requests.done = original;
-  assert.deepEqual(f.app.requestActions.save(request.id, USER_A, [{ name: 'value', content: 'fixture-value' }]), { names: ['value'], replaced: [] });
-  assert.equal(f.app.secrets.content(f.app.secrets.at(USER_A, 'value')).toString(), 'fixture-value');
+  assert.deepEqual(f.app.requestActions.save(request.id, USER_A, [entry]), { names: ['value'], replaced: [] });
+  assert.equal(f.app.secrets.open(f.app.secrets.at(USER_A, 'value')).toString(), 'fixture-value');
 });
 
 test('依頼の種類に合った完了表示と移動先を返す', () => {
