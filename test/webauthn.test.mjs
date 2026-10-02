@@ -107,12 +107,13 @@ test('名前のないWebAuthnの資格情報や、ほかのプリンシパル向
 
 test('WebAuthnの資格情報だけで新しいプリンシパルになり、ブラウザはCookieを、プログラムはトークンをその場で受け取る', async t => {
   const f = await fixture(t, { signin: false });
-  const asked = await f.request('/v1/principals/options', { method: 'POST', data: { name: 'はじめての人' }, anonymous: true });
+  const asked = await f.request('/v1/principals/options', { method: 'POST', data: {}, anonymous: true });
   assert.equal(asked.status, 200, asked.text);
   const made = createCredential(asked.json.options, f.base);
-  const browser = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { name: 'はじめての人', webauthn_credential: { name: 'この端末', credential: made.response }, return_to: '/secrets' } });
+  const browser = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { webauthn_credential: { name: 'この端末', credential: made.response }, return_to: '/secrets' } });
   assert.equal(browser.status, 201, browser.text);
-  assert.equal(browser.json.principal.name, 'はじめての人');
+  assert.equal(browser.json.principal.name, '', 'no name asked to begin');
+  assert.equal((await f.request('/v1/principals/me', { method: 'PATCH', data: { name: 'はじめての人' }, headers: { cookie: browser.headers.getSetCookie().find(v => v.startsWith('fdn_session='))?.split(';')[0] ?? '' }, anonymous: true })).json.principal.name, 'はじめての人');
   assert.equal(browser.json.return_to, '/secrets');
   const cookie = sessionCookie(browser);
   assert.equal((await f.request('/v1/overview', { anonymous: true, headers: { cookie } })).json.user.id, browser.json.principal.id);

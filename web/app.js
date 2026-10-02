@@ -235,24 +235,19 @@ async function createPasskey(name) {
   return api('/v1/webauthn-credentials', { method: 'POST', data: { name, credential, ...wrap } });
 }
 // Starting with a passkey alone: the passkey made here makes the principal, signed in at once.
-function startWithPasskey() {
-  openDialog(`<h2 id="dialog-title">パスキーで始める</h2><form><label for="start-name">名前</label><input id="start-name" name="name" required maxlength="80" autocomplete="name">
-    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">パスキーを作成</button></form>`);
-  bindForm(async (form) => {
-    const name = String(form.get('name') || '').trim();
-    let made;
-    try {
-      const { options } = await api('/v1/principals/options', { method: 'POST', data: { name } });
-      const { credential, yielded } = await makePasskey(options);
-      // The principal's key, made with its first passkey and wrapped for it.
-      const key = yielded ? await sealing.generateKey() : null;
-      made = await api('/v1/principals', { method: 'POST', data: { name, webauthn_credential: { name: deviceName(), credential, ...(key ? { wrap: b64(await sealing.wrap(key.privateKey, yielded)) } : {}) }, ...(key ? { public_key: b64(key.publicKey) } : {}), return_to: returnTo() } });
-      own = key; keyUnavailable = !key;
-    } catch (error) { throw passkeyDeclined(error) ? new Error('パスキーを作れませんでした。') : error; }
-    if (made.backed_up) { closeDialog(); await arrive(made.return_to); return; }
-    openDialog(`<h2 id="dialog-title">パスキーを作成しました</h2><p>このパスキーは、この端末にしか保存されていません。</p><button class="button primary full" type="button" id="start-continue">続ける</button>`);
-    dialog.querySelector('#start-continue').addEventListener('click', () => { closeDialog(); void arrive(made.return_to); });
-  });
+// Starting with a passkey alone: one press makes the passkey, and with it the principal, signed in at once. Nothing
+// is asked; a name can be given on the account page.
+async function startWithPasskey() {
+  let made;
+  const { options } = await api('/v1/principals/options', { method: 'POST', data: {} });
+  const { credential, yielded } = await makePasskey(options);
+  // The principal's key, made with its first passkey and wrapped for it.
+  const key = yielded ? await sealing.generateKey() : null;
+  made = await api('/v1/principals', { method: 'POST', data: { webauthn_credential: { name: deviceName(), credential, ...(key ? { wrap: b64(await sealing.wrap(key.privateKey, yielded)) } : {}) }, ...(key ? { public_key: b64(key.publicKey) } : {}), return_to: returnTo() } });
+  own = key; keyUnavailable = !key;
+  if (made.backed_up) { await arrive(made.return_to); return; }
+  openDialog(`<h2 id="dialog-title">パスキーを作成しました</h2><p>このパスキーは、この端末にしか保存されていません。</p><button class="button primary full" type="button" id="start-continue">続ける</button>`);
+  dialog.querySelector('#start-continue').addEventListener('click', () => { closeDialog(); void arrive(made.return_to); });
 }
 async function answerPasskey() {
   const { options } = await api('/v1/signin/webauthn/options', { method: 'POST', data: {} });
@@ -296,7 +291,15 @@ async function showSignin({ email = '', message = '' } = {}) {
     resend.disabled = busy || seconds > 0;
     resend.textContent = seconds > 0 ? `再送信まで ${seconds}秒` : 'メールを再送信';
   }
-  document.querySelector('#passkey-start')?.addEventListener('click', () => { if (!busy) startWithPasskey(); });
+  document.querySelector('#passkey-start')?.addEventListener('click', async () => {
+    if (busy) return;
+    setBusy(true); document.querySelector('#passkey-error').textContent = '';
+    try { await startWithPasskey(); }
+    catch (error) {
+      if (!app.querySelector('#passkey-start')) return;
+      document.querySelector('#passkey-error').textContent = passkeyDeclined(error) ? 'パスキーを作れませんでした。' : error.message; setBusy(false);
+    }
+  });
   const passkeyButton = document.querySelector('#passkey-signin');
   passkeyButton?.addEventListener('click', async () => {
     if (busy) return;
@@ -555,7 +558,8 @@ function render() {
     // The account itself: who this is, and the few things done to it rather than in it.
     const passkeyRow = item => `<article class="agent-row" aria-label="${esc(item.name)}"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${item.last_used_at ? '最後に使った日時 ' + esc(keptWhen(item.last_used_at)) : 'まだ使っていません'}</p></div>
       <div class="agent-actions"><button class="text-button danger" data-action="remove-passkey" data-id="${esc(item.id)}">削除</button></div></article>`;
-    shell(`<header class="page-heading"><h1>アカウント</h1><p>${esc(state.user.email)}</p></header>
+    shell(`<header class="page-heading"><h1>アカウント</h1><p>${esc(state.user.email || '')}</p></header>
+      <section class="resource-section" aria-labelledby="name-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('edit')}</span><div><h2 id="name-title">名前</h2><p>${esc(state.principal.name || '')}</p></div></div><button class="button secondary" data-action="rename-me">名前を変更</button></div></section>
       <section class="resource-section" aria-labelledby="passkeys-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="passkeys-title">パスキー</h2><p>顔や指紋、端末のPINでサインインできます。</p></div></div>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} パスキーを追加</button>` : ''}</div>
         ${(state.webauthn_credentials || []).length ? `<div class="agent-list">${state.webauthn_credentials.map(passkeyRow).join('')}</div>` : ''}</section>
       ${state.payment?.available ? `<section class="resource-section" aria-labelledby="payment-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('card')}</span><div><h2 id="payment-title">支払い</h2><p>${state.payment.paying ? '支払い方法を登録済みです。無料枠を超えた分が請求されます。' : '無料枠を超えて使うには、支払い方法を登録します。'}</p></div></div><button class="button secondary" data-action="set-payment">${state.payment.paying ? '支払い方法を変更' : '支払い方法を登録'}</button></div></section>` : ''}
@@ -1145,6 +1149,10 @@ function renamePrincipal(item) {
   openDialog(`<h2 id="dialog-title">名前を変更</h2><form><label for="agent-name">名前</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off" value="${esc(item.name)}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
   bindForm(async (form) => { await api(`/v1/principals/${item.id}`, { method: 'PATCH', data: { name: form.get('name') } }); await refresh(); await principalDetails(item.id); });
 }
+function renameMe() {
+  openDialog(`<h2 id="dialog-title">名前を変更</h2><form><label for="my-name">名前</label><input id="my-name" name="name" required maxlength="80" autocomplete="name" value="${esc(state.principal.name || '')}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
+  bindForm(async (form) => { await api('/v1/principals/me', { method: 'PATCH', data: { name: form.get('name') } }); closeDialog(); await refresh(); });
+}
 async function issueKey(item) {
   const result = await api(`/v1/principals/${item.id}/keys`, { method: 'POST', data: {} });
   await refresh();
@@ -1531,6 +1539,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'add-integration') addIntegration();
     if (action === 'remove-principal') removePrincipal(principalById(id));
     if (action === 'rename-principal') renamePrincipal(principalById(id));
+    if (action === 'rename-me') renameMe();
     if (action === 'copy-token') {
       const token = document.querySelector('#agent-token');
       try { await navigator.clipboard.writeText(token.value); toast('キーをコピーしました。'); }

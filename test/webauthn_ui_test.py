@@ -79,15 +79,22 @@ with sync_playwright() as p:
     other.send('WebAuthn.addVirtualAuthenticator', {'options': {'protocol': 'ctap2', 'transport': 'internal', 'hasResidentKey': True,
                                                                 'hasUserVerification': True, 'isUserVerified': True, 'automaticPresenceSimulation': True, 'hasPrf': True}})
     fresh.goto(base, wait_until='networkidle')
-    fresh.get_by_role('button', name='パスキーで始める', exact=True).click()
-    started = fresh.get_by_role('dialog')
-    started.get_by_label('名前', exact=True).fill('はじめての人')
     fresh.screenshot(path=str(shots / 'start-390.png'), full_page=True)
     review(fresh)
-    started.get_by_role('button', name='パスキーを作成', exact=True).click()
+    # One press: nothing is asked.
+    fresh.get_by_role('button', name='パスキーで始める', exact=True).click()
+    started = fresh.get_by_role('dialog')
     expect(started.get_by_text('このパスキーは、この端末にしか保存されていません。', exact=True)).to_be_visible()
     started.get_by_role('button', name='続ける', exact=True).click()
     expect(fresh.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()
+    assert newcomer.request.get(base + '/v1/overview').json()['principal']['name'] == ''
+    # A name is given on the account page, when wanted.
+    fresh.goto(base + '/account', wait_until='networkidle')
+    fresh.get_by_role('button', name='名前を変更', exact=True).click()
+    fresh.get_by_role('dialog').get_by_label('名前', exact=True).fill('はじめての人')
+    fresh.get_by_role('dialog').get_by_role('button', name='保存', exact=True).click()
+    expect(fresh.get_by_role('region', name='名前').get_by_text('はじめての人', exact=True)).to_be_visible()
+    review(fresh)
     assert newcomer.request.get(base + '/v1/overview').json()['principal']['name'] == 'はじめての人'
     assert not errors, errors
     browser.close()

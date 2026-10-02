@@ -383,7 +383,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       if (at === 'principalOptions' && method === 'POST') {
         const input = await body(req);
         rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
-        return send(200, { options: await webauthn.registration(randomUUID(), { origin, userName: nameValue(input?.name), creating: true }) });
+        // The passkey's label where it is kept: the name given, or Foundation's, since none is needed to begin.
+        return send(200, { options: await webauthn.registration(randomUUID(), { origin, userName: input?.name === undefined ? 'Foundation' : nameValue(input.name), creating: true }) });
       }
       if (at === 'webauthnSigninOptions' && method === 'POST') {
         rateLimit('webauthn-options:' + clientAddress(req), 60, 600_000);
@@ -445,7 +446,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const input = await body(req);
         rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
         if (input?.webauthn_credential !== undefined) {
-          const asToken = input.session === 'token', given = input.webauthn_credential, name = nameValue(input.name);
+          const asToken = input.session === 'token', given = input.webauthn_credential, name = input.name === undefined ? '' : nameValue(input.name);
           if (!asToken) requireOrigin(req, origin);
           const destination = asToken ? '/' : returnPath(input.return_to);
           const made = await webauthn.register(given?.credential, { origin, name: given?.name, make: id => {

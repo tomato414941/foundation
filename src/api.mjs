@@ -220,7 +220,7 @@ export const routes = [
     get: op('getMe', 'Read the caller and its current access', 'Me'), patch: op('renameMe', 'Rename the caller', one('Principal'), { input: 'Rename', 'x-input-error': 'invalid_name' }),
     delete: okay('removeMe', 'Remove the caller and its resources'),
   } },
-  { name: 'principalOptions', path: '/v1/principals/options', methods: { post: op('principalOptions', 'Start becoming a principal with a WebAuthn credential', object({ options: object() }, ['options']), { input: object({ name: errorCode(string, 'invalid_name') }, ['name']), security: [], 'x-input-error': 'invalid_name',
+  { name: 'principalOptions', path: '/v1/principals/options', methods: { post: op('principalOptions', 'Start becoming a principal with a WebAuthn credential', object({ options: object() }, ['options']), { input: object({ name: errorCode(string, 'invalid_name') }), security: [], 'x-input-error': 'invalid_name',
     description: 'WebAuthn creation options (PublicKeyCredentialCreationOptionsJSON) for a principal that registering the credential will make. name is what the credential is known by in its authenticator.' }) } },
   { name: 'principals', path: '/v1/principals', methods: {
     get: op('listPrincipals', 'List principals owned by the caller', many('principals', 'Principal')),
