@@ -117,7 +117,7 @@ export const schemas = {
     object({ plain: { ...string, description: 'The bytes as they are, base64url, for Foundation\'s principal to seal for the holder and itself. Only where it is the holder\'s agent (otherwise foundation_not_agent).' } }, ['plain']),
   ], description: 'Sealed by the client, which opens nothing to the server; or, by a client that cannot seal, handed to Foundation\'s principal to seal. See /v1/recipients for whom to seal for.' },
   SecretContent: object({ content: string, envelope: { ...nullable(string), description: 'The caller\'s own envelope, when one was made for it.' }, recipients: { ...array(ref('Recipient')), description: 'Those with an envelope: a writer sealing with a new key seals it for each of them again.' } }, ['content', 'envelope', 'recipients']),
-  PrincipalKey: object({ principal_id: principalId, public_key: nullable(string), wrap: { ...nullable(string), description: 'The private key wrapped for the credential this session was proved with, when kept.' } }, ['principal_id', 'public_key']),
+  PrincipalKey: object({ principal_id: principalId, public_key: nullable(string), wraps: { ...map(string), description: 'For the caller\'s own key: the private key wrapped per WebAuthn credential id, as kept.' } }, ['principal_id', 'public_key']),
   PublishKey: object({ public_key: string, wraps: { ...map(string), description: 'The private key wrapped per WebAuthn credential id, as the client made it.' } }, ['public_key']),
   Recipient: object({ principal_id: principalId, public_key: string }, ['principal_id', 'public_key']),
   Object: resource('object', { size: integer, type: nullable(string) }),
@@ -206,7 +206,7 @@ export const routes = [
   { name: 'webauthnCredential', path: '/v1/webauthn-credentials/{credentialId}', methods: { delete: okay('removeWebauthnCredential', 'Remove a WebAuthn credential; the sessions it proved end') } },
   { name: 'webauthnCredentialWrap', path: '/v1/webauthn-credentials/{credentialId}/wrap', methods: { put: okay('keepWrap', 'Keep the principal\'s private key wrapped for this credential', { input: object({ wrapped: string }, ['wrapped']), 'x-input-error': 'invalid_wrap' }) } },
   { name: 'key', path: '/v1/key', methods: {
-    get: op('getKey', 'Read the caller\'s public key and its private key wrapped for this session\'s credential', object({ key: ref('PrincipalKey') }, ['key'])),
+    get: op('getKey', 'Read the caller\'s public key and its private key wrapped per credential', object({ key: ref('PrincipalKey') }, ['key'])),
     put: op('publishKey', 'Publish the caller\'s public key, once', object({ key: ref('PrincipalKey') }, ['key']), { input: 'PublishKey', 'x-input-error': 'invalid_key', description: 'A principal has one key; envelopes are made for it. Replacing it is refused (key_exists).' }),
   } },
   { name: 'recipients', path: '/v1/recipients', methods: { get: op('listRecipients', 'Whom a secret kept by the holder is sealed for', object({ recipients: array(ref('Recipient')) }, ['recipients']), { parameters: [as], description: 'The holder, and Foundation\'s principal when it is the holder\'s agent, each with a public key. Make an envelope for each when placing a secret.' }) } },

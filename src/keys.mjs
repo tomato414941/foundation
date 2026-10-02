@@ -63,9 +63,12 @@ export class Keys {
     const row = credentialId ? this.db.prepare('SELECT wrapped FROM key_wraps WHERE credential_id=?').get(credentialId) : undefined;
     return row ? text(row.wrapped) : null;
   }
-  view(principalId, credentialId) {
+  // The principal's key as a client sees it: the public half, and - for its own - the private half wrapped per
+  // credential, so that any of its credentials unwraps it.
+  view(principalId, { own = false } = {}) {
     const key = this.publicKeyOf(principalId);
-    return { principal_id: principalId, public_key: key ? text(key) : null, wrap: this.wrapOf(credentialId) };
+    const wraps = own ? Object.fromEntries(this.db.prepare('SELECT w.credential_id, w.wrapped FROM key_wraps w JOIN webauthn_credentials c ON c.id=w.credential_id WHERE c.principal_id=?').all(principalId).map(row => [row.credential_id, text(row.wrapped)])) : undefined;
+    return { principal_id: principalId, public_key: key ? text(key) : null, ...(own ? { wraps } : {}) };
   }
 
   // Envelopes on one resource, by recipient. Given as the client made them; checked only for shape.

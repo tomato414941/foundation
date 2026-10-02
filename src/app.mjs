@@ -616,11 +616,10 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         keys.keepWrap(row.id, input.wrapped);
         return send(200, { ok: true });
       }
-      // The caller's key: the public half published once, the private half kept wrapped per credential. What this
-      // session proved with is the credential whose wrap is given back.
+      // The caller's key: the public half published once, the private half kept wrapped per credential, each given
+      // back so that whichever credential is at hand unwraps it.
       if (at === 'key') {
-        const credentialId = session?.proof === 'webauthn' ? session.proof_ref : null;
-        if (method === 'GET') return send(200, { key: keys.view(subject.id, credentialId) });
+        if (method === 'GET') return send(200, { key: keys.view(subject.id, { own: true }) });
         if (method !== 'PUT') fail(405, 'method_not_allowed', 'この操作は利用できません。');
         const input = await inputBody();
         const wraps = input.wraps === undefined ? [] : Object.entries(input.wraps);
@@ -633,7 +632,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           }
         });
         auditLog.write(subject.id, 'key.published', 'principal', subject.id, {});
-        return send(200, { key: keys.view(subject.id, credentialId) });
+        return send(200, { key: keys.view(subject.id, { own: true }) });
       }
       // Whom to seal a secret of the holder's for: the holder, and Foundation's principal when it acts for them.
       if (at === 'recipients' && method === 'GET') {
@@ -696,7 +695,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           requestActions.revokeAccess(holderId, id);
           return send(200, { ok: true });
         }
-        if (part === 'publicKey' && method === 'GET') return send(200, { key: keys.view(id, null) });
+        if (part === 'publicKey' && method === 'GET') return send(200, { key: keys.view(id) });
         if (!part) {
           if (method === 'GET') { permit('read', 'principal', id); return send(200, { principal: { ...target, keys: principals.keys(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id) } }); }
           if (method === 'PATCH') { permit('rename', 'principal', id); const input = await inputBody(); return send(200, { principal: principals.rename(id, nameValue(input.name)) }); }

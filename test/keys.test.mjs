@@ -12,7 +12,7 @@ const b64 = buffer => Buffer.from(buffer).toString('base64url');
 test('主体は公開鍵を一度だけ公開し、相手の公開鍵は誰でも読める', async t => {
   const f = await fixture(t, { signin: false }), machine = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { name: 'machine' } });
   const options = { token: machine.json.token, anonymous: true }, made = generateKey();
-  assert.deepEqual((await f.request('/v1/key', options)).json.key, { principal_id: machine.json.principal.id, public_key: null, wrap: null });
+  assert.deepEqual((await f.request('/v1/key', options)).json.key, { principal_id: machine.json.principal.id, public_key: null, wraps: {} });
   const published = await f.request('/v1/key', { ...options, method: 'PUT', data: { public_key: b64(made.publicKey) } });
   assert.equal(published.status, 200, published.text);
   assert.equal(published.json.key.public_key, b64(made.publicKey));
@@ -31,10 +31,10 @@ test('秘密鍵はパスキーごとに包んで預け、そのパスキーで�
   assert.equal(published.status, 409, 'the signin already published one');
   const kept = await f.request('/v1/webauthn-credentials/credential-0000000001/wrap', { method: 'PUT', data: { wrapped: b64(wrap(made.privateKey, yielded)) } });
   assert.equal(kept.status, 200, kept.text);
-  const view = f.app.keys.view(USER_A, 'credential-0000000001');
-  assert.deepEqual(unwrap(Buffer.from(view.wrap, 'base64url'), yielded), made.privateKey);
-  assert.equal(f.app.keys.view(USER_A, 'credential-0000000002').wrap, null);
-  assert.equal((await f.request('/v1/key')).json.key.wrap, null, 'an email session proved with no credential');
+  const { wraps } = (await f.request('/v1/key')).json.key;
+  assert.deepEqual(Object.keys(wraps), ['credential-0000000001']);
+  assert.deepEqual(unwrap(Buffer.from(wraps['credential-0000000001'], 'base64url'), yielded), made.privateKey);
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/public-key')).json.key.wraps, undefined, 'wraps are the principal\'s own');
   assert.equal((await f.request('/v1/webauthn-credentials/credential-0000000009/wrap', { method: 'PUT', data: { wrapped: 'x' } })).status, 404);
 });
 
