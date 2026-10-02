@@ -529,13 +529,15 @@ test('mainの42版DBは認可と課金を保って43版へ移り、停止の読�
   const settled = next.db.prepare('SELECT * FROM meter_events').all(); assert.equal(settled.length, 3);
   await environments.stop(row); assert.deepEqual(next.db.prepare('SELECT * FROM meter_events').all(), settled);
   assert.equal(next.db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
+  assert.deepEqual(next.db.prepare('PRAGMA foreign_key_check').all(), []);
+});
 
 test('43版のシークレットはそれぞれの鍵で封じ直され、開いていたFoundationの封筒だけが残り、Foundationは持ち主の代わりに動く線を得る', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-43-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY), vault = new Vault(KEY);
   const { principals, resources } = modules(store);
   principals.ensure(USER_A); principals.ensure(USER_B);
-  // Two secrets of the owner's and one of another's, sealed as the server did before 43; the other keeps none.
+  // Two secrets of the owner's and one of another's, sealed as the server did before 44; the other keeps none.
   const kept = [['s1', USER_A, 'one'], ['s2', USER_A, 'two'], ['s3', USER_B, 'three']];
   for (const [id, holder, value] of kept) {
     resources.insert(id, holder, 'secret', id);
