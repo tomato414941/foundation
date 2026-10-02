@@ -700,6 +700,16 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           return send(200, { ok: true });
         }
         if (part === 'publicKey' && method === 'GET') return send(200, { key: keys.view(id) });
+        // Owned by another from now on: by its owner, who stops being so.
+        if (part === 'transferPrincipal' && method === 'POST') {
+          permit('transfer', 'principal', id);
+          const input = await inputBody(), to = principalId(input.to);
+          const owners = principals.ownersOf(id), from = owners.includes(subject.id) ? subject.id : owners[0];
+          if (from === undefined) fail(409, 'not_owned', 'この相手には持ち主がいません。');
+          const moved = principals.transfer(id, from, to);
+          auditLog.write(subject.id, 'principal.transferred', 'principal', id, { from, to });
+          return send(200, { principal: { ...moved, keys: principals.keys(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id) } });
+        }
         if (!part) {
           if (method === 'GET') { permit('read', 'principal', id); return send(200, { principal: { ...target, keys: principals.keys(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id) } }); }
           if (method === 'PATCH') { permit('rename', 'principal', id); const input = await inputBody(); return send(200, { principal: principals.rename(id, nameValue(input.name)) }); }
@@ -951,8 +961,20 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         return send(200, { resource: shown(saved) });
       }
       if (route?.group === 'resources') {
-        const held = resources.at(route.params.resourceId), part = at === 'content' ? '/content' : at === 'objectLink' ? '/link' : at === 'envelopes' ? '/envelopes' : null;
+        const held = resources.at(route.params.resourceId), part = at === 'content' ? '/content' : at === 'objectLink' ? '/link' : at === 'envelopes' ? '/envelopes' : at === 'transferResource' ? '/transfer' : null;
         const connection = held.kind === 'connection' ? connections.get(held.id) : null, secret = held.kind === 'secret' ? secrets.get(held.id) : null;
+        // Given to another owner: by whoever may transfer it, to any principal. A lent machine is not given.
+        if (part === '/transfer' && method === 'POST') {
+          if (held.kind === 'environment') fail(405, 'method_not_allowed', '環境は渡せません。');
+          permit('transfer', held.kind, held.id, held.owner_id);
+          const input = await inputBody(), to = principals.at(principalId(input.to)).id;
+          const moved = held.kind === 'secret' ? secrets.transfer(secrets.get(held.id), to, input.envelope)
+            : held.kind === 'connection' ? connections.transfer(connections.get(held.id), to)
+            : held.kind === 'app' ? apps.transfer(apps.get(held.id), to)
+            : held.kind === 'service' ? services.transfer(services.row(held.id), to) : objects.transfer(objects.get(held.id), to);
+          auditLog.write(subject.id, 'resource.transferred', 'resource', held.id, { from: held.owner_id, to });
+          return send(200, { resource: shown(resources.get(held.id)) });
+        }
         // An app: renamed by its owner; given new values by its owner or an editor; removed by its owner, which
         // stops the connections made through it. Its secret is never read back, by anyone.
         if (held.kind === 'app') {

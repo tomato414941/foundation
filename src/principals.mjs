@@ -68,6 +68,18 @@ export class Principals {
   unrelate(subjectId, relation, objectType, objectId) {
     return this.db.prepare('DELETE FROM relations WHERE subject_id=? AND relation=? AND object_type=? AND object_id=?').run(subjectId, relation, objectType, objectId).changes > 0;
   }
+  // Owned by another: the owner's record moves, and with it the name the old owner called it by. Its lines stay.
+  transfer(id, fromId, toId) {
+    if (toId === fromId) fail(400, 'invalid_transfer', 'すでにその相手のものです。');
+    if (!this.get(toId)) fail(404, 'not_found', '相手が見つかりません。');
+    if (toId === id) fail(400, 'invalid_relation', '自分自身との関係は引けません。');
+    return this.store.transaction(() => {
+      this.unrelate(fromId, 'owner', 'principal', id);
+      this.db.prepare('DELETE FROM aliases WHERE owner_id=? AND principal_id=?').run(fromId, id);
+      this.relate(toId, 'owner', 'principal', id);
+      return this.get(id);
+    });
+  }
   // Stop this principal's access to one owner: every line onto the owner, but the owner's ownership of it, and
   // onto what the owner has. Its identity and keys remain.
   revokeAccess(subjectId, ownerId) {

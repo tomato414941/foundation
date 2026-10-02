@@ -46,6 +46,7 @@ definition principal {
   relation inject_grant: principal
   relation functions_grant: principal
   relation invoke_grant: principal
+  relation transfer_grant: principal
   // An action on something that does not exist yet is an action on the owner, named by what it would make.
   relation connection_connect_grant: principal
 
@@ -62,6 +63,8 @@ definition principal {
   permission pass = manage + use + pass_grant
   // A limit is set on a principal by whoever owns it, never by itself.
   permission limit = owner + limit_grant
+  // Given to another owner by its owner, never by itself: what is owned is passed on, it does not pass itself on.
+  permission transfer = owner + transfer_grant
   permission relate = manage + relate_grant
   permission settings = manage + settings_grant
   permission overview = decide + overview_grant
@@ -88,6 +91,7 @@ definition secret {
   relation remove_grant: principal
   relation rename_grant: principal
   relation share_grant: principal
+  relation transfer_grant: principal
 
   permission list = owner->use + list_grant
   permission read = owner->use + viewer + editor + read_grant
@@ -96,6 +100,7 @@ definition secret {
   permission remove = owner->use + remove_grant
   permission rename = owner->decide + rename_grant
   permission share = owner->decide + share_grant
+  permission transfer = owner->decide + transfer_grant
 }
 
 // What a service lets the owner do, through a scheme: used by injecting, never read; disconnected by whoever
@@ -108,12 +113,14 @@ definition connection {
   relation read_grant: principal
   relation rename_grant: principal
   relation share_grant: principal
+  relation transfer_grant: principal
   relation disconnect_grant: principal
 
   permission list = owner->use + list_grant
   permission read = owner->use + viewer + editor + read_grant
   permission rename = owner->decide + rename_grant
   permission share = owner->decide + share_grant
+  permission transfer = owner->decide + transfer_grant
   permission disconnect = owner->decide + disconnect_grant
 }
 
@@ -128,6 +135,7 @@ definition object {
   relation rename_grant: principal
   relation link_grant: principal
   relation share_grant: principal
+  relation transfer_grant: principal
 
   permission list = owner->use + list_grant
   permission read = owner->use + viewer + editor + read_grant
@@ -136,6 +144,7 @@ definition object {
   permission rename = owner->decide + rename_grant
   permission link = owner->use + link_grant
   permission share = owner->decide + share_grant
+  permission transfer = owner->decide + transfer_grant
 }
 
 // An OAuth app: used to connect by whoever decides for the owner and anyone on a line to it; its secret is never
@@ -151,6 +160,7 @@ definition app {
   relation remove_grant: principal
   relation rename_grant: principal
   relation share_grant: principal
+  relation transfer_grant: principal
 
   permission list = owner->use + list_grant
   permission read = owner->use + viewer + editor + read_grant
@@ -159,6 +169,7 @@ definition app {
   permission remove = owner->decide + remove_grant
   permission rename = owner->decide + rename_grant
   permission share = owner->decide + share_grant
+  permission transfer = owner->decide + transfer_grant
 }
 
 // A service a owner described: it holds nothing secret, so whoever uses the owner's things may change it too.
@@ -172,6 +183,7 @@ definition service {
   relation remove_grant: principal
   relation rename_grant: principal
   relation share_grant: principal
+  relation transfer_grant: principal
 
   permission list = owner->use + list_grant
   permission read = owner->use + viewer + editor + read_grant
@@ -179,9 +191,11 @@ definition service {
   permission remove = owner->use + remove_grant
   permission rename = owner->decide + rename_grant
   permission share = owner->decide + share_grant
+  permission transfer = owner->decide + transfer_grant
 }
 
-// A lent machine: opened and used by whoever uses the owner's things and by editors, watched by viewers too.
+// A lent machine: opened and used by whoever uses the owner's things and by editors, watched by viewers too. It is
+// not passed on: it ends with the one it was lent to.
 definition environment {
   relation owner: principal
   relation viewer: principal

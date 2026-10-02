@@ -166,6 +166,14 @@ export class Objects {
     const found = await this.space.get(ROOM, row.id);
     return { content: found.content, contentType: row.type || found.contentType };
   }
+  // Given to another owner, within what they may keep.
+  transfer(row, ownerId) {
+    this.check();
+    const { count, bytes } = this.usage(ownerId);
+    if (count >= OBJECT_COUNT_MAX) fail(409, 'object_limit', '置けるのは1000件までです。');
+    this.fits(ownerId, bytes + row.size, row.size);
+    return this.get(this.resources.transfer(row, ownerId).id);
+  }
   rename(row, key) {
     const wanted = objectKey(key);
     if (wanted !== row.name && this.find(row.owner_id, wanted)) fail(409, 'name_taken', 'その名前はすでに使われています。');

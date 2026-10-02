@@ -80,6 +80,18 @@ export class Secrets {
     if (name !== row.name && this.find(row.owner_id, name)) fail(409, 'name_taken', 'その名前はすでに使われています。');
     return this.get(this.resources.rename(row, name).id);
   }
+  // Given to another owner, with an envelope for them when the giver made one, or when Foundation can make one
+  // from its own; the giver's own envelope goes with their line. Without either, the new owner has the secret and not
+  // yet its key.
+  transfer(row, ownerId, envelope) {
+    return this.store.transaction(() => {
+      const moved = this.resources.transfer(row, ownerId);
+      if (envelope !== undefined) this.keys.keepEnvelope(row.id, ownerId, envelope);
+      else if (this.keys.envelopeOf(row.id, this.keys.agentId) && this.keys.publicKeyOf(ownerId)) this.keys.resealFor(row.id, ownerId);
+      this.keys.dropEnvelope(row.id, row.owner_id);
+      return this.get(moved.id);
+    });
+  }
   remove(row) { this.resources.remove(row); }
   view(row) { return { ...this.resources.view(row), size: row.size, recipients: this.keys.recipientsOf(row.id) }; }
 }

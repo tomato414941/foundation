@@ -34,6 +34,14 @@ export class Resources {
     this.db.prepare('INSERT INTO resources (id,owner_id,kind,name,created_at,updated_at) VALUES (?,?,?,?,?,?)').run(id, ownerId, kind, name, stamp, stamp);
     return this.get(id);
   }
+  // Given to another owner: the same thing, with its lines and its log, now theirs. A name the new owner already
+  // uses for a thing of this kind is refused, as placing one would be.
+  transfer(row, ownerId) {
+    if (ownerId === row.owner_id) fail(400, 'invalid_transfer', 'すでにその相手のものです。');
+    if (row.kind !== 'connection' && this.db.prepare('SELECT 1 FROM resources WHERE owner_id=? AND kind=? AND name=?').get(ownerId, row.kind, row.name)) fail(409, 'name_taken', 'その相手はすでに同じ名前のものを持っています。');
+    this.db.prepare('UPDATE resources SET owner_id=?,updated_at=? WHERE id=?').run(ownerId, now(), row.id);
+    return this.get(row.id);
+  }
   touch(id) { this.db.prepare('UPDATE resources SET updated_at=? WHERE id=?').run(now(), id); return this.get(id); }
   // A new name for the same thing. Lines, the audit log and the content stay: they point at the id. Whether the
   // name is free is the kind's question, asked before this.

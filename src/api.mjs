@@ -61,6 +61,7 @@ export const schemas = {
   WebauthnSignin: object({ credential: { ...object(), description: 'The AuthenticationResponseJSON answering the options.' }, session: choice(['cookie', 'token']), return_to: errorCode(string, 'invalid_return') }, ['credential']),
   CreatePrincipal: object({ name: string, alias: string, agent: boolean, key: boolean, webauthn_credential: object({ name: string, credential: object(), wrap: string }, ['name', 'credential']), public_key: string, session: choice(['cookie', 'token']), return_to: string }),
   Rename: object({ name: resourceName }, ['name']),
+  Transfer: object({ to: principalId, envelope: { ...string, description: 'For a secret: its key sealed for the new owner, base64url, as the giver made it.' } }, ['to']),
   Principal: object({ id: principalId, name: string, created_at: iso, alias: nullable(string),
     keys: array(ref('Key')), acts_for: array(principalId), owners: array(principalId) }, ['id', 'name', 'created_at']),
   Key: object({ id, kind: { const: 'key' }, created_at: iso, last_used_at: nullable(iso), environment: nullable(id), environment_id: id, expires_at: time }, ['id']),
@@ -236,6 +237,7 @@ export const routes = [
     post: op('issueKey', 'Issue a key, optionally replacing an existing key', object({ key: ref('Key'), token: string }, ['key', 'token']), { input: object({ replaces: string }), status: 201, description: 'The token is returned only once. Keep it in private storage, not chat or logs.' }),
   } },
   { name: 'accessKey', group: 'principals', path: '/v1/principals/{principalId}/keys/{keyId}', methods: { delete: okay('revokeKey', 'Revoke a key') } },
+  { name: 'transferPrincipal', group: 'principals', path: '/v1/principals/{principalId}/transfer', methods: { post: op('transferPrincipal', 'Give an owned principal to another principal', one('Principal'), { input: 'Transfer', 'x-input-error': 'invalid_transfer', description: 'By its owner. The owner\'s record and alias move; the principal\'s own lines and keys stay.' }) } },
   { name: 'publicKey', group: 'principals', path: '/v1/principals/{principalId}/public-key', methods: { get: op('getPublicKey', 'Read a principal\'s public key', object({ key: ref('PrincipalKey') }, ['key'])) } },
   { name: 'links', group: 'principals', path: '/v1/principals/{principalId}/links', methods: { post: op('issueLink', 'Issue a one-use link for a store request', object({ link: object({ id, request_id: requestId, expires_at: time }, ['id', 'request_id', 'expires_at']), url: string, expires_at: time }, ['link', 'url', 'expires_at']), { input: object({ request_id: string }, ['request_id']), status: 201, 'x-input-error': 'invalid_request' }) } },
   { name: 'access', group: 'principals', path: '/v1/principals/{principalId}/access', methods: { delete: okay('revokeAccess', 'Revoke a principal’s access to the owner', { parameters: [as] }) } },
@@ -300,6 +302,7 @@ export const routes = [
     post: okay('resealEnvelope', 'Have Foundation seal the secret\'s key for a principal, from the envelope made for Foundation', { input: 'Empty', description: 'Only for a secret sealed for Foundation\'s principal (otherwise not_sealed_for_foundation), and for a principal with a key (otherwise no_key).' }),
     delete: okay('dropEnvelope', 'Take back the envelope made for a principal'),
   } },
+  { name: 'transferResource', group: 'resources', path: '/v1/resources/{resourceId}/transfer', methods: { post: op('transferResource', 'Give a resource to another principal', one('Resource'), { input: 'Transfer', 'x-input-error': 'invalid_transfer', description: 'By whoever may transfer it (its owner, or one given that action). The lines onto it stay. A secret goes with an envelope for the new owner when given, or one Foundation makes from its own; a connection or app is resealed for them; a service goes only when nothing refers to it; an environment is not given.' }) } },
   { name: 'objectLink', group: 'resources', path: '/v1/resources/{resourceId}/link', methods: { post: op('createObjectLink', 'Create a time-limited object download URL', object({ id, name: string, url: string, url_expires_at: time }, ['id', 'name', 'url', 'url_expires_at']), { input: object({ minutes: integer }), 'x-input-error': 'invalid_minutes' }) } },
   { name: 'confirmation', path: '/v1/connections/confirmation', methods: {
     get: op('getConfirmation', 'Review changed service authorization', 'Confirmation', { parameters: [as, query('state', string, undefined, true)], security: session }),

@@ -29,6 +29,14 @@ export class Connections {
     return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE ${where.join(' AND ')} ORDER BY r.name,r.created_at,r.id`).all(...params);
   }
   rename(row, name) { return this.get(this.resources.rename(row, String(name ?? '').slice(0, 80) || row.name).id); }
+  // Given to another owner: its state is sealed under the new owner's name.
+  transfer(row, ownerId) {
+    return this.store.transaction(() => {
+      const state = this.state(row), moved = this.resources.transfer(row, ownerId);
+      this.db.prepare('UPDATE connections SET state=? WHERE resource_id=?').run(this.vault.seal(state, this.binding(moved)), row.id);
+      return this.get(row.id);
+    });
+  }
   remove(row) { this.resources.remove(row); }
 
   // For a service: what its scheme left with Foundation, and what it says about the account.

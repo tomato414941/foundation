@@ -137,6 +137,13 @@ export class Services {
     return this.db.prepare(`SELECT r.id, r.owner_id, r.kind, r.name FROM resources r LEFT JOIN connections c ON c.resource_id=r.id LEFT JOIN apps a ON a.resource_id=r.id
       WHERE c.service=? OR a.service=? ORDER BY r.created_at`).all(row.id, row.id);
   }
+  // Given to another owner, when nothing refers to it: what refers to it reaches it as its owner's.
+  transfer(row, ownerId) {
+    const dependents = this.dependents(row);
+    if (dependents.length) fail(409, 'service_in_use', `このサービスを使う接続やアプリが${dependents.length}件あります。先にそれらを削除してください。`, { dependents: dependents.length });
+    this.built.delete(row.id);
+    return this.row(this.resources.transfer(row, ownerId).id);
+  }
   // A service something still refers to stays: removing it would leave connections no scheme can use.
   remove(row) {
     const dependents = this.dependents(row);

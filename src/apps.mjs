@@ -100,6 +100,15 @@ export class Apps {
     if (name !== row.name && this.find(row.owner_id, name)) fail(409, 'name_taken', 'その名前はすでに使われています。');
     return this.get(this.resources.rename(row, name).id);
   }
+  // Given to another owner: its secret is sealed under the new owner's name. Connections made through it go on.
+  transfer(row, ownerId) {
+    return this.store.transaction(() => {
+      const sealed = this.vault.open(this.db.prepare('SELECT secret FROM apps WHERE resource_id=?').get(row.id).secret, this.binding(row));
+      const moved = this.resources.transfer(row, ownerId);
+      this.db.prepare('UPDATE apps SET secret=? WHERE resource_id=?').run(this.vault.seal(sealed, this.binding(moved)), row.id);
+      return this.get(row.id);
+    });
+  }
   // Everything the app holds, as the scheme's client takes it.
   clientValues(row) {
     const sealed = this.vault.open(this.db.prepare('SELECT secret FROM apps WHERE resource_id=?').get(row.id).secret, this.binding(row));
