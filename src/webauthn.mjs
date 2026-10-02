@@ -7,7 +7,7 @@ import { fail } from './errors.mjs';
 // Foundation's single-use values; answering it spends it.
 const TTL = 5 * 60_000;
 const NAME_MAX = 80;
-const COLUMNS = 'id, principal_id, name, created_at, last_used_at';
+const COLUMNS = 'id, principal_id, name, user_handle, created_at, last_used_at';
 const refused = () => fail(400, 'invalid_webauthn_credential', 'パスキーを確認できませんでした。もう一度お試しください。');
 // The challenge a response answers, as the client signed it.
 function answered(response) {
@@ -56,23 +56,25 @@ export class WebauthnCredentials {
     this.store.transaction(() => {
       if (this.get(credential.id)) fail(409, 'webauthn_credential_exists', 'このパスキーはすでに登録されています。');
       make?.(owner);
-      this.db.prepare('INSERT INTO webauthn_credentials (id,principal_id,public_key,sign_count,name,created_at) VALUES (?,?,?,?,?,?)')
-        .run(credential.id, owner, Buffer.from(credential.publicKey), credential.counter, label, Date.now());
+      this.db.prepare('INSERT INTO webauthn_credentials (id,principal_id,public_key,sign_count,name,user_handle,created_at) VALUES (?,?,?,?,?,?,?)')
+        .run(credential.id, owner, Buffer.from(credential.publicKey), credential.counter, label, owner, Date.now());
     });
     return { principalId: owner, credential: this.get(credential.id), backedUp: credentialBackedUp };
   }
 
-  // Signing in: any credential may answer, and the one that does says whose it is.
-  async authentication({ origin }) {
-    const challenge = this.challenges.issue('webauthn', 'signin', { ttl: TTL });
+  // Signing in - or, for another purpose named, proving a credential is at hand: any credential may answer, and the
+  // one that does says whose it is.
+  async authentication({ origin, purpose = 'signin' }) {
+    const challenge = this.challenges.issue('webauthn', purpose, { ttl: TTL });
     return generateAuthenticationOptions({ rpID: new URL(origin).hostname, challenge, userVerification: 'preferred', allowCredentials: [] });
   }
-  async authenticate(response, { origin }) {
+  async authenticate(response, { origin, purpose = 'signin' }) {
     const challenge = answered(response), spent = this.challenges.take('webauthn', challenge);
-    const row = spent?.subject === 'signin' && typeof response?.id === 'string' ? this.db.prepare('SELECT * FROM webauthn_credentials WHERE id=?').get(response.id) : undefined;
+    const row = spent?.subject === purpose && typeof response?.id === 'string' ? this.db.prepare('SELECT * FROM webauthn_credentials WHERE id=?').get(response.id) : undefined;
     if (!row) fail(401, 'invalid_webauthn_credential', 'パスキーを確認できませんでした。');
     const handle = response.response?.userHandle;
-    if (handle && Buffer.from(handle, 'base64url').toString() !== row.principal_id) fail(401, 'invalid_webauthn_credential', 'パスキーを確認できませんでした。');
+    // The handle is the one the credential was made with: its principal's id then, which merging may have changed since.
+    if (handle && Buffer.from(handle, 'base64url').toString() !== row.user_handle) fail(401, 'invalid_webauthn_credential', 'パスキーを確認できませんでした。');
     let verified;
     try {
       verified = await verifyAuthenticationResponse({ response, expectedChallenge: Buffer.from(challenge).toString('base64url'), ...where(origin), requireUserVerification: false,

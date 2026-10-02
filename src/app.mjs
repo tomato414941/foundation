@@ -24,6 +24,7 @@ import { Connections } from './connections.mjs';
 import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX } from './secrets.mjs';
 import { Keys, bytes as keyBytes } from './keys.mjs';
 import { principalName } from './names.mjs';
+import { Merge } from './merge.mjs';
 import { Inputs } from './inputs.mjs';
 import { Services } from './services.mjs';
 import { Objects, OBJECT_MAX } from './objects.mjs';
@@ -176,6 +177,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, connections, apps, resources, keys, authorization }, row, origin, { interval: requestInterval, ...options });
   const requestActions = new RequestActions({ store, requests, secrets, connections, services, apps, principals, authorization, auditLog,
     changed: row => { if (row.to_id) void settings.notify(row.to_id, 'request.' + row.status, { request: viewRequest(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() }); } });
+  const merge = new Merge({ store, db: store.db, resources, secrets, connections, apps, services, objects, environments, principals, webauthn, keys, requests, challenges, auditLog });
   const limits = new Map(), disconnects = new Set();
   const timer = setInterval(() => {
     store.sweep();
@@ -662,6 +664,23 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         permit('write', 'secret');
         const ids = [ownerId, ...(authorization.can(keys.agentId, 'inject', 'principal', { id: ownerId }) ? [keys.agentId] : [])];
         return send(200, { recipients: ids.map(id => ({ principal_id: id, public_key: keys.publicKeyOf(id) })).filter(item => item.public_key).map(item => ({ ...item, public_key: item.public_key.toString('base64url') })) });
+      }
+      // Another account made one with this: its passkey answers for it, this session for this one.
+      if (at === 'mergeOptions' && method === 'POST') {
+        permit('add-webauthn-credential', 'principal', subject.id);
+        await inputBody();
+        return send(200, { options: await webauthn.authentication({ origin, purpose: 'merge' }) });
+      }
+      if (at === 'mergeBegin' && method === 'POST') {
+        permit('add-webauthn-credential', 'principal', subject.id);
+        const input = await inputBody();
+        return send(200, await merge.begin(subject.id, input.credential, { origin }));
+      }
+      if (at === 'mergeComplete' && method === 'POST') {
+        permit('add-webauthn-credential', 'principal', subject.id);
+        const input = await inputBody(SECRET_MAX);
+        const done = merge.complete(subject.id, input);
+        return send(200, { ...done, principal: principals.get(subject.id) });
       }
       // Paying for more than the free part: a payment method set on Stripe's page, for the principal itself.
       if (at === 'payment' && method === 'GET') {

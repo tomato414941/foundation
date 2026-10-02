@@ -59,16 +59,23 @@ with sync_playwright() as p:
     page.reload(wait_until='networkidle')
     # The account shows its own ID, for whoever is to give to it.
     expect(page.get_by_role('region', name='ID').get_by_text(context.request.get(args.base + '/v1/overview').json()['user']['id'], exact=True)).to_be_visible()
-    section = page.get_by_role('region', name='持ち物をすべて渡す')
+    section = page.get_by_role('region', name='引き渡す')
     expect(section).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'account-transfer.png'), full_page=True)
-    section.get_by_role('button', name='渡す', exact=True).click()
+    section.get_by_role('button', name='引き渡す', exact=True).click()
     dialog = page.get_by_role('dialog')
-    dialog.get_by_label('渡す相手の ID', exact=True).fill(made['principal']['id'])
+    # Nothing chosen gives nothing; everything chosen gives everything.
+    dialog.get_by_label('引き渡す相手の ID', exact=True).fill(made['principal']['id'])
+    dialog.get_by_role('button', name='引き渡す', exact=True).click()
+    expect(dialog.get_by_role('alert')).to_have_text('引き渡すものを選んでください。')
+    expect(dialog.get_by_role('group', name='シークレット').get_by_role('checkbox', name='handed')).to_be_visible()
+    expect(dialog.get_by_role('group', name='登録した相手').get_by_role('checkbox', name='my agent')).to_be_visible()
+    for box in dialog.get_by_role('checkbox').all():
+        box.check()
     review(page)
     page.screenshot(path=str(shots / 'transfer-dialog.png'), full_page=True)
-    dialog.get_by_role('button', name='渡す', exact=True).click()
+    dialog.get_by_role('button', name='引き渡す', exact=True).click()
     expect(dialog).not_to_be_visible()
     assert context.request.get(args.base + '/v1/resources?kind=secret').json()['resources'] == []
     assert context.request.get(args.base + '/v1/principals').json()['principals'] == []
@@ -78,4 +85,4 @@ with sync_playwright() as p:
     assert [row['id'] for row in other.get(args.base + '/v1/principals', headers=headers).json()['principals']] == [owned['principal']['id']]
     assert not errors, errors
     browser.close()
-    print('持ち物をすべて渡す: 秘密と持っている相手が別のアカウントのものになり、相手が Foundation を通して使えることを確認しました。')
+    print('引き渡す: 選んだ秘密と相手が別のアカウントのものになり、相手が Foundation を通して使えることを確認しました。')

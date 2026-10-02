@@ -392,3 +392,8 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 .scope-list code { font-size: 14px; overflow-wrap: anywhere; }
 .scope-details { margin-top: 4px; font-size: 14px; }
 .own-client { margin-top: 4px; }
+/* Handing over: what there is to give, by kind, each a choice. */
+.handover-group { border: 0; padding: 0; margin: 0 0 12px; min-width: 0; }
+.handover-group legend { font-size: 13px; font-weight: 600; color: var(--muted); padding: 0; margin-bottom: 4px; }
+.handover-item { display: flex; gap: 8px; align-items: center; padding: 4px 0; font-size: 14px; }
+.handover-item input { margin: 0; }

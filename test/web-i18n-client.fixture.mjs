@@ -83,8 +83,8 @@ if (mode === 'boot') {
   await start;
   if (mode === 'account-transfer') {
     const labels = {
-      ja: { account: 'アカウント', copy: 'IDをコピー', title: '持ち物をすべて渡す', action: '渡す', recipient: '渡す相手の ID', close: '閉じる' },
-      en: { account: 'Account', copy: 'Copy ID', title: 'Transfer all belongings', action: 'Transfer', recipient: 'Recipient ID', close: 'Close' },
+      ja: { account: 'アカウント', copy: 'IDをコピー', title: '引き渡す', action: '引き渡す', recipient: '引き渡す相手の ID', close: '閉じる' },
+      en: { account: 'Account', copy: 'Copy ID', title: 'Hand over', action: 'Hand over', recipient: "Recipient's ID", close: 'Close' },
     };
     const assertAccount = locale => {
       const words = labels[locale], section = document.querySelector('[aria-labelledby="id-title"]');
@@ -92,22 +92,22 @@ if (mode === 'boot') {
       assert.equal(document.querySelector('#id-title').textContent, 'ID');
       assert.equal(section.querySelector('code').textContent, 'owner');
       assert.equal(section.querySelector('[data-action="copy-id"]').textContent.trim(), words.copy);
-      assert.equal(document.querySelector('#transfer-title').textContent, words.title);
-      assert.equal(document.querySelector('[data-action="transfer-all"]').textContent, words.action);
+      assert.equal(document.querySelector('#handover-title').textContent, words.title);
+      assert.equal(document.querySelector('[data-action="hand-over"]').textContent, words.action);
     };
     const assertDialog = locale => {
       const words = labels[locale], dialog = document.querySelector('#dialog');
       assert.ok(dialog.open);
       assert.equal(dialog.querySelector('#dialog-title').textContent, words.title);
-      assert.equal(dialog.querySelector('label[for="transfer-to"]').textContent, words.recipient);
+      assert.equal(dialog.querySelector('label[for="handover-to"]').textContent, words.recipient);
       assert.equal(dialog.querySelector('[type="submit"]').textContent, words.action);
       assert.equal(dialog.querySelector('[data-action="close-dialog"]').getAttribute('aria-label'), words.close);
-      assert.equal(dialog.querySelector('#transfer-to').name, 'to');
+      assert.equal(dialog.querySelector('#handover-to').name, 'to');
     };
     const assertNoTransfer = () => {
       assert.equal(calls.filter(({ url }) => url.endsWith('/transfer')).length, 0, 'changing language never transfers ownership');
       assert.equal(calls.filter(({ url }) => url.endsWith('/public-key')).length, 0, 'changing language never starts the transfer flow');
-      assert.ok(calls.every(({ options }) => options.method === 'GET'), 'copy, language changes, and cancellation do not write to the API');
+      assert.ok(calls.every(({ options }) => options.method === 'GET' || !options.method), 'copy, language changes, and cancellation do not write to the API');
     };
     assertAccount('ja');
     document.querySelector('[data-action="copy-id"]').click();
@@ -121,15 +121,16 @@ if (mode === 'boot') {
     assertNoTransfer();
 
     for (const [locale, next] of [['en', 'ja'], ['ja', 'en']]) {
-      document.querySelector('[data-action="transfer-all"]').click();
+      document.querySelector('[data-action="hand-over"]').click();
+      await until(() => document.querySelector('#handover-to'));
       assertDialog(locale);
-      const input = document.querySelector('#transfer-to'), form = input.form;
+      const input = document.querySelector('#handover-to'), form = input.form;
       const targetId = 'recipient-unique-' + locale;
       input.value = targetId;
       input.dispatchEvent(new w.Event('input', { bubbles: true }));
       change(next); await tick();
       assert.equal(document.documentElement.lang, locale, 'language changes wait for the transfer dialog to close');
-      assert.equal(document.querySelector('#transfer-to'), input, 'the exact dirty target input is preserved');
+      assert.equal(document.querySelector('#handover-to'), input, 'the exact dirty target input is preserved');
       assert.equal(input.form, form, 'the original form and submission closure survive');
       assert.equal(input.value, targetId);
       assert.ok(!document.querySelector('.language-status').hidden);
@@ -138,13 +139,13 @@ if (mode === 'boot') {
       // Cancelling the queued language change also leaves the entered ID alone.
       change(locale); await tick();
       assert.ok(document.querySelector('.language-status').hidden);
-      assert.equal(document.querySelector('#transfer-to'), input);
+      assert.equal(document.querySelector('#handover-to'), input);
       assert.equal(input.value, targetId);
       change(next); await tick();
       document.querySelector('#dialog [data-action="close-dialog"]').click();
       await until(() => document.documentElement.lang === next && heading() === labels[next].account);
       assert.ok(!document.querySelector('#dialog').open);
-      assert.equal(document.querySelector('#transfer-to'), null);
+      assert.equal(document.querySelector('#handover-to'), null);
       assertAccount(next);
       assertNoTransfer();
       assert.ok(!document.cookie.includes(targetId));

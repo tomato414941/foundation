@@ -441,10 +441,22 @@ export const ja = {
   "client.validation.invalid": "入力内容を確認してください。",
   "client.account.id": "ID",
   "client.account.copyId": "IDをコピー",
-  "client.transferAll.title": "持ち物をすべて渡す",
-  "client.transferAll.action": "渡す",
-  "client.transferAll.recipientId": "渡す相手の ID",
-  "client.transferAll.itemFailure": "{{name}}：{{message}}"
+  "client.handover.title": "引き渡す",
+  "client.handover.description": "選んだものの所有が相手に移ります。アクセスを許可した相手は移りません。",
+  "client.handover.action": "引き渡す",
+  "client.handover.recipientId": "引き渡す相手の ID",
+  "client.handover.chooseSomething": "引き渡すものを選んでください。",
+  "client.handover.nothing": "引き渡せるものはありません。",
+  "client.handover.secrets": "シークレット",
+  "client.handover.connections": "接続",
+  "client.handover.objects": "オブジェクト",
+  "client.handover.apps": "アプリ",
+  "client.handover.services": "サービス",
+  "client.handover.principals": "登録した相手",
+  "client.handover.itemFailure": "{{group}}：{{name}}：{{message}}",
+  "client.merge.title": "別のアカウントをまとめる",
+  "client.merge.action": "まとめる",
+  "client.merge.confirmation": "{{name}} の持ち物・パスキー・メールアドレスがこのアカウントのものになり、{{name}} はなくなります。"
 };
 
 export const en = {
@@ -889,8 +901,20 @@ export const en = {
   "client.validation.invalid": "Please check this value.",
   "client.account.id": "ID",
   "client.account.copyId": "Copy ID",
-  "client.transferAll.title": "Transfer all belongings",
-  "client.transferAll.action": "Transfer",
-  "client.transferAll.recipientId": "Recipient ID",
-  "client.transferAll.itemFailure": "{{name}}: {{message}}"
+  "client.handover.title": "Hand over",
+  "client.handover.description": "Ownership of what you choose passes to the recipient. Principals you granted access do not.",
+  "client.handover.action": "Hand over",
+  "client.handover.recipientId": "Recipient's ID",
+  "client.handover.chooseSomething": "Choose what to hand over.",
+  "client.handover.nothing": "There is nothing to hand over.",
+  "client.handover.secrets": "Secrets",
+  "client.handover.connections": "Connections",
+  "client.handover.objects": "Objects",
+  "client.handover.apps": "Apps",
+  "client.handover.services": "Services",
+  "client.handover.principals": "Registered principals",
+  "client.handover.itemFailure": "{{group}}: {{name}}: {{message}}",
+  "client.merge.title": "Merge another account",
+  "client.merge.action": "Merge",
+  "client.merge.confirmation": "Everything {{name}} owns, its passkeys and its email addresses become this account's, and {{name}} ends."
 };

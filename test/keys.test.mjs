@@ -26,7 +26,7 @@ test('主体は公開鍵を一度だけ公開し、相手の公開鍵は誰で�
 test('秘密鍵はパスキーごとに包んで預け、そのパスキーで証明したセッションに返す', async t => {
   const f = await fixture(t), yielded = Buffer.alloc(32, 9), made = generateKey();
   // A credential registered by a browser, standing in for one here.
-  f.app.store.db.prepare('INSERT INTO webauthn_credentials (id,principal_id,public_key,sign_count,name,created_at) VALUES (?,?,?,?,?,?)').run('credential-0000000001', USER_A, Buffer.alloc(8), 0, 'phone', Date.now());
+  f.app.store.db.prepare('INSERT INTO webauthn_credentials (id,principal_id,public_key,sign_count,name,user_handle,created_at) VALUES (?,?,?,?,?,?,?)').run('credential-0000000001', USER_A, Buffer.alloc(8), 0, 'phone', USER_A, Date.now());
   const published = await f.request('/v1/key', { method: 'PUT', data: { public_key: b64(made.publicKey), wraps: { 'credential-0000000001': b64(wrap(made.privateKey, yielded)) } } });
   assert.equal(published.status, 409, 'the signin already published one');
   const kept = await f.request('/v1/webauthn-credentials/credential-0000000001/wrap', { method: 'PUT', data: { wrapped: b64(wrap(made.privateKey, yielded)) } });

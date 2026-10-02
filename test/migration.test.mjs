@@ -46,7 +46,7 @@ async function storedDefinitions(t, definitions) {
     store.db.prepare('UPDATE connections SET state=? WHERE resource_id=?').run(vault.seal(vault.open(row.state, `connection:${row.owner_id}:${row.resource_id}`), `credential:${row.owner_id}:${row.resource_id}`), row.resource_id);
   }
   store.db.exec('DROP INDEX connections_app; ALTER TABLE connections RENAME TO credentials; CREATE INDEX credentials_app ON credentials(app_id) WHERE app_id IS NOT NULL;');
-  store.db.exec(`DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
+  store.db.exec(`ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
     CREATE TABLE sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL, expires_at INTEGER NOT NULL);
     CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);`);
   const snapshots = Object.fromEntries(['resources', 'secrets', 'credentials', 'relations'].map(table => [table, store.db.prepare(`SELECT ${SNAPSHOT_COLUMNS[table] ?? '*'} FROM ${table}`).all()]));
@@ -333,7 +333,7 @@ test('36版のセッションでサインインしていたアドレスは、そ
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
   const { principals } = modules(store);
   principals.ensure(USER_A); principals.ensure(USER_B);
-  store.db.exec(`DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
+  store.db.exec(`ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
     CREATE TABLE sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL, expires_at INTEGER NOT NULL);
     CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);`);
   const old = store.db.prepare('INSERT INTO sessions VALUES (?,?,?,?,?)');
@@ -356,7 +356,7 @@ test('37版のアドレスは、持ち主との結びつきだけを残して移
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-38-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
   modules(store).principals.ensure(USER_A);
-  store.db.exec(`DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE emails; CREATE TABLE emails (address TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, verified_at INTEGER NOT NULL);
+  store.db.exec(`ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE emails; CREATE TABLE emails (address TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, verified_at INTEGER NOT NULL);
     CREATE INDEX emails_principal ON emails(principal_id);`);
   store.db.prepare('INSERT INTO emails VALUES (?,?,?)').run('owner@example.test', USER_A, 1);
   store.db.exec('PRAGMA user_version=37'); store.close();
@@ -369,7 +369,7 @@ test('39版のパスキーの表はWebAuthnの資格情報の表になり、そ�
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-40-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
   modules(store).principals.ensure(USER_A);
-  store.db.exec(`DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
+  store.db.exec(`ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
     CREATE TABLE passkeys (id TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, public_key BLOB NOT NULL,
       sign_count INTEGER NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER);
     CREATE INDEX passkeys_principal ON passkeys(principal_id);
@@ -401,7 +401,7 @@ test('41版の代わりに動く線は agent に、一つの操作の線はそ�
   line.run(USER_B, 'viewer', 'resource', 's1', '2026-01-01');
   store.db.prepare("INSERT INTO requests (id,from_id,to_id,type,detail,binding_message,steps,status,result,created_at,expires_at) VALUES ('r1',?,?,'relation',?,'','[]','granted',?,0,9999999999999)")
     .run(USER_B, USER_A, JSON.stringify({ relation: 'actor' }), JSON.stringify({ relation: 'actor', object_type: 'principal', object_id: USER_A }));
-  store.db.exec("DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; PRAGMA user_version=41"); store.close();
+  store.db.exec("ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; PRAGMA user_version=41"); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   assert.deepEqual(next.db.prepare('SELECT relation, object_type, object_id FROM relations ORDER BY relation, object_id').all().map(row => ({ ...row })),
@@ -435,7 +435,7 @@ test('40版の環境は ID・コマンド・鍵・使用量を保って停止再
   const tables = ['resources', 'environment_commands', 'access_keys', 'compute_usage'];
   const before = Object.fromEntries(tables.map(table => [table, store.db.prepare('SELECT * FROM ' + table).all()]));
   const rows = store.db.prepare('SELECT * FROM environments ORDER BY resource_id').all();
-  store.db.exec("DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; PRAGMA user_version=40"); store.close();
+  store.db.exec("ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; PRAGMA user_version=40"); store.close();
   let next = new Store(path, KEY);
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   for (const table of tables) assert.deepEqual(next.db.prepare('SELECT * FROM ' + table).all(), before[table], table);
@@ -472,7 +472,7 @@ test('本番41版の支払い登録と送信済み・未送信イベントは、
   store.db.prepare("INSERT INTO compute_usage VALUES (?,'2026-10',30)").run(USER_A);
   const tables = ['payment_accounts', 'meter_events', 'compute_usage'];
   const before = Object.fromEntries(tables.map(table => [table, store.db.prepare('SELECT * FROM ' + table).all()]));
-  store.db.exec("DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; PRAGMA user_version=41"); store.close();
+  store.db.exec("ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; PRAGMA user_version=41"); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   for (const table of tables) assert.deepEqual(next.db.prepare('SELECT * FROM ' + table).all(), before[table], table);
@@ -511,7 +511,7 @@ test('mainの42版DBは認可と課金を保って43版へ移り、停止の読�
   store.db.prepare('INSERT INTO compute_usage VALUES (?,?,30)').run(USER_A, new Date(now).toISOString().slice(0, 7));
   const tables = ['resources', 'relations', 'requests', 'environment_commands', 'access_keys', 'payment_accounts', 'meter_events', 'compute_usage'];
   const before = Object.fromEntries(tables.map(table => [table, store.db.prepare('SELECT * FROM ' + table).all()]));
-  store.db.exec("DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; PRAGMA user_version=42"); store.close();
+  store.db.exec("ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; PRAGMA user_version=42"); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   for (const table of tables) assert.deepEqual(next.db.prepare('SELECT * FROM ' + table).all(), before[table], table);
@@ -545,7 +545,7 @@ test('43版のシークレットはそれぞれの鍵で封じ直され、開い
     resources.insert(id, holder, 'secret', id);
     store.db.prepare('INSERT INTO secrets (resource_id,size,content) VALUES (?,?,?)').run(id, value.length, vault.sealBytes(Buffer.from(value), `secret:${holder}:${id}`));
   }
-  store.db.exec("DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; PRAGMA user_version=43");
+  store.db.exec("ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation'; DELETE FROM metadata WHERE name LIKE 'agent_%'; PRAGMA user_version=43");
   store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
@@ -570,7 +570,7 @@ test('44版の持ち物の列は owner_id になり、持ち物も線も封筒�
   resources.insert('o1', USER_B, 'object', 'theirs');
   principals.relate(USER_B, 'viewer', 'resource', kept.id);
   const before = store.db.prepare('SELECT id, owner_id, kind, name FROM resources ORDER BY id').all().map(row => ({ ...row }));
-  store.db.exec('DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); PRAGMA user_version=44'); store.close();
+  store.db.exec("ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); PRAGMA user_version=44"); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   assert.deepEqual(next.db.prepare('SELECT id, owner_id, kind, name FROM resources ORDER BY id').all().map(row => ({ ...row })), before);
@@ -580,4 +580,20 @@ test('44版の持ち物の列は owner_id になり、持ち物も線も封筒�
   assert.equal(m.authorization.can(USER_B, 'read', 'secret', { id: kept.id, owner: USER_A }), true, 'the line onto it holds');
   assert.equal(m.authorization.can(USER_A, 'content', 'secret', { id: kept.id }), true, 'the owner, read from the column');
   assert.deepEqual(next.db.prepare('PRAGMA foreign_key_check').all(), []);
+});
+
+test('45版の確認値の表は、まとめる手続きの券も入る形になり、待っている確認値は残る', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-46-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
+  store.db.exec("ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at);");
+  store.db.prepare('INSERT INTO challenges VALUES (?,?,?,?,?,?,?)').run('c1', 'email', 'owner@example.test', null, '{}', 1, 9999999999999);
+  modules(store).principals.ensure(USER_A);
+  store.db.prepare('INSERT INTO webauthn_credentials (id,principal_id,public_key,sign_count,name,created_at) VALUES (?,?,?,?,?,?)').run('credential-0000000046', USER_A, Buffer.alloc(8), 0, 'phone', 1);
+  store.db.exec('PRAGMA user_version=45'); store.close();
+  const next = new Store(path, KEY); t.after(() => next.close());
+  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
+  assert.deepEqual({ ...next.db.prepare('SELECT id, purpose, subject FROM challenges').get() }, { id: 'c1', purpose: 'email', subject: 'owner@example.test' });
+  next.db.prepare('INSERT INTO challenges VALUES (?,?,?,?,?,?,?)').run('c2', 'merge', 'a:b', null, '{}', 1, 9999999999999);
+  assert.equal(next.db.prepare('SELECT user_handle FROM webauthn_credentials WHERE id=?').get('credential-0000000046').user_handle, USER_A, 'a credential keeps the handle it was made with: its principal then');
+  assert.ok(next.db.prepare("SELECT 1 FROM sqlite_schema WHERE type='index' AND name='challenges_subject'").get());
 });

@@ -689,7 +689,8 @@ function render() {
         ${(state.webauthn_credentials || []).length ? `<div class="agent-list">${state.webauthn_credentials.map(passkeyRow).join('')}</div>` : ''}</section>
       ${state.payment?.available ? `<section class="resource-section" aria-labelledby="payment-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('card')}</span><div><h2 id="payment-title">${esc(t('client.payment.title'))}</h2><p>${state.payment.paying ? t('client.payment.registeredNote') : t('client.payment.addMethodNote')}</p></div></div><button class="button secondary" data-action="set-payment">${state.payment.paying ? t('client.payment.changeMethod') : t('client.payment.addMethod')}</button></div></section>` : ''}
       <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">${esc(t('client.account.downloadData'))}</h2><p>${esc(t('client.account.exportDescription'))}</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ${esc(t('client.common.download'))}</a></div></section>
-      <section class="resource-section" aria-labelledby="transfer-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('arrow')}</span><div><h2 id="transfer-title">${esc(t('client.transferAll.title'))}</h2></div></div><button class="button secondary" data-action="transfer-all">${esc(t('client.transferAll.action'))}</button></div></section>
+      <section class="resource-section" aria-labelledby="handover-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('arrow')}</span><div><h2 id="handover-title">${esc(t('client.handover.title'))}</h2><p>${esc(t('client.handover.description'))}</p></div></div><button class="button secondary" data-action="hand-over">${esc(t('client.handover.action'))}</button></div></section>
+      <section class="resource-section" aria-labelledby="merge-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="merge-title">${esc(t('client.merge.title'))}</h2></div></div>${passkeysWork() ? `<button class="button secondary" data-action="merge">${esc(t('client.merge.action'))}</button>` : ''}</div></section>
       <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">${esc(t('client.account.developers'))}</h2></div></div><a class="button secondary" href="/principals#apps">${esc(t('client.integration.registration'))}</a></div></section>`);
     return;
   }
@@ -1286,32 +1287,66 @@ function renameMe() {
     closeDialog(); await refresh();
   });
 }
-// Everything the account has, given to another principal: each resource and each owned principal, one by one, as
-// the API gives them. A secret goes with an envelope made here when the key is open; otherwise Foundation makes one.
-function transferAll() {
-  openDialog(`<h2 id="dialog-title">${esc(t('client.transferAll.title'))}</h2><form><label for="transfer-to">${esc(t('client.transferAll.recipientId'))}</label><input id="transfer-to" name="to" required maxlength="64" autocomplete="off" spellcheck="false"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.transferAll.action'))}</button></form>`);
+// Things of the account's, chosen, given to another principal: each resource and each owned principal, one by one,
+// as the API gives them. A secret goes with an envelope made here when the key is open; otherwise Foundation makes one.
+async function handOver() {
+  let objects = [];
+  try { objects = (await api('/v1/resources?kind=object')).resources; } catch {}
+  const groups = [[t('client.handover.secrets'), secrets()], [t('client.handover.connections'), connected().map(item => ({ ...item, name: item.label || item.service.name }))], [t('client.handover.objects'), objects],
+    [t('client.handover.apps'), (state.apps || []).filter(item => !item.foundation && item.owner_id === state.user.id)], [t('client.handover.services'), (state.services || []).filter(item => item.owner_id === state.user.id)],
+    [t('client.handover.principals'), (state.principals || []).map(item => ({ ...item, kind: 'principal' }))]].filter(([, items]) => items.length);
+  const choice = (item, at) => `<label class="handover-item"><input type="checkbox" name="item" value="${esc(item.kind + ':' + item.id)}" id="hand-${esc(at)}"> ${esc(item.name)}</label>`;
+  openDialog(`<h2 id="dialog-title">${esc(t('client.handover.title'))}</h2><form>${groups.map(([title, items], group) => `<fieldset class="handover-group"><legend>${esc(title)}</legend>${items.map((item, at) => choice(item, group + '-' + at)).join('')}</fieldset>`).join('') || `<p>${esc(t('client.handover.nothing'))}</p>`}
+    <label for="handover-to">${esc(t('client.handover.recipientId'))}</label><input id="handover-to" name="to" required maxlength="64" autocomplete="off" spellcheck="false"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.handover.action'))}</button></form>`);
   bindForm(async (form) => {
-    const to = String(form.get('to') || '').trim();
+    const to = String(form.get('to') || '').trim(), chosen = form.getAll('item').map(String);
+    if (!chosen.length) throw new Error(t('client.handover.chooseSomething'));
     const { key } = await api('/v1/principals/' + encodeURIComponent(to) + '/public-key');
-    let objects = [];
-    try { objects = (await api('/v1/resources?kind=object')).resources; } catch {}
-    const things = [...secrets(), ...connected(), ...objects, ...(state.apps || []).filter(item => !item.foundation && item.owner_id === state.user.id), ...(state.services || []).filter(item => item.owner_id === state.user.id)];
     const failures = [];
-    for (const item of things) {
-      let envelope;
-      if (item.kind === 'secret' && own && key.public_key) {
-        try { const kept = await api('/v1/resources/' + item.id + '/content'); if (kept.envelope) envelope = b64(await sealing.seal(await openKey(kept), unb64(key.public_key))); } catch {}
-      }
-      try { await api('/v1/resources/' + item.id + '/transfer', { method: 'POST', data: { to, ...(envelope ? { envelope } : {}) } }); }
-      catch (error) { failures.push(t('client.transferAll.itemFailure', { name: item.name, message: error.message })); }
-    }
-    for (const item of (state.principals || []).filter(item => item.id !== to)) {
-      try { await api('/v1/principals/' + item.id + '/transfer', { method: 'POST', data: { to } }); }
-      catch (error) { failures.push(t('client.transferAll.itemFailure', { name: item.name, message: error.message })); }
+    for (const [title, items] of groups) for (const item of items) {
+      if (!chosen.includes(item.kind + ':' + item.id)) continue;
+      try {
+        if (item.kind === 'principal') { await api('/v1/principals/' + item.id + '/transfer', { method: 'POST', data: { to } }); continue; }
+        let envelope;
+        if (item.kind === 'secret' && own && key.public_key) {
+          try { const kept = await api('/v1/resources/' + item.id + '/content'); if (kept.envelope) envelope = b64(await sealing.seal(await openKey(kept), unb64(key.public_key))); } catch {}
+        }
+        await api('/v1/resources/' + item.id + '/transfer', { method: 'POST', data: { to, ...(envelope ? { envelope } : {}) } });
+      } catch (error) { failures.push(t('client.handover.itemFailure', { group: title, name: item.name, message: error.message })); }
     }
     if (failures.length) throw new Error(failures.join('\n'));
     closeDialog(); await refresh();
   });
+}
+// Another account made one with this: its passkey answers for it, here, and yields the key that opens its secrets,
+// which are sealed anew for this account. The other account ends.
+async function mergeAccount(button) {
+  button.disabled = true;
+  try {
+    const { options } = await api('/v1/merge/options', { method: 'POST', data: {} });
+    const given = await navigator.credentials.get({ publicKey: { ...options, challenge: bytes(options.challenge), allowCredentials: described(options.allowCredentials), extensions: { prf: { eval: { first: PRF_INPUT } } } } });
+    const yielded = yieldedBy(given);
+    const credential = { id: given.id, rawId: text64(given.rawId), type: given.type, clientExtensionResults: {},
+      response: { clientDataJSON: text64(given.response.clientDataJSON), authenticatorData: text64(given.response.authenticatorData), signature: text64(given.response.signature), ...(given.response.userHandle ? { userHandle: text64(given.response.userHandle) } : {}) } };
+    const begun = await api('/v1/merge', { method: 'POST', data: { credential } });
+    const name = begun.from.name || begun.from.id;
+    openDialog(`<h2 id="dialog-title">${esc(t('client.merge.title'))}</h2><form><p>${esc(t('client.merge.confirmation', { name }))}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.merge.action'))}</button></form>`);
+    bindForm(async () => {
+      // This account's key: open here, or published, or made now with what the passkey yielded.
+      let mine = own, made = null;
+      if (!mine) { const { key } = await api('/v1/key'); if (key.public_key) mine = { publicKey: unb64(key.public_key) }; else if (yielded) { made = await sealing.generateKey(); mine = made; } }
+      const envelopes = {};
+      if (begun.wrap && yielded && mine && begun.key.public_key) {
+        const theirs = { privateKey: await sealing.unwrap(unb64(begun.wrap), yielded), publicKey: unb64(begun.key.public_key) };
+        for (const item of begun.secrets) { if (item.envelope) envelopes[item.id] = b64(await sealing.seal(await sealing.open(unb64(item.envelope), theirs.privateKey, theirs.publicKey), mine.publicKey)); }
+      }
+      const wrap = yielded && (made || own) ? b64(await sealing.wrap((made || own).privateKey, yielded)) : undefined;
+      await api('/v1/merge/complete', { method: 'POST', data: { ticket: begun.ticket, envelopes, ...(wrap ? { wrap } : {}), ...(made ? { public_key: b64(made.publicKey) } : {}) } });
+      if (made) { own = made; keyUnavailable = false; }
+      closeDialog(); await refresh();
+    });
+  } catch (error) { if (!passkeyDeclined(error)) toast(error.message); }
+  finally { if (button.isConnected) button.disabled = false; }
 }
 async function issueKey(item) {
   const result = await api(`/v1/principals/${item.id}/keys`, { method: 'POST', data: {} });
@@ -1702,7 +1737,8 @@ document.addEventListener('click', async (event) => {
     if (action === 'rename-principal') renamePrincipal(principalById(id));
     if (action === 'rename-me') renameMe();
     if (action === 'copy-id') { try { await navigator.clipboard.writeText(state.user.id); toast(t('client.common.copied')); } catch { toast(t('client.errors.copyFailed')); } }
-    if (action === 'transfer-all') transferAll();
+    if (action === 'hand-over') handOver();
+    if (action === 'merge') mergeAccount(target);
     if (action === 'copy-token') {
       const token = document.querySelector('#agent-token');
       try { await navigator.clipboard.writeText(token.value); toast(t('client.access.keyCopied')); }

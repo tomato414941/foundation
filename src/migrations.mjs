@@ -2,7 +2,7 @@ import { checkDefinition } from './service-definition.mjs';
 import { ensureAgent } from './keys.mjs';
 import { newContentKey, sealContent, seal } from '../cli/envelope.mjs';
 
-export const SCHEMA_VERSION = 45;
+export const SCHEMA_VERSION = 46;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -21,6 +21,7 @@ export const STEPS = {
   43: durableEnvironmentStops,
   44: envelopes,
   45: ownerOfResources,
+  46: mergeTickets,
 };
 
 // A stop is kept until the runner confirms it. Rebuilding widens the status check without changing resource IDs.
@@ -409,6 +410,24 @@ function ownerOfResources({ db }) {
   `);
 }
 
+// A challenge may also be the ticket between the two steps of making another account one with this (merge).
+// Rebuilt to widen the check; what was pending is kept. A credential keeps the user handle it was made with, since
+// the device answers with it, and merging moves credentials between principals.
+function mergeTickets({ db }) {
+  db.exec(`
+    ALTER TABLE webauthn_credentials ADD COLUMN user_handle TEXT NOT NULL DEFAULT '';
+    UPDATE webauthn_credentials SET user_handle=principal_id;
+    CREATE TABLE challenges_next (
+      id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn','merge')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL,
+      created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    );
+    INSERT INTO challenges_next SELECT id, purpose, subject, handle, data, created_at, expires_at FROM challenges;
+    DROP TABLE challenges;
+    ALTER TABLE challenges_next RENAME TO challenges;
+    CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at);
+  `);
+}
+
 // A session: what proving who one is leaves, for any principal. proof is how (an email reached, a WebAuthn signature),
 // proof_ref which address or credential, and proved_at when; an operation that needs a fresh or stronger proof asks
 // again.
@@ -423,7 +442,7 @@ const SESSIONS = `
 const WEBAUTHN_CREDENTIALS = `
   CREATE TABLE webauthn_credentials (
     id TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, public_key BLOB NOT NULL,
-    sign_count INTEGER NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER
+    sign_count INTEGER NOT NULL, name TEXT NOT NULL, user_handle TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER
   );
   CREATE INDEX webauthn_credentials_principal ON webauthn_credentials(principal_id);`;
 // A principal that pays: its Stripe customer, and the subscription its use is charged to once a payment method is set,
@@ -444,7 +463,7 @@ const PAYMENT = `
 // lets the browser that asked find what it is waiting for; it proves nothing.
 const CHALLENGES = `
   CREATE TABLE challenges (
-    id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL,
+    id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn','merge')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL,
     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
   );
   CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at);
