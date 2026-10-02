@@ -236,14 +236,14 @@ async function createPasskey(name) {
 }
 // Starting with a passkey alone: the passkey made here makes the principal, signed in at once.
 // Starting with a passkey alone: one press makes the passkey, and with it the principal, signed in at once. Nothing
-// is asked; a name can be given on the account page.
+// is asked: the name Foundation drew for the passkey's label becomes the principal's, to be changed on the account page.
 async function startWithPasskey() {
   let made;
   const { options } = await api('/v1/principals/options', { method: 'POST', data: {} });
   const { credential, yielded } = await makePasskey(options);
   // The principal's key, made with its first passkey and wrapped for it.
   const key = yielded ? await sealing.generateKey() : null;
-  made = await api('/v1/principals', { method: 'POST', data: { webauthn_credential: { name: deviceName(), credential, ...(key ? { wrap: b64(await sealing.wrap(key.privateKey, yielded)) } : {}) }, ...(key ? { public_key: b64(key.publicKey) } : {}), return_to: returnTo() } });
+  made = await api('/v1/principals', { method: 'POST', data: { name: options.user.name, webauthn_credential: { name: deviceName(), credential, ...(key ? { wrap: b64(await sealing.wrap(key.privateKey, yielded)) } : {}) }, ...(key ? { public_key: b64(key.publicKey) } : {}), return_to: returnTo() } });
   own = key; keyUnavailable = !key;
   if (made.backed_up) { await arrive(made.return_to); return; }
   openDialog(`<h2 id="dialog-title">パスキーを作成しました</h2><p>このパスキーは、この端末にしか保存されていません。</p><button class="button primary full" type="button" id="start-continue">続ける</button>`);
@@ -1151,7 +1151,12 @@ function renamePrincipal(item) {
 }
 function renameMe() {
   openDialog(`<h2 id="dialog-title">名前を変更</h2><form><label for="my-name">名前</label><input id="my-name" name="name" required maxlength="80" autocomplete="name" value="${esc(state.principal.name || '')}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">保存</button></form>`);
-  bindForm(async (form) => { await api('/v1/principals/me', { method: 'PATCH', data: { name: form.get('name') } }); closeDialog(); await refresh(); });
+  bindForm(async (form) => {
+    const { principal } = await api('/v1/principals/me', { method: 'PATCH', data: { name: form.get('name') } });
+    // The device's passkey list is told the new name too, where the browser can (the WebAuthn signal API).
+    try { await PublicKeyCredential.signalCurrentUserDetails?.({ rpId: location.hostname, userId: text64(new TextEncoder().encode(principal.id)), name: principal.name, displayName: principal.name }); } catch {}
+    closeDialog(); await refresh();
+  });
 }
 async function issueKey(item) {
   const result = await api(`/v1/principals/${item.id}/keys`, { method: 'POST', data: {} });

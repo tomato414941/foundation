@@ -87,7 +87,8 @@ with sync_playwright() as p:
     expect(started.get_by_text('このパスキーは、この端末にしか保存されていません。', exact=True)).to_be_visible()
     started.get_by_role('button', name='続ける', exact=True).click()
     expect(fresh.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()
-    assert newcomer.request.get(base + '/v1/overview').json()['principal']['name'] == ''
+    import re
+    assert re.fullmatch(r"[A-Z][A-Za-z' ]+ [A-Z][A-Za-z' ]+", newcomer.request.get(base + '/v1/overview').json()['principal']['name']), 'named by a role at a star'
     # A name is given on the account page, when wanted.
     fresh.goto(base + '/account', wait_until='networkidle')
     fresh.get_by_role('button', name='名前を変更', exact=True).click()

@@ -23,6 +23,7 @@ import { Apps, FOUNDATION_APP, takesApps } from './apps.mjs';
 import { Connections } from './connections.mjs';
 import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX } from './secrets.mjs';
 import { Keys, bytes as keyBytes } from './keys.mjs';
+import { principalName } from './names.mjs';
 import { Inputs } from './inputs.mjs';
 import { Services } from './services.mjs';
 import { Objects, OBJECT_MAX } from './objects.mjs';
@@ -383,8 +384,9 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       if (at === 'principalOptions' && method === 'POST') {
         const input = await body(req);
         rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
-        // The passkey's label where it is kept: the name given, or Foundation's, since none is needed to begin.
-        return send(200, { options: await webauthn.registration(randomUUID(), { origin, userName: input?.name === undefined ? 'Foundation' : nameValue(input.name), creating: true }) });
+        // The passkey's label where it is kept: the name given, or one drawn here (names.mjs), which the client then
+        // gives the principal it makes, so the device and Foundation call it the same thing.
+        return send(200, { options: await webauthn.registration(randomUUID(), { origin, userName: input?.name === undefined ? principalName() : nameValue(input.name), creating: true }) });
       }
       if (at === 'webauthnSigninOptions' && method === 'POST') {
         rateLimit('webauthn-options:' + clientAddress(req), 60, 600_000);
