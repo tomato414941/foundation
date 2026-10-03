@@ -968,11 +968,12 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const answered = await environments.answer(opened.id, started.id, 20_000);
         return send(answered.status === 'running' ? 202 : 200, { environment: environments.view(environments.get(opened.id)), command: answered });
       }
-      const environmentHeld = route?.group === 'environments' || (at === 'resource' && resources.get(route.params.resourceId)?.kind === 'environment')
-        ? environments.at(route.params.resourceId) : null;
-      if (environmentHeld && (route.group === 'environments' || method === 'DELETE')) {
-        const held = environmentHeld, commands = at === 'commands' || at === 'command';
-        if (!commands && method === 'GET') { permit('read', 'environment', held.id, held.owner_id); return send(200, { environment: environments.view(held) }); }
+      // An environment is a resource: read like any other, and beside that given an identity, run in, and closed.
+      const commands = at === 'commands' || at === 'command';
+      const environmentHeld = (at === 'resource' || commands) && resources.at(route.params.resourceId).kind === 'environment' ? environments.at(route.params.resourceId) : null;
+      if (commands && !environmentHeld) fail(404, 'not_found', '見つかりません。');
+      if (environmentHeld && (commands || method !== 'GET')) {
+        const held = environmentHeld;
         if (!commands && method === 'PATCH') {
           permit('identity', 'environment', held.id, held.owner_id);
           const input = await inputBody();
@@ -980,7 +981,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           const identity = passable(input.identity);
           const changed = identity ? await environments.attach(held, identity) : await environments.detach(held);
           auditLog.write(subject.id, identity ? 'environment.identity' : 'environment.identity_removed', 'resource', held.id, { identity });
-          return send(200, { environment: environments.view(changed) });
+          return send(200, { resource: environments.view(changed) });
         }
         if (!commands && method === 'DELETE') {
           permit('remove', 'environment', held.id, held.owner_id);

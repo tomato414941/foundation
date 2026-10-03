@@ -189,10 +189,10 @@ test('DELETE の停止失敗は503と停止中を返し、principal と全エン
   }
   assert.equal(f.app.principals.keys(who.id).length, 0); assert.equal(runner.stops.length, 2);
   const token = f.app.principals.issueKey(who.id).token;
-  const deleted = await f.request('/v1/environments/' + first.id, { method: 'DELETE', data: {}, token, anonymous: true });
+  const deleted = await f.request('/v1/resources/' + first.id, { method: 'DELETE', data: {}, token, anonymous: true });
   assert.equal(deleted.status, 503); assert.equal(deleted.json.error.code, 'environment_stopping');
-  const read = await f.request('/v1/environments/' + first.id, { token, anonymous: true });
-  assert.equal(read.json.environment.status, 'stopping');
+  const read = await f.request('/v1/resources/' + first.id, { token, anonymous: true });
+  assert.equal(read.json.resource.status, 'stopping');
   runner.stopping = null; await f.app.environments.sweep(Date.now() + 10_000);
   assert.equal((await f.request('/v1/principals/' + who.id, { method: 'DELETE', data: {} })).status, 200);
 });
@@ -311,7 +311,7 @@ test('古い停止試行が後から戻っても、引き継いだ停止の課�
 
 test('操作ごとの grant は準備済みのエンバイロメントにだけ届き、停止中の実行や ID 付与を復活させない', async t => {
   const runner = new Runner(), f = await fixture(t, { runner }), delegate = await f.become('delegate');
-  const row = await f.app.environments.open(USER_A), path = '/v1/environments/' + row.id;
+  const row = await f.app.environments.open(USER_A), path = '/v1/resources/' + row.id;
   const asDelegate = { token: delegate.token, anonymous: true };
   const run = () => f.request(path + '/commands', { ...asDelegate, method: 'POST', data: { command: ['true'] } });
   const attach = () => f.request(path, { ...asDelegate, method: 'PATCH', data: { identity: USER_A } });

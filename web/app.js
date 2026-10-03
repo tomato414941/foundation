@@ -1873,7 +1873,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'revoke-access') revokeAccess(principalById(id));
     if (action === 'close-environment') {
       const item = (state.environments || []).find(row => row.id === id);
-      if (item) confirmRemoval(t('client.environments.closeTitle', { name: item.name }), t('client.environment.closeWarning'), () => api('/v1/environments/' + item.id, { method: 'DELETE', data: {} }), t('client.environment.closed'), t('client.environment.close'));
+      if (item) confirmRemoval(t('client.environments.closeTitle', { name: item.name }), t('client.environment.closeWarning'), () => api('/v1/resources/' + item.id, { method: 'DELETE', data: {} }), t('client.environment.closed'), t('client.environment.close'));
     }
     if (action === 'principal-details') await principalDetails(id);
     if (action === 'issue-key') { target.disabled = true; await issueKey(principalById(id)); }

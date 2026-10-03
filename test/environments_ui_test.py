@@ -79,7 +79,7 @@ with sync_playwright() as p:
     dialog.get_by_role('button', name='エンバイロメントを閉じる', exact=True).click()
     expect(page.get_by_text('閉じました。', exact=True)).to_be_visible()
     expect(page.locator('.access-row').filter(has_text='ビルド')).to_have_count(0)
-    gone = caller.get('/v1/environments/' + as_owner['id'], headers={'authorization': 'Bearer ' + token})
+    gone = caller.get('/v1/resources/' + as_owner['id'], headers={'authorization': 'Bearer ' + token})
     assert gone.status == 404, 'closed from the page, it is gone'
     assert not errors, errors
     context.close()
