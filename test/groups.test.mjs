@@ -23,7 +23,7 @@ test('集団として作った相手には、作った者がその者として�
   // Another person: nothing, until made a steward by one who stands as the group; then the secret, once handed its key.
   const other = await f.request('/v1/principals', { method: 'POST', data: { name: 'other', key: true } });
   const theirs = { token: other.json.token, anonymous: true, as: group.id };
-  assert.equal((await f.request('/v1/resources?kind=secret', theirs)).status, 403);
+  assert.equal((await f.request('/v1/principals/me/resources?kind=secret', theirs)).status, 403);
   assert.equal((await f.request('/v1/principals/' + other.json.principal.id + '/relations', { method: 'POST', token: other.json.token, anonymous: true, data: { relation: 'steward', object_type: 'principal', object_id: group.id } })).status, 403, 'not by oneself');
   const drawn = await f.request('/v1/principals/' + other.json.principal.id + '/relations', { method: 'POST', data: { relation: 'steward', object_type: 'principal', object_id: group.id } });
   assert.equal(drawn.status, 201, drawn.text);
@@ -44,7 +44,7 @@ test('集団として作った相手には、作った者がその者として�
   assert.deepEqual((await f.request('/v1/injections', { method: 'POST', as: group.id, data: { names: [{ name: 'ledger', as: 'LEDGER' }] } })).json.injection.environment, { LEDGER: 'rows' });
   // Owning a group manages it; standing as it decides for it. USER_B, owning nothing here, reaches nothing.
   await f.signin('other@example.test');
-  assert.equal((await f.request('/v1/resources?kind=secret', { as: group.id })).status, 403);
+  assert.equal((await f.request('/v1/principals/me/resources?kind=secret', { as: group.id })).status, 403);
   assert.equal(f.app.authorization.can(USER_B, 'decide', 'principal', { id: group.id }), false);
   assert.equal(f.app.authorization.can(USER_A, 'decide', 'principal', { id: group.id }), true);
   assert.equal(f.app.authorization.can(USER_A, 'remove', 'principal', { id: group.id }), true, 'as its owner');

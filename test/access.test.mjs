@@ -29,7 +29,7 @@ test('アクセス許可と個別の閲覧・編集権限を取り消し、相�
     assert.equal(me.status, 200); assert.equal(me.json.principal.id, agent.id);
     assert.deepEqual(me.json.acts_for, []);
     assert.equal(me.json.keys.length, 2);
-    assert.equal((await f.request('/v1/resources?kind=connection', { token, as: USER_A })).status, 403);
+    assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token, as: USER_A })).status, 403);
     for (const saved of [given, written]) {
       assert.equal((await f.request(`/v1/resources/${saved.json.resource.id}/content`, { token })).status, 403);
       assert.equal((await f.request(`/v1/resources/${saved.json.resource.id}/content`, { token, method: 'PUT', raw: 'changed' })).status, 403);
@@ -79,11 +79,11 @@ test('保有者が自分への許可だけを取り消し、相手の所有権�
   assert.equal((await revoke(f, agent.id, { token: stranger.token, as: USER_A })).status, 401);
   assert.equal((await revoke(f, agent.id, { token: agent.token, as: USER_A })).status, 403);
   assert.equal((await revoke(f, USER_A)).status, 400);
-  assert.equal((await f.request('/v1/resources?kind=connection', { token: agent.token })).status, 200);
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).status, 200);
   f.app.principals.unrelate(USER_A, 'owner', 'principal', agent.id);
   assert.equal((await revoke(f, agent.id)).status, 200);
   assert.equal((await f.request('/v1/principals/me', { token: agent.token })).status, 200);
-  assert.equal((await f.request('/v1/resources?kind=connection', { token: agent.token })).status, 401);
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).status, 401);
 });
 
 test('取り消した相手を同じキーで再承認し、以後に追加したデータも利用する', async t => {
@@ -126,7 +126,7 @@ test('個別のキーを失効させても他のキーから同じアクセス�
   assert.equal((await f.request('/v1/principals/me', { token: agent.token })).status, 401);
   const result = await f.request('/v1/principals/me', { token: second.json.token });
   assert.equal(result.status, 200); assert.deepEqual(result.json.acts_for, [USER_A]);
-  assert.equal((await f.request('/v1/resources?kind=connection', { token: second.json.token, as: USER_A })).status, 200);
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: second.json.token, as: USER_A })).status, 200);
 });
 
 test('認証情報の更新中にアクセスを取り消すと受け渡しを止め、保有者は接続を利用し続ける', async t => {
@@ -150,7 +150,7 @@ test('アップロード中にアクセスを取り消すと保存を拒否し�
   const started = new Promise(resolve => f.app.server.once('request', req => req.once('readable', resolve)));
   let upload;
   const completed = new Promise((resolve, reject) => {
-    upload = httpRequest(f.base + '/v1/resources?kind=secret&name=value&as=' + USER_A, { method: 'PUT', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + agent.token } }, res => {
+    upload = httpRequest(f.base + '/v1/principals/' + USER_A + '/resources?kind=secret&name=value', { method: 'PUT', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + agent.token } }, res => {
       const chunks = []; res.on('data', chunk => chunks.push(chunk));
       res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString() })); res.on('error', reject);
     });
@@ -179,5 +179,5 @@ test('接続認証の完了前にアクセスを取り消すと、取消済み�
   const callback = await returning;
   assert.match(callback.headers.get('location'), /result=failed/);
   assert.equal((await f.request('/v1/requests/' + asked.id)).json.request.status, 'cancelled');
-  assert.deepEqual((await f.request('/v1/resources?kind=connection')).json.resources, []);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection')).json.resources, []);
 });

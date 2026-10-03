@@ -17,7 +17,7 @@ async function cloudflareFixture(t, cloudflare = new FakeCloudflare()) {
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
-  const connections = async () => (await f.request('/v1/resources?kind=connection')).json.resources;
+  const connections = async () => (await f.request('/v1/principals/me/resources?kind=connection')).json.resources;
   async function connect(code = 'personal', input = {}) {
     const ids = new Set((await connections()).map(item => item.id));
     const done = await f.callback(await start(input), code);
@@ -69,7 +69,7 @@ test('接続依頼を完了し、許可された権限と認証情報を分け�
   const completed = await f.request('/v1/requests/' + asked.json.request.id, { token });
   assert.equal(completed.json.request.status, 'granted');
   assert.equal(completed.json.request.result.connection_id, connection.id);
-  const listed = await f.request('/v1/resources?kind=connection', { token });
+  const listed = await f.request('/v1/principals/me/resources?kind=connection', { token });
   assert.equal(listed.json.resources[0].label, 'personal@example.test');
   assert.equal(listed.json.resources[0].facts.user_id, '1'.repeat(32));
   assert.deepEqual(listed.json.resources[0].facts.scopes, GRANTED);

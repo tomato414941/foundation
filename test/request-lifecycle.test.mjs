@@ -31,7 +31,7 @@ test('接続の失効・削除後も依頼の完了と結果を維持する', as
   const done = await read(), id = done.result.connection_id;
   assert.equal(done.status, 'granted');
   f.app.connections.reconnectRequired(f.app.connections.held(USER_A, id));
-  assert.equal((await f.request('/v1/resources?kind=connection', { token: key.token })).json.resources[0].status, 'reconnect_required');
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: key.token })).json.resources[0].status, 'reconnect_required');
   for (const remove of [false, true]) {
     if (remove) await f.request('/v1/resources/' + id, { method: 'DELETE', data: { revoke: false } });
     const current = await read();
@@ -48,8 +48,8 @@ test('保存値の名前変更や削除後も依頼には完了時の保存名�
   const request = await ask(f, key.token, 'store', { fields: [{ name: 'first', label: 'トークン' }] });
   const complete = await f.request('/v1/requests/' + request.id + '/grant', { method: 'POST', data: { entries: [{ name: 'first', content: 'fixture-secret' }] } });
   assert.equal(complete.status, 200);
-  await f.request('/v1/resources?kind=secret&name=first', { method: 'PATCH', data: { name: 'renamed' } });
-  await f.request('/v1/resources?kind=secret&name=renamed', { method: 'DELETE', data: {} });
+  await f.request('/v1/principals/me/resources?kind=secret&name=first', { method: 'PATCH', data: { name: 'renamed' } });
+  await f.request('/v1/principals/me/resources?kind=secret&name=renamed', { method: 'DELETE', data: {} });
   const done = (await f.request('/v1/requests/' + request.id, { token: key.token })).json.request;
   assert.equal(done.status, 'granted');
   assert.deepEqual(done.result, { names: ['first'], replaced: [] });
@@ -72,7 +72,7 @@ test('キー失効時に未完了の依頼を取り消し、同じトークン�
   const again = await f.approveKey('再承認');
   assert.equal((await f.request('/v1/requests/' + doneRequest.id, { token: again.token })).status, 404);
   assert.deepEqual((await f.request('/v1/requests', { token: again.token })).json.requests.map(row => row.authorization_details[0].relation), ['agent'], 'a newly approved machine is a new principal, with only its own asking behind it');
-  assert.equal((await f.request('/v1/resources?kind=secret', { token: again.token })).json.resources[0].name, 'kept');
+  assert.equal((await f.request('/v1/principals/me/resources?kind=secret', { token: again.token })).json.resources[0].name, 'kept');
 });
 
 test('承認依頼の完了結果を保ち、失効キーの認証を拒否する', async t => {
@@ -94,7 +94,7 @@ test('APIの認証成功をキーの最終利用として記録する', async t 
   assert.ok(first);
   await new Promise(resolve => setTimeout(resolve, 5));
   const before = Date.now();
-  assert.equal((await f.request('/v1/resources?kind=connection', { token: key.token })).status, 200);
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: key.token })).status, 200);
   const current = await mine();
   assert.ok(Date.parse(current.last_used_at) >= before);
   assert.ok(Date.parse(current.last_used_at) > Date.parse(first));
@@ -104,11 +104,11 @@ test('APIの認証成功をキーの最終利用として記録する', async t 
 
 for (const identity of ['キー', 'セッション']) test(`アップロード中に${identity}が失効した場合は保存を拒否して元の値を維持する`, async t => {
   const f = await fixture(t), key = await f.issueKey();
-  await f.request('/v1/resources?kind=secret&name=value', { method: 'PUT', raw: 'original' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=value', { method: 'PUT', raw: 'original' });
   const started = new Promise(resolve => f.app.server.once('request', req => req.once('readable', resolve)));
   let upload;
   const completed = new Promise((resolve, reject) => {
-    upload = httpRequest(f.base + '/v1/resources?kind=secret&name=value', { method: 'PUT', headers: {
+    upload = httpRequest(f.base + '/v1/principals/me/resources?kind=secret&name=value', { method: 'PUT', headers: {
       'content-type': 'application/json',
       ...(identity === 'キー' ? { authorization: 'Bearer ' + key.token } : { cookie: f.cookie(), origin: f.base }),
     } }, res => {

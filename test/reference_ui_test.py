@@ -39,7 +39,7 @@ with sync_playwright() as p:
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/services')
     allow_foundation(context.request, args.base)
-    kept = context.request.put(args.base + '/v1/resources?kind=secret&name=cloudflare token', data=plain('cf-referenced-1'), headers={'content-type': 'application/json', 'origin': args.base})
+    kept = context.request.put(args.base + '/v1/principals/me/resources?kind=secret&name=cloudflare token', data=plain('cf-referenced-1'), headers={'content-type': 'application/json', 'origin': args.base})
     assert kept.ok, kept.text()
     page.reload(wait_until='networkidle')
 
@@ -55,7 +55,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / 'reference-dialog.png'), full_page=True)
     dialog.get_by_role('button', name='接続する', exact=True).click()
     expect(page.get_by_text('Cloudflareに接続しました。', exact=True)).to_be_visible()
-    connections = context.request.get(args.base + '/v1/resources?kind=connection').json()['resources']
+    connections = context.request.get(args.base + '/v1/principals/me/resources?kind=connection').json()['resources']
     assert len(connections) == 1 and connections[0]['references'] == [kept.json()['resource']['id']], connections
     assert injected(context.request, args.base, 'cloudflare token').text() == 'cf-referenced-1'
     delivered = context.request.post(args.base + '/v1/injections', data=json.dumps({'names': [{'id': connections[0]['id']}]}), headers={'content-type': 'application/json', 'origin': args.base}).json()

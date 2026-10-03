@@ -22,7 +22,7 @@ test('持ち主は秘密を相手に渡し、封筒をつけるか Foundation �
   assert.deepEqual(given.json.resource.recipients.sort(), [f.app.keys.agentId, other.json.principal.id].sort(), 'the new owner has an envelope; the giver no longer');
   assert.equal((await f.read('secret', 'handed', theirs)).text, 'hand-me');
   assert.equal((await f.request('/v1/resources/' + kept.json.resource.id + '/content')).status, 403, 'the giver has no line to it');
-  assert.deepEqual((await f.request('/v1/resources?kind=secret')).json.resources, []);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=secret')).json.resources, []);
   // Without an envelope from the giver, Foundation makes one from its own, for a new owner with a key.
   const second = await f.keep('secret', 'second', 'two');
   const handed = await give(f, second.json.resource.id, { to: other.json.principal.id });
@@ -38,7 +38,7 @@ test('渡せるのは持ち主と、渡す操作を渡された相手だけで�
   assert.equal((await give(f, kept.json.resource.id, { to: other.json.principal.id }, { token: agent.token })).status, 403, 'an agent uses, it does not give away');
   assert.equal((await give(f, kept.json.resource.id, { to: USER_A })).json.error.code, 'invalid_transfer');
   assert.equal((await give(f, kept.json.resource.id, { to: 'no-such' })).status, 404);
-  await f.request('/v1/resources?kind=secret&name=thing', { method: 'PUT', raw: 'theirs', token: other.json.token, anonymous: true, as: other.json.principal.id });
+  await f.request('/v1/principals/me/resources?kind=secret&name=thing', { method: 'PUT', raw: 'theirs', token: other.json.token, anonymous: true, as: other.json.principal.id });
   assert.equal((await give(f, kept.json.resource.id, { to: other.json.principal.id })).json.error.code, 'name_taken');
   f.app.principals.relate(agent.id, 'transfer_grant', 'resource', kept.json.resource.id);
   const byGrant = await give(f, kept.json.resource.id, { to: agent.id }, { token: agent.token });
@@ -58,7 +58,7 @@ test('接続とアプリは新しい持ち主の名前で封じ直され、そ�
   assert.equal(delivered.status, 200, delivered.text);
   assert.equal(delivered.json.injection.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal');
   assert.equal((await f.inject(connection)).status, 404, 'no longer the giver\'s');
-  const app = await f.request('/v1/resources?kind=app&name=mine', { method: 'PUT', data: { service: 'cloudflare', client_id: 'id-1', client_secret: 'secret-1' } });
+  const app = await f.request('/v1/principals/me/resources?kind=app&name=mine', { method: 'PUT', data: { service: 'cloudflare', client_id: 'id-1', client_secret: 'secret-1' } });
   assert.equal(app.status, 200, app.text);
   const appMoved = await give(f, app.json.resource.id, { to: other.json.principal.id });
   assert.equal(appMoved.status, 200, appMoved.text);
@@ -67,7 +67,7 @@ test('接続とアプリは新しい持ち主の名前で封じ直され、そ�
 
 test('サービスは参照するものがなければ渡せ、オブジェクトは相手の枠に入れば渡せ、エンバイロメントは渡せない', async t => {
   const f = await fixture(t), other = await f.request('/v1/principals', { method: 'POST', data: { name: 'other', key: true } });
-  const service = await f.request('/v1/resources?kind=service&name=Notes', { method: 'PUT', data: { name: 'Notes' } });
+  const service = await f.request('/v1/principals/me/resources?kind=service&name=Notes', { method: 'PUT', data: { name: 'Notes' } });
   assert.equal(service.status, 200, service.text);
   // Something of the owner's referring to it keeps it where it is.
   f.app.resources.insert('conn-1', USER_A, 'connection', 'Notes');
@@ -76,7 +76,7 @@ test('サービスは参照するものがなければ渡せ、オブジェク�
   f.app.resources.remove(f.app.resources.get('conn-1'));
   assert.equal((await give(f, service.json.resource.id, { to: other.json.principal.id })).status, 200);
   assert.equal(f.app.services.row(service.json.resource.id).owner_id, other.json.principal.id);
-  const object = await f.request('/v1/resources?kind=object&name=file.txt', { method: 'PUT', raw: Buffer.from('bytes'), type: 'text/plain' });
+  const object = await f.request('/v1/principals/me/resources?kind=object&name=file.txt', { method: 'PUT', raw: Buffer.from('bytes'), type: 'text/plain' });
   if (object.status === 200) {
     assert.equal((await give(f, object.json.resource.id, { to: other.json.principal.id })).status, 200);
     assert.equal(f.app.resources.get(object.json.resource.id).owner_id, other.json.principal.id);

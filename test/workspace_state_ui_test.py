@@ -38,7 +38,7 @@ with sync_playwright() as p:
     make_key(page, args.base)
 
     def keep(kind, name, value='fixture-only'):
-        result = context.request.put(args.base + '/v1/resources?' + urlencode({'kind': kind, 'name': name}),
+        result = context.request.put(args.base + '/v1/principals/me/resources?' + urlencode({'kind': kind, 'name': name}),
                                      data=plain(value) if kind == 'secret' else value, headers={'Origin': args.base, 'content-type': 'application/json' if kind == 'secret' else 'text/plain'})
         assert result.ok, result.text()
         return result.json()['resource']
@@ -250,7 +250,7 @@ with sync_playwright() as p:
         page.keyboard.press('Enter')
     selected.value.set_files({'name': 'keyboard.txt', 'mimeType': 'text/plain', 'buffer': b'keyboard-fixture'})
     expect(page.get_by_role('link', name='keyboard.txt', exact=True)).to_be_visible()
-    found = context.request.get(args.base + '/v1/resources?' + urlencode({'kind': 'object', 'name': 'reports/keyboard.txt'}))
+    found = context.request.get(args.base + '/v1/principals/me/resources?' + urlencode({'kind': 'object', 'name': 'reports/keyboard.txt'}))
     assert found.ok
     for choice in ['キャンセル', '置き換える']:
         with page.expect_file_chooser() as selected:

@@ -93,7 +93,7 @@ globalThis.fetch = async (url, options = {}) => {
   else if (url === '/v1/principals/me/key') data = { key: {} };
   else if (url === '/v1/requests/' + id) data = { request };
   else if (url.endsWith('/deny')) { await new Promise(resolve => { release = resolve; }); request.status = 'denied'; data = {}; }
-  else if (url.startsWith('/v1/resources?')) data = { resources: [] };
+  else if (url.startsWith('/v1/principals/me/resources?')) data = { resources: [] };
   else if (url === '/v1/principals/me/usage') data = { objects: { count: 0, bytes: 0, bytes_max: 1024, count_max: 100 } };
   else throw new Error('Unexpected API operation: ' + url);
   return { ok: status < 400, status, json: async () => data };

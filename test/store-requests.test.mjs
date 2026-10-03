@@ -30,7 +30,7 @@ test('利用者が選んだ名前で保存し、依頼元に実際の保存名�
 
 test('同じ名前を使う登録を全件保留し、既存の値を保ったまま別名で再試行する', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
-  await f.request('/v1/resources?kind=secret&name=existing', { method: 'PUT', raw: 'keep-this-value', type: 'text/plain' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=existing', { method: 'PUT', raw: 'keep-this-value', type: 'text/plain' });
   const before = f.app.secrets.list(USER_A);
   const row = await ask(f, token, ['first', 'second'], { readable: true });
   const refused = await save(f, row, [entry('new-name'), entry('existing', 'replacement')]);
@@ -48,7 +48,7 @@ test('同じ名前を使う登録を全件保留し、既存の値を保った�
 test('依頼された名前をそのまま使う場合も同名の値を保護する', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
   const row = await ask(f, token, ['existing']);
-  await f.request('/v1/resources?kind=secret&name=existing', { method: 'PUT', raw: 'original', type: 'text/plain' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=existing', { method: 'PUT', raw: 'original', type: 'text/plain' });
   const refused = await save(f, row, [entry('existing')]);
   assert.equal(refused.status, 409, refused.text);
   assert.equal(f.app.secrets.open(f.app.secrets.find(USER_A, 'existing')).toString(), 'original');
@@ -95,7 +95,7 @@ test('同じ保存名への同時登録は一方だけを保存し、もう一�
 
 test('依頼を作る時点で保存先を確かめ、食い違いは依頼元にだけ返す', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
-  await f.request('/v1/resources?kind=secret&name=existing', { method: 'PUT', raw: 'keep-this-value', type: 'text/plain' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=existing', { method: 'PUT', raw: 'keep-this-value', type: 'text/plain' });
   const taken = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'secret', fields: { name: 'existing', label: 'APIキー' } }]} });
   assert.equal(taken.status, 409); assert.equal(taken.json.error.code, 'name_taken');
   const missing = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'secret', fields: { name: 'nothing-here', label: 'APIキー', replace: true } }]} });
@@ -106,7 +106,7 @@ test('依頼を作る時点で保存先を確かめ、食い違いは依頼元�
 
 test('置き換えの依頼は、持ち主がそのままの名前で完了すると既存の値だけを入れ替え、線はそのまま保つ', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
-  await f.request('/v1/resources?kind=secret&name=npm-token', { method: 'PUT', raw: 'old-value', type: 'text/plain' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=npm-token', { method: 'PUT', raw: 'old-value', type: 'text/plain' });
   const before = f.app.secrets.find(USER_A, 'npm-token');
   const row = await ask(f, token, ['npm-token'], { replace: true, readable: true });
   assert.equal(row.store[0].replace, true);
@@ -122,7 +122,7 @@ test('置き換えの依頼は、持ち主がそのままの名前で完了す�
 
 test('置き換えの依頼でも持ち主が別の名前を付ければ、既存の値は残り新しく保管される', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
-  await f.request('/v1/resources?kind=secret&name=npm-token', { method: 'PUT', raw: 'old-value', type: 'text/plain' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=npm-token', { method: 'PUT', raw: 'old-value', type: 'text/plain' });
   const row = await ask(f, token, ['npm-token'], { replace: true });
   const saved = await save(f, row, [entry('npm-token-2', 'new-value')]);
   assert.equal(saved.status, 200, saved.text);
@@ -135,7 +135,7 @@ test('置き換えの依頼でも持ち主が別の名前を付ければ、既�
 
 test('完了までに置き換える相手が消えていれば止め、依頼は保留のまま理由を記録する', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
-  await f.request('/v1/resources?kind=secret&name=npm-token', { method: 'PUT', raw: 'old-value', type: 'text/plain' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=npm-token', { method: 'PUT', raw: 'old-value', type: 'text/plain' });
   const row = await ask(f, token, ['npm-token'], { replace: true });
   await f.drop('secret', 'npm-token');
   const refused = await save(f, row, [entry('npm-token', 'new-value')]);

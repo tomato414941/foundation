@@ -26,7 +26,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], description: 'HTTP method' },
-        path: { type: 'string', maxLength: 2048, description: 'Path beginning with /v1/, or /openapi.json for GET. For example /v1/resources?kind=secret.' },
+        path: { type: 'string', maxLength: 2048, description: 'Path beginning with /v1/, or /openapi.json for GET. For example /v1/principals/me/resources?kind=secret.' },
         body: { description: 'Request body. JSON by default; a string when body_encoding is text or base64.' },
         body_encoding: { type: 'string', enum: ['json', 'text', 'base64'], description: 'Default json. Use text to save a token verbatim, or base64 to send file bytes.' },
       },

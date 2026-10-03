@@ -43,7 +43,7 @@ for (const definition of DEFINITIONS.filter(item => item.auth_schemes.oauth && !
     const values = { ...spec.defaults, ...Object.fromEntries((spec.app_fields ?? []).map(field => [field.name, SAMPLE[field.name]])) };
     const fake = oauthFake(spec, values);
     const f = await fixture(t, { services: [{ definition, schemes: { oauth: oauthScheme(definition, oauthClient(definition, {}, { fetcher: fake.fetcher })) } }] });
-    const app = await f.request('/v1/resources?kind=app&name=' + definition.id, { method: 'PUT', data: { service: definition.id, client_id: 'own-client', client_secret: 'own-secret',
+    const app = await f.request('/v1/principals/me/resources?kind=app&name=' + definition.id, { method: 'PUT', data: { service: definition.id, client_id: 'own-client', client_secret: 'own-secret',
       ...Object.fromEntries((spec.app_fields ?? []).map(field => [field.name, SAMPLE[field.name]])) } });
     assert.equal(app.status, 200, app.text);
     const started = await f.request('/v1/connections', { method: 'POST', data: { service: definition.id, app: app.json.resource.id, ...(spec.scopes ? { scopes: ['one', 'two'] } : {}) } });
@@ -59,7 +59,7 @@ for (const definition of DEFINITIONS.filter(item => item.auth_schemes.oauth && !
     assert.equal(sent.code, 'code-1');
     if (spec.client_auth === 'body') assert.equal(sent.client_secret, 'own-secret');
     else assert.equal(token.options.headers.authorization, 'Basic ' + Buffer.from('own-client:own-secret').toString('base64'));
-    const connection = (await f.request('/v1/resources?kind=connection')).json.resources.find(item => item.service?.id === definition.id);
+    const connection = (await f.request('/v1/principals/me/resources?kind=connection')).json.resources.find(item => item.service?.id === definition.id);
     if (spec.identity) {
       assert.equal(connection.facts.account, spec.identity.from === 'app' ? valueAt(values, spec.identity.id) : [].concat(spec.identity.id).map((_, index) => 'id-' + index).join(':'));
       if (spec.identity.label) assert.equal(connection.label, 'someone@example.test');

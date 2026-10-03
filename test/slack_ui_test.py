@@ -65,7 +65,7 @@ with sync_playwright() as p:
 
     page.route('https://slack.com/oauth/v2/authorize?*', consent)
     expect(dialog.get_by_role('heading', name='Slackに接続', exact=True)).to_be_visible()
-    expect(dialog.get_by_label('OAuthアプリ', exact=True)).to_have_value(page.evaluate("async () => (await (await fetch('/v1/resources?kind=app')).json()).resources.find(app => !app.foundation).id"))
+    expect(dialog.get_by_label('OAuthアプリ', exact=True)).to_have_value(page.evaluate("async () => (await (await fetch('/v1/principals/me/resources?kind=app')).json()).resources.find(app => !app.foundation).id"))
     dialog.get_by_label('許可する権限（1行に1つ）', exact=True).fill('channels:read\nchat:write')
     review(page)
     if shots:

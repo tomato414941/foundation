@@ -20,13 +20,13 @@ test('エンバイロメントは何の ID も持たずに開き、コマンド�
   assert.equal(ran.json.command.exit_code, 0); assert.equal(ran.json.command.stdout.trim(), 'sum 3 false');
   const cli = await f.request('/v1/environments/' + environment.id + '/commands', { method: 'POST', token: agent.token, data: { command: [process.execPath, CLI, 'api', 'GET', '/v1/principals/me'] } });
   assert.notEqual(cli.json.command.exit_code, 0, 'no key, no Foundation');
-  assert.deepEqual((await f.request('/v1/resources?kind=environment', { token: agent.token })).json.resources.map(row => row.id), [environment.id]);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=environment', { token: agent.token })).json.resources.map(row => row.id), [environment.id]);
 });
 
 test('コマンドに渡したシークレットは、変数とファイルでそのコマンドだけに届き、出力からは伏せられる', async t => {
   const f = await lent(t), agent = await f.issueKey();
-  await f.request('/v1/resources?kind=secret&name=token', { method: 'PUT', raw: 'kept-secret-value', type: 'text/plain' });
-  await f.request('/v1/resources?kind=secret&name=config', { method: 'PUT', raw: 'line one\nline two\n', type: 'text/plain' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=token', { method: 'PUT', raw: 'kept-secret-value', type: 'text/plain' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=config', { method: 'PUT', raw: 'line one\nline two\n', type: 'text/plain' });
   const opened = (await f.request('/v1/environments', { method: 'POST', token: agent.token, data: {} })).json.environment;
   const ran = await f.request('/v1/environments/' + opened.id + '/commands', { method: 'POST', token: agent.token, data: {
     command: node("const fs = require('node:fs');", "console.log(process.env.TOKEN, process.env.TOKEN.length);", "console.log(fs.readFileSync(process.env.CONFIG, 'utf8').split('\\n').length);"),
@@ -57,7 +57,7 @@ test('エンバイロメントは開く者が選んだイメージから作ら�
 
 test('ID を付けたエンバイロメントは、その principal として動き、渡した値は出力から伏せられ、閉じると鍵が失効する', async t => {
   const f = await lent(t), agent = await f.issueKey();
-  await f.request('/v1/resources?kind=secret&name=token', { method: 'PUT', raw: 'kept-secret-value', type: 'text/plain' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=token', { method: 'PUT', raw: 'kept-secret-value', type: 'text/plain' });
   const opened = await f.request('/v1/environments', { method: 'POST', token: agent.token, data: { identity: USER_A } });
   assert.equal(opened.status, 201, opened.text);
   const id = opened.json.environment.id;

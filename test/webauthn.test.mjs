@@ -81,7 +81,7 @@ test('鍵で動くAIが自分のWebAuthnの資格情報を登録し、その後�
   const me = await f.request('/v1/principals/me', { anonymous: true, token: program.json.token });
   assert.equal(me.json.principal.id, agent.id);
   assert.deepEqual(me.json.acts_for, [USER_A]);
-  const held = await f.request('/v1/resources?' + new URLSearchParams({ kind: 'secret', name: 'x' }) + '&as=' + USER_A, { anonymous: true, token: program.json.token });
+  const held = await f.request('/v1/principals/' + USER_A + '/resources?' + new URLSearchParams({ kind: 'secret', name: 'x' }), { anonymous: true, token: program.json.token });
   assert.equal(held.status, 404, held.text);
 });
 

@@ -74,7 +74,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.route('https://openrouter.ai/auth?*', consent)
     page.get_by_role('button', name='OpenRouterの画面へ', exact=True).click()
     expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
-    assert cli('api', 'GET', '/v1/resources?kind=connection')['resources'] == []
+    assert cli('api', 'GET', '/v1/principals/' + owner_id + '/resources?kind=connection')['resources'] == []
     authorization['deny'] = False
     page.get_by_role('button', name='OpenRouterの画面へ', exact=True).click()
     expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
@@ -105,7 +105,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     review(page)
     dialog.get_by_role('button', name='許可を取り消す', exact=True).click()
     expect(dialog).not_to_be_visible()
-    cli('api', 'GET', '/v1/resources?kind=connection&as=' + owner_id, success=False)
+    cli('api', 'GET', '/v1/principals/' + owner_id + '/resources?kind=connection', success=False)
 
     page.goto(args.base + '/services', wait_until='networkidle')
     section.get_by_role('button', name='接続を解除', exact=True).click()

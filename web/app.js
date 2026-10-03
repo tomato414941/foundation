@@ -502,7 +502,7 @@ async function showSignin({ email = '', message = '' } = {}) {
 window.addEventListener('focus', () => { if (document.querySelector('#email-sent')) void refresh().catch(() => {}); });
 // The owner's objects: every page of the listing, and how much of the space they use.
 async function loadSpace(signal) {
-  const [listing, usage] = await Promise.all([api('/v1/resources?kind=object', { signal }), api('/v1/principals/me/usage', { signal })]);
+  const [listing, usage] = await Promise.all([api('/v1/principals/me/resources?kind=object', { signal }), api('/v1/principals/me/usage', { signal })]);
   const objects = listing.resources.map(item => ({ ...item, key: item.name, updated_at: Date.parse(item.updated_at) }));
   return { available: true, objects, usage: usage.objects };
 }
@@ -534,10 +534,10 @@ const SOURCES = {
   me: signal => api('/v1/principals/me', { signal }),
   credentials: signal => api('/v1/principals/me/credentials', { signal }).then(result => result.credentials),
   payment: signal => api('/v1/principals/me/payment', { signal }).then(result => result.payment),
-  secrets: signal => api('/v1/resources?kind=secret', { signal }).then(result => result.resources),
-  connections: signal => api('/v1/resources?kind=connection', { signal }).then(result => result.resources),
-  apps: signal => api('/v1/resources?kind=app', { signal }).then(result => result.resources),
-  services: signal => api('/v1/resources?kind=service', { signal }).then(result => result.resources),
+  secrets: signal => api('/v1/principals/me/resources?kind=secret', { signal }).then(result => result.resources),
+  connections: signal => api('/v1/principals/me/resources?kind=connection', { signal }).then(result => result.resources),
+  apps: signal => api('/v1/principals/me/resources?kind=app', { signal }).then(result => result.resources),
+  services: signal => api('/v1/principals/me/resources?kind=service', { signal }).then(result => result.resources),
   catalog: signal => api('/v1/services', { signal }).then(result => result.services),
   // What this principal owns: the lines of ownership it drew, with who is at their other end.
   principals: signal => api('/v1/principals/me/relations?relation=owner&direction=from&limit=200', { signal }).then(result => result.relations.map(line => line.principal)),
@@ -926,7 +926,7 @@ function bindObjects() {
         });
         if (!go) return;
       }
-      const response = await fetch('/v1/resources?' + new URLSearchParams({ kind: 'object', name: key }), { method: 'PUT', credentials: 'same-origin',
+      const response = await fetch('/v1/principals/me/resources?' + new URLSearchParams({ kind: 'object', name: key }), { method: 'PUT', credentials: 'same-origin',
         headers: { 'X-Foundation-Locale': i18n.language, 'content-type': file.type || 'application/octet-stream' }, body: file });
       const result = await response.json();
       if (response.status === 401) await showSignin();
@@ -1168,7 +1168,7 @@ function addApp(serviceId, then) {
   bindForm(async (form) => {
     const service = accepting.find(item => item.id === form.get('service')), name = String(form.get('name') || '');
     const values = Object.fromEntries(service.auth_schemes.oauth.app_fields.map(({ name }) => [name, String(form.get(name) || '')]));
-    await api('/v1/resources?kind=app&name=' + encodeURIComponent(name), { method: 'PUT', data: { service: service.id, ...values } });
+    await api('/v1/principals/me/resources?kind=app&name=' + encodeURIComponent(name), { method: 'PUT', data: { service: service.id, ...values } });
     closeDialog(); await refresh(); toast(t('client.common.addedName', { name: name }));
     then?.(service.id);
   });
@@ -1314,7 +1314,7 @@ function defineService({ name = '', created } = {}) {
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.add'))}</button></form>`);
   bindForm(async (form) => {
     const name = String(form.get('name') || '').trim();
-    const result = await api('/v1/resources?kind=service&name=' + encodeURIComponent(name), {
+    const result = await api('/v1/principals/me/resources?kind=service&name=' + encodeURIComponent(name), {
       method: 'PUT', headers: { 'if-none-match': '*' }, data: { name },
     });
     const service = rememberService(result.resource);
@@ -1415,7 +1415,7 @@ function renameMe() {
 async function handOver() {
   // Everything that can be handed over, asked for when the dialog opens: the page it opens from shows none of it.
   let objects = [];
-  try { objects = (await api('/v1/resources?kind=object')).resources; } catch {}
+  try { objects = (await api('/v1/principals/me/resources?kind=object')).resources; } catch {}
   for (const key of ['secrets', 'connections', 'apps', 'services', 'principals']) state[key] = await SOURCES[key]();
   const groups = [[t('client.handover.secrets'), secrets()], [t('client.handover.connections'), connected().map(item => ({ ...item, name: item.label || item.service.name }))], [t('client.handover.objects'), objects],
     [t('client.handover.apps'), (state.apps || []).filter(item => !item.foundation && item.owner_id === state.user.id)], [t('client.handover.services'), (state.services || []).filter(item => item.owner_id === state.user.id)],
@@ -1583,7 +1583,7 @@ function addSecret() {
     const name = form.get('name');
     const { recipients } = await api('/v1/principals/me/recipients');
     if (!recipients.length) throw new Error(t('client.secret.passkeyRequired'));
-    await api('/v1/resources?' + new URLSearchParams({ kind: 'secret', name }), { method: 'PUT', data: await sealFor(new TextEncoder().encode(String(form.get('value'))), recipients) });
+    await api('/v1/principals/me/resources?' + new URLSearchParams({ kind: 'secret', name }), { method: 'PUT', data: await sealFor(new TextEncoder().encode(String(form.get('value'))), recipients) });
     closeDialog(); await refresh(); toast(t('client.common.addedName', { name: name }));
   });
 }

@@ -19,7 +19,7 @@ const execute = (args, env) => new Promise((resolve, reject) => {
 // Everything else it does over HTTP, with the key in that file.
 async function storedInputs(f) {
   for (const [name, value] of [['first input', 'google-access-personal'], ['second=入力:1', 'personal@example.test']]) {
-    const saved = await f.request('/v1/resources?kind=secret&name=' + encodeURIComponent(name), { method: 'PUT', raw: value });
+    const saved = await f.request('/v1/principals/me/resources?kind=secret&name=' + encodeURIComponent(name), { method: 'PUT', raw: value });
     assert.equal(saved.status, 200, saved.text);
   }
   return ['GOOGLE_OAUTH_ACCESS_TOKEN=first input', 'GOOGLE_ACCOUNT_EMAIL=second=入力:1'];
@@ -82,7 +82,7 @@ test('コマンドが作った非公開ファイルを名前どおりに保存�
 
 test('入力ファイルと出力ファイルを別々に渡し、成功した出力で指定した値を置き換える', async t => {
   const f = await outputFixture(t);
-  await f.request('/v1/resources?kind=secret&name=signin%20config', { method: 'PUT', raw: 'previous-secret' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=signin%20config', { method: 'PUT', raw: 'previous-secret' });
   const input = { name: outputSpec.name, as: 'INPUT_FILE', filename: outputSpec.filename };
   const run = await execute(['exec', '--inputs', JSON.stringify([input]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
     const fs = require('node:fs');
@@ -113,7 +113,7 @@ test('出力指定とFoundationの承認を確認してからコマンドを実�
 
 test('コマンドが失敗すると一時ファイルを片づけて既存の保存値を維持する', async t => {
   const f = await outputFixture(t);
-  await f.request('/v1/resources?kind=secret&name=signin%20config', { method: 'PUT', raw: 'previous-secret' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=signin%20config', { method: 'PUT', raw: 'previous-secret' });
   const input = { name: outputSpec.name, as: 'INPUT_FILE', filename: 'input' };
   const run = await execute(['exec', '--inputs', JSON.stringify([input]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `
     require('node:fs').writeFileSync(process.env.AUTH_FILE, 'partial-secret');
@@ -152,7 +152,7 @@ test('空・過大・公開・リンク・特殊ファイルの出力を安全�
 
 test('保存に失敗したときだけ復旧用の非公開出力を残し、入力は片づける', async t => {
   const f = await outputFixture(t);
-  await f.request('/v1/resources?kind=secret&name=input', { method: 'PUT', raw: 'input-secret' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=input', { method: 'PUT', raw: 'input-secret' });
   const put = f.app.secrets.put;
   f.app.secrets.put = () => fail(503, 'storage_unavailable', 'generated-secret');
   const run = await execute(['exec', '--inputs', JSON.stringify([{ name: 'input', as: 'INPUT_FILE', filename: 'input' }]), '--output', JSON.stringify(outputSpec), '--', process.execPath, '-e', `

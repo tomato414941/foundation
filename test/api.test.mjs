@@ -10,8 +10,8 @@ test('Signin gives a private state behind a safe session cookie', async (t) => {
   assert.match(signin.headers.get('set-cookie'), /HttpOnly; SameSite=Lax/);
   const result = await f.request('/v1/principals/me');
   assert.equal(result.json.principal.id, USER_A);
-  assert.deepEqual((await f.request('/v1/resources?kind=secret')).json.resources, []);
-  assert.deepEqual((await f.request('/v1/resources?kind=connection')).json.resources.filter(row => row.service !== null), []);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=secret')).json.resources, []);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection')).json.resources.filter(row => row.service !== null), []);
   assert.equal(result.headers.get('cache-control'), 'no-store');
   assert.doesNotMatch(await f.visible(), /refresh_token|"secret"|"token"/);
 });
@@ -29,7 +29,7 @@ test('OAuth uses state, PKCE, offline consent, native Google URL; callback is on
   assert.equal(complete.headers.get('location'), '/services?result=connected&service=google');
   assert.equal((await f.callback(url)).headers.get('location'), '/services?result=expired');
   assert.equal(f.google.exchanges, 1);
-  assert.equal((await f.request('/v1/resources?kind=connection')).json.resources.filter(row => row.service !== null).length, 1);
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).json.resources.filter(row => row.service !== null).length, 1);
 });
 
 test('OAuth state is browser-bound and expires; cancel and forged callbacks cannot connect', async (t) => {
@@ -54,11 +54,11 @@ test('Connections expose explicit connection outputs independently of saved name
   assert.notEqual(a.id, b.id);
   assert.equal(a.label, 'personal@example.test');
   assert.equal(b.label, 'work@example.test');
-  const saved = await f.request('/v1/resources?kind=secret&name=gmail%2Fpersonal-example-test', { method: 'PUT', raw: 'independent-value' });
+  const saved = await f.request('/v1/principals/me/resources?kind=secret&name=gmail%2Fpersonal-example-test', { method: 'PUT', raw: 'independent-value' });
   assert.equal(saved.status, 200);
-  assert.deepEqual((await f.request('/v1/resources?kind=secret', { token: agent.token })).json.resources.map(row => row.name), ['gmail/personal-example-test']);
-  assert.deepEqual((await f.request('/v1/resources?kind=connection', { token: agent.token })).json.resources.map(row => row.auth_scheme), ['oauth', 'oauth'], 'managed authorizations are listed independently of secrets');
-  const connections = await f.request('/v1/resources?kind=connection', { token: agent.token });
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=secret', { token: agent.token })).json.resources.map(row => row.name), ['gmail/personal-example-test']);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).json.resources.map(row => row.auth_scheme), ['oauth', 'oauth'], 'managed authorizations are listed independently of secrets');
+  const connections = await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token });
   assert.deepEqual(connections.json.resources.map(item => item.id), [a.id, b.id]);
   assert.deepEqual(connections.json.resources[0].service, { id: 'google', name: 'Google', catalog: true });
   assert.doesNotMatch(connections.text, /refresh_token|google-access-|"state":/);
@@ -79,18 +79,18 @@ test('Connections expose explicit connection outputs independently of saved name
 test('Owners cannot see, disconnect or reach each other\'s connections', async (t) => {
   const f = await fixture(t), first = await f.connection(), runtime = await f.issueKey();
   await f.signin('second@example.test');
-  assert.deepEqual((await f.request('/v1/resources?kind=connection')).json.resources.filter(row => row.service !== null), []);
-  assert.deepEqual((await f.request('/v1/resources?kind=secret')).json.resources, []);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection')).json.resources.filter(row => row.service !== null), []);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=secret')).json.resources, []);
   assert.deepEqual((await f.request('/v1/principals/me/relations?relation=agent&direction=to')).json.relations.map(item => item.principal.name), ['Foundation Agent']);
   assert.equal((await f.request('/v1/resources/' + encodeURIComponent(first.id), { method: 'DELETE', data: { revoke: true } })).status, 403);
   const intruder = await f.issueKey('intruder');
-  assert.deepEqual((await f.request('/v1/resources?kind=connection', { token: intruder.token })).json.resources, []);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection', { token: intruder.token })).json.resources, []);
   assert.equal((await f.inject(first, { token: intruder.token })).status, 404);
   await f.request('/v1/principals/' + runtime.id, { method: 'DELETE', data: {} });
-  assert.equal((await f.request('/v1/resources?kind=connection', { token: runtime.token })).json.resources.length, 1, 'the owner keeps it when one key is revoked');
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: runtime.token })).json.resources.length, 1, 'the owner keeps it when one key is revoked');
   const second = await f.connection();
   assert.notEqual(second.id, first.id);
-  assert.equal((await f.request('/v1/resources?kind=connection')).json.resources.filter(row => row.service !== null).length, 1);
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).json.resources.filter(row => row.service !== null).length, 1);
 });
 
 test('Connecting again pins the Google account', async (t) => {
@@ -98,10 +98,10 @@ test('Connecting again pins the Google account', async (t) => {
   let flow = await f.start({ scopes: GMAIL.metadata, connection_id: a.id });
   assert.equal(flow.searchParams.get('login_hint'), 'personal@example.test');
   assert.equal((await f.callback(flow, 'work')).headers.get('location'), '/services?result=wrong_account&service=google');
-  assert.equal((await f.request('/v1/resources?kind=connection', { token: agent.token })).json.resources.length, 1);
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).json.resources.length, 1);
   flow = await f.start({ scopes: GMAIL.metadata, connection_id: a.id });
   assert.equal((await f.callback(flow, 'personal')).headers.get('location'), '/services?result=connected&service=google');
-  const seen = (await f.request('/v1/resources?kind=connection', { token: agent.token })).json.resources;
+  const seen = (await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).json.resources;
   assert.equal(seen.length, 1); assert.equal(seen[0].id, a.id);
 });
 
@@ -109,8 +109,8 @@ test('同じGmailユーザーの新たな認可を別の接続として保存す
   const f = await fixture(t), a = await f.connection(), agent = await f.issueKey();
   const flow = await f.start();
   assert.equal((await f.callback(flow, 'personal')).headers.get('location'), '/services?result=connected&service=google');
-  assert.equal((await f.request('/v1/resources?kind=connection')).json.resources.filter(row => row.service !== null)[0].id, a.id);
-  const connections = (await f.request('/v1/resources?kind=connection', { token: agent.token })).json.resources;
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).json.resources.filter(row => row.service !== null)[0].id, a.id);
+  const connections = (await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).json.resources;
   assert.equal(connections.length, 2);
   assert.equal(new Set(connections.map(item => item.id)).size, 2);
 });
@@ -143,20 +143,20 @@ test('Refreshing is coalesced, and an invalid grant asks the owner to connect ag
   const response = await f.inject(a, { token: agent.token });
   assert.equal(response.status, 409);
   assert.doesNotMatch(response.text, /secret-provider/);
-  assert.equal((await f.request('/v1/resources?kind=connection')).json.resources.filter(row => row.service !== null)[0].status, 'reconnect_required');
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).json.resources.filter(row => row.service !== null)[0].status, 'reconnect_required');
 });
 
 test('Disconnecting preserves saved values even when service revocation fails, and reports the failure', async (t) => {
   const f = await fixture(t), a = await f.connection(), agent = await f.issueKey();
-  await f.request('/v1/resources?kind=secret&name=gmail%2Fpersonal-example-test%2Ftoken', { method: 'PUT', raw: 'independent-copy' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=gmail%2Fpersonal-example-test%2Ftoken', { method: 'PUT', raw: 'independent-copy' });
   f.google.revokeHandler = () => new Response('{}', { status: 503 });
   const removed = await f.request('/v1/resources/' + encodeURIComponent(a.id), { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.status, 200);
   assert.equal(removed.json.service_revoked, false, 'the owner learns the grant is still at Google');
-  assert.deepEqual((await f.request('/v1/resources?kind=connection')).json.resources.filter(row => row.service !== null), []);
-  assert.deepEqual((await f.request('/v1/resources?kind=secret')).json.resources.map(row => row.name), ['gmail/personal-example-test/token']);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection')).json.resources.filter(row => row.service !== null), []);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=secret')).json.resources.map(row => row.name), ['gmail/personal-example-test/token']);
   assert.equal((await f.read('secret', 'gmail/personal-example-test/token')).text, 'independent-copy');
   assert.equal((await f.inject(a, { token: agent.token })).status, 404);
-  assert.deepEqual((await f.request('/v1/resources?kind=connection', { token: agent.token })).json.resources, []);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).json.resources, []);
 });
 

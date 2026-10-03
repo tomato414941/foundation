@@ -14,7 +14,7 @@ async function slackFixture(t, slack = new FakeSlack()) {
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
-  const connections = async () => (await f.request('/v1/resources?kind=connection')).json.resources;
+  const connections = async () => (await f.request('/v1/principals/me/resources?kind=connection')).json.resources;
   async function connect(code = 'personal', input = {}) {
     const ids = new Set((await connections()).map(item => item.id));
     const done = await f.callback(await start(input), code);
@@ -133,7 +133,7 @@ test('Slackの不正な応答とクライアント認証の失敗を安全なエ
 
 test('利用者自身のSlackアプリで接続し、そのアプリのクライアントで交換する', async t => {
   const f = await slackFixture(t, new FakeSlack({ configured: false }));
-  const app = (await f.request('/v1/resources?kind=app&name=' + encodeURIComponent('自分のBot'), { method: 'PUT', data: { service: 'slack', client_id: 'own-id', client_secret: 'own-secret' } })).json.resource;
+  const app = (await f.request('/v1/principals/me/resources?kind=app&name=' + encodeURIComponent('自分のBot'), { method: 'PUT', data: { service: 'slack', client_id: 'own-id', client_secret: 'own-secret' } })).json.resource;
   const connection = await f.connect('personal', { app: app.id });
   assert.deepEqual(connection.app, { id: app.id, name: '自分のBot', foundation: false });
   const exchange = new URLSearchParams(f.slack.calls.find(call => call.url.endsWith('/oauth.v2.access')).options.body);

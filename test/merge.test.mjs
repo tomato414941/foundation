@@ -15,7 +15,7 @@ async function other(f, name = 'Navigator Vega') {
   assert.equal(became.status, 201, became.text);
   const as = { token: became.json.token, anonymous: true };
   await f.allowFoundation({ ...as, as: became.json.principal.id });
-  const kept = await f.request('/v1/resources?kind=secret&name=theirs', { ...as, method: 'PUT', raw: 'their-value' });
+  const kept = await f.request('/v1/principals/me/resources?kind=secret&name=theirs', { ...as, method: 'PUT', raw: 'their-value' });
   assert.equal(kept.status, 200, kept.text);
   const owned = await f.request('/v1/principals', { ...as, method: 'POST', data: { name: 'their agent', key: true } });
   f.app.emails.add(became.json.principal.id, 'other@example.test');

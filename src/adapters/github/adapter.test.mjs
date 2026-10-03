@@ -14,7 +14,7 @@ async function githubFixture(t, github = new FakeGitHub()) {
     return new URL(result.json.url);
   }
   const back = (url, code) => f.request(new URL(url.searchParams.get('redirect_uri')).pathname + '?state=' + url.searchParams.get('state') + '&code=' + code);
-  const connections = async () => (await f.request('/v1/resources?kind=connection')).json.resources.filter(item => item.service?.id === 'github');
+  const connections = async () => (await f.request('/v1/principals/me/resources?kind=connection')).json.resources.filter(item => item.service?.id === 'github');
   return { ...f, github, start, back, connections };
 }
 

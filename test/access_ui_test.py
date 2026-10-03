@@ -82,7 +82,7 @@ with sync_playwright() as p:
     dialog.get_by_role('button', name='失効させる', exact=True).click()
     expect(dialog.locator('.connection-list li')).to_have_count(1)
     assert caller.get('/v1/principals/me', headers={'authorization': 'Bearer ' + token}).status == 401
-    assert caller.get('/v1/resources?kind=connection&as=' + owner, headers={'authorization': 'Bearer ' + second_token}).status == 200
+    assert caller.get('/v1/principals/' + owner + '/resources?kind=connection', headers={'authorization': 'Bearer ' + second_token}).status == 200
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
@@ -103,7 +103,7 @@ with sync_playwright() as p:
     own = caller.get('/v1/principals/me', headers={'authorization': 'Bearer ' + second_token})
     assert own.status == 200 and own.json()['principal']['id'] == actor['principal']['id']
     assert own.json()['acts_for'] == []
-    assert caller.get('/v1/resources?kind=connection&as=' + owner, headers={'authorization': 'Bearer ' + second_token}).status == 403
+    assert caller.get('/v1/principals/' + owner + '/resources?kind=connection', headers={'authorization': 'Bearer ' + second_token}).status == 403
     row.get_by_role('button', name='詳細', exact=True).click()
     expect(dialog.get_by_text('全体へのアクセス許可なし', exact=True)).to_be_visible()
     expect(dialog.locator('.connection-list li')).to_have_count(1)

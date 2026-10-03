@@ -24,7 +24,7 @@ async function register(f, overrides = {}, agent = null) {
 }
 const approve = (f, row, overrides = {}) => f.request('/v1/requests/' + row.id + '/grant', { method: 'POST', data: { user_code: row.user_code, ...overrides } });
 // Once approved, a machine names the person it acts for on every call, as the CLI does.
-const usable = (f, token) => f.request('/v1/resources?kind=connection', { token, anonymous: true, as: USER_A });
+const usable = (f, token) => f.request('/v1/principals/me/resources?kind=connection', { token, anonymous: true, as: USER_A });
 const cancel = (f, token) => f.request('/v1/principals/me', { method: 'DELETE', token, anonymous: true, data: {} });
 const rowStatus = (f, id) => f.app.store.db.prepare('SELECT status FROM requests WHERE id=?').get(id)?.status;
 
@@ -37,7 +37,7 @@ test('A new key asks only to be approved: no access before approval, the same pr
   assert.doesNotMatch(JSON.stringify(row), /fdn_|token_hash|refresh_token/);
   assert.equal((await f.request('/requests/' + row.id, { anonymous: true, headers: { 'sec-fetch-site': 'cross-site' } })).status, 200);
   assert.equal((await f.request('/v1/requests/' + row.id, { anonymous: true })).status, 401);
-  assert.deepEqual((await f.request('/v1/resources?kind=connection', { token, anonymous: true })).json.resources, [], 'a key nobody has accepted holds nothing but itself');
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection', { token, anonymous: true })).json.resources, [], 'a key nobody has accepted holds nothing but itself');
   assert.equal((await cancel(f, row.id)).status, 401);
   assert.equal((await cancel(f, key())).status, 401);
   assert.equal((await f.request('/v1/principals/me', { token, anonymous: true })).json.requests[0].id, row.id, 'a runtime may read its own request');
@@ -209,11 +209,11 @@ test('Unavailable services cannot register through a request; expired request re
 test('利用者が定義したサービスも、共通の依頼・認証・受け渡しの動線を利用する', async t => {
   const notes = new FakeOAuth2Service();
   const f = await fixture(t, { serviceFetcher: notes.fetch });
-  const defined = await f.request('/v1/resources?kind=service&name=Notes', { method: 'PUT', data: { name: 'Notes', api: 'https://service.example/api',
+  const defined = await f.request('/v1/principals/me/resources?kind=service&name=Notes', { method: 'PUT', data: { name: 'Notes', api: 'https://service.example/api',
     auth_schemes: { oauth: { authorize: SERVICE.authorize_url, token: SERVICE.token_url, identity: { url: SERVICE.userinfo_url }, injection: { NOTES_TOKEN: '/access_token' } } } } });
   assert.equal(defined.status, 200, defined.text);
   const service = defined.json.resource.id;
-  const app = (await f.request('/v1/resources?kind=app&name=' + encodeURIComponent('Notesのアプリ'), { method: 'PUT', data: { service, client_id: 'notes-client', client_secret: 'notes-secret' } })).json.resource;
+  const app = (await f.request('/v1/principals/me/resources?kind=app&name=' + encodeURIComponent('Notesのアプリ'), { method: 'PUT', data: { service, client_id: 'notes-client', client_secret: 'notes-secret' } })).json.resource;
   const { row, token } = await register(f, { authorization_details: [{ type: 'connection', service, app: app.id }] });
   assert.equal(row.service.name, 'Notes');
   assert.deepEqual(row.app, { id: app.id, name: 'Notesのアプリ', foundation: false });
@@ -225,7 +225,7 @@ test('利用者が定義したサービスも、共通の依頼・認証・受�
   assert.equal(saved.service, service); assert.equal(saved.subject, 'user:id-personal');
   const injected = await f.inject(saved, { token });
   assert.deepEqual(injected.json.injection.environment, { NOTES_TOKEN: 'access-personal-0' });
-  const listed = (await f.request('/v1/resources?kind=connection', { token })).json.resources[0];
+  const listed = (await f.request('/v1/principals/me/resources?kind=connection', { token })).json.resources[0];
   assert.deepEqual(listed.variables, ['NOTES_TOKEN']); assert.equal(listed.service.name, 'Notes');
 });
 
@@ -281,7 +281,7 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
   assert.equal(f.app.principals.agentsOf(USER_A).find(item => item.id === agentId).name, '作業用 Claude');
   // Leaving revokes the key but keeps the connections.
   assert.equal((await f.request('/v1/principals/me', { method: 'DELETE', token, anonymous: true, data: {} })).status, 200);
-  assert.equal((await f.request('/v1/resources?kind=connection', { token, anonymous: true })).status, 401);
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token, anonymous: true })).status, 401);
   assert.equal(f.app.principals.agentsOf(USER_A).length, 1, 'Foundation stays');
   assert.equal(f.app.connections.list(USER_A).length, 1);
 });

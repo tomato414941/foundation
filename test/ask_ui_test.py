@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     browser = p.chromium.launch(headless=True)
     # The owner's name for a thing finds its id; the id reaches the thing.
     def held(page, name):
-        found = page.request.get(args.base + '/v1/resources?' + urlencode({'kind': 'secret', 'name': name}))
+        found = page.request.get(args.base + '/v1/principals/me/resources?' + urlencode({'kind': 'secret', 'name': name}))
         assert found.status == 200, found.text()
         return found.json()['resource']['id']
     def read(page, name):
@@ -91,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # A rotation: the AI declares a replacement, the page says so, and renaming it makes it a new value instead.
-    kept = page.request.put(args.base + '/v1/resources?kind=secret&name=npm token', headers={'content-type': 'application/json', 'origin': args.base}, data=plain('old-token'))
+    kept = page.request.put(args.base + '/v1/principals/me/resources?kind=secret&name=npm token', headers={'content-type': 'application/json', 'origin': args.base}, data=plain('old-token'))
     assert kept.status == 200
     rotation = cli('api', 'POST', '/v1/requests', '--json', json.dumps({
         'authorization_details': [{'type': 'secret', 'fields': {'name': 'npm token', 'label': 'npmアクセストークン', 'replace': True}}], 'binding_message': '期限切れのトークンを新しいものに入れ替えます。'}))['request']
@@ -140,7 +140,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # Another value may be saved after the request page opens. The submitted name is checked again.
-    existing = page.request.put(args.base + '/v1/resources?kind=secret&name=cloudflare/cloudflare-api-token',
+    existing = page.request.put(args.base + '/v1/principals/me/resources?kind=secret&name=cloudflare/cloudflare-api-token',
                                headers={'content-type': 'application/json', 'origin': args.base}, data=plain('existing-value'))
     assert existing.status == 200
     value.fill(SECRET)
@@ -176,7 +176,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # The value is available to the AI under the name the owner chose.
-    kept = cli('api', 'GET', '/v1/resources?kind=secret')['resources']
+    kept = cli('api', 'GET', '/v1/principals/' + cli('api', 'GET', '/v1/principals/me')['acts_for'][0] + '/resources?kind=secret')['resources']
     assert [row['name'] for row in kept] == ['cloudflare-api-token', 'cloudflare/cloudflare-api-token']
     refused = subprocess.run(['node', 'cli/runtime.mjs', 'api', 'GET', '/v1/resources/' + kept[0]['id'] + '/content'], env=env, capture_output=True, text=True, timeout=15)
     assert refused.returncode == 1 and SECRET not in refused.stdout + refused.stderr

@@ -25,7 +25,7 @@ test('WebとAPIキーが同じAPIで固定トークンを保存・更新し、�
 
 test('APIキーだけの主体も自分のシークレットを持ち、他の主体の値を保護する', async t => {
   const f = await fixture(t), key = await f.become(), options = { token: key.token, anonymous: true };
-  const response = await f.request('/v1/resources?kind=secret&name=token', { ...options, method: 'PUT', raw: 'private-token' });
+  const response = await f.request('/v1/principals/me/resources?kind=secret&name=token', { ...options, method: 'PUT', raw: 'private-token' });
   assert.equal(response.status, 200, response.text);
   const saved = response.json.resource;
   assert.equal(saved.owner_id, key.id);
@@ -67,7 +67,7 @@ test('CLIは封をして、MCPはFoundationに封をさせて固定トークン�
   const call = (method, path, body, body_encoding = 'json') => f.request('/mcp', { method: 'POST', token: key.token, anonymous: true, data: {
     jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'foundation_api', arguments: { method, path, body, body_encoding } },
   } });
-  const mcp = await call('PUT', '/v1/resources?kind=secret&name=MCP', { plain: Buffer.from('mcp-private').toString('base64url') });
+  const mcp = await call('PUT', '/v1/principals/' + USER_A + '/resources?kind=secret&name=MCP', { plain: Buffer.from('mcp-private').toString('base64url') });
   assert.equal(mcp.json.result.isError, undefined, mcp.text);
   const saved = mcp.json.result.structuredContent.resource;
   assert.equal(saved.kind, 'secret');

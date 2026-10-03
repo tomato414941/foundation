@@ -307,8 +307,8 @@ async function main() {
   // Reading a secret this machine was handed an envelope for: its own, or one shown to it along a line.
   if (action === 'read') {
     if (!key.own) throw new Error('This machine has no key of its own here, so nothing sealed for it can be opened.');
-    const own = await send('/v1/resources?kind=secret&name=' + encodeURIComponent(call.name), undefined, { method: 'GET', accept: () => true });
-    const resource = own.resource ?? (await send('/v1/resources?shown=me', undefined, { method: 'GET' })).resources.find(item => item.kind === 'secret' && item.name === call.name);
+    const own = await send('/v1/principals/me/resources?kind=secret&name=' + encodeURIComponent(call.name), undefined, { method: 'GET', accept: () => true });
+    const resource = own.resource ?? (await send('/v1/principals/me/resources?shown=me', undefined, { method: 'GET' })).resources.find(item => item.kind === 'secret' && item.name === call.name);
     if (!resource) throw new Error('No secret named ' + JSON.stringify(call.name) + ' is kept by this machine or shown to it.');
     const kept = await send('/v1/resources/' + resource.id + '/content', undefined, { method: 'GET' });
     if (!kept.envelope) throw new Error('No envelope was made for this machine: it may read about this secret, but was not handed its key.');
@@ -337,7 +337,7 @@ async function main() {
     return { content: sealContent(contentKey, bytes).toString('base64url'), envelopes: Object.fromEntries(recipients.map(item => [item.principal_id, seal(contentKey, Buffer.from(item.public_key, 'base64url')).toString('base64url')])) };
   };
   if (action === 'keep') {
-    const saved = await send(forHolder('/v1/resources?kind=secret&name=' + encodeURIComponent(call.name)), await sealedFor(call.body), { method: 'PUT' });
+    const saved = await send('/v1/principals/' + encodeURIComponent(owner || 'me') + '/resources?kind=secret&name=' + encodeURIComponent(call.name), await sealedFor(call.body), { method: 'PUT' });
     try { await send('/v1/principals/me/relations', { relation: 'editor', object_type: 'resource', object_id: saved.resource.id }, { method: 'DELETE' }); } catch {}
     console.log(JSON.stringify(saved));
     return;
@@ -348,13 +348,13 @@ async function main() {
   const handed = { environment: {}, files: [] };
   let asked = names;
   if (key.own && names.some(item => typeof item.name === 'string')) {
-    const shown = owner ? (await send('/v1/resources?shown=me', undefined, { method: 'GET', accept: () => true })).resources ?? [] : [];
+    const shown = owner ? (await send('/v1/principals/me/resources?shown=me', undefined, { method: 'GET', accept: () => true })).resources ?? [] : [];
     asked = [];
     for (const item of names) {
       let resource = null;
       if (typeof item.name === 'string') {
         resource = owner ? shown.find(row => row.kind === 'secret' && row.name === item.name && row.owner_id === owner)
-          : (await send('/v1/resources?kind=secret&name=' + encodeURIComponent(item.name), undefined, { method: 'GET', accept: () => true })).resource;
+          : (await send('/v1/principals/me/resources?kind=secret&name=' + encodeURIComponent(item.name), undefined, { method: 'GET', accept: () => true })).resource;
       }
       const kept = resource ? await send('/v1/resources/' + resource.id + '/content', undefined, { method: 'GET', accept: () => true }) : null;
       if (!kept?.envelope) { asked.push(item); continue; }
@@ -434,7 +434,7 @@ async function main() {
       retainOutput = true;
       // The command wrote it; the agent never saw it, and keeps it that way: the line drawn for the one who kept it is declined.
       let saved;
-      try { saved = await send(forHolder('/v1/resources?kind=secret&name=' + encodeURIComponent(output.name)), await sealedFor(bytes), { method: 'PUT' }); }
+      try { saved = await send('/v1/principals/' + encodeURIComponent(owner || 'me') + '/resources?kind=secret&name=' + encodeURIComponent(output.name), await sealedFor(bytes), { method: 'PUT' }); }
       catch { throw new Error(recovery()); }
       try { await send('/v1/principals/me/relations', { relation: 'editor', object_type: 'resource', object_id: saved.resource.id }, { method: 'DELETE' }); } catch {}
       retainOutput = false;

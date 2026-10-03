@@ -80,7 +80,7 @@ with sync_playwright() as p:
     passkeys = [item for item in context.request.get(base + '/v1/principals/me/credentials').json()['credentials'] if item['kind'] == 'webauthn']
     assert len(passkeys) == 1, passkeys
     expect(page.get_by_role('region', name='パスキー').get_by_role('heading', name=passkeys[0]['name'], exact=True)).to_be_visible()
-    assert [row['name'] for row in context.request.get(base + '/v1/resources?kind=secret').json()['resources']] == ['their secret']
+    assert [row['name'] for row in context.request.get(base + '/v1/principals/me/resources?kind=secret').json()['resources']] == ['their secret']
     assert context.request.get(base + '/v1/principals/' + other['principal']['id'] + '/key').status == 404, 'the other ended'
 
     # Its secret opens here, with the key made for this account from that passkey; and the passkey signs this account in.

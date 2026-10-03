@@ -42,7 +42,7 @@ with sync_playwright() as p:
         return response.text() if raw is not None else response.json()
 
     def listed(kind):
-        return api('/v1/resources?kind=' + kind)['resources']
+        return api('/v1/principals/me/resources?kind=' + kind)['resources']
 
     def service(name):
         return next(item for item in listed('service') if item['name'] == name)

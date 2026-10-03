@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, USER_A, json } from './helpers.mjs';
 
-const route = name => '/v1/resources?kind=secret&name=' + encodeURIComponent(name);
-const own = name => '/v1/resources?kind=secret&name=' + encodeURIComponent(name);
+const route = name => '/v1/principals/me/resources?kind=secret&name=' + encodeURIComponent(name);
+const own = name => '/v1/principals/me/resources?kind=secret&name=' + encodeURIComponent(name);
 
 test('Every accepted name round-trips literally through HTTP, including Unicode, separators and dot segments', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
@@ -15,7 +15,7 @@ test('Every accepted name round-trips literally through HTTP, including Unicode,
     assert.equal((await f.read('secret', name, { token })).text, content);
     assert.equal((await f.read('secret', name)).text, content);
   }
-  assert.deepEqual(new Set((await f.request('/v1/resources?kind=secret', { token })).json.resources.map(row => row.name)), new Set(names));
+  assert.deepEqual(new Set((await f.request('/v1/principals/me/resources?kind=secret', { token })).json.resources.map(row => row.name)), new Set(names));
   const renamed = await f.request('/v1/resources/' + (await f.lookup('secret', '..')).json.resource.id, { method: 'PATCH', data: { name: ' ../新しい名=, ' } });
   assert.equal(renamed.status, 200); assert.equal(renamed.json.resource.name, ' ../新しい名=, ');
   assert.equal((await f.read('secret', ' ../新しい名=, ', { token })).text, 'value-3');
@@ -28,7 +28,7 @@ test('Name prefix filtering uses literal, case-sensitive text rather than wildca
   const names = ['a', 'a_', 'a_2', 'a%', 'ab', 'ab/c', 'A_', 'a/?'];
   for (const name of names) await f.request(route(name), { method: 'PUT', token, raw: 'x' });
   for (const [prefix, expected] of [['a_', ['a_', 'a_2']], ['a%', ['a%']], ['A', ['A_']], ['ab', ['ab', 'ab/c']]]) {
-    const listed = await f.request('/v1/resources?kind=secret&prefix=' + encodeURIComponent(prefix), { token });
+    const listed = await f.request('/v1/principals/me/resources?kind=secret&prefix=' + encodeURIComponent(prefix), { token });
     assert.deepEqual(listed.json.resources.map(row => row.name), expected);
   }
 });

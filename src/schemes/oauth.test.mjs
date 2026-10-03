@@ -13,10 +13,10 @@ const DEFINITION = { name: 'Notes', api: 'https://service.example/api', auth_sch
 
 async function generic(t, definition = DEFINITION) {
   const service = new FakeOAuth2Service(), f = await fixture(t, { serviceFetcher: service.fetch });
-  const described = await f.request('/v1/resources?kind=service&name=Notes', { method: 'PUT', data: definition });
+  const described = await f.request('/v1/principals/me/resources?kind=service&name=Notes', { method: 'PUT', data: definition });
   assert.equal(described.status, 200, described.text);
   const serviceId = described.json.resource.id;
-  const registered = await f.request('/v1/resources?kind=app&name=Notes', { method: 'PUT', data: { service: serviceId, client_id: 'notes-client', client_secret: 'notes-secret' } });
+  const registered = await f.request('/v1/principals/me/resources?kind=app&name=Notes', { method: 'PUT', data: { service: serviceId, client_id: 'notes-client', client_secret: 'notes-secret' } });
   assert.equal(registered.status, 200, registered.text);
   const appId = registered.json.resource.id;
   async function start(input = {}) {
@@ -24,7 +24,7 @@ async function generic(t, definition = DEFINITION) {
     assert.equal(started.status, 200, started.text);
     return new URL(started.json.url);
   }
-  const connections = async () => (await f.request('/v1/resources?kind=connection')).json.resources.filter(item => item.service?.id === serviceId);
+  const connections = async () => (await f.request('/v1/principals/me/resources?kind=connection')).json.resources.filter(item => item.service?.id === serviceId);
   async function connect(account = 'personal', input = {}) {
     const before = new Set((await connections()).map(item => item.id));
     const url = await start(input), done = await f.callback(url, account);
@@ -113,14 +113,14 @@ test('サービスの定義では、インターネット上のhttpsのURLを求
   const f = await generic(t);
   for (const [change, where] of [[{ token: 'http://service.example/token' }, 'definition.auth_schemes.oauth.token'], [{ authorize: 'https://localhost/authorize' }, 'definition.auth_schemes.oauth.authorize'],
     [{ token: 'https://10.0.0.1/token' }, 'definition.auth_schemes.oauth.token'], [{ identity: { url: 'https://metadata.internal/me' } }, 'definition.auth_schemes.oauth.identity.url'], [{ token: 'not a url' }, 'definition.auth_schemes.oauth.token']]) {
-    const refused = await f.request('/v1/resources?kind=service&name=Other', { method: 'PUT', data: { ...DEFINITION, auth_schemes: { oauth: { ...OAUTH, ...change } } } });
+    const refused = await f.request('/v1/principals/me/resources?kind=service&name=Other', { method: 'PUT', data: { ...DEFINITION, auth_schemes: { oauth: { ...OAUTH, ...change } } } });
     assert.equal(refused.status, 400, JSON.stringify(change) + ' ' + refused.text);
     assert.equal(refused.json.error.where, where);
   }
-  assert.equal((await f.request('/v1/resources?kind=service&name=Other', { method: 'PUT', data: { ...DEFINITION, name: '' } })).json.error.where, 'definition.name');
-  const other = (await f.request('/v1/resources?kind=service&name=Plain', { method: 'PUT', data: { ...DEFINITION, name: 'Plain' } })).json.resource.id;
+  assert.equal((await f.request('/v1/principals/me/resources?kind=service&name=Other', { method: 'PUT', data: { ...DEFINITION, name: '' } })).json.error.where, 'definition.name');
+  const other = (await f.request('/v1/principals/me/resources?kind=service&name=Plain', { method: 'PUT', data: { ...DEFINITION, name: 'Plain' } })).json.resource.id;
   assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: other } })).json.error.code, 'app_required');
-  const listed = (await f.request('/v1/resources?kind=app')).json.resources;
+  const listed = (await f.request('/v1/principals/me/resources?kind=app')).json.resources;
   assert.deepEqual(listed.filter(app => !app.foundation).map(app => [app.name, app.service.name]), [['Notes', 'Notes']]);
 });
 

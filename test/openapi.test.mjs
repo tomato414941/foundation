@@ -51,7 +51,7 @@ test('公開仕様から操作を見つけ、初回接続・承認・保存・�
   assert.ok(as);
   // A client that cannot seal hands the bytes to Foundation's principal, which seals them as the owner's agent.
   const plain = text => ({ plain: Buffer.from(text).toString('base64url') });
-  const saved = await call('putResource', { token, query: { as, kind: 'secret', name: 'api/config' }, data: plain('{"demo":"value"}') });
+  const saved = await call('putResource', { token, params: { principalId: as }, query: { kind: 'secret', name: 'api/config' }, data: plain('{"demo":"value"}') });
   assert.equal(saved.status, 200, saved.text);
   const resourceId = saved.json.resource.id;
   const content = await call('getContent', { token, params: { resourceId } });
@@ -68,14 +68,14 @@ test('公開仕様から操作を見つけ、初回接続・承認・保存・�
 
 test('JSON定義を検証し、バイナリ保存とJSONリソースの入力を種類によって扱う', async t => {
   const f = await fixture(t);
-  const made = await f.request('/v1/resources?kind=service&name=notes', { method: 'PUT', data: { name: 'Notes' } });
+  const made = await f.request('/v1/principals/me/resources?kind=service&name=notes', { method: 'PUT', data: { name: 'Notes' } });
   assert.equal(made.status, 200);
-  const refused = await f.request('/v1/resources?kind=service&name=notes', { method: 'PUT', data: { name: 123 } });
+  const refused = await f.request('/v1/principals/me/resources?kind=service&name=notes', { method: 'PUT', data: { name: 123 } });
   assert.equal(refused.status, 400);
   const kept = await f.request('/v1/resources/' + made.json.resource.id);
   assert.equal(kept.json.resource.definition.name, 'Notes');
   const binary = Buffer.from([0, 255, 10, 1]);
-  const saved = await f.request('/v1/resources?kind=secret&name=binary', { method: 'PUT', raw: binary });
+  const saved = await f.request('/v1/principals/me/resources?kind=secret&name=binary', { method: 'PUT', raw: binary });
   assert.equal(saved.status, 200);
   assert.equal(saved.json.resource.size, binary.length + 28, 'sealed: iv and tag with the bytes');
   const delivery = await f.request('/v1/injections', { method: 'POST', data: { names: [{ name: 'binary', as: 'BINARY_FILE', filename: 'data.bin' }] } });

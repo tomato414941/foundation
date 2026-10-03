@@ -31,7 +31,7 @@ with sync_playwright() as p:
     page.wait_for_url(args.base + '/secrets')
     page.wait_for_load_state('networkidle')
     allow_foundation(context.request, args.base)
-    created = context.request.put(args.base + '/v1/resources?kind=object&name=navigation.txt',
+    created = context.request.put(args.base + '/v1/principals/me/resources?kind=object&name=navigation.txt',
                                   data='fixture-only', headers={'Origin': args.base, 'content-type': 'text/plain'})
     assert created.ok, created.status
 
@@ -62,7 +62,7 @@ with sync_playwright() as p:
         field = page.get_by_label('サービスを探す', exact=True)
         field.fill('Slack')
         if width == 1280:
-            created = context.request.put(args.base + '/v1/resources?kind=secret&name=background-example',
+            created = context.request.put(args.base + '/v1/principals/me/resources?kind=secret&name=background-example',
                                           data=plain('fixture-only'), headers={'Origin': args.base, 'content-type': 'application/json'})
             assert created.ok, created.status
         assert pending, '最新情報の確認を進める'
@@ -143,7 +143,7 @@ with sync_playwright() as p:
     print('新しいタブでも通常のリンクとして接続画面を開く。')
 
     # ほかのクライアントで追加された情報を、移動時に取り込む。
-    created = context.request.put(args.base + '/v1/resources?kind=secret&name=navigation-example',
+    created = context.request.put(args.base + '/v1/principals/me/resources?kind=secret&name=navigation-example',
                                   data=plain('fixture-only'), headers={'Origin': args.base, 'content-type': 'application/json'})
     assert created.ok, created.status
     go('サービス')

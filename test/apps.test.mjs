@@ -15,13 +15,13 @@ async function withApps(t, { offered = true } = {}) {
   if (!offered) { cloudflare.enabled = false; cloudflare.clientId = ''; cloudflare.clientSecret = ''; }
   cloudflare.scopes = 'offline_access user-details.read dns.write';
   const f = await fixture(t, { services: [entry('cloudflare', { oauth: cloudflareOauth(cloudflare) }), entry('openrouter', { oauth: openrouterOauth(new FakeOpenRouter()) }), entry('google', { oauth: googleOauth(new FakeGoogle()) })] });
-  const register = (name, values = WORK) => f.request('/v1/resources?kind=app&name=' + encodeURIComponent(name), { method: 'PUT', data: values });
+  const register = (name, values = WORK) => f.request('/v1/principals/me/resources?kind=app&name=' + encodeURIComponent(name), { method: 'PUT', data: values });
   async function connect(input = {}, code = 'personal') {
     const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare', ...input } });
     assert.equal(started.status, 200, started.text);
     const url = new URL(started.json.url), done = await f.callback(url, code);
     assert.match(done.headers.get('location'), /result=connected/, done.headers.get('location'));
-    return { url, connection: (await f.request('/v1/resources?kind=connection')).json.resources.filter(item => item.service?.id === 'cloudflare').at(-1) };
+    return { url, connection: (await f.request('/v1/principals/me/resources?kind=connection')).json.resources.filter(item => item.service?.id === 'cloudflare').at(-1) };
   }
   const tokenCalls = () => cloudflare.calls.filter(call => call.url.endsWith('/token')).map(call => call.options.body);
   return { ...f, cloudflare, register, connect, tokenCalls };
@@ -32,7 +32,7 @@ test('アプリは持ち物の一つとして登録し、Foundationのアプリ�
   const made = await f.register('仕事用');
   assert.equal(made.status, 200, made.text);
   assert.equal(made.json.resource.kind, 'app'); assert.equal(made.json.resource.client_id, 'work-app-id');
-  const listed = (await f.request('/v1/resources?kind=app', { token })).json.resources;
+  const listed = (await f.request('/v1/principals/me/resources?kind=app', { token })).json.resources;
   assert.deepEqual(listed.filter(app => app.service.id === 'cloudflare').map(app => [app.name, app.service.id, app.foundation]).sort(), [['Foundationのアプリ', 'cloudflare', true], ['仕事用', 'cloudflare', false]]);
   assert.equal((await f.request('/v1/resources/' + made.json.resource.id + '/content')).status, 405);
   const everything = JSON.stringify([made.json, listed]) + await f.visible();
@@ -77,7 +77,7 @@ test('アプリを消すと、そのアプリの接続は権限を保ったま�
   assert.equal(refused.json.error.connections, 1); assert.deepEqual(refused.json.error.yours.map(row => row.id), [connection.id]);
   const removed = await f.request('/v1/resources/' + app.id, { method: 'DELETE', data: { confirm: true } });
   assert.equal(removed.json.connections_stopped, 1);
-  const stopped = (await f.request('/v1/resources?kind=connection')).json.resources.find(item => item.id === connection.id);
+  const stopped = (await f.request('/v1/principals/me/resources?kind=connection')).json.resources.find(item => item.id === connection.id);
   assert.equal(stopped.status, 'reconnect_required');
   assert.equal(stopped.app, null, 'it names no app, rather than one it was not made through');
   assert.deepEqual(stopped.facts.requested_scopes, ['dns.write', 'offline_access', 'user-details.read']);
@@ -92,7 +92,7 @@ test('アプリを消すと、そのアプリの接続は権限を保ったま�
   const shown = await f.request('/v1/connections/confirmation?state=' + review.searchParams.get('state'));
   assert.ok(shown.json.changes.some(change => change.label === 'OAuthアプリ'));
   assert.equal((await f.request('/v1/connections/confirmation', { method: 'POST', data: { state: review.searchParams.get('state') } })).status, 200);
-  const again = (await f.request('/v1/resources?kind=connection')).json.resources.find(item => item.id === connection.id);
+  const again = (await f.request('/v1/principals/me/resources?kind=connection')).json.resources.find(item => item.id === connection.id);
   assert.equal(again.id, connection.id); assert.equal(again.status, 'usable');
   assert.deepEqual(again.app, { id: other.id, name: '個人用', foundation: false });
 });
@@ -105,7 +105,7 @@ test('線を引かれた人は、そのアプリで自分のアカウントを�
   await f.signin();
   assert.equal((await f.request('/v1/principals/' + member + '/relations', { method: 'POST', data: { relation: 'viewer', object_type: 'resource', object_id: app.id } })).status, 201);
   await f.signin('member@example.test');
-  assert.deepEqual((await f.request('/v1/resources?kind=app')).json.resources.filter(item => !item.foundation).map(item => item.name), ['会社のアプリ']);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=app')).json.resources.filter(item => !item.foundation).map(item => item.name), ['会社のアプリ']);
   const { url, connection } = await f.connect({ app: app.id }, 'work');
   assert.equal(url.searchParams.get('client_id'), 'work-app-id');
   assert.equal(connection.label, 'work@example.test');

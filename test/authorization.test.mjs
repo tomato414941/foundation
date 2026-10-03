@@ -40,8 +40,8 @@ test('ルートは同じ問いを立て、許されない主体には 403、依�
     const refused = await f.request(path, { ...options, token: key.token, anonymous: true });
     assert.equal(refused.status, 403, path + ' ' + refused.text); assert.equal(refused.json.error.code, 'forbidden');
   }
-  assert.equal((await f.request('/v1/resources?kind=connection', { token: key.token, anonymous: true })).status, 200, 'what both may do still works');
-  assert.equal((await f.request('/v1/resources?kind=connection')).status, 200);
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: key.token, anonymous: true })).status, 200, 'what both may do still works');
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).status, 200);
   assert.equal((await f.request('/v1/functions')).status, 200, 'the owner may do what those acting for them may');
   assert.equal((await f.request('/v1/principals/' + key.id, { method: 'DELETE', token: key.token, anonymous: true, data: {} })).status, 403, 'nobody removes what they do not own');
   const stranger = await f.request('/v1/principals/' + USER_A, { token: key.token, anonymous: true });
@@ -59,7 +59,7 @@ test('持ち主は一つの操作を関係として渡し、渡された相手�
   assert.ok(listed.json.relations.some(row => row.relation === 'disconnect_grant' && row.resource?.id === connected.id), '役割と同じ一覧に載る');
   const done = await disconnect(key.token);
   assert.equal(done.status, 200, done.text);
-  assert.equal((await f.request('/v1/resources?kind=connection')).json.resources.some(item => item.id === connected.id), false);
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).json.resources.some(item => item.id === connected.id), false);
 });
 
 test('一つの操作は、その物にだけ渡せる。持ち主そのものには引けない', async t => {

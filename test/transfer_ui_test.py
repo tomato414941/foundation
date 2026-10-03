@@ -42,7 +42,7 @@ with sync_playwright() as p:
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/account')
     allow_foundation(context.request, args.base)
-    kept = context.request.put(args.base + '/v1/resources?kind=secret&name=handed', data=plain('hand-me'), headers={'content-type': 'application/json', 'origin': args.base})
+    kept = context.request.put(args.base + '/v1/principals/me/resources?kind=secret&name=handed', data=plain('hand-me'), headers={'content-type': 'application/json', 'origin': args.base})
     assert kept.ok, kept.text()
     owned = context.request.post(args.base + '/v1/principals', data=json.dumps({'name': 'my agent', 'agent': True}), headers={'content-type': 'application/json', 'origin': args.base}).json()
     owned.update(context.request.post(args.base + '/v1/principals/' + owned['principal']['id'] + '/credentials', data=json.dumps({'kind': 'key'}), headers={'content-type': 'application/json', 'origin': args.base}).json())
@@ -77,9 +77,9 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / 'transfer-dialog.png'), full_page=True)
     dialog.get_by_role('button', name='引き渡す', exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert context.request.get(args.base + '/v1/resources?kind=secret').json()['resources'] == []
+    assert context.request.get(args.base + '/v1/principals/me/resources?kind=secret').json()['resources'] == []
     assert context.request.get(args.base + '/v1/principals/me/relations?relation=owner&direction=from').json()['relations'] == []
-    theirs = other.get(args.base + '/v1/resources?kind=secret', headers=headers).json()['resources']
+    theirs = other.get(args.base + '/v1/principals/me/resources?kind=secret', headers=headers).json()['resources']
     assert [row['name'] for row in theirs] == ['handed']
     assert injected(other, args.base, 'handed', headers=headers).text() == 'hand-me'
     assert [row['principal']['id'] for row in other.get(args.base + '/v1/principals/me/relations?relation=owner&direction=from', headers=headers).json()['relations']] == [owned['principal']['id']]

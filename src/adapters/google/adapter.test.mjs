@@ -23,7 +23,7 @@ async function googleFixture(t, google = new FakeGoogle()) {
     assert.match(done.headers.get('location'), /result=connected/, done.headers.get('location'));
     return (await connections()).find(item => input.connection_id ? item.id === input.connection_id : !ids.has(item.id));
   }
-  const connections = async () => (await f.request('/v1/resources?kind=connection')).json.resources.filter(item => item.service?.id === 'google');
+  const connections = async () => (await f.request('/v1/principals/me/resources?kind=connection')).json.resources.filter(item => item.service?.id === 'google');
   const secret = connection => f.app.connections.state(f.app.connections.held(USER_A, connection.id)).private_state;
   return { ...f, connect, connections, secret };
 }
@@ -63,7 +63,7 @@ test('AIが頼んだ権限で接続の依頼を完了し、確認結果と短期
   const a = await f.connect('personal', { request_id: asked.json.request.id });
   const done = await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token });
   assert.equal(done.json.request.status, 'granted'); assert.equal(done.json.request.result.connection_id, a.id);
-  const [listed] = (await f.request('/v1/resources?kind=connection', { token: agent.token })).json.resources;
+  const [listed] = (await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).json.resources;
   assert.equal(listed.label, 'personal@example.test');
   assert.deepEqual(listed.facts.scopes, with_(READONLY, SEND));
   assert.deepEqual(listed.facts.requested_scopes, with_(READONLY, SEND));
@@ -96,7 +96,7 @@ test('複数アカウントをメールアドレスで区別し、別の所有�
   assert.equal((await f.inject(b, { token: agent.token })).json.injection.environment.GOOGLE_ACCOUNT_EMAIL, 'work@example.test');
   await f.signin('second@example.test');
   const stranger = await f.issueKey();
-  assert.deepEqual((await f.request('/v1/resources?kind=connection', { token: stranger.token })).json.resources, []);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection', { token: stranger.token })).json.resources, []);
   assert.equal((await f.inject(a, { token: stranger.token })).status, 404);
   assert.equal((await f.request('/v1/resources/' + a.id, { method: 'DELETE', data: { revoke: false } })).status, 403);
 });

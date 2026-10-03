@@ -88,7 +88,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
             {'service': {'id': 'google', 'name': 'Google'}, 'auth_scheme': 'oauth', 'label': f'複数の用途で利用する接続先のアカウント {number}@example.test'}
             for number in range(count)
         ]}
-        page.route('**/v1/resources?kind=connection', lambda route: route.fulfill(json=summary))
+        page.route('**/v1/principals/me/resources?kind=connection', lambda route: route.fulfill(json=summary))
         for width in [1280, 390]:
             page.set_viewport_size({'width': width, 'height': 844})
             page.reload(wait_until='networkidle')
@@ -98,7 +98,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
             expect(card).to_have_text(f'サービス{count} 件')
             if count == 40:
                 page.screenshot(path=str(shots / f'home-connections-{width}.png'), full_page=True)
-        page.unroute('**/v1/resources?kind=connection')
+        page.unroute('**/v1/principals/me/resources?kind=connection')
     page.set_viewport_size({'width': 1280, 'height': 800})
     page.reload(wait_until='networkidle')
 

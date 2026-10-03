@@ -21,7 +21,7 @@ with sync_playwright() as p:
     page.goto(args.base + '/docs', wait_until='networkidle')
     expect(page.get_by_role('heading', name='Foundation API', exact=False)).to_be_visible()
     # Swagger expands an operation and displays the contract, including its request schema.
-    operation = page.locator('#operations-resources-putResource')
+    operation = page.locator('#operations-principals-putResource')
     operation.locator('.opblock-summary-control').click()
     expect(operation.locator('.opblock-description-wrapper').first).to_contain_text('raw bytes')
     expect(operation.get_by_text('Request body', exact=True)).to_be_visible()

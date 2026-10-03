@@ -33,7 +33,7 @@ test('OpenRouter exchanges only PKCE code, preserves real expiry and zero budget
   const url = await f.startOpenRouter();
   assert.equal((await f.callbackOpenRouter(url)).headers.get('location'), '/services?result=connected&service=openrouter');
   assert.match((await f.callbackOpenRouter(url)).headers.get('location'), /result=expired/);
-  const response = await f.request('/v1/resources?kind=connection');
+  const response = await f.request('/v1/principals/me/resources?kind=connection');
   const account = response.json.resources[0];
   assert.equal(account.service.id, 'openrouter');
   assert.deepEqual(account.variables, ['OPENROUTER_API_KEY']);
@@ -65,16 +65,16 @@ test('OpenRouter callback cannot use another session, forged state, or a denied 
 
 test('承認したキーに認証情報と提供元の有効期限を渡し、失効後の取得を拒否する', async t => {
   const f = await openrouterFixture(t); let token = 'fdn_' + randomBytes(32).toString('base64url');
-  assert.equal((await f.request('/v1/resources?kind=connection', { token, anonymous: true })).status, 401, 'a key nobody knows is nobody');
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token, anonymous: true })).status, 401, 'a key nobody knows is nobody');
   token = (await f.approveKey()).token;
   const created = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'connection', service: 'openrouter' }], binding_message: 'キー情報を確認。モデルは実行しない。' } });
   const row = created.json.request;
   assert.equal(row.service.auth_schemes.oauth.can_revoke, false);
   const callback = await f.callbackOpenRouter(await f.startOpenRouter({ request_id: row.id }));
   assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?result=connected');
-  const account = (await f.request('/v1/resources?kind=connection')).json.resources[0];
+  const account = (await f.request('/v1/principals/me/resources?kind=connection')).json.resources[0];
   assert.equal((await f.request('/v1/requests/' + row.id)).json.request.status, 'granted', 'the request is granted');
-  const listed = await f.request('/v1/resources?kind=connection', { token });
+  const listed = await f.request('/v1/principals/me/resources?kind=connection', { token });
   assert.deepEqual(listed.json.resources[0].variables, ['OPENROUTER_API_KEY']);
   assert.doesNotMatch(listed.text, /sk-or-v1-/);
   const issued = await connection(f, account, token);
@@ -97,7 +97,7 @@ test('OpenRouter keys are owner-separated, cannot silently replace connections, 
   const replacement = await f.request('/v1/connections', { method: 'POST', data: { service: 'openrouter', connection_id: account.id } });
   assert.equal(replacement.json.error.code, 'new_connection_required');
   await f.signin('other@example.test');
-  assert.equal((await f.request('/v1/resources?kind=connection')).json.resources.length, 0);
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).json.resources.length, 0);
   assert.equal((await f.request('/v1/resources/' + encodeURIComponent(account.id), { method: 'DELETE', data: { revoke: false } })).status, 403);
   const own = await f.openrouterAccount('other'), other = await f.issueKey();
   assert.equal((await connection(f, account, other.token)).status, 404);
@@ -123,7 +123,7 @@ test('Provider expiry, revocation and budget updates are checked before every AP
   let issued = await connection(f, account, agent.token);
   assert.equal(issued.json.expires_at, Date.parse(f.openrouter.info.expires_at));
   assert.ok(issued.json.expires_in > 80_000, 'not replaced with a fictitious short lifetime');
-  const listed = (await f.request('/v1/resources?kind=connection', { token: agent.token })).json.resources[0];
+  const listed = (await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).json.resources[0];
   assert.equal(listed.label, account.label, 'what the key can see about it is on the connection, not the delivery');
   assert.equal(listed.facts.expires_at, Date.parse(f.openrouter.info.expires_at));
   assert.equal(listed.facts.key_info.limit, 10);

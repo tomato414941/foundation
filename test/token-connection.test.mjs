@@ -30,7 +30,7 @@ test('トークンの接続に名前を付け、同じサービスにいくつ�
   const personal = await paste(f, { service: 'github', name: '個人用', fields: { token: 'ghp_personal' } });
   assert.equal(work.status, 201, work.text);
   assert.equal(personal.status, 201, personal.text);
-  const listed = (await f.request('/v1/resources?kind=connection')).json.resources.filter(item => item.service.id === 'github').map(item => item.name).sort();
+  const listed = (await f.request('/v1/principals/me/resources?kind=connection')).json.resources.filter(item => item.service.id === 'github').map(item => item.name).sort();
   assert.deepEqual(listed, ['仕事用', '個人用']);
 });
 
@@ -71,7 +71,7 @@ test('トークンの項目が定義に合わなければ、接続を作らず�
   assert.equal(wrongDomain.status, 400);
   const withScopes = await paste(f, { service: 'github', scopes: ['repo'], fields: { token: 'ghp' } });
   assert.equal(withScopes.status, 400);
-  assert.equal((await f.request('/v1/resources?kind=connection')).json.resources.length, 0);
+  assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).json.resources.length, 0);
 });
 
 test('トークンそのものは見せず、ドメインのような秘密でない項目だけを接続の説明に示す', async t => {
@@ -80,7 +80,7 @@ test('トークンそのものは見せず、ドメインのような秘密で�
   const made = await paste(f, { service: 'kintone', fields: { domain: 'example.cybozu.com', token: 'kintone-secret' } });
   assert.equal(made.status, 201, made.text);
   assert.deepEqual(made.json.connection.facts, { domain: 'example.cybozu.com' });
-  const listed = await f.request('/v1/resources?kind=connection');
+  const listed = await f.request('/v1/principals/me/resources?kind=connection');
   assert.doesNotMatch(listed.text, /kintone-secret/);
   assert.deepEqual((await f.inject(made.json.connection)).json.injection.environment, { KINTONE_DOMAIN: 'example.cybozu.com', KINTONE_API_TOKEN: 'kintone-secret' });
 });

@@ -14,7 +14,7 @@ test('未定義のURLには認証状態によらず404を返し、認証が必�
       assert.equal(head.text, '');
     }
   }
-  const protectedResource = await f.request('/v1/resources?kind=secret', { anonymous: true });
+  const protectedResource = await f.request('/v1/principals/me/resources?kind=secret', { anonymous: true });
   assert.equal(protectedResource.status, 401);
   assert.equal(protectedResource.json.error.code, 'signin_required');
 });
@@ -67,16 +67,16 @@ test('認証情報と接続の画面をそれぞれのURLから開く', async t 
 
 test('サインイン済みの初回HTMLで行き先の見出しとメニューを表示し、データは認証済みAPIから取得する', async t => {
   const f = await fixture(t);
-  await f.request('/v1/resources?kind=secret&name=private-test-name', { method: 'PUT', raw: 'private-test-value' });
+  await f.request('/v1/principals/me/resources?kind=secret&name=private-test-name', { method: 'PUT', raw: 'private-test-value' });
   const page = await f.request('/secrets');
   assert.match(page.text, /<h1>シークレット<\/h1>/);
   assert.match(page.text, /href="\/secrets" aria-current="page"/);
   assert.match(page.text, /role="status" aria-label="読み込み中"/);
   assert.equal(page.headers.get('cache-control'), 'private, no-store');
   for (const privateValue of ['private-test-name', 'private-test-value', 'owner@example.test']) assert.ok(!page.text.includes(privateValue));
-  const records = await f.request('/v1/resources?kind=secret');
+  const records = await f.request('/v1/principals/me/resources?kind=secret');
   assert.equal(records.json.resources[0].name, 'private-test-name');
-  const denied = await f.request('/v1/resources?kind=connection', { headers: { cookie: 'fdn_session=unverified' } });
+  const denied = await f.request('/v1/principals/me/resources?kind=connection', { headers: { cookie: 'fdn_session=unverified' } });
   assert.equal(denied.status, 401);
 });
 
@@ -106,9 +106,9 @@ test('同じURLでCookieとBearerを受け付け、Bearerがある場合はそ�
   const f = await fixture(t), first = await f.connection(), key = await f.issueKey();
   await f.signin('second@example.test');
   await f.connection('work');
-  const browser = await f.request('/v1/resources?kind=connection');
+  const browser = await f.request('/v1/principals/me/resources?kind=connection');
   assert.equal(browser.json.resources[0].subject, 'work@example.test');
-  const agent = await f.request('/v1/resources?kind=connection', { token: key.token });
+  const agent = await f.request('/v1/principals/me/resources?kind=connection', { token: key.token });
   assert.deepEqual(agent.json.resources.map(item => item.id), [first.id]);
   const anonymous = await f.request('/v1/services', { anonymous: true });
   assert.deepEqual(anonymous.json.services.map(item => item.id), ['google']);
@@ -118,16 +118,16 @@ test('解釈できないAuthorizationが付いた要求をCookieで代用せず�
   const f = await fixture(t);
   await f.connection();
   for (const authorization of ['Basic invalid', 'Bearer', '', 'Bearer invalid token', 'Bearer not-an-approved-key']) {
-    const read = await f.request('/v1/resources?kind=connection', { headers: { authorization } });
+    const read = await f.request('/v1/principals/me/resources?kind=connection', { headers: { authorization } });
     assert.equal(read.status, 401, authorization || '(empty header)');
-    const write = await f.request('/v1/resources?kind=secret&name=must-not-write', { method: 'PUT', raw: 'untrusted', headers: { authorization } });
+    const write = await f.request('/v1/principals/me/resources?kind=secret&name=must-not-write', { method: 'PUT', raw: 'untrusted', headers: { authorization } });
     assert.equal(write.status, 401, authorization || '(empty header)');
   }
-  assert.deepEqual((await f.request('/v1/resources?kind=secret')).json.resources, []);
+  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=secret')).json.resources, []);
 });
 
 test('Cookieによる更新は同一Originに限定し、CLIのBearerではOriginなしで更新する', async t => {
-  const f = await fixture(t), key = await f.issueKey(), path = '/v1/resources?kind=secret&name=url-review&as=' + USER_A;
+  const f = await fixture(t), key = await f.issueKey(), path = '/v1/principals/' + USER_A + '/resources?kind=secret&name=url-review';
   const request = async headers => {
     const response = await fetch(f.base + path, { method: 'PUT', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ plain: Buffer.from('fixture-value').toString('base64url') }) });
     await response.arrayBuffer();

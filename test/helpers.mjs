@@ -129,7 +129,7 @@ export async function fixture(t, options = {}) {
     const contentKey = newContentKey();
     return { content: b64(sealContent(contentKey, Buffer.from(content))), envelopes: Object.fromEntries(recipients.map(item => [item.principal_id, b64(seal(contentKey, Buffer.from(item.public_key, 'base64url')))])) };
   }
-  const secretPath = path => /^\/v1\/resources\?.*kind=secret/.test(path) || (path.match(/^\/v1\/resources\/([^/?]+)\/content/) && app.resources.get(RegExp.$1)?.kind === 'secret');
+  const secretPath = path => /^\/v1\/principals\/[^/?]+\/resources\?.*kind=secret/.test(path) || (path.match(/^\/v1\/resources\/([^/?]+)\/content/) && app.resources.get(RegExp.$1)?.kind === 'secret');
   async function request(path, { method = 'GET', data, raw, type = 'application/octet-stream', token, anonymous = false, headers = {}, as } = {}) {
     // Making a principal and giving it a key are two calls; a test that wants both at once gets them joined here.
     if (method === 'POST' && /^\/v1\/principals(\?|$)/.test(path) && data?.key === true) {
@@ -141,7 +141,9 @@ export async function fixture(t, options = {}) {
       const json = { principal: { ...made.json.principal, keys: [{ id: issued.json.credential.id, created_at: issued.json.credential.created_at, last_used_at: null }] }, token: issued.json.token, key: { id: issued.json.credential.id, kind: 'key' } };
       return { status: 201, json, text: JSON.stringify(json), headers: issued.headers };
     }
-    const owner = as ?? (token && actsFor.get(token)) ?? new URL(path, base).searchParams.get('as') ?? undefined;
+    const named = path.match(/^\/v1\/principals\/([^/?]+)\/resources/)?.[1];
+    const owner = as ?? (named && named !== 'me' ? named : undefined) ?? (token && actsFor.get(token)) ?? new URL(path, base).searchParams.get('as') ?? undefined;
+    if (owner && path.startsWith('/v1/principals/me/resources')) path = '/v1/principals/' + owner + path.slice('/v1/principals/me'.length);
     if (owner && !/[?&]as=/.test(path)) path += (path.includes('?') ? '&' : '?') + 'as=' + owner;
     if (method === 'PUT' && raw !== undefined && secretPath(path)) {
       // Over what is there, the new key goes to everyone who had the old one.
@@ -221,14 +223,14 @@ export async function fixture(t, options = {}) {
     const url = await start({ scopes });
     const response = await callback(url, code);
     assert.equal(response.headers.get('location'), '/services?result=connected&service=google', response.text);
-    return (await request('/v1/resources?kind=connection')).json.resources.find((item) => item.subject === code + '@example.test');
+    return (await request('/v1/principals/me/resources?kind=connection')).json.resources.find((item) => item.subject === code + '@example.test');
   }
   // Injecting a connection for a service derives what it yields now; nothing else reaches the service.
   async function inject(connection, options = {}) {
     return request('/v1/injections', { method: 'POST', data: { names: [{ id: connection.id }] }, ...options });
   }
   async function connectionFacts(connection, options = {}) {
-    const listed = await request('/v1/resources?kind=connection', options);
+    const listed = await request('/v1/principals/me/resources?kind=connection', options);
     assert.equal(listed.status, 200, listed.text);
     const found = listed.json.resources.find(item => item.id === connection.id);
     assert.ok(found, '接続の一覧から対象を取得する');
@@ -239,7 +241,7 @@ export async function fixture(t, options = {}) {
   // All that a principal is shown of what it has, across the API: for checking that something kept in confidence
   // appears nowhere in it.
   async function visible(options = {}) {
-    const paths = ['/v1/principals/me', '/v1/principals/me/credentials', '/v1/resources', '/v1/principals/me/relations', '/v1/requests?to=me', '/v1/services'];
+    const paths = ['/v1/principals/me', '/v1/principals/me/credentials', '/v1/principals/me/resources', '/v1/principals/me/relations', '/v1/requests?to=me', '/v1/services'];
     return JSON.stringify(await Promise.all(paths.map(async path => (await request(path, options)).json)));
   }
   async function become(name = 'laptop') {
@@ -260,12 +262,12 @@ export async function fixture(t, options = {}) {
   }
   // A key the owner makes from the dashboard: a principal that acts for them, carrying a key.
   // Resources by name: the owner's name finds the id, and the id reaches the thing.
-  const lookup = (kind, name, options = {}) => request('/v1/resources?' + new URLSearchParams({ kind, name }), options);
+  const lookup = (kind, name, options = {}) => request('/v1/principals/me/resources?' + new URLSearchParams({ kind, name }), options);
   async function read(kind, name, options = {}) {
     const found = await lookup(kind, name, options);
     return found.status === 200 ? request('/v1/resources/' + found.json.resource.id + '/content', options) : found;
   }
-  const keep = (kind, name, raw, options = {}) => request('/v1/resources?' + new URLSearchParams({ kind, name }), { method: 'PUT', raw, type: 'text/plain', ...options });
+  const keep = (kind, name, raw, options = {}) => request('/v1/principals/me/resources?' + new URLSearchParams({ kind, name }), { method: 'PUT', raw, type: 'text/plain', ...options });
   async function drop(kind, name, options = {}) {
     const found = await lookup(kind, name, options);
     return found.status === 200 ? request('/v1/resources/' + found.json.resource.id, { method: 'DELETE', data: {}, ...options }) : found;

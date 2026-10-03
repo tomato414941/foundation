@@ -123,7 +123,7 @@ test('各サービスの暗号化状態・接続ID・保存名を再起動後も
     identities.push({ id: row.id, subject: row.subject, generation: row.generation, service, output });
   }
   const agent = await first.issueKey();
-  await first.request('/v1/resources?kind=secret&name=a%2Faa%2Faaa', { method: 'PUT', raw: 'independent-snapshot' });
+  await first.request('/v1/principals/me/resources?kind=secret&name=a%2Faa%2Faaa', { method: 'PUT', raw: 'independent-snapshot' });
   await first.close();
   const second = await fixture(t, { database, services: makeServices() });
   for (const identity of identities) {

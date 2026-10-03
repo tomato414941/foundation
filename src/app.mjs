@@ -555,7 +555,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // the same question as any other, answered from the lines.
       const actsFor = principals.actsFor(subject.id);
       const asked = url.searchParams.get('as');
-      const ownerId = asked ? principalId(asked) : subject.id;
+      // A principal's own things are listed and placed under it, where the path names it.
+      const ownerId = at === 'resources' ? (route.params.principalId === 'me' ? subject.id : principalId(route.params.principalId)) : asked ? principalId(asked) : subject.id;
       let asked_ = null;
       const permit = (name, type, id, owner = type === 'principal' ? id : ownerId) => {
         asked_ = { subject, action: { name }, resource: { type, ...(id === undefined ? {} : { id }), owner } };
@@ -1016,7 +1017,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         return kind;
       };
       if (at === 'resources' && method === 'GET') {
-        if (url.searchParams.get('shown') === 'me') { permit('shown', 'principal', subject.id); return send(200, { resources: principals.shownTo(subject.id) }); }
+        if (url.searchParams.get('shown') === 'me') { permit('shown', 'principal', ownerId); return send(200, { resources: principals.shownTo(ownerId) }); }
         const kind = resourceKind(false), name = url.searchParams.get('name') ?? undefined, prefix = url.searchParams.get('prefix') ?? undefined;
         const kinds = kind ? [kind] : KINDS;
         for (const one of kinds) permit('list', one);
@@ -1292,7 +1293,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // Connecting: a connection for a service, by one of its schemes. OAuth goes to the service's consent screen
       // and comes back at /oauth/callback; a role is made in the service's console and named here; a token is
       // handed over here. The connection it makes is a resource like any other: listed and removed at
-      // /v1/resources.
+      // /v1/principals/{id}/resources.
       if (at === 'confirmation' && ['GET', 'POST', 'DELETE'].includes(method)) {
         permit('connect', 'connection');
         if (!session) fail(401, 'signin_required', 'サインインしてください。');

@@ -51,12 +51,12 @@ test('宛先は持ち主と、持ち主の代わりに動くFoundationで、Foun
   assert.equal((await f.request('/v1/principals/me/key', { ...as, method: 'PUT', data: { public_key: b64(made.publicKey) } })).status, 200);
   assert.deepEqual((await f.request('/v1/principals/me/recipients', as)).json.recipients, [{ principal_id: USER_A, public_key: b64(made.publicKey) }], 'nobody but the owner');
   const sealed = await f.sealed('mine', as, [{ principal_id: USER_A, public_key: b64(made.publicKey) }]);
-  const kept = await f.request('/v1/resources?kind=secret&name=mine', { ...as, method: 'PUT', data: sealed });
+  const kept = await f.request('/v1/principals/me/resources?kind=secret&name=mine', { ...as, method: 'PUT', data: sealed });
   assert.equal(kept.status, 200, kept.text);
   assert.deepEqual(kept.json.resource.recipients, [USER_A]);
   const injected = await f.request('/v1/injections', { ...as, method: 'POST', data: { names: [{ name: 'mine', as: 'MINE' }] } });
   assert.equal(injected.status, 403); assert.equal(injected.json.error.code, 'foundation_not_agent');
-  const plain = await f.request('/v1/resources?kind=secret&name=plain', { ...as, method: 'PUT', data: { plain: b64(Buffer.from('x')) } });
+  const plain = await f.request('/v1/principals/me/resources?kind=secret&name=plain', { ...as, method: 'PUT', data: { plain: b64(Buffer.from('x')) } });
   assert.equal(plain.status, 403); assert.equal(plain.json.error.code, 'foundation_not_agent');
   // Made its agent, Foundation is a recipient of what is kept from then on, and opens what was sealed for it.
   await f.allowFoundation({ ...as, as: USER_A });

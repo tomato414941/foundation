@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture } from './helpers.mjs';
+import { fixture, USER_A } from './helpers.mjs';
 import { LATEST, SUPPORTED } from '../src/mcp.mjs';
 
 let KEY;
@@ -34,13 +34,13 @@ test('MCPで文字列とバイナリの保存値を指定の符号化で共通AP
   const f = await connected(t);
   const call = args => modern(f, { jsonrpc: '2.0', id: 40, method: 'tools/call', params: { name: 'foundation_api', arguments: args } });
   const bytes = Buffer.from([0, 255, 1, 10]);
-  const stored = await call({ method: 'PUT', path: '/v1/resources?kind=secret&name=file', body: { plain: bytes.toString('base64url') } });
+  const stored = await call({ method: 'PUT', path: '/v1/principals/' + USER_A + '/resources?kind=secret&name=file', body: { plain: bytes.toString('base64url') } });
   assert.equal(stored.json.result.isError, undefined, stored.text);
   const id = stored.json.result.structuredContent.resource.id;
   const delivered = await call({ method: 'POST', path: '/v1/injections', body: { names: [{ id, as: 'CONFIG_FILE', filename: 'config.bin' }] } });
   assert.deepEqual(Buffer.from(delivered.json.result.structuredContent.injection.files[0].content, 'base64'), bytes);
   for (const [body, body_encoding] of [[{ plain: '%%%' }, 'json'], [42, 'text'], ['x', 'unknown']]) {
-    const refused = await call({ method: 'PUT', path: '/v1/resources?kind=secret&name=file', body, body_encoding });
+    const refused = await call({ method: 'PUT', path: '/v1/principals/' + USER_A + '/resources?kind=secret&name=file', body, body_encoding });
     assert.equal(refused.json.result.isError, true, refused.text);
   }
   const preserved = await call({ method: 'POST', path: '/v1/injections', body: { names: [{ id, as: 'CONFIG_FILE', filename: 'config.bin' }] } });
@@ -66,9 +66,9 @@ test('共通APIツールで最新のOpenAPI仕様を取得する', async (t) => 
 
 test('makes an API call with the caller\'s own key and returns what it said', async (t) => {
   const f = await connected(t);
-  const stored = await f.request('/v1/resources?kind=secret&name=notes/plan', { method: 'PUT', token: KEY, raw: 'one line', type: 'text/plain' });
+  const stored = await f.request('/v1/principals/me/resources?kind=secret&name=notes/plan', { method: 'PUT', token: KEY, raw: 'one line', type: 'text/plain' });
   assert.equal(stored.status, 200, stored.text);
-  const result = await modern(f, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'foundation_api', arguments: { method: 'GET', path: '/v1/resources?kind=secret' } } });
+  const result = await modern(f, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'foundation_api', arguments: { method: 'GET', path: '/v1/principals/' + USER_A + '/resources?kind=secret' } } });
   assert.equal(result.status, 200, result.text);
   assert.deepEqual(result.json.result.structuredContent.resources.map(entry => entry.name), ['notes/plan']);
 });
@@ -87,7 +87,7 @@ test('MCP delivers what a connected grant yields, and never its renewal state', 
 
 test('reports a refused API call as a tool error the model can act on', async (t) => {
   const f = await connected(t);
-  const result = await modern(f, { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'foundation_api', arguments: { method: 'GET', path: '/v1/resources?kind=secret&name=missing/thing' } } });
+  const result = await modern(f, { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'foundation_api', arguments: { method: 'GET', path: '/v1/principals/' + USER_A + '/resources?kind=secret&name=missing/thing' } } });
   assert.equal(result.status, 200, result.text);
   assert.equal(result.json.result.isError, true);
   assert.equal(result.json.result.structuredContent.error.code, 'not_found');
