@@ -184,3 +184,35 @@ test('サインアウトするとそのセッションだけを終え、ほか�
   assert.equal((await f.request('/v1/overview', { headers: { cookie: one } })).status, 401);
   assert.equal((await f.request('/v1/overview', { headers: { cookie: two } })).status, 200);
 });
+
+test('プリンシパルが頼んだリンクは、開いて確かめるとそのアドレスをそのプリンシパルの入口にし、誰もサインインさせない', async t => {
+  const f = await fixture(t);
+  // One that came by a key alone asks for an address, as any client may.
+  const machine = await f.become('machine'), as = { token: machine.token, anonymous: true };
+  const asked = await f.request('/v1/credentials', { ...as, method: 'POST', data: { kind: 'email', address: ' Machine@Example.Test ' } });
+  assert.equal(asked.status, 202, asked.text);
+  assert.equal(asked.json.pending.email, 'machine@example.test');
+  assert.equal(f.mailer.sent.at(-1).subject, 'Foundationにメールアドレスを追加');
+  const link = f.mailer.link('machine@example.test');
+  assert.equal(new URLSearchParams(new URL(link.url).hash.slice(1)).get('attach'), 'machine', 'the page says whose it becomes');
+  // Whoever opens the link confirms it, in any browser: the address is attached, and that browser is signed in as nobody.
+  const opened = await f.request('/v1/credentials', { method: 'PUT', anonymous: true, data: { kind: 'email', email: link.email, token: link.token } });
+  assert.equal(opened.status, 200, opened.text);
+  assert.equal(opened.json.attached, true);
+  assert.equal(opened.headers.getSetCookie().some(value => value.startsWith('fdn_session=')), false);
+  const entries = (await f.request('/v1/credentials', as)).json.credentials;
+  assert.deepEqual(entries.map(item => [item.kind, item.name]), [['email', 'machine@example.test'], ['key', null]]);
+  assert.equal(f.app.emails.principalOf('machine@example.test'), machine.id, 'and it signs that principal in from then on');
+  assert.equal((await f.request('/v1/credentials', { method: 'PUT', anonymous: true, data: { kind: 'email', email: link.email, token: link.token } })).status, 401, 'the link is spent');
+  // An address another principal has is not taken from it.
+  const taken = await f.request('/v1/credentials', { ...as, method: 'POST', data: { kind: 'email', address: 'owner@example.test' } });
+  assert.equal(taken.status, 409); assert.equal(taken.json.error.code, 'email_taken');
+  // Whoever manages a principal adds its entries: an owner for what it owns, and nobody for a stranger.
+  const agent = await f.issueKey();
+  assert.equal((await f.request('/v1/credentials?as=' + agent.id, { method: 'POST', data: { kind: 'email', address: 'agent@example.test' } })).status, 202);
+  assert.equal((await f.request('/v1/credentials?as=' + USER_A, { ...as, method: 'POST', data: { kind: 'email', address: 'mine@example.test' } })).status, 401);
+  // An address is removed like any other entry.
+  const address = entries.find(item => item.kind === 'email');
+  assert.equal((await f.request('/v1/credentials/' + address.id, { ...as, method: 'DELETE', data: {} })).status, 200);
+  assert.equal(f.app.emails.principalOf('machine@example.test'), undefined);
+});

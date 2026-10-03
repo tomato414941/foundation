@@ -1051,7 +1051,7 @@ function appsSection() {
       <div class="agent-actions">${mine ? `<button class="text-button" data-action="change-app" data-id="${esc(app.id)}">${esc(t('client.oauth.changeSecret'))}</button><button class="text-button danger" data-action="remove-app" data-id="${esc(app.id)}">${esc(t('client.common.delete'))}</button>` : ''}</div></article>`;
   };
   return `<details class="resource-section folded-section" id="oauth-apps" aria-labelledby="oauth-apps-title"${appsOpen ? ' open' : ''}><summary><h2 id="oauth-apps-title">${esc(t('client.oauth.app'))}</h2></summary>
-    <div class="section-heading"><p>${esc(t('client.oauth.explanation'))}</p><button class="button secondary" data-action="add-app">${icon('plus')} ${esc(t('client.oauth.add'))}</button></div>
+    <div class="section-heading"><span></span><button class="button secondary" data-action="add-app">${icon('plus')} ${esc(t('client.oauth.add'))}</button></div>
     ${apps.length ? `<div class="agent-list">${apps.map(row).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.oauth.empty'))}</p></div>`}</details>`;
 }
 // The fields an app of this service needs, and where its registration at the service must send people back.
@@ -1298,7 +1298,7 @@ function renamePrincipal(item) {
 }
 // Asking for an address: the API sends the link; whoever opens it confirms there.
 function addEmail() {
-  openDialog(`<h2 id="dialog-title">${esc(t('client.account.addEmail'))}</h2><form><label for="new-email">${esc(t('client.signin.emailAddress'))}</label><input id="new-email" name="address" type="email" required maxlength="254" autocomplete="email"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.signin.sendEmail').replace(/^サインイン|^Send sign-in /, m => m === 'サインイン' ? '確認' : 'Send '))}</button></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.account.addEmail'))}</h2><form><label for="new-email">${esc(t('client.signin.emailAddress'))}</label><input id="new-email" name="address" type="email" required maxlength="254" autocomplete="email"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.account.sendConfirmation'))}</button></form>`);
   bindForm(async (form) => {
     await api('/v1/credentials', { method: 'POST', data: { kind: 'email', address: form.get('address').trim() } });
     closeDialog(); toast(t('client.account.emailLinkSent'));
