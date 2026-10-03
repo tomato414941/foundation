@@ -179,3 +179,13 @@ test('公開後のnpm確認が一時的に失敗しても反映の確認を続�
   });
   assert.equal(reads, 2);
 });
+
+// What is published under a version is fixed: the files of the package as they were when the version was set.
+const SHIPPED = { version: '0.23.0', digest: '8349c7f5e6419baaae3abf94f7382220aeb2444cb51ab416983417b857faf756' };
+test('CLIのファイルを変えるとバージョンも変える', async () => {
+  const { createHash } = await import('node:crypto'), { readFileSync } = await import('node:fs');
+  const shipped = JSON.parse(readFileSync(new URL('../cli/package.json', import.meta.url)));
+  const hash = createHash('sha256');
+  for (const file of shipped.files) hash.update(file + '\0').update(readFileSync(new URL('../cli/' + file, import.meta.url))).update('\0');
+  assert.deepEqual({ version: shipped.version, digest: hash.digest('hex') }, SHIPPED, 'The CLI files changed: raise the version in cli/package.json and record it here with the new digest.');
+});
