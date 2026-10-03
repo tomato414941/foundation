@@ -37,7 +37,7 @@ test('shared and catalog dictionaries have complete locale parity', () => {
   }
 });
 
-test('workspace navigation, titles, pending states and language control use the chosen locale', () => {
+test('localized workspace and pending shells omit the account-only language control', () => {
   assert.equal(pages['/services'], 'nav.services');
   assert.equal(pageTitle('/services'), 'サービス · Foundation');
   assert.equal(pageTitle('/services', en), 'Services · Foundation');
@@ -51,7 +51,9 @@ test('workspace navigation, titles, pending states and language control use the 
     assert.match(html, /href="\/services" aria-current="page"/);
     assert.match(html, /data-action="signout" disabled/);
     assert.match(html, /<main tabindex="-1" aria-busy="true">/);
-    assert.ok(html.includes(`value="${locale}" lang="${locale}" selected`));
+    assert.doesNotMatch(html, /data-action="change-language"/);
+    assert.doesNotMatch(pendingView('/services', { t }), /data-action="change-language"/);
+    assert.ok(languagePicker(t).includes(`value="${locale}" lang="${locale}" selected`));
     assert.match(pendingView('/services', { t }), /aria-busy="true"/);
     assert.ok(pendingView('/services', { t }).includes(`<h1>${servicesLabel}</h1>`));
   }

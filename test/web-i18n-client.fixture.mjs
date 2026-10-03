@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { workspaceView } from '../web/workspace-view.js';
+import { createI18n, resolveLocale } from '../web/i18n.js';
 
 const mode = process.argv[2], passkey = mode.startsWith('passkey-'), id = 'a'.repeat(43);
-const path = mode === 'account-transfer' ? '/account' : mode === 'boot' ? '/services' : ['deny', 'transfer'].includes(mode) ? '/requests/' + id : mode === 'editing' ? '/secrets'
+const initialLocale = mode === 'account-settings-en' ? 'en' : 'ja', accountMode = mode.startsWith('account-');
+const path = accountMode ? '/account' : mode === 'boot' ? '/services' : ['deny', 'transfer'].includes(mode) ? '/requests/' + id : mode === 'editing' ? '/secrets'
   : mode === 'confirm' ? '/signin/confirm#email=owner%40example.test&token=' + id : '/';
-const dom = new JSDOM(`<!doctype html><html lang="ja"><body><div id="app">${workspaceView(path, { pending: true })}</div>
+const dom = new JSDOM(`<!doctype html><html lang="${initialLocale}"><body><div id="app">${workspaceView(path, { pending: true, t: createI18n(initialLocale).t })}</div>
   <dialog id="dialog"></dialog><div id="notice"></div><footer id="public-info"><a data-i18n="server.docs.api">API仕様</a></footer></body></html>`,
 { url: 'https://foundation.test' + path, pretendToBeVisual: true });
 const w = dom.window;
@@ -22,10 +24,27 @@ async function until(predicate) {
   for (let attempt = 0; attempt < 200 && !predicate(); attempt++) await tick();
   assert.ok(predicate(), 'the operation did not settle');
 }
+const pickerSelector = '[data-action="change-language"]';
+function assertPlacement(account = accountMode) {
+  assert.equal(document.querySelector('.topbar ' + pickerSelector), null, 'the permanent header has no language control');
+  assert.equal(document.querySelectorAll(pickerSelector).length, account ? 1 : 0);
+  if (account) assert.ok(document.querySelector('main [aria-labelledby="language-title"] ' + pickerSelector));
+}
 function change(locale) {
-  const picker = document.querySelector('[data-action="change-language"]');
+  let picker = document.querySelector(pickerSelector);
+  // Keep defensive coverage of the unchanged locale guards even on screens that
+  // no longer expose a picker. These injected events are not user-facing controls.
+  const guardProbe = !accountMode;
+  if (guardProbe) {
+    assertPlacement(false);
+    picker = document.createElement('select');
+    picker.dataset.action = 'change-language';
+    picker.innerHTML = '<option value="ja">日本語</option><option value="en">English</option>';
+    document.body.append(picker);
+  } else assertPlacement();
   picker.value = locale;
   picker.dispatchEvent(new w.Event('change', { bubbles: true }));
+  if (guardProbe) picker.remove();
 }
 const heading = () => document.querySelector('main h1')?.textContent;
 const overview = { user: { id: 'owner', email: 'owner@example.test' }, principal: { id: 'owner', name: 'Keeper Sirius' },
@@ -35,7 +54,7 @@ if (mode === 'transfer') {
   request.authorization_details[0].relation = 'transfer_grant';
   request.object = { id: 'resource', name: '利用者の名前' };
 }
-let signedIn = ['boot', 'deny', 'transfer', 'editing', 'account-transfer'].includes(mode), release, bootWaited = false;
+let signedIn = accountMode || ['boot', 'deny', 'transfer', 'editing'].includes(mode), release, bootWaited = false;
 const calls = [], copied = [];
 if (mode === 'account-transfer') {
   Object.defineProperty(navigator, 'clipboard', { value: { writeText: async value => { copied.push(value); } } });
@@ -81,12 +100,51 @@ if (mode === 'boot') {
   assert.equal(document.querySelector('#signin-form'), null);
 } else {
   await start;
-  if (mode === 'account-transfer') {
+  assertPlacement();
+  if (mode.startsWith('account-settings-')) {
+    const other = initialLocale === 'ja' ? 'en' : 'ja';
+    const labels = { ja: { title: 'アカウント', language: '言語' }, en: { title: 'Account', language: 'Language' } };
+    const assertAccount = locale => {
+      assertPlacement();
+      assert.equal(document.documentElement.lang, locale);
+      assert.equal(heading(), labels[locale].title);
+      assert.equal(document.querySelector('#language-title').textContent, labels[locale].language);
+      assert.equal(document.querySelector(pickerSelector).getAttribute('aria-label'), labels[locale].language);
+      assert.equal(document.querySelector(pickerSelector).value, locale);
+      assert.deepEqual([...document.querySelector(pickerSelector).options].map(option => option.textContent), ['日本語', 'English']);
+    };
+    assertAccount(initialLocale);
+    for (const locale of [other, initialLocale, other]) {
+      change(locale); await until(() => document.documentElement.lang === locale);
+      assertAccount(locale);
+      assert.equal(resolveLocale({ cookie: document.cookie, acceptLanguage: initialLocale }), locale, 'saved choice wins on the next request');
+      const before = document.querySelector(pickerSelector);
+      change(locale); await tick();
+      assert.equal(document.querySelector(pickerSelector), before, 'selecting the current locale does not rerender');
+    }
+    for (const path of ['/', '/services', '/secrets', '/objects', '/principals', '/functions']) {
+      document.querySelector('.topbar a[href="' + path + '"]').click();
+      await until(() => location.pathname === path);
+      assertPlacement(false);
+      assert.equal(document.documentElement.lang, other);
+      document.querySelector('.topbar a[href="/account"]').click();
+      await until(() => location.pathname === '/account');
+      assertAccount(other);
+    }
+    history.back(); await until(() => location.pathname === '/functions');
+    assertPlacement(false);
+    history.forward(); await until(() => location.pathname === '/account');
+    assertAccount(other);
+    assert.ok(calls.every(({ options }) => !options.method || options.method === 'GET'), 'locale preferences do not mutate account data');
+    assert.equal(overview.user.id, 'owner');
+    assert.equal(overview.principal.name, 'Keeper Sirius');
+  } else if (mode === 'account-transfer') {
     const labels = {
       ja: { account: 'アカウント', copy: 'IDをコピー', title: '引き渡す', action: '引き渡す', recipient: '引き渡す相手の ID', close: '閉じる' },
       en: { account: 'Account', copy: 'Copy ID', title: 'Hand over', action: 'Hand over', recipient: "Recipient's ID", close: 'Close' },
     };
     const assertAccount = locale => {
+      assertPlacement();
       const words = labels[locale], section = document.querySelector('[aria-labelledby="id-title"]');
       assert.equal(heading(), words.account);
       assert.equal(document.querySelector('#id-title').textContent, 'ID');
@@ -217,5 +275,6 @@ if (mode === 'boot') {
   } else throw new Error('Unknown fixture mode: ' + mode);
 }
 assert.ok(calls.every(({ options }) => ['ja', 'en'].includes(options.headers?.['X-Foundation-Locale'])));
+assertPlacement();
 assert.ok(!/client\./.test(document.body.textContent), 'no unresolved client resource keys');
 dom.window.close();

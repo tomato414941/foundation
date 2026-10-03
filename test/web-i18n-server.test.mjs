@@ -15,7 +15,7 @@ test('SSR resolves request locale for public, pending and authenticated shells',
   assert.match(english.text, /Enable JavaScript to sign in\./);
   assert.equal(english.headers.get('content-language'), 'en');
   assert.equal(english.headers.get('vary'), 'Accept-Language, Cookie');
-  assert.match(english.text, /value="en" lang="en" selected/);
+  assert.doesNotMatch(english.text, /data-action="change-language"/);
   assert.doesNotMatch(english.text, /foundation-(locale|title|app|noscript|importmap)/);
   const japanese = await f.request('/', { headers: { cookie: 'foundation_locale=ja', 'accept-language': 'en-US' } });
   assert.match(japanese.text, /<html lang="ja">/);
@@ -32,6 +32,9 @@ test('SSR resolves request locale for public, pending and authenticated shells',
   assert.match(authenticated.text, /Sign out/);
   assert.match(authenticated.text, /Access management/);
   assert.match(authenticated.text, /aria-current="page">Account/);
+  for (const response of [japanese, pending, confirmation, authenticated]) {
+    assert.doesNotMatch(response.text, /data-action="change-language"/, 'SSR shells never show the account-only control');
+  }
 });
 
 test('concurrent JA and EN requests never share a mutable locale', async t => {

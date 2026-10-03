@@ -36,7 +36,7 @@ import { FUNCTIONS, Functions } from './functions.mjs';
 import { matchRoute, openapi, validateBody } from './api.mjs';
 import { serveDocs } from './api-docs.mjs';
 import { Authorization, reaches } from './authorization.mjs';
-import { pages, brand, languagePicker, pageTitle, workspaceView, pendingView } from '../web/workspace-view.js';
+import { pages, brand, pageTitle, workspaceView, pendingView } from '../web/workspace-view.js';
 import { createI18n, isLocale, resolveLocale } from '../web/i18n.js';
 import { IMPORT_MAP, escapeHtml, localizeErrorMessage } from './web-i18n.mjs';
 
@@ -258,9 +258,9 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         let content = await readFile(filename === I18NEXT ? I18NEXT : fileURLToPath(new URL(filename, PUBLIC)));
         if (filename === 'index.html') {
           const ownerFrame = PAGES.includes(path) && Boolean(sessions.get(cookieToken(req)));
-          const frame = ownerFrame ? workspaceView(path, { pending: true, t, locale })
-            : path !== '/' ? pendingView(path, { t, locale })
-              : `<div class="workspace signin-shell"><header class="topbar">${brand(t)}${languagePicker(t, locale)}</header><main class="signin-main"><h1>Foundation</h1><footer id="public-info" class="public-info"><a href="/docs" data-i18n="server.docs.api">${escapeHtml(t('server.docs.api'))}</a></footer></main></div>`;
+          const frame = ownerFrame ? workspaceView(path, { pending: true, t })
+            : path !== '/' ? pendingView(path, { t })
+              : `<div class="workspace signin-shell"><header class="topbar">${brand(t)}</header><main class="signin-main"><h1>Foundation</h1><footer id="public-info" class="public-info"><a href="/docs" data-i18n="server.docs.api">${escapeHtml(t('server.docs.api'))}</a></footer></main></div>`;
           const slots = { locale, title: escapeHtml(pageTitle(path, t)), importmap: IMPORT_MAP,
             app: frame, noscript: escapeHtml(t('server.noscript.signin')) };
           content = content.toString().replace(/\{\{foundation-(locale|title|importmap|app|noscript)\}\}/g, (_, key) => slots[key]);

@@ -233,6 +233,7 @@ const icon = (name) => {
     key: '<circle cx="8" cy="14" r="4"/><path d="m11 11 8-8m-3 3 2 2m-5 1 2 2"/>',
     note: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>',
     folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/>',
     network: '<circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="2"/><circle cx="18" cy="19" r="2"/><path d="m9 11 7-5m-7 7 7 5"/>',
     edit: '<path d="m15 5 4 4M4 20l5-1L20 8a2.8 2.8 0 0 0-4-4L5 15Z"/>',
     eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
@@ -265,7 +266,7 @@ function showSigninConfirmation() {
   const email = signinLink.get('email') || '', token = signinLink.get('token') || '';
   const valid = signinLink.getAll('email').length === 1 && signinLink.getAll('token').length === 1
     && email.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(email) && /^[A-Za-z0-9_-]{43}$/.test(token);
-  app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand(t)}${languagePicker(t, i18n.language)}</header><main class="signin-main">
+  app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand(t)}</header><main class="signin-main">
     <h1>${valid ? t('client.signin.title') : t('client.signin.checkLink')}</h1>
     ${valid ? `<p class="signin-address">${esc(email)}</p><form id="confirm-signin"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.signin.title'))} ${icon('arrow')}</button></form>
     <p class="signin-footer"><a href="/">${esc(t('client.signin.useAnotherEmail'))}</a></p>` : `<p class="signin-help">${esc(t('client.signin.reopenEmailLink'))}</p><p class="signin-footer"><a href="/">${esc(t('client.signin.sendEmail'))}</a></p>`}</main></div>`;
@@ -370,7 +371,7 @@ async function showSignin({ email = '', message = '' } = {}) {
   catch (error) { if (current === revision) showRefreshError(error, 'retry-signin'); return; }
   if (current !== revision) return;
   const pending = config.available ? config.pending : null, withPasskey = !pending && passkeysWork();
-  app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand(t)}${languagePicker(t, i18n.language)}</header><main class="signin-main">${requestId ? `<p class="signin-context">${esc(t('client.request.review'))}</p>` : ''}<h1>${pending ? t('client.signin.checkEmail') : t('client.signin.title')}</h1>
+  app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand(t)}</header><main class="signin-main">${requestId ? `<p class="signin-context">${esc(t('client.request.review'))}</p>` : ''}<h1>${pending ? t('client.signin.checkEmail') : t('client.signin.title')}</h1>
     ${pending ? `<p class="signin-intro" id="email-sent">${esc(t('client.signin.linkSent'))}</p><p class="signin-address">${esc(pending.email)}</p><p class="signin-help">${esc(t('client.signin.emailInstructions'))}</p>` : ''}
     ${withPasskey ? `<div class="signin-passkey"><button class="button primary full" type="button" id="passkey-signin">${esc(t('client.signin.withPasskey'))}</button><p class="form-error" role="alert" id="passkey-error"></p><button class="text-button full" type="button" id="passkey-start">${esc(t('client.signin.startWithPasskey'))}</button></div>` : ''}
     <form id="signin-form">${pending ? '' : `<label for="signin-email">${esc(t('client.signin.emailAddress'))}</label><input id="signin-email" name="email" type="email" autocomplete="email" required maxlength="254" value="${esc(email)}" ${config.available ? '' : 'disabled'}>`}
@@ -685,6 +686,7 @@ function render() {
     shell(`<header class="page-heading"><h1>${esc(t('client.account.title'))}</h1><p>${esc(state.user.email || '')}</p></header>
       <section class="resource-section" aria-labelledby="id-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="id-title">${esc(t('client.account.id'))}</h2><p><code>${esc(state.user.id)}</code></p></div></div><button class="button secondary" data-action="copy-id">${icon('copy')} ${esc(t('client.account.copyId'))}</button></div></section>
       <section class="resource-section" aria-labelledby="name-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('edit')}</span><div><h2 id="name-title">${esc(t('client.common.name'))}</h2><p>${esc(state.principal.name || '')}</p></div></div><button class="button secondary" data-action="rename-me">${esc(t('client.common.changeName'))}</button></div></section>
+      <section class="resource-section" aria-labelledby="language-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('globe')}</span><h2 id="language-title">${esc(t('language.label'))}</h2></div>${languagePicker(t, i18n.language)}</div></section>
       <section class="resource-section" aria-labelledby="passkeys-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="passkeys-title">${esc(t('client.passkey.title'))}</h2><p>${esc(t('client.passkey.description'))}</p></div></div>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} ${esc(t('client.passkey.add'))}</button>` : ''}</div>
         ${(state.webauthn_credentials || []).length ? `<div class="agent-list">${state.webauthn_credentials.map(passkeyRow).join('')}</div>` : ''}</section>
       ${state.payment?.available ? `<section class="resource-section" aria-labelledby="payment-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('card')}</span><div><h2 id="payment-title">${esc(t('client.payment.title'))}</h2><p>${state.payment.paying ? t('client.payment.registeredNote') : t('client.payment.addMethodNote')}</p></div></div><button class="button secondary" data-action="set-payment">${state.payment.paying ? t('client.payment.changeMethod') : t('client.payment.addMethod')}</button></div></section>` : ''}
@@ -853,7 +855,7 @@ function codeField(enabled = true) {
 function renderRequest() {
   document.title = t('client.request.review') + ' · Foundation';
   const row = accessRequest;
-  const shell = (content) => `<div class="workspace"><header class="topbar">${brand(t)}${languagePicker(t, i18n.language)}${linked ? '' : `<div class="user-menu"><a href="/account"${page === 'account' ? ' aria-current="page"' : ''}>${esc(t('client.account.title'))}</a><button class="text-button" data-action="signout">${esc(t('client.signin.signout'))}</button></div>`}</header><main class="approval-main">${content}</main></div>`;
+  const shell = (content) => `<div class="workspace"><header class="topbar">${brand(t)}${linked ? '' : `<div class="user-menu"><a href="/account"${page === 'account' ? ' aria-current="page"' : ''}>${esc(t('client.account.title'))}</a><button class="text-button" data-action="signout">${esc(t('client.signin.signout'))}</button></div>`}</header><main class="approval-main">${content}</main></div>`;
   const type = detailOf(row).type, asked = detailOf(row);
   if (!row || row.status !== 'pending' || !knownRequestKind(type)) {
     const view = requestResultView(row, requestError, t);

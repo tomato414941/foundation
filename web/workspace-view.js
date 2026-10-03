@@ -13,12 +13,12 @@ export function languagePicker(t = japanese, locale = t('locale')) {
 }
 
 // Only the public frame: session validation and all private data still come from the API.
-export function workspaceView(path, { pending = false, t = japanese, locale = t('locale') } = {}) {
+export function workspaceView(path, { pending = false, t = japanese } = {}) {
   const link = (href, label) => `<a href="${href}"${href === path ? ' aria-current="page"' : ''}>${esc(label)}</a>`;
   const nav = `<nav class="page-nav" aria-label="${esc(t('nav.label'))}">${Object.entries(pages).filter(([href]) => href !== '/' && href !== '/account').map(([href, key]) => link(href, t(key))).join('')}</nav>`;
-  return `<div class="workspace"><header class="topbar">${brand(t)}${nav}<div class="user-menu">${languagePicker(t, locale)}${link('/account', t('nav.account'))}<button class="text-button" data-action="signout"${pending ? ' disabled' : ''}>${esc(t('nav.signout'))}</button></div></header><main tabindex="-1"${pending ? ' aria-busy="true"' : ''}>${pending ? `<header class="page-heading"><h1>${esc(t(Object.hasOwn(pages, path) ? pages[path] : 'nav.foundation'))}</h1></header>${loading(t)}` : ''}</main></div>`;
+  return `<div class="workspace"><header class="topbar">${brand(t)}${nav}<div class="user-menu">${link('/account', t('nav.account'))}<button class="text-button" data-action="signout"${pending ? ' disabled' : ''}>${esc(t('nav.signout'))}</button></div></header><main tabindex="-1"${pending ? ' aria-busy="true"' : ''}>${pending ? `<header class="page-heading"><h1>${esc(t(Object.hasOwn(pages, path) ? pages[path] : 'nav.foundation'))}</h1></header>${loading(t)}` : ''}</main></div>`;
 }
 
-export function pendingView(path, { t = japanese, locale = t('locale') } = {}) {
-  return `<div class="workspace signin-shell"><header class="topbar">${brand(t)}${languagePicker(t, locale)}</header><main class="signin-main" aria-busy="true"><h1>${esc(t(Object.hasOwn(pages, path) ? pages[path] : 'nav.foundation'))}</h1>${loading(t)}</main></div>`;
+export function pendingView(path, { t = japanese } = {}) {
+  return `<div class="workspace signin-shell"><header class="topbar">${brand(t)}</header><main class="signin-main" aria-busy="true"><h1>${esc(t(Object.hasOwn(pages, path) ? pages[path] : 'nav.foundation'))}</h1>${loading(t)}</main></div>`;
 }
