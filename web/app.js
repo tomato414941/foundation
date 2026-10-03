@@ -1310,7 +1310,7 @@ async function addServiceScheme(service, way, definition) {
 // Registering the service and choosing how to connect it are separate steps.
 function defineService({ name = '', created } = {}) {
   openDialog(`<h2 id="dialog-title">${esc(t('client.service.add'))}</h2><form>
-    <label for="define-name">${esc(t('client.service.name'))}</label><input id="define-name" name="name" required maxlength="80" autocomplete="off" placeholder="${esc(t('client.service.namePlaceholder'))}" value="${esc(name)}">
+    <label for="define-name">${esc(t('client.service.name'))}</label><input id="define-name" name="name" required maxlength="80" autocomplete="off" value="${esc(name)}">
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.add'))}</button></form>`);
   bindForm(async (form) => {
     const name = String(form.get('name') || '').trim();
