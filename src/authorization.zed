@@ -4,7 +4,7 @@
 //
 // People, AIs and groups are the same principal. What a principal reaches comes only from these lines; nothing from
 // how it came in. A principal stands for itself; a group, which nobody comes in as, has stewards who stand for it.
-// Owning a principal is managing it, not reaching what it holds. The owner of a thing decides for it; an agent uses
+// Owning a principal is standing as it: whatever it may do, its owner may, and its owner's owner. The owner of a thing decides for it; an agent uses
 // it; a viewer sees it; an editor changes it; and any single action can be given on its own.
 
 definition credential {}
@@ -18,11 +18,11 @@ definition principal {
   relation payer: principal
   relation entry: credential
 
-  // Who stands as this principal: itself, and whoever stewards it (a group's people).
-  permission stands = self + steward
+  // Who stands as this principal: itself, whoever stewards it (a group's people), and whoever stands as its owner.
+  permission stands = self + steward + owner->stands
 
-  // Managing: the name, the keys and credentials, the limits, removal. By the principal, or whoever owns it.
-  permission manage = stands + owner
+  // Managing: the name, the keys and credentials. By whoever stands as it.
+  permission manage = stands
   // Using what it holds, without necessarily seeing it. By the principal, or whoever acts as its agent.
   permission use = stands + agent
   // Seeing the bytes of what it holds. Not an agent's: an agent injects a secret into a command, never reads it.
@@ -56,7 +56,7 @@ definition principal {
   permission read = manage + read_grant
   permission rename = manage + rename_grant
   // Removing a principal is its owner's, never its own: a principal does not end itself.
-  permission remove = owner + remove_grant
+  permission remove = owner->stands + remove_grant
   permission issue_link = manage + issue_link_grant
   // An entry (a passkey, an address, a key) is added and removed by whoever manages the principal: itself, its stewards, its owner.
   permission add_credential = manage + add_credential_grant
@@ -64,9 +64,9 @@ definition principal {
   permission payment = decide + payer + payment_grant
   permission pass = manage + use + pass_grant
   // A limit is set on a principal by whoever owns it, never by itself.
-  permission limit = owner + limit_grant
+  permission limit = owner->stands + limit_grant
   // Given to another owner by its owner, never by itself: what is owned is passed on, it does not pass itself on.
-  permission transfer = owner + transfer_grant
+  permission transfer = owner->stands + transfer_grant
   permission relate = manage + relate_grant
   permission settings = manage + settings_grant
   permission list = decide + list_grant

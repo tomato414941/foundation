@@ -21,7 +21,7 @@ test('持ち主は秘密を相手に渡し、封筒をつけるか Foundation �
   assert.equal(given.json.resource.owner_id, other.json.principal.id);
   assert.deepEqual(given.json.resource.recipients.sort(), [f.app.keys.agentId, other.json.principal.id].sort(), 'the new owner has an envelope; the giver no longer');
   assert.equal((await f.read('secret', 'handed', theirs)).text, 'hand-me');
-  assert.equal((await f.request('/v1/resources/' + kept.json.resource.id + '/content')).status, 403, 'the giver has no line to it');
+  assert.equal((await f.request('/v1/resources/' + kept.json.resource.id + '/content')).json.envelope, null, 'the giver has no envelope of its own; it reads on as the owner of the new owner');
   assert.deepEqual((await f.request('/v1/principals/me/resources?kind=secret')).json.resources, []);
   // Without an envelope from the giver, Foundation makes one from its own, for a new owner with a key.
   const second = await f.keep('secret', 'second', 'two');
@@ -101,5 +101,6 @@ test('持ち主は持っている相手を別の相手に渡し、別名は消�
   assert.equal(withAlias.status, 200, withAlias.text);
   assert.equal(f.app.principals.aliasOf(USER_A, aliased.json.principal.id), null);
   assert.equal(f.app.principals.aliasOf(other.json.principal.id, aliased.json.principal.id), null, 'an alias was the old owner\'s word');
-  assert.equal((await f.request('/v1/principals/' + machine.id + '/transfer', { method: 'POST', data: { to: USER_B } })).status, 403, 'no longer the owner');
+  const stranger = await f.become('stranger');
+  assert.equal((await f.request('/v1/principals/' + machine.id + '/transfer', { method: 'POST', data: { to: stranger.id }, token: stranger.token, anonymous: true })).status, 401, 'one who owns neither it nor its owner gives nothing');
 });

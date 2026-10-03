@@ -54,9 +54,10 @@ test('An app makes one principal per user, and each keeps to itself', async t =>
   assert.equal((await f.request('/v1/principals/me/resources?kind=secret&name=npm-token', { method: 'PUT', anonymous: true, token: first.key.token, raw: 'tok-1', type: 'text/plain' })).status, 200);
   assert.deepEqual((await f.request('/v1/principals/me/resources?kind=secret', { anonymous: true, token: second.key.token })).json.resources, []);
   assert.deepEqual((await f.request('/v1/principals/me/resources?kind=secret')).json.resources, [], 'nor are they the developer\'s who made the app');
-  // The app's own key reaches none of its users' contents: the app acts for nobody.
+  // The app holds nothing of its own; as the owner of its users, it reaches what each of them holds, by naming them.
   assert.deepEqual((await f.request('/v1/principals/me/resources?kind=secret', { anonymous: true, token: product })).json.resources, []);
-  assert.equal((await f.request('/v1/principals/' + first.account.id + '/resources?kind=secret', { anonymous: true, token: product })).status, 403);
+  assert.deepEqual((await f.request('/v1/principals/' + first.account.id + '/resources?kind=secret', { anonymous: true, token: product })).json.resources.map(row => row.name), ['npm-token']);
+  assert.deepEqual((await f.request('/v1/principals/' + first.account.id + '/resources?kind=secret')).json.resources.map(row => row.name), ['npm-token'], 'and so does the developer, who owns the app');
   const usage = await call('/principals/' + first.account.id + '/usage');
   assert.equal(usage.status, 200, usage.text); assert.equal(usage.json.secrets.count, 1);
   assert.equal((await call('/principals/' + USER_A + '/usage')).status, 403, 'and not the developer\'s either');

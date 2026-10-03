@@ -87,10 +87,13 @@ export class Authorization {
 export function reaches(relation, type) {
   const definition = SCHEMA.definitions.get(type);
   if (!definition || !declared(type, relation)) return null;
-  const names = (node, found = new Set()) => {
+  // A permission may be reached through itself (who stands as an owner stands as what it owns): each is read once.
+  const names = (node, found = new Set(), through = new Set()) => {
     if (node.op === 'this') found.add(node.relation);
-    else if (node.op === 'arrow') { for (const name of names(PRINCIPAL.permissions.get(node.to)?.expression ?? { op: 'nil' })) found.add(node.through + '->' + name); }
-    else if (node.of) for (const part of node.of) names(part, found);
+    else if (node.op === 'arrow') {
+      if (!through.has(node.to)) for (const name of names(PRINCIPAL.permissions.get(node.to)?.expression ?? { op: 'nil' }, new Set(), new Set([...through, node.to]))) found.add(node.through + '->' + name);
+    }
+    else if (node.of) for (const part of node.of) names(part, found, through);
     return found;
   };
   // Through the owner: a relation on the principal (agent, owner) reaches what the owner's permissions reach.
