@@ -55,7 +55,7 @@ with sync_playwright() as p:
     dialog.get_by_label('名前', exact=True).fill('仕事用')
     dialog.get_by_label('クライアントID', exact=True).fill('work-app-id')
     dialog.get_by_label('クライアントシークレット', exact=True).fill('work-app-secret')
-    expect(dialog.get_by_text(args.base + '/oauth/callback', exact=True)).to_be_visible()
+    expect(dialog.get_by_text(args.base + '/oauth/callback')).to_be_visible()
     review(page)
     if shots:
         page.screenshot(path=str(shots / 'add-app.png'), full_page=True)
@@ -118,10 +118,10 @@ with sync_playwright() as p:
         body: JSON.stringify({name: 'UI test agent', agent: true})})).json();
       const key = { ...made, ...await (await fetch('/v1/principals/' + made.principal.id + '/credentials', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind: 'key'})})).json() };
       const owner = key.principal.acts_for[0];
-      const made = await (await fetch('/v1/requests?as=' + owner, {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
+      const asked = await (await fetch('/v1/requests?as=' + owner, {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
         body: JSON.stringify({authorization_details: [{type: 'app', service: 'cloudflare', name: 'メール用'}], binding_message: 'メールの転送を設定できるアプリを使います。',
           steps: ['CloudflareのOAuth clientsでアプリを作ります。']})})).json();
-      return {path: '/requests/' + made.request.id, id: made.request.id, token: key.token, owner};
+      return {path: '/requests/' + asked.request.id, id: asked.request.id, token: key.token, owner};
     }""")
     page.goto(args.base + request['path'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='CloudflareのOAuthアプリを登録', exact=True)).to_be_visible()

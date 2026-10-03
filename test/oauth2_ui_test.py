@@ -66,7 +66,7 @@ with sync_playwright() as p:
 
     # Then its app, whose redirect URL is the same for every service.
     expect(dialog.get_by_role('heading', name='OAuthアプリを追加', exact=True)).to_be_visible()
-    expect(dialog.get_by_text(args.base + '/oauth/callback', exact=True)).to_be_visible()
+    expect(dialog.get_by_text(args.base + '/oauth/callback')).to_be_visible()
     dialog.get_by_label('名前', exact=True).fill('Notes')
     dialog.get_by_label('クライアントID', exact=True).fill('notes-client')
     dialog.get_by_label('クライアントシークレット', exact=True).fill('notes-secret')

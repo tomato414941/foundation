@@ -41,6 +41,19 @@ def no_language_picker(page):
     expect(page.locator(PICKER)).to_have_count(0)
 
 
+def open_menu(page, locale):
+    """On a narrow screen the menu is behind its button."""
+    button = page.get_by_role('button', name=tr(locale, 'nav.menu'), exact=True)
+    if button.is_visible() and button.get_attribute('aria-expanded') != 'true':
+        button.click()
+
+
+def close_menu(page, locale):
+    button = page.get_by_role('button', name=tr(locale, 'nav.menu'), exact=True)
+    if button.is_visible() and button.get_attribute('aria-expanded') == 'true':
+        button.click()
+
+
 def account_language_picker(page, locale):
     expect(page).to_have_url(args.base + '/account')
     expect(page.get_by_role('heading', name=tr(locale, 'nav.account'), exact=True)).to_be_visible()
@@ -75,7 +88,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-i18n-ui-') as temporary, syn
 
     for locale in ['ja', 'en']:
         other = 'en' if locale == 'ja' else 'ja'
-        context = browser.new_context(locale='ja-JP' if locale == 'ja' else 'en-US', viewport={'width': 1280, 'height': 900})
+        context = browser.new_context(locale='ja-JP' if locale == 'ja' else 'en-US', viewport={'width': 1280, 'height': 900}, permissions=['clipboard-read', 'clipboard-write'])
         page = context.new_page()
         virtual_authenticator(context, page)
         errors = []
@@ -183,6 +196,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-i18n-ui-') as temporary, syn
         # All primary pages, history, accessible titles, desktop and narrow mobile layouts.
         for width in [1280, 390, 320]:
             page.set_viewport_size({'width': width, 'height': 900})
+            open_menu(page, locale)
             page.get_by_role('link', name=tr(locale, 'nav.account'), exact=True).click()
             account_language_picker(page, locale)
             switch_account_language(page, context, locale, other)
@@ -192,10 +206,13 @@ with tempfile.TemporaryDirectory(prefix='foundation-i18n-ui-') as temporary, syn
             page.screenshot(path=str(shots / f'i18n-account-{locale}-{width}.png'), full_page=True)
             for path in ['services', 'secrets', 'objects', 'principals', 'functions']:
                 label = tr(locale, 'nav.' + path)
+                open_menu(page, locale)
                 page.get_by_role('navigation').get_by_role('link', name=label, exact=True).click()
                 expect(page.get_by_role('heading', name=label, exact=True)).to_be_visible()
                 expect(page).to_have_title(label + ' · Foundation')
+                open_menu(page, locale)
                 expect(page.get_by_role('navigation').get_by_role('link', name=label, exact=True)).to_have_attribute('aria-current', 'page')
+                close_menu(page, locale)
                 no_language_picker(page)
                 check_display(page)
             page.go_back(wait_until='networkidle')

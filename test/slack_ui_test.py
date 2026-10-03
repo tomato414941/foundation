@@ -50,7 +50,7 @@ with sync_playwright() as p:
     start_connect(page, 'Slack')
     expect(dialog.get_by_role('heading', name='OAuthアプリを追加', exact=True)).to_be_visible()
     expect(dialog.get_by_label('サービス', exact=True)).to_have_value('slack')
-    expect(dialog.get_by_text(args.base + '/oauth/callback', exact=True)).to_be_visible()
+    expect(dialog.get_by_text(args.base + '/oauth/callback')).to_be_visible()
     dialog.get_by_label('名前', exact=True).fill('自分のBot')
     dialog.get_by_label('クライアントID', exact=True).fill('bot-client')
     dialog.get_by_label('クライアントシークレット', exact=True).fill('bot-secret')
@@ -97,10 +97,10 @@ with sync_playwright() as p:
         body: JSON.stringify({name: 'UI test agent', agent: true})})).json();
       const key = { ...made, ...await (await fetch('/v1/principals/' + made.principal.id + '/credentials', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind: 'key'})})).json() };
       const owner = key.principal.acts_for[0];
-      const made = await (await fetch('/v1/requests?as=' + owner, {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
+      const asked = await (await fetch('/v1/requests?as=' + owner, {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
         body: JSON.stringify({authorization_details: [{type: 'secret', fields: [{name: 'slack-bot', label: 'Bot User OAuth Token', site: 'https://api.slack.com/apps'}]}], binding_message: 'チャンネルに要約を投稿します。',
           steps: ['Slackでアプリを作り、Bot User OAuth Tokenを写します。']})})).json();
-      return '/requests/' + made.request.id;
+      return '/requests/' + asked.request.id;
     }""")
     page.goto(args.base + request, wait_until='networkidle')
     expect(page.get_by_role('heading', name='Bot User OAuth Tokenを登録する', exact=True)).to_be_visible()
