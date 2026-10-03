@@ -264,7 +264,9 @@ dialog > p { color: var(--muted); margin-bottom: 18px; overflow-wrap: anywhere; 
 .secret-value-panel .secret-mask { padding: 0 4px; font: 16px/44px var(--sans); background: transparent; white-space: nowrap; }
 .secret-value-panel > .form-error:empty { margin: 0; }
 .secret-value-panel .dialog-actions { margin-top: 12px; }
-.secret-value-panel textarea { font: 400 16px/1.6 ui-monospace, monospace; min-height: 180px; max-height: 45vh; }
+.secret-value-panel textarea { font: 400 16px/1.6 ui-monospace, monospace; }
+/* A field for a value starts at one line and grows with what is put in it, up to a part of the window. */
+textarea[data-grow] { field-sizing: content; max-height: 45vh; overflow-y: auto; }
 .secret-file { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 14px; }
 .dialog-close { position: absolute; top: 18px; right: 16px; }
 .dialog-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 20px; }

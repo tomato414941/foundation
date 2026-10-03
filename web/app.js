@@ -223,6 +223,7 @@ const serviceLogo = service => service?.logo ? `<svg viewBox="0 0 24 24" aria-hi
 const icon = (name) => {
   const paths = {
     plus: '<path d="M12 5v14M5 12h14"/>', close: '<path d="m6 6 12 12M6 18 18 6"/>',
+    mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
     device: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>',
     arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>', check: '<path d="m5 12 4 4L19 6"/>',
     lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
@@ -350,6 +351,9 @@ async function needRawKey() {
   if (own && !sealing.isHeld(own.privateKey)) return;
   if (passkeys().length) await unlockKey();
 }
+// A field that grows with its content, where the browser does not do so by itself (field-sizing).
+const grow = field => { if (typeof CSS === 'undefined' || !CSS.supports?.('field-sizing', 'content')) { field.style.height = 'auto'; field.style.height = field.scrollHeight + 2 + 'px'; } };
+document.addEventListener('input', event => { if (event.target.matches?.('textarea[data-grow]')) grow(event.target); });
 // The key, where an act needs it: already open, or opened now by a passkey. Says why when it cannot be.
 async function needKey() {
   if (own) return;
@@ -1516,7 +1520,7 @@ async function handEnvelope(row) {
 function addSecret() {
   openDialog(`<h2 id="dialog-title">${esc(t('client.secret.add'))}</h2>
     <form><label for="new-name">${esc(t('client.common.name'))}</label><input id="new-name" name="name" required maxlength="200" placeholder="${esc(t('client.secret.namePlaceholder'))}" autocomplete="off" spellcheck="false">
-    <label for="new-value">${esc(t('client.secret.value'))}</label><textarea id="new-value" name="value" rows="4" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>
+    <label for="new-value">${esc(t('client.secret.value'))}</label><textarea id="new-value" name="value" rows="1" data-grow required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.add'))}</button></form>`);
   bindForm(async (form) => {
     const name = form.get('name');
@@ -1648,12 +1652,12 @@ function bindSecretValue(entry, row) {
     lock(true); panel.classList.add('editing');
     panel.innerHTML = `<form aria-label="${esc(t('client.secret.valueEditor'))}">${binary
       ? `<input type="file" name="file" aria-label="${esc(t('client.common.file'))}" required>`
-      : `<textarea name="value" aria-label="${esc(t('client.secret.value'))}" rows="6" required autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>`}
+      : `<textarea name="value" aria-label="${esc(t('client.secret.value'))}" rows="1" data-grow required autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>`}
       <p class="form-error" role="alert"></p><div class="dialog-actions">${value === null ? `<button class="text-button" type="button" data-load>${esc(t('client.secret.loadCurrent'))}</button>` : ''}<button class="button secondary" type="button" data-cancel>${esc(t('client.common.cancel'))}</button><button class="button primary" type="submit">${esc(t('client.common.save'))}</button></div></form>`;
     const form = panel.querySelector('form'), input = form.querySelector('textarea, input'), cancel = form.querySelector('[data-cancel]'), save = form.querySelector('[type="submit"]'), error = form.querySelector('[role="alert"]');
     // A new value is written over the old without reading it. The old one is read - and the key asked for - only
     // when someone wants to start from it.
-    if (!binary && text !== null) input.value = text;
+    if (!binary && text !== null) { input.value = text; grow(input); }
     const initial = value === null ? null : input.value;
     form.querySelector('[data-load]')?.addEventListener('click', async () => { if (await load()) edit(); });
     // What a new value replaces is the revision that was there when the editor opened, read or not: whom it is sealed
@@ -1717,7 +1721,7 @@ function addPasskey() {
   });
 }
 function confirmRemoval(title, body, run, done = t('client.common.deleted'), label = t('client.common.confirmDelete')) {
-  openDialog(`<h2 id="dialog-title">${esc(title)}</h2><form><p>${esc(body)}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">${esc(t('client.common.cancel'))}</button><button type="submit" class="button destructive">${esc(label)}</button></div></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(title)}</h2><form>${body ? `<p>${esc(body)}</p>` : ''}<p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">${esc(t('client.common.cancel'))}</button><button type="submit" class="button destructive">${esc(label)}</button></div></form>`);
   bindForm(async () => { await run(); closeDialog(); await refresh(); toast(done); });
 }
 document.addEventListener('click', async (event) => {
@@ -1762,7 +1766,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'disconnect') disconnect(connected().find(item => item.id === target.dataset.id));
     if (action === 'drop-secret') {
       const name = target.dataset.name, entry = secrets().find(item => item.name === name);
-      confirmRemoval(t('client.common.deleteNameTitle', { name: name }), t('client.secret.deleteWarning'), () => api('/v1/resources/' + entry.id, { method: 'DELETE', data: {} }));
+      confirmRemoval(t('client.common.deleteNameTitle', { name: name }), '', () => api('/v1/resources/' + entry.id, { method: 'DELETE', data: {} }));
     }
     if (action === 'upload-object') app.querySelector('#space-upload').click();
     if (action === 'more-objects') { objectLimit += 100; render(); }
