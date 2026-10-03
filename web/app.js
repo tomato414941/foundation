@@ -761,9 +761,14 @@ function render() {
         ${card('/services', t('client.service.title'), t('client.common.itemCount', { count: connections.length + unconnectedServices().length }))}
         ${card('/secrets', t('client.secret.title'), t('client.common.itemCount', { count: kept.length }))}
         ${card('/objects', t('client.objects.title'), spaceSummary(space))}
+        ${card('/environments', t('client.environment.title'), t('client.common.itemCount', { count: (state.environments || []).length }))}
         ${card('/principals', t('client.access.title'), keys.length ? lastUsed ? t('client.home.accessLastUsed', { count: keys.length, date: formatDate(lastUsed, i18n.language) }) : t('client.home.accessCount', { count: keys.length }) : t('client.common.noItems'))}
         ${card('/functions', t('client.functions.title'), t('client.home.functionCount', { count: state.functions?.length || 0 }))}
       </div>`);
+    return;
+  }
+  if (page === 'environments') {
+    shell(`<header class="page-heading"><h1>${esc(t('client.environment.title'))}</h1></header>${environmentsSection()}`);
     return;
   }
   if (page === 'principals') {
@@ -773,7 +778,6 @@ function render() {
     shell(`<header class="page-heading"><h1>${esc(t('client.access.title'))}</h1></header>
       <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><h2 id="access-title">${esc(t('client.access.registeredPrincipals'))}</h2></div><button class="button secondary" data-action="add-key">${icon('plus')} ${esc(t('client.common.add'))}</button></div>
       ${agents.length || others.length ? `<div class="agent-list">${agents.map(item => row(item, true)).join('')}${others.map(item => row(item, false)).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.access.empty'))}</p></div>`}</section>
-      ${environmentsSection()}
       <div class="integration-entry" id="apps"><button class="text-button" data-action="add-integration">${esc(t('client.integration.register'))}</button></div>`);
     return;
   }
@@ -1319,7 +1323,7 @@ function environmentsSection() {
   const row = item => `<article class="agent-row access-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${esc(status[item.status] || item.status)} · ${esc(identity(item.identity))}</p></div>
     <div class="agent-permissions"><span class="muted">${esc(t('client.environments.until', { time: formatDate(item.expires_at, i18n.language, { hour: '2-digit', minute: '2-digit' }) }))}</span></div>
     <div class="agent-actions"><button class="text-button danger" data-action="close-environment" data-id="${esc(item.id)}">${esc(t('client.common.close'))}</button></div></article>`;
-  return `<section class="resource-section" aria-labelledby="environments-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><h2 id="environments-title">${esc(t('client.environment.title'))}</h2></div>${compute ? `<span class="muted">${esc(t('client.environments.monthlyCompute', { used: minutes(compute.used_seconds), limit: minutes(compute.limit_seconds) }))}</span>` : ''}</div>
+  return `<section class="resource-section" aria-labelledby="environments-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><h2 id="environments-title">${esc(t('client.environment.open'))}</h2></div>${compute ? `<span class="muted">${esc(t('client.environments.monthlyCompute', { used: minutes(compute.used_seconds), limit: minutes(compute.limit_seconds) }))}</span>` : ''}</div>
     ${running.length ? `<div class="agent-list">${running.map(row).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.environment.empty'))}</p></div>`}</section>`;
 }
 async function principalDetails(id) {

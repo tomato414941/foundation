@@ -24,7 +24,7 @@ export class Merge {
     const other = proven.principalId;
     if (other === principalId) fail(400, 'invalid_merge', 'このパスキーはこのアカウントのものです。');
     if (expected !== undefined && other !== expected) fail(400, 'invalid_merge', 'このパスキーは指定したアカウントのものではありません。');
-    if (this.environments.list(other).some(row => row.status !== 'stopped')) fail(409, 'environments_open', '相手のアカウントに開いている環境があります。先に閉じてください。');
+    if (this.environments.list(other).some(row => row.status !== 'stopped')) fail(409, 'environments_open', '相手のアカウントに開いているエンバイロメントがあります。先に閉じてください。');
     const ticket = this.challenges.issue('merge', principalId + ':' + other, { data: { credential: proven.credentialId }, ttl: TICKET_TTL });
     const secrets = this.secrets.list(other).map(row => ({ id: row.id, name: row.name, envelope: this.keys.envelopeOf(row.id, other)?.toString('base64url') ?? null }));
     return { ticket, other: this.principals.get(other), key: this.keys.view(other), wrap: this.keys.wrapOf(proven.credentialId), secrets };

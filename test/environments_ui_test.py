@@ -50,9 +50,12 @@ with sync_playwright() as p:
     owner = call('GET', '/v1/principals/me', token=token)['acts_for'][0]
 
     # Nothing open yet: the page says so, with the month's computing.
-    page.goto(args.base + '/principals', wait_until='networkidle')
-    expect(page.get_by_role('heading', name='環境', exact=True)).to_be_visible()
-    expect(page.get_by_text('開いている環境はありません。', exact=True)).to_be_visible()
+    # A page of its own, beside the other things one holds, reached from the menu.
+    page.goto(args.base + '/', wait_until='networkidle')
+    page.locator('.page-nav').get_by_role('link', name='エンバイロメント', exact=True).click()
+    expect(page).to_have_url(args.base + '/environments')
+    expect(page.get_by_role('heading', name='エンバイロメント', exact=True)).to_be_visible()
+    expect(page.get_by_text('開いているエンバイロメントはありません。', exact=True)).to_be_visible()
     expect(page.get_by_text('今月の計算時間', exact=False)).to_be_visible()
 
     # The AI opens two: one acting as the owner, one with no identity at all.
@@ -72,8 +75,8 @@ with sync_playwright() as p:
     # Closing one from the page.
     building.get_by_role('button', name='閉じる', exact=True).click()
     dialog = page.get_by_role('dialog')
-    expect(dialog.get_by_text('中のファイルは消え、この環境に渡した鍵は使えなくなります。', exact=True)).to_be_visible()
-    dialog.get_by_role('button', name='環境を閉じる', exact=True).click()
+    expect(dialog.get_by_text('中のファイルは消え、このエンバイロメントに渡した鍵は使えなくなります。', exact=True)).to_be_visible()
+    dialog.get_by_role('button', name='エンバイロメントを閉じる', exact=True).click()
     expect(page.get_by_text('閉じました。', exact=True)).to_be_visible()
     expect(page.locator('.access-row').filter(has_text='ビルド')).to_have_count(0)
     gone = caller.get('/v1/environments/' + as_owner['id'] + '?as=' + owner, headers={'authorization': 'Bearer ' + token})

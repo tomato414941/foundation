@@ -8,7 +8,7 @@ const CLI = fileURLToPath(new URL('../cli/runtime.mjs', import.meta.url));
 const node = (...code) => [process.execPath, '-e', code.join('\n')];
 const lent = (t, options = {}) => fixture(t, { runner: new LocalRunner(), ...options });
 
-test('環境は何の ID も持たずに開き、コマンドを動かしても Foundation には届かない', async t => {
+test('エンバイロメントは何の ID も持たずに開き、コマンドを動かしても Foundation には届かない', async t => {
   const f = await lent(t), agent = await f.issueKey();
   const opened = await f.request('/v1/environments', { method: 'POST', token: agent.token, data: { name: 'scratch' } });
   assert.equal(opened.status, 201, opened.text);
@@ -23,7 +23,7 @@ test('環境は何の ID も持たずに開き、コマンドを動かしても 
   assert.deepEqual((await f.request('/v1/resources?kind=environment', { token: agent.token })).json.resources.map(row => row.id), [environment.id]);
 });
 
-test('ID を付けた環境は、その principal として動き、渡した値は出力から伏せられ、閉じると鍵が失効する', async t => {
+test('ID を付けたエンバイロメントは、その principal として動き、渡した値は出力から伏せられ、閉じると鍵が失効する', async t => {
   const f = await lent(t), agent = await f.issueKey();
   await f.request('/v1/resources?kind=secret&name=token', { method: 'PUT', raw: 'kept-secret-value', type: 'text/plain' });
   const opened = await f.request('/v1/environments', { method: 'POST', token: agent.token, data: { identity: USER_A } });
@@ -99,7 +99,7 @@ test('計算時間は使った分だけ減り、持ち主が決めた上限を�
   assert.equal(refused.status, 429); assert.equal(refused.json.error.code, 'compute_limit');
 });
 
-test('放置が続いた環境は止まり、しばらくして消え、リソースの入口から閉じると機械も止まる', async t => {
+test('放置が続いたエンバイロメントは止まり、しばらくして消え、リソースの入口から閉じると機械も止まる', async t => {
   const f = await lent(t);
   const idle = (await f.request('/v1/environments', { method: 'POST', data: { lifetime: { idle_seconds: 30 } } })).json.environment;
   f.app.store.db.prepare('UPDATE environments SET last_active_at=last_active_at-31000 WHERE resource_id=?').run(idle.id);
@@ -113,7 +113,7 @@ test('放置が続いた環境は止まり、しばらくして消え、リソ�
   assert.equal(f.app.environments.runner.machines.has(machine), false);
 });
 
-test('実行基盤がなければ環境は使えないと答える', async t => {
+test('実行基盤がなければエンバイロメントは使えないと答える', async t => {
   const f = await fixture(t), agent = await f.issueKey();
   const refused = await f.request('/v1/environments', { method: 'POST', token: agent.token, data: {} });
   assert.equal(refused.status, 503); assert.equal(refused.json.error.code, 'environments_unavailable');

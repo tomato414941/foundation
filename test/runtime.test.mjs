@@ -34,7 +34,7 @@ async function outputFixture(t) {
   return { ...f, runtime, dir, env: { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath, XDG_RUNTIME_DIR: dir } };
 }
 
-test('CLIからリテラルな名前と接続の出力を明示して、値をコマンドの環境へ渡す', async t => {
+test('CLIからリテラルな名前と接続の出力を明示して、値をコマンドのエンバイロメントへ渡す', async t => {
   const f = await outputFixture(t), connection = await f.connection();
   await f.keep('secret', 'token#work', 'work-value');
   const direct = await execute(['exec', 'VALUE=token#work', '--', process.execPath, '-e', "if(process.env.VALUE!=='work-value')process.exit(2);console.log('ready')"], f.env);

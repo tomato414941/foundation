@@ -65,7 +65,7 @@ test('接続とアプリは新しい持ち主の名前で封じ直され、そ�
   assert.equal(f.app.apps.clientValues(f.app.apps.get(app.json.resource.id)).clientSecret, 'secret-1', 'its secret opens under the new name');
 });
 
-test('サービスは参照するものがなければ渡せ、オブジェクトは相手の枠に入れば渡せ、環境は渡せない', async t => {
+test('サービスは参照するものがなければ渡せ、オブジェクトは相手の枠に入れば渡せ、エンバイロメントは渡せない', async t => {
   const f = await fixture(t), other = await f.request('/v1/principals', { method: 'POST', data: { name: 'other', key: true } });
   const service = await f.request('/v1/resources?kind=service&name=Notes', { method: 'PUT', data: { name: 'Notes' } });
   assert.equal(service.status, 200, service.text);

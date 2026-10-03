@@ -35,7 +35,7 @@ export class Environments {
     this.opening = new Set();
   }
   get enabled() { return Boolean(this.runner); }
-  check() { if (!this.enabled) fail(503, 'environments_unavailable', '環境は現在使えません。'); }
+  check() { if (!this.enabled) fail(503, 'environments_unavailable', 'エンバイロメントは現在使えません。'); }
 
   get(id) { return typeof id === 'string' ? this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.id=?`).get(id) : undefined; }
   at(id) {
@@ -84,7 +84,7 @@ export class Environments {
     return { seconds: spent + running.reduce((total, row) => total + Math.ceil((now - row.started_at) / 1000) * SIZES[row.size], 0), machines: running.length };
   }
   within(ownerId) {
-    this.payments.needsPayer(ownerId, '環境を使う');
+    this.payments.needsPayer(ownerId, 'エンバイロメントを使う');
     if (!this.payments.paying(ownerId)) {
       const shared = this.freeUsage();
       if (shared.seconds >= this.limits.freePoolSeconds || shared.machines >= this.limits.freeConcurrent) fail(402, 'payment_required', '今月の無料枠はすべて使われました。支払い方法を登録すると、続けて使えます。');
@@ -104,11 +104,11 @@ export class Environments {
     const idle = lifetime.idle_seconds ?? this.limits.idleSeconds, max = lifetime.max_seconds ?? this.limits.maxSeconds;
     if (!Number.isInteger(idle) || idle < 30 || idle > this.limits.maxSeconds) fail(400, 'invalid_lifetime', `idle_seconds は30〜${this.limits.maxSeconds}秒です。`);
     if (!Number.isInteger(max) || max < 30 || max > this.limits.maxSeconds) fail(400, 'invalid_lifetime', `max_seconds は30〜${this.limits.maxSeconds}秒です。`);
-    const name = input.name === undefined ? '環境' : resourceName(input.name);
+    const name = input.name === undefined ? 'エンバイロメント' : resourceName(input.name);
     const id = randomUUID(), now = Date.now();
     this.store.transaction(() => {
       this.principals.at(ownerId);
-      if (this.db.prepare(`SELECT count(*) n ${FROM} WHERE r.owner_id=? AND e.status<>'stopped'`).get(ownerId).n >= this.limits.concurrent) fail(429, 'environment_limit', `同時に開ける環境は${this.limits.concurrent}つまでです。`);
+      if (this.db.prepare(`SELECT count(*) n ${FROM} WHERE r.owner_id=? AND e.status<>'stopped'`).get(ownerId).n >= this.limits.concurrent) fail(429, 'environment_limit', `同時に開けるエンバイロメントは${this.limits.concurrent}つまでです。`);
       this.within(ownerId);
       this.resources.insert(id, ownerId, 'environment', name);
       this.db.prepare("INSERT INTO environments (resource_id,size,lifetime,idle_seconds,max_seconds,identity,runner,status,started_at,last_active_at,expires_at) VALUES (?,?,?,?,?,NULL,?,'starting',?,?,?)")
@@ -161,7 +161,7 @@ export class Environments {
   }
   usable(row) {
     row = row && this.get(row.id);
-    if (!row || !['ready', 'busy'].includes(row.status) || !row.machine) fail(409, 'environment_stopped', 'この環境は利用できません。新しく開いてください。');
+    if (!row || !['ready', 'busy'].includes(row.status) || !row.machine) fail(409, 'environment_stopped', 'このエンバイロメントは利用できません。新しく開いてください。');
     return row;
   }
   // What a command handed into a machine, to be taken out of what it prints.
@@ -282,7 +282,7 @@ export class Environments {
   async remove(row) {
     const stopped = await this.stop(row, { remove: true });
     if (!stopped) return;
-    if (stopped.status !== 'stopped') fail(503, 'environment_stopping', '環境の停止を確認できていません。停止と削除は自動で再試行されます。');
+    if (stopped.status !== 'stopped') fail(503, 'environment_stopping', 'エンバイロメントの停止を確認できていません。停止と削除は自動で再試行されます。');
     this.resources.remove(stopped);
   }
   async removeAll(ownerId) {
@@ -293,7 +293,7 @@ export class Environments {
   }
   // Called in the owner-deletion transaction: a concurrent open during provider cleanup must not be cascaded away.
   assertRemoved(ownerId) {
-    if (this.list(ownerId).length) fail(409, 'environments_changed', '新しい環境が開かれています。もう一度削除してください。');
+    if (this.list(ownerId).length) fail(409, 'environments_changed', '新しいエンバイロメントが開かれています。もう一度削除してください。');
   }
   // Machines past their time, idle too long, due for a stop retry, or stopped long enough ago.
   async sweep(now = Date.now()) {

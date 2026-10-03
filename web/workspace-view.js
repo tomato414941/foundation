@@ -2,7 +2,7 @@ import { createI18n } from './i18n.js';
 
 const japanese = createI18n('ja').t;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
-export const pages = { '/': 'nav.foundation', '/services': 'nav.services', '/secrets': 'nav.secrets', '/objects': 'nav.objects', '/principals': 'nav.principals', '/functions': 'nav.functions', '/account': 'nav.account' };
+export const pages = { '/': 'nav.foundation', '/services': 'nav.services', '/secrets': 'nav.secrets', '/objects': 'nav.objects', '/environments': 'nav.environments', '/principals': 'nav.principals', '/functions': 'nav.functions', '/account': 'nav.account' };
 export const brand = (t = japanese) => `<a class="brand" href="/" aria-label="${esc(t('brand.home'))}"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 48 48" fill="currentColor"><path d="M11 37V11H37M11 24H24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" opacity=".6"/><circle cx="37" cy="24" r="3" opacity=".3"/><circle cx="24" cy="37" r="3" opacity=".3"/><circle cx="37" cy="37" r="3" opacity=".3"/><circle cx="11" cy="11" r="4"/><circle cx="24" cy="11" r="4"/><circle cx="37" cy="11" r="4"/><circle cx="11" cy="24" r="4"/><circle cx="24" cy="24" r="4"/><circle cx="11" cy="37" r="4"/></svg></span>Foundation</a>`;
 
 export const loading = (t = japanese) => `<div class="content-loading" role="status" aria-label="${esc(t('common.loading'))}"><span></span><span></span><span></span></div>`;

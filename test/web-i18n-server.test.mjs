@@ -76,7 +76,7 @@ test('JSON errors opt in only through an exact supported Web locale header', asy
 test('errors retain dynamic context and custom data while localizing known field labels', () => {
   for (const [original, translated] of [
     ['この相手には持ち主がいません。', 'This principal has no owner.'],
-    ['環境は渡せません。', 'Environments cannot be transferred.'],
+    ['エンバイロメントは渡せません。', 'Environments cannot be transferred.'],
     ['すでにその相手のものです。', 'This already belongs to that principal.'],
     ['その相手はすでに同じ名前のものを持っています。', 'That principal already owns an item with the same name.'],
   ]) {

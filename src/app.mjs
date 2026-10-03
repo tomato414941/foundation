@@ -1071,7 +1071,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const connection = held.kind === 'connection' ? connections.get(held.id) : null, secret = held.kind === 'secret' ? secrets.get(held.id) : null;
         // Given to another owner: by whoever may transfer it, to any principal. A lent machine is not given.
         if (part === '/transfer' && method === 'POST') {
-          if (held.kind === 'environment') fail(405, 'method_not_allowed', '環境は渡せません。');
+          if (held.kind === 'environment') fail(405, 'method_not_allowed', 'エンバイロメントは渡せません。');
           permit('transfer', held.kind, held.id, held.owner_id);
           const input = await inputBody(), to = principals.at(principalId(input.to)).id;
           const moved = held.kind === 'secret' ? secrets.transfer(secrets.get(held.id), to, input.envelope)

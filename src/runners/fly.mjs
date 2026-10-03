@@ -25,11 +25,11 @@ export class FlyRunner {
       response = await this.fetcher(API + '/apps/' + encodeURIComponent(this.app) + path, { method, redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
         headers: { authorization: 'Bearer ' + this.token, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-    } catch { fail(502, 'runner_unavailable', '実行環境を用意できませんでした。時間をおいて再度お試しください。'); }
+    } catch { fail(502, 'runner_unavailable', 'エンバイロメントを用意できませんでした。時間をおいて再度お試しください。'); }
     const creating = method === 'POST' && path === '/machines';
     if (response.status === 404 && !creating) throw Object.assign(new Error('machine is gone'), { gone: true });
     if (!response.ok) {
-      const error = new HttpError(502, 'runner_unavailable', '実行環境を用意できませんでした。時間をおいて再度お試しください。');
+      const error = new HttpError(502, 'runner_unavailable', 'エンバイロメントを用意できませんでした。時間をおいて再度お試しください。');
       // Explicit request rejection is different from a timeout/5xx: the provider did not accept creation.
       if (creating && [400, 401, 402, 403, 404, 422, 429].includes(response.status)) error.notCreated = true;
       throw error;
@@ -45,7 +45,7 @@ export class FlyRunner {
       config: { image: this.image, env: { HOME, ...placed }, guest: GUESTS[size] ?? GUESTS.small, auto_destroy: true, restart: { policy: 'no' },
         metadata: { foundation_environment: id } },
     });
-    if (typeof made.id !== 'string') fail(502, 'runner_unavailable', '実行環境を用意できませんでした。');
+    if (typeof made.id !== 'string') fail(502, 'runner_unavailable', 'エンバイロメントを用意できませんでした。');
     onCreated(made.id);
     await this.call('GET', '/machines/' + made.id + '/wait?state=started&timeout=60', undefined, { timeoutMs: 70_000 });
     return { machine: made.id, home: HOME };
@@ -106,7 +106,7 @@ export class FlyRunner {
     try {
       await this.call('DELETE', '/machines/' + machine + '?force=true');
       const remaining = await this.call('GET', '/machines/' + machine);
-      if (remaining.state !== 'destroyed') fail(502, 'runner_unavailable', '実行環境の削除を確認できませんでした。');
+      if (remaining.state !== 'destroyed') fail(502, 'runner_unavailable', 'エンバイロメントの削除を確認できませんでした。');
     }
     catch (error) { if (!error?.gone) throw error; }
   }

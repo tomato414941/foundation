@@ -167,7 +167,7 @@ test('停止中に終わるコマンドの値は伏せられ、削除後の完�
   }
 });
 
-test('ID の書き込み中に停止した環境は、再び ID や有効な鍵を持たない', async t => {
+test('ID の書き込み中に停止したエンバイロメントは、再び ID や有効な鍵を持たない', async t => {
   const f = await state(t), e = f.environments, row = await e.open(USER_A), write = deferred();
   f.runner.put = () => write.promise;
   const attaching = e.attach(row, USER_A);
@@ -176,7 +176,7 @@ test('ID の書き込み中に停止した環境は、再び ID や有効な鍵�
   assert.equal(e.get(row.id).identity, null); assert.equal(keys(f, row.id).length, 0);
 });
 
-test('DELETE の停止失敗は503と停止中を返し、principal と全環境の再試行を保持する', async t => {
+test('DELETE の停止失敗は503と停止中を返し、principal と全エンバイロメントの再試行を保持する', async t => {
   const runner = new Runner(), f = await fixture(t, { runner });
   const who = (await f.request('/v1/principals', { method: 'POST', data: { name: 'worker' } })).json.principal;
   const first = await f.app.environments.open(who.id, { identity: who.id }), other = await f.app.environments.open(who.id, { identity: who.id });
@@ -197,7 +197,7 @@ test('DELETE の停止失敗は503と停止中を返し、principal と全環境
   assert.equal((await f.request('/v1/principals/' + who.id, { method: 'DELETE', data: {} })).status, 200);
 });
 
-test('principal の削除中に開いた環境はまとめて消されず、削除後の古い open も拒否する', async t => {
+test('principal の削除中に開いたエンバイロメントはまとめて消されず、削除後の古い open も拒否する', async t => {
   const runner = new Runner(), f = await fixture(t, { runner });
   const who = (await f.request('/v1/principals', { method: 'POST', data: { name: 'worker' } })).json.principal;
   await f.app.environments.open(who.id);
@@ -213,7 +213,7 @@ test('principal の削除中に開いた環境はまとめて消されず、削�
 });
 
 
-test('別プロセスが ID 未確定の環境を止めても記録を失わず、遅れて届いた ID を回収できる', async t => {
+test('別プロセスが ID 未確定のエンバイロメントを止めても記録を失わず、遅れて届いた ID を回収できる', async t => {
   const f = await state(t), e = f.environments, started = deferred();
   const start = f.runner.start.bind(f.runner);
   f.runner.start = async options => { await started.promise; return start(options); };
@@ -309,7 +309,7 @@ test('古い停止試行が後から戻っても、引き継いだ停止の課�
   assert.deepEqual(meterEvents(f), events); assert.equal(spent(f), events[0].value);
 });
 
-test('操作ごとの grant は準備済みの環境にだけ届き、停止中の実行や ID 付与を復活させない', async t => {
+test('操作ごとの grant は準備済みのエンバイロメントにだけ届き、停止中の実行や ID 付与を復活させない', async t => {
   const runner = new Runner(), f = await fixture(t, { runner }), delegate = await f.become('delegate');
   const row = await f.app.environments.open(USER_A), path = '/v1/environments/' + row.id;
   const asDelegate = { token: delegate.token, anonymous: true };

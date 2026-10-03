@@ -136,7 +136,7 @@ test('持っている相手が使った分は持ち主の枠に数えられ、�
   assert.equal((await f.request('/v1/payment', { token: sponsor.json.token, anonymous: true, as: group.id })).json.payment.payer, sponsor.json.principal.id, 'the payer may see the group\'s payment');
 });
 
-test('支払い方法のないプリンシパルには負担者がおらず、自分の名では環境もファイルも使えず、支払い方法を登録するか誰かに引き取られると負担者ができる', async t => {
+test('支払い方法のないプリンシパルには負担者がおらず、自分の名ではエンバイロメントもファイルも使えず、支払い方法を登録するか誰かに引き取られると負担者ができる', async t => {
   const fake = fakeStripe(), f = await fixture(t, { stripe: fake.stripe });
   // One that came by itself: nobody made it, nobody pays for it.
   const alone = await f.request('/v1/credentials', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'alone' } });

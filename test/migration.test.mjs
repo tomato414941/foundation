@@ -411,7 +411,7 @@ test('41版の代わりに動く線は agent に、一つの操作の線はそ�
   assert.equal(JSON.parse(request.detail).relation, 'agent'); assert.equal(JSON.parse(request.result).relation, 'agent');
 });
 
-test('40版の環境は ID・コマンド・鍵・使用量を保って停止再試行可能な43版へ移る', async t => {
+test('40版のエンバイロメントは ID・コマンド・鍵・使用量を保って停止再試行可能な43版へ移る', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-43-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY), m = modules(store);
   m.principals.ensure(USER_A);
