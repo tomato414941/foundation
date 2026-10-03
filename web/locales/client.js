@@ -268,7 +268,7 @@ export const ja = {
   "client.access.endpoint": "接続先",
   "client.access.keySharingWarning": "キーを会話や共有ファイルに貼り付けないでください。",
   "client.environment.title": "エンバイロメント",
-  "client.environment.open": "開いているもの",
+  "client.environment.open": "環境一覧",
   "client.environment.empty": "開いているエンバイロメントはありません。",
   "client.access.issueKey": "キーを発行",
   "client.access.revokeKey": "失効",
