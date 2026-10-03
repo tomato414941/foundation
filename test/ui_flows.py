@@ -47,18 +47,17 @@ def make_key(page, base, name='テスト端末'):
 
 
 def unlock(page, base):
-    """The secrets page with the key open: asked of the passkey when the page was loaded anew."""
+    """The secrets page: listing and adding need no key, and the page says nothing of one; a value asks the passkey."""
     page.goto(base + '/secrets', wait_until='networkidle')
-    button = page.get_by_role('button', name='パスキーで鍵を開く', exact=True)
-    if button.count():
-        button.click()
     expect(page.get_by_role('button', name='追加', exact=True)).to_be_enabled()
+    expect(page.get_by_text('鍵', exact=False)).to_have_count(0)
 
 
 def hand_to_foundation(page):
-    """Foundation made the owner's agent from the secrets page, with the key open."""
-    page.get_by_role('button', name='Foundation に渡す', exact=True).click()
-    expect(page.get_by_text('AIが使うには Foundation に渡します。', exact=True)).to_have_count(0)
+    """Foundation made the owner's agent. The web offers no way to do it; it is a line drawn through the API."""
+    base = page.url.split('/', 3)[0] + '//' + page.url.split('/', 3)[2]
+    allow_foundation(page.request, base)
+    page.reload(wait_until='networkidle')
 
 
 def allow_foundation(request, base, headers=None):

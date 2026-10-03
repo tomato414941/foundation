@@ -432,3 +432,36 @@ test('tokenはWebAuthnの資格情報で証明して1時間のトークンを出
   assert.equal(me.status, 200, me.text);
   assert.equal(me.json.principal.id, f.runtime.id);
 });
+
+test('渡された封筒のあるシークレットは、Foundation が開けなくても、この機械が自分の鍵で開けてコマンドに渡す', async t => {
+  const { seal, open } = await import('../cli/envelope.mjs');
+  const { USER_A } = await import('./helpers.mjs');
+  const f = await fixture(t);
+  const dir = await mkdtemp(join(tmpdir(), 'foundation-handed-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'key') };
+  const started = await execute(['init', '--name', 'reader'], env);
+  assert.equal(started.code, 0, started.err);
+  const machine = JSON.parse(started.out.slice(0, started.out.indexOf('\n\nKey file'))).principal;
+  const asked = JSON.parse((await execute(['join'], env)).out).request;
+  assert.equal((await f.request('/v1/requests/' + asked.id + '/grant', { method: 'POST', data: { user_code: asked.user_code } })).status, 200);
+  // The owner keeps a secret that only they can open: Foundation is not their agent, and holds no envelope for it.
+  const kept = (await f.keep('secret', 'handed/token', 'opened-here')).json.resource;
+  assert.equal((await f.request('/v1/relations', { method: 'DELETE', data: { subject: f.app.keys.agentId, relation: 'agent', object_type: 'principal', object_id: USER_A } })).status, 200);
+  await f.request('/v1/resources/' + kept.id + '/envelopes/' + f.app.keys.agentId, { method: 'DELETE', data: {} });
+  const refused = await execute(['exec', 'TOKEN=handed/token', '--', process.execPath, '-e', '0'], env);
+  assert.equal(refused.code, 1, 'nobody who may hand it over can open it');
+  // Handing it to the machine: a line to see it, and its key sealed for the machine's own.
+  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: machine.id, relation: 'viewer', object_type: 'resource', object_id: kept.id } })).status, 201);
+  const mine = await f.request('/v1/resources/' + kept.id + '/content');
+  const contentKey = open(Buffer.from(mine.json.envelope, 'base64url'), (await f.keyOf({})).privateKey);
+  const theirs = (await f.request('/v1/principals/' + machine.id + '/public-key')).json.key.public_key;
+  const handed = await f.request('/v1/resources/' + kept.id + '/envelopes/' + machine.id, { method: 'PUT', data: { wrapped: seal(contentKey, Buffer.from(theirs, 'base64url')).toString('base64url') } });
+  assert.equal(handed.status, 200, handed.text);
+  const run = await execute(['exec', 'TOKEN=handed/token', '--', process.execPath, '-e', 'process.stdout.write(process.env.TOKEN)'], env);
+  assert.equal(run.code, 0, run.err);
+  assert.equal(run.out, 'opened-here');
+  const asFile = await execute(['exec', '--inputs', JSON.stringify([{ name: 'handed/token', as: 'TOKEN_FILE', filename: 'token.txt' }]), '--', process.execPath, '-e', 'process.stdout.write(require("fs").readFileSync(process.env.TOKEN_FILE, "utf8"))'], env);
+  assert.equal(asFile.code, 0, asFile.err);
+  assert.equal(asFile.out, 'opened-here');
+  assert.equal(JSON.parse(await readFile(env.FOUNDATION_RUNTIME_KEY_FILE, 'utf8')).key.private_key.length, 43, 'opened with the key this machine keeps');
+});

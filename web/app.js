@@ -317,6 +317,13 @@ async function unlockWith(credentialId, yielded) {
   own = { privateKey: await sealing.unwrap(unb64(wrapped), yielded), publicKey: unb64(key.public_key) };
 }
 // Opening the key again, after the page was loaded anew: any passkey of the owner's, asked here for what it yields.
+// The key, where an act needs it: already open, or opened now by a passkey. Says why when it cannot be.
+async function needKey() {
+  if (own) return;
+  if (!passkeys().length) throw new Error(t('client.secret.passkeyRequired'));
+  await unlockKey();
+  if (!own) throw new Error(t('client.secret.keyUnavailable'));
+}
 async function unlockKey() {
   const given = await navigator.credentials.get({ publicKey: { challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: location.hostname, allowCredentials: [], userVerification: 'preferred', extensions: { prf: { eval: { first: PRF_INPUT } } } } });
   await unlockWith(given.id, yieldedBy(given));
@@ -746,16 +753,10 @@ function render() {
   if (page === 'secrets') {
     const focused = document.activeElement, focusedRow = focused.closest('.secret-row')?.getAttribute('aria-label');
     const focusedAction = focused.getAttribute('aria-label') || focused.dataset.action;
-    const kept = secrets(), handed = (state.agents || []).some(item => item.id === state.foundation?.principal_id);
-    // What the page can do here: nothing with a value until the owner's key is open.
-    const keyLine = own ? '' : !passkeys().length
-      ? `<div class="access-empty key-state"><p>${esc(t('client.secret.passkeyRequired'))}</p>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} ${esc(t('client.passkey.add'))}</button>` : ''}</div>`
-      : keyUnavailable ? `<div class="access-empty key-state"><p>${esc(t('client.secret.keyUnavailable'))}</p></div>`
-        : `<div class="access-empty key-state"><button class="button secondary" data-action="unlock-key">${icon('lock')} ${esc(t('client.secret.unlockWithPasskey'))}</button></div>`;
-    const foundationLine = handed ? '' : `<div class="access-empty key-state"><p>${esc(t('client.secret.shareFoundationNote'))}</p><button class="button secondary" data-action="allow-foundation"${own ? '' : ' disabled'}>${esc(t('client.secret.shareFoundation'))}</button></div>`;
+    // The page says nothing of the key: listing and adding need none, and what does asks for it then.
+    const kept = secrets();
     shell(`<header class="page-heading page-heading-actions"><h1>${esc(t('client.secret.title'))}</h1>
-      <button class="button secondary" data-action="add-secret"${own ? '' : ' disabled'}>${icon('plus')} ${esc(t('client.common.add'))}</button></header>
-      ${keyLine}${foundationLine}
+      <button class="button secondary" data-action="add-secret">${icon('plus')} ${esc(t('client.common.add'))}</button></header>
       <section class="resource-section" aria-label="${esc(t('client.secret.title'))}">
         ${kept.length ? `<div class="agent-list">${kept.map(secretRow).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.secret.empty'))}</p></div>`}</section>`);
     if (own) void receiveFromFoundation();
@@ -1456,29 +1457,14 @@ async function receiveFromFoundation() {
     await refresh();
   } catch (error) { toast(error.message); } finally { receiving = false; }
 }
-// Foundation made the owner's agent: a line, and an envelope for everything kept so far.
-async function allowFoundation(button) {
-  const foundation = state.foundation.principal_id;
-  button.disabled = true;
-  try {
-    await api('/v1/relations', { method: 'POST', data: { subject: foundation, relation: 'agent', object_type: 'principal', object_id: state.user.id } });
-    const { key } = await api('/v1/principals/' + foundation + '/public-key');
-    for (const item of secrets()) {
-      if (item.recipients.includes(foundation)) continue;
-      const kept = await api('/v1/resources/' + item.id + '/content');
-      if (!kept.envelope) continue;
-      await api('/v1/resources/' + item.id + '/envelopes/' + foundation, { method: 'PUT', data: { wrapped: b64(await sealing.seal(await openKey(kept), unb64(key.public_key))) } });
-    }
-    await refresh();
-  } catch (error) { toast(error.message); if (button.isConnected) button.disabled = false; }
-}
 // A line drawn onto a secret reaches its bytes only with an envelope: Foundation makes one from its own, or the
 // owner's key does here.
 async function handEnvelope(row) {
   if (row.object?.kind !== 'secret' || !['viewer', 'editor', 'content_grant', 'write_grant', 'share_grant'].includes(detailOf(row).relation)) return;
   const path = '/v1/resources/' + row.object.id + '/envelopes/' + row.from;
-  try { await api(path, { method: 'POST', data: {} }); return; } catch (error) { if (!own || error.code !== 'not_sealed_for_foundation') { toast(error.message); return; } }
+  try { await api(path, { method: 'POST', data: {} }); return; } catch (error) { if (error.code !== 'not_sealed_for_foundation') { toast(error.message); return; } }
   try {
+    await needKey();
     const kept = await api('/v1/resources/' + row.object.id + '/content'), { key } = await api('/v1/principals/' + row.from + '/public-key');
     if (!kept.envelope || !key.public_key) return;
     await api(path, { method: 'PUT', data: { wrapped: b64(await sealing.seal(await openKey(kept), unb64(key.public_key))) } });
@@ -1495,6 +1481,7 @@ function addSecret() {
   bindForm(async (form) => {
     const name = form.get('name');
     const { recipients } = await api('/v1/recipients');
+    if (!recipients.length) throw new Error(t('client.secret.passkeyRequired'));
     await api('/v1/resources?' + new URLSearchParams({ kind: 'secret', name }), { method: 'PUT', data: await sealFor(new TextEncoder().encode(String(form.get('value'))), recipients) });
     closeDialog(); await refresh(); toast(t('client.common.addedName', { name: name }));
   });
@@ -1553,7 +1540,7 @@ function bindSecretValue(entry, row) {
   let value = null, text = null, etag = null, recipients = [], revealed = false, binary = false, busy = false;
   const lock = locked => row.querySelectorAll('[data-action]').forEach(button => { button.disabled = locked; });
   const clear = () => { value = null; text = null; etag = null; revealed = false; };
-  const control = (action, label, glyph) => `<button type="button" class="icon-button" data-value-action="${action}" aria-label="${label}" title="${label}"${own ? '' : ' disabled'}>${icon(glyph)}</button>`;
+  const control = (action, label, glyph) => `<button type="button" class="icon-button" data-value-action="${action}" aria-label="${label}" title="${label}">${icon(glyph)}</button>`;
   const decode = bytes => {
     try {
       const decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
@@ -1564,17 +1551,24 @@ function bindSecretValue(entry, row) {
     busy = true; lock(true); panel.setAttribute('aria-busy', 'true');
     panel.querySelectorAll('button').forEach(button => { button.disabled = true; });
     try {
+      await needKey();
+      // Sealed for Foundation and not yet for this key - as what an agent placed - it is handed to the owner by
+      // Foundation, from its own envelope, now that the owner's key is there to seal for.
+      if (!entry.recipients?.includes(state.user.id) && entry.recipients?.includes(state.foundation?.principal_id)) {
+        await api('/v1/resources/' + entry.id + '/envelopes/' + state.user.id, { method: 'POST', data: {} });
+        entry.recipients = [...entry.recipients, state.user.id];
+      }
       const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store', headers: { 'X-Foundation-Locale': i18n.language } });
       if (response.status === 401) await showSignin();
       if (!response.ok) throw new Error(t('client.secret.loadFailed'));
       const kept = await response.json();
-      if (!kept.envelope || !own) throw new Error(t('client.secret.loadFailed'));
+      if (!kept.envelope) throw new Error(t('client.secret.loadFailed'));
       const bytes = await sealing.openContent(await openKey(kept), unb64(kept.content));
       if (!panel.isConnected) return false;
       value = bytes; text = decode(value); binary = text === null; etag = response.headers.get('etag'); recipients = kept.recipients;
       return true;
     } catch (error) {
-      if (panel.isConnected) panel.querySelector('[role="alert"]').textContent = error instanceof TypeError ? t('client.errors.connectionFailed') : error.message;
+      if (panel.isConnected) panel.querySelector('[role="alert"]').textContent = passkeyDeclined(error) ? '' : error instanceof TypeError ? t('client.errors.connectionFailed') : error.message;
       return false;
     } finally {
       busy = false; lock(false); panel.removeAttribute('aria-busy');
@@ -1685,13 +1679,6 @@ document.addEventListener('click', async (event) => {
   try {
     if (action === 'close-dialog') closeDialog();
     if (action === 'add-passkey') addPasskey();
-    if (action === 'unlock-key') {
-      target.disabled = true;
-      try { await unlockKey(); } catch (error) { if (!passkeyDeclined(error)) toast(error.message); }
-      if (target.isConnected) target.disabled = false;
-      render();
-    }
-    if (action === 'allow-foundation') await allowFoundation(target);
     if (action === 'set-payment') { target.disabled = true; location.assign((await api('/v1/payment/setup', { method: 'POST', data: {} })).url); }
     if (action === 'remove-passkey') {
       const item = passkeys().find(entry => entry.id === id);

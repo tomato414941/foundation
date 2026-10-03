@@ -342,10 +342,32 @@ async function main() {
     console.log(JSON.stringify(saved));
     return;
   }
+  // A secret this machine was handed an envelope for is opened here, with its own key: the server keeps what it cannot
+  // open, and nobody else has to be able to open it for this machine to use it. Everything else - a connection, a secret
+  // not handed to this machine - is asked of the server, which hands over only what Foundation may open for the owner.
+  const handed = { environment: {}, files: [] };
+  let asked = names;
+  if (key.own && names.some(item => typeof item.name === 'string')) {
+    const shown = owner ? (await send('/v1/resources?shown=me', undefined, { method: 'GET', accept: () => true })).resources ?? [] : [];
+    asked = [];
+    for (const item of names) {
+      let resource = null;
+      if (typeof item.name === 'string') {
+        resource = owner ? shown.find(row => row.kind === 'secret' && row.name === item.name && row.owner_id === owner)
+          : (await send('/v1/resources?kind=secret&name=' + encodeURIComponent(item.name), undefined, { method: 'GET', accept: () => true })).resource;
+      }
+      const kept = resource ? await send('/v1/resources/' + resource.id + '/content', undefined, { method: 'GET', accept: () => true }) : null;
+      if (!kept?.envelope) { asked.push(item); continue; }
+      const bytes = openContent(openEnvelope(Buffer.from(kept.envelope, 'base64url'), Buffer.from(key.own.private_key, 'base64url')), Buffer.from(kept.content, 'base64url'));
+      if (item.filename !== undefined) handed.files.push({ env: item.as, filename: item.filename, content: bytes.toString('base64'), encoding: 'base64' });
+      else handed.environment[item.as] = bytes.toString('utf8');
+    }
+  }
   let injection;
-  if (names.length) ({ injection } = await send(forHolder('/v1/injections'), { names }));
+  if (asked.length) ({ injection } = await send(forHolder('/v1/injections'), { names: asked }));
   else injection = { environment: {}, files: [] };
   if (!injection || typeof injection.environment !== 'object' || !Array.isArray(injection.files)) throw new Error('Foundation returned an invalid injection.');
+  injection = { environment: { ...injection.environment, ...handed.environment }, files: [...injection.files, ...handed.files] };
   // What each of them sets is the server's to say; this applies it and refuses anything it may not set.
   const environment = { ...process.env };
   delete environment.FOUNDATION_RUNTIME_KEY_FILE;
