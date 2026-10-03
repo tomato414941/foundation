@@ -28,7 +28,7 @@ test('持ち主は秘密を相手に渡し、封筒をつけるか Foundation �
   const handed = await give(f, second.json.resource.id, { to: other.json.principal.id });
   assert.equal(handed.status, 200, handed.text);
   assert.equal((await f.read('secret', 'second', theirs)).text, 'two');
-  const log = (await f.request('/v1/audit-log')).json.entries.filter(row => row.action === 'resource.transferred');
+  const log = (await f.request('/v1/principals/me/audit-log')).json.entries.filter(row => row.action === 'resource.transferred');
   assert.equal(log.length, 2); assert.deepEqual(log[0].detail, { from: USER_A, to: other.json.principal.id });
 });
 

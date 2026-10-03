@@ -57,9 +57,9 @@ test('An app makes one principal per user, and each keeps to itself', async t =>
   // The app's own key reaches none of its users' contents: the app acts for nobody.
   assert.deepEqual((await f.request('/v1/resources?kind=secret', { anonymous: true, token: product })).json.resources, []);
   assert.equal((await f.request('/v1/resources?kind=secret&as=' + first.account.id, { anonymous: true, token: product })).status, 403);
-  const usage = await call('/usage?as=' + first.account.id);
+  const usage = await call('/principals/' + first.account.id + '/usage');
   assert.equal(usage.status, 200, usage.text); assert.equal(usage.json.secrets.count, 1);
-  assert.equal((await call('/usage?as=' + USER_A)).status, 403, 'and not the developer\'s either');
+  assert.equal((await call('/principals/' + USER_A + '/usage')).status, 403, 'and not the developer\'s either');
   assert.equal((await call('/principals', { method: 'POST', data: { alias: '' } })).status, 400);
   const listed = (await call('/principals/me/relations?relation=owner&direction=from')).json.relations;
   assert.deepEqual(listed.map(item => item.alias).sort(), ['user-1', 'user-2']);
@@ -136,7 +136,7 @@ test('Removing a user takes what they hold with it; removing the app stops its k
   const kept = await account('user-2');
   assert.equal((await call('/principals/' + user.id, { method: 'DELETE', data: {} })).status, 200);
   assert.equal((await f.request('/v1/principals/me', { anonymous: true, token: key.token })).status, 401);
-  assert.equal((await call('/usage?as=' + user.id)).status, 403);
+  assert.equal((await call('/principals/' + user.id + '/usage')).status, 404);
   const listed = (await f.request('/v1/principals/me/relations?relation=owner&direction=from')).json.relations.map(line => line.principal);
   assert.equal(listed.length, 1); assert.equal(listed[0].id, app.id);
   assert.doesNotMatch(JSON.stringify(listed), /fdn_/);

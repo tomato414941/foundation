@@ -331,7 +331,7 @@ async function main() {
   // A secret is sealed here, with a key of its own, for each of the owner's recipients: the server keeps what it
   // cannot open. This machine is not among them; it places the bytes and does not read them back.
   const sealedFor = async bytes => {
-    const { recipients } = await send(forHolder('/v1/recipients'), undefined, { method: 'GET' });
+    const { recipients } = await send('/v1/principals/' + encodeURIComponent(owner || 'me') + '/recipients', undefined, { method: 'GET' });
     if (!Array.isArray(recipients) || !recipients.length) throw new Error('Nobody can open a secret kept for this owner yet: the owner needs a key, or Foundation needs to act for them.');
     const contentKey = newContentKey();
     return { content: sealContent(contentKey, bytes).toString('base64url'), envelopes: Object.fromEntries(recipients.map(item => [item.principal_id, seal(contentKey, Buffer.from(item.public_key, 'base64url')).toString('base64url')])) };

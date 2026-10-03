@@ -654,13 +654,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       }
       if (subject.via.kind === 'link') fail(401, 'signin_required', 'サインインしてください。');
       // Principals: oneself, and those one owns.
-      // Whom to seal a secret of the owner's for: the owner, and Foundation's principal when it acts for them.
-      if (at === 'recipients' && method === 'GET') {
-        permit('write', 'secret');
-        // The owner, those who stand for it (a group's stewards), and Foundation when it acts for them.
-        const ids = [ownerId, ...principals.stewardsOf(ownerId), ...(authorization.can(keys.agentId, 'inject', 'principal', { id: ownerId }) ? [keys.agentId] : [])];
-        return send(200, { recipients: ids.map(id => ({ principal_id: id, public_key: keys.publicKeyOf(id) })).filter(item => item.public_key).map(item => ({ ...item, public_key: item.public_key.toString('base64url') })) });
-      }
       // Another account made one with this: its passkey answers for it, this session for this one.
       if (at === 'mergeOptions' && method === 'POST') {
         permit('add-credential', 'principal', subject.id);
@@ -677,23 +670,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const input = await inputBody(SECRET_MAX);
         const done = merge.complete(subject.id, input);
         return send(200, { ...done, principal: principals.get(done.into) });
-      }
-      // Paying for more than the free part: a payment method set on Stripe's page, for the principal itself.
-      if (at === 'payment' && method === 'GET') {
-        permit('payment', 'principal', ownerId);
-        return send(200, { payment: payments.view(ownerId) });
-      }
-      if (at === 'paymentSetup' && method === 'POST') {
-        permit('payment', 'principal', ownerId);
-        await inputBody();
-        return send(200, { url: await payments.setup(ownerId, { origin, email: emails.of(ownerId)[0] }) });
-      }
-      if (at === 'paymentComplete' && method === 'POST') {
-        permit('payment', 'principal', ownerId);
-        const input = await inputBody();
-        const view = await payments.complete(ownerId, input.session_id);
-        auditLog.write(subject.id, 'payment.set', 'principal', ownerId, {});
-        return send(200, { payment: view });
       }
       if (at === 'me') {
         if (method === 'GET') return send(200, { principal: self, ...(subject.via.kind === 'key' ? { key: { id: subject.via.id, ...(subject.via.environment ? { environment: subject.via.environment } : {}) } } : {}), acts_for: actsFor, owners: principals.ownersOf(subject.id), keys: principals.keys(subject.id), requests: requests.list(subject.id, 'pending').map(row => viewRequest(row, origin, { code: true })) });
@@ -895,6 +871,38 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           auditLog.write(subject.id, 'link.issued', 'principal', id, { request: row.id });
           return send(201, { link: { id: made.id, request_id: made.request_id, expires_at: made.expires_at }, url: origin + '/requests/' + row.id + '#link=' + made.token, expires_at: made.expires_at });
         }
+        // Whom to seal a secret of this principal's for: itself, those who stand for it (a group's stewards), and
+        // Foundation when it acts for it.
+        if (part === 'principalRecipients' && method === 'GET') {
+          permit('write', 'secret', undefined, id);
+          const ids = [id, ...principals.stewardsOf(id), ...(authorization.can(keys.agentId, 'inject', 'principal', { id }) ? [keys.agentId] : [])];
+          return send(200, { recipients: ids.map(one => ({ principal_id: one, public_key: keys.publicKeyOf(one) })).filter(item => item.public_key).map(item => ({ ...item, public_key: item.public_key.toString('base64url') })) });
+        }
+        // Paying for more than the free part: a payment method set on Stripe's page, begun here and completed coming back.
+        if (part === 'principalPayment') {
+          permit('payment', 'principal', id);
+          if (method === 'GET') return send(200, { payment: payments.view(id) });
+          if (method === 'POST') {
+            await inputBody();
+            return send(200, { url: await payments.setup(id, { origin, email: emails.of(id)[0] }) });
+          }
+          if (method === 'PUT') {
+            const input = await inputBody();
+            const view = await payments.complete(id, input.session_id);
+            auditLog.write(subject.id, 'payment.set', 'principal', id, {});
+            return send(200, { payment: view });
+          }
+        }
+        // What this principal is using, and what it may use. Lending has a cost, so both sides can see it.
+        if (part === 'principalUsage' && method === 'GET') {
+          permit('usage', 'principal', id);
+          const kept = secrets.usage(id);
+          const space = objects.enabled ? await objects.usage(id) : null;
+          still();
+          return send(200, { secrets: { ...kept, count_max: SECRET_COUNT_MAX, bytes_max: SECRET_TOTAL_MAX },
+            objects: space ? { count: space.count, bytes: space.bytes, count_max: space.count_max, bytes_max: space.bytes_max } : null });
+        }
+        if (part === 'principalAuditLog' && method === 'GET') { permit('audit-log', 'principal', id); return send(200, { entries: auditLog.list(id) }); }
         // Computing this principal spent this month and may spend; its owner bounds it.
         if (part === 'compute') {
           if (method === 'GET') { permit('usage', 'principal', id); return send(200, { compute: environments.usage(id) }); }
@@ -1255,7 +1263,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
-      if (at === 'audit' && method === 'GET') { permit('audit-log', 'principal', subject.id); return send(200, { entries: auditLog.list(subject.id) }); }
       // The owner's screen, in one answer.
       if (at === 'export' && method === 'GET') {
         permit('export', 'principal', ownerId);
@@ -1362,15 +1369,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           result => requestActions.connect(flow.requestId, ownerId, flow.service, 'role', result, { requestedBy: flow.requestedBy, previous }));
         flows.drop(session.id, input.state);
         return send(200, { connection: connections.view(saved, { owner: true }) });
-      }
-      // What this owner is using, and what they may use. Lending has a cost, so both sides can see it.
-      if (at === 'usage' && method === 'GET') {
-        permit('usage', 'principal', ownerId);
-        const kept = secrets.usage(ownerId);
-        const space = objects.enabled ? await objects.usage(ownerId) : null;
-        still();
-        return send(200, { secrets: { ...kept, count_max: SECRET_COUNT_MAX, bytes_max: SECRET_TOTAL_MAX },
-          objects: space ? { count: space.count, bytes: space.bytes, count_max: space.count_max, bytes_max: space.bytes_max } : null });
       }
       // Injecting derives what each connection yields now: a secret its bytes, one for a service what its scheme
       // obtains. This is the one place a connection reaches a service.

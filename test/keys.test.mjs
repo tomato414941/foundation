@@ -49,7 +49,7 @@ test('宛先は持ち主と、持ち主の代わりに動くFoundationで、Foun
   const cookie = session.headers.getSetCookie()[0].split(';')[0], as = { headers: { cookie }, anonymous: true };
   const made = generateKey();
   assert.equal((await f.request('/v1/principals/me/key', { ...as, method: 'PUT', data: { public_key: b64(made.publicKey) } })).status, 200);
-  assert.deepEqual((await f.request('/v1/recipients', as)).json.recipients, [{ principal_id: USER_A, public_key: b64(made.publicKey) }], 'nobody but the owner');
+  assert.deepEqual((await f.request('/v1/principals/me/recipients', as)).json.recipients, [{ principal_id: USER_A, public_key: b64(made.publicKey) }], 'nobody but the owner');
   const sealed = await f.sealed('mine', as, [{ principal_id: USER_A, public_key: b64(made.publicKey) }]);
   const kept = await f.request('/v1/resources?kind=secret&name=mine', { ...as, method: 'PUT', data: sealed });
   assert.equal(kept.status, 200, kept.text);
@@ -60,7 +60,7 @@ test('宛先は持ち主と、持ち主の代わりに動くFoundationで、Foun
   assert.equal(plain.status, 403); assert.equal(plain.json.error.code, 'foundation_not_agent');
   // Made its agent, Foundation is a recipient of what is kept from then on, and opens what was sealed for it.
   await f.allowFoundation({ ...as, as: USER_A });
-  const recipients = (await f.request('/v1/recipients', as)).json.recipients.map(one => one.principal_id);
+  const recipients = (await f.request('/v1/principals/me/recipients', as)).json.recipients.map(one => one.principal_id);
   assert.deepEqual(recipients, [USER_A, f.app.keys.agentId]);
   assert.equal((await f.request('/v1/injections', { ...as, method: 'POST', data: { names: [{ name: 'mine', as: 'MINE' }] } })).json.error.code, 'not_sealed_for_foundation', 'sealed before Foundation was a recipient');
   const handed = await f.request('/v1/resources/' + kept.json.resource.id + '/envelopes/' + f.app.keys.agentId, { ...as, method: 'PUT', data: { wrapped: b64(resealed(sealed, made, f.app.keys.publicKeyOf(f.app.keys.agentId))) } });
@@ -93,7 +93,7 @@ test('封筒は共有できる者が渡し、Foundationに封をさせること�
   assert.equal((await f.request(path, { method: 'DELETE', data: {} })).status, 404);
   assert.equal((await f.request(path, { method: 'PUT', token: reader.json.token, anonymous: true, data: { wrapped: 'AAAA' } })).status, 403, 'only one who may share hands envelopes');
   assert.equal((await f.request(path, { method: 'PUT', data: { wrapped: '' } })).json.error.code, 'invalid_envelope');
-  const audit = (await f.request('/v1/audit-log')).json.entries.map(row => row.action).filter(action => action.startsWith('envelope.'));
+  const audit = (await f.request('/v1/principals/me/audit-log')).json.entries.map(row => row.action).filter(action => action.startsWith('envelope.'));
   assert.deepEqual(audit, ['envelope.dropped', 'envelope.kept']);
 });
 

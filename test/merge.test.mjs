@@ -47,7 +47,7 @@ test('別のアカウントをそのパスキーでまとめると、持ち物�
   assert.equal(f.app.emails.principalOf('other@example.test'), USER_A);
   assert.equal(f.app.principals.get(them.id), undefined, 'the other ended');
   assert.equal((await f.request('/v1/principals/me', them.as)).status, 401, 'and so did its sessions');
-  const log = (await f.request('/v1/audit-log')).json.entries.find(row => row.action === 'principal.merged');
+  const log = (await f.request('/v1/principals/me/audit-log')).json.entries.find(row => row.action === 'principal.merged');
   assert.equal(log.detail.from, them.id);
   // The passkey now signs this principal in.
   const signin = (await f.request('/v1/session', { method: 'POST', data: { kind: 'webauthn' }, anonymous: true })).json.options;

@@ -502,7 +502,7 @@ async function showSignin({ email = '', message = '' } = {}) {
 window.addEventListener('focus', () => { if (document.querySelector('#email-sent')) void refresh().catch(() => {}); });
 // The owner's objects: every page of the listing, and how much of the space they use.
 async function loadSpace(signal) {
-  const [listing, usage] = await Promise.all([api('/v1/resources?kind=object', { signal }), api('/v1/usage', { signal })]);
+  const [listing, usage] = await Promise.all([api('/v1/resources?kind=object', { signal }), api('/v1/principals/me/usage', { signal })]);
   const objects = listing.resources.map(item => ({ ...item, key: item.name, updated_at: Date.parse(item.updated_at) }));
   return { available: true, objects, usage: usage.objects };
 }
@@ -533,7 +533,7 @@ function showRefreshError(error, action = 'retry-page') {
 const SOURCES = {
   me: signal => api('/v1/principals/me', { signal }),
   credentials: signal => api('/v1/principals/me/credentials', { signal }).then(result => result.credentials),
-  payment: signal => api('/v1/payment', { signal }).then(result => result.payment),
+  payment: signal => api('/v1/principals/me/payment', { signal }).then(result => result.payment),
   secrets: signal => api('/v1/resources?kind=secret', { signal }).then(result => result.resources),
   connections: signal => api('/v1/resources?kind=connection', { signal }).then(result => result.resources),
   apps: signal => api('/v1/resources?kind=app', { signal }).then(result => result.resources),
@@ -783,7 +783,7 @@ function render() {
     const session = paymentReturn;
     paymentReturn = null;
     history.replaceState(null, '', '/account');
-    void api('/v1/payment/complete', { method: 'POST', data: { session_id: session } }).then(async () => { await refresh(); toast(t('client.payment.added')); }, error => toast(error.message));
+    void api('/v1/principals/me/payment', { method: 'PUT', data: { session_id: session } }).then(async () => { await refresh(); toast(t('client.payment.added')); }, error => toast(error.message));
   }
   if (page === 'account') {
     // The account itself: who this is, and the few things done to it rather than in it.
@@ -1581,7 +1581,7 @@ function addSecret() {
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.add'))}</button></form>`);
   bindForm(async (form) => {
     const name = form.get('name');
-    const { recipients } = await api('/v1/recipients');
+    const { recipients } = await api('/v1/principals/me/recipients');
     if (!recipients.length) throw new Error(t('client.secret.passkeyRequired'));
     await api('/v1/resources?' + new URLSearchParams({ kind: 'secret', name }), { method: 'PUT', data: await sealFor(new TextEncoder().encode(String(form.get('value'))), recipients) });
     closeDialog(); await refresh(); toast(t('client.common.addedName', { name: name }));
@@ -1742,7 +1742,7 @@ function bindSecretValue(entry, row) {
         if (!etag) throw new Error(t('client.secret.restartEdit'));
         const bytes = binary ? new Uint8Array(await file.arrayBuffer()) : content;
         // Sealed anew, for everyone who had it and everyone it is for now.
-        const named = (await api('/v1/recipients')).recipients;
+        const named = (await api('/v1/principals/me/recipients')).recipients;
         const sealed = await sealFor(bytes, [...recipients, ...named.filter(item => !recipients.some(one => one.principal_id === item.principal_id))]);
         const response = await fetch(path, { method: 'PUT', credentials: 'same-origin', cache: 'no-store',
           headers: { 'X-Foundation-Locale': i18n.language, 'content-type': 'application/json', 'if-match': etag }, body: JSON.stringify(sealed) });
@@ -1788,7 +1788,7 @@ document.addEventListener('click', async (event) => {
   try {
     if (action === 'close-dialog') closeDialog();
     if (action === 'add-passkey') addPasskey();
-    if (action === 'set-payment') { target.disabled = true; location.assign((await api('/v1/payment/setup', { method: 'POST', data: {} })).url); }
+    if (action === 'set-payment') { target.disabled = true; location.assign((await api('/v1/principals/me/payment', { method: 'POST', data: {} })).url); }
     if (action === 'remove-passkey') {
       const item = passkeys().find(entry => entry.id === id);
       if (item) confirmRemoval(t('client.common.deleteNameTitle', { name: item.name }), t('client.passkey.deleteWarning'), () => api('/v1/principals/me/credentials/' + encodeURIComponent(item.id), { method: 'DELETE', data: {} }));

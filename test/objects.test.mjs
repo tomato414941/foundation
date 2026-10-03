@@ -1,7 +1,7 @@
 import test from 'node:test';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
-import { fixture } from './helpers.mjs';
+import { fixture, USER_A } from './helpers.mjs';
 import { Objects, S3Space } from '../src/objects.mjs';
 import { fail } from '../src/errors.mjs';
 
@@ -165,7 +165,7 @@ test('says what an owner is using and what they may use', async (t) => {
   const f = await space(t);
   await f.request('/v1/resources?kind=object&name=a.txt', { method: 'PUT', token: KEY, raw: Buffer.from('12345'), type: 'text/plain' });
   await f.request('/v1/resources?kind=secret&name=notes/plan', { method: 'PUT', token: KEY, raw: 'abc', type: 'text/plain' });
-  const usage = await f.request('/v1/usage', { token: KEY });
+  const usage = await f.request('/v1/principals/' + USER_A + '/usage', { token: KEY });
   assert.equal(usage.status, 200, usage.text);
   assert.equal(usage.json.objects.count, 1);
   assert.equal(usage.json.objects.bytes, 5);

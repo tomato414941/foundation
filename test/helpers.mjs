@@ -122,7 +122,7 @@ export async function fixture(t, options = {}) {
   }
   async function sealed(content, options, recipients, also = []) {
     const own = await keyOf(options);
-    if (!recipients) { const listed = await request('/v1/recipients', { ...options, method: 'GET', data: undefined, raw: undefined }); recipients = listed.status === 200 ? listed.json.recipients : []; }
+    if (!recipients) { const listed = await request('/v1/principals/' + (options?.as ?? (options?.token && actsFor.get(options.token)) ?? 'me') + '/recipients', { ...options, method: 'GET', data: undefined, raw: undefined }); recipients = listed.status === 200 ? listed.json.recipients : []; }
     recipients = [...recipients, ...also.filter(one => !recipients.some(item => item.principal_id === one.principal_id))];
     // The placer is a recipient too: placing something new for another makes it the thing's editor.
     if (own && !recipients.some(item => item.principal_id === own.id)) recipients.push({ principal_id: own.id, public_key: b64(own.publicKey) });

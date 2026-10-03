@@ -84,7 +84,7 @@ globalThis.fetch = async (url, options = {}) => {
   else if (url === '/v1/functions') data = { functions: [] };
   else if (url === '/v1/environments') data = { environments: [] };
   else if (url === '/v1/services') data = { services: [] };
-  else if (url === '/v1/payment') data = { payment: { available: false, paying: false, payer: 'owner' } };
+  else if (url === '/v1/principals/me/payment') data = { payment: { available: false, paying: false, payer: 'owner' } };
   else if (url === '/v1/session' && options.method === 'GET') data = { available: true, pending: null };
   else if (url === '/v1/session' && options.method === 'POST' && JSON.parse(options.body).kind === 'webauthn') data = { options: { challenge: 'AAAAAAAA', allowCredentials: [] } };
   else if (url === '/v1/principals' && options.method === 'POST' && JSON.parse(options.body).kind === 'webauthn') data = { options: { challenge: 'AAAAAAAA', user: { id: 'b3duZXI', name: 'Keeper Sirius', displayName: 'Keeper Sirius' } } };
@@ -94,7 +94,7 @@ globalThis.fetch = async (url, options = {}) => {
   else if (url === '/v1/requests/' + id) data = { request };
   else if (url.endsWith('/deny')) { await new Promise(resolve => { release = resolve; }); request.status = 'denied'; data = {}; }
   else if (url.startsWith('/v1/resources?')) data = { resources: [] };
-  else if (url === '/v1/usage') data = { objects: { count: 0, bytes: 0, bytes_max: 1024, count_max: 100 } };
+  else if (url === '/v1/principals/me/usage') data = { objects: { count: 0, bytes: 0, bytes_max: 1024, count_max: 100 } };
   else throw new Error('Unexpected API operation: ' + url);
   return { ok: status < 400, status, json: async () => data };
 };

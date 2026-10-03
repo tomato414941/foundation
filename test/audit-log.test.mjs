@@ -11,7 +11,7 @@ async function deliver(f, key, owner, name) {
 }
 
 async function deliveries(f, options) {
-  const response = await f.request('/v1/audit-log', options);
+  const response = await f.request('/v1/principals/me/audit-log', options);
   assert.equal(response.status, 200, response.text);
   return response.json.entries.filter(row => row.action === 'injection');
 }

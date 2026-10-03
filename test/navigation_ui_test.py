@@ -82,7 +82,7 @@ with sync_playwright() as p:
     page.set_viewport_size({'width': 1280, 'height': 900})
     # 必要な部分を読み込み表示にし、取得後に一覧へ切り替える。
     pending = []
-    page.route('**/v1/usage', lambda route: pending.append(route))
+    page.route('**/v1/principals/me/usage', lambda route: pending.append(route))
     go('オブジェクト')
     expect(page.get_by_role('status', name='読み込み中')).to_be_visible()
     expect(page.get_by_role('navigation')).to_be_visible()
@@ -90,7 +90,7 @@ with sync_playwright() as p:
     assert pending
     for route in pending:
         route.continue_()
-    page.unroute('**/v1/usage')
+    page.unroute('**/v1/principals/me/usage')
     expect(page.get_by_role('table')).to_be_visible()
     page.wait_for_load_state('networkidle')
     print('オブジェクトの取得中も見出しとメニューを表示し、取得後に一覧を表示する。')
@@ -161,11 +161,11 @@ with sync_playwright() as p:
 
     # 取得に失敗した場合は、その場所からやり直す。
     page.goto(args.base + '/secrets', wait_until='networkidle')
-    page.route('**/v1/usage', lambda route: route.fulfill(status=503, json={'error': {'message': '一時的に取得できません。'}}))
+    page.route('**/v1/principals/me/usage', lambda route: route.fulfill(status=503, json={'error': {'message': '一時的に取得できません。'}}))
     go('オブジェクト')
     retry = page.get_by_role('button', name='再読み込み', exact=True)
     expect(retry).to_be_enabled()
-    page.unroute('**/v1/usage')
+    page.unroute('**/v1/principals/me/usage')
     retry.click()
     expect(page.get_by_role('table')).to_be_visible()
     print('取得の失敗を表示し、再読み込みで一覧を表示する。')
