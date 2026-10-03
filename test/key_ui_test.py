@@ -50,13 +50,13 @@ with sync_playwright() as p:
 
     # A new value is written over the old without reading it; the old one is loaded only when asked for.
     page.reload(wait_until='networkidle')
-    row.get_by_role('button', name='値を編集', exact=True).click()
+    row.get_by_role('button', name='値を差し替える', exact=True).click()
     field = row.get_by_role('textbox', name='値', exact=True)
     expect(field).to_have_value('')
     field.fill('second-value')
     row.get_by_role('button', name='保存', exact=True).click()
     expect(page.get_by_text('保存しました', exact=False).first).to_be_visible()
-    row.get_by_role('button', name='値を編集', exact=True).click()
+    row.get_by_role('button', name='値を差し替える', exact=True).click()
     row.get_by_role('button', name='今の値を読み込む', exact=True).click()
     expect(field).to_have_value('second-value')
     row.get_by_role('button', name='キャンセル', exact=True).click()

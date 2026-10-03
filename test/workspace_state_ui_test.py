@@ -71,8 +71,8 @@ with sync_playwright() as p:
     name_form = name_row.get_by_role('form', name='名前の変更')
     name_form.get_by_role('textbox', name='名前', exact=True).fill('saved-name')
     value_row = page.get_by_role('article', name='value-draft', exact=True)
-    value_row.get_by_role('button', name='値を編集', exact=True).click()
-    value_form = value_row.get_by_role('form', name='値の編集')
+    value_row.get_by_role('button', name='値を差し替える', exact=True).click()
+    value_form = value_row.get_by_role('form', name='値の差し替え')
     value_form.get_by_role('textbox', name='値', exact=True).fill('unsaved-value')
     page.get_by_role('heading', name='シークレット', exact=True).click()
     keep('secret', 'arrived-while-editing')
@@ -93,7 +93,7 @@ with sync_playwright() as p:
     value_form.get_by_role('button', name='キャンセル', exact=True).click()
     expect(page.get_by_role('heading', name='arrived-after-refresh', exact=True)).to_be_visible()
     expect(page.get_by_role('heading', name='arrived-while-editing', exact=True)).to_be_visible()
-    expect(value_row.get_by_role('button', name='値を編集', exact=True)).to_be_focused()
+    expect(value_row.get_by_role('button', name='値を差し替える', exact=True)).to_be_focused()
     print('フォーカス移動・保存失敗・他の編集の保存後も下書きを保ち、全編集終了後に最新情報を取得する。')
 
     # 値の読み込み中に背景更新が終わっても、そのまま編集して保存する。
@@ -104,7 +104,7 @@ with sync_playwright() as p:
     content_pattern = '**/v1/resources/' + value_resource['id'] + '/content'
     page.route(content_pattern, lambda route: content.append(route))
     go('シークレット')
-    value_row.get_by_role('button', name='値を編集', exact=True).click()
+    value_row.get_by_role('button', name='値を差し替える', exact=True).click()
     value_row.get_by_role('button', name='今の値を読み込む', exact=True).click()
     keep('secret', 'arrived-during-value-load')
     # Two reads wait: the revision the editor replaces, and the value asked for.
@@ -118,7 +118,7 @@ with sync_playwright() as p:
     page.get_by_role('heading', name='シークレット', exact=True).click()
     value_form.get_by_role('button', name='保存', exact=True).click()
     expect(page.get_by_role('heading', name='arrived-during-value-load', exact=True)).to_be_visible()
-    expect(value_row.get_by_role('button', name='値を編集', exact=True)).to_be_focused()
+    expect(value_row.get_by_role('button', name='値を差し替える', exact=True)).to_be_focused()
     saved = injected(context.request, args.base, 'value-draft')
     assert saved.text() == 'saved-value'
     print('値の取得中から保存まで編集を継続する。')
@@ -148,7 +148,7 @@ with sync_playwright() as p:
     page.unroute('**/v1/overview')
     page.get_by_role('button', name='再読み込み', exact=True).click()
     expect(page.get_by_role('heading', name='saved-name', exact=True)).to_be_visible()
-    # 読み込み直した画面では、鍵を開き直してから値を編集する。
+    # 読み込み直した画面では、鍵を開き直してから値を差し替えるする。
     unlock(page, args.base)
 
     # キャッシュ済みの画面と編集中の値は、背景通信の失敗時にも操作を続けられる。
@@ -157,7 +157,7 @@ with sync_playwright() as p:
     pending = []
     page.route('**/v1/overview', lambda route: pending.append(route))
     go('シークレット')
-    value_row.get_by_role('button', name='値を編集', exact=True).click()
+    value_row.get_by_role('button', name='値を差し替える', exact=True).click()
     value_form.get_by_role('textbox', name='値', exact=True).fill('retained-after-error')
     for route in pending:
         route.fulfill(status=503, json={'error': {'message': '通信を再試行してください。'}})

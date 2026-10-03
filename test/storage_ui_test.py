@@ -104,7 +104,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     expect(github.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
     expect(github.get_by_text(f'{len(SECRET)} バイト', exact=True)).to_be_visible()
     expect(release.get_by_role('heading', name='release/2026-09-23', exact=True)).to_be_visible()
-    expect(release.get_by_role('button', name='値を編集', exact=True)).to_be_visible()
+    expect(release.get_by_role('button', name='値を差し替える', exact=True)).to_be_visible()
     assert SECRET not in page.locator('body').inner_text(), 'what is kept is never on the page itself'
 
     review(page)
@@ -180,7 +180,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     expect(github.locator('.kept-document')).to_have_text('••••••••')
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
-        for label in ['値を表示', 'コピー', '値を編集']:
+        for label in ['値を表示', 'コピー', '値を差し替える']:
             expect(github.get_by_role('button', name=label, exact=True)).to_be_visible()
         value_box = github.locator('.secret-value-panel').bounding_box()
         metadata_box = github.locator('.secret-meta').bounding_box()
@@ -207,7 +207,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
 
     # Editing writes a new value without reading the old; the old one is loaded only when asked for.
     # Cancelling preserves the value; saving replaces only its bytes.
-    github.get_by_role('button', name='値を編集', exact=True).click()
+    github.get_by_role('button', name='値を差し替える', exact=True).click()
     value_input = github.get_by_role('textbox', name='値', exact=True)
     expect(value_input).to_have_value('')
     github.get_by_role('button', name='今の値を読み込む', exact=True).click()
@@ -215,11 +215,11 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     value_input.fill('cancel this draft')
     github.get_by_role('button', name='キャンセル', exact=True).click()
     assert read(page, 'github/gh-token').text() == SECRET
-    github.get_by_role('button', name='値を編集', exact=True).click()
+    github.get_by_role('button', name='値を差し替える', exact=True).click()
     value_input.fill('escape this draft')
     value_input.press('Escape')
     expect(github.locator('.kept-document')).to_have_text('••••••••')
-    github.get_by_role('button', name='値を編集', exact=True).click()
+    github.get_by_role('button', name='値を差し替える', exact=True).click()
     updated = '  {\n  "token": "new-value",\n  "note": "<img src=x onerror=window.valueXss=1>"\n}\n'
     value_input.fill(updated)
     for width in [1280, 390, 320]:
@@ -249,7 +249,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     github.get_by_role('button', name='値を隠す', exact=True).click()
 
     # Another writer wins over a stale editor, which keeps the owner's draft for recovery.
-    github.get_by_role('button', name='値を編集', exact=True).click()
+    github.get_by_role('button', name='値を差し替える', exact=True).click()
     value_input.fill('my pending value')
     api('PUT', '/v1/resources?kind=secret&name=github/gh-token', b'newer value')
     github.get_by_role('button', name='保存', exact=True).click()
@@ -261,20 +261,20 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     # Readable text retains its access setting and unchanged CRLF/BOM bytes survive an edit/save.
     unchanged = '\ufefffirst\r\nsecond\r\n'
     api('PUT', '/v1/resources?kind=secret&name=release/2026-09-23', unchanged.encode('utf-8'))
-    release.get_by_role('button', name='値を編集', exact=True).click()
+    release.get_by_role('button', name='値を差し替える', exact=True).click()
     release.get_by_role('button', name='今の値を読み込む', exact=True).click()
     expect(release.get_by_role('textbox', name='値', exact=True)).not_to_have_value('')
     release.get_by_role('button', name='保存', exact=True).click()
-    expect(release.get_by_role('button', name='値を編集', exact=True)).to_be_visible()
+    expect(release.get_by_role('button', name='値を差し替える', exact=True)).to_be_visible()
     assert read(page, 'release/2026-09-23').body() == unchanged.encode('utf-8')
-    release.get_by_role('button', name='値を編集', exact=True).click()
+    release.get_by_role('button', name='値を差し替える', exact=True).click()
     release.get_by_role('textbox', name='値', exact=True).fill('updated readable value')
     release.get_by_role('button', name='保存', exact=True).click()
-    expect(release.get_by_role('button', name='値を編集', exact=True)).to_be_visible()
+    expect(release.get_by_role('button', name='値を差し替える', exact=True)).to_be_visible()
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # Changing one name leaves a different row's draft in place.
-    github.get_by_role('button', name='値を編集', exact=True).click()
+    github.get_by_role('button', name='値を差し替える', exact=True).click()
     value_input.fill('keep my draft')
     expect(github.get_by_role('button', name='名前を編集', exact=True)).to_be_disabled()
     release.get_by_role('button', name='名前を編集', exact=True).click()
@@ -283,10 +283,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     release = page.get_by_role('article', name='release note', exact=True)
     expect(release.get_by_role('heading', name='release note', exact=True)).to_be_visible()
     expect(value_input).to_have_value('keep my draft')
-    release.get_by_role('button', name='値を編集', exact=True).click()
+    release.get_by_role('button', name='値を差し替える', exact=True).click()
     release.get_by_role('textbox', name='値', exact=True).fill('second row value')
     release.get_by_role('button', name='保存', exact=True).click()
-    expect(release.get_by_role('button', name='値を編集', exact=True)).to_be_visible()
+    expect(release.get_by_role('button', name='値を差し替える', exact=True)).to_be_visible()
     expect(value_input).to_have_value('keep my draft')
     github.get_by_role('button', name='キャンセル', exact=True).click()
 
@@ -341,7 +341,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     with page.expect_download() as download_info:
         binary_row.get_by_role('button', name='ダウンロード', exact=True).click()
     assert Path(download_info.value.path()).read_bytes() == binary
-    binary_row.get_by_role('button', name='値を編集', exact=True).click()
+    binary_row.get_by_role('button', name='値を差し替える', exact=True).click()
     replaced = b'\x00\xfe\x01replacement'
     binary_row.get_by_label('ファイル', exact=True).set_input_files({'name': 'connection.bin', 'mimeType': 'application/octet-stream', 'buffer': replaced})
     binary_row.get_by_role('button', name='保存', exact=True).click()

@@ -224,6 +224,7 @@ const icon = (name) => {
   const paths = {
     plus: '<path d="M12 5v14M5 12h14"/>', close: '<path d="m6 6 12 12M6 18 18 6"/>',
     mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+    replace: '<path d="M4 8h15l-3.5-3.5M20 16H5l3.5 3.5"/>',
     device: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>',
     arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>', check: '<path d="m5 12 4 4L19 6"/>',
     lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
@@ -1624,7 +1625,7 @@ function bindSecretValue(entry, row) {
     panel.innerHTML = `<div class="secret-value-line">${binary ? `<span class="secret-file">${icon('note')}${esc(t('client.common.file'))}</span>`
       : `<pre class="kept-document${revealed ? '' : ' secret-mask'}" aria-label="${revealed ? t('client.secret.value') : t('client.secret.hiddenValue')}">${revealed ? esc(text) : '••••••••'}</pre>`}<div class="secret-value-actions">${binary
       ? control('download', t('client.common.download'), 'download')
-      : control('reveal', revealed ? t('client.secret.hideValue') : t('client.secret.showValue'), revealed ? 'eye-off' : 'eye') + control('copy', t('client.common.copy'), 'copy')}${control('edit', t('client.secret.editValue'), 'edit')}</div></div><p class="form-error" role="alert"></p>`;
+      : control('reveal', revealed ? t('client.secret.hideValue') : t('client.secret.showValue'), revealed ? 'eye-off' : 'eye') + control('copy', t('client.common.copy'), 'copy')}${control('edit', t('client.secret.editValue'), 'replace')}</div></div><p class="form-error" role="alert"></p>`;
     panel.querySelectorAll('[data-value-action]').forEach(button => button.addEventListener('click', async () => {
       if (busy) return;
       const action = button.dataset.valueAction;
