@@ -46,7 +46,14 @@ test('初めて確かめたアドレスは新しいプリンシパルになり�
   await send(f);
   const again = await f.request('/v1/principals/me', { headers: { cookie: sessionCookie(await verify(f)) } });
   assert.match(first.json.principal.id, /^[0-9a-f-]{36}$/);
+  assert.match(first.json.principal.name, /^[A-Z][A-Za-z' ]+ [A-Z][A-Za-z' ]+$/, 'it is given a name, drawn as for any other');
   assert.equal(again.json.principal.id, first.json.principal.id);
+  assert.equal(again.json.principal.name, first.json.principal.name, 'and keeps it');
+  // One made before names were given gets one the next time it signs in.
+  f.app.principals.rename(first.json.principal.id, '');
+  await age(f, 60_001);
+  await send(f);
+  assert.match((await f.request('/v1/principals/me', { headers: { cookie: sessionCookie(await verify(f)) } })).json.principal.name, /^[A-Z][A-Za-z' ]+ [A-Z][A-Za-z' ]+$/);
   await send(f, 'someone@example.test');
   const other = await f.request('/v1/principals/me', { headers: { cookie: sessionCookie(await verify(f, f.mailer.link('someone@example.test'))) } });
   assert.notEqual(other.json.principal.id, first.json.principal.id);

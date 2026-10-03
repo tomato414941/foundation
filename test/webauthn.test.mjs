@@ -113,7 +113,7 @@ test('WebAuthnの資格情報だけで新しいプリンシパルになり、ブ
   const made = createCredential(asked.json.options, f.base);
   const browser = await f.request('/v1/principals', { method: 'PUT', anonymous: true, data: { kind: 'webauthn', name: 'この端末', credential: made.response, return_to: '/secrets' } });
   assert.equal(browser.status, 201, browser.text);
-  assert.equal(browser.json.principal.name, '', 'the name is the client\'s to give, from the options');
+  assert.match(browser.json.principal.name, /^[A-Z][A-Za-z' ]+ [A-Z][A-Za-z' ]+$/, 'one that gives no name is given one, drawn as for any other');
   assert.match(asked.json.options.user.name, /^[A-Z][A-Za-z' ]+ [A-Z][A-Za-z' ]+$/, 'a role at a star, drawn for the passkey\'s label');
   assert.equal(asked.json.options.user.displayName, asked.json.options.user.name);
   assert.equal((await f.request('/v1/principals/me', { method: 'PATCH', data: { name: 'はじめての人' }, headers: { cookie: browser.headers.getSetCookie().find(v => v.startsWith('fdn_session='))?.split(';')[0] ?? '' }, anonymous: true })).json.principal.name, 'はじめての人');

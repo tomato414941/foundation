@@ -385,6 +385,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const row = challenges.waiting(handle);
         return row ? { email: row.subject, expires_at: row.expires_at, resend_at: row.created_at + RESEND_WAIT } : null;
       };
+      // However one became a principal, it has a name: one that has none yet is given one, drawn as for any other.
+      const nameUnnamed = id => { const row = principals.get(id); if (row && !row.name) principals.rename(id, principalName()); };
       // The session: what proving an entry makes. Reading says what can be proven here and what is being waited for.
       // It also says who the caller is and what it came in by, when it came in by anything.
       if (at === 'session' && method === 'GET') {
@@ -418,11 +420,12 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const principalId = store.transaction(() => {
           const known = emails.principalOf(email);
           if (known) return known;
-          const made = principals.ensure(randomUUID());
+          const made = principals.ensure(randomUUID(), principalName());
           emails.add(made.id, email);
           auditLog.write(made.id, 'principal.created', 'principal', made.id, { kind: 'email' });
           return made.id;
         });
+        nameUnnamed(principalId);
         const next = sessions.create(principalId, { proof: 'email', ref: email });
         sessions.remove(cookieToken(req));
         setCookie(next, SESSION_AGE);
@@ -465,6 +468,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         if (!asToken) requireOrigin(req, origin);
         const destination = asToken ? '/' : returnPath(input?.return_to);
         const proven = await webauthn.authenticate(input?.credential, { origin });
+        nameUnnamed(proven.principalId);
         if (asToken) {
           const token = sessions.create(proven.principalId, { proof: 'webauthn', ref: proven.credentialId }, { ttl: TOKEN_TTL });
           return send(200, { token, expires_at: Date.now() + TOKEN_TTL });
@@ -518,7 +522,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         }
         if (method === 'PUT' && input.kind === 'webauthn') {
           rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
-          const asToken = input.session === 'token', name = input.principal_name === undefined ? '' : nameValue(input.principal_name);
+          const asToken = input.session === 'token', name = input.principal_name === undefined ? principalName() : nameValue(input.principal_name);
           if (!asToken) requireOrigin(req, origin);
           const destination = asToken ? '/' : returnPath(input.return_to);
           const made = await webauthn.register(input.credential, { origin, name: input.name, make: id => {
@@ -536,7 +540,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         if (method === 'POST' && input.kind === 'key') {
           rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
           const made = store.transaction(() => {
-            const principal = principals.ensure(randomUUID(), nameValue(input.name, '相手'));
+            const principal = principals.ensure(randomUUID(), input.name === undefined ? principalName() : nameValue(input.name));
             return { principal, issued: principals.issueKey(principal.id) };
           });
           auditLog.write(made.principal.id, 'principal.created', 'principal', made.principal.id, { credential: made.issued.id, kind: 'key' });
@@ -668,7 +672,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const input = await inputBody();
         const alias = input.alias === undefined ? undefined : nameValue(input.alias);
         const made = store.transaction(() => {
-          const made = principals.create(subject.id, { name: input.name === undefined ? (alias ?? '相手') : nameValue(input.name), alias });
+          const made = principals.create(subject.id, { name: input.name === undefined ? (alias ?? principalName()) : nameValue(input.name), alias });
           if (input.agent === true) principals.relate(made.id, 'agent', 'principal', subject.id);
           // Made as a group (steward: true): its maker stands as it, until others are made stewards too. A principal made
           // for someone else to come in as (an app's user, given a key later) is nobody's to stand as.
