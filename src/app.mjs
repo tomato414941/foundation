@@ -1017,7 +1017,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         return kind;
       };
       if (at === 'resources' && method === 'GET') {
-        if (url.searchParams.get('shown') === 'me') { permit('shown', 'principal', ownerId); return send(200, { resources: principals.shownTo(ownerId) }); }
         const kind = resourceKind(false), name = url.searchParams.get('name') ?? undefined, prefix = url.searchParams.get('prefix') ?? undefined;
         const kinds = kind ? [kind] : KINDS;
         for (const one of kinds) permit('list', one);

@@ -300,11 +300,20 @@ async function main() {
     console.log(JSON.stringify(answer, null, 2));
     return;
   }
+  // What others hold and this machine has a line onto: the things at the far end of the lines it is at the near end of.
+  const shownToMe = async () => {
+    const things = [];
+    for (let after = null; ;) {
+      const page = await send('/v1/principals/me/relations?direction=from&limit=200' + (after ? '&after=' + encodeURIComponent(after) : ''), undefined, { method: 'GET', accept: () => true });
+      things.push(...(page.relations ?? []).filter(line => line.resource).map(line => line.resource));
+      if (!(after = page.next)) return things;
+    }
+  };
   // Reading a secret this machine was handed an envelope for: its own, or one shown to it along a line.
   if (action === 'read') {
     if (!key.own) throw new Error('This machine has no key of its own here, so nothing sealed for it can be opened.');
     const own = await send('/v1/principals/me/resources?kind=secret&name=' + encodeURIComponent(call.name), undefined, { method: 'GET', accept: () => true });
-    const resource = own.resource ?? (await send('/v1/principals/me/resources?shown=me', undefined, { method: 'GET' })).resources.find(item => item.kind === 'secret' && item.name === call.name);
+    const resource = own.resource ?? (await shownToMe()).find(item => item.kind === 'secret' && item.name === call.name);
     if (!resource) throw new Error('No secret named ' + JSON.stringify(call.name) + ' is kept by this machine or shown to it.');
     const kept = await send('/v1/resources/' + resource.id + '/content', undefined, { method: 'GET' });
     if (!kept.envelope) throw new Error('No envelope was made for this machine: it may read about this secret, but was not handed its key.');
@@ -344,7 +353,7 @@ async function main() {
   const handed = { environment: {}, files: [] };
   let asked = names;
   if (key.own && names.some(item => typeof item.name === 'string')) {
-    const shown = owner ? (await send('/v1/principals/me/resources?shown=me', undefined, { method: 'GET', accept: () => true })).resources ?? [] : [];
+    const shown = owner ? await shownToMe() : [];
     asked = [];
     for (const item of names) {
       let resource = null;

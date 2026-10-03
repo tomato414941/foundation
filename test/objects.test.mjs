@@ -202,8 +202,8 @@ test('置いたものは ID で共有でき、見せられた相手は同じも�
   const token = made.json.token, id = made.json.principal.id;
   assert.equal((await f.request('/v1/resources/' + put.json.resource.id + '/content', { token, anonymous: true })).status, 403, 'nothing before a line is drawn');
   assert.equal((await f.request('/v1/principals/' + id + '/relations', { method: 'POST', data: { relation: 'viewer', object_type: 'resource', object_id: put.json.resource.id } })).status, 201);
-  const shown = await f.request('/v1/principals/me/resources?shown=me', { token, anonymous: true });
-  assert.deepEqual(shown.json.resources.map(row => [row.id, row.kind, row.name, row.relation]), [[put.json.resource.id, 'object', 'plan.md', 'viewer']]);
+  const shown = await f.request('/v1/principals/me/relations?direction=from', { token, anonymous: true });
+  assert.deepEqual(shown.json.relations.map(line => [line.resource.id, line.resource.kind, line.resource.name, line.resource.owner_id, line.relation]), [[put.json.resource.id, 'object', 'plan.md', USER_A, 'viewer']]);
   const read = await f.request('/v1/resources/' + put.json.resource.id + '/content', { token, anonymous: true });
   assert.equal(read.status, 200); assert.equal(read.text, '# plan'); assert.equal(read.headers.get('content-type'), 'text/markdown');
   assert.equal((await f.request('/v1/resources/' + put.json.resource.id + '/content', { method: 'PUT', raw: Buffer.from('# changed'), type: 'text/markdown', token, anonymous: true })).status, 403, 'a viewer does not write');

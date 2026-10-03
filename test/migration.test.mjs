@@ -299,7 +299,7 @@ test('31版のシークレットと固定トークンを値・ID・共有権限�
   assert.deepEqual(JSON.parse(store.db.prepare("SELECT result FROM requests WHERE id='request-done'").get().result), { connection_id: 'single' });
   assert.deepEqual({ ...store.db.prepare("SELECT type,status,user_code FROM requests WHERE id='request-done'").get() }, { type: 'connection', status: 'granted', user_code: null }, 'a request says what it asks as a detail, and is granted');
   assert.deepEqual(store.db.prepare('PRAGMA foreign_key_check').all(), []);
-  assert.deepEqual(principals.shownTo(old.reader).filter(row => row.id === 'plain').map(row => row.kind), ['secret', 'secret']);
+  assert.deepEqual(principals.lines(old.reader, { direction: 'from' }).relations.filter(line => line.resource?.id === 'plain').map(line => line.resource.kind), ['secret', 'secret']);
 });
 
 test('移行で値を復号できない場合は全体をロールバックして以前のデータを保持する', async t => {

@@ -111,7 +111,7 @@ export class Principals {
       .all({ id, from: from ? 1 : 0, to: to ? 1 : 0, relation: relation ?? null, after: after ?? 0, limit: limit + 1 });
     const page = rows.slice(0, limit);
     const named = other => { const row = this.db.prepare('SELECT id, name FROM principals WHERE id=?').get(other); return row ? { id: row.id, name: row.name } : { id: other, name: '' }; };
-    const thing = other => { const row = this.db.prepare('SELECT id, kind, name FROM resources WHERE id=?').get(other); return row ? { id: row.id, kind: row.kind, name: row.name } : { id: other, kind: null, name: '' }; };
+    const thing = other => { const row = this.db.prepare('SELECT id, owner_id, kind, name FROM resources WHERE id=?').get(other); return row ? { id: row.id, kind: row.kind, name: row.name, owner_id: row.owner_id } : { id: other, kind: null, name: '', owner_id: null }; };
     return { relations: page.map(row => {
       const outward = row.subject_id === id;
       // What an owner calls what it owns is the owner's word, kept beside the line of ownership.
@@ -123,12 +123,6 @@ export class Principals {
   // Lines onto one resource: who may see or change it.
   linesOnto(resourceId) {
     return this.db.prepare("SELECT subject_id,relation,created_at FROM relations WHERE object_type='resource' AND object_id=? ORDER BY created_at").all(resourceId);
-  }
-  // What others hold and show to this principal, with the line it is shown along.
-  shownTo(id) {
-    return this.db.prepare(`SELECT x.id, x.owner_id, x.kind, x.name, COALESCE(o.size, s.size) AS size, o.type, x.updated_at, l.relation FROM relations l JOIN resources x ON x.id=l.object_id
-      LEFT JOIN objects o ON o.resource_id=x.id LEFT JOIN secrets s ON s.resource_id=x.id
-      WHERE l.subject_id=? AND l.object_type='resource' ORDER BY l.created_at`).all(id);
   }
   stewardsOf(id) { return this.db.prepare("SELECT subject_id AS id FROM relations WHERE relation='steward' AND object_type='principal' AND object_id=?").all(id).map(row => row.id); }
   ownersOf(id) { return this.db.prepare("SELECT subject_id AS id FROM relations WHERE relation='owner' AND object_type='principal' AND object_id=?").all(id).map(row => row.id); }
