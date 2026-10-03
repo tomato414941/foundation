@@ -108,6 +108,7 @@ export class Objects {
   }
   // bytes: what this owner would keep; the ceiling is the payer's, over everyone it pays for.
   fits(ownerId, bytes, added) {
+    this.payments.needsPayer(ownerId, 'ファイルを置く');
     const paying = this.payments.paying(ownerId), payer = this.payments.payerOf(ownerId);
     if (!paying && added > 0 && this.freeBytes() + added > OBJECT_FREE_POOL) fail(402, 'payment_required', '今月の無料枠はすべて使われました。支払い方法を登録すると、続けて使えます。');
     const own = this.db.prepare(`SELECT COALESCE(SUM(o.size),0) AS bytes ${FROM} WHERE h.owner_id=?`).get(ownerId).bytes;

@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
         return json.loads(result.stdout.split('\n\nKey file')[0]) if success else None
 
     # 1. A new key asks only to be approved. The owner types the code; nothing is registered here.
-    request = cli('connect', '--name', 'laptop のAI')['request']
+    cli('start', '--name', 'laptop のAI'); request = cli('join')['request']
     assert '/requests/' in request['verification_uri'] and request['user_code']
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 1050})
@@ -152,7 +152,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_role('heading', name='依頼は取り消されました', exact=True)).to_be_visible()
 
     # 4. The same identity and key remain: it may ask for access again, and the owner may refuse.
-    request = cli('connect', '--name', 'laptop のAI')['request']
+    request = cli('join')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='アクセスを許可する', exact=True)).to_be_visible()
     expect(page.get_by_text('laptop のAIの依頼', exact=True)).to_be_visible()
@@ -161,7 +161,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     assert cli('api', 'GET', '/v1/principals/me')['acts_for'] == []
 
     # 5. Approved again, the key asks for a metadata-only Gmail scope: another request, its own registration.
-    request = cli('connect', '--name', 'laptop のAI')['request']
+    request = cli('join')['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     page.get_by_label('確認コード', exact=True).fill(request['user_code'])
     page.get_by_role('button', name='許可する', exact=True).click()

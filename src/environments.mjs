@@ -58,7 +58,7 @@ export class Environments {
   // What is spent is counted for the payer, over everyone it pays for; the limit is the principal's own, under the
   // payer's ceiling.
   usage(principalId, now = Date.now()) {
-    const family = this.payments.family(this.payments.payerOf(principalId)), marks = family.map(() => '?').join(',');
+    const payer = this.payments.payerOf(principalId), family = payer === null ? [principalId] : this.payments.family(payer), marks = family.map(() => '?').join(',');
     const spent = this.db.prepare(`SELECT COALESCE(SUM(seconds),0) AS seconds FROM compute_usage WHERE month=? AND principal_id IN (${marks})`).get(month(now), ...family).seconds;
     const running = this.db.prepare(`SELECT e.size,e.started_at ${FROM} WHERE e.status<>'stopped' AND r.owner_id IN (${marks})`).all(...family)
       .reduce((total, row) => total + Math.ceil((now - row.started_at) / 1000) * SIZES[row.size], 0);
@@ -84,6 +84,7 @@ export class Environments {
     return { seconds: spent + running.reduce((total, row) => total + Math.ceil((now - row.started_at) / 1000) * SIZES[row.size], 0), machines: running.length };
   }
   within(ownerId) {
+    this.payments.needsPayer(ownerId, '環境を使う');
     if (!this.payments.paying(ownerId)) {
       const shared = this.freeUsage();
       if (shared.seconds >= this.limits.freePoolSeconds || shared.machines >= this.limits.freeConcurrent) fail(402, 'payment_required', '今月の無料枠はすべて使われました。支払い方法を登録すると、続けて使えます。');

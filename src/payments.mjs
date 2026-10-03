@@ -52,20 +52,27 @@ export class Stripe {
 export class Payments {
   constructor(store, stripe) { Object.assign(this, { store, db: store.db, stripe, sending: null }); }
   account(principalId) { return this.db.prepare('SELECT * FROM payment_accounts WHERE principal_id=?').get(principalId); }
-  // Who pays for a principal's use: the one that took it on (a payer line), else its owner's payer, else itself. Every
-  // principal has one; the free part and the ceiling are counted for the payer, over all it pays for.
+  // Whether a principal can stand as a payer: it has registered a payment method here, so there is someone to charge.
+  // Anyone may make a principal and nobody has to say who they are; what costs money needs a payer.
+  payer(principalId) { return Boolean(this.account(principalId)?.subscription_id); }
+  // Who pays for a principal's use: the one that took it on (a payer line), else its owner's payer, else itself if it
+  // is a payer, else nobody (null). The free part and the ceiling are counted for the payer, over all it pays for; a
+  // principal with no payer keeps secrets and acts for others, and uses nothing metered in its own name.
   payerOf(principalId, seen = new Set()) {
-    if (seen.has(principalId)) return principalId;
+    if (seen.has(principalId)) return this.payer(principalId) ? principalId : null;
     seen.add(principalId);
     const payer = this.db.prepare("SELECT subject_id FROM relations WHERE relation='payer' AND object_type='principal' AND object_id=? ORDER BY created_at LIMIT 1").get(principalId)?.subject_id;
     if (payer) return this.payerOf(payer, seen);
     const owner = this.db.prepare("SELECT subject_id FROM relations WHERE relation='owner' AND object_type='principal' AND object_id=? ORDER BY created_at LIMIT 1").get(principalId)?.subject_id;
-    return owner ? this.payerOf(owner, seen) : principalId;
+    if (owner) return this.payerOf(owner, seen);
+    return this.payer(principalId) ? principalId : null;
   }
   // Everyone a payer pays for, itself included.
-  family(payerId) { return this.db.prepare('SELECT id FROM principals').all().map(row => row.id).filter(id => this.payerOf(id) === payerId); }
+  family(payerId) { return payerId === null ? [] : this.db.prepare('SELECT id FROM principals').all().map(row => row.id).filter(id => this.payerOf(id) === payerId); }
+  // What is metered is refused where nobody pays for it.
+  needsPayer(principalId, what) { if (this.payerOf(principalId) === null) fail(402, 'payer_required', what + 'には支払い方法の登録が必要です。登録すると無料枠から使えます。'); }
   // Whether a principal's use can be charged: its payer has a payment method and a subscription to charge it to.
-  paying(principalId) { const row = this.account(this.payerOf(principalId)); return Boolean(row?.subscription_id && CHARGEABLE.includes(row.status)); }
+  paying(principalId) { const payer = this.payerOf(principalId); if (payer === null) return false; const row = this.account(payer); return Boolean(row?.subscription_id && CHARGEABLE.includes(row.status)); }
   view(principalId) { return { available: this.stripe.enabled, paying: this.paying(principalId), payer: this.payerOf(principalId) }; }
 
   // Setting a payment method: Stripe's page, for this principal's customer (made the first time).
@@ -91,9 +98,9 @@ export class Payments {
     const method = session.setup_intent?.payment_method;
     if (session.customer !== row.customer_id || session.mode !== 'setup' || session.status !== 'complete' || typeof method !== 'string') fail(400, 'invalid_payment', '支払い方法の登録を確認できませんでした。');
     await this.stripe.call('POST', '/v1/customers/' + row.customer_id, { invoice_settings: { default_payment_method: method } });
-    if (!row.subscription_id) {
+    if (!row.subscription_id || !CHARGEABLE.includes(row.status)) {
       const subscription = await this.stripe.call('POST', '/v1/subscriptions', { customer: row.customer_id, items: [{ price: this.stripe.computePrice }, { price: this.stripe.storagePrice }] },
-        { idempotency: 'subscription:' + principalId });
+        { idempotency: 'subscription:' + principalId + ':' + (row.subscription_id ?? '') });
       this.db.prepare('UPDATE payment_accounts SET subscription_id=?, status=? WHERE principal_id=?').run(subscription.id, subscription.status, principalId);
     }
     return this.view(principalId);

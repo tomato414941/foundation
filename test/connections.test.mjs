@@ -262,7 +262,7 @@ test('The runtime hands what is kept to a command, as bytes and as a file, and n
   // Nothing else is a command: everything the agent can do for itself is left to it.
   const refused = await run(['list'], env);
   assert.equal(refused.code, 1);
-  assert.match(refused.err, /connect .* exec/);
+  assert.match(refused.err, /start .* join .* exec/);
 });
 
 test('保存値の一覧には認証を要求し、OpenAPIは認証前に取得する', async t => {

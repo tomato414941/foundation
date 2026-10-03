@@ -224,7 +224,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
     if (req.aborted || req.socket.destroyed || signedIn(req).id !== session.id) fail(401, 'signin_required', 'サインインしてください。');
     return commit(result);
   }
-  const notApproved = () => fail(401, 'not_approved', 'このキーはまだ誰の代わりにも動けないか、失効しています。foundation connect（POST /v1/requests で relation actor を依頼）で承認を依頼し、承認後にお試しください。');
+  const notApproved = () => fail(401, 'not_approved', 'このキーはまだ誰の代わりにも動けないか、失効しています。foundation join（POST /v1/requests で relation agent を依頼）で承認を依頼し、承認後にお試しください。');
   const server = createServer(async (req, res) => {
     const locale = resolveLocale({ cookie: req.headers.cookie, acceptLanguage: req.headers['accept-language'] });
     const t = createI18n(locale).t;
@@ -848,6 +848,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         if (method === 'POST') {
           // Paying for another is taken on, never put on someone: the payer draws its own line.
           if (input.relation === 'payer' && subjectId !== subject.id) fail(403, 'forbidden', '支払いを引き受けるのは、引き受ける側だけです。');
+          if (input.relation === 'payer' && !payments.payer(subjectId)) fail(402, 'payer_required', '支払いを引き受けるには、支払い方法の登録が必要です。');
           if (!authorization.mayGive(subject.id, input.relation, input.object_type, object)) fail(403, 'forbidden', 'この操作は許可されていません。');
           principals.relate(subjectId, input.relation, input.object_type, input.object_id);
           auditLog.write(subject.id, 'relation.added', input.object_type, input.object_id, { subject: subjectId, relation: input.relation });

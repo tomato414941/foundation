@@ -29,6 +29,8 @@ async function state(t, { runner = new Runner(), persistent = false, limits = {}
     return f.environments;
   } };
   f.reopen(); f.principals.ensure(USER_A);
+  // The owner has registered a payment method, as one who computes must have.
+  f.store.db.prepare("INSERT INTO payment_accounts (principal_id,customer_id,subscription_id,status,created_at) VALUES (?,'cus_fixture','sub_fixture','canceled',0)").run(USER_A);
   t.after(async () => { store.close(); if (directory) await rm(directory, { recursive: true, force: true }); });
   return f;
 }
@@ -241,7 +243,7 @@ test('機械の作成が明確に拒否された場合は使用量を計上せ�
 
 const meterEvents = f => f.store.db.prepare("SELECT * FROM meter_events WHERE meter='compute' ORDER BY id").all();
 function payer(f) {
-  f.store.db.prepare('INSERT INTO payment_accounts (principal_id,customer_id,subscription_id,status,created_at) VALUES (?,?,?,?,?)')
+  f.store.db.prepare('INSERT INTO payment_accounts (principal_id,customer_id,subscription_id,status,created_at) VALUES (?,?,?,?,?) ON CONFLICT(principal_id) DO UPDATE SET customer_id=excluded.customer_id, subscription_id=excluded.subscription_id, status=excluded.status')
     .run(USER_A, 'cus_1', 'sub_1', 'active', Date.now());
 }
 

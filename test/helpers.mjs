@@ -86,7 +86,7 @@ export function acquired(store, entries, service, { subject, secret }, scheme = 
   return { connections, row, run, state };
 }
 export async function fixture(t, options = {}) {
-  const { google = new FakeGoogle(), services = [entry('google', { oauth: googleOauth(google) })], ...rest } = options, mailer = options.mailer || new FakeMailer();
+  const { google = new FakeGoogle(), services = [entry('google', { oauth: googleOauth(google) })], payers = true, ...rest } = options, mailer = options.mailer || new FakeMailer();
   // Tests look at a request again at once; the interval between looks is a test of its own.
   const app = createApp({ encryptionKey: KEY, requestInterval: 0, ...rest, mailer, services });
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
@@ -163,10 +163,14 @@ export async function fixture(t, options = {}) {
     return { status: response.status, json, text, headers: response.headers };
   }
   // An address someone has signed in with before, so it is the same principal each time.
+  // A principal that has registered a payment method, as people who use what is metered have: a payer, whether or
+  // not it is being charged now.
+  const bind = id => app.store.db.prepare("INSERT INTO payment_accounts (principal_id,customer_id,subscription_id,status,created_at) VALUES (?,?,?,'canceled',0) ON CONFLICT(principal_id) DO NOTHING").run(id, 'cus_fixture_' + id, 'sub_fixture_' + id);
   function known(email) {
     if (app.emails.principalOf(email)) return;
     app.principals.ensure(PEOPLE(email));
     app.emails.add(PEOPLE(email), email);
+    if (payers) bind(PEOPLE(email));
   }
   async function signin(email = 'owner@example.test') {
     // The other tests need a verified identity, not a real email delivery or its resend cooldown.
@@ -264,5 +268,5 @@ export async function fixture(t, options = {}) {
     app.connections.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
   }
   if (options.signin !== false) await signin();
-  return { app, mailer, known, google, base, request, lookup, read, keep, drop, become, signin, start, callback, connection, inject, connectionFacts, issueKey, approveKey, expire, close, allowFoundation, handEnvelope, keyOf, sealed, cookie: () => cookie };
+  return { app, mailer, known, bind, google, base, request, lookup, read, keep, drop, become, signin, start, callback, connection, inject, connectionFacts, issueKey, approveKey, expire, close, allowFoundation, handEnvelope, keyOf, sealed, cookie: () => cookie };
 }

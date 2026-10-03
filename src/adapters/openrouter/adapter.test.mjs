@@ -192,9 +192,11 @@ test('CLI asks for approval, then injects the OpenRouter key only into the child
   const f = await openrouterFixture(t), account = await f.openrouterAccount();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-openrouter-cli-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'runtime-key') };
-  const start = await execute(['connect', '--name', 'laptop'], env);
+  const started = await execute(['start', '--name', 'laptop'], env);
+  assert.equal(started.code, 0, started.err);
+  const start = await execute(['join'], env);
   assert.equal(start.code, 0, start.err);
-  const row = JSON.parse(start.out.split('\n\nKey file')[0]).request;
+  const row = JSON.parse(start.out).request;
   assert.match(row.verification_uri, /\/requests\//);
   const approved = await f.request('/v1/requests/' + row.id + '/grant', { method: 'POST', data: { user_code: row.user_code } });
   assert.equal(approved.status, 200);

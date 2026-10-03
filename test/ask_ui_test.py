@@ -45,7 +45,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
         assert SECRET not in result.stdout + result.stderr
         return json.loads(result.stdout.split('\n\nKey file')[0])
 
-    approval = cli('connect', '--name', 'laptop のAI')['request']
+    cli('start', '--name', 'laptop のAI'); approval = cli('join')['request']
     browser = p.chromium.launch(headless=True)
     # The owner's name for a thing finds its id; the id reaches the thing.
     def held(page, name):

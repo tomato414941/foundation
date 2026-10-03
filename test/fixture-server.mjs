@@ -61,6 +61,12 @@ const services = process.env.FOUNDATION_TEST_AWS === '1' ? withGoogle([entry('aw
 // Paying through a Stripe that answers as Stripe would, when the test asks for it.
 const stripe = process.env.FOUNDATION_TEST_PAYMENT === '1' ? fakeStripe().stripe : undefined;
 const app = createApp({ encryptionKey: KEY, mailer, challengeSecret, space, services, serviceFetcher: described.fetch, runner: new LocalRunner(), requestInterval: 0, ...(stripe ? { stripe } : {}) });
+// People who sign in here have registered a payment method, as those who compute and store must have; a test of paying
+// starts from none.
+if (!stripe) {
+  const add = app.emails.add.bind(app.emails);
+  app.emails.add = (principalId, address) => { add(principalId, address); app.store.db.prepare("INSERT OR IGNORE INTO payment_accounts (principal_id,customer_id,subscription_id,status,created_at) VALUES (?,?,?,'canceled',0)").run(principalId, 'cus_fixture_' + principalId, 'sub_fixture_' + principalId); };
+}
 const port = Number(process.env.FOUNDATION_TEST_PORT || 3418);
 app.server.listen(port, '127.0.0.1', () => console.log('Test fixture: http://127.0.0.1:' + port));
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, async () => { await app.close(); process.exit(0); });

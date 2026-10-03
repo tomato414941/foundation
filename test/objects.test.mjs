@@ -187,7 +187,7 @@ test('無料枠を超えて置こうとすると支払い方法を求め、支�
   const free = await put('more.txt');
   assert.equal(free.status, 402, free.text);
   assert.equal(free.json.error.code, 'payment_required');
-  f.app.store.db.prepare("INSERT INTO payment_accounts (principal_id,customer_id,subscription_id,status,created_at) VALUES (?,'cus_test','sub_test','active',0)").run(owner);
+  f.app.store.db.prepare("INSERT INTO payment_accounts (principal_id,customer_id,subscription_id,status,created_at) VALUES (?,'cus_test','sub_test','active',0) ON CONFLICT(principal_id) DO UPDATE SET customer_id=excluded.customer_id, subscription_id=excluded.subscription_id, status=excluded.status").run(owner);
   assert.equal((await put('more.txt')).status, 200, 'one that pays keeps more');
   big('big-2', 99 * 1024 * 1024 * 1024);
   const full = await put('even-more.txt');

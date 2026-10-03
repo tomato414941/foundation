@@ -216,22 +216,27 @@ test('The runtime hands what is kept to the selected process only', async (t) =>
   assert.match(unsafe.err, /private/);
 });
 
-test('connect makes the key as a private file, never printing it, and the same key is used from then on', async t => {
+test('start makes the key as a private file, never printing it, and the same key is used from then on', async t => {
   const f = await fixture(t), inputs = await storedInputs(f);
   const dir = await mkdtemp(join(tmpdir(), 'foundation-pairing-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'runtime-key'), env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
   await assert.rejects(stat(keyPath), { code: 'ENOENT' });
   const missing = await execute(['exec', ...inputs, '--', process.execPath, '-e', '0'], env);
   assert.equal(missing.code, 1);
-  assert.match(missing.err, /connect/);
+  assert.match(missing.err, /foundation start/);
 
-  const connected = await execute(['connect', '--name', 'laptop のAI'], env);
-  assert.equal(connected.code, 0, connected.err);
-  const row = JSON.parse(connected.out.slice(0, connected.out.indexOf('\n\nKey file'))).request, secret = (await readFile(keyPath, 'utf8')).trim();
-  assert.equal(row.status, 'pending'); assert.match(row.verification_uri, /\/requests\//);
+  // Starting makes this machine a principal of its own; joining asks a person to make it their agent.
+  const started = await execute(['start', '--name', 'laptop のAI'], env);
+  assert.equal(started.code, 0, started.err);
+  const me = JSON.parse(started.out.slice(0, started.out.indexOf('\n\nKey file'))), secret = (await readFile(keyPath, 'utf8')).trim();
+  assert.equal(me.principal.name, 'laptop のAI'); assert.deepEqual(me.acts_for, []);
   assert.equal((await stat(keyPath)).mode & 0o777, 0o600);
-  assert.ok(!connected.out.includes(secret), 'the key stays in the file');
-  assert.match(connected.out, new RegExp(keyPath), 'and the agent is told where it is, for its own HTTP calls');
+  assert.ok(!started.out.includes(secret), 'the key stays in the file');
+  assert.match(started.out, new RegExp(keyPath), 'and the agent is told where it is, for its own HTTP calls');
+  const connected = await execute(['join'], env);
+  assert.equal(connected.code, 0, connected.err);
+  const row = JSON.parse(connected.out).request;
+  assert.equal(row.status, 'pending'); assert.match(row.verification_uri, /\/requests\//);
 
   const before = await execute(['exec', ...inputs, '--', process.execPath, '-e', '0'], env);
   assert.equal(before.code, 1); assert.match(before.err, /not_approved/);
@@ -240,7 +245,8 @@ test('connect makes the key as a private file, never printing it, and the same k
   const run = await execute(['exec', ...inputs, '--', process.execPath, '-e', 'if(process.env.FOUNDATION_RUNTIME_KEY_FILE)process.exit(2);console.log("connected")'], env);
   assert.equal(run.code, 0, run.err);
   assert.equal(run.out.trim(), 'connected');
-  assert.equal((await readFile(keyPath, 'utf8')).trim(), secret, 'connecting again never replaces a key that works');
+  assert.equal((await readFile(keyPath, 'utf8')).trim(), secret, 'starting again never replaces a key that works');
+  assert.match((await execute(['join'], env)).out, /Already approved/);
   for (const result of [connected, before, run]) assert.doesNotMatch(result.out + result.err, /fdn_|google-access|refresh_token/);
 });
 
@@ -249,12 +255,12 @@ test('CLI never overwrites or follows an existing insecure key file', async t =>
   const dir = await mkdtemp(join(tmpdir(), 'foundation-keyfile-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const existing = join(dir, 'existing'), link = join(dir, 'link');
   await writeFile(existing, 'do-not-overwrite', { mode: 0o644 });
-  let result = await execute(['connect'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: existing });
+  let result = await execute(['start'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: existing });
   assert.equal(result.code, 1);
   assert.match(result.err, /private/);
   assert.equal(await readFile(existing, 'utf8'), 'do-not-overwrite');
   await symlink(existing, link);
-  result = await execute(['connect'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: link });
+  result = await execute(['start'], { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: link });
   assert.equal(result.code, 1);
   assert.match(result.err, /symbolic link/);
   assert.equal(await readFile(existing, 'utf8'), 'do-not-overwrite');
@@ -264,11 +270,12 @@ test('A denied request is indistinguishable from waiting, and asking again still
   const f = await fixture(t), inputs = await storedInputs(f);
   const dir = await mkdtemp(join(tmpdir(), 'foundation-denied-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const keyPath = join(dir, 'runtime-key'), env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
-  const row = JSON.parse((await execute(['connect'], env)).out.split('\n\nKey file')[0]).request;
+  assert.equal((await execute(['start'], env)).code, 0);
+  const row = JSON.parse((await execute(['join'], env)).out).request;
   await f.request('/v1/requests/' + row.id + '/deny', { method: 'POST', data: {} });
   const denied = await execute(['exec', ...inputs, '--', process.execPath, '-e', '0'], env);
   assert.equal(denied.code, 1); assert.match(denied.err, /not_approved/, 'denial is indistinguishable from waiting');
-  const again = JSON.parse((await execute(['connect'], env)).out.split('\n\nKey file')[0]).request;
+  const again = JSON.parse((await execute(['join'], env)).out).request;
   await f.request('/v1/requests/' + again.id + '/grant', { method: 'POST', data: { user_code: again.user_code } });
   const after = await execute(['exec', ...inputs, '--', process.execPath, '-e', 'console.log("ready")'], env);
   assert.equal(after.code, 0, after.err); assert.equal(after.out.trim(), 'ready');
@@ -311,7 +318,7 @@ test('CLIを更新せずに接続先の新しい仕様を読み、取得失敗�
   assert.deepEqual(JSON.parse(failed.out), JSON.parse(content));
 });
 
-test('The CLI installs from its npm package, and connect <url> remembers the server for every later command', async t => {
+test('The CLI installs from its npm package, and start <url> remembers the server for every later command', async t => {
   const f = await fixture(t);
   const dir = await mkdtemp(join(tmpdir(), 'foundation-install-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const run = (command, args, env = {}) => new Promise((resolve) => {
@@ -329,16 +336,18 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   assert.equal(version.out.trim(), JSON.parse(await readFile('cli/package.json', 'utf8')).version);
   const unset = await run(foundation, ['api', 'GET', '/v1/principals/me'], env);
   assert.equal(unset.code, 1);
-  assert.match(unset.err, /foundation connect <url>/);
-  const connected = await run(foundation, ['connect', f.base], env);
+  assert.match(unset.err, /foundation start <url>/);
+  const connected = await run(foundation, ['start', f.base], env);
   assert.equal(connected.code, 0, connected.err);
-  assert.match(connected.out, /user_code/);
+  assert.match(connected.out, /"principal"/);
   assert.deepEqual(JSON.parse(await readFile(join(dir, 'config', 'foundation', 'config.json'), 'utf8')), { url: f.base });
   const spec = await run(foundation, ['api', 'GET', '/openapi.json'], env);
   assert.equal(JSON.parse(spec.out).info.title, 'Foundation API');
+  const joined = await run(foundation, ['join'], env);
+  assert.equal(joined.code, 0, joined.err);
   const waiting = await run(foundation, ['api', 'GET', '/v1/principals/me'], env);
   assert.match(waiting.out, /"status":"pending"/); assert.doesNotMatch(waiting.out, /fdn_/);
-  const request = JSON.parse(connected.out.split('\n\nKey file')[0]).request;
+  const request = JSON.parse(joined.out).request;
   const approved = await f.request('/v1/requests/' + request.id + '/grant', { method: 'POST', data: { user_code: request.user_code } });
   assert.equal(approved.status, 200, approved.text);
   const me = await run(foundation, ['api', 'GET', '/v1/principals/me'], env);
@@ -363,14 +372,15 @@ test('The CLI installs from its npm package, and connect <url> remembers the ser
   assert.equal(moved.code, 1, 'FOUNDATION_URL wins over the remembered server');
 });
 
-test('connect on a key already approved only remembers the server', async t => {
+test('start on a key already approved only remembers the server, and join has nothing to ask', async t => {
   const f = await fixture(t);
   const dir = await mkdtemp(join(tmpdir(), 'foundation-reconnect-test-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const env = { HOME: join(dir, 'home'), XDG_CONFIG_HOME: join(dir, 'config'), FOUNDATION_URL: '', FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'key') };
   await writeFile(env.FOUNDATION_RUNTIME_KEY_FILE, (await f.issueKey()).token, { mode: 0o600 });
-  const again = await execute(['connect', f.base], env);
+  const again = await execute(['start', f.base], env);
   assert.equal(again.code, 0, again.err);
-  assert.match(again.out, /Already approved/);
+  assert.match(again.out, /"acts_for": \[\n\s+"/);
+  assert.match((await execute(['join'], env)).out, /Already approved/);
   const me = await execute(['api', 'GET', '/v1/principals/me'], env);
   assert.equal(me.code, 0, me.out + me.err);
 });
@@ -379,17 +389,19 @@ test('FOUNDATION_AGENT gives each agent its own key file and default name', asyn
   const f = await fixture(t), inputs = await storedInputs(f);
   const home = await mkdtemp(join(tmpdir(), 'foundation-agent-home-')); t.after(() => rm(home, { recursive: true, force: true }));
   const base = { FOUNDATION_URL: f.base, HOME: home, FOUNDATION_RUNTIME_KEY_FILE: '' };
-  const first = await execute(['connect'], { ...base, FOUNDATION_AGENT: 'claude' });
+  assert.equal((await execute(['start'], { ...base, FOUNDATION_AGENT: 'claude' })).code, 0);
+  const first = await execute(['join'], { ...base, FOUNDATION_AGENT: 'claude' });
   assert.equal(first.code, 0, first.err);
-  const second = await execute(['connect'], { ...base, FOUNDATION_AGENT: 'codex' });
+  assert.equal((await execute(['start'], { ...base, FOUNDATION_AGENT: 'codex' })).code, 0);
+  const second = await execute(['join'], { ...base, FOUNDATION_AGENT: 'codex' });
   assert.equal(second.code, 0, second.err);
-  const rows = [first, second].map(result => JSON.parse(result.out.split('\n\nKey file')[0]).request);
+  const rows = [first, second].map(result => JSON.parse(result.out).request);
   assert.notEqual(rows[0].id, rows[1].id);
   assert.match(rows[0].requester_name, / の claude$/); assert.match(rows[1].requester_name, / の codex$/);
   const { readdir } = await import('node:fs/promises');
   const keys = (await readdir(join(home, '.local', 'state', 'foundation'))).sort();
   assert.equal(keys.length, 2); assert.ok(keys.some(name => name.endsWith('-claude.key')) && keys.some(name => name.endsWith('-codex.key')));
-  const bad = await execute(['connect'], { ...base, FOUNDATION_AGENT: '../x' });
+  const bad = await execute(['start'], { ...base, FOUNDATION_AGENT: '../x' });
   assert.equal(bad.code, 1); assert.match(bad.err, /FOUNDATION_AGENT/);
   await f.request('/v1/requests/' + rows[0].id + '/grant', { method: 'POST', data: { user_code: rows[0].user_code } });
   const approved = await execute(['exec', ...inputs, '--', process.execPath, '-e', 'console.log("ready")'], { ...base, FOUNDATION_AGENT: 'claude' });

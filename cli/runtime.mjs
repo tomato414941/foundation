@@ -15,8 +15,9 @@ import { newContentKey, sealContent, seal, open as openEnvelope, openContent, ge
 //
 // Everything Foundation offers is plain HTTP, and an agent with the key can call it directly; a command
 // wrapper around those calls would only narrow what the agent is allowed to think of. Two things are left:
-//   connect  say which server, and make this machine's WebAuthn credential. Its private key has to exist as a private file
-//            before anything can be asked, and nothing prints it.
+//   start    say which server, and make this machine's WebAuthn credential: the machine becomes a principal there, of
+//            nobody's. Its private key has to exist as a private file before anything can be asked, and nothing prints it.
+//   join     ask a person to make this machine their agent, so that it may act for them.
 //   token    prove this machine with its credential and print a bearer token that lasts an hour, for calling the API.
 //   exec     hand what is kept to a command, or keep a file it creates, without the bytes passing through
 //            the agent. If the agent fetched the values itself they would be in its context.
@@ -41,7 +42,7 @@ async function readKey(path, { missingOk = false } = {}) {
     if (own !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(own?.private_key ?? '')) throw new Error('Invalid runtime key file.');
     return { credential, own };
   } catch (error) {
-    if (error.code === 'ENOENT') { if (missingOk) return null; throw new Error('No key yet. Run: foundation connect'); }
+    if (error.code === 'ENOENT') { if (missingOk) return null; throw new Error('No key yet. Run: foundation start'); }
     if (error.code === 'ELOOP') throw new Error('Runtime key file must not be a symbolic link.');
     throw error;
   } finally { await handle?.close(); }
@@ -57,7 +58,7 @@ async function writeKey(path, content, privateDirectory) {
 }
 
 const VERSION = createRequire(import.meta.url)('./package.json').version;
-// Which server this machine talks to is a setting, not part of the program: `connect <url>` writes it here,
+// Which server this machine talks to is a setting, not part of the program: `start <url>` writes it here,
 // and FOUNDATION_URL, when set, wins for that one run.
 const configPath = () => join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'foundation', 'config.json');
 async function savedUrl() {
@@ -72,7 +73,7 @@ async function saveUrl(origin) {
 }
 function serverUrl(value) {
   let url;
-  try { url = new URL(value); } catch { throw new Error('No Foundation server yet. Run: foundation connect <url>'); }
+  try { url = new URL(value); } catch { throw new Error('No Foundation server yet. Run: foundation start <url>'); }
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('The Foundation URL must be an HTTPS origin (HTTP is allowed only on localhost).');
   return url;
 }
@@ -108,8 +109,9 @@ async function outputBytes(path) {
 const HELP = `Usage: foundation <command> [options]
 
 Commands:
-  connect [<url>] [--name <name>]      Make this machine's credential and ask the owner to approve it.
+  start [<url>] [--name <name>]        Make this machine's credential: it becomes a principal of its own.
                                        With <url>, remember that Foundation server for later commands.
+  join                                 Ask a person to make this machine their agent.
   token                                Print a bearer token for the API, valid for an hour.
   api <METHOD> </path> [--json <body>] [--from <file>] [--type <media-type>]
                                        Send one request to the Foundation API as this machine.
@@ -125,7 +127,7 @@ API specification:
   foundation api GET /openapi.json      Read the server's OpenAPI specification; no key required.
 
 Environment:
-  FOUNDATION_URL               The server for this run (otherwise the one saved by connect).
+  FOUNDATION_URL               The server for this run (otherwise the one saved by start).
   FOUNDATION_AGENT             Your name, such as claude or codex; gives each agent its own key file.
   FOUNDATION_RUNTIME_KEY_FILE  Where the key file (this machine's credential) is.
 `;
@@ -169,12 +171,14 @@ async function main() {
       if (names.some(item => item.as === output.as)) throw new Error('Output needs a different environment variable from every input.');
     }
   }
-  let call, connectTo, name;
-  if (action === 'connect') {
+  let call, serverGiven, name;
+  if (action === 'start') {
     const parsed = parseArgs({ args, options: { name: { type: 'string' } }, strict: true, allowPositionals: true });
-    if (parsed.positionals.length > 1) throw new Error('Usage: connect [<url>] [--name <name>]');
-    connectTo = parsed.positionals[0];
+    if (parsed.positionals.length > 1) throw new Error('Usage: start [<url>] [--name <name>]');
+    serverGiven = parsed.positionals[0];
     name = parsed.values.name;
+  } else if (action === 'join') {
+    if (args.length) throw new Error('Usage: join');
   } else if (action === 'api') {
     const parsed = parseArgs({ args, options: { json: { type: 'string' }, from: { type: 'string' }, type: { type: 'string' } }, strict: true, allowPositionals: true });
     if (parsed.positionals.length !== 2 || !/^(GET|POST|PUT|DELETE|PATCH)$/.test(parsed.positionals[0]) || !parsed.positionals[1].startsWith('/')) {
@@ -198,12 +202,12 @@ async function main() {
   } else if (action === 'token') {
     if (args.length) throw new Error('Usage: token');
   } else if (!(action === 'exec' && (names.length || output) && command.length)) {
-    throw new Error('Usage: connect [<url>] [--name <name>] | token | exec [<ENV>=<name> ... | --inputs <json>] [--output <json>] -- <command> [args...] | keep <name> --from <file> | read <name> | api <method> </path> [--json <body>] [--from <file>]');
+    throw new Error('Usage: start [<url>] [--name <name>] | join | token | exec [<ENV>=<name> ... | --inputs <json>] [--output <json>] -- <command> [args...] | keep <name> --from <file> | read <name> | api <method> </path> [--json <body>] [--from <file>]');
   }
-  const url = serverUrl(connectTo ?? configured);
+  const url = serverUrl(serverGiven ?? configured);
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
   const publicSpec = action === 'api' && call.method === 'GET' && call.target === '/openapi.json';
-  let key = publicSpec ? null : await readKey(keyPath, { missingOk: action === 'connect' }), token = key?.token ?? null;
+  let key = publicSpec ? null : await readKey(keyPath, { missingOk: action === 'start' }), token = key?.token ?? null;
   // The credential proves this machine for an hour at a time: the challenge is answered for the server actually reached.
   async function prove() {
     const begin = await fetch(url.origin + '/v1/signin/webauthn/options', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', redirect: 'error', signal: AbortSignal.timeout(30_000) });
@@ -242,11 +246,11 @@ async function main() {
     key.own = { private_key: made.privateKey.toString('base64url') };
     await writeKey(keyPath, JSON.stringify({ webauthn_credential: key.credential, key: key.own }), !process.env.FOUNDATION_RUNTIME_KEY_FILE);
   }
-  if (key?.token && action !== 'connect') { await upgrade(hostname() + ' の ' + (agentName || 'AI')); }
-  // A credential this server no longer knows leaves connecting to start over; anything else needs it.
+  if (key?.token && action !== 'start') { await upgrade(hostname() + ' の ' + (agentName || 'AI')); }
+  // A credential this server no longer knows leaves starting over; anything else needs it.
   if (key?.credential) {
     try { token = await prove(); await publishKey(); }
-    catch (error) { if (action !== 'connect') throw error; key = null; token = null; }
+    catch (error) { if (action !== 'start') throw error; key = null; token = null; }
   }
   if (action === 'token') { console.log(token); return; }
   // One request, as this machine, and the answer printed as it came. Nothing here knows the endpoints.
@@ -263,15 +267,14 @@ async function main() {
     if (!response.ok) process.exitCode = 1;
     return;
   }
-  // Asking the owner to approve this key. The key itself is never printed: it stays in the file.
-  // A key the owner already approved has nothing to ask; connecting again only changes which server is remembered.
-  if (action === 'connect') {
-    // A key someone already accepted has nothing to ask; connecting again only changes which server is remembered.
-    // No key, or one this server does not know: become a principal there first, and keep what it issues.
+  // Becoming a principal here: a key this server knows has nothing to make; starting again only changes which server
+  // is remembered. The key itself is never printed: it stays in the file.
+  if (action === 'start') {
     const wanted = name ?? hostname() + ' の ' + (agentName || 'AI');
     let me = null;
     if (token) me = await send('/v1/principals/me', undefined, { method: 'GET', accept: data => data.error?.code === 'not_approved' });
     if (!token || me?.error) {
+      // No key, or one this server does not know: become a principal there, of nobody's, and keep what it issues.
       key = null;
       const response = await fetch(url.origin + '/v1/principals', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: wanted }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
       const made = await response.json();
@@ -280,10 +283,18 @@ async function main() {
       key = { token };
     }
     if (key?.token) { await upgrade(wanted); token = await prove(); await publishKey(); }
-    const answer = me?.acts_for?.length ? null : await send('/v1/requests', { authorization_details: [{ type: 'relation', relation: 'agent' }] });
-    if (connectTo !== undefined) await saveUrl(url.origin);
-    console.log(answer === null ? 'Already approved on ' + url.origin + '.' : JSON.stringify(answer, null, 2));
-    console.log('\nKey file: ' + keyPath + '\nServer: ' + url.origin + (connectTo !== undefined ? ' (saved to ' + configPath() + ')' : '') + '\nEverything else is HTTP: Authorization: Bearer $(foundation token)');
+    if (serverGiven !== undefined) await saveUrl(url.origin);
+    if (!me) me = await send('/v1/principals/me', undefined, { method: 'GET' });
+    console.log(JSON.stringify({ principal: me.principal, acts_for: me.acts_for ?? [] }, null, 2));
+    console.log('\nKey file: ' + keyPath + '\nServer: ' + url.origin + (serverGiven !== undefined ? ' (saved to ' + configPath() + ')' : '') + '\nTo act for someone: foundation join\nEverything else is HTTP: Authorization: Bearer $(foundation token)');
+    return;
+  }
+  // Asking a person to make this machine their agent. One they already approved has nothing to ask.
+  if (action === 'join') {
+    const me = await send('/v1/principals/me', undefined, { method: 'GET', accept: data => data.error?.code === 'not_approved' });
+    if (me.acts_for?.length) { console.log('Already approved on ' + url.origin + '.'); return; }
+    const answer = await send('/v1/requests', { authorization_details: [{ type: 'relation', relation: 'agent' }] });
+    console.log(JSON.stringify(answer, null, 2));
     return;
   }
   // Reading a secret this machine was handed an envelope for: its own, or one shown to it along a line.
