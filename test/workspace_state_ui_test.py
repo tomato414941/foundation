@@ -270,7 +270,7 @@ with sync_playwright() as p:
     # フォルダを開く途中にサインインしても、同じ場所へ戻る。
     signin_email = 'folder-return@example.test'
     page.get_by_label('メールアドレス', exact=True).fill(signin_email)
-    with page.expect_request(lambda request: request.method == 'POST' and request.url.endswith('/v1/signin')) as sent:
+    with page.expect_request(lambda request: request.method == 'POST' and request.url.endswith('/v1/credentials')) as sent:
         page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     assert sent.value.post_data_json['return_to'] == '/objects?prefix=reports%2F'
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
@@ -282,10 +282,10 @@ with sync_playwright() as p:
 
     # サインインの設定取得に失敗した場合も、再試行してフォームへ進む。
     context.clear_cookies()
-    page.route('**/v1/signin', lambda route: route.fulfill(status=503, json={'error': {'message': '接続できませんでした。'}}))
+    page.route('**/v1/session', lambda route: route.fulfill(status=503, json={'error': {'message': '接続できませんでした。'}}))
     page.reload(wait_until='networkidle')
     expect(page.get_by_role('alert')).to_have_text('接続できませんでした。')
-    page.unroute('**/v1/signin')
+    page.unroute('**/v1/session')
     page.get_by_role('button', name='再読み込み', exact=True).click()
     expect(page.get_by_label('メールアドレス', exact=True)).to_be_enabled()
     assert not errors, errors

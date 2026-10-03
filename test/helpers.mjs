@@ -131,6 +131,16 @@ export async function fixture(t, options = {}) {
   }
   const secretPath = path => /^\/v1\/resources\?.*kind=secret/.test(path) || (path.match(/^\/v1\/resources\/([^/?]+)\/content/) && app.resources.get(RegExp.$1)?.kind === 'secret');
   async function request(path, { method = 'GET', data, raw, type = 'application/octet-stream', token, anonymous = false, headers = {}, as } = {}) {
+    // Making a principal and giving it a key are two calls; a test that wants both at once gets them joined here.
+    if (method === 'POST' && /^\/v1\/principals(\?|$)/.test(path) && data?.key === true) {
+      const { key: _, ...rest } = data;
+      const made = await request(path, { method, data: rest, token, anonymous, headers, as });
+      if (made.status !== 201) return made;
+      const issued = await request('/v1/credentials?as=' + encodeURIComponent(made.json.principal.id), { method: 'POST', data: { kind: 'key' }, token, anonymous, headers });
+      if (issued.status !== 201) return issued;
+      const json = { principal: { ...made.json.principal, keys: [{ id: issued.json.credential.id, created_at: issued.json.credential.created_at, last_used_at: null }] }, token: issued.json.token, key: { id: issued.json.credential.id, kind: 'key' } };
+      return { status: 201, json, text: JSON.stringify(json), headers: issued.headers };
+    }
     const owner = as ?? (token && actsFor.get(token)) ?? new URL(path, base).searchParams.get('as') ?? undefined;
     if (owner && !/[?&]as=/.test(path)) path += (path.includes('?') ? '&' : '?') + 'as=' + owner;
     if (method === 'PUT' && raw !== undefined && secretPath(path)) {
@@ -176,7 +186,7 @@ export async function fixture(t, options = {}) {
     // The other tests need a verified identity, not a real email delivery or its resend cooldown.
     known(email);
     const token = app.challenges.issue('email', email, { ttl: 900_000 });
-    const response = await request('/v1/signin/verify', { method: 'POST', data: { email, token } });
+    const response = await request('/v1/credentials', { method: 'PUT', data: { kind: 'email', email, token } });
     assert.equal(response.status, 200, response.text);
     assert.equal(response.json.return_to, '/');
     cookie = response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
@@ -227,7 +237,7 @@ export async function fixture(t, options = {}) {
   // Makes a key known to the owner: the key asks to act for whoever opens its request, and the owner types its code.
   // A machine becomes a principal with no connection, is issued a key, asks to act for the person, and is approved.
   async function become(name = 'laptop') {
-    const made = await request('/v1/principals', { method: 'POST', anonymous: true, data: { name } });
+    const made = await request('/v1/credentials', { method: 'POST', anonymous: true, data: { kind: 'key', name } });
     assert.equal(made.status, 201, made.text);
     // A machine publishes its key as soon as it has a credential, as the CLI does.
     await keyOf({ token: made.json.token, anonymous: true });

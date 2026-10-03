@@ -98,6 +98,12 @@ function signinMessage(link) {
     html: `<p><a href="${href}">Foundationにサインイン</a></p>\n<p>リンクは15分間有効です。心当たりがない場合は、このメールを無視してください。</p>` };
 }
 
+// Attaching an address to a principal that exists: the link proves receiving there; the page it opens says whose it becomes.
+function attachMessage(link, name) {
+  const href = link.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  return { subject: 'Foundationにメールアドレスを追加', text: `このアドレスを「${name}」のアドレスにする\n${link}\n\nリンクは15分間有効です。心当たりがない場合は、このメールを無視してください。`,
+    html: `<p><a href="${href}">このアドレスを「${name.replace(/&/g, '&amp;').replace(/</g, '&lt;')}」のアドレスにする</a></p>\n<p>リンクは15分間有効です。心当たりがない場合は、このメールを無視してください。</p>` };
+}
 function signinEmail(value) {
   if (typeof value !== 'string' || value.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(value.trim())) fail(400, 'invalid_email', 'メールアドレスを確認してください。');
   return value.trim().toLowerCase();
@@ -160,6 +166,15 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   const resources = new Resources(store);
   const principals = new Principals(store), sessions = new Sessions(store), flows = new OAuthFlows(store), emails = new Emails(store);
   const challenges = new Challenges(store, challengeSecret ? { secret: challengeSecret } : {}), webauthn = new WebauthnCredentials(store, challenges);
+  // A principal's entries, whatever their kind: its passkeys, its addresses and its keys, each proven in its own way and
+  // all listed and removed the same way.
+  const whenIso = value => value === null || value === undefined ? null : new Date(value).toISOString();
+  const credentialsOf = principalId => [
+    ...webauthn.list(principalId).map(row => ({ kind: 'webauthn', ...webauthn.view(row) })),
+    ...emails.list(principalId).map(row => ({ kind: 'email', id: row.id, name: row.address, created_at: whenIso(row.created_at), last_used_at: null })),
+    ...principals.keys(principalId).map(row => ({ kind: 'key', id: row.id, name: null, created_at: whenIso(row.created_at), last_used_at: whenIso(row.last_used_at), ...(row.environment_id ? { environment: row.environment_id } : {}) })),
+  ];
+  const credentialKind = id => webauthn.get(id) ? 'webauthn' : emails.get(id) ? 'email' : principals.key(id) ? 'key' : null;
   const authorization = new Authorization(principals, resources);
   const services = new Services(store, resources, catalog, { authorization, ...(serviceFetcher ? { fetcher: serviceFetcher } : {}) });
   const keys = new Keys(store);
@@ -225,7 +240,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
     return commit(result);
   }
   const notApproved = () => fail(401, 'not_approved', 'このキーはまだ誰の代わりにも動けないか、失効しています。foundation join（POST /v1/requests で relation agent を依頼）で承認を依頼し、承認後にお試しください。');
-  const server = createServer(async (req, res) => {
+  const handle = async (req, res) => {
     const locale = resolveLocale({ cookie: req.headers.cookie, acceptLanguage: req.headers['accept-language'] });
     const t = createI18n(locale).t;
     // JSON messages change only when the Web client explicitly opts in. Cookies and
@@ -357,10 +372,11 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // asks for must come from Foundation's own pages. Cookies are never read beside a token.
       const token = bearer(req), browser = req.headers.authorization === undefined;
       if (!browser && !token) fail(401, 'invalid_token', 'Bearer形式のキーを指定してください。');
-      // Becoming a principal needs no connection and no signin: the request carries nothing to protect.
-      const becoming = at === 'principals' && method === 'POST' && browser && !cookieToken(req);
-      // Proving oneself by WebAuthn carries nothing to protect either; a browser's session is still asked its origin there.
-      const proving = ['webauthnSigninOptions', 'webauthnSignin', 'principalOptions'].includes(at);
+      // Proving an entry needs no connection and no signin: becoming a principal by one, or signing in by one, carries
+      // nothing to protect. Each of those asks a browser's origin itself where it matters.
+      const anonymous = browser ? !sessions.get(cookieToken(req)) : !token;
+      const becoming = at === 'credentials' && ['POST', 'PUT'].includes(method) && anonymous;
+      const proving = at === 'session' && ['POST', 'PUT'].includes(method);
       if (browser && !['GET', 'HEAD'].includes(method) && !becoming && !proving) requireOrigin(req, origin);
       if (!browser && req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
       // Signing in by email: a single-use link is sent to the address, and opening it proves receiving there. The
@@ -369,63 +385,20 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const row = challenges.waiting(handle);
         return row ? { email: row.subject, expires_at: row.expires_at, resend_at: row.created_at + RESEND_WAIT } : null;
       };
-      if (at === 'signin' && method === 'GET') return send(200, { available: mailer.enabled, method: 'email_link', pending: waitingFor(signinHandle) });
-      if (at === 'signin' && method === 'POST') {
+      // The session: what proving an entry makes. Reading says what can be proven here and what is being waited for.
+      if (at === 'session' && method === 'GET') return send(200, { available: mailer.enabled, method: 'email_link', pending: waitingFor(signinHandle) });
+      // Signing in by WebAuthn, from anywhere: options any registered credential may answer, then a browser gets its
+      // session as a cookie, a program as an hour's token.
+      if (at === 'session' && method === 'POST') {
         const input = await body(req);
-        const email = signinEmail(input?.email);
-        const destination = returnPath(input.return_to);
-        rateLimit('link-send:' + clientAddress(req), 12, 600_000);
-        const last = challenges.latest('email', email);
-        if (last && last.created_at + RESEND_WAIT > Date.now()) fail(429, 'link_cooldown', '送信から1分ほど待って、もう一度お試しください。');
-        if (!mailer.enabled) fail(503, 'email_unavailable', '現在サインインを利用できません。');
-        const handle = randomSecret();
-        const secret = challenges.issue('email', email, { handle, ttl: SIGNIN_TTL });
-        const link = origin + SIGNIN_CONFIRM + (destination === '/' ? '' : '?' + new URLSearchParams({ return_to: destination })) + '#' + new URLSearchParams({ token: secret, email });
-        try { await mailer.send({ to: email, ...signinMessage(link) }); }
-        catch (error) { challenges.take('email', secret); throw error; }
-        challenges.forget(signinHandle);
-        setNamedCookie('fdn_signin', handle, SIGNIN_TTL / 1000);
-        return send(202, { pending: waitingFor(handle) });
-      }
-      if (at === 'verifySignin' && method === 'POST') {
-        requireOrigin(req, origin);
-        rateLimit('signin:' + clientAddress(req), 30, 600_000);
-        const input = await body(req), email = signinEmail(input?.email), destination = returnPath(input.return_to);
-        if (typeof input.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(input.token)) fail(400, 'invalid_link', 'リンクが無効です。最新のメールのリンクを開いてください。');
-        // Giving the link back spends it. Merely opening the confirmation page does not; the page asks first.
-        const proof = challenges.take('email', input.token);
-        if (!proof || proof.subject !== email || req.aborted || req.socket.destroyed) fail(401, 'invalid_link', 'リンクが無効か、有効期限が切れています。最新のメールのリンクを開いてください。');
-        // An address proven for the first time is a new principal's; one proven before is its principal's again.
-        const principalId = store.transaction(() => {
-          const known = emails.principalOf(email);
-          if (known) return known;
-          const made = principals.ensure(randomUUID());
-          emails.add(made.id, email);
-          return made.id;
-        });
-        const next = sessions.create(principalId, { proof: 'email', ref: email });
-        sessions.remove(cookieToken(req));
-        setCookie(next, SESSION_AGE);
-        challenges.forget(signinHandle);
-        setNamedCookie('fdn_signin', '', 0);
-        return send(200, { ok: true, return_to: destination });
-      }
-      // Signing in by WebAuthn, from anywhere: a browser gets its session as a cookie, a program as an hour's token.
-      // Options for a credential that, once registered, makes its principal.
-      if (at === 'principalOptions' && method === 'POST') {
-        const input = await body(req);
-        rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
-        // The passkey's label where it is kept: the name given, or one drawn here (names.mjs), which the client then
-        // gives the principal it makes, so the device and Foundation call it the same thing.
-        return send(200, { options: await webauthn.registration(randomUUID(), { origin, userName: input?.name === undefined ? principalName() : nameValue(input.name), creating: true }) });
-      }
-      if (at === 'webauthnSigninOptions' && method === 'POST') {
+        if (input?.kind !== 'webauthn') fail(400, 'invalid_kind', 'サインインの種類を確認してください。');
         rateLimit('webauthn-options:' + clientAddress(req), 60, 600_000);
         return send(200, { options: await webauthn.authentication({ origin }) });
       }
-      if (at === 'webauthnSignin' && method === 'POST') {
+      if (at === 'session' && method === 'PUT') {
         rateLimit('signin:' + clientAddress(req), 30, 600_000);
         const input = await body(req), asToken = input?.session === 'token';
+        if (input?.kind !== 'webauthn') fail(400, 'invalid_kind', 'サインインの種類を確認してください。');
         if (!asToken) requireOrigin(req, origin);
         const destination = asToken ? '/' : returnPath(input?.return_to);
         const proven = await webauthn.authenticate(input?.credential, { origin });
@@ -437,10 +410,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         sessions.remove(cookieToken(req));
         setCookie(next, SESSION_AGE);
         return send(200, { ok: true, return_to: destination });
-      }
-      if (at === 'signin' && method === 'DELETE') {
-        challenges.forget(signinHandle); setNamedCookie('fdn_signin', '', 0);
-        return send(200, { ok: true });
       }
       if (at === 'session' && method === 'DELETE') {
         challenges.forget(signinHandle);
@@ -472,33 +441,102 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // or the one a request link handed to a single request.
       let subject, session = null;
       const known = browser ? undefined : principals.authenticateKey(token);
-      // Anyone may become a principal: one row, with a WebAuthn credential made for it - and so a session at once, a
-      // cookie for a browser or an hour's token for a program - or else one key, issued here and shown once. It reaches
-      // nothing of anyone else's until someone draws it a line; what it may do never comes from the making.
+      // Opening an email link: the address is proven. A link a principal asked for attaches the address to it and signs
+      // nobody in; otherwise an address proven for the first time is a new principal's, and one proven before is its
+      // principal's again - a signin, whoever was signed in here before.
+      const redeemEmailLink = async input => {
+        requireOrigin(req, origin);
+        rateLimit('signin:' + clientAddress(req), 30, 600_000);
+        const email = signinEmail(input.email), destination = returnPath(input.return_to);
+        if (typeof input.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(input.token)) fail(400, 'invalid_link', 'リンクが無効です。最新のメールのリンクを開いてください。');
+        // Giving the link back spends it. Merely opening the confirmation page does not; the page asks first.
+        const proof = challenges.take('email', input.token);
+        if (!proof || proof.subject !== email || req.aborted || req.socket.destroyed) fail(401, 'invalid_link', 'リンクが無効か、有効期限が切れています。最新のメールのリンクを開いてください。');
+        if (proof.data.attach) {
+          const to = principals.get(proof.data.attach);
+          if (!to) fail(401, 'invalid_link', 'リンクが無効か、有効期限が切れています。最新のメールのリンクを開いてください。');
+          // An address another principal already has is not taken from it: the two are merged instead.
+          const known = emails.principalOf(email);
+          if (known && known !== to.id) fail(409, 'email_taken', 'このアドレスは別のアカウントで使われています。アカウントを統合してください。');
+          emails.add(to.id, email);
+          auditLog.write(to.id, 'credential.added', 'principal', to.id, { kind: 'email', email });
+          return send(200, { ok: true, attached: true, return_to: destination });
+        }
+        const principalId = store.transaction(() => {
+          const known = emails.principalOf(email);
+          if (known) return known;
+          const made = principals.ensure(randomUUID());
+          emails.add(made.id, email);
+          auditLog.write(made.id, 'principal.created', 'principal', made.id, { kind: 'email' });
+          return made.id;
+        });
+        const next = sessions.create(principalId, { proof: 'email', ref: email });
+        sessions.remove(cookieToken(req));
+        setCookie(next, SESSION_AGE);
+        challenges.forget(signinHandle);
+        setNamedCookie('fdn_signin', '', 0);
+        return send(200, { ok: true, return_to: destination });
+      };
+      // Anyone may become a principal by proving an entry that is nobody's: a passkey made for it, an address reached, or
+      // a key issued here and shown once. It reaches nothing of anyone else's until someone draws it a line; what it may
+      // do never comes from the making. The same entry proven by a principal is attached to it instead (below).
       if (becoming) {
         const input = await body(req);
-        rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
-        if (input?.webauthn_credential !== undefined) {
-          const asToken = input.session === 'token', given = input.webauthn_credential, name = input.name === undefined ? '' : nameValue(input.name);
+        if (!['webauthn', 'email', 'key'].includes(input?.kind)) fail(400, 'invalid_kind', '入口の種類を確認してください。');
+        if (method === 'POST' && input.kind === 'webauthn') {
+          rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
+          // The passkey's label where it is kept: the name given, or one drawn here (names.mjs), which the client then
+          // gives the principal it makes, so the device and Foundation call it the same thing.
+          return send(200, { options: await webauthn.registration(randomUUID(), { origin, userName: input.name === undefined ? principalName() : nameValue(input.name), creating: true }) });
+        }
+        if (method === 'PUT' && input.kind === 'webauthn') {
+          rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
+          const asToken = input.session === 'token', name = input.principal_name === undefined ? '' : nameValue(input.principal_name);
           if (!asToken) requireOrigin(req, origin);
           const destination = asToken ? '/' : returnPath(input.return_to);
-          const made = await webauthn.register(given?.credential, { origin, name: given?.name, make: id => {
+          const made = await webauthn.register(input.credential, { origin, name: input.name, make: id => {
             principals.ensure(id, name);
             if (input.public_key !== undefined) keys.publish(id, input.public_key);
           } });
-          if (given.wrap !== undefined) keys.keepWrap(made.credential.id, given.wrap);
-          auditLog.write(made.principalId, 'principal.created', 'principal', made.principalId, { webauthn_credential: made.credential.id });
+          if (input.wrap !== undefined) keys.keepWrap(made.credential.id, input.wrap);
+          auditLog.write(made.principalId, 'principal.created', 'principal', made.principalId, { credential: made.credential.id, kind: 'webauthn' });
           const proof = { proof: 'webauthn', ref: made.credential.id }, principal = principals.get(made.principalId);
-          const answer = { principal, webauthn_credential: webauthn.view(made.credential), backed_up: made.backedUp };
+          const answer = { principal, credential: { kind: 'webauthn', ...webauthn.view(made.credential) }, backed_up: made.backedUp };
           if (asToken) return send(201, { ...answer, token: sessions.create(made.principalId, proof, { ttl: TOKEN_TTL }), expires_at: Date.now() + TOKEN_TTL });
           setCookie(sessions.create(made.principalId, proof), SESSION_AGE);
           return send(201, { ...answer, return_to: destination });
         }
-        const made = store.transaction(() => {
-          const principal = principals.ensure(randomUUID(), nameValue(input.name, '相手'));
-          return { principal, issued: principals.issueKey(principal.id) };
-        });
-        return send(201, { principal: made.principal, token: made.issued.token, key: { id: made.issued.id } });
+        if (method === 'POST' && input.kind === 'key') {
+          rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
+          const made = store.transaction(() => {
+            const principal = principals.ensure(randomUUID(), nameValue(input.name, '相手'));
+            return { principal, issued: principals.issueKey(principal.id) };
+          });
+          auditLog.write(made.principal.id, 'principal.created', 'principal', made.principal.id, { credential: made.issued.id, kind: 'key' });
+          return send(201, { principal: made.principal, credential: { kind: 'key', id: made.issued.id, name: null, created_at: whenIso(made.issued.created_at), last_used_at: null }, token: made.issued.token });
+        }
+        // Signing in by email, or becoming a principal by one: a single-use link is sent to the address, and opening it
+        // proves receiving there. The browser that asked keeps only a handle, to show what it is waiting for; the link
+        // works in any browser.
+        if (method === 'POST' && input.kind === 'email') {
+          requireOrigin(req, origin);
+          const email = signinEmail(input.address);
+          const destination = returnPath(input.return_to);
+          rateLimit('link-send:' + clientAddress(req), 12, 600_000);
+          const last = challenges.latest('email', email);
+          if (last && last.created_at + RESEND_WAIT > Date.now()) fail(429, 'link_cooldown', '送信から1分ほど待って、もう一度お試しください。');
+          if (!mailer.enabled) fail(503, 'email_unavailable', '現在サインインを利用できません。');
+          const handle = randomSecret();
+          const secret = challenges.issue('email', email, { handle, ttl: SIGNIN_TTL });
+          const link = origin + SIGNIN_CONFIRM + (destination === '/' ? '' : '?' + new URLSearchParams({ return_to: destination })) + '#' + new URLSearchParams({ token: secret, email });
+          try { await mailer.send({ to: email, ...signinMessage(link) }); }
+          catch (error) { challenges.take('email', secret); throw error; }
+          challenges.forget(signinHandle);
+          setNamedCookie('fdn_signin', handle, SIGNIN_TTL / 1000);
+          return send(202, { pending: waitingFor(handle) });
+        }
+        if (method === 'PUT' && input.kind === 'email') return await redeemEmailLink(input);
+        fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
       // A bearer token is an access key, or a session a program was given for proving itself by WebAuthn.
       const tokenSession = !browser && !known ? sessions.get(token) : undefined;
@@ -617,36 +655,70 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       }
       if (subject.via.kind === 'link') fail(401, 'signin_required', 'サインインしてください。');
       // Principals: oneself, and those one owns.
-      // A principal's WebAuthn credentials: added by the principal itself, listed by whoever reads it, removed by it or its owner.
-      if (at === 'webauthnCredentials' && method === 'GET') {
+      // A principal's entries: listed by whoever reads it, added and removed by whoever manages it (itself, its stewards, its owner).
+      // Adding is proving: a passkey answers options, an address is reached by a link, a key is issued and shown once.
+      if (at === 'credentials' && method === 'GET') {
         permit('read', 'principal', ownerId);
-        return send(200, { webauthn_credentials: webauthn.list(ownerId).map(row => webauthn.view(row)) });
+        return send(200, { credentials: credentialsOf(ownerId) });
       }
-      if (at === 'webauthnCredentialOptions' && method === 'POST') {
-        permit('add-webauthn-credential', 'principal', ownerId);
-        return send(200, { options: await webauthn.registration(ownerId, { origin, userName: emails.of(ownerId)[0] || self.name || ownerId }) });
-      }
-      if (at === 'webauthnCredentials' && method === 'POST') {
-        permit('add-webauthn-credential', 'principal', ownerId);
+      if (at === 'credentials' && method === 'POST') {
+        permit('add-credential', 'principal', ownerId);
         const input = await inputBody();
+        if (input.kind === 'webauthn') return send(200, { options: await webauthn.registration(ownerId, { origin, userName: emails.of(ownerId)[0] || principals.get(ownerId)?.name || ownerId }) });
+        if (input.kind === 'key') {
+          const made = store.transaction(() => {
+            if (input.replaces !== undefined && !principals.revokeKey(ownerId, input.replaces)) fail(404, 'not_found', '置き換えるキーが見つかりません。');
+            return principals.issueKey(ownerId);
+          });
+          auditLog.write(subject.id, 'credential.added', 'principal', ownerId, { kind: 'key', credential: made.id, replaced: input.replaces ?? null });
+          return send(201, { credential: { kind: 'key', id: made.id, name: null, created_at: whenIso(made.created_at), last_used_at: null }, token: made.token });
+        }
+        if (input.kind === 'email') {
+          // The link works in any browser and signs nobody in; the page it opens says whose the address becomes.
+          const email = signinEmail(input.address);
+          rateLimit('link-send:' + clientAddress(req), 12, 600_000);
+          const last = challenges.latest('email', email);
+          if (last && last.created_at + RESEND_WAIT > Date.now()) fail(429, 'link_cooldown', '送信から1分ほど待って、もう一度お試しください。');
+          if (!mailer.enabled) fail(503, 'email_unavailable', '現在メールを送れません。');
+          const known = emails.principalOf(email);
+          if (known && known !== ownerId) fail(409, 'email_taken', 'このアドレスは別のアカウントで使われています。アカウントを統合してください。');
+          const label = principals.get(ownerId)?.name || ownerId;
+          const secret = challenges.issue('email', email, { data: { attach: ownerId }, ttl: SIGNIN_TTL });
+          const link = origin + SIGNIN_CONFIRM + '#' + new URLSearchParams({ token: secret, email, attach: label });
+          try { await mailer.send({ to: email, ...attachMessage(link, label) }); }
+          catch (error) { challenges.take('email', secret); throw error; }
+          const row = challenges.latest('email', email);
+          return send(202, { pending: { email, expires_at: row.expires_at, resend_at: row.created_at + RESEND_WAIT } });
+        }
+        fail(400, 'invalid_kind', '入口の種類を確認してください。');
+      }
+      if (at === 'credentials' && method === 'PUT') {
+        const input = await inputBody();
+        if (input.kind === 'email') return await redeemEmailLink(input);
+        permit('add-credential', 'principal', ownerId);
+        if (input.kind !== 'webauthn') fail(400, 'invalid_kind', '入口の種類を確認してください。');
         const made = await webauthn.register(input.credential, { origin, name: input.name, principalId: ownerId });
         if (input.wrap !== undefined) keys.keepWrap(made.credential.id, input.wrap);
-        auditLog.write(subject.id, 'webauthn_credential.added', 'principal', ownerId, { credential: made.credential.id });
-        return send(201, { webauthn_credential: webauthn.view(made.credential), backed_up: made.backedUp });
+        auditLog.write(subject.id, 'credential.added', 'principal', ownerId, { kind: 'webauthn', credential: made.credential.id });
+        return send(201, { credential: { kind: 'webauthn', ...webauthn.view(made.credential) }, backed_up: made.backedUp });
       }
-      if (at === 'webauthnCredential' && method === 'DELETE') {
-        const row = webauthn.get(route.params.credentialId);
-        if (!row) fail(404, 'not_found', 'パスキーが見つかりません。');
-        permit('remove-webauthn-credential', 'principal', row.principal_id);
+      if (at === 'credential' && method === 'DELETE') {
+        const id = route.params.credentialId, kind = credentialKind(id);
+        if (!kind) fail(404, 'not_found', '入口が見つかりません。');
+        const owner = kind === 'webauthn' ? webauthn.get(id).principal_id : kind === 'email' ? emails.get(id).principal_id : principals.key(id).principal_id;
+        permit('remove-credential', 'principal', owner);
         still();
-        webauthn.remove(row);
-        auditLog.write(subject.id, 'webauthn_credential.removed', 'principal', row.principal_id, { credential: row.id });
+        await inputBody();
+        if (kind === 'webauthn') webauthn.remove(webauthn.get(id));
+        else if (kind === 'email') emails.remove(emails.get(id));
+        else principals.revokeKey(owner, id);
+        auditLog.write(subject.id, 'credential.removed', 'principal', owner, { kind, credential: id });
         return send(200, { ok: true });
       }
-      if (at === 'webauthnCredentialWrap' && method === 'PUT') {
+      if (at === 'credentialWrap' && method === 'PUT') {
         const row = webauthn.get(route.params.credentialId);
         if (!row) fail(404, 'not_found', 'パスキーが見つかりません。');
-        permit('add-webauthn-credential', 'principal', row.principal_id);
+        permit('add-credential', 'principal', row.principal_id);
         const input = await inputBody();
         keys.keepWrap(row.id, input.wrapped);
         return send(200, { ok: true });
@@ -678,17 +750,17 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       }
       // Another account made one with this: its passkey answers for it, this session for this one.
       if (at === 'mergeOptions' && method === 'POST') {
-        permit('add-webauthn-credential', 'principal', subject.id);
+        permit('add-credential', 'principal', subject.id);
         const input = await inputBody();
         return send(200, { options: await merge.options(subject.id, principalId(input.principal_id), { origin }) });
       }
       if (at === 'mergeBegin' && method === 'POST') {
-        permit('add-webauthn-credential', 'principal', subject.id);
+        permit('add-credential', 'principal', subject.id);
         const input = await inputBody();
         return send(200, await merge.begin(subject.id, input.credential, { origin, expected: input.principal_id === undefined ? undefined : principalId(input.principal_id) }));
       }
       if (at === 'mergeComplete' && method === 'POST') {
-        permit('add-webauthn-credential', 'principal', subject.id);
+        permit('add-credential', 'principal', subject.id);
         const input = await inputBody(SECRET_MAX);
         const done = merge.complete(subject.id, input);
         return send(200, { ...done, principal: principals.get(done.into) });
@@ -729,22 +801,21 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       if (at === 'principals' && method === 'POST') {
         const input = await inputBody();
         const alias = input.alias === undefined ? undefined : nameValue(input.alias);
-        const { made, issued } = store.transaction(() => {
+        const made = store.transaction(() => {
           const made = principals.create(subject.id, { name: input.name === undefined ? (alias ?? '相手') : nameValue(input.name), alias });
           if (input.agent === true) principals.relate(made.id, 'agent', 'principal', subject.id);
           // Made as a group (steward: true): its maker stands as it, until others are made stewards too. A principal made
           // for someone else to come in as (an app's user, given a key later) is nobody's to stand as.
           if (input.steward === true) principals.relate(subject.id, 'steward', 'principal', made.id);
-          const issued = input.key === true ? principals.issueKey(made.id) : null;
-          return { made, issued };
+          return made;
         });
-        auditLog.write(subject.id, 'principal.created', 'principal', made.id, { alias: alias ?? null, agent: input.agent === true, key: Boolean(issued) });
-        return send(201, { principal: { ...made, alias: alias ?? null, keys: principals.keys(made.id), acts_for: principals.actsFor(made.id), owners: principals.ownersOf(made.id), stewards: principals.stewardsOf(made.id) }, ...(issued ? { token: issued.token, key: { id: issued.id, kind: 'key' } } : {}) });
+        auditLog.write(subject.id, 'principal.created', 'principal', made.id, { alias: alias ?? null, agent: input.agent === true });
+        return send(201, { principal: { ...made, alias: alias ?? null, keys: principals.keys(made.id), acts_for: principals.actsFor(made.id), owners: principals.ownersOf(made.id), stewards: principals.stewardsOf(made.id) } });
       }
       if (route?.group === 'principals') {
-        const id = route.params.principalId === 'me' ? subject.id : route.params.principalId, part = at === 'principal' ? null : at === 'accessKey' ? 'keys' : at, keyId = route.params.keyId;
+        const id = route.params.principalId === 'me' ? subject.id : route.params.principalId, part = at === 'principal' ? null : at;
         const target = principals.at(id);
-        if (part === 'access' && !keyId && method === 'DELETE') {
+        if (part === 'access' && method === 'DELETE') {
           permit('relate', 'principal', ownerId);
           if (id === ownerId) fail(400, 'invalid_principal', '自分自身のアクセスは取り消せません。');
           await inputBody();
@@ -778,28 +849,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
             return send(200, { ok: true });
           }
         }
-        if (part === 'keys') {
-          if (!keyId && method === 'GET') { permit('read', 'principal', id); return send(200, { keys: principals.keys(id) }); }
-          if (!keyId && method === 'POST') {
-            permit('issue-key', 'principal', id);
-            const input = await inputBody();
-            const made = store.transaction(() => {
-              if (input.replaces !== undefined && !principals.revokeKey(id, input.replaces)) fail(404, 'not_found', '置き換えるキーが見つかりません。');
-              return principals.issueKey(id);
-            });
-            auditLog.write(subject.id, 'key.issued', 'principal', id, { replaced: input.replaces ?? null });
-            return send(201, { key: { id: made.id, created_at: made.created_at }, token: made.token });
-          }
-          if (keyId && method === 'DELETE') {
-            permit('revoke-key', 'principal', id);
-            await inputBody();
-            if (!principals.revokeKey(id, keyId)) fail(404, 'not_found', 'キーが見つかりません。');
-            auditLog.write(subject.id, 'key.revoked', 'principal', id, { key: keyId });
-            return send(200, { ok: true });
-          }
-        }
         // A request link: handed to the principal asked, to answer that one request without a signin.
-        if (part === 'links' && !keyId && method === 'POST') {
+        if (part === 'links' && method === 'POST') {
           permit('issue-link', 'principal', id);
           const input = await inputBody();
           if (typeof input.request_id !== 'string') fail(400, 'invalid_request', 'リンクにする依頼を指定してください。');
@@ -810,7 +861,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           return send(201, { link: { id: made.id, request_id: made.request_id, expires_at: made.expires_at }, url: origin + '/requests/' + row.id + '#link=' + made.token, expires_at: made.expires_at });
         }
         // Computing this principal spent this month and may spend; its owner bounds it.
-        if (part === 'compute' && !keyId) {
+        if (part === 'compute') {
           if (method === 'GET') { permit('usage', 'principal', id); return send(200, { compute: environments.usage(id) }); }
           if (method === 'PUT') {
             permit('limit', 'principal', id);
@@ -820,7 +871,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
             return send(200, { compute: made });
           }
         }
-        if (part === 'settings' && !keyId) {
+        if (part === 'settings') {
           permit('settings', 'principal', id);
           if (method === 'GET') return send(200, { settings: settings.get(id) ?? null });
           if (method === 'PUT') {
@@ -1199,7 +1250,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // The owner's screen, in one answer.
       if (at === 'overview' && method === 'GET') {
         permit('overview', 'principal', ownerId);
-        return send(200, { user: { id: subject.id, email: emails.of(subject.id)[0] ?? null }, principal: self, payment: payments.view(ownerId), webauthn_credentials: webauthn.list(ownerId).map(row => webauthn.view(row)), secrets: secrets.list(ownerId).map(row => secrets.view(row)), connections: connections.list(ownerId).map(row => connections.view(row, { owner: true })),
+        return send(200, { user: { id: subject.id, email: emails.of(subject.id)[0] ?? null }, principal: self, payment: payments.view(ownerId), credentials: credentialsOf(ownerId), secrets: secrets.list(ownerId).map(row => secrets.view(row)), connections: connections.list(ownerId).map(row => connections.view(row, { owner: true })),
           apps: [...apps.list(ownerId).map(row => apps.view(row, { owner: true })), ...apps.lent(ownerId).map(row => apps.view(row)), ...apps.offeredAll()],
           services: [...services.list(ownerId).map(row => services.view(row, { owner: true })), ...services.lent(ownerId).map(row => services.view(row))],
           catalog: services.catalogView(), principals: principals.owned(ownerId), agents: principals.agentsOf(ownerId),
@@ -1378,6 +1429,14 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         ...(error instanceof HttpError && error.extra ? error.extra : {}) } });
       else res.end();
     }
+  };
+  // Whatever a request's handling lets escape is answered and logged here, never left waiting.
+  const server = createServer((req, res) => {
+    handle(req, res).catch(error => {
+      console.error(new Date().toISOString(), req.method, req.url, error);
+      if (!res.headersSent) { res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: { code: 'internal_error', message: '処理を完了できませんでした。' } })); }
+      else res.end();
+    });
   });
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;

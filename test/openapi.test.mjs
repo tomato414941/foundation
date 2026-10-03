@@ -36,7 +36,7 @@ test('公開仕様から操作を見つけ、初回接続・承認・保存・�
     }
     throw new Error('Unknown operation ' + operationId);
   };
-  const created = await call('createPrincipal', { anonymous: true, data: { name: 'API reader' } });
+  const created = await call('beginCredential', { anonymous: true, data: { kind: 'key', name: 'API reader' } });
   assert.equal(created.status, 201);
   const token = created.json.token;
   const asked = await call('createRequest', { anonymous: true, token, data: { authorization_details: [{ type: 'relation', relation: 'agent' }] } });

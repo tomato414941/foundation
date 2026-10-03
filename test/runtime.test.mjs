@@ -419,7 +419,7 @@ test('アクセスキーの鍵ファイルを持つAIは、次に動いたとき
   assert.equal(after.webauthn_credential.private_key.kty, 'EC');
   assert.ok(!JSON.stringify(after).includes(before.trim()), 'the access key is no longer kept in the file');
   assert.equal((await stat(f.env.FOUNDATION_RUNTIME_KEY_FILE)).mode & 0o777, 0o600);
-  const credentials = (await f.request('/v1/webauthn-credentials?as=' + f.runtime.id, { anonymous: true, token: f.runtime.token })).json.webauthn_credentials;
+  const credentials = (await f.request('/v1/credentials?as=' + f.runtime.id, { anonymous: true, token: f.runtime.token })).json.credentials.filter(item => item.kind === 'webauthn');
   assert.deepEqual(credentials.map(item => item.id), [after.webauthn_credential.id]);
   assert.equal(JSON.parse((await execute(['api', 'GET', '/v1/principals/me'], f.env)).out).principal.id, f.runtime.id, 'and the credential is what proves it from then on');
 });

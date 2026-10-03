@@ -96,7 +96,7 @@ test('サインインを終えると開こうとしていた認証情報また�
   for (const [at, path] of ['/secrets', '/services', '/objects?prefix=reports%2F', '/objects?prefix=%E8%B3%87%E6%96%99+%23%3F%2F', '/principals#apps'].entries()) {
     const email = 'return-' + at + '@example.test';
     const token = f.app.challenges.issue('email', email, { ttl: 900_000 });
-    const result = await f.request('/v1/signin/verify', { method: 'POST', data: { email, token, return_to: path } });
+    const result = await f.request('/v1/credentials', { method: 'PUT', data: { kind: 'email', email, token, return_to: path } });
     assert.equal(result.status, 200, result.text);
     assert.equal(result.json.return_to, path);
   }

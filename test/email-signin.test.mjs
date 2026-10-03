@@ -8,9 +8,8 @@ import { fixture, USER_A } from './helpers.mjs';
 
 const deliveryCookie = response => response.headers.getSetCookie().find(value => value.startsWith('fdn_signin=')).split(';')[0];
 const sessionCookie = response => response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
-const send = (f, email = 'new@example.test', cookie, return_to) => f.request('/v1/signin', { method: 'POST', data: { email, return_to }, headers: cookie ? { cookie } : {} });
-const verify = (f, link = f.mailer.link('new@example.test'), options = {}) => f.request('/v1/signin/verify', {
-  method: 'POST', data: { email: link.email, token: link.token }, ...options,
+const send = (f, email = 'new@example.test', cookie, return_to) => f.request('/v1/credentials', { method: 'POST', data: { kind: 'email', address: email, return_to }, headers: cookie ? { cookie } : {} });
+const verify = (f, link = f.mailer.link('new@example.test'), options = {}) => f.request('/v1/credentials', { method: 'PUT', data: { kind: 'email', email: link.email, token: link.token }, ...options,
 });
 // Moves what Foundation remembers of the sign-ins under way back in time.
 const age = (f, ms) => f.app.store.db.prepare('UPDATE challenges SET created_at=created_at-?, expires_at=expires_at-?').run(ms, ms);
@@ -26,7 +25,7 @@ test('メールで送ったリンクを、送信元のCookieを持たないブ�
   assert.equal(url.pathname, '/signin/confirm');
   assert.match(link.token, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(f.mailer.sent.at(-1).subject, 'Foundationへのサインイン');
-  assert.deepEqual((await f.request('/v1/signin', { headers: { cookie } })).json.pending, sent.json.pending);
+  assert.deepEqual((await f.request('/v1/session', { headers: { cookie } })).json.pending, sent.json.pending);
   const result = await verify(f);
   assert.equal(result.status, 200, result.text);
   assert.deepEqual(result.json, { ok: true, return_to: '/' });
@@ -109,15 +108,15 @@ test('リンクを送ったアドレスと違うアドレスでは検証せず�
 
 test('外部サイトからの送信・検証・送信状況の取り消しを拒否する', async t => {
   const f = await fixture(t, { signin: false });
-  const data = { email: 'new@example.test' };
-  assert.equal((await f.request('/v1/signin', { method: 'POST', data, headers: { origin: 'https://evil.example' } })).status, 403);
+  const data = { kind: 'email', address: 'new@example.test' };
+  assert.equal((await f.request('/v1/credentials', { method: 'POST', data, headers: { origin: 'https://evil.example' } })).status, 403);
   const cookie = deliveryCookie(await send(f));
   const link = f.mailer.link('new@example.test');
   for (const origin of ['https://evil.example', 'null', '']) {
     assert.equal((await verify(f, link, { headers: { cookie, origin } })).status, 403);
   }
   assert.equal((await verify(f, link, { headers: { authorization: 'Bearer ignored', origin: 'https://evil.example' } })).status, 403);
-  assert.equal((await f.request('/v1/signin', { method: 'DELETE', headers: { cookie, origin: 'https://evil.example' } })).status, 403);
+  assert.equal((await f.request('/v1/session', { method: 'DELETE', headers: { cookie, origin: 'https://evil.example' } })).status, 403);
   assert.equal((await verify(f, link)).status, 200);
 });
 
@@ -127,11 +126,11 @@ test('不正な入力と外部への戻り先を拒否し、許可されたペ�
   const link = f.mailer.link('new@example.test');
   assert.equal(new URL(link.url).searchParams.get('return_to'), '/secrets');
   for (const changes of [{ email: '' }, { email: 'not-an-email' }, { token: 'short' }, { token: ['ambiguous'] }, { return_to: 'https://evil.example' }, { return_to: '//evil.example' }, { return_to: '/\\evil.example' }, { return_to: '/objects?redirect=https://evil.example' }, { return_to: '/services?prefix=private' }, { return_to: '/signin/confirm' }]) {
-    const result = await f.request('/v1/signin/verify', { method: 'POST', data: { email: link.email, token: link.token, ...changes } });
+    const result = await f.request('/v1/credentials', { method: 'PUT', data: { kind: 'email', email: link.email, token: link.token, ...changes } });
     assert.equal(result.status, 400, result.text);
   }
-  assert.equal((await f.request('/v1/signin/verify', { method: 'POST', raw: 'token=' + link.token, type: 'application/x-www-form-urlencoded' })).status, 415);
-  const result = await f.request('/v1/signin/verify', { method: 'POST', data: { email: link.email, token: link.token, return_to: '/secrets' } });
+  assert.equal((await f.request('/v1/credentials', { method: 'PUT', raw: 'token=' + link.token, type: 'application/x-www-form-urlencoded' })).status, 415);
+  const result = await f.request('/v1/credentials', { method: 'PUT', data: { kind: 'email', email: link.email, token: link.token, return_to: '/secrets' } });
   assert.equal(result.status, 200);
   assert.equal(result.json.return_to, '/secrets');
 });
@@ -155,7 +154,7 @@ test('送信に失敗したリンクは使えず、前のメールのリンク�
   assert.equal(failed.status, 503);
   const unsent = new URLSearchParams(new URL(attempted.text.match(/https?:\/\/\S+/)[0]).hash.slice(1));
   assert.equal((await verify(f, { email: 'second@example.test', token: unsent.get('token') })).status, 401);
-  assert.equal((await f.request('/v1/signin', { headers: { cookie } })).json.pending.email, 'new@example.test');
+  assert.equal((await f.request('/v1/session', { headers: { cookie } })).json.pending.email, 'new@example.test');
   assert.equal((await verify(f)).status, 200);
 });
 

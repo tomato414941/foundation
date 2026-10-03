@@ -256,7 +256,7 @@ async function api(path, { method = 'GET', data, signal, headers = {} } = {}) {
   signal?.throwIfAborted();
   if (!response.ok) {
     const error = new Error(result.error?.message || t('client.errors.requestFailed')); error.status = response.status; error.code = result.error?.code; error.details = result.error;
-    if (response.status === 401 && !linked && path !== '/v1/session' && !path.startsWith('/v1/signin')) await showSignin();
+    if (response.status === 401 && !linked && path !== '/v1/session' && path !== '/v1/credentials') await showSignin();
     throw error;
   }
   return result;
@@ -266,9 +266,11 @@ function showSigninConfirmation() {
   const email = signinLink.get('email') || '', token = signinLink.get('token') || '';
   const valid = signinLink.getAll('email').length === 1 && signinLink.getAll('token').length === 1
     && email.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(email) && /^[A-Za-z0-9_-]{43}$/.test(token);
+  // A link from POST /v1/emails attaches the address to a principal named in the link, and signs nobody in.
+  const attach = signinLink.get('attach');
   app.innerHTML = `<div class="workspace signin-shell"><header class="topbar">${brand(t)}</header><main class="signin-main">
-    <h1>${valid ? t('client.signin.title') : t('client.signin.checkLink')}</h1>
-    ${valid ? `<p class="signin-address">${esc(email)}</p><form id="confirm-signin"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.signin.title'))} ${icon('arrow')}</button></form>
+    <h1>${valid ? attach ? t('client.email.attachTitle') : t('client.signin.title') : t('client.signin.checkLink')}</h1>
+    ${valid ? `${attach ? `<p class="signin-help">${esc(t('client.email.attachLead', { email, name: attach }))}</p>` : `<p class="signin-address">${esc(email)}</p>`}<form id="confirm-signin"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(attach ? t('client.email.attach') : t('client.signin.title'))} ${icon('arrow')}</button></form>
     <p class="signin-footer"><a href="/">${esc(t('client.signin.useAnotherEmail'))}</a></p>` : `<p class="signin-help">${esc(t('client.signin.reopenEmailLink'))}</p><p class="signin-footer"><a href="/">${esc(t('client.signin.sendEmail'))}</a></p>`}</main></div>`;
   if (!valid) return;
   const form = document.querySelector('#confirm-signin'), button = form.querySelector('button');
@@ -278,7 +280,8 @@ function showSigninConfirmation() {
     button.disabled = true;
     form.querySelector('.form-error').textContent = '';
     try {
-      const result = await api('/v1/signin/verify', { method: 'POST', data: { email, token, return_to: signinReturn } });
+      const result = await api('/v1/credentials', { method: 'PUT', data: { kind: 'email', email, token, return_to: signinReturn } });
+      if (result.attached) { form.replaceWith(Object.assign(document.createElement('p'), { className: 'signin-help', textContent: t('client.email.attached') })); return; }
       location.replace(result.return_to);
     } catch (error) {
       form.querySelector('.form-error').textContent = error.message;
@@ -327,31 +330,33 @@ async function arrive(path) {
   try { await refresh(); }
   finally { signinBusy = false; void applyPendingLanguage(); }
 }
+// The principal's entries of one kind, from the overview.
+const passkeys = () => (state?.credentials || []).filter(item => item.kind === 'webauthn');
 const deviceName = () => navigator.userAgentData?.platform || t('client.passkey.thisDevice');
 async function createPasskey(name) {
-  const { options } = await api('/v1/webauthn-credentials/options', { method: 'POST', data: {} });
+  const { options } = await api('/v1/credentials', { method: 'POST', data: { kind: 'webauthn' } });
   const { credential, yielded } = await makePasskey(options);
   // With the key open here, it is wrapped for the new passkey too, so that one opens it as well.
   const wrap = own && yielded ? { wrap: b64(await sealing.wrap(own.privateKey, yielded)) } : {};
-  return api('/v1/webauthn-credentials', { method: 'POST', data: { name, credential, ...wrap } });
+  return api('/v1/credentials', { method: 'PUT', data: { kind: 'webauthn', name, credential, ...wrap } });
 }
 // Starting with a passkey alone: the passkey made here makes the principal, signed in at once.
 // Starting with a passkey alone: one press makes the passkey, and with it the principal, signed in at once. Nothing
 // is asked: the name Foundation drew for the passkey's label becomes the principal's, to be changed on the account page.
 async function startWithPasskey() {
   let made;
-  const { options } = await api('/v1/principals/options', { method: 'POST', data: {} });
+  const { options } = await api('/v1/credentials', { method: 'POST', data: { kind: 'webauthn' } });
   const { credential, yielded } = await makePasskey(options);
   // The principal's key, made with its first passkey and wrapped for it.
   const key = yielded ? await sealing.generateKey() : null;
-  made = await api('/v1/principals', { method: 'POST', data: { name: options.user.name, webauthn_credential: { name: deviceName(), credential, ...(key ? { wrap: b64(await sealing.wrap(key.privateKey, yielded)) } : {}) }, ...(key ? { public_key: b64(key.publicKey) } : {}), return_to: returnTo() } });
+  made = await api('/v1/credentials', { method: 'PUT', data: { kind: 'webauthn', principal_name: options.user.name, name: deviceName(), credential, ...(key ? { wrap: b64(await sealing.wrap(key.privateKey, yielded)), public_key: b64(key.publicKey) } : {}), return_to: returnTo() } });
   own = key; keyUnavailable = !key;
   if (made.backed_up) { await arrive(made.return_to); return; }
   openDialog(`<h2 id="dialog-title">${esc(t('client.passkey.created'))}</h2><p>${esc(t('client.passkey.deviceOnly'))}</p><button class="button primary full" type="button" id="start-continue">${esc(t('client.common.continue'))}</button>`);
   dialog.querySelector('#start-continue').addEventListener('click', () => { closeDialog(); void arrive(made.return_to); });
 }
 async function answerPasskey() {
-  const { options } = await api('/v1/signin/webauthn/options', { method: 'POST', data: {} });
+  const { options } = await api('/v1/session', { method: 'POST', data: { kind: 'webauthn' } });
   const given = await navigator.credentials.get({ publicKey: { ...options, challenge: bytes(options.challenge), allowCredentials: described(options.allowCredentials), extensions: { prf: { eval: { first: PRF_INPUT } } } } });
   return { yielded: yieldedBy(given), credential: { id: given.id, rawId: text64(given.rawId), type: given.type, clientExtensionResults: {},
     response: { clientDataJSON: text64(given.response.clientDataJSON), authenticatorData: text64(given.response.authenticatorData), signature: text64(given.response.signature),
@@ -367,7 +372,7 @@ async function showSignin({ email = '', message = '' } = {}) {
   document.title = 'Foundation';
   app.innerHTML = pendingView('/', { t });
   let config = { available: false, pending: null };
-  try { config = await api('/v1/signin'); }
+  try { config = await api('/v1/session'); }
   catch (error) { if (current === revision) showRefreshError(error, 'retry-signin'); return; }
   if (current !== revision) return;
   const pending = config.available ? config.pending : null, withPasskey = !pending && passkeysWork();
@@ -408,7 +413,7 @@ async function showSignin({ email = '', message = '' } = {}) {
     setBusy(true); document.querySelector('#passkey-error').textContent = '';
     try {
       const { credential, yielded } = await answerPasskey();
-      const signed = await api('/v1/signin/webauthn', { method: 'POST', data: { credential, return_to: returnTo() } });
+      const signed = await api('/v1/session', { method: 'PUT', data: { kind: 'webauthn', credential, return_to: returnTo() } });
       await unlockWith(credential.id, yielded);
       await arrive(signed.return_to);
     } catch (error) {
@@ -421,7 +426,7 @@ async function showSignin({ email = '', message = '' } = {}) {
     document.querySelector('#change-email').addEventListener('click', async () => {
       if (busy) return;
       setBusy(true);
-      try { await api('/v1/signin', { method: 'DELETE' }); await showSignin({ email: pending.email }); }
+      try { await api('/v1/session', { method: 'DELETE' }); await showSignin({ email: pending.email }); }
       catch (error) { if (form.isConnected) { form.querySelector('.form-error').textContent = error.message; setBusy(false); } }
     });
   }
@@ -430,7 +435,7 @@ async function showSignin({ email = '', message = '' } = {}) {
     if (busy || !config.available || (pending && Date.now() < pending.resend_at)) return;
     setBusy(true); form.querySelector('.form-error').textContent = '';
     try {
-      await api('/v1/signin', { method: 'POST', data: { email: pending?.email || form.elements.email.value.trim(), return_to: returnTo() } });
+      await api('/v1/credentials', { method: 'POST', data: { kind: 'email', address: pending?.email || form.elements.email.value.trim(), return_to: returnTo() } });
       await showSignin();
     } catch (error) {
       if (!form.isConnected) return;
@@ -685,10 +690,11 @@ function render() {
       <div class="agent-actions"><button class="text-button danger" data-action="remove-passkey" data-id="${esc(item.id)}">${esc(t('client.common.delete'))}</button></div></article>`;
     shell(`<header class="page-heading"><h1>${esc(t('client.account.title'))}</h1><p>${esc(state.user.email || '')}</p></header>
       <section class="resource-section" aria-labelledby="id-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="id-title">${esc(t('client.account.id'))}</h2><p><code>${esc(state.user.id)}</code></p></div></div><button class="button secondary" data-action="copy-id">${icon('copy')} ${esc(t('client.account.copyId'))}</button></div></section>
+      <section class="resource-section" aria-labelledby="email-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('mail')}</span><div><h2 id="email-title">${esc(t('client.account.email'))}</h2>${state.user.email ? `<p>${esc(state.user.email)}</p>` : ''}</div></div><button class="button secondary" data-action="add-email">${icon('plus')} ${esc(t('client.account.addEmail'))}</button></div></section>
       <section class="resource-section" aria-labelledby="name-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('edit')}</span><div><h2 id="name-title">${esc(t('client.common.name'))}</h2><p>${esc(state.principal.name || '')}</p></div></div><button class="button secondary" data-action="rename-me">${esc(t('client.common.changeName'))}</button></div></section>
       <section class="resource-section" aria-labelledby="language-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('globe')}</span><h2 id="language-title">${esc(t('language.label'))}</h2></div>${languagePicker(t, i18n.language)}</div></section>
       <section class="resource-section" aria-labelledby="passkeys-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="passkeys-title">${esc(t('client.passkey.title'))}</h2><p>${esc(t('client.passkey.description'))}</p></div></div>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} ${esc(t('client.passkey.add'))}</button>` : ''}</div>
-        ${(state.webauthn_credentials || []).length ? `<div class="agent-list">${state.webauthn_credentials.map(passkeyRow).join('')}</div>` : ''}</section>
+        ${passkeys().length ? `<div class="agent-list">${passkeys().map(passkeyRow).join('')}</div>` : ''}</section>
       ${state.payment?.available ? `<section class="resource-section" aria-labelledby="payment-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('card')}</span><div><h2 id="payment-title">${esc(t('client.payment.title'))}</h2><p>${state.payment.paying ? t('client.payment.registeredNote') : t('client.payment.addMethodNote')}</p></div></div><button class="button secondary" data-action="set-payment">${state.payment.paying ? t('client.payment.changeMethod') : t('client.payment.addMethod')}</button></div></section>` : ''}
       <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">${esc(t('client.account.downloadData'))}</h2><p>${esc(t('client.account.exportDescription'))}</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ${esc(t('client.common.download'))}</a></div></section>
       <section class="resource-section" aria-labelledby="handover-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('arrow')}</span><div><h2 id="handover-title">${esc(t('client.handover.title'))}</h2><p>${esc(t('client.handover.description'))}</p></div></div><button class="button secondary" data-action="hand-over">${esc(t('client.handover.action'))}</button></div></section>
@@ -742,7 +748,7 @@ function render() {
     const focusedAction = focused.getAttribute('aria-label') || focused.dataset.action;
     const kept = secrets(), handed = (state.agents || []).some(item => item.id === state.foundation?.principal_id);
     // What the page can do here: nothing with a value until the owner's key is open.
-    const keyLine = own ? '' : !(state.webauthn_credentials || []).length
+    const keyLine = own ? '' : !passkeys().length
       ? `<div class="access-empty key-state"><p>${esc(t('client.secret.passkeyRequired'))}</p>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} ${esc(t('client.passkey.add'))}</button>` : ''}</div>`
       : keyUnavailable ? `<div class="access-empty key-state"><p>${esc(t('client.secret.keyUnavailable'))}</p></div>`
         : `<div class="access-empty key-state"><button class="button secondary" data-action="unlock-key">${icon('lock')} ${esc(t('client.secret.unlockWithPasskey'))}</button></div>`;
@@ -1254,7 +1260,8 @@ function disconnect(connection) {
 function addKey() {
   openDialog(`<h2 id="dialog-title">${esc(t('client.access.addPrincipal'))}</h2><form><label for="agent-name">${esc(t('client.common.name'))}</label><input id="agent-name" name="name" placeholder="${esc(t('client.access.namePlaceholder'))}" required maxlength="80" autocomplete="off"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.access.addAndIssueKey'))}</button></form>`);
   bindForm(async (form) => {
-    const result = await api('/v1/principals', { method: 'POST', data: { name: form.get('name'), key: true } });
+    const { principal } = await api('/v1/principals', { method: 'POST', data: { name: form.get('name') } });
+    const result = { principal, ...await api('/v1/credentials?as=' + encodeURIComponent(principal.id), { method: 'POST', data: { kind: 'key' } }) };
     await refresh(); if (!state) return;
     openDialog(`<h2 id="dialog-title">${esc(t('client.principals.accessKeyTitle', { name: result.principal.name }))}</h2><p>${esc(t('client.access.keyStorageWarning'))}</p><label for="agent-token">${esc(t('client.access.key'))}</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">${esc(t('client.access.copyKey'))}</button><label for="api-url">${esc(t('client.access.endpoint'))}</label><input id="api-url" readonly value="${esc(location.origin)}/v1"><p class="permission-note">${esc(t('client.access.keySharingWarning'))}</p><button class="button primary full" data-action="close-dialog">${esc(t('client.common.close'))}</button>`);
   });
@@ -1288,6 +1295,14 @@ async function principalDetails(id) {
 function renamePrincipal(item) {
   openDialog(`<h2 id="dialog-title">${esc(t('client.common.changeName'))}</h2><form><label for="agent-name">${esc(t('client.common.name'))}</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off" value="${esc(item.name)}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.save'))}</button></form>`);
   bindForm(async (form) => { await api(`/v1/principals/${item.id}`, { method: 'PATCH', data: { name: form.get('name') } }); await refresh(); await principalDetails(item.id); });
+}
+// Asking for an address: the API sends the link; whoever opens it confirms there.
+function addEmail() {
+  openDialog(`<h2 id="dialog-title">${esc(t('client.account.addEmail'))}</h2><form><label for="new-email">${esc(t('client.signin.emailAddress'))}</label><input id="new-email" name="address" type="email" required maxlength="254" autocomplete="email"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.signin.sendEmail').replace(/^サインイン|^Send sign-in /, m => m === 'サインイン' ? '確認' : 'Send '))}</button></form>`);
+  bindForm(async (form) => {
+    await api('/v1/credentials', { method: 'POST', data: { kind: 'email', address: form.get('address').trim() } });
+    closeDialog(); toast(t('client.account.emailLinkSent'));
+  });
 }
 function renameMe() {
   openDialog(`<h2 id="dialog-title">${esc(t('client.common.changeName'))}</h2><form><label for="my-name">${esc(t('client.common.name'))}</label><input id="my-name" name="name" required maxlength="80" autocomplete="name" value="${esc(state.principal.name || '')}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.save'))}</button></form>`);
@@ -1383,13 +1398,13 @@ function mergeAccount() {
   });
 }
 async function issueKey(item) {
-  const result = await api(`/v1/principals/${item.id}/keys`, { method: 'POST', data: {} });
+  const result = await api('/v1/credentials?as=' + encodeURIComponent(item.id), { method: 'POST', data: { kind: 'key' } });
   await refresh();
   openDialog(`<h2 id="dialog-title">${esc(t('client.principals.accessKeyTitle', { name: item.name }))}</h2><p>${esc(t('client.access.keyShownOnce'))}</p><label for="agent-token">${esc(t('client.access.key'))}</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">${esc(t('client.access.copyKey'))}</button><button class="button primary full" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.done'))}</button>`);
 }
 function revokeKey(item, key) {
   openDialog(`<h2 id="dialog-title">${esc(t('client.access.confirmRevokeKey'))}</h2><p>${esc(item.name)} · ${esc(key.slice(0, 8))}</p><form><p>${esc(t('client.access.revokeKeyWarning'))}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.cancel'))}</button><button type="submit" class="button destructive">${esc(t('client.access.confirmRevoke'))}</button></div></form>`);
-  bindForm(async () => { await api(`/v1/principals/${item.id}/keys/${key}`, { method: 'DELETE', data: {} }); await refresh(); await principalDetails(item.id); toast(t('client.access.keyRevoked')); });
+  bindForm(async () => { await api('/v1/credentials/' + encodeURIComponent(key), { method: 'DELETE', data: {} }); await refresh(); await principalDetails(item.id); toast(t('client.access.keyRevoked')); });
 }
 function addIntegration() {
   openDialog(`<h2 id="dialog-title">${esc(t('client.integration.register'))}</h2><form>
@@ -1403,7 +1418,7 @@ function addIntegration() {
     // An app is a principal of this person's making, with settings for handing its users back, and a key of its own.
     const made = (await api('/v1/principals', { method: 'POST', data: { name: form.get('name') } })).principal;
     const settings = (await api(`/v1/principals/${made.id}/settings`, { method: 'PUT', data: { return_url: form.get('return_url'), refresh_url: form.get('refresh_url') || undefined, webhook_url: form.get('webhook_url') || undefined } })).settings;
-    const issued = await api(`/v1/principals/${made.id}/keys`, { method: 'POST', data: {} });
+    const issued = await api('/v1/credentials?as=' + encodeURIComponent(made.id), { method: 'POST', data: { kind: 'key' } });
     const result = { ...made, token: issued.token, webhook_secret: settings.webhook_secret };
     await refresh(); if (!state) return;
     openDialog(`<h2 id="dialog-title">${esc(t('client.integrations.keyTitle', { name: result.name }))}</h2><p>${esc(t('client.access.keyShownOnce'))}</p><label for="agent-token">${esc(t('client.integration.key'))}</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">${esc(t('client.access.copyKey'))}</button>
@@ -1679,8 +1694,8 @@ document.addEventListener('click', async (event) => {
     if (action === 'allow-foundation') await allowFoundation(target);
     if (action === 'set-payment') { target.disabled = true; location.assign((await api('/v1/payment/setup', { method: 'POST', data: {} })).url); }
     if (action === 'remove-passkey') {
-      const item = (state.webauthn_credentials || []).find(entry => entry.id === id);
-      if (item) confirmRemoval(t('client.common.deleteNameTitle', { name: item.name }), t('client.passkey.deleteWarning'), () => api('/v1/webauthn-credentials/' + encodeURIComponent(item.id), { method: 'DELETE', data: {} }));
+      const item = passkeys().find(entry => entry.id === id);
+      if (item) confirmRemoval(t('client.common.deleteNameTitle', { name: item.name }), t('client.passkey.deleteWarning'), () => api('/v1/credentials/' + encodeURIComponent(item.id), { method: 'DELETE', data: {} }));
     }
     if (action === 'retry-page') { target.disabled = true; try { await refresh(); } finally { if (target.isConnected) target.disabled = false; } }
     if (action === 'retry-signin') { target.disabled = true; await showSignin(); }
@@ -1771,6 +1786,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'remove-principal') removePrincipal(principalById(id));
     if (action === 'rename-principal') renamePrincipal(principalById(id));
     if (action === 'rename-me') renameMe();
+    if (action === 'add-email') addEmail();
     if (action === 'copy-id') { try { await navigator.clipboard.writeText(state.user.id); toast(t('client.common.copied')); } catch { toast(t('client.errors.copyFailed')); } }
     if (action === 'hand-over') handOver();
     if (action === 'merge') mergeAccount();

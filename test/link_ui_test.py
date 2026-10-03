@@ -69,7 +69,7 @@ with sync_playwright() as p:
 
     # The product makes its user's account and key; the user's AI asks for something to keep.
     user = call('/v1/principals', product, 'POST', {'alias': 'user-1'})['principal']
-    key = call('/v1/principals/' + user['id'] + '/keys', product, 'POST', {})['token']
+    key = call('/v1/credentials?as=' + user['id'], product, 'POST', {'kind': 'key'})['token']
     # What the user keeps is injected by Foundation's principal, which the user makes their agent.
     overview = call('/v1/overview', key)
     call('/v1/relations', key, 'POST', {'subject': overview['foundation']['principal_id'], 'relation': 'agent', 'object_type': 'principal', 'object_id': overview['user']['id']})

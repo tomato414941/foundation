@@ -102,7 +102,7 @@ test('所有者は所有する相手を管理するが、その持ち物には�
   const store = new Store(':memory:', KEY), principals = new Principals(store), authorization = new Authorization(principals, new Resources(store));
   const person = principals.ensure('person'), ai = principals.create(person.id, { name: 'ai' });
   const ask = (name, resource) => authorization.allowed({ subject: { id: person.id, via: { kind: 'key' } }, action: { name }, resource }).decision;
-  assert.equal(ask('issue-key', { type: 'principal', id: ai.id }), true);
+  assert.equal(ask('add-credential', { type: 'principal', id: ai.id }), true);
   assert.equal(ask('remove', { type: 'principal', id: ai.id }), true);
   assert.equal(ask('content', { type: 'connection', id: 'x', owner: ai.id }), false);
   principals.relate(person.id, 'agent', 'principal', ai.id);

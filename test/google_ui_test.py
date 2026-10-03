@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-google-ui-') as private_dir,
         assert all(value not in result.stdout + result.stderr for value in ['google-access-', 'refresh-personal', 'fdn_'])
         return json.loads(result.stdout.split('\n\nKey file')[0])
 
-    approval = cli('connect', '--name', 'laptop のAI')['request']
+    cli('init', '--name', 'laptop のAI'); approval = cli('join')['request']
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 1000})
     page = context.new_page()

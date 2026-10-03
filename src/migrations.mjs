@@ -1,8 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import { checkDefinition } from './service-definition.mjs';
 import { ensureAgent } from './keys.mjs';
 import { newContentKey, sealContent, seal } from '../cli/envelope.mjs';
 
-export const SCHEMA_VERSION = 48;
+export const SCHEMA_VERSION = 49;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -24,6 +25,7 @@ export const STEPS = {
   46: mergeTickets,
   47: sealedConnections,
   48: connectionReferences,
+  49: emailEntries,
 };
 
 // A stop is kept until the runner confirms it. Rebuilding widens the status check without changing resource IDs.
@@ -445,6 +447,14 @@ function sealedConnections({ db, vault }) {
 // A connection's fields may refer to secrets; which, is kept beside the connection, so that a referenced secret is
 // not removed from under it.
 function connectionReferences({ db }) { db.exec(REFERENCES); }
+// An address is one of a principal's entries, beside its passkeys and keys: it gets an id and a time like them, so that
+// all entries are listed and removed the same way.
+function emailEntries({ db }) {
+  db.exec('ALTER TABLE emails ADD COLUMN id TEXT; ALTER TABLE emails ADD COLUMN created_at INTEGER');
+  const now = Date.now();
+  for (const row of db.prepare('SELECT address FROM emails').all()) db.prepare('UPDATE emails SET id=?, created_at=? WHERE address=?').run(randomUUID(), now, row.address);
+  db.exec('CREATE UNIQUE INDEX emails_id ON emails(id)');
+}
 const REFERENCES = `
   CREATE TABLE connection_references (
     connection_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE, secret_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
@@ -520,8 +530,9 @@ export const SCHEMA = `
     principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
     return_url TEXT NOT NULL, refresh_url TEXT, webhook_url TEXT, webhook_secret TEXT, created_at TEXT NOT NULL
   );
-  CREATE TABLE emails (address TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE);
+  CREATE TABLE emails (address TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, id TEXT, created_at INTEGER);
   CREATE INDEX emails_principal ON emails(principal_id);
+  CREATE UNIQUE INDEX emails_id ON emails(id);
   ${SESSIONS}
   ${CHALLENGES}
   ${WEBAUTHN_CREDENTIALS}

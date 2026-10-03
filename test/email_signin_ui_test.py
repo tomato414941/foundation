@@ -30,7 +30,7 @@ with sync_playwright() as p:
     errors, calls, urls = [], [], []
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.on('request', lambda request: urls.append(request.url))
-    page.on('request', lambda request: calls.append(request) if request.url.endswith('/v1/signin/verify') else None)
+    page.on('request', lambda request: calls.append(request) if request.url.endswith('/v1/credentials') and request.method == 'PUT' else None)
     page.goto(link, wait_until='networkidle')
     expect(page.get_by_role('heading', name='サインイン', exact=True)).to_be_visible()
     expect(page.get_by_text(email, exact=True)).to_be_visible()

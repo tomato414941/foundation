@@ -136,6 +136,7 @@ export class Principals {
     return this.db.prepare('SELECT id,created_at,last_used_at,expires_at,environment_id FROM access_keys WHERE principal_id=? AND (expires_at IS NULL OR expires_at>?) ORDER BY created_at,id')
       .all(principalId, Date.now()).map(({ expires_at, environment_id, ...row }) => ({ ...row, ...(environment_id ? { expires_at, environment_id } : {}) }));
   }
+  key(keyId) { return typeof keyId === 'string' ? this.db.prepare('SELECT id,principal_id,created_at,last_used_at,environment_id FROM access_keys WHERE id=? AND (expires_at IS NULL OR expires_at>?)').get(keyId, Date.now()) : undefined; }
   hasKey(principalId, keyId) { return Boolean(this.db.prepare('SELECT 1 FROM access_keys WHERE principal_id=? AND id=? AND (expires_at IS NULL OR expires_at>?)').get(principalId, keyId, Date.now())); }
   issueKey(principalId, { expiresAt = null, environmentId = null } = {}) {
     if (!environmentId && this.keys(principalId).filter(row => !row.environment_id).length >= KEYS_MAX) fail(409, 'key_limit', `登録できるキーは${KEYS_MAX}件までです。`);

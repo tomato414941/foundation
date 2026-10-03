@@ -48,7 +48,7 @@ function change(locale) {
 }
 const heading = () => document.querySelector('main h1')?.textContent;
 const overview = { user: { id: 'owner', email: 'owner@example.test' }, principal: { id: 'owner', name: 'Keeper Sirius' },
-  secrets: [], connections: [], services: [], catalog: [], apps: [], agents: [], principals: [], webauthn_credentials: [], functions: [], environments: [] };
+  secrets: [], connections: [], services: [], catalog: [], apps: [], agents: [], principals: [], credentials: [], functions: [], environments: [] };
 const request = { id, to: 'owner', requester_name: 'Test', authorization_details: [{ type: 'relation', relation: 'agent' }], status: 'pending', expires_at: Date.now() + 60_000 };
 if (mode === 'transfer') {
   request.authorization_details[0].relation = 'transfer_grant';
@@ -76,10 +76,11 @@ globalThis.fetch = async (url, options = {}) => {
     if (mode === 'boot' && !bootWaited) { bootWaited = true; await new Promise(resolve => { release = resolve; }); }
     if (signedIn) data = overview;
     else { status = 401; data = { error: { code: 'signin_required', message: 'Sign in' } }; }
-  } else if (url === '/v1/signin' && options.method === 'GET') data = { available: true, pending: null };
-  else if (url === '/v1/signin' || url === '/v1/signin/verify') { status = 400; data = { error: { code: 'invalid_input', message: 'Sample error' } }; }
-  else if (url.endsWith('/options')) data = { options: { challenge: 'AAAAAAAA', user: { id: 'b3duZXI', name: 'Keeper Sirius', displayName: 'Keeper Sirius' }, allowCredentials: [] } };
-  else if (url === '/v1/principals' || url === '/v1/signin/webauthn') { signedIn = true; data = { return_to: '/', backed_up: mode !== 'passkey-local' }; }
+  } else if (url === '/v1/session' && options.method === 'GET') data = { available: true, pending: null };
+  else if (url === '/v1/session' && options.method === 'POST') data = { options: { challenge: 'AAAAAAAA', allowCredentials: [] } };
+  else if (url === '/v1/credentials' && options.method === 'POST' && JSON.parse(options.body).kind === 'webauthn') data = { options: { challenge: 'AAAAAAAA', user: { id: 'b3duZXI', name: 'Keeper Sirius', displayName: 'Keeper Sirius' } } };
+  else if (url === '/v1/credentials' && JSON.parse(options.body).kind === 'email') { status = 400; data = { error: { code: 'invalid_input', message: 'Sample error' } }; }
+  else if (url === '/v1/credentials' || url === '/v1/session') { signedIn = true; data = { return_to: '/', backed_up: mode !== 'passkey-local' }; }
   else if (url === '/v1/key') data = { key: {} };
   else if (url === '/v1/requests/' + id) data = { request };
   else if (url.endsWith('/deny')) { await new Promise(resolve => { release = resolve; }); request.status = 'denied'; data = {}; }
@@ -267,9 +268,9 @@ if (mode === 'boot') {
     await until(() => document.documentElement.lang === 'en' && heading() === 'Foundation');
     change('ja'); await until(() => document.documentElement.lang === 'ja');
     if (mode !== 'passkey-signin') {
-      const created = calls.filter(call => call.url === '/v1/principals');
+      const created = calls.filter(call => call.url === '/v1/credentials' && call.options.method === 'PUT');
       assert.equal(created.length, 1, 'locale changes never regenerate a stored identity');
-      assert.equal(JSON.parse(created[0].options.body).name, 'Keeper Sirius');
+      assert.equal(JSON.parse(created[0].options.body).principal_name, 'Keeper Sirius');
     }
     assert.equal(overview.principal.name, 'Keeper Sirius');
   } else throw new Error('Unknown fixture mode: ' + mode);

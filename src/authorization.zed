@@ -34,11 +34,9 @@ definition principal {
   relation read_grant: principal
   relation rename_grant: principal
   relation remove_grant: principal
-  relation issue_key_grant: principal
-  relation revoke_key_grant: principal
   relation issue_link_grant: principal
-  relation add_webauthn_credential_grant: principal
-  relation remove_webauthn_credential_grant: principal
+  relation add_credential_grant: principal
+  relation remove_credential_grant: principal
   relation payment_grant: principal
   relation pass_grant: principal
   relation limit_grant: principal
@@ -61,11 +59,10 @@ definition principal {
   permission rename = manage + rename_grant
   // Removing a principal is its owner's, never its own: a principal does not end itself.
   permission remove = owner + remove_grant
-  permission issue_key = manage + issue_key_grant
-  permission revoke_key = manage + revoke_key_grant
   permission issue_link = manage + issue_link_grant
-  permission add_webauthn_credential = decide + add_webauthn_credential_grant
-  permission remove_webauthn_credential = manage + remove_webauthn_credential_grant
+  // An entry (a passkey, an address, a key) is added and removed by whoever manages the principal: itself, its stewards, its owner.
+  permission add_credential = manage + add_credential_grant
+  permission remove_credential = manage + remove_credential_grant
   permission payment = decide + payer + payment_grant
   permission pass = manage + use + pass_grant
   // A limit is set on a principal by whoever owns it, never by itself.

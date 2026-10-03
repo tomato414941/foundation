@@ -93,8 +93,9 @@ with sync_playwright() as p:
     # Foundation, which the owner has made their agent.
     allow_foundation(page.request, args.base)
     request = page.evaluate("""async () => {
-      const key = await (await fetch('/v1/principals', {method: 'POST', headers: {'content-type': 'application/json'},
-        body: JSON.stringify({name: 'UI test agent', agent: true, key: true})})).json();
+      const made = await (await fetch('/v1/principals', {method: 'POST', headers: {'content-type': 'application/json'},
+        body: JSON.stringify({name: 'UI test agent', agent: true})})).json();
+      const key = { ...made, ...await (await fetch('/v1/credentials?as=' + made.principal.id, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind: 'key'})})).json() };
       const owner = key.principal.acts_for[0];
       const made = await (await fetch('/v1/requests?as=' + owner, {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
         body: JSON.stringify({authorization_details: [{type: 'secret', fields: [{name: 'slack-bot', label: 'Bot User OAuth Token', site: 'https://api.slack.com/apps'}]}], binding_message: 'チャンネルに要約を投稿します。',

@@ -23,7 +23,7 @@ with sync_playwright() as p:
         assert result.ok, str(result.status)
         return result.json()
 
-    actor = post('/v1/principals', {'name': 'laptop の作業用AI'})
+    actor = post('/v1/credentials', {'kind': 'key', 'name': 'laptop の作業用AI'})
     token = actor['token']
     asked = post('/v1/requests', {'authorization_details': [{'type': 'relation', 'relation': 'agent'}], 'binding_message': '保存した認証情報を使って接続を確認します。'}, token)['request']
     page = context.new_page()
@@ -76,7 +76,7 @@ with sync_playwright() as p:
     expect(dialog.locator('.connection-list li')).to_have_count(2)
     me = caller.get('/v1/principals/me', headers={'authorization': 'Bearer ' + token}).json()
     owner = me['acts_for'][0]
-    original_key = actor['key']['id'][:8]
+    original_key = actor['credential']['id'][:8]
     dialog.locator('.connection-list li').filter(has_text=original_key).get_by_role('button', name='失効', exact=True).click()
     expect(dialog.get_by_text('このキーは使えなくなります。他のキーとアクセス許可は残ります。', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='失効させる', exact=True).click()

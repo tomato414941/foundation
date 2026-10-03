@@ -31,7 +31,7 @@ with sync_playwright() as p:
         assert result.ok, str(result.status) + ' ' + result.text()
         return result.json()
 
-    actor = call('POST', '/v1/principals', {'name': '作業用AI'})
+    actor = call('POST', '/v1/credentials', {'kind': 'key', 'name': '作業用AI'})
     token = actor['token']
     asked = call('POST', '/v1/requests', {'authorization_details': [{'type': 'relation', 'relation': 'agent'}]}, token)['request']
     page = context.new_page()

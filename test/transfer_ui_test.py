@@ -44,11 +44,12 @@ with sync_playwright() as p:
     allow_foundation(context.request, args.base)
     kept = context.request.put(args.base + '/v1/resources?kind=secret&name=handed', data=plain('hand-me'), headers={'content-type': 'application/json', 'origin': args.base})
     assert kept.ok, kept.text()
-    owned = context.request.post(args.base + '/v1/principals', data=json.dumps({'name': 'my agent', 'agent': True, 'key': True}), headers={'content-type': 'application/json', 'origin': args.base}).json()
+    owned = context.request.post(args.base + '/v1/principals', data=json.dumps({'name': 'my agent', 'agent': True}), headers={'content-type': 'application/json', 'origin': args.base}).json()
+    owned.update(context.request.post(args.base + '/v1/credentials?as=' + owned['principal']['id'], data=json.dumps({'kind': 'key'}), headers={'content-type': 'application/json', 'origin': args.base}).json())
 
     # The one given to: a principal of its own, with a key, and Foundation as its agent.
     other = p.request.new_context()
-    made = other.post(args.base + '/v1/principals', data=json.dumps({'name': 'receiver'}), headers={'content-type': 'application/json'}).json()
+    made = other.post(args.base + '/v1/credentials', data=json.dumps({'kind': 'key', 'name': 'receiver'}), headers={'content-type': 'application/json'}).json()
     headers = {'authorization': 'Bearer ' + made['token']}
     private = x25519.X25519PrivateKey.generate()
     public = private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)

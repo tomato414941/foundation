@@ -34,7 +34,7 @@ test('ほかの顧客のものや終わっていない支払い方法の登録�
 test('Stripeの用意がなければ支払い方法は登録できず、誰もが自分の負担者として無料枠で止まる', async t => {
   const f = await fixture(t, { payers: false });
   assert.deepEqual((await f.request('/v1/payment')).json.payment, { available: false, paying: false, payer: USER_A }, 'with no way to register, nobody is asked to');
-  const alone = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { name: 'alone' } });
+  const alone = await f.request('/v1/credentials', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'alone' } });
   assert.equal(f.app.payments.payerOf(alone.json.principal.id), alone.json.principal.id);
   f.app.environments.within(alone.json.principal.id);
   assert.equal((await f.request('/v1/payment/setup', { method: 'POST', data: {} })).status, 503);
@@ -120,7 +120,7 @@ test('持っている相手が使った分は持ち主の枠に数えられ、�
   assert.throws(() => f.app.environments.within(agent.id), /無料枠の上限/, 'the free part is one, not one per principal');
   // Another person takes the group's costs on: only they can draw that line, and from then on the group counts for them.
   // One of its own (made by nobody here), or its costs would only roll up to this owner again.
-  const sponsor = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { name: 'sponsor' } });
+  const sponsor = await f.request('/v1/credentials', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'sponsor' } });
   assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: sponsor.json.principal.id, relation: 'payer', object_type: 'principal', object_id: group.id } })).status, 403, 'not put on someone');
   // A sponsor acting as itself: it may give lines on the group only where it may relate there, so the group's steward lends it that first.
   f.app.principals.relate(sponsor.json.principal.id, 'relate_grant', 'principal', group.id);
@@ -139,7 +139,7 @@ test('持っている相手が使った分は持ち主の枠に数えられ、�
 test('支払い方法のないプリンシパルには負担者がおらず、自分の名では環境もファイルも使えず、支払い方法を登録するか誰かに引き取られると負担者ができる', async t => {
   const fake = fakeStripe(), f = await fixture(t, { stripe: fake.stripe });
   // One that came by itself: nobody made it, nobody pays for it.
-  const alone = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { name: 'alone' } });
+  const alone = await f.request('/v1/credentials', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'alone' } });
   const as = { token: alone.json.token, anonymous: true, as: alone.json.principal.id };
   assert.deepEqual((await f.request('/v1/payment', as)).json.payment, { available: true, paying: false, payer: null });
   assert.throws(() => f.app.environments.within(alone.json.principal.id), { status: 402, code: 'payer_required' });
@@ -155,7 +155,7 @@ test('支払い方法のないプリンシパルには負担者がおらず、�
   f.app.environments.within(alone.json.principal.id);
   assert.equal(f.app.payments.payerOf(made.json.principal.id), alone.json.principal.id);
   // Another that came by itself and asks to be someone's agent: approving takes it in, so that person pays for it.
-  const asking = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { name: 'asking' } });
+  const asking = await f.request('/v1/credentials', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'asking' } });
   assert.throws(() => f.app.environments.within(asking.json.principal.id), { code: 'payer_required' });
   const asked = await f.request('/v1/requests', { token: asking.json.token, anonymous: true, method: 'POST', data: { authorization_details: [{ type: 'relation', relation: 'agent' }] } });
   assert.equal(asked.status, 201, asked.text);

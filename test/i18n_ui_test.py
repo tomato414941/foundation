@@ -208,9 +208,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-i18n-ui-') as temporary, syn
 
         # Consent uses real fixture requests in the saved locale, with no language control at any stage.
         env = {**os.environ, 'FOUNDATION_URL': args.base, 'FOUNDATION_RUNTIME_KEY_FILE': str(Path(temporary) / f'{locale}.key')}
-        result = subprocess.run(['node', 'cli/runtime.mjs', 'connect', '--name', 'Test AI'], cwd=root,
-                                env=env, capture_output=True, text=True, timeout=30, check=True)
-        request = json.loads(result.stdout.split('\n\nKey file')[0])['request']
+        subprocess.run(['node', 'cli/runtime.mjs', 'init', '--name', 'Test AI'], cwd=root, env=env, capture_output=True, text=True, timeout=30, check=True)
+        result = subprocess.run(['node', 'cli/runtime.mjs', 'join'], cwd=root, env=env, capture_output=True, text=True, timeout=30, check=True)
+        request = json.loads(result.stdout)['request']
         page.goto(request['verification_uri'], wait_until='networkidle')
         expect(page.get_by_role('heading', name=tr(locale, 'client.access.allowAccess'), exact=True)).to_be_visible()
         expect(page.locator('html')).to_have_attribute('lang', locale)

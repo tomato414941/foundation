@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
         assert 'sk-or-v1-' not in result.stdout + result.stderr and 'fdn_' not in result.stdout
         return json.loads(result.stdout.split('\n\nKey file')[0]) if success else None
 
-    approval = cli('connect', '--name', 'laptop のAI')['request']
+    cli('init', '--name', 'laptop のAI'); approval = cli('join')['request']
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 1050})
     page = context.new_page()

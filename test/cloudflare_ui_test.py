@@ -88,8 +88,9 @@ with sync_playwright() as p:
 
     # The agent asks to reconnect the exact first connection; no real mail or service is used.
     request_path = page.evaluate("""async (id) => {
-      const key = await (await fetch('/v1/principals', {method: 'POST', headers: {'content-type': 'application/json'},
-        body: JSON.stringify({name: 'UI test agent', agent: true, key: true})})).json();
+      const made = await (await fetch('/v1/principals', {method: 'POST', headers: {'content-type': 'application/json'},
+        body: JSON.stringify({name: 'UI test agent', agent: true})})).json();
+      const key = { ...made, ...await (await fetch('/v1/credentials?as=' + made.principal.id, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind: 'key'})})).json() };
       const owner = key.principal.acts_for[0];
       const response = await fetch('/v1/requests?as=' + owner, {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
         body: JSON.stringify({authorization_details: [{type: 'connection', service: 'cloudflare', connection_id: id}], binding_message: '共有アカウントへの接続を更新'})});

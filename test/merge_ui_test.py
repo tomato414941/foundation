@@ -77,7 +77,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots / 'merge-390.png'), full_page=True)
     dialog.get_by_role('button', name='統合する', exact=True).click()
     expect(dialog).not_to_be_visible()
-    passkeys = context.request.get(base + '/v1/webauthn-credentials').json()['webauthn_credentials']
+    passkeys = [item for item in context.request.get(base + '/v1/credentials').json()['credentials'] if item['kind'] == 'webauthn']
     assert len(passkeys) == 1, passkeys
     expect(page.get_by_role('region', name='パスキー').get_by_role('heading', name=passkeys[0]['name'], exact=True)).to_be_visible()
     assert [row['name'] for row in context.request.get(base + '/v1/resources?kind=secret').json()['resources']] == ['their secret']

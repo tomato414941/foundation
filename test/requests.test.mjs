@@ -88,14 +88,14 @@ test('Request creation is idempotent, and asking for something else makes a new 
 test('メール認証後は依頼のページへ戻し、外部への転送を拒否する', async t => {
   const f = await fixture(t, { signin: false }), { row } = await create(f);
   for (const return_to of ['https://evil.test/', '//evil.test/', '/keys/x', '/requests/' + row.id + '?next=evil', '/requests/' + row.id + '/..', 42]) {
-    const response = await f.request('/v1/signin', { method: 'POST', data: { email: 'owner@example.test', return_to } });
+    const response = await f.request('/v1/credentials', { method: 'POST', data: { kind: 'email', address: 'owner@example.test', return_to } });
     assert.equal(response.status, 400, String(return_to));
   }
-  const sent = await f.request('/v1/signin', { method: 'POST', data: { email: 'owner@example.test', return_to: '/requests/' + row.id } });
+  const sent = await f.request('/v1/credentials', { method: 'POST', data: { kind: 'email', address: 'owner@example.test', return_to: '/requests/' + row.id } });
   assert.equal(sent.status, 202);
   const url = new URL(f.mailer.link('owner@example.test').url);
   const keys = new URLSearchParams(url.hash.slice(1));
-  const result = await f.request('/v1/signin/verify', { method: 'POST', data: {
+  const result = await f.request('/v1/credentials', { method: 'PUT', data: { kind: 'email',
     email: keys.get('email'), token: keys.get('token'), return_to: url.searchParams.get('return_to'),
   } });
   assert.equal(result.status, 200);

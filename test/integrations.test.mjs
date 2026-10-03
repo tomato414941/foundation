@@ -11,7 +11,7 @@ async function setup(t) {
   assert.equal(made.status, 201, made.text);
   const app = made.json.principal;
   assert.equal((await f.request('/v1/principals/' + app.id + '/settings', { method: 'PUT', data: { return_url: 'https://simplicity.example.test/foundation' } })).status, 200);
-  const issued = await f.request('/v1/principals/' + app.id + '/keys', { method: 'POST', data: {} });
+  const issued = await f.request('/v1/credentials?as=' + app.id, { method: 'POST', data: { kind: 'key' } });
   assert.equal(issued.status, 201, issued.text);
   const product = issued.json.token;
   const call = (path, options = {}) => f.request('/v1' + path, { anonymous: true, token: product, ...options });
@@ -19,9 +19,9 @@ async function setup(t) {
   const account = async external => {
     const ensured = await call('/principals', { method: 'POST', data: { alias: external } });
     assert.equal(ensured.status, 201, ensured.text);
-    const key = await call('/principals/' + ensured.json.principal.id + '/keys', { method: 'POST', data: {} });
+    const key = await call('/credentials?as=' + ensured.json.principal.id, { method: 'POST', data: { kind: 'key' } });
     assert.equal(key.status, 201, key.text);
-    return { account: ensured.json.principal, key: { id: key.json.key.id, token: key.json.token } };
+    return { account: ensured.json.principal, key: { id: key.json.credential.id, token: key.json.token } };
   };
   const ask = async key => {
     const asked = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { authorization_details: [{ type: 'secret', fields: { name: 'npm-token', label: 'npm のトークン' } }], binding_message: '公開に使います', steps: ['トークンを作る'] } });
@@ -68,14 +68,14 @@ test('An app makes one principal per user, and each keeps to itself', async t =>
 test('Replacing a key revokes the one it replaces, and an app revokes only its own users\' keys', async t => {
   const { f, call, account } = await setup(t);
   const { account: user, key } = await account('user-1');
-  const next = await call('/principals/' + user.id + '/keys', { method: 'POST', data: { replaces: key.id } });
+  const next = await call('/credentials?as=' + user.id, { method: 'POST', data: { kind: 'key', replaces: key.id } });
   assert.equal(next.status, 201, next.text);
   assert.equal((await f.request('/v1/principals/me', { anonymous: true, token: key.token })).status, 401);
   assert.equal((await f.request('/v1/principals/me', { anonymous: true, token: next.json.token })).status, 200);
   const ownKey = await f.issueKey();
-  assert.equal((await call('/principals/' + ownKey.id + '/keys/' + ownKey.key_id, { method: 'DELETE', data: {} })).status, 403);
+  assert.equal((await call('/credentials/' + ownKey.key_id, { method: 'DELETE', data: {} })).status, 403);
   assert.equal((await f.request('/v1/principals/me', { anonymous: true, token: ownKey.token })).status, 200);
-  assert.equal((await call('/principals/' + user.id + '/keys/' + next.json.key.id, { method: 'DELETE', data: {} })).status, 200);
+  assert.equal((await call('/credentials/' + next.json.credential.id, { method: 'DELETE', data: {} })).status, 200);
   assert.equal((await f.request('/v1/principals/me', { anonymous: true, token: next.json.token })).status, 401);
 });
 
@@ -180,10 +180,10 @@ test('As with Stripe, an app gives a return page, a refresh page and a signed we
     refresh_url: 'https://simplicity.example.test/foundation/again', webhook_url: 'https://hook.example.test/foundation' })).json.settings;
   assert.match(settings.webhook_secret, /^whsec_/);
   assert.doesNotMatch(JSON.stringify((await f.request('/v1/overview')).json), /whsec_|fdn_/);
-  const product = (await f.request('/v1/principals/' + app.id + '/keys', { method: 'POST', data: {} })).json.token;
+  const product = (await f.request('/v1/credentials?as=' + app.id, { method: 'POST', data: { kind: 'key' } })).json.token;
   const call = (path, options = {}) => f.request('/v1' + path, { anonymous: true, token: product, ...options });
   const user = (await call('/principals', { method: 'POST', data: { alias: 'user-1' } })).json.principal;
-  const key = (await call('/principals/' + user.id + '/keys', { method: 'POST', data: {} })).json;
+  const key = (await call('/credentials?as=' + user.id, { method: 'POST', data: { kind: 'key' } })).json;
   const ask = async (name = 'npm-token') => (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { authorization_details: [{ type: 'secret', fields: { name, label: 'npm' } }], binding_message: 'p', steps: [] } })).json.request;
   const first = await ask();
   const back = (await f.request('/v1/requests/' + first.id + '/return', { anonymous: true })).json.back;
