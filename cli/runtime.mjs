@@ -230,7 +230,7 @@ async function main() {
   // A lent machine's key stays as it is; it ends with the machine.
   async function upgrade(label) {
     const me = await send('/v1/principals/me', undefined, { method: 'GET' });
-    if (me.key?.environment) return;
+    if ((await send('/v1/session', undefined, { method: 'GET' })).current?.via.environment) return;
     const { options } = await send('/v1/principals/' + encodeURIComponent(me.principal.id) + '/credentials', { kind: 'webauthn' });
     const made = createCredential(options, url.origin);
     await send('/v1/principals/' + encodeURIComponent(me.principal.id) + '/credentials', { kind: 'webauthn', name: label, credential: made.response }, { method: 'PUT' });
@@ -288,14 +288,14 @@ async function main() {
     } else if (key?.token) { await upgrade(wanted); token = await prove(); await publishKey(); }
     if (serverGiven !== undefined) await saveUrl(url.origin);
     if (!me) me = await send('/v1/principals/me', undefined, { method: 'GET' });
-    console.log(JSON.stringify({ principal: me.principal, acts_for: me.acts_for ?? [] }, null, 2));
+    console.log(JSON.stringify({ principal: { id: me.principal.id, name: me.principal.name, created_at: me.principal.created_at }, acts_for: me.principal.acts_for ?? [] }, null, 2));
     console.log('\nKey file: ' + keyPath + '\nServer: ' + url.origin + (serverGiven !== undefined ? ' (saved to ' + configPath() + ')' : '') + '\nTo act for someone: foundation join\nEverything else is HTTP: Authorization: Bearer $(foundation token)');
     return;
   }
   // Asking a person to make this machine their agent. One they already approved has nothing to ask.
   if (action === 'join') {
     const me = await send('/v1/principals/me', undefined, { method: 'GET', accept: data => data.error?.code === 'not_approved' });
-    if (me.acts_for?.length) { console.log('Already approved on ' + url.origin + '.'); return; }
+    if (me.principal?.acts_for?.length) { console.log('Already approved on ' + url.origin + '.'); return; }
     const answer = await send('/v1/requests', { authorization_details: [{ type: 'relation', relation: 'agent' }] });
     console.log(JSON.stringify(answer, null, 2));
     return;
@@ -323,11 +323,14 @@ async function main() {
   }
   // Nothing runs before someone has accepted this key: a key that acts for nobody reaches only its own empty resources,
   // and the person it asked has yet to answer.
-  const current = await send('/v1/principals/me', undefined, { method: 'GET' });
+  const current = (await send('/v1/principals/me', undefined, { method: 'GET' })).principal;
   // A key given to a lent machine acts as its principal's own self. Any other key acts for someone once approved;
   // until then, whether waiting or refused, it has nothing to run with.
-  const own = Boolean(current.key?.environment);
-  if (!own && !current.acts_for?.length) throw new Error('Foundation request failed (401, not_approved). This key acts for nobody yet' + (current.requests?.[0] ? '; it is waiting for approval at ' + current.requests[0].verification_uri : '') + '.');
+  const own = Boolean((await send('/v1/session', undefined, { method: 'GET' })).current?.via.environment);
+  if (!own && !current.acts_for?.length) {
+    const waiting = (await send('/v1/requests?status=pending', undefined, { method: 'GET', accept: () => true })).requests?.[0];
+    throw new Error('Foundation request failed (401, not_approved). This key acts for nobody yet' + (waiting ? '; it is waiting for approval at ' + waiting.verification_uri : '') + '.');
+  }
   // Whose resources a run reaches: the one this key acts for, the one named when it acts for several, or its own.
   const acting = current.acts_for ?? [];
   const owner = process.env.FOUNDATION_AS || (acting.length === 1 ? acting[0] : null);

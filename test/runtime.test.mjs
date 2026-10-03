@@ -345,7 +345,7 @@ test('The CLI installs from its npm package, and init <url> remembers the server
   assert.equal(JSON.parse(spec.out).info.title, 'Foundation API');
   const joined = await run(foundation, ['join'], env);
   assert.equal(joined.code, 0, joined.err);
-  const waiting = await run(foundation, ['api', 'GET', '/v1/principals/me'], env);
+  const waiting = await run(foundation, ['api', 'GET', '/v1/requests?status=pending'], env);
   assert.match(waiting.out, /"status":"pending"/); assert.doesNotMatch(waiting.out, /fdn_/);
   const request = JSON.parse(joined.out).request;
   const approved = await f.request('/v1/requests/' + request.id + '/grant', { method: 'POST', data: { user_code: request.user_code } });

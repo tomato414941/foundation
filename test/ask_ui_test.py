@@ -73,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
 
     # A longer purpose reads vertically on desktop as well as narrow screens.
     purpose = 'Foundationに預けた認証情報でnpmアカウントへの接続を確認します。パッケージの公開や変更は行いません。'
-    npm_request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['acts_for'][0], 
+    npm_request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0], 
         'authorization_details': [{'type': 'secret', 'fields': {'name': 'npm token', 'label': 'npmアクセストークン', 'site': 'https://www.npmjs.com/'}}],
         'binding_message': purpose}))['request']
     page.goto(npm_request['verification_uri'], wait_until='networkidle')
@@ -93,7 +93,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     # A rotation: the AI declares a replacement, the page says so, and renaming it makes it a new value instead.
     kept = page.request.put(args.base + '/v1/principals/me/resources?kind=secret&name=npm token', headers={'content-type': 'application/json', 'origin': args.base}, data=plain('old-token'))
     assert kept.status == 200
-    rotation = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['acts_for'][0], 
+    rotation = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0], 
         'authorization_details': [{'type': 'secret', 'fields': {'name': 'npm token', 'label': 'npmアクセストークン', 'replace': True}}], 'binding_message': '期限切れのトークンを新しいものに入れ替えます。'}))['request']
     assert rotation['store'][0]['replace'] is True
     page.goto(rotation['verification_uri'], wait_until='networkidle')
@@ -114,7 +114,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     page.request.delete(args.base + '/v1/resources/' + held(page, 'npm token'), headers={'content-type': 'application/json', 'origin': args.base}, data='{}')
 
     # The AI suggests a name; the owner chooses the name used for storage.
-    asked = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['acts_for'][0], 
+    asked = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0], 
         'authorization_details': [{'type': 'secret', 'fields': {'name': 'cloudflare/cloudflare-api-token', 'label': 'CloudflareのAPIトークン',
                   'site': 'https://dash.cloudflare.com/profile/api-tokens'}}],
         'binding_message': 'DNSレコードの確認に使います。',
@@ -176,7 +176,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # The value is available to the AI under the name the owner chose.
-    kept = cli('api', 'GET', '/v1/principals/' + cli('api', 'GET', '/v1/principals/me')['acts_for'][0] + '/resources?kind=secret')['resources']
+    kept = cli('api', 'GET', '/v1/principals/' + cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0] + '/resources?kind=secret')['resources']
     assert [row['name'] for row in kept] == ['cloudflare-api-token', 'cloudflare/cloudflare-api-token']
     refused = subprocess.run(['node', 'cli/runtime.mjs', 'api', 'GET', '/v1/resources/' + kept[0]['id'] + '/content'], env=env, capture_output=True, text=True, timeout=15)
     assert refused.returncode == 1 and SECRET not in refused.stdout + refused.stderr
@@ -192,7 +192,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
 
     # Stored names are not DOM form-property names, either.
     names = ['querySelector', 'elements', '__proto__']
-    multiple = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['acts_for'][0], 
+    multiple = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0], 
         'authorization_details': [{'type': 'secret', 'fields': [{'name': name, 'label': '入力 ' + str(index + 1)} for index, name in enumerate(names)]}],
         'binding_message': '値を保存します。'}))['request']
     page.goto(multiple['verification_uri'], wait_until='networkidle')

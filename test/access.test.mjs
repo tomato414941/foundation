@@ -27,8 +27,8 @@ test('アクセス許可と個別の閲覧・編集権限を取り消し、相�
   for (const token of [agent.token, second.json.token]) {
     const me = await f.request('/v1/principals/me', { token });
     assert.equal(me.status, 200); assert.equal(me.json.principal.id, agent.id);
-    assert.deepEqual(me.json.acts_for, []);
-    assert.equal(me.json.keys.length, 2);
+    assert.deepEqual(me.json.principal.acts_for, []);
+    assert.equal(me.json.principal.keys.length, 2);
     assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token })).status, 403);
     for (const saved of [given, written]) {
       assert.equal((await f.request(`/v1/resources/${saved.json.resource.id}/content`, { token })).status, 403);
@@ -61,7 +61,7 @@ test('自分宛ての未完了依頼を取り消し、他のアカウントの�
   await f.signin();
   assert.equal((await revoke(f, agent.id)).status, 200);
   const me = (await f.request('/v1/principals/me', { token: agent.token })).json;
-  assert.deepEqual(me.acts_for, [USER_B]);
+  assert.deepEqual(me.principal.acts_for, [USER_B]);
   assert.equal((await f.read('secret', 'private-b', { token: agent.token, as: USER_B })).text, 'other-value');
   for (const request of [nextA, connectA]) {
     const current = (await f.request('/v1/requests/' + request.id, { token: agent.token })).json.request;
@@ -125,7 +125,7 @@ test('個別のキーを失効させても他のキーから同じアクセス�
   assert.equal((await f.request('/v1/principals/' + agent.id + '/credentials/' + agent.key_id, { method: 'DELETE', data: {} })).status, 200);
   assert.equal((await f.request('/v1/principals/me', { token: agent.token })).status, 401);
   const result = await f.request('/v1/principals/me', { token: second.json.token });
-  assert.equal(result.status, 200); assert.deepEqual(result.json.acts_for, [USER_A]);
+  assert.equal(result.status, 200); assert.deepEqual(result.json.principal.acts_for, [USER_A]);
   assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: second.json.token })).status, 200);
 });
 

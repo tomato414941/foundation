@@ -43,7 +43,7 @@ test('ルートは同じ問いを立て、許されない主体には 403、依�
   assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: key.token, anonymous: true })).status, 200, 'what both may do still works');
   assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).status, 200);
   assert.equal((await f.request('/v1/functions')).status, 200, 'the owner may do what those acting for them may');
-  assert.equal((await f.request('/v1/principals/' + key.id, { method: 'DELETE', token: key.token, anonymous: true, data: {} })).status, 403, 'nobody removes what they do not own');
+  assert.equal((await f.request('/v1/principals/' + USER_A, { method: 'DELETE', token: key.token, anonymous: true, data: {} })).status, 403, 'nobody removes what they do not own');
   const stranger = await f.request('/v1/principals/' + USER_A, { token: key.token, anonymous: true });
   assert.equal(stranger.status, 403);
 });

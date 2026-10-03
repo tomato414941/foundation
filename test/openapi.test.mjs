@@ -46,8 +46,8 @@ test('公開仕様から操作を見つけ、初回接続・承認・保存・�
   await f.signin();
   const accepted = await call('grantRequest', { params: { requestId: request.id }, data: { user_code: request.user_code } });
   assert.equal(accepted.json.request.status, 'granted');
-  const me = await call('getMe', { token });
-  const as = me.json.acts_for[0];
+  const me = await call('getPrincipal', { token, params: { principalId: 'me' } });
+  const as = me.json.principal.acts_for[0];
   assert.ok(as);
   // A client that cannot seal hands the bytes to Foundation's principal, which seals them as the owner's agent.
   const plain = text => ({ plain: Buffer.from(text).toString('base64url') });

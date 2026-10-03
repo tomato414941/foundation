@@ -75,7 +75,7 @@ with sync_playwright() as p:
     dialog.get_by_role('button', name='完了', exact=True).click()
     expect(dialog.locator('.connection-list li')).to_have_count(2)
     me = caller.get('/v1/principals/me', headers={'authorization': 'Bearer ' + token}).json()
-    owner = me['acts_for'][0]
+    owner = me['principal']['acts_for'][0]
     original_key = actor['credential']['id'][:8]
     dialog.locator('.connection-list li').filter(has_text=original_key).get_by_role('button', name='失効', exact=True).click()
     expect(dialog.get_by_text('このキーは使えなくなります。他のキーとアクセス許可は残ります。', exact=True)).to_be_visible()
@@ -102,7 +102,7 @@ with sync_playwright() as p:
     expect(row.get_by_text('全体へのアクセス許可なし', exact=True)).to_be_visible()
     own = caller.get('/v1/principals/me', headers={'authorization': 'Bearer ' + second_token})
     assert own.status == 200 and own.json()['principal']['id'] == actor['principal']['id']
-    assert own.json()['acts_for'] == []
+    assert own.json()['principal']['acts_for'] == []
     assert caller.get('/v1/principals/' + owner + '/resources?kind=connection', headers={'authorization': 'Bearer ' + second_token}).status == 403
     row.get_by_role('button', name='詳細', exact=True).click()
     expect(dialog.get_by_text('全体へのアクセス許可なし', exact=True)).to_be_visible()

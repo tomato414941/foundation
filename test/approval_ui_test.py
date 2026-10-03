@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_label('確認コード', exact=True).fill('0000-0000')
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('alert')).to_contain_text('確認コードを入力してください')
-    assert cli('api', 'GET', '/v1/principals/me')['acts_for'] == []
+    assert cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'] == []
     page.get_by_label('確認コード', exact=True).fill(request['user_code'].lower())
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
@@ -86,7 +86,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page).to_have_url(args.base + '/principals')
     expect(page.get_by_role('heading', name='プリンシパル', exact=True)).to_be_visible()
     review(page)
-    owner_id = cli('api', 'GET', '/v1/principals/me')['acts_for'][0]
+    owner_id = cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0]
     assert cli('api', 'GET', '/v1/principals/' + owner_id + '/resources?kind=secret')['resources'] == []
 
     # 2. The approved key asks for a registration, on its own link and without a code.
@@ -158,7 +158,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     expect(page.get_by_text('laptop のAIの依頼', exact=True)).to_be_visible()
     page.get_by_role('button', name='許可しない', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しませんでした', exact=True)).to_be_visible()
-    assert cli('api', 'GET', '/v1/principals/me')['acts_for'] == []
+    assert cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'] == []
 
     # 5. Approved again, the key asks for a metadata-only Gmail scope: another request, its own registration.
     request = cli('join')['request']

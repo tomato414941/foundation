@@ -47,7 +47,7 @@ with sync_playwright() as p:
     page.get_by_label('確認コード', exact=True).fill(asked['user_code'])
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
-    owner = call('GET', '/v1/principals/me', token=token)['acts_for'][0]
+    owner = call('GET', '/v1/principals/me', token=token)['principal']['acts_for'][0]
 
     # Nothing open yet: the page says so, with the month's computing.
     # A page of its own, beside the other things one holds, reached from the menu.

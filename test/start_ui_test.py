@@ -118,7 +118,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     request = json.loads(connected.stdout)['request']
     before = cli('api', 'GET', '/v1/principals/me')
     assert before.returncode == 0, before.stderr
-    assert json.loads(before.stdout)['acts_for'] == []
+    assert json.loads(before.stdout)['principal']['acts_for'] == []
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_text('初めて使うAIの依頼', exact=True)).to_be_visible()
     page.get_by_label('確認コード', exact=True).fill(request['user_code'])
@@ -126,7 +126,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
     approved = cli('api', 'GET', '/v1/principals/me')
     assert approved.returncode == 0, approved.stderr
-    assert len(json.loads(approved.stdout)['acts_for']) == 1
+    assert len(json.loads(approved.stdout)['principal']['acts_for']) == 1
 
     # Secrets need a key, from a passkey; the AI uses them through Foundation, handed over here.
     make_key(page, args.base)

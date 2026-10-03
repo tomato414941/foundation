@@ -40,7 +40,7 @@ test('A new key asks only to be approved: no access before approval, the same pr
   assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection', { token, anonymous: true })).json.resources, [], 'a key nobody has accepted holds nothing but itself');
   assert.equal((await cancel(f, row.id)).status, 401);
   assert.equal((await cancel(f, key())).status, 401);
-  assert.equal((await f.request('/v1/principals/me', { token, anonymous: true })).json.requests[0].id, row.id, 'a runtime may read its own request');
+  assert.equal((await f.request('/v1/requests?status=pending', { token, anonymous: true })).json.requests[0].id, row.id, 'a runtime may read its own request');
   await f.signin();
   const saved = await f.connection();
   const approved = await approve(f, row);
@@ -259,7 +259,7 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
   const f = await fixture(t), saved = await f.connection();
   const { token, row } = await create(f, null, { name: 'laptop の claude' });
   const before = await f.request('/v1/principals/me', { token, anonymous: true });
-  assert.equal(before.status, 200); assert.equal(before.json.requests[0].status, 'pending'); assert.deepEqual(before.json.acts_for, [], 'nobody to act for yet');
+  assert.equal(before.status, 200); assert.equal((await f.request('/v1/requests?status=pending', { token, anonymous: true })).json.requests[0].status, 'pending'); assert.deepEqual(before.json.principal.acts_for, [], 'nobody to act for yet');
   assert.equal((await approve(f, row)).status, 200);
   const me = await f.request('/v1/principals/me', { token, anonymous: true });
   assert.equal(me.status, 200, me.text);

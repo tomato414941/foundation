@@ -386,7 +386,14 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         return row ? { email: row.subject, expires_at: row.expires_at, resend_at: row.created_at + RESEND_WAIT } : null;
       };
       // The session: what proving an entry makes. Reading says what can be proven here and what is being waited for.
-      if (at === 'session' && method === 'GET') return send(200, { available: mailer.enabled, method: 'email_link', pending: waitingFor(signinHandle) });
+      // It also says who the caller is and what it came in by, when it came in by anything.
+      if (at === 'session' && method === 'GET') {
+        const held = browser ? sessions.get(cookieToken(req)) : token ? sessions.get(token) : undefined;
+        const keyed = !browser && token && !held ? principals.authenticateKey(token) : undefined;
+        const current = held ? { principal_id: held.principal_id, via: { kind: 'session', id: held.id } }
+          : keyed ? { principal_id: keyed.principal.id, via: { kind: 'key', id: keyed.key.id, ...(keyed.key.environment ? { environment: keyed.key.environment } : {}) } } : null;
+        return send(200, { available: mailer.enabled, method: 'email_link', pending: waitingFor(signinHandle), current });
+      }
       // Opening an email link: the address is proven. A link a principal asked for attaches the address to it and signs
       // nobody in; otherwise an address proven for the first time is a new principal's, and one proven before is its
       // principal's again - a signin, whoever was signed in here before.
@@ -602,7 +609,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           if (status !== null && !['pending', 'granted', 'denied', 'cancelled'].includes(status)) fail(400, 'invalid_status', 'status は pending / granted / denied / cancelled のいずれかです。');
           limit('request-poll', 30);
           const mine = url.searchParams.get('to') === 'me';
-          return send(200, { requests: (mine ? requests.listTo(subject.id, status) : requests.list(subject.id, status)).map(row => viewRequest(row, origin)) });
+          return send(200, { requests: (mine ? requests.listTo(subject.id, status) : requests.list(subject.id, status)).map(row => viewRequest(row, origin, mine ? {} : { code: true })) });
         }
         const row = requests.get(id);
         const asker = row.from_id === subject.id;
@@ -655,19 +662,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       }
       if (subject.via.kind === 'link') fail(401, 'signin_required', 'サインインしてください。');
       // Principals: oneself, and those one owns.
-      if (at === 'me') {
-        if (method === 'GET') return send(200, { principal: self, ...(subject.via.kind === 'key' ? { key: { id: subject.via.id, ...(subject.via.environment ? { environment: subject.via.environment } : {}) } } : {}), acts_for: actsFor, owners: principals.ownersOf(subject.id), keys: principals.keys(subject.id), requests: requests.list(subject.id, 'pending').map(row => viewRequest(row, origin, { code: true })) });
-        if (method === 'PATCH') { const input = await inputBody(); return send(200, { principal: principals.rename(subject.id, nameValue(input.name)) }); }
-        // Leaving: a principal takes itself away, its open requests with it. What it acted for stays where it was.
-        if (method === 'DELETE') {
-          await inputBody();
-          await environments.removeAll(subject.id);
-          const cancelled = store.transaction(() => { environments.assertRemoved(subject.id); const rows = requests.cancelFrom(subject.id, 'requester_left'); resources.removeAll(subject.id); principals.remove(subject.id); return rows; });
-          for (const row of cancelled) requestActions.changed(row);
-          return send(200, { ok: true });
-        }
-        fail(405, 'method_not_allowed', 'この操作は利用できません。');
-      }
       // Making a principal. One that is to act for its maker, and to carry a key, can be asked for in the same
       // breath; that is what making oneself a key is.
       if (at === 'principals' && method === 'POST') {
@@ -832,6 +826,14 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           if (method === 'GET' && id === keys.agentId) return send(200, { principal: target });
           if (method === 'GET') { permit('read', 'principal', id); return send(200, { principal: { ...target, keys: principals.keys(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id), stewards: principals.stewardsOf(id) } }); }
           if (method === 'PATCH') { permit('rename', 'principal', id); const input = await inputBody(); return send(200, { principal: principals.rename(id, nameValue(input.name)) }); }
+          // Leaving: a principal takes itself away, its open requests with it. What it acted for stays where it was.
+          if (method === 'DELETE' && id === subject.id) {
+            await inputBody();
+            await environments.removeAll(subject.id);
+            const cancelled = store.transaction(() => { environments.assertRemoved(subject.id); const rows = requests.cancelFrom(subject.id, 'requester_left'); resources.removeAll(subject.id); principals.remove(subject.id); return rows; });
+            for (const row of cancelled) requestActions.changed(row);
+            return send(200, { ok: true });
+          }
           if (method === 'DELETE') {
             permit('remove', 'principal', id);
             await inputBody();
