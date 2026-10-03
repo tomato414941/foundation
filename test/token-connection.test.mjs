@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { open, openContent } from '../cli/envelope.mjs';
 import { fixture } from './helpers.mjs';
 import { entry } from '../src/catalog.mjs';
 
@@ -84,13 +85,17 @@ test('トークンそのものは見せず、ドメインのような秘密で�
   assert.deepEqual((await f.inject(made.json.connection)).json.injection.environment, { KINTONE_DOMAIN: 'example.cybozu.com', KINTONE_API_TOKEN: 'kintone-secret' });
 });
 
-test('書き出しには、貼ったトークンの値をそのまま含める', async t => {
+test('書き出しには、接続の状態を封じたまま封筒とともに含め、持ち主の鍵で開くと貼ったトークンがある', async t => {
   const f = await tokenFixture(t);
   await f.signin();
   await paste(f, { service: 'github', fields: { token: 'ghp_export' } });
   const exported = await f.request('/v1/export');
   assert.equal(exported.status, 200, exported.text);
-  assert.deepEqual(exported.json.connections.map(item => item.fields), [{ token: 'ghp_export' }]);
+  const [kept] = exported.json.connections, own = await f.keyOf({});
+  assert.equal(kept.encoding, 'base64url');
+  assert.doesNotMatch(exported.text, /ghp_export/, 'nothing goes out in the clear');
+  const state = JSON.parse(openContent(open(Buffer.from(kept.envelopes[own.id], 'base64url'), own.privateKey), Buffer.from(kept.content, 'base64url')).toString());
+  assert.deepEqual(state.private_state.fields, { token: 'ghp_export' });
 });
 
 test('サービスの説明に、トークンで接続するときの項目と作る場所を示す', async t => {

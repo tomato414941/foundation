@@ -30,7 +30,7 @@ export const GMAIL = { readonly: [GMAIL_SCOPE + 'readonly'], metadata: [GMAIL_SC
 export function modules(store, entries = []) {
   const principals = new Principals(store), resources = new Resources(store), authorization = new Authorization(principals, resources);
   const services = new Services(store, resources, entries, { authorization }), apps = new Apps(store, resources, services);
-  const keys = new Keys(store), secrets = new Secrets(store, resources, keys), connections = new Connections(store, resources, services, apps, authorization);
+  const keys = new Keys(store), secrets = new Secrets(store, resources, keys), connections = new Connections(store, resources, services, apps, authorization, keys);
   return { resources, services, apps, secrets, keys, connections, inputs: new Inputs(secrets, connections, row => secrets.open(row)), principals, authorization, sessions: new Sessions(store), flows: new OAuthFlows(store) };
 }
 

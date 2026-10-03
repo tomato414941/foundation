@@ -162,8 +162,9 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   const challenges = new Challenges(store, challengeSecret ? { secret: challengeSecret } : {}), webauthn = new WebauthnCredentials(store, challenges);
   const authorization = new Authorization(principals, resources);
   const services = new Services(store, resources, catalog, { authorization, ...(serviceFetcher ? { fetcher: serviceFetcher } : {}) });
-  const apps = new Apps(store, resources, services), connections = new Connections(store, resources, services, apps, authorization);
-  const keys = new Keys(store), secrets = new Secrets(store, resources, keys);
+  const keys = new Keys(store);
+  const apps = new Apps(store, resources, services), connections = new Connections(store, resources, services, apps, authorization, keys);
+  const secrets = new Secrets(store, resources, keys);
   // Opening a secret to use it in Foundation's name: only for a owner that made Foundation's principal its agent.
   const agentFor = ownerId => { if (!authorization.can(keys.agentId, 'inject', 'principal', { id: ownerId })) fail(403, 'foundation_not_agent', 'Foundation はこの持ち主の代わりに動く許可がありません。'); };
   const opener = row => { agentFor(row.owner_id); return secrets.open(row); };
@@ -1194,12 +1195,12 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // them away again; without this the promise is words.
       if (at === 'export' && method === 'GET') {
         permit('export', 'principal', ownerId);
-        // A secret goes out as it is kept, sealed, with its envelopes; a connection with what is known of it, and a token with what was pasted.
+        // A secret goes out as it is kept, sealed, with its envelopes; so does a connection's state, which opens with the owner's key when one was made for them.
         // What renews the others is Foundation's to keep and would be of no use elsewhere. A described service goes
         // out as its definition.
         const kept = secrets.list(ownerId).map(row => ({ ...secrets.view(row), content: secrets.content(row).toString('base64url'), encoding: 'base64url', envelopes: keys.envelopesOf(row.id) }));
         const value = { exported_at: new Date().toISOString(), owner: emails.of(subject.id)[0] ?? null, origin, secrets: kept,
-          connections: connections.list(ownerId).map(row => ({ ...connections.view(row, { owner: true }), fields: connections.handed(row) })),
+          connections: connections.list(ownerId).map(row => ({ ...connections.view(row, { owner: true }), ...connections.sealed(row), encoding: 'base64url' })),
           services: services.list(ownerId).map(row => ({ id: row.id, name: row.name, definition: JSON.parse(row.definition) })), principals: principals.owned(ownerId) };
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
           'content-disposition': `attachment; filename="foundation-${new Date().toISOString().slice(0, 10)}.json"` });

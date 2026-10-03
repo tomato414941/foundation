@@ -2,7 +2,7 @@ import { checkDefinition } from './service-definition.mjs';
 import { ensureAgent } from './keys.mjs';
 import { newContentKey, sealContent, seal } from '../cli/envelope.mjs';
 
-export const SCHEMA_VERSION = 46;
+export const SCHEMA_VERSION = 47;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -22,6 +22,7 @@ export const STEPS = {
   44: envelopes,
   45: ownerOfResources,
   46: mergeTickets,
+  47: sealedConnections,
 };
 
 // A stop is kept until the runner confirms it. Rebuilding widens the status check without changing resource IDs.
@@ -426,6 +427,18 @@ function mergeTickets({ db }) {
     ALTER TABLE challenges_next RENAME TO challenges;
     CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at);
   `);
+}
+
+// A connection's state is sealed like a secret: with a key of its own, in an envelope for Foundation's principal,
+// which runs the scheme. What the server sealed under its own key is opened once and sealed anew; nothing else
+// about the connection changes.
+function sealedConnections({ db, vault }) {
+  const agent = ensureAgent(db, vault), publicKey = db.prepare('SELECT public_key FROM principal_keys WHERE principal_id=?').get(agent).public_key;
+  for (const row of db.prepare('SELECT c.resource_id, c.state, r.owner_id FROM connections c JOIN resources r ON r.id=c.resource_id').all()) {
+    const state = vault.open(row.state, `connection:${row.owner_id}:${row.resource_id}`), contentKey = newContentKey();
+    db.prepare('UPDATE connections SET state=? WHERE resource_id=?').run(sealContent(contentKey, Buffer.from(JSON.stringify(state))), row.resource_id);
+    db.prepare('INSERT OR REPLACE INTO envelopes (resource_id,principal_id,wrapped) VALUES (?,?,?)').run(row.resource_id, agent, seal(contentKey, publicKey));
+  }
 }
 
 // A session: what proving who one is leaves, for any principal. proof is how (an email reached, a WebAuthn signature),

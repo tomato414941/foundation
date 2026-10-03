@@ -165,7 +165,7 @@ export const schemas = {
     ['user', 'principal', 'payment', 'webauthn_credentials', 'secrets', 'connections', 'apps', 'services', 'catalog', 'principals', 'actors', 'requests', 'functions', 'settings', 'environments', 'compute', 'foundation']),
   Export: object({ exported_at: iso, owner: nullable(string), origin: string,
     secrets: array({ allOf: [ref('Secret'), object({ content: string, encoding: { const: 'base64url' }, envelopes: map(string) }, ['content', 'encoding', 'envelopes'])] }),
-    connections: array({ allOf: [ref('Connection'), object({ fields: map(string) })] }), services: array(object({ id, name: string, definition: object() })), principals: array(ref('Principal')) }, ['exported_at', 'owner', 'origin', 'secrets', 'connections', 'services', 'principals']),
+    connections: array({ allOf: [ref('Connection'), object({ content: string, encoding: { const: 'base64url' }, envelopes: map(string) }, ['content', 'encoding', 'envelopes'])] }), services: array(object({ id, name: string, definition: object() })), principals: array(ref('Principal')) }, ['exported_at', 'owner', 'origin', 'secrets', 'connections', 'services', 'principals']),
 };
 
 const query = (name, schema = string, description, required = false) => ({ name, in: 'query', schema, required, ...(description ? { description } : {}) });
@@ -324,7 +324,7 @@ export const routes = [
   { name: 'usage', path: '/v1/usage', methods: { get: op('getUsage', 'Read storage usage and limits', 'Usage', { parameters: [as] }) } },
   { name: 'audit', path: '/v1/audit-log', methods: { get: op('getAuditLog', 'Read the caller’s audit records', many('entries', 'AuditEntry')) } },
   { name: 'overview', path: '/v1/overview', methods: { get: op('getOverview', 'Read the owner’s workspace', 'Overview', { parameters: [as] }) } },
-  { name: 'export', path: '/v1/export', methods: { get: op('exportData', 'Download the owner’s data, including secret bytes', 'Export', { parameters: [as], description: 'Contains base64 secret content. Handle as private data. Managed connections export metadata, not renewable state.' }) } },
+  { name: 'export', path: '/v1/export', methods: { get: op('exportData', 'Download the owner’s data, including secret bytes', 'Export', { parameters: [as], description: 'Secrets and connection states go out as kept: sealed, with their envelopes; they open with the owner\'s key where an envelope was made for them. Handle as private data.' }) } },
 ];
 
 // A WebAuthn credential is known by the id its authenticator gave it (base64url, up to 1023 bytes).

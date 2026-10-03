@@ -14,8 +14,10 @@ const invalidResult = () => fail(502, 'service_response', '接続先からの応
 export class Connections {
   // services: where a connection works (services.mjs); apps: the OAuth apps connections are made through (apps.mjs);
   // authorization: whether what a connection relies on is still the owner's to use, asked each time it is used.
-  constructor(store, resources, services, apps, authorization) {
-    Object.assign(this, { store, db: store.db, vault: store.vault, resources, services, apps, authorization, pending: new Map() });
+  // keys: a connection's state is sealed with a key of its own, in an envelope for Foundation's principal - which runs
+  // the scheme, so it is what a connection is handed to - and for the owner when they have a key.
+  constructor(store, resources, services, apps, authorization, keys) {
+    Object.assign(this, { store, db: store.db, resources, services, apps, authorization, keys, pending: new Map() });
   }
   // A connection through someone's app is theirs to let be used: the line is looked at every time, not only when the
   // connection was made, so that taking it back takes effect.
@@ -26,7 +28,6 @@ export class Connections {
   }
   // The scheme as it speaks for this connection: through the app it was made with, for OAuth.
   schemeFor(row) { return row.auth_scheme === 'oauth' ? this.apps.scheme(row.service, row.app_id) : this.services.scheme(row.service, row.auth_scheme); }
-  binding(row) { return `connection:${row.owner_id}:${row.id}`; }
 
   get(id) { return typeof id === 'string' ? this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.id=?`).get(id) : undefined; }
   held(ownerId, id) { const row = this.get(id); return row && row.owner_id === ownerId ? row : undefined; }
@@ -37,18 +38,21 @@ export class Connections {
     return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE ${where.join(' AND ')} ORDER BY r.name,r.created_at,r.id`).all(...params);
   }
   rename(row, name) { return this.get(this.resources.rename(row, String(name ?? '').slice(0, 80) || row.name).id); }
-  // Given to another owner: its state is sealed under the new owner's name.
+  // Given to another owner: the new owner gets an envelope when they have a key; the giver's goes.
   transfer(row, ownerId) {
     return this.store.transaction(() => {
-      const state = this.state(row), moved = this.resources.transfer(row, ownerId);
-      this.db.prepare('UPDATE connections SET state=? WHERE resource_id=?').run(this.vault.seal(state, this.binding(moved)), row.id);
-      return this.get(row.id);
+      const moved = this.resources.transfer(row, ownerId);
+      if (this.keys.publicKeyOf(ownerId)) this.keys.resealFor(row.id, ownerId);
+      this.keys.dropEnvelope(row.id, row.owner_id);
+      return this.get(moved.id);
     });
   }
   remove(row) { this.resources.remove(row); }
 
   // For a service: what its scheme left with Foundation, and what it says about the account.
-  state(row) { return this.vault.open(this.db.prepare('SELECT state FROM connections WHERE resource_id=?').get(row.id).state, this.binding(row)); }
+  state(row) { return JSON.parse(this.keys.openFor(row.id, Buffer.from(this.db.prepare('SELECT state FROM connections WHERE resource_id=?').get(row.id).state)).toString('utf8')); }
+  // The state as kept, sealed, with its envelopes: for the owner to take away.
+  sealed(row) { return { content: Buffer.from(this.db.prepare('SELECT state FROM connections WHERE resource_id=?').get(row.id).state).toString('base64url'), envelopes: this.keys.envelopesOf(row.id) }; }
   context(row) { return row ? { subject: row.subject, privateState: this.state(row).private_state } : undefined; }
   // requested: the scopes this connection asked the service for (null for a scheme without scopes).
   nextState(result, { requested } = {}) {
@@ -91,21 +95,25 @@ export class Connections {
         this.reconnection(ownerId, service, scheme, existing.id);
       }
       if (!previous && this.list(ownerId).length >= CONNECTION_LIMIT) fail(409, 'connection_limit', `登録できる接続は${CONNECTION_LIMIT}件までです。`);
-      const id = existing?.id ?? randomUUID(), sealed = this.vault.seal(state, `connection:${ownerId}:${id}`);
+      const id = existing?.id ?? randomUUID(), bytes = Buffer.from(JSON.stringify(state));
+      // Sealed anew with a key of its own, for Foundation's principal and for the owner when they have a key; one
+      // connected again keeps its key, so every envelope stays good.
+      const sealed = existing && this.keys.envelopeOf(id, this.keys.agentId) ? { content: this.keys.sealFor(id, bytes) } : this.keys.sealAs(bytes, [ownerId]);
       if (existing) {
-        this.db.prepare("UPDATE connections SET service=?,auth_scheme=?,app_id=?,subject=?,state=?,status='usable',generation=generation+1 WHERE resource_id=?").run(service, scheme, app, subject, sealed, id);
+        this.db.prepare("UPDATE connections SET service=?,auth_scheme=?,app_id=?,subject=?,state=?,status='usable',generation=generation+1 WHERE resource_id=?").run(service, scheme, app, subject, sealed.content, id);
         if (label !== null) this.resources.rename(existing, label);
       } else {
         this.resources.insert(id, ownerId, 'connection', label);
-        this.db.prepare("INSERT INTO connections (resource_id,service,auth_scheme,app_id,subject,status,state) VALUES (?,?,?,?,?,'usable',?)").run(id, service, scheme, app, subject, sealed);
+        this.db.prepare("INSERT INTO connections (resource_id,service,auth_scheme,app_id,subject,status,state) VALUES (?,?,?,?,?,'usable',?)").run(id, service, scheme, app, subject, sealed.content);
       }
+      this.keys.keepEnvelopes(id, sealed.envelopes);
       return this.get(id);
     });
   }
   saveState(row, state, subject = row.subject) {
     return this.store.transaction(() => {
       this.current(row);
-      this.db.prepare('UPDATE connections SET subject=?,state=? WHERE resource_id=?').run(subject, this.vault.seal(state, this.binding(row)), row.id);
+      this.db.prepare('UPDATE connections SET subject=?,state=? WHERE resource_id=?').run(subject, this.keys.sealFor(row.id, Buffer.from(JSON.stringify(state))), row.id);
       this.resources.touch(row.id);
     });
   }
@@ -179,11 +187,6 @@ export class Connections {
   // What is said of a connection. The owner sees everything but the sealed state; whoever acts for them sees what
   // they need to use it. Whether disconnecting can also take it back at the service is as the app it was made
   // through can.
-  // What the owner pasted, for a token; what renews the others is Foundation's to keep and of no use elsewhere.
-  handed(row) {
-    if (row.auth_scheme !== 'token') return undefined;
-    return this.state(row).private_state.fields;
-  }
   revocable(row) {
     try { return typeof this.schemeFor(row).revoke === 'function'; } catch { return false; }
   }
