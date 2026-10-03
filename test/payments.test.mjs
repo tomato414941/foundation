@@ -5,7 +5,7 @@ import { fixture, fakeStripe, USER_A, USER_B } from './helpers.mjs';
 
 test('支払い方法を登録すると、Stripeの顧客と契約ができ、無料枠より多く使えるようになる', async t => {
   const fake = fakeStripe(), f = await fixture(t, { stripe: fake.stripe });
-  assert.deepEqual((await f.request('/v1/payment')).json.payment, { available: true, paying: false });
+  assert.deepEqual((await f.request('/v1/payment')).json.payment, { available: true, paying: false, payer: USER_A });
   assert.equal(f.app.environments.usage(USER_A).limit_seconds, 36_000, 'the free part, before paying');
   const started = await f.request('/v1/payment/setup', { method: 'POST', data: {} });
   assert.equal(started.status, 200, started.text);
@@ -15,7 +15,7 @@ test('支払い方法を登録すると、Stripeの顧客と契約ができ、�
   assert.equal(page.body.success_url, f.base + '/account?payment={CHECKOUT_SESSION_ID}');
   const done = await f.request('/v1/payment/complete', { method: 'POST', data: { session_id: 'cs_test_1' } });
   assert.equal(done.status, 200, done.text);
-  assert.deepEqual(done.json.payment, { available: true, paying: true });
+  assert.deepEqual(done.json.payment, { available: true, paying: true, payer: USER_A });
   assert.deepEqual(fake.calls.find(call => call.path === '/v1/subscriptions').body, { customer: 'cus_1', 'items[0][price]': 'price_compute', 'items[1][price]': 'price_storage' });
   assert.equal(fake.calls.find(call => call.path === '/v1/customers/cus_1').body['invoice_settings[default_payment_method]'], 'pm_1');
   assert.equal(f.app.environments.usage(USER_A).limit_seconds, 360_000);
@@ -33,7 +33,7 @@ test('ほかの顧客のものや終わっていない支払い方法の登録�
 
 test('Stripeの用意がなければ支払い方法は登録できず、誰もが無料枠で止まる', async t => {
   const f = await fixture(t);
-  assert.deepEqual((await f.request('/v1/payment')).json.payment, { available: false, paying: false });
+  assert.deepEqual((await f.request('/v1/payment')).json.payment, { available: false, paying: false, payer: USER_A });
   assert.equal((await f.request('/v1/payment/setup', { method: 'POST', data: {} })).status, 503);
   f.app.store.db.prepare('INSERT INTO compute_usage (principal_id,month,seconds) VALUES (?,?,?)').run(USER_A, new Date().toISOString().slice(0, 7), 36_000);
   assert.throws(() => f.app.environments.within(USER_A), { status: 402, code: 'payment_required' });
@@ -100,4 +100,30 @@ test('支払っていない人たちの計算時間は、全体でも上限を�
   assert.throws(() => f.app.environments.within(USER_A), { status: 402, code: 'payment_required' }, 'the free part is used up for everyone');
   await paying(f);
   f.app.environments.within(USER_A);
+});
+
+test('持っている相手が使った分は持ち主の枠に数えられ、相手を増やしても無料枠は増えず、負担は引き受ける側だけが引ける', async t => {
+  const fake = fakeStripe(), f = await fixture(t, { stripe: fake.stripe }), month = new Date().toISOString().slice(0, 7);
+  const agent = await f.issueKey('box'), group = (await f.request('/v1/principals', { method: 'POST', data: { name: 'team', steward: true } })).json.principal;
+  assert.equal((await f.request('/v1/payment', { token: agent.token, anonymous: true, as: agent.id })).json.payment.payer, USER_A, 'an owned principal is paid for by its owner');
+  assert.equal(f.app.payments.payerOf(group.id), USER_A);
+  f.app.store.db.prepare('INSERT INTO compute_usage (principal_id,month,seconds) VALUES (?,?,?)').run(agent.id, month, 20_000);
+  f.app.store.db.prepare('INSERT INTO compute_usage (principal_id,month,seconds) VALUES (?,?,?)').run(group.id, month, 10_000);
+  assert.equal(f.app.environments.usage(USER_A).used_seconds, 30_000, 'what those it pays for spent counts for the payer');
+  assert.equal(f.app.environments.usage(agent.id).used_seconds, 30_000, 'and the same count is theirs');
+  f.app.store.db.prepare('INSERT INTO compute_usage (principal_id,month,seconds) VALUES (?,?,?)').run(USER_A, month, 6_000);
+  assert.throws(() => f.app.environments.within(agent.id), /無料枠の上限/, 'the free part is one, not one per principal');
+  // Another person takes the group's costs on: only they can draw that line, and from then on the group counts for them.
+  // One of its own (made by nobody here), or its costs would only roll up to this owner again.
+  const sponsor = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { name: 'sponsor' } });
+  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: sponsor.json.principal.id, relation: 'payer', object_type: 'principal', object_id: group.id } })).status, 403, 'not put on someone');
+  // A sponsor acting as itself: it may give lines on the group only where it may relate there, so the group's steward lends it that first.
+  f.app.principals.relate(sponsor.json.principal.id, 'relate_grant', 'principal', group.id);
+  f.app.principals.relate(sponsor.json.principal.id, 'payment_grant', 'principal', group.id);
+  const taken = await f.request('/v1/relations', { method: 'POST', token: sponsor.json.token, anonymous: true, data: { subject: sponsor.json.principal.id, relation: 'payer', object_type: 'principal', object_id: group.id } });
+  assert.equal(taken.status, 201, taken.text);
+  assert.equal(f.app.payments.payerOf(group.id), sponsor.json.principal.id);
+  assert.equal(f.app.environments.usage(USER_A).used_seconds, 26_000, 'the group no longer counts for the maker');
+  assert.equal(f.app.environments.usage(group.id).used_seconds, 10_000, 'but for its sponsor');
+  assert.equal((await f.request('/v1/payment', { token: sponsor.json.token, anonymous: true, as: group.id })).json.payment.payer, sponsor.json.principal.id, 'the payer may see the group\'s payment');
 });

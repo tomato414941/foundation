@@ -14,6 +14,8 @@ definition principal {
   relation owner: principal
   relation agent: principal
   relation steward: principal
+  // Who pays for what this principal uses, when not its owner's payer or itself: drawn only by the payer, who takes it on.
+  relation payer: principal
   relation entry: credential
 
   // Who stands as this principal: itself, and whoever stewards it (a group's people).
@@ -64,7 +66,7 @@ definition principal {
   permission issue_link = manage + issue_link_grant
   permission add_webauthn_credential = decide + add_webauthn_credential_grant
   permission remove_webauthn_credential = manage + remove_webauthn_credential_grant
-  permission payment = decide + payment_grant
+  permission payment = decide + payer + payment_grant
   permission pass = manage + use + pass_grant
   // A limit is set on a principal by whoever owns it, never by itself.
   permission limit = owner + limit_grant

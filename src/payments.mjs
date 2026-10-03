@@ -52,9 +52,21 @@ export class Stripe {
 export class Payments {
   constructor(store, stripe) { Object.assign(this, { store, db: store.db, stripe, sending: null }); }
   account(principalId) { return this.db.prepare('SELECT * FROM payment_accounts WHERE principal_id=?').get(principalId); }
-  // Whether this principal's use can be charged: it has a payment method and a subscription to charge it to.
-  paying(principalId) { const row = this.account(principalId); return Boolean(row?.subscription_id && CHARGEABLE.includes(row.status)); }
-  view(principalId) { return { available: this.stripe.enabled, paying: this.paying(principalId) }; }
+  // Who pays for a principal's use: the one that took it on (a payer line), else its owner's payer, else itself. Every
+  // principal has one; the free part and the ceiling are counted for the payer, over all it pays for.
+  payerOf(principalId, seen = new Set()) {
+    if (seen.has(principalId)) return principalId;
+    seen.add(principalId);
+    const payer = this.db.prepare("SELECT subject_id FROM relations WHERE relation='payer' AND object_type='principal' AND object_id=? ORDER BY created_at LIMIT 1").get(principalId)?.subject_id;
+    if (payer) return this.payerOf(payer, seen);
+    const owner = this.db.prepare("SELECT subject_id FROM relations WHERE relation='owner' AND object_type='principal' AND object_id=? ORDER BY created_at LIMIT 1").get(principalId)?.subject_id;
+    return owner ? this.payerOf(owner, seen) : principalId;
+  }
+  // Everyone a payer pays for, itself included.
+  family(payerId) { return this.db.prepare('SELECT id FROM principals').all().map(row => row.id).filter(id => this.payerOf(id) === payerId); }
+  // Whether a principal's use can be charged: its payer has a payment method and a subscription to charge it to.
+  paying(principalId) { const row = this.account(this.payerOf(principalId)); return Boolean(row?.subscription_id && CHARGEABLE.includes(row.status)); }
+  view(principalId) { return { available: this.stripe.enabled, paying: this.paying(principalId), payer: this.payerOf(principalId) }; }
 
   // Setting a payment method: Stripe's page, for this principal's customer (made the first time).
   async setup(principalId, { origin, email }) {
@@ -89,7 +101,7 @@ export class Payments {
 
   // What was used: a machine's seconds weighted by its size, recorded when it stops.
   computed(principalId, seconds, at) {
-    if (seconds > 0 && this.paying(principalId)) this.db.prepare('INSERT INTO meter_events (id,principal_id,meter,value,at) VALUES (?,?,?,?,?)').run(randomUUID(), principalId, 'compute', seconds, at);
+    if (seconds > 0 && this.paying(principalId)) this.db.prepare('INSERT INTO meter_events (id,principal_id,meter,value,at) VALUES (?,?,?,?,?)').run(randomUUID(), this.payerOf(principalId), 'compute', seconds, at);
   }
   // What is stored, once a day for each principal that pays, in megabytes.
   stored(principalId, bytes, at) {

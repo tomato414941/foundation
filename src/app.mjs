@@ -194,7 +194,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
     principals.sweep();
     void environments.sweep().catch(error => console.error(new Date().toISOString(), 'environment sweep', error));
     // What payers store, once a day, and whatever is recorded and not yet sent to Stripe.
-    if (objects.enabled) for (const payer of payments.payers()) payments.stored(payer, objects.usage(payer).bytes, Date.now());
+    if (objects.enabled) for (const payer of payments.payers()) payments.stored(payer, objects.familyBytes(payer), Date.now());
     void payments.send()?.catch(error => console.error(new Date().toISOString(), 'meter events', error));
     for (const [key, value] of limits) if (value.until <= Date.now()) limits.delete(key);
   }, 60_000).unref();
@@ -846,6 +846,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         if (!reaches(input.relation, input.object_type === 'principal' ? 'principal' : object.kind)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
         principals.at(subjectId);
         if (method === 'POST') {
+          // Paying for another is taken on, never put on someone: the payer draws its own line.
+          if (input.relation === 'payer' && subjectId !== subject.id) fail(403, 'forbidden', '支払いを引き受けるのは、引き受ける側だけです。');
           if (!authorization.mayGive(subject.id, input.relation, input.object_type, object)) fail(403, 'forbidden', 'この操作は許可されていません。');
           principals.relate(subjectId, input.relation, input.object_type, input.object_id);
           auditLog.write(subject.id, 'relation.added', input.object_type, input.object_id, { subject: subjectId, relation: input.relation });

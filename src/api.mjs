@@ -55,7 +55,7 @@ export const schemas = {
   Signin: object({ email: errorCode(string, 'invalid_email'), return_to: errorCode(string, 'invalid_return') }, ['email']),
   VerifySignin: object({ email: errorCode(string, 'invalid_email'), token: errorCode(string, 'invalid_link'), return_to: errorCode(string, 'invalid_return') }, ['email', 'token']),
   PendingSignin: object({ email: string, expires_at: time, resend_at: time }, ['email', 'expires_at', 'resend_at']),
-  Payment: object({ available: boolean, paying: boolean }, ['available', 'paying']),
+  Payment: object({ available: boolean, paying: boolean, payer: { ...principalId, description: 'Who pays for this principal\'s use: the one that took it on, else its owner\'s payer, else itself. The free part and the ceiling are counted for the payer.' } }, ['available', 'paying', 'payer']),
   WebauthnCredential: object({ id: string, name: string, created_at: iso, last_used_at: nullable(iso) }, ['id', 'name', 'created_at', 'last_used_at']),
   AddWebauthnCredential: object({ name: errorCode(string, 'invalid_name'), credential: { ...object(), description: 'The RegistrationResponseJSON the authenticator made from the options.' }, wrap: { ...string, description: 'The principal\'s private key wrapped with what this credential yields (PRF), base64url.' } }, ['name', 'credential']),
   WebauthnSignin: object({ credential: { ...object(), description: 'The AuthenticationResponseJSON answering the options.' }, session: choice(['cookie', 'token']), return_to: errorCode(string, 'invalid_return') }, ['credential']),

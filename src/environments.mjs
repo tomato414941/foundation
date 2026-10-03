@@ -55,9 +55,12 @@ export class Environments {
     const set = this.db.prepare('SELECT monthly_seconds FROM compute_limits WHERE principal_id=?').get(principalId)?.monthly_seconds;
     return Math.min(set ?? Infinity, this.ceiling(principalId));
   }
+  // What is spent is counted for the payer, over everyone it pays for; the limit is the principal's own, under the
+  // payer's ceiling.
   usage(principalId, now = Date.now()) {
-    const spent = this.db.prepare('SELECT seconds FROM compute_usage WHERE principal_id=? AND month=?').get(principalId, month(now))?.seconds ?? 0;
-    const running = this.db.prepare(`SELECT e.size,e.started_at ${FROM} WHERE r.owner_id=? AND e.status<>'stopped'`).all(principalId)
+    const family = this.payments.family(this.payments.payerOf(principalId)), marks = family.map(() => '?').join(',');
+    const spent = this.db.prepare(`SELECT COALESCE(SUM(seconds),0) AS seconds FROM compute_usage WHERE month=? AND principal_id IN (${marks})`).get(month(now), ...family).seconds;
+    const running = this.db.prepare(`SELECT e.size,e.started_at ${FROM} WHERE e.status<>'stopped' AND r.owner_id IN (${marks})`).all(...family)
       .reduce((total, row) => total + Math.ceil((now - row.started_at) / 1000) * SIZES[row.size], 0);
     return { month: month(now), used_seconds: spent + running, limit_seconds: this.limitOf(principalId) };
   }
@@ -75,7 +78,7 @@ export class Environments {
   }
   // What all who do not pay have computed this month, and how many machines they are running now.
   freeUsage(now = Date.now()) {
-    const payers = new Set(this.payments.payers()), free = id => !payers.has(id);
+    const payers = new Set(this.payments.payers()), free = id => !payers.has(this.payments.payerOf(id));
     const spent = this.db.prepare('SELECT principal_id, seconds FROM compute_usage WHERE month=?').all(month(now)).filter(row => free(row.principal_id)).reduce((total, row) => total + row.seconds, 0);
     const running = this.db.prepare(`SELECT r.owner_id, e.size, e.started_at ${FROM} WHERE e.status<>'stopped'`).all().filter(row => free(row.owner_id));
     return { seconds: spent + running.reduce((total, row) => total + Math.ceil((now - row.started_at) / 1000) * SIZES[row.size], 0), machines: running.length };
