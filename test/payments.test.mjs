@@ -31,9 +31,12 @@ test('ほかの顧客のものや終わっていない支払い方法の登録�
   }
 });
 
-test('Stripeの用意がなければ支払い方法は登録できず、誰もが無料枠で止まる', async t => {
-  const f = await fixture(t);
-  assert.deepEqual((await f.request('/v1/payment')).json.payment, { available: false, paying: false, payer: USER_A });
+test('Stripeの用意がなければ支払い方法は登録できず、誰もが自分の負担者として無料枠で止まる', async t => {
+  const f = await fixture(t, { payers: false });
+  assert.deepEqual((await f.request('/v1/payment')).json.payment, { available: false, paying: false, payer: USER_A }, 'with no way to register, nobody is asked to');
+  const alone = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { name: 'alone' } });
+  assert.equal(f.app.payments.payerOf(alone.json.principal.id), alone.json.principal.id);
+  f.app.environments.within(alone.json.principal.id);
   assert.equal((await f.request('/v1/payment/setup', { method: 'POST', data: {} })).status, 503);
   f.app.store.db.prepare('INSERT INTO compute_usage (principal_id,month,seconds) VALUES (?,?,?)').run(USER_A, new Date().toISOString().slice(0, 7), 36_000);
   assert.throws(() => f.app.environments.within(USER_A), { status: 402, code: 'payment_required' });

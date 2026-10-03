@@ -53,8 +53,9 @@ export class Payments {
   constructor(store, stripe) { Object.assign(this, { store, db: store.db, stripe, sending: null }); }
   account(principalId) { return this.db.prepare('SELECT * FROM payment_accounts WHERE principal_id=?').get(principalId); }
   // Whether a principal can stand as a payer: it has registered a payment method here, so there is someone to charge.
-  // Anyone may make a principal and nobody has to say who they are; what costs money needs a payer.
-  payer(principalId) { return Boolean(this.account(principalId)?.subscription_id); }
+  // Anyone may make a principal and nobody has to say who they are; what costs money needs a payer. Where no payment
+  // method can be registered at all (no Stripe), the condition cannot be met, so it is not asked: everyone pays for itself.
+  payer(principalId) { return !this.stripe.enabled || Boolean(this.account(principalId)?.subscription_id); }
   // Who pays for a principal's use: the one that took it on (a payer line), else its owner's payer, else itself if it
   // is a payer, else nobody (null). The free part and the ceiling are counted for the payer, over all it pays for; a
   // principal with no payer keeps secrets and acts for others, and uses nothing metered in its own name.
