@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The browser tests, a few at a time: each one starts a fixture server and a browser, and more than a few at once
 # starve the machine. Usage: bash test/ui.sh [name ...]   (names as in test/<name>_ui_test.py; all by default)
-# UI_JOBS: how many run at once (3). UI_OUT: where logs and screenshots go (a temporary directory).
+# UI_JOBS: how many run at once (2). UI_OUT: where logs and screenshots go (a temporary directory).
 cd "$(dirname "$0")/.." || exit 1
-jobs=${UI_JOBS:-3}; out=${UI_OUT:-$(mktemp -d)}; mkdir -p "$out"
+jobs=${UI_JOBS:-2}; out=${UI_OUT:-$(mktemp -d)}; mkdir -p "$out"
 names=("$@"); [ ${#names[@]} -gt 0 ] || names=($(ls test/*_ui_test.py | sed 's|test/||; s|_ui_test.py||'))
 one() {
   local t=$1 port=$2 env base server
