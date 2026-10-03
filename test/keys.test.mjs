@@ -128,3 +128,13 @@ test('保管の依頼は宛先を示し、読み返す依頼では頼んだ側�
   assert.equal(refused.code, 1);
   assert.doesNotMatch(refused.out + refused.err, /very-secret/);
 });
+
+test('サーバー自身のプリンシパルは Foundation Agent と名乗り、前の名前で作られていたものもそう名乗り直す', async t => {
+  const { Keys } = await import('../src/keys.mjs');
+  const f = await fixture(t), db = f.app.store.db, id = f.app.keys.agentId;
+  const name = () => db.prepare('SELECT name FROM principals WHERE id=?').get(id).name;
+  assert.equal(name(), 'Foundation Agent');
+  db.prepare("UPDATE principals SET name='Foundation' WHERE id=?").run(id);
+  assert.equal(new Keys(f.app.store).agentId, id, 'the same principal');
+  assert.equal(name(), 'Foundation Agent');
+});

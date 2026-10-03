@@ -47,7 +47,7 @@ test('OpenRouter exchanges only PKCE code, preserves real expiry and zero budget
   assert.deepEqual(Object.keys(body).sort(), ['code', 'code_challenge_method', 'code_verifier']);
   assert.equal(createHash('sha256').update(body.code_verifier).digest('base64url'), url.searchParams.get('code_challenge'));
   assert.equal(f.openrouter.calls[1].url, OPENROUTER_API + '/key');
-  assert.deepEqual(f.app.principals.agentsOf(USER_A).map(item => item.name), ['Foundation'], 'connecting alone grants no runtime');
+  assert.deepEqual(f.app.principals.agentsOf(USER_A).map(item => item.name), ['Foundation Agent'], 'connecting alone grants no runtime');
 });
 
 test('OpenRouter callback cannot use another session, forged state, or a denied authorization', async t => {

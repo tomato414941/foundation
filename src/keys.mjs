@@ -8,7 +8,8 @@ import { generateKey, open, seal, newContentKey, sealContent, openContent } from
 // opens nothing with these. The one exception is Foundation's own principal, the agent: it has a key like any
 // other, kept sealed here, and opens what was sealed for it when a owner has made it their agent - to inject
 // into a command, to send a request. That key is the one thing the server can open with.
-const AGENT_NAME = 'Foundation';
+// What the server's own principal is called: it acts for those who make it their agent, and for nobody else.
+const AGENT_NAME = 'Foundation Agent';
 const KEY_LENGTH = 32;
 const now = () => new Date().toISOString();
 
@@ -16,7 +17,10 @@ const now = () => new Date().toISOString();
 // database key, which is as far from the server as the enclave is not.
 export function ensureAgent(db, vault) {
   const found = db.prepare("SELECT value FROM metadata WHERE name='agent_id'").get();
-  if (found) return found.value;
+  if (found) {
+    db.prepare('UPDATE principals SET name=? WHERE id=? AND name<>?').run(AGENT_NAME, found.value, AGENT_NAME);
+    return found.value;
+  }
   const id = randomUUID(), key = generateKey();
   db.prepare('INSERT INTO principals (id,name,created_at) VALUES (?,?,?)').run(id, AGENT_NAME, now());
   db.prepare('INSERT INTO principal_keys (principal_id,public_key,created_at) VALUES (?,?,?)').run(id, key.publicKey, now());

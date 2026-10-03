@@ -191,7 +191,7 @@ test('What a key sees reflects a connection needing attention, one removed, and 
   assert.equal((await usable(f, token)).json.resources[0].status, 'reconnect_required');
   f.app.connections.disconnect(USER_A, saved.id);
   assert.deepEqual((await usable(f, token)).json.resources, []);
-  f.app.requestActions.removePrincipal(USER_A, f.app.principals.agentsOf(USER_A).find(item => item.name !== 'Foundation').id);
+  f.app.requestActions.removePrincipal(USER_A, f.app.principals.agentsOf(USER_A).find(item => item.name !== 'Foundation Agent').id);
   assert.equal((await usable(f, token)).status, 401);
 });
 
