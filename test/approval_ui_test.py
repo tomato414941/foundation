@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 from playwright.sync_api import sync_playwright, expect
+from ui_flows import revoke_access
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--base', required=True)
@@ -143,9 +144,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     # 3. Revoking access stops use of this account and cancels its open registration requests.
     pending = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': owner_id, 'authorization_details': [{'type': 'connection', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/gmail.metadata']}], 'binding_message': '件名を確認する'}))['request']
     page.goto(args.base + '/principals', wait_until='networkidle')
-    runtime = page.locator('.agent-row').filter(has_text='laptop のAI')
-    runtime.get_by_role('button', name='取り消す', exact=True).click()
-    page.get_by_role('dialog').get_by_role('button', name='許可を取り消す', exact=True).click()
+    revoke_access(page, 'laptop のAI').get_by_role('button', name='許可を取り消す', exact=True).click()
     expect(page.get_by_role('dialog')).not_to_be_visible()
     cli('api', 'GET', '/v1/principals/' + owner_id + '/resources?kind=secret', success=False)
     page.goto(pending['verification_uri'], wait_until='networkidle')

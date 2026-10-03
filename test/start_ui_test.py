@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
-from ui_flows import virtual_authenticator, make_key, unlock, hand_to_foundation
+from ui_flows import virtual_authenticator, make_key, unlock, hand_to_foundation, revoke_access
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--base', required=True)
@@ -145,9 +145,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
 
     page.goto(args.base + '/principals', wait_until='networkidle')
     row = page.locator('.access-row').filter(has_text='初めて使うAI')
-    row.get_by_role('button', name='取り消す', exact=True).click()
-    page.get_by_role('dialog').get_by_role('button', name='許可を取り消す', exact=True).click()
-    expect(row.get_by_text('全体へのアクセス許可なし', exact=True)).to_be_visible()
+    revoke_access(page, '初めて使うAI').get_by_role('button', name='許可を取り消す', exact=True).click()
+    expect(row.get_by_text('自分のもの', exact=True)).to_be_visible()
+    expect(row.get_by_text('代理をまかせている', exact=True)).to_have_count(0)
     refused = cli(*command)
     assert refused.returncode == 1 and 'not_approved' in refused.stderr
     assert not errors, errors

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright, expect
+from ui_flows import revoke_access
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--base', required=True)
@@ -73,14 +74,14 @@ with sync_playwright() as p:
     expect(dialog.get_by_label('アクセスキー', exact=True)).to_be_visible()
     second_token = dialog.get_by_label('アクセスキー', exact=True).input_value()
     dialog.get_by_role('button', name='完了', exact=True).click()
-    expect(dialog.locator('.connection-list li')).to_have_count(2)
+    expect(dialog.locator('.key-list li')).to_have_count(2)
     me = caller.get('/v1/principals/me', headers={'authorization': 'Bearer ' + token}).json()
     owner = me['principal']['acts_for'][0]
     original_key = actor['credential']['id'][:8]
-    dialog.locator('.connection-list li').filter(has_text=original_key).get_by_role('button', name='失効', exact=True).click()
+    dialog.locator('.key-list li').filter(has_text=original_key).get_by_role('button', name='失効', exact=True).click()
     expect(dialog.get_by_text('このキーは使えなくなります。他のキーとアクセス許可は残ります。', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='失効させる', exact=True).click()
-    expect(dialog.locator('.connection-list li')).to_have_count(1)
+    expect(dialog.locator('.key-list li')).to_have_count(1)
     assert caller.get('/v1/principals/me', headers={'authorization': 'Bearer ' + token}).status == 401
     assert caller.get('/v1/principals/' + owner + '/resources?kind=connection', headers={'authorization': 'Bearer ' + second_token}).status == 200
     for width in [1280, 390, 320]:
@@ -94,19 +95,19 @@ with sync_playwright() as p:
     for width in [1280, 1024, 900, 801, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-        expect(row.get_by_role('button', name='取り消す', exact=True)).to_be_visible()
+        expect(row.get_by_text('代理をまかせている', exact=True)).to_be_visible()
         if width in [1280, 390]:
             page.screenshot(path=str(shots / f'access-{width}.png'), full_page=True)
-    row.get_by_role('button', name='取り消す', exact=True).click()
-    dialog.get_by_role('button', name='許可を取り消す', exact=True).click()
-    expect(row.get_by_text('全体へのアクセス許可なし', exact=True)).to_be_visible()
+    revoke_access(page, 'laptop のアシスタント').get_by_role('button', name='許可を取り消す', exact=True).click()
+    expect(row.get_by_text('代理をまかせている', exact=True)).to_have_count(0)
+    expect(row.get_by_text('自分のもの', exact=True)).to_be_visible()
     own = caller.get('/v1/principals/me', headers={'authorization': 'Bearer ' + second_token})
     assert own.status == 200 and own.json()['principal']['id'] == actor['principal']['id']
     assert own.json()['principal']['acts_for'] == []
     assert caller.get('/v1/principals/' + owner + '/resources?kind=connection', headers={'authorization': 'Bearer ' + second_token}).status == 403
     row.get_by_role('button', name='詳細', exact=True).click()
-    expect(dialog.get_by_text('全体へのアクセス許可なし', exact=True)).to_be_visible()
-    expect(dialog.locator('.connection-list li')).to_have_count(1)
+    expect(dialog.get_by_role('button', name='代理人にする', exact=True)).to_be_visible()
+    expect(dialog.locator('.key-list li')).to_have_count(1)
     assert not errors, errors
     caller.dispose()
     context.close()

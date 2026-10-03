@@ -101,14 +101,15 @@ export class Principals {
   // The lines one principal is at an end of, a page at a time, oldest first: those it drew toward others and their
   // things (from), and those drawn toward it (to). Each says who or what is at the other end, by id and name and no
   // more: to learn more of them is to be someone to them.
-  lines(id, { relation, direction, limit = 50, after } = {}) {
+  lines(id, { relation, direction, principal, limit = 50, after } = {}) {
     if (direction !== undefined && !['from', 'to'].includes(direction)) fail(400, 'invalid_relation', '関係の向きを確認してください。');
     const from = direction !== 'to', to = direction !== 'from';
     const rows = this.db.prepare(`SELECT r.rowid AS at, r.subject_id, r.relation, r.object_type, r.object_id, r.created_at FROM relations r
       WHERE ((:from AND r.subject_id=:id) OR (:to AND r.object_type='principal' AND r.object_id=:id))
         AND NOT (r.object_type='principal' AND r.subject_id=r.object_id)
+        AND (:other IS NULL OR (r.object_type='principal' AND ((r.subject_id=:id AND r.object_id=:other) OR (r.object_id=:id AND r.subject_id=:other))))
         AND (:relation IS NULL OR r.relation=:relation) AND r.rowid > :after ORDER BY r.rowid LIMIT :limit`)
-      .all({ id, from: from ? 1 : 0, to: to ? 1 : 0, relation: relation ?? null, after: after ?? 0, limit: limit + 1 });
+      .all({ id, from: from ? 1 : 0, to: to ? 1 : 0, relation: relation ?? null, other: principal ?? null, after: after ?? 0, limit: limit + 1 });
     const page = rows.slice(0, limit);
     const named = other => { const row = this.db.prepare('SELECT id, name FROM principals WHERE id=?').get(other); return row ? { id: row.id, name: row.name } : { id: other, name: '' }; };
     const thing = other => { const row = this.db.prepare('SELECT id, owner_id, kind, name FROM resources WHERE id=?').get(other); return row ? { id: row.id, kind: row.kind, name: row.name, owner_id: row.owner_id } : { id: other, kind: null, name: '', owner_id: null }; };

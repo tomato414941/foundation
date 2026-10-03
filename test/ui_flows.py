@@ -87,3 +87,12 @@ def injected(request, base, name, headers=None, as_=None):
                             headers={'content-type': 'application/json', 'origin': base, **(headers or {})})
     value = base64.b64decode(response.json()['injection']['files'][0]['content']) if response.ok else b''
     return types.SimpleNamespace(status=response.status, body=lambda: value, text=lambda: value.decode())
+
+
+def revoke_access(page, name):
+    """From a principal's details, take away what it was allowed as this account's agent."""
+    row = page.locator('.access-row').filter(has_text=name)
+    row.get_by_role('button', name='詳細', exact=True).click()
+    dialog = page.get_by_role('dialog')
+    dialog.get_by_role('button', name='アクセスを取り消す', exact=True).click()
+    return dialog

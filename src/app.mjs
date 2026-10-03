@@ -690,7 +690,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           const given = url.searchParams.get('limit'), limit = given === null ? 50 : Number(given), after = url.searchParams.get('after');
           if (!Number.isInteger(limit) || limit < 1 || limit > 200) fail(400, 'invalid_limit', '件数は1〜200で指定してください。');
           if (after !== null && !/^\d{1,15}$/.test(after)) fail(400, 'invalid_cursor', '続きの位置を確認してください。');
-          return send(200, principals.lines(id, { relation: url.searchParams.get('relation') ?? undefined, direction: url.searchParams.get('direction') ?? undefined, limit, after: after === null ? undefined : Number(after) }));
+          const other = url.searchParams.get('principal');
+          return send(200, principals.lines(id, { relation: url.searchParams.get('relation') ?? undefined, direction: url.searchParams.get('direction') ?? undefined, principal: other === null ? undefined : principalId(other), limit, after: after === null ? undefined : Number(after) }));
         }
         // A line from this principal to another, or to a thing: drawn by whoever may give it there, and removed by the
         // principal it is from, or by whoever may share what it is onto.
@@ -824,7 +825,12 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           // What this server acts as is nobody's secret: anyone may learn its id and name, to seal for it or to make it
           // their agent.
           if (method === 'GET' && id === keys.agentId) return send(200, { principal: target });
-          if (method === 'GET') { permit('read', 'principal', id); return send(200, { principal: { ...target, keys: principals.keys(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id), stewards: principals.stewardsOf(id) } }); }
+          if (method === 'GET') {
+            permit('read', 'principal', id);
+            // Who bears what it uses beyond the free part: itself, one who took that on, its owner's - or nobody.
+            const paying = payments.payerOf(id), payer = paying ? { id: paying, name: principals.get(paying)?.name ?? '' } : null;
+            return send(200, { principal: { ...target, keys: principals.keys(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id), stewards: principals.stewardsOf(id), payer } });
+          }
           if (method === 'PATCH') { permit('rename', 'principal', id); const input = await inputBody(); return send(200, { principal: principals.rename(id, nameValue(input.name)) }); }
           // Leaving: a principal takes itself away, its open requests with it. What it acted for stays where it was.
           if (method === 'DELETE' && id === subject.id) {

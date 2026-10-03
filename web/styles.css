@@ -420,3 +420,10 @@ textarea[data-grow] { field-sizing: content; max-height: 45vh; overflow-y: auto;
 .handover-group legend { font-size: 13px; font-weight: 600; color: var(--muted); padding: 0; margin-bottom: 4px; }
 .handover-item { display: flex; gap: 8px; align-items: center; padding: 4px 0; font-size: 14px; }
 .handover-item input { margin: 0; }
+
+.relation-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.relation-badge { font-size: 13px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); white-space: nowrap; }
+.list-filter { padding: 12px 20px; }
+.list-filter input { width: 100%; max-width: 320px; }
+.list-more { padding: 12px 20px; border-top: 1px solid var(--line); }
+.principal-keys > .button { margin-top: 12px; }

@@ -63,6 +63,7 @@ test('プリンシパルの線は、本人と持ち主と執事にだけ、両�
   assert.ok(seen.some(([direction, relation, name]) => direction === 'to' && relation === 'agent' && name === 'Foundation Agent'));
   assert.deepEqual(Object.keys(mine.json.relations.find(line => line.principal?.name === 'machine').principal).sort(), ['id', 'name'], 'the other end by id and name, no more');
   assert.deepEqual((await lines('me', '?relation=owner&direction=from')).json.relations.map(line => line.principal.name), ['machine']);
+  assert.deepEqual((await lines('me', '?principal=' + machine.id)).json.relations.map(line => [line.direction, line.relation]).sort(), [['from', 'owner'], ['to', 'agent']], 'the lines between it and one other');
   // A line onto a thing names the thing.
   const kept = (await f.keep('secret', 'shown', 'value')).json.resource;
   assert.equal((await f.request('/v1/principals/' + machine.id + '/relations', { method: 'POST', data: { relation: 'viewer', object_type: 'resource', object_id: kept.id } })).status, 201);

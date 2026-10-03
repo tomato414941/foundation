@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
-from ui_flows import start_connect
+from ui_flows import start_connect, revoke_access
 from playwright.sync_api import sync_playwright, expect
 
 parser = argparse.ArgumentParser()
@@ -98,10 +98,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
             page.screenshot(path=str(shots / ('connections-desktop.png' if width == 1280 else 'connections-mobile.png')), full_page=True)
 
     page.goto(args.base + '/principals', wait_until='networkidle')
-    runtime = page.locator('.agent-row').filter(has_text='laptop のAI')
-    runtime.get_by_role('button', name='取り消す', exact=True).click()
-    dialog = page.get_by_role('dialog')
-    expect(dialog.get_by_text('取得済みの外部サービスの認証情報は、接続先で失効させてください。', exact=True)).to_be_visible()
+    dialog = revoke_access(page, 'laptop のAI')
+    expect(dialog.get_by_role('heading', name='laptop のAI のアクセスを取り消しますか？', exact=True)).to_be_visible()
     review(page)
     dialog.get_by_role('button', name='許可を取り消す', exact=True).click()
     expect(dialog).not_to_be_visible()
