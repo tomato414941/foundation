@@ -112,7 +112,7 @@ code { font-size: 14px; overflow-wrap: anywhere; }
 .agent-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto; gap: 16px; align-items: center; padding: 10px 20px; border-top: 1px solid var(--line); }
 .agent-name h3 { white-space: pre-wrap; }
 .agent-name p { color: var(--muted); font-size: 14px; margin-top: 3px; }
-.connection-row { padding-top: 16px; padding-bottom: 16px; }
+.connection-row { align-items: start; padding-top: 16px; padding-bottom: 16px; }
 .connection-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .connection-identity > svg { width: 28px; height: 28px; flex: 0 0 28px; }
 .connection-identity .agent-name { min-width: 0; }
