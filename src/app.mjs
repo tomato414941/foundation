@@ -163,7 +163,16 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   const authorization = new Authorization(principals, resources);
   const services = new Services(store, resources, catalog, { authorization, ...(serviceFetcher ? { fetcher: serviceFetcher } : {}) });
   const keys = new Keys(store);
-  const apps = new Apps(store, resources, services), connections = new Connections(store, resources, services, apps, authorization, keys);
+  // A secret a connection refers to: the connection's owner must be allowed its content now, and Foundation must hold
+  // an envelope for it; then its bytes, as text, go into the field.
+  const resolveReference = (ownerId, secretId) => {
+    const row = secrets.get(secretId);
+    if (!row || !authorization.can(ownerId, 'content', 'secret', { id: row.id, owner: row.owner_id })) fail(404, 'not_found', '参照しているシークレットが見つかりません。');
+    const bytes = secrets.open(row), text = bytes.toString('utf8');
+    if (!Buffer.from(text, 'utf8').equals(bytes)) fail(400, 'not_text', '参照しているシークレットは文字列ではありません。');
+    return text;
+  };
+  const apps = new Apps(store, resources, services), connections = new Connections(store, resources, services, apps, authorization, keys, resolveReference);
   const secrets = new Secrets(store, resources, keys);
   // Opening a secret to use it in Foundation's name: only for a owner that made Foundation's principal its agent.
   const agentFor = ownerId => { if (!authorization.can(keys.agentId, 'inject', 'principal', { id: ownerId })) fail(403, 'foundation_not_agent', 'Foundation はこの持ち主の代わりに動く許可がありません。'); };
@@ -1252,7 +1261,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         if (schemeId === 'token') {
           if (input.scopes !== undefined || input.app !== undefined) fail(400, 'invalid_fields', 'トークンの接続にはスコープもアプリもありません。');
           if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 80 || /[\x00-\x1f\x7f]/.test(input.name))) fail(400, 'invalid_name', '名前は80文字までで指定してください。');
-          const result = await scheme.authorization.complete({ fields: input.fields });
+          const result = await scheme.authorization.complete({ fields: input.fields, resolve: connections.resolver(ownerId) });
           still();
           const saved = requestActions.connect(request?.id, ownerId, ref, 'token', result, { requestedBy, previous, name: input.name?.trim() });
           return send(previous ? 200 : 201, { connection: connections.view(saved, { owner: true }) });

@@ -1170,8 +1170,16 @@ function connect(serviceId, connectionId, appId, shown = 'oauth') {
 // Made at the service and pasted here: a token, or a role made from a link Foundation prepares. The service says
 // what is pasted and what to do there first; the link is its page for tokens, or one made for this connection.
 // Pasting a token again replaces its value.
-const pastedFields = (scheme, prefix) => scheme.fields.map(field => `<label for="${prefix}-${esc(field.name)}">${esc(field.required === false ? t('client.common.optionalLabel', { label: field.label }) : field.label)}</label><input id="${prefix}-${esc(field.name)}" name="${esc(field.name)}"${field.required === false ? '' : ' required'}${field.secret ? ' type="password"' : ''} autocomplete="off" spellcheck="false"${field.placeholder ? ` placeholder="${esc(field.placeholder)}"` : ''}>${field.note ? `<p class="permission-note">${esc(field.note)}</p>` : ''}`).join('');
-const pastedValues = (scheme, form) => Object.fromEntries(scheme.fields.map(field => [field.name, String(form.get(field.name) || '').trim()]).filter(([, value]) => value));
+// Each field is pasted as a value, or refers to one of the owner's secrets, whose bytes are used - and whose line is
+// looked at - every time; the choice sits under the field, and choosing a secret puts the input away.
+const pastedFields = (scheme, prefix) => scheme.fields.map(field => `<label for="${prefix}-${esc(field.name)}">${esc(field.required === false ? t('client.common.optionalLabel', { label: field.label }) : field.label)}</label><input id="${prefix}-${esc(field.name)}" name="${esc(field.name)}"${field.required === false ? '' : ' required'}${field.secret ? ' type="password"' : ''} autocomplete="off" spellcheck="false"${field.placeholder ? ` placeholder="${esc(field.placeholder)}"` : ''}>${secrets().length ? `<select name="${esc(field.name)}:reference" aria-label="${esc(t('client.connections.referenceSecret', { label: field.label }))}" data-field="${esc(prefix)}-${esc(field.name)}" class="field-source"><option value="">${esc(t('client.connections.pasteValue'))}</option>${secrets().map(item => `<option value="${esc(item.id)}">${esc(t('client.connections.referenceSecret', { label: item.name }))}</option>`).join('')}</select>` : ''}${field.note ? `<p class="permission-note">${esc(field.note)}</p>` : ''}`).join('');
+const pastedValues = (scheme, form) => Object.fromEntries(scheme.fields.map(field => { const reference = String(form.get(field.name + ':reference') || ''); return [field.name, reference ? { reference } : String(form.get(field.name) || '').trim()]; }).filter(([, value]) => value));
+// Choosing a secret for a field puts its input away and lets the form be sent without it.
+dialog.addEventListener('change', event => {
+  const select = event.target.closest('select.field-source'); if (!select) return;
+  const input = dialog.querySelector('#' + CSS.escape(select.dataset.field)); if (!input) return;
+  input.hidden = Boolean(select.value); input.disabled = Boolean(select.value);
+});
 const serviceLink = (href, label) => href ? `<a class="button secondary full" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>` : '';
 const instructions = scheme => scheme.instructions ? `<p class="permission-note">${esc(scheme.instructions)}</p>` : '';
 async function connectByPaste(service, way, { connectionId, requestId } = {}) {

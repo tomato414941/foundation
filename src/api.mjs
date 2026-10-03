@@ -30,7 +30,7 @@ const scheme = choice(['oauth', 'role', 'token']);
 const app = nullable({ anyOf: [id, { const: 'foundation' }] });
 const field = object({ name: resourceName, label: string, site: string, readable: boolean, multiline: boolean, replace: boolean }, ['name', 'label']);
 const connect = object({ service: string, auth_scheme: scheme, connection_id: id, scopes, app,
-  fields: { ...map(string), description: 'token: the values the service\'s token scheme lists, by field name.' }, name: { ...string, description: 'token: what to call the connection; defaults to the service name followed by のトークン.' } }, ['service']);
+  fields: { ...map({ anyOf: [string, object({ reference: id }, ['reference'])] }), description: 'token: the values the service\'s token scheme lists, by field name - each a value, or { reference: <secret id> } for a secret of the owner\'s (or one they may read) whose bytes are used, and whose line is looked at, every time.' }, name: { ...string, description: 'token: what to call the connection; defaults to the service name followed by のトークン.' } }, ['service']);
 const requestProperties = {
   to: errorCode(principalId, 'invalid_principal'), binding_message: errorCode({ type: 'string', maxLength: 240 }, 'invalid_purpose'), steps: errorCode({ type: ['array', 'null'], items: errorCode(string, 'invalid_steps'), maxItems: 20 }, 'invalid_steps'),
   valid_minutes: errorCode({ type: ['integer', 'null'], description: 'Expiry in minutes; default 30, from 1 to 1440. null uses the default.' }, 'invalid_validity'),
@@ -125,7 +125,7 @@ export const schemas = {
   PublishKey: object({ public_key: string, wraps: { ...map(string), description: 'The private key wrapped per WebAuthn credential id, as the client made it.' } }, ['public_key']),
   Recipient: object({ principal_id: principalId, public_key: string }, ['principal_id', 'public_key']),
   Object: resource('object', { size: integer, type: nullable(string) }),
-  Connection: resource('connection', { service: ref('ServiceSummary'), auth_scheme: scheme, status: string, label: string,
+  Connection: resource('connection', { service: ref('ServiceSummary'), auth_scheme: scheme, status: string, label: string, references: { ...array(id), description: 'The secrets its fields refer to.' },
     facts: object(), variables: array(string), app: nullable(object({ id: string, name: string, foundation: boolean })), subject: nullable(string),
     generation: integer, expires_at: nullable(time), can_reconnect: boolean, can_revoke: boolean, available: boolean }),
   App: resource('app', { service: ref('ServiceSummary'), foundation: boolean, client_id: string, settings: map(string), connections: integer }),

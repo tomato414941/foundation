@@ -139,3 +139,45 @@ test('サイトやメールと組にして使うトークンは、それぞれ�
   assert.deepEqual((await f.inject(made.json.connection)).json.injection.environment,
     { ZENDESK_SUBDOMAIN: 'example', ZENDESK_EMAIL: 'owner@example.test', ZENDESK_API_TOKEN: 'zendesk-token' });
 });
+
+test('トークンの欄はシークレットを参照でき、使うたびに中身と線を見て、参照されている間は消せない', async t => {
+  const f = await tokenFixture(t);
+  await f.signin();
+  const secret = (await f.keep('secret', 'gh', 'ghp_referenced')).json.resource;
+  const made = await paste(f, { service: 'github', name: '参照', fields: { token: { reference: secret.id } } });
+  assert.equal(made.status, 201, made.text);
+  assert.deepEqual(made.json.connection.references, [secret.id]);
+  assert.doesNotMatch(made.text, /ghp_referenced/);
+  const delivered = await f.request('/v1/injections', { method: 'POST', data: { names: [{ id: made.json.connection.id }] } });
+  assert.equal(delivered.status, 200, delivered.text);
+  assert.equal(delivered.json.injection.environment.GITHUB_TOKEN, 'ghp_referenced');
+  // The secret changes: the connection follows.
+  await f.request('/v1/resources/' + secret.id + '/content', { method: 'PUT', raw: 'ghp_rotated' });
+  assert.equal((await f.request('/v1/injections', { method: 'POST', data: { names: [{ id: made.json.connection.id }] } })).json.injection.environment.GITHUB_TOKEN, 'ghp_rotated');
+  // Referenced, it is not removed; the connection replaced with a value, it is.
+  const refused = await f.request('/v1/resources/' + secret.id, { method: 'DELETE', data: {} });
+  assert.equal(refused.status, 409); assert.equal(refused.json.error.code, 'secret_in_use');
+  assert.equal((await paste(f, { service: 'github', connection_id: made.json.connection.id, fields: { token: 'ghp_value' } })).status, 200);
+  assert.deepEqual((await f.request('/v1/resources/' + made.json.connection.id)).json.resource.references, []);
+  assert.equal((await f.request('/v1/resources/' + secret.id, { method: 'DELETE', data: {} })).status, 200);
+  // A secret one may not read, or that does not exist, is not referred to.
+  assert.equal((await paste(f, { service: 'github', fields: { token: { reference: '11111111-1111-4111-8111-111111111111' } } })).status, 404);
+  assert.equal((await paste(f, { service: 'github', fields: { token: { reference: 'nope' } } })).status, 400);
+});
+
+test('別の持ち主のシークレットを参照する接続は、その線が消えた次の使用から止まる', async t => {
+  const f = await tokenFixture(t), other = await f.request('/v1/principals', { method: 'POST', data: { name: 'other', key: true } });
+  const theirs = { token: other.json.token, anonymous: true, as: other.json.principal.id };
+  await f.allowFoundation(theirs);
+  const secret = (await f.keep('secret', 'shared', 'ghp_shared')).json.resource;
+  f.app.principals.relate(other.json.principal.id, 'viewer', 'resource', secret.id);
+  const made = await paste(f, { service: 'github', name: '借り物', fields: { token: { reference: secret.id } } }, theirs);
+  assert.equal(made.status, 201, made.text);
+  const inject = () => f.request('/v1/injections', { ...theirs, method: 'POST', data: { names: [{ id: made.json.connection.id }] } });
+  assert.equal((await inject()).json.injection.environment.GITHUB_TOKEN, 'ghp_shared');
+  f.app.principals.unrelate(other.json.principal.id, 'viewer', 'resource', secret.id);
+  const stopped = await inject();
+  assert.equal(stopped.status, 404, stopped.text);
+  f.app.principals.relate(other.json.principal.id, 'viewer', 'resource', secret.id);
+  assert.equal((await inject()).status, 200, 'drawn again, it goes on');
+});

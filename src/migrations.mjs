@@ -2,7 +2,7 @@ import { checkDefinition } from './service-definition.mjs';
 import { ensureAgent } from './keys.mjs';
 import { newContentKey, sealContent, seal } from '../cli/envelope.mjs';
 
-export const SCHEMA_VERSION = 47;
+export const SCHEMA_VERSION = 48;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -23,6 +23,7 @@ export const STEPS = {
   45: ownerOfResources,
   46: mergeTickets,
   47: sealedConnections,
+  48: connectionReferences,
 };
 
 // A stop is kept until the runner confirms it. Rebuilding widens the status check without changing resource IDs.
@@ -441,6 +442,16 @@ function sealedConnections({ db, vault }) {
   }
 }
 
+// A connection's fields may refer to secrets; which, is kept beside the connection, so that a referenced secret is
+// not removed from under it.
+function connectionReferences({ db }) { db.exec(REFERENCES); }
+const REFERENCES = `
+  CREATE TABLE connection_references (
+    connection_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE, secret_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+    PRIMARY KEY (connection_id, secret_id)
+  );
+  CREATE INDEX connection_references_secret ON connection_references(secret_id);`;
+
 // A session: what proving who one is leaves, for any principal. proof is how (an email reached, a WebAuthn signature),
 // proof_ref which address or credential, and proved_at when; an operation that needs a fresh or stronger proof asks
 // again.
@@ -583,5 +594,6 @@ export const SCHEMA = `
   CREATE INDEX audit_log_actor ON audit_log(actor_id, at);
   CREATE INDEX audit_log_object ON audit_log(object_type, object_id, at);
   ${KEYS}
+  ${REFERENCES}
   PRAGMA user_version = ${SCHEMA_VERSION};
 `;

@@ -1,6 +1,7 @@
 import { fail, HttpError } from './errors.mjs';
 import { scopeFacts } from './scopes.mjs';
 import { FOUNDATION_APP, takesApps } from './apps.mjs';
+import { isReference } from './schemes/token.mjs';
 import { randomUUID } from 'node:crypto';
 
 // What a principal holds for a service, by one of its schemes: OAuth renewal state, the role short-lived keys are
@@ -16,8 +17,17 @@ export class Connections {
   // authorization: whether what a connection relies on is still the owner's to use, asked each time it is used.
   // keys: a connection's state is sealed with a key of its own, in an envelope for Foundation's principal - which runs
   // the scheme, so it is what a connection is handed to - and for the owner when they have a key.
-  constructor(store, resources, services, apps, authorization, keys) {
-    Object.assign(this, { store, db: store.db, resources, services, apps, authorization, keys, pending: new Map() });
+  // resolve(ownerId, secretId): a referenced secret's bytes, as text, where that owner may use them now.
+  constructor(store, resources, services, apps, authorization, keys, resolve = null) {
+    Object.assign(this, { store, db: store.db, resources, services, apps, authorization, keys, resolve, pending: new Map() });
+  }
+  resolver(ownerId) { return this.resolve ? id => this.resolve(ownerId, id) : null; }
+  // The secrets a connection's fields refer to, kept beside it so that a referenced secret is not removed from under it.
+  referencesOf(id) { return this.db.prepare('SELECT secret_id FROM connection_references WHERE connection_id=? ORDER BY secret_id').all(id).map(row => row.secret_id); }
+  referrers(secretId) { return this.db.prepare('SELECT connection_id FROM connection_references WHERE secret_id=? ORDER BY connection_id').all(secretId).map(row => row.connection_id); }
+  record(id, state) {
+    this.db.prepare('DELETE FROM connection_references WHERE connection_id=?').run(id);
+    for (const given of Object.values(state.private_state?.fields ?? {})) if (isReference(given)) this.db.prepare('INSERT OR IGNORE INTO connection_references (connection_id,secret_id) VALUES (?,?)').run(id, given.reference);
   }
   // A connection through someone's app is theirs to let be used: the line is looked at every time, not only when the
   // connection was made, so that taking it back takes effect.
@@ -53,7 +63,7 @@ export class Connections {
   state(row) { return JSON.parse(this.keys.openFor(row.id, Buffer.from(this.db.prepare('SELECT state FROM connections WHERE resource_id=?').get(row.id).state)).toString('utf8')); }
   // The state as kept, sealed, with its envelopes: for the owner to take away.
   sealed(row) { return { content: Buffer.from(this.db.prepare('SELECT state FROM connections WHERE resource_id=?').get(row.id).state).toString('base64url'), envelopes: this.keys.envelopesOf(row.id) }; }
-  context(row) { return row ? { subject: row.subject, privateState: this.state(row).private_state } : undefined; }
+  context(row) { return row ? { subject: row.subject, privateState: this.state(row).private_state, resolve: this.resolver(row.owner_id) } : undefined; }
   // requested: the scopes this connection asked the service for (null for a scheme without scopes).
   nextState(result, { requested } = {}) {
     if (!result || (result.subject !== null && (typeof result.subject !== 'string' || !result.subject || result.subject.length > 512))
@@ -107,6 +117,7 @@ export class Connections {
         this.db.prepare("INSERT INTO connections (resource_id,service,auth_scheme,app_id,subject,status,state) VALUES (?,?,?,?,?,'usable',?)").run(id, service, scheme, app, subject, sealed.content);
       }
       this.keys.keepEnvelopes(id, sealed.envelopes);
+      this.record(id, state);
       return this.get(id);
     });
   }
@@ -191,7 +202,7 @@ export class Connections {
     try { return typeof this.schemeFor(row).revoke === 'function'; } catch { return false; }
   }
   view(row, { owner = false } = {}) {
-    const base = { ...this.resources.view(row), service: this.services.summary(row.service), auth_scheme: row.auth_scheme, status: row.status };
+    const base = { ...this.resources.view(row), service: this.services.summary(row.service), auth_scheme: row.auth_scheme, status: row.status, references: this.referencesOf(row.id) };
     const state = this.state(row);
     let scheme = null;
     try { scheme = this.services.scheme(row.service, row.auth_scheme); } catch {}

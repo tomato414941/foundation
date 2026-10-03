@@ -92,6 +92,11 @@ export class Secrets {
       return this.get(moved.id);
     });
   }
-  remove(row) { this.resources.remove(row); }
+  // Not removed from under a connection that refers to it: the connection changes or goes first.
+  remove(row) {
+    const referrers = this.db.prepare('SELECT count(*) n FROM connection_references WHERE secret_id=?').get(row.id).n;
+    if (referrers) fail(409, 'secret_in_use', `このシークレットを参照する接続が${referrers}件あります。先にその接続を変えるか削除してください。`, { referrers });
+    this.resources.remove(row);
+  }
   view(row) { return { ...this.resources.view(row), size: row.size, recipients: this.keys.recipientsOf(row.id) }; }
 }
