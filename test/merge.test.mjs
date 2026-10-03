@@ -22,10 +22,10 @@ async function other(f, name = 'Navigator Vega') {
   return { id: became.json.principal.id, token: became.json.token, credential: made.credential, secret: kept.json.resource, owned: owned.json.principal, as };
 }
 async function begin(f, credential, otherId) {
-  const asked = await f.request('/v1/merge/options', { method: 'POST', data: { principal_id: otherId } });
+  const asked = await f.request('/v1/principals/me/merge', { method: 'POST', data: { principal_id: otherId } });
   assert.equal(asked.status, 200, asked.text);
   assert.deepEqual(asked.json.options.allowCredentials.map(one => one.id), [credential.id], 'only the other\'s passkeys may answer');
-  return f.request('/v1/merge', { method: 'POST', data: { credential: answer(asked.json.options, credential, f.base), principal_id: otherId } });
+  return f.request('/v1/principals/me/merge', { method: 'PUT', data: { credential: answer(asked.json.options, credential, f.base), principal_id: otherId } });
 }
 
 test('別のアカウントをそのパスキーでまとめると、持ち物・相手・パスキー・アドレスがこちらのものになり、相手は終わる', async t => {
@@ -38,7 +38,7 @@ test('別のアカウントをそのパスキーでまとめると、持ち物�
   // The browser opens their envelopes with their key and seals the keys for this principal.
   const theirKey = await f.keyOf(them.as), mine = await f.keyOf({});
   const envelopes = Object.fromEntries(begun.json.secrets.map(one => [one.id, b64(seal(open(Buffer.from(one.envelope, 'base64url'), theirKey.privateKey), mine.publicKey))]));
-  const done = await f.request('/v1/merge/complete', { method: 'POST', data: { ticket: begun.json.ticket, envelopes } });
+  const done = await f.request('/v1/principals/me/merge/' + begun.json.ticket, { method: 'PUT', data: { envelopes } });
   assert.equal(done.status, 200, done.text);
   assert.deepEqual(done.json.moved, { secrets: 1, connections: 0, objects: 0, apps: 0, services: 0, principals: 1, webauthn_credentials: 1, emails: 1 });
   assert.equal((await f.read('secret', 'theirs')).text, 'their-value', 'opened with this principal\'s key');
@@ -58,19 +58,19 @@ test('別のアカウントをそのパスキーでまとめると、持ち物�
 
 test('名前がぶつかれば何も動かず、券は一度きりで、封筒がなければ Foundation が作る', async t => {
   const f = await fixture(t), them = await other(f);
-  assert.equal((await f.request('/v1/merge/options', { method: 'POST', data: { principal_id: USER_A } })).json.error.code, 'invalid_merge', 'not with itself');
-  assert.equal((await f.request('/v1/merge/options', { method: 'POST', data: { principal_id: them.owned.id } })).json.error.code, 'no_passkey', 'an account with no passkey cannot answer');
+  assert.equal((await f.request('/v1/principals/me/merge', { method: 'POST', data: { principal_id: USER_A } })).json.error.code, 'invalid_merge', 'not with itself');
+  assert.equal((await f.request('/v1/principals/me/merge', { method: 'POST', data: { principal_id: them.owned.id } })).json.error.code, 'no_passkey', 'an account with no passkey cannot answer');
   await f.keep('secret', 'theirs', 'mine-already');
   const begun = await begin(f, them.credential, them.id);
   assert.equal(begun.status, 200, begun.text);
-  const clash = await f.request('/v1/merge/complete', { method: 'POST', data: { ticket: begun.json.ticket } });
+  const clash = await f.request('/v1/principals/me/merge/' + begun.json.ticket, { method: 'PUT', data: {  } });
   assert.equal(clash.status, 409); assert.equal(clash.json.error.code, 'name_taken');
   assert.ok(f.app.principals.get(them.id), 'nothing moved');
   assert.equal(f.app.resources.get(them.secret.id).owner_id, them.id);
-  assert.equal((await f.request('/v1/merge/complete', { method: 'POST', data: { ticket: begun.json.ticket } })).json.error.code, 'invalid_merge', 'spent');
+  assert.equal((await f.request('/v1/principals/me/merge/' + begun.json.ticket, { method: 'PUT', data: {  } })).json.error.code, 'invalid_merge', 'spent');
   await f.drop('secret', 'theirs');
   const again = await begin(f, them.credential, them.id);
-  const done = await f.request('/v1/merge/complete', { method: 'POST', data: { ticket: again.json.ticket } });
+  const done = await f.request('/v1/principals/me/merge/' + again.json.ticket, { method: 'PUT', data: {  } });
   assert.equal(done.status, 200, done.text);
   assert.equal((await f.read('secret', 'theirs')).text, 'their-value', 'without an envelope from the browser, Foundation sealed it for this principal from its own');
 });
@@ -83,7 +83,7 @@ test('残すほうを相手にすれば、こちらの持ち物・パスキー�
   // The browser seals this account's secrets for the other's key.
   const mine = await f.keyOf({}), kept = await f.request('/v1/resources/' + (await f.lookup('secret', 'mine')).json.resource.id + '/content');
   const envelopes = { [kept.json.recipients.length && (await f.lookup('secret', 'mine')).json.resource.id]: b64(seal(open(Buffer.from(kept.json.envelope, 'base64url'), mine.privateKey), Buffer.from(begun.json.key.public_key, 'base64url'))) };
-  const done = await f.request('/v1/merge/complete', { method: 'POST', data: { ticket: begun.json.ticket, into: 'other', envelopes } });
+  const done = await f.request('/v1/principals/me/merge/' + begun.json.ticket, { method: 'PUT', data: { into: 'other', envelopes } });
   assert.equal(done.status, 200, done.text);
   assert.equal(done.json.into, them.id); assert.equal(done.json.from, USER_A);
   assert.equal(done.json.moved.secrets, 1); assert.equal(done.json.moved.emails, 1);

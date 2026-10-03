@@ -1457,14 +1457,14 @@ function mergeAccount() {
       <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.merge.confirmWithPasskey'))}</button></form>`);
     bindForm(async (form) => {
       const otherId = String(form.get('other') || '').trim();
-      const { options } = await api('/v1/merge/options', { method: 'POST', data: { principal_id: otherId } });
+      const { options } = await api('/v1/principals/me/merge', { method: 'POST', data: { principal_id: otherId } });
       let given;
       try { given = await navigator.credentials.get({ publicKey: { ...options, challenge: bytes(options.challenge), allowCredentials: described(options.allowCredentials), extensions: { prf: { eval: { first: PRF_INPUT } } } } }); }
       catch (error) { if (passkeyDeclined(error)) return; throw error; }
       const yielded = yieldedBy(given);
       const credential = { id: given.id, rawId: text64(given.rawId), type: given.type, clientExtensionResults: {},
         response: { clientDataJSON: text64(given.response.clientDataJSON), authenticatorData: text64(given.response.authenticatorData), signature: text64(given.response.signature), ...(given.response.userHandle ? { userHandle: text64(given.response.userHandle) } : {}) } };
-      const begun = await api('/v1/merge', { method: 'POST', data: { credential, principal_id: otherId } });
+      const begun = await api('/v1/principals/me/merge', { method: 'PUT', data: { credential, principal_id: otherId } });
       const name = begun.other.name || begun.other.id;
       openDialog(`<h2 id="dialog-title">${esc(t('client.merge.title'))}</h2><form><p>${esc(t(into === 'this' ? 'client.merge.confirmThis' : 'client.merge.confirmOther', { name }))}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.merge.action'))}</button></form>`);
       bindForm(async () => {
@@ -1481,7 +1481,7 @@ function mergeAccount() {
           }
           const whole = made || (own && !sealing.isHeld(own.privateKey) ? own : null);
           const wrap = yielded && whole ? b64(await sealing.wrap(whole.privateKey, yielded)) : undefined;
-          await api('/v1/merge/complete', { method: 'POST', data: { ticket: begun.ticket, into, envelopes, ...(wrap ? { wrap } : {}), ...(made ? { public_key: b64(made.publicKey) } : {}) } });
+          await api('/v1/principals/me/merge/' + encodeURIComponent(begun.ticket), { method: 'PUT', data: { into, envelopes, ...(wrap ? { wrap } : {}), ...(made ? { public_key: b64(made.publicKey) } : {}) } });
           if (made) { own = made; keyUnavailable = false; }
           closeDialog(); await refresh();
           return;
@@ -1492,7 +1492,7 @@ function mergeAccount() {
             try { const kept = await api('/v1/resources/' + item.id + '/content'); if (kept.envelope) envelopes[item.id] = b64(await sealing.seal(await openKey(kept), unb64(begun.key.public_key))); } catch {}
           }
         }
-        await api('/v1/merge/complete', { method: 'POST', data: { ticket: begun.ticket, into, envelopes } });
+        await api('/v1/principals/me/merge/' + encodeURIComponent(begun.ticket), { method: 'PUT', data: { into, envelopes } });
         own = null;
         location.replace('/');
       });

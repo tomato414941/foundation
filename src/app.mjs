@@ -655,23 +655,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       }
       if (subject.via.kind === 'link') fail(401, 'signin_required', 'サインインしてください。');
       // Principals: oneself, and those one owns.
-      // Another account made one with this: its passkey answers for it, this session for this one.
-      if (at === 'mergeOptions' && method === 'POST') {
-        permit('add-credential', 'principal', subject.id);
-        const input = await inputBody();
-        return send(200, { options: await merge.options(subject.id, principalId(input.principal_id), { origin }) });
-      }
-      if (at === 'mergeBegin' && method === 'POST') {
-        permit('add-credential', 'principal', subject.id);
-        const input = await inputBody();
-        return send(200, await merge.begin(subject.id, input.credential, { origin, expected: input.principal_id === undefined ? undefined : principalId(input.principal_id) }));
-      }
-      if (at === 'mergeComplete' && method === 'POST') {
-        permit('add-credential', 'principal', subject.id);
-        const input = await inputBody(SECRET_MAX);
-        const done = merge.complete(subject.id, input);
-        return send(200, { ...done, principal: principals.get(done.into) });
-      }
       if (at === 'me') {
         if (method === 'GET') return send(200, { principal: self, ...(subject.via.kind === 'key' ? { key: { id: subject.via.id, ...(subject.via.environment ? { environment: subject.via.environment } : {}) } } : {}), acts_for: actsFor, owners: principals.ownersOf(subject.id), keys: principals.keys(subject.id), requests: requests.list(subject.id, 'pending').map(row => viewRequest(row, origin, { code: true })) });
         if (method === 'PATCH') { const input = await inputBody(); return send(200, { principal: principals.rename(subject.id, nameValue(input.name)) }); }
@@ -872,6 +855,24 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           const made = principals.issueLink(id, row.id, LINK_TTL);
           auditLog.write(subject.id, 'link.issued', 'principal', id, { request: row.id });
           return send(201, { link: { id: made.id, request_id: made.request_id, expires_at: made.expires_at }, url: origin + '/requests/' + row.id + '#link=' + made.token, expires_at: made.expires_at });
+        }
+        // Another account made one with this: its passkey answers for it, this session for this one. Begun by POST,
+        // proven by PUT, which names the merge by a ticket; completed at the ticket.
+        if (part === 'merge' || part === 'mergeComplete') {
+          permit('add-credential', 'principal', id);
+          if (part === 'merge' && method === 'POST') {
+            const input = await inputBody();
+            return send(200, { options: await merge.options(id, principalId(input.principal_id), { origin }) });
+          }
+          if (part === 'merge' && method === 'PUT') {
+            const input = await inputBody();
+            return send(200, await merge.begin(id, input.credential, { origin, expected: input.principal_id === undefined ? undefined : principalId(input.principal_id) }));
+          }
+          if (part === 'mergeComplete' && method === 'PUT') {
+            const input = await inputBody(SECRET_MAX);
+            const done = merge.complete(id, { ...input, ticket: route.params.ticket });
+            return send(200, { ...done, principal: principals.get(done.into) });
+          }
         }
         // Whom to seal a secret of this principal's for: itself, those who stand for it (a group's stewards), and
         // Foundation when it acts for it.
