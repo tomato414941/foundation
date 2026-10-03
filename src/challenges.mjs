@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { digest } from './crypto.mjs';
-import { fail } from './errors.mjs';
 
 const SECRET = /^[A-Za-z0-9_-]{43}$/;
-const PENDING_MAX = 1000;
+// How many may wait at once, for each purpose.
+export const PENDING_MAX = 1000;
 export const randomSecret = () => randomBytes(32).toString('base64url');
 
 // Single-use values given out to be given back, as proof of something: that one receives at an address. Only their
@@ -12,7 +12,11 @@ export class Challenges {
   constructor(store, { secret = randomSecret, now = Date.now } = {}) { Object.assign(this, { store, db: store.db, secret, now }); }
   issue(purpose, subject, { handle, data = {}, ttl }) {
     const now = this.now();
-    if (this.db.prepare('SELECT count(*) n FROM challenges WHERE expires_at>?').get(now).n >= PENDING_MAX) fail(429, 'signin_rate_limit', 'しばらく待ってからお試しください。');
+    // The table is bounded for each purpose. When one is full, its oldest waiting ones give way: nobody is refused for
+    // what others asked, and the most a flood costs anyone is asking again.
+    this.db.prepare('DELETE FROM challenges WHERE expires_at<=?').run(now);
+    const over = this.db.prepare('SELECT count(*) n FROM challenges WHERE purpose=?').get(purpose).n - PENDING_MAX + 1;
+    if (over > 0) this.db.prepare('DELETE FROM challenges WHERE id IN (SELECT id FROM challenges WHERE purpose=? ORDER BY created_at, rowid LIMIT ?)').run(purpose, over);
     const secret = this.secret(subject);
     this.db.prepare('INSERT OR REPLACE INTO challenges (id,purpose,subject,handle,data,created_at,expires_at) VALUES (?,?,?,?,?,?,?)')
       .run(digest(secret), purpose, subject, handle ? digest(handle) : null, JSON.stringify(data), now, now + ttl);
