@@ -21,8 +21,13 @@ async function hkdf(secret, info) {
   const base = await subtle.importKey('raw', secret, 'HKDF', false, ['deriveKey']);
   return subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: text(info) }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
-async function agree(privateRaw, publicRaw, info) {
-  const bits = await subtle.deriveBits({ name: 'X25519', public: await importPublic(publicRaw) }, await importPrivate(privateRaw), 256);
+// A private key as the browser holds it: usable for agreeing, and not to be taken out again. What is kept between
+// loads of the page is kept in this form.
+export const hold = raw => importPrivate(raw);
+const held = key => typeof CryptoKey !== 'undefined' && key instanceof CryptoKey;
+export const isHeld = held;
+async function agree(privateKey, publicRaw, info) {
+  const bits = await subtle.deriveBits({ name: 'X25519', public: await importPublic(publicRaw) }, held(privateKey) ? privateKey : await importPrivate(privateKey), 256);
   return hkdf(new Uint8Array(bits), info);
 }
 // Web Crypto puts the tag after the ciphertext; the kept form puts it after the iv.

@@ -317,6 +317,39 @@ async function unlockWith(credentialId, yielded) {
   own = { privateKey: await sealing.unwrap(unb64(wrapped), yielded), publicKey: unb64(key.public_key) };
 }
 // Opening the key again, after the page was loaded anew: any passkey of the owner's, asked here for what it yields.
+// The owner's key, kept by the browser between loads of the page: in a form that cannot be taken out, usable only by
+// these pages, and forgotten at sign-out. Opening values with it asks nothing more; giving the key itself to a new
+// passkey still asks an old one for it.
+const keyShelf = act => new Promise((resolve, reject) => {
+  if (typeof indexedDB === 'undefined') { resolve(undefined); return; }
+  const opening = indexedDB.open('foundation', 1);
+  opening.onupgradeneeded = () => opening.result.createObjectStore('keys');
+  opening.onerror = () => reject(opening.error);
+  opening.onsuccess = () => {
+    const db = opening.result, tx = db.transaction('keys', 'readwrite'), request = act(tx.objectStore('keys'));
+    tx.oncomplete = () => { db.close(); resolve(request?.result); };
+    tx.onerror = tx.onabort = () => { db.close(); reject(tx.error); };
+  };
+});
+let shelved = null;
+async function shelveKey(principalId) {
+  if (!own || sealing.isHeld(own.privateKey) || shelved === principalId) return;
+  try { const privateKey = await sealing.hold(own.privateKey); await keyShelf(store => store.put({ principal: principalId, privateKey, publicKey: own.publicKey }, 'own')); shelved = principalId; } catch {}
+}
+async function takeKey(principalId) {
+  try {
+    const kept = await keyShelf(store => store.get('own'));
+    if (kept?.principal === principalId) { shelved = principalId; return { privateKey: kept.privateKey, publicKey: kept.publicKey }; }
+    if (kept) await forgetKey();
+  } catch {}
+  return null;
+}
+async function forgetKey() { shelved = null; try { await keyShelf(store => store.delete('own')); } catch {} }
+// The key itself, as bytes: what a passkey's wrap is made from. Only a passkey gives it, in the page it was used in.
+async function needRawKey() {
+  if (own && !sealing.isHeld(own.privateKey)) return;
+  if (passkeys().length) await unlockKey();
+}
 // The key, where an act needs it: already open, or opened now by a passkey. Says why when it cannot be.
 async function needKey() {
   if (own) return;
@@ -341,10 +374,11 @@ async function arrive(path) {
 const passkeys = () => (state?.credentials || []).filter(item => item.kind === 'webauthn');
 const deviceName = () => navigator.userAgentData?.platform || t('client.passkey.thisDevice');
 async function createPasskey(name) {
+  // The key is wrapped for the new passkey too, so that one opens it as well: an old passkey gives it first.
+  try { await needRawKey(); } catch (error) { if (!passkeyDeclined(error)) throw error; }
   const { options } = await api('/v1/credentials', { method: 'POST', data: { kind: 'webauthn' } });
   const { credential, yielded } = await makePasskey(options);
-  // With the key open here, it is wrapped for the new passkey too, so that one opens it as well.
-  const wrap = own && yielded ? { wrap: b64(await sealing.wrap(own.privateKey, yielded)) } : {};
+  const wrap = own && !sealing.isHeld(own.privateKey) && yielded ? { wrap: b64(await sealing.wrap(own.privateKey, yielded)) } : {};
   return api('/v1/credentials', { method: 'PUT', data: { kind: 'webauthn', name, credential, ...wrap } });
 }
 // Starting with a passkey alone: the passkey made here makes the principal, signed in at once.
@@ -374,6 +408,7 @@ const passkeyDeclined = error => error?.name === 'NotAllowedError' || error?.nam
 
 async function showSignin({ email = '', message = '' } = {}) {
   clearInterval(signinTimer); signinBusy = false;
+  own = null; keyUnavailable = false; void forgetKey();
   refreshController?.abort();
   const current = ++revision; state = null; refreshDeferred = false; closeDialog();
   document.title = 'Foundation';
@@ -509,6 +544,8 @@ async function refresh({ background = false } = {}) {
     const space = sameOwner ? state.space : undefined;
     if (!sameOwner) { closeDialog(); objectChosen.clear(); }
     state = { ...result, space };
+    // The key opened in this page is kept for the next load of it; one kept before is taken up again.
+    if (state.user?.id) { if (own) await shelveKey(state.user.id); else own = await takeKey(state.user.id); }
     if (!background || changed) render();
     if (loading) {
       const { value: loaded, error } = await loading;
@@ -1372,6 +1409,8 @@ function mergeAccount() {
       bindForm(async () => {
         const envelopes = {};
         if (into === 'this') {
+          // The other's passkey is given this account's key too: the key itself, which an old passkey gives.
+          if (own) { try { await needRawKey(); } catch (error) { if (!passkeyDeclined(error)) throw error; } }
           // This account's key: open here, or published, or made now with what the passkey yielded.
           let mine = own, made = null;
           if (!mine) { const { key } = await api('/v1/key'); if (key.public_key) mine = { publicKey: unb64(key.public_key) }; else if (yielded) { made = await sealing.generateKey(); mine = made; } }
@@ -1379,7 +1418,8 @@ function mergeAccount() {
             const theirs = { privateKey: await sealing.unwrap(unb64(begun.wrap), yielded), publicKey: unb64(begun.key.public_key) };
             for (const item of begun.secrets) { if (item.envelope) envelopes[item.id] = b64(await sealing.seal(await sealing.open(unb64(item.envelope), theirs.privateKey, theirs.publicKey), mine.publicKey)); }
           }
-          const wrap = yielded && (made || own) ? b64(await sealing.wrap((made || own).privateKey, yielded)) : undefined;
+          const whole = made || (own && !sealing.isHeld(own.privateKey) ? own : null);
+          const wrap = yielded && whole ? b64(await sealing.wrap(whole.privateKey, yielded)) : undefined;
           await api('/v1/merge/complete', { method: 'POST', data: { ticket: begun.ticket, into, envelopes, ...(wrap ? { wrap } : {}), ...(made ? { public_key: b64(made.publicKey) } : {}) } });
           if (made) { own = made; keyUnavailable = false; }
           closeDialog(); await refresh();
@@ -1585,9 +1625,9 @@ function bindSecretValue(entry, row) {
       if (busy) return;
       const action = button.dataset.valueAction;
       if (action === 'reveal' && revealed) { clear(); show('reveal'); return; }
+      if (action === 'edit') { edit(); return; }
       try {
         if (!await load()) return;
-        if (action === 'edit') { edit(); return; }
         if (action === 'download') {
           const url = URL.createObjectURL(new Blob([value])), link = document.createElement('a');
           link.href = url; link.download = entry.name.split('/').pop(); link.click();
@@ -1609,10 +1649,17 @@ function bindSecretValue(entry, row) {
     panel.innerHTML = `<form aria-label="${esc(t('client.secret.valueEditor'))}">${binary
       ? `<input type="file" name="file" aria-label="${esc(t('client.common.file'))}" required>`
       : `<textarea name="value" aria-label="${esc(t('client.secret.value'))}" rows="6" required autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>`}
-      <p class="form-error" role="alert"></p><div class="dialog-actions"><button class="button secondary" type="button">${esc(t('client.common.cancel'))}</button><button class="button primary" type="submit">${esc(t('client.common.save'))}</button></div></form>`;
-    const form = panel.querySelector('form'), input = form.querySelector('textarea, input'), cancel = form.querySelector('[type="button"]'), save = form.querySelector('[type="submit"]'), error = form.querySelector('[role="alert"]');
-    if (!binary) input.value = text;
-    const initial = input.value;
+      <p class="form-error" role="alert"></p><div class="dialog-actions">${value === null ? `<button class="text-button" type="button" data-load>${esc(t('client.secret.loadCurrent'))}</button>` : ''}<button class="button secondary" type="button" data-cancel>${esc(t('client.common.cancel'))}</button><button class="button primary" type="submit">${esc(t('client.common.save'))}</button></div></form>`;
+    const form = panel.querySelector('form'), input = form.querySelector('textarea, input'), cancel = form.querySelector('[data-cancel]'), save = form.querySelector('[type="submit"]'), error = form.querySelector('[role="alert"]');
+    // A new value is written over the old without reading it. The old one is read - and the key asked for - only
+    // when someone wants to start from it.
+    if (!binary && text !== null) input.value = text;
+    const initial = value === null ? null : input.value;
+    form.querySelector('[data-load]')?.addEventListener('click', async () => { if (await load()) edit(); });
+    // What a new value replaces is the revision that was there when the editor opened, read or not: whom it is sealed
+    // for and which revision it is are asked now, which needs no key.
+    const basis = etag ? Promise.resolve() : fetch(path, { credentials: 'same-origin', cache: 'no-store', headers: { 'X-Foundation-Locale': i18n.language } })
+      .then(async now => { if (now.ok && !etag) { etag = now.headers.get('etag'); recipients = (await now.json()).recipients; } }, () => {});
     let saving = false;
     const cancelEdit = () => { if (!saving) { clear(); panel.classList.remove('editing'); show('edit'); resumeRefresh(); } };
     cancel.addEventListener('click', cancelEdit);
@@ -1622,7 +1669,7 @@ function bindSecretValue(entry, row) {
     form.addEventListener('submit', async event => {
       event.preventDefault();
       if (saving) return;
-      if (!binary && input.value === initial) { cancelEdit(); return; }
+      if (!binary && initial !== null && input.value === initial) { cancelEdit(); return; }
       const file = binary ? input.files[0] : null;
       if (binary && !file) return;
       const content = binary ? file : new TextEncoder().encode(input.value);
@@ -1630,6 +1677,7 @@ function bindSecretValue(entry, row) {
       saving = true; error.textContent = ''; save.disabled = true; cancel.disabled = true; input.disabled = true;
       panel.setAttribute('aria-busy', 'true');
       try {
+        await basis;
         if (!etag) throw new Error(t('client.secret.restartEdit'));
         const bytes = binary ? new Uint8Array(await file.arrayBuffer()) : content;
         // Sealed anew, for everyone who had it and everyone it is for now.

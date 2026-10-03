@@ -205,9 +205,12 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     assert page.evaluate('navigator.clipboard.readText()') == github.get_attribute('aria-label')
     expect(github.locator('.kept-document')).to_have_text('••••••••')
 
-    # Editing and cancelling preserve the value; saving replaces only its bytes.
+    # Editing writes a new value without reading the old; the old one is loaded only when asked for.
+    # Cancelling preserves the value; saving replaces only its bytes.
     github.get_by_role('button', name='値を編集', exact=True).click()
     value_input = github.get_by_role('textbox', name='値', exact=True)
+    expect(value_input).to_have_value('')
+    github.get_by_role('button', name='今の値を読み込む', exact=True).click()
     expect(value_input).to_have_value(SECRET)
     value_input.fill('cancel this draft')
     github.get_by_role('button', name='キャンセル', exact=True).click()
@@ -259,6 +262,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     unchanged = '\ufefffirst\r\nsecond\r\n'
     api('PUT', '/v1/resources?kind=secret&name=release/2026-09-23', unchanged.encode('utf-8'))
     release.get_by_role('button', name='値を編集', exact=True).click()
+    release.get_by_role('button', name='今の値を読み込む', exact=True).click()
+    expect(release.get_by_role('textbox', name='値', exact=True)).not_to_have_value('')
     release.get_by_role('button', name='保存', exact=True).click()
     expect(release.get_by_role('button', name='値を編集', exact=True)).to_be_visible()
     assert read(page, 'release/2026-09-23').body() == unchanged.encode('utf-8')

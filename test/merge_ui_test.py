@@ -51,7 +51,7 @@ with sync_playwright() as p:
     # This account: signed in by email, in the same browser.
     page.get_by_role('link', name='アカウント', exact=True).click()
     page.get_by_role('button', name='サインアウト', exact=True).click()
-    page.get_by_label('メールアドレス', exact=True).fill(email)
+    page.get_by_role('textbox', name='メールアドレス', exact=True).fill(email)
     page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()
     page.goto(base + '/signin/confirm?' + urlencode({'return_to': '/account'}) + '#' + urlencode({'token': base64.urlsafe_b64encode(hashlib.sha256(email.encode()).digest()).rstrip(b'=').decode(), 'email': email}), wait_until='networkidle')

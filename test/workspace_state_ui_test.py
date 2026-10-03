@@ -105,7 +105,13 @@ with sync_playwright() as p:
     page.route(content_pattern, lambda route: content.append(route))
     go('シークレット')
     value_row.get_by_role('button', name='値を編集', exact=True).click()
+    value_row.get_by_role('button', name='今の値を読み込む', exact=True).click()
     keep('secret', 'arrived-during-value-load')
+    # Two reads wait: the revision the editor replaces, and the value asked for.
+    for _ in range(100):
+        if len(content) >= 2:
+            break
+        page.wait_for_timeout(100)
     release(pending)
     release(content, content_pattern)
     value_form.get_by_role('textbox', name='値', exact=True).fill('saved-value')

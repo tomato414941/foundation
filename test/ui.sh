@@ -13,7 +13,7 @@ one() {
   server=$!
   for _ in $(seq 50); do curl -s -o /dev/null http://127.0.0.1:$port/health && break; sleep 0.2; done
   # Passkeys need a hostname.
-  case $t in merge|transfer|principals|reference|webauthn) base=http://localhost:$port;; *) base=http://127.0.0.1:$port;; esac
+  case $t in merge|transfer|principals|reference|webauthn|key) base=http://localhost:$port;; *) base=http://127.0.0.1:$port;; esac
   mkdir -p "$out/$t"
   if timeout 240 python3 test/${t}_ui_test.py --base $base --screenshots "$out/$t" > "$out/$t.log" 2>&1; then echo "PASS $t"
   else echo "FAIL $t  ($out/$t.log)"; echo "$t" >> "$out/failed"; fi
