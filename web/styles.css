@@ -338,8 +338,10 @@ textarea[data-grow] { field-sizing: content; max-height: 45vh; overflow-y: auto;
 .menu-toggle svg { width: 24px; height: 24px; }
 .site-menu { display: contents; }
 @media (min-width: 901px) {
-  .workspace.with-menu { display: grid; grid-template-columns: 208px minmax(0, 1fr); column-gap: 40px; max-width: 1336px; align-items: start; }
-  .with-menu > .topbar { position: sticky; top: 0; height: 100vh; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 28px; padding: 28px 20px 28px 0; border-bottom: 0; border-right: 1px solid var(--line); }
+  /* The menu stands at the window's left edge, however wide the window; the page takes the rest, up to its width. */
+  .workspace.with-menu { display: grid; grid-template-columns: 232px minmax(0, 1fr); column-gap: 40px; max-width: none; margin: 0; padding: 0 40px 72px 0; align-items: start; }
+  .with-menu > .topbar { position: sticky; top: 0; height: 100vh; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 28px; padding: 28px 20px 28px 24px; border-bottom: 0; border-right: 1px solid var(--line); }
+  .with-menu > main { max-width: 1096px; }
   .with-menu .site-menu { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; margin-left: -12px; }
   .with-menu .page-nav { flex-direction: column; margin-left: 0; gap: 18px; }
   .with-menu .user-menu { margin-top: auto; padding: 20px 0 0 12px; flex-direction: column; align-items: flex-start; gap: 12px; }
