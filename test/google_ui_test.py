@@ -56,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-google-ui-') as private_dir,
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
 
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'authorization_details': [{'type': 'connection', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/cloud-platform']}], 'binding_message': 'Google Cloudの設定を確認します。リソースの作成や変更はしません。'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['acts_for'][0], 'authorization_details': [{'type': 'connection', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/cloud-platform']}], 'binding_message': 'Google Cloudの設定を確認します。リソースの作成や変更はしません。'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='Googleに接続', exact=True)).to_be_visible()
     expect(page.locator('.approval-facts')).to_contain_text('https://www.googleapis.com/auth/cloud-platform')

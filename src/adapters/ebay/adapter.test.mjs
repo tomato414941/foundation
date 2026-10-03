@@ -22,7 +22,7 @@ async function ebayFixture(t, ebay = new FakeEbay()) {
   const f = await fixture(t, { services: [entry('ebay', { oauth: ebayOauth(ebay) })] });
   const connections = async () => (await f.request('/v1/principals/me/resources?kind=connection')).json.resources;
   async function start(input = {}) {
-    const result = await f.request('/v1/connections', { method: 'POST', data: { service: 'ebay', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
+    const result = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'ebay', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
@@ -48,7 +48,7 @@ test('eBayの設定を読み込み、設定済みの場合に接続を利用可�
     { clientId: 'id', clientSecret: 'secret', ruName: ' ' }]) assert.throws(() => new EbayClient(config), /all required/);
   const f = await ebayFixture(t, new EbayClient());
   assert.equal((await f.request('/v1/services')).json.services[0].auth_schemes.oauth.available, false);
-  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'ebay' } })).status, 503);
+  assert.equal((await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'ebay' } })).status, 503);
 });
 
 test('RuNameとstateで同意を開始し、同じセッションで一度だけ認証コードを交換する', async t => {

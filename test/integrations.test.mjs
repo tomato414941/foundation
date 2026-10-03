@@ -104,7 +104,7 @@ test('A request from such a user is opened on the app\'s page, and a single-use 
   const stored = await go('/v1/requests/' + request.id + '/grant', { method: 'POST', data: { entries: [{ name: 'npm-api-token', ...await f.sealed('npm_value', { anonymous: true }, shown.recipients) }] } });
   assert.equal(stored.status, 200, stored.text);
   assert.deepEqual((await go('/v1/requests/' + request.id)).json.request.result.names, ['npm-api-token']);
-  const delivered = await f.request('/v1/injections', { method: 'POST', anonymous: true, token: key.token, data: { names: [{ name: 'npm-api-token', as: 'NPM_TOKEN' }] } });
+  const delivered = await f.request('/v1/principals/me/injections', { method: 'POST', anonymous: true, token: key.token, data: { names: [{ name: 'npm-api-token', as: 'NPM_TOKEN' }] } });
   assert.equal(delivered.json.injection.environment.NPM_TOKEN, 'npm_value');
   // Spent once; another visitor gets nowhere with it.
   assert.equal((await visitor()('/v1/links/exchange', { method: 'POST', data: { request_id: request.id, link: token } })).status, 410);

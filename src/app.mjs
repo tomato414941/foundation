@@ -551,12 +551,13 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         }
       }
       const self = principals.get(subject.id);
-      // In whose name. A principal acts as itself unless it names whom it acts for (?as=<id>); whether it may is
+      // In whose name. A principal acts as itself unless the path names another (/v1/principals/{id}/...); whether it may is
       // the same question as any other, answered from the lines.
       const actsFor = principals.actsFor(subject.id);
       const asked = url.searchParams.get('as');
       // A principal's own things are listed and placed under it, where the path names it.
-      const ownerId = at === 'resources' ? (route.params.principalId === 'me' ? subject.id : principalId(route.params.principalId)) : asked ? principalId(asked) : subject.id;
+      const under = route?.group !== 'principals' && route?.params?.principalId;
+      const ownerId = under ? (under === 'me' ? subject.id : principalId(under)) : asked && at === 'access' ? principalId(asked) : subject.id;
       let asked_ = null;
       const permit = (name, type, id, owner = type === 'principal' ? id : ownerId) => {
         asked_ = { subject, action: { name }, resource: { type, ...(id === undefined ? {} : { id }), owner } };
@@ -940,17 +941,16 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         permit('pass', 'principal', id);
         return id;
       };
-      // What a command is handed: obtained as POST /v1/injections obtains it, in the caller's name, for that command alone.
-      const handedTo = async input => {
+      // What a command is handed: obtained as POST /v1/principals/{id}/injections obtains it, from what the owner holds, for that command alone.
+      const handedTo = async (input, owner = ownerId) => {
         if (input.inputs === undefined || input.inputs === null) return null;
-        permit('inject', 'principal', ownerId);
+        permit('inject', 'principal', owner);
         limit('issue', 30);
-        return (await inputs.inject(ownerId, input.inputs)).injection;
+        return (await inputs.inject(owner, input.inputs)).injection;
       };
       const recordHanded = (input, environmentId) => {
         if (Array.isArray(input.inputs)) auditLog.write(subject.id, 'injection', 'resource', environmentId, { inputs: input.inputs.map(({ as, filename, ...reference }) => reference) });
       };
-      if (at === 'environments' && method === 'GET') { permit('list', 'environment'); return send(200, { environments: environments.list(ownerId).map(row => environments.view(row)) }); }
       if ((at === 'environments' || at === 'runs') && method === 'POST') {
         permit('open', 'environment');
         environments.check();
@@ -991,7 +991,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         if (at === 'commands' && method === 'POST') {
           permit('exec', 'environment', held.id, held.owner_id);
           const input = await inputBody(1024 * 1024 + 20_000);
-          const started = environments.run(held, subject.id, input, await handedTo(input));
+          const started = environments.run(held, subject.id, input, await handedTo(input, held.owner_id));
           recordHanded(input, held.id);
           auditLog.write(subject.id, 'environment.command', 'resource', held.id, { command: String(input.command?.[0] ?? '').slice(0, 100) });
           const answered = await environments.answer(held.id, started.id, 20_000);
@@ -1041,7 +1041,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         return send(200, { resources: [...rows.map(shown), ...(kind === 'app' ? apps.offeredAll() : [])] });
       }
       // Placing a thing by name: the owner's name for it. The same name, same kind, replaces what is there. A
-      // secret placed this way is the owner's bytes. Managed authorizations are made at /v1/connections.
+      // secret placed this way is the owner's bytes. Managed authorizations are made at /v1/principals/{id}/connections.
       if (at === 'resources' && method === 'PUT') {
         const kind = resourceKind(true), name = url.searchParams.get('name');
         if (name === null) fail(400, 'invalid_name', '名前を指定してください。');
@@ -1217,7 +1217,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         // The content of a thing: an object's bytes, or a secret's. A connection for a service has nothing to read;
         // what it yields is derived when it is injected.
         if (part === '/content' && method === 'GET') {
-          if (connection) fail(405, 'method_not_allowed', 'この接続に読める中身はありません。使うには /v1/injections を使います。');
+          if (connection) fail(405, 'method_not_allowed', 'この接続に読める中身はありません。使うには /v1/principals/{id}/injections を使います。');
           permit(secret ? 'content' : 'read', held.kind, held.id, held.owner_id);
           const disposition = `attachment; filename="resource.bin"; filename*=UTF-8''${encodeURIComponent(held.name.split('/').pop()).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}`;
           if (secret) {
@@ -1365,7 +1365,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const state = flows.begin(session.id, { ...flow, verifier, redirectUri });
         return send(200, { url: await active.authorization.begin({ state, verifier, redirectUri, scopes }, connections.context(previous)) });
       }
-      if (at === 'completeConnection' && method === 'POST') {
+      if (at === 'connections' && method === 'PUT') {
         permit('connect', 'connection');
         const input = await inputBody();
         if (!session) fail(401, 'signin_required', 'サインインしてください。');
@@ -1397,7 +1397,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         auditLog.write(subject.id, 'injection', 'principal', ownerId, { inputs: names.map(({ as, filename, ...reference }) => reference) });
         return send(200, { injection, expires_at, expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
       }
-      if (at === 'functions' && method === 'GET') { permit('functions', 'principal', ownerId); return send(200, { functions: FUNCTIONS }); }
+      if (at === 'functions' && method === 'GET') { permit('functions', 'principal', subject.id); return send(200, { functions: FUNCTIONS }); }
       if (at === 'httpRequest' && method === 'POST') {
         permit('invoke', 'principal', ownerId);
         const input = await inputBody(FETCH_BODY_MAX * 2);
@@ -1414,10 +1414,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const authorization = req.headers.authorization;
         const answer = await respond(await body(req), req.headers, {
           serverInfo: { name: 'foundation', version: VERSION },
-          // The tool names whom the caller acts for when it is exactly one and the call did not say.
           call: async ({ method: verb, path: target, body: payload, body_encoding }) => {
-            const named = target !== '/openapi.json' && actsFor.length === 1 && !/[?&]as=/.test(target) ? target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(actsFor[0]) : target;
-            const response = await fetch(`http://127.0.0.1:${port}${named}`, {
+            const response = await fetch(`http://127.0.0.1:${port}${target}`, {
               method: verb, redirect: 'error', signal: AbortSignal.timeout(20_000),
               headers: { authorization, ...(payload === undefined ? {} : { 'content-type': body_encoding === 'json' ? 'application/json' : 'application/octet-stream' }) },
               ...(payload === undefined ? {} : { body: body_encoding === 'base64' ? Buffer.from(payload, 'base64') : body_encoding === 'text' ? payload : JSON.stringify(payload) }),

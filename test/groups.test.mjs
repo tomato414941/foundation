@@ -41,7 +41,7 @@ test('集団として作った相手には、作った者がその者として�
   assert.equal((await f.request('/v1/principals/' + f.app.keys.agentId + '/relations', { method: 'POST', data: { relation: 'agent', object_type: 'principal', object_id: group.id } })).status, 201);
   const third = await f.keep('secret', 'ledger', 'rows', { as: group.id });
   assert.ok(third.json.resource.recipients.includes(f.app.keys.agentId));
-  assert.deepEqual((await f.request('/v1/injections', { method: 'POST', as: group.id, data: { names: [{ name: 'ledger', as: 'LEDGER' }] } })).json.injection.environment, { LEDGER: 'rows' });
+  assert.deepEqual((await f.request('/v1/principals/me/injections', { method: 'POST', as: group.id, data: { names: [{ name: 'ledger', as: 'LEDGER' }] } })).json.injection.environment, { LEDGER: 'rows' });
   // Owning a group manages it; standing as it decides for it. USER_B, owning nothing here, reaches nothing.
   await f.signin('other@example.test');
   assert.equal((await f.request('/v1/principals/me/resources?kind=secret', { as: group.id })).status, 403);

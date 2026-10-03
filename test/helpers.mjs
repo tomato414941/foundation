@@ -141,10 +141,12 @@ export async function fixture(t, options = {}) {
       const json = { principal: { ...made.json.principal, keys: [{ id: issued.json.credential.id, created_at: issued.json.credential.created_at, last_used_at: null }] }, token: issued.json.token, key: { id: issued.json.credential.id, kind: 'key' } };
       return { status: 201, json, text: JSON.stringify(json), headers: issued.headers };
     }
-    const named = path.match(/^\/v1\/principals\/([^/?]+)\/resources/)?.[1];
+    const OWNED = '(?:resources|environments|runs|connections|injections|functions|export|recipients)';
+    const named = path.match(new RegExp('^/v1/principals/([^/?]+)/' + OWNED))?.[1];
     const owner = as ?? (named && named !== 'me' ? named : undefined) ?? (token && actsFor.get(token)) ?? new URL(path, base).searchParams.get('as') ?? undefined;
-    if (owner && path.startsWith('/v1/principals/me/resources')) path = '/v1/principals/' + owner + path.slice('/v1/principals/me'.length);
-    if (owner && !/[?&]as=/.test(path)) path += (path.includes('?') ? '&' : '?') + 'as=' + owner;
+    if (owner && named === 'me') path = '/v1/principals/' + owner + path.slice('/v1/principals/me'.length);
+    // One who acts for an owner asks that owner, unless the request says whom.
+    if (owner && method === 'POST' && path === '/v1/requests' && data && data.to === undefined && data.authorization_details?.[0]?.type !== 'relation') data = { ...data, to: owner };
     if (method === 'PUT' && raw !== undefined && secretPath(path)) {
       // Over what is there, the new key goes to everyone who had the old one.
       let existing = null;
@@ -210,7 +212,7 @@ export async function fixture(t, options = {}) {
   }
   // Connecting Google, asking to read Gmail unless other scopes are given.
   async function start({ connection_id, scopes = GMAIL.readonly } = {}) {
-    const result = await request('/v1/connections', { method: 'POST', data: { service: 'google', connection_id, scopes } });
+    const result = await request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', connection_id, scopes } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
@@ -227,7 +229,7 @@ export async function fixture(t, options = {}) {
   }
   // Injecting a connection for a service derives what it yields now; nothing else reaches the service.
   async function inject(connection, options = {}) {
-    return request('/v1/injections', { method: 'POST', data: { names: [{ id: connection.id }] }, ...options });
+    return request('/v1/principals/me/injections', { method: 'POST', data: { names: [{ id: connection.id }] }, ...options });
   }
   async function connectionFacts(connection, options = {}) {
     const listed = await request('/v1/principals/me/resources?kind=connection', options);

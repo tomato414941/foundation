@@ -17,7 +17,7 @@ async function withApps(t, { offered = true } = {}) {
   const f = await fixture(t, { services: [entry('cloudflare', { oauth: cloudflareOauth(cloudflare) }), entry('openrouter', { oauth: openrouterOauth(new FakeOpenRouter()) }), entry('google', { oauth: googleOauth(new FakeGoogle()) })] });
   const register = (name, values = WORK) => f.request('/v1/principals/me/resources?kind=app&name=' + encodeURIComponent(name), { method: 'PUT', data: values });
   async function connect(input = {}, code = 'personal') {
-    const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare', ...input } });
+    const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'cloudflare', ...input } });
     assert.equal(started.status, 200, started.text);
     const url = new URL(started.json.url), done = await f.callback(url, code);
     assert.match(done.headers.get('location'), /result=connected/, done.headers.get('location'));
@@ -56,7 +56,7 @@ test('持ち主のアプリで接続し、更新・つなぎ直し・取り消�
   const removed = await f.request('/v1/resources/' + connection.id, { method: 'DELETE', data: { revoke: true } });
   assert.equal(removed.json.service_revoked, true);
   assert.equal(f.cloudflare.calls.find(call => call.url.endsWith('/revoke')).options.body.get('client_id'), 'work-app-id');
-  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare' } })).status, 503, "without an app, Foundation's is used, and here it has none");
+  assert.equal((await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'cloudflare' } })).status, 503, "without an app, Foundation's is used, and here it has none");
 });
 
 test('アプリの秘密を新しくしても、そのアプリの接続はそのまま使える', async t => {
@@ -84,14 +84,14 @@ test('アプリを消すと、そのアプリの接続は権限を保ったま�
   assert.equal((await f.inject(connection)).status, 409);
   const other = (await f.register('個人用', { ...WORK, client_id: 'personal-app-id' })).json.resource;
   // Changing the app a connection goes through is shown to the owner before it is kept.
-  const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare', connection_id: connection.id, app: other.id } });
+  const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'cloudflare', connection_id: connection.id, app: other.id } });
   const url = new URL(started.json.url);
   assert.equal(url.searchParams.get('client_id'), 'personal-app-id');
   const review = new URL((await f.callback(url, 'personal')).headers.get('location'), f.base);
   assert.equal(review.searchParams.get('result'), 'review');
-  const shown = await f.request('/v1/connections/confirmation?state=' + review.searchParams.get('state'));
+  const shown = await f.request('/v1/principals/me/connections/confirmation?state=' + review.searchParams.get('state'));
   assert.ok(shown.json.changes.some(change => change.label === 'OAuthアプリ'));
-  assert.equal((await f.request('/v1/connections/confirmation', { method: 'POST', data: { state: review.searchParams.get('state') } })).status, 200);
+  assert.equal((await f.request('/v1/principals/me/connections/confirmation', { method: 'POST', data: { state: review.searchParams.get('state') } })).status, 200);
   const again = (await f.request('/v1/principals/me/resources?kind=connection')).json.resources.find(item => item.id === connection.id);
   assert.equal(again.id, connection.id); assert.equal(again.status, 'usable');
   assert.deepEqual(again.app, { id: other.id, name: '個人用', foundation: false });
@@ -101,7 +101,7 @@ test('線を引かれた人は、そのアプリで自分のアカウントを�
   const f = await withApps(t), app = (await f.register('会社のアプリ')).json.resource;
   await f.signin('member@example.test');
   const member = (await f.request('/v1/principals/me')).json.principal.id;
-  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare', app: app.id } })).status, 403);
+  assert.equal((await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'cloudflare', app: app.id } })).status, 403);
   await f.signin();
   assert.equal((await f.request('/v1/principals/' + member + '/relations', { method: 'POST', data: { relation: 'viewer', object_type: 'resource', object_id: app.id } })).status, 201);
   await f.signin('member@example.test');
@@ -143,7 +143,7 @@ test('AIはアプリの登録を依頼でき、持ち主が秘密を入力し、
   const connect = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'connection', service: 'cloudflare', app: appId, scopes: ['dns.write'] }], binding_message: 'DNSを設定します。' } });
   assert.equal(connect.status, 201, connect.text);
   assert.deepEqual(connect.json.request.app, { id: appId, name: 'メール用', foundation: false });
-  const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare', request_id: connect.json.request.id } });
+  const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'cloudflare', request_id: connect.json.request.id } });
   assert.equal(new URL(started.json.url).searchParams.get('client_id'), 'mail-app-id');
   const wrong = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'connection', service: 'google', app: appId }], binding_message: 'x' } });
   assert.equal(wrong.json.error.code, 'app_mismatch');

@@ -59,8 +59,8 @@ with sync_playwright() as p:
     expect(page.get_by_text('今月の計算時間', exact=False)).to_be_visible()
 
     # The AI opens two: one acting as the owner, one with no identity at all.
-    as_owner = call('POST', '/v1/environments?as=' + owner, {'name': 'ビルド', 'identity': owner}, token)['environment']
-    call('POST', '/v1/environments?as=' + owner, {'name': '調べもの'}, token)
+    as_owner = call('POST', '/v1/principals/' + owner + '/environments', {'name': 'ビルド', 'identity': owner}, token)['environment']
+    call('POST', '/v1/principals/' + owner + '/environments', {'name': '調べもの'}, token)
     page.reload(wait_until='networkidle')
     building = page.locator('.access-row').filter(has_text='ビルド')
     expect(building.get_by_text('待機中 · あなたとして動作', exact=True)).to_be_visible()
@@ -79,7 +79,7 @@ with sync_playwright() as p:
     dialog.get_by_role('button', name='エンバイロメントを閉じる', exact=True).click()
     expect(page.get_by_text('閉じました。', exact=True)).to_be_visible()
     expect(page.locator('.access-row').filter(has_text='ビルド')).to_have_count(0)
-    gone = caller.get('/v1/environments/' + as_owner['id'] + '?as=' + owner, headers={'authorization': 'Bearer ' + token})
+    gone = caller.get('/v1/environments/' + as_owner['id'], headers={'authorization': 'Bearer ' + token})
     assert gone.status == 404, 'closed from the page, it is gone'
     assert not errors, errors
     context.close()

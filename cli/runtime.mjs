@@ -256,10 +256,6 @@ async function main() {
   if (action === 'token') { console.log(token); return; }
   // One request, as this machine, and the answer printed as it came. Nothing here knows the endpoints.
   if (action === 'api') {
-    if (!publicSpec && !/[?&]as=/.test(call.target)) {
-      const me = await send('/v1/principals/me', undefined, { method: 'GET', accept: () => true });
-      if (me.acts_for?.length === 1) call.target += (call.target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(me.acts_for[0]);
-    }
     const response = await fetch(url.origin + call.target, { method: call.method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), ...(call.body === undefined ? {} : { 'content-type': call.type }) },
       ...(call.body === undefined ? {} : { body: call.body }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
     const bytes = Buffer.from(await response.arrayBuffer());
@@ -327,17 +323,17 @@ async function main() {
   const acting = current.acts_for ?? [];
   const owner = process.env.FOUNDATION_AS || (acting.length === 1 ? acting[0] : null);
   if (!owner && acting.length > 1) throw new Error('This key acts for several principals. Set FOUNDATION_AS=<principal id> to say which one this run is for.');
-  const forHolder = target => owner ? target + (target.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(owner) : target;
+  const holder = '/v1/principals/' + encodeURIComponent(owner || 'me');
   // A secret is sealed here, with a key of its own, for each of the owner's recipients: the server keeps what it
   // cannot open. This machine is not among them; it places the bytes and does not read them back.
   const sealedFor = async bytes => {
-    const { recipients } = await send('/v1/principals/' + encodeURIComponent(owner || 'me') + '/recipients', undefined, { method: 'GET' });
+    const { recipients } = await send(holder + '/recipients', undefined, { method: 'GET' });
     if (!Array.isArray(recipients) || !recipients.length) throw new Error('Nobody can open a secret kept for this owner yet: the owner needs a key, or Foundation needs to act for them.');
     const contentKey = newContentKey();
     return { content: sealContent(contentKey, bytes).toString('base64url'), envelopes: Object.fromEntries(recipients.map(item => [item.principal_id, seal(contentKey, Buffer.from(item.public_key, 'base64url')).toString('base64url')])) };
   };
   if (action === 'keep') {
-    const saved = await send('/v1/principals/' + encodeURIComponent(owner || 'me') + '/resources?kind=secret&name=' + encodeURIComponent(call.name), await sealedFor(call.body), { method: 'PUT' });
+    const saved = await send(holder + '/resources?kind=secret&name=' + encodeURIComponent(call.name), await sealedFor(call.body), { method: 'PUT' });
     try { await send('/v1/principals/me/relations', { relation: 'editor', object_type: 'resource', object_id: saved.resource.id }, { method: 'DELETE' }); } catch {}
     console.log(JSON.stringify(saved));
     return;
@@ -364,7 +360,7 @@ async function main() {
     }
   }
   let injection;
-  if (asked.length) ({ injection } = await send(forHolder('/v1/injections'), { names: asked }));
+  if (asked.length) ({ injection } = await send(holder + '/injections', { names: asked }));
   else injection = { environment: {}, files: [] };
   if (!injection || typeof injection.environment !== 'object' || !Array.isArray(injection.files)) throw new Error('Foundation returned an invalid injection.');
   injection = { environment: { ...injection.environment, ...handed.environment }, files: [...injection.files, ...handed.files] };
@@ -434,7 +430,7 @@ async function main() {
       retainOutput = true;
       // The command wrote it; the agent never saw it, and keeps it that way: the line drawn for the one who kept it is declined.
       let saved;
-      try { saved = await send('/v1/principals/' + encodeURIComponent(owner || 'me') + '/resources?kind=secret&name=' + encodeURIComponent(output.name), await sealedFor(bytes), { method: 'PUT' }); }
+      try { saved = await send(holder + '/resources?kind=secret&name=' + encodeURIComponent(output.name), await sealedFor(bytes), { method: 'PUT' }); }
       catch { throw new Error(recovery()); }
       try { await send('/v1/principals/me/relations', { relation: 'editor', object_type: 'resource', object_id: saved.resource.id }, { method: 'DELETE' }); } catch {}
       retainOutput = false;

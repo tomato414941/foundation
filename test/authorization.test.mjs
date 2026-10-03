@@ -35,8 +35,8 @@ test('答えは subject・action・resource から decision だけを返し、�
 test('ルートは同じ問いを立て、許されない主体には 403、依頼だけを渡された利用者には 401 で答える', async t => {
   const f = await fixture(t), key = await f.issueKey();
   const kept = await f.keep('secret', 'x', 'value');
-  for (const [path, options] of [['/v1/principals/' + USER_A + '/relations', {}], ['/v1/export', {}],
-    ['/v1/resources/' + kept.json.resource.id, { method: 'PATCH', data: { name: 'y' } }], ['/v1/connections', { method: 'POST', data: { service: 'google' } }]]) {
+  for (const [path, options] of [['/v1/principals/' + USER_A + '/relations', {}], ['/v1/principals/me/export', {}],
+    ['/v1/resources/' + kept.json.resource.id, { method: 'PATCH', data: { name: 'y' } }], ['/v1/principals/me/connections', { method: 'POST', data: { service: 'google' } }]]) {
     const refused = await f.request(path, { ...options, token: key.token, anonymous: true });
     assert.equal(refused.status, 403, path + ' ' + refused.text); assert.equal(refused.json.error.code, 'forbidden');
   }

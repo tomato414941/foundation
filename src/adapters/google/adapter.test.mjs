@@ -17,7 +17,7 @@ async function googleFixture(t, google = new FakeGoogle()) {
   const f = await fixture(t, { google, services: [entry('google', { oauth: googleOauth(google) })] });
   async function connect(code = 'personal', input = {}) {
     const ids = new Set((await connections()).map(item => item.id));
-    const result = await f.request('/v1/connections', { method: 'POST', data: { service: 'google', ...(input.request_id ? {} : { scopes: [CLOUD] }), ...input } });
+    const result = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', ...(input.request_id ? {} : { scopes: [CLOUD] }), ...input } });
     assert.equal(result.status, 200, result.text);
     const done = await f.callback(new URL(result.json.url), code);
     assert.match(done.headers.get('location'), /result=connected/, done.headers.get('location'));
@@ -33,7 +33,7 @@ test('Googleの設定を読み込み、未設定なら接続を利用不可と�
   for (const incomplete of [{ clientId: 'id' }, { clientSecret: 'secret' }]) assert.throws(() => new GoogleClient(incomplete), /Both Foundation Google/);
   const f = await googleFixture(t, new GoogleClient());
   assert.equal((await f.request('/v1/services')).json.services.find(item => item.id === 'google').auth_schemes.oauth.available, false);
-  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'google' } })).status, 503);
+  assert.equal((await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google' } })).status, 503);
 });
 
 test('Googleの同意を、頼まれた権限と本人確認の権限、state・PKCE・オフライン更新付きで一度だけ要求する', async t => {

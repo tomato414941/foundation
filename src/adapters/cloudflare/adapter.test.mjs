@@ -13,7 +13,7 @@ const GRANTED = [...new Set([...CLOUDFLARE_BASE_SCOPES, ...ASKED])].sort();
 async function cloudflareFixture(t, cloudflare = new FakeCloudflare()) {
   const f = await fixture(t, { services: [entry('cloudflare', { oauth: cloudflareOauth(cloudflare) })] });
   async function start(input = {}) {
-    const result = await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
+    const result = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'cloudflare', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
@@ -34,7 +34,7 @@ test('Cloudflareの設定を読み込み、未設定なら利用不可として�
   const f = await cloudflareFixture(t, new CloudflareClient());
   const listed = await f.request('/v1/services');
   assert.equal(listed.json.services[0].auth_schemes.oauth.available, false);
-  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare' } })).status, 503);
+  assert.equal((await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'cloudflare' } })).status, 503);
 });
 
 test('Cloudflareの認可を、頼まれた権限と継続利用・本人確認の権限、state・PKCE付きで要求し、同じセッションで完了する', async t => {
@@ -297,7 +297,7 @@ test('新規接続の依頼と再接続の依頼を、それぞれ指定され�
     authorization_details: [{ type: 'connection', service: 'cloudflare', ...(connectionId ? { connection_id: connectionId } : {}) }] } })).json.request;
   const renewal = await ask(one.id), addition = await ask();
   for (const [request, target] of [[renewal, two.id], [addition, one.id]]) {
-    const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare', request_id: request.id, connection_id: target } });
+    const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'cloudflare', request_id: request.id, connection_id: target } });
     assert.equal(started.status, 409, started.text);
     assert.equal(started.json.error.code, 'connection_changed');
   }
@@ -319,19 +319,19 @@ test('新しいOAuthアプリへの再接続で変更内容を確認し、既存
   const done = await f.callback(await f.start({ request_id: asked.json.request.id }), 'personal');
   const location = new URL(done.headers.get('location'), f.base), state = location.searchParams.get('state');
   assert.equal(location.searchParams.get('result'), 'review');
-  const review = await f.request('/v1/connections/confirmation?state=' + state);
+  const review = await f.request('/v1/principals/me/connections/confirmation?state=' + state);
   assert.equal(review.status, 200, review.text);
   assert.deepEqual(review.json.changes.map(item => item.label), ['OAuthアプリ', '権限', '確認できたアカウント']);
   assert.doesNotMatch(review.text, /cf-access-|cf-refresh-/);
   assert.deepEqual(f.secret(connection), old);
   assert.equal((await f.request('/v1/requests/' + asked.json.request.id, { token })).json.request.status, 'pending');
-  const approved = await f.request('/v1/connections/confirmation', { method: 'POST', data: { state } });
+  const approved = await f.request('/v1/principals/me/connections/confirmation', { method: 'POST', data: { state } });
   assert.equal(approved.status, 200, approved.text);
   assert.equal(approved.json.connection.id, connection.id);
   assert.equal(approved.json.connection.facts.client_id, 'new-cloudflare-client');
   assert.equal((await f.request('/v1/requests/' + asked.json.request.id, { token })).json.request.result.connection_id, connection.id);
   assert.equal((await f.inject(connection, { token })).status, 200);
-  assert.equal((await f.request('/v1/connections/confirmation', { method: 'POST', data: { state } })).status, 400);
+  assert.equal((await f.request('/v1/principals/me/connections/confirmation', { method: 'POST', data: { state } })).status, 400);
 });
 
 test('変更の確認をキャンセルして元の接続を利用し続ける', async t => {
@@ -340,7 +340,7 @@ test('変更の確認をキャンセルして元の接続を利用し続ける',
   const done = await f.callback(await f.start({ connection_id: connection.id }), 'personal');
   const state = new URL(done.headers.get('location'), f.base).searchParams.get('state');
   assert.ok(state);
-  assert.equal((await f.request('/v1/connections/confirmation', { method: 'DELETE', data: { state } })).status, 200);
+  assert.equal((await f.request('/v1/principals/me/connections/confirmation', { method: 'DELETE', data: { state } })).status, 200);
   assert.deepEqual(f.secret(connection), old);
   assert.equal((await f.inject(connection)).status, 200);
   assert.equal(f.cloudflare.revoked.size, 0);
@@ -354,7 +354,7 @@ test('確認待ちに別の更新が完了した場合は、先に完了した�
   const row = f.app.connections.held(USER_A, connection.id), context = f.app.connections.context(row);
   const result = await cloudflareOauth(f.cloudflare).authorization.complete({ code: 'personal', verifier: 'test', redirectUri: f.base }, context);
   const fresh = f.app.connections.save(USER_A, 'cloudflare', 'oauth', result, { previous: row });
-  const confirmed = await f.request('/v1/connections/confirmation', { method: 'POST', data: { state } });
+  const confirmed = await f.request('/v1/principals/me/connections/confirmation', { method: 'POST', data: { state } });
   assert.equal(confirmed.status, 409);
   assert.equal(confirmed.json.error.code, 'connection_changed');
   assert.equal(f.app.connections.held(USER_A, connection.id).generation, fresh.generation);
@@ -368,11 +368,11 @@ test('取り消された依頼や別のブラウザーでは確認待ちの変�
   f.cloudflare.listedAccounts = [];
   const done = await f.callback(await f.start({ request_id: asked.json.request.id }), 'personal');
   const state = new URL(done.headers.get('location'), f.base).searchParams.get('state');
-  assert.equal((await f.request('/v1/connections/confirmation?state=' + state, { anonymous: true })).status, 401);
-  assert.equal((await f.request('/v1/connections/confirmation', { method: 'POST', token, data: { state } })).status, 403);
+  assert.equal((await f.request('/v1/principals/me/connections/confirmation?state=' + state, { anonymous: true })).status, 401);
+  assert.equal((await f.request('/v1/principals/me/connections/confirmation', { method: 'POST', token, data: { state } })).status, 403);
   assert.equal((await f.request('/v1/requests/' + asked.json.request.id, { method: 'DELETE', token, data: {} })).status, 200);
-  assert.equal((await f.request('/v1/connections/confirmation', { method: 'POST', data: { state } })).status, 409);
+  assert.equal((await f.request('/v1/principals/me/connections/confirmation', { method: 'POST', data: { state } })).status, 409);
   await f.signin('second@example.test');
-  assert.equal((await f.request('/v1/connections/confirmation?state=' + state)).status, 400);
+  assert.equal((await f.request('/v1/principals/me/connections/confirmation?state=' + state)).status, 400);
   assert.deepEqual(f.secret(connection), old);
 });

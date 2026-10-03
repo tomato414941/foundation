@@ -54,7 +54,7 @@ test('宛先は持ち主と、持ち主の代わりに動くFoundationで、Foun
   const kept = await f.request('/v1/principals/me/resources?kind=secret&name=mine', { ...as, method: 'PUT', data: sealed });
   assert.equal(kept.status, 200, kept.text);
   assert.deepEqual(kept.json.resource.recipients, [USER_A]);
-  const injected = await f.request('/v1/injections', { ...as, method: 'POST', data: { names: [{ name: 'mine', as: 'MINE' }] } });
+  const injected = await f.request('/v1/principals/me/injections', { ...as, method: 'POST', data: { names: [{ name: 'mine', as: 'MINE' }] } });
   assert.equal(injected.status, 403); assert.equal(injected.json.error.code, 'foundation_not_agent');
   const plain = await f.request('/v1/principals/me/resources?kind=secret&name=plain', { ...as, method: 'PUT', data: { plain: b64(Buffer.from('x')) } });
   assert.equal(plain.status, 403); assert.equal(plain.json.error.code, 'foundation_not_agent');
@@ -62,10 +62,10 @@ test('宛先は持ち主と、持ち主の代わりに動くFoundationで、Foun
   await f.allowFoundation({ ...as, as: USER_A });
   const recipients = (await f.request('/v1/principals/me/recipients', as)).json.recipients.map(one => one.principal_id);
   assert.deepEqual(recipients, [USER_A, f.app.keys.agentId]);
-  assert.equal((await f.request('/v1/injections', { ...as, method: 'POST', data: { names: [{ name: 'mine', as: 'MINE' }] } })).json.error.code, 'not_sealed_for_foundation', 'sealed before Foundation was a recipient');
+  assert.equal((await f.request('/v1/principals/me/injections', { ...as, method: 'POST', data: { names: [{ name: 'mine', as: 'MINE' }] } })).json.error.code, 'not_sealed_for_foundation', 'sealed before Foundation was a recipient');
   const handed = await f.request('/v1/resources/' + kept.json.resource.id + '/envelopes/' + f.app.keys.agentId, { ...as, method: 'PUT', data: { wrapped: b64(resealed(sealed, made, f.app.keys.publicKeyOf(f.app.keys.agentId))) } });
   assert.equal(handed.status, 200, handed.text);
-  assert.deepEqual((await f.request('/v1/injections', { ...as, method: 'POST', data: { names: [{ name: 'mine', as: 'MINE' }] } })).json.injection.environment, { MINE: 'mine' });
+  assert.deepEqual((await f.request('/v1/principals/me/injections', { ...as, method: 'POST', data: { names: [{ name: 'mine', as: 'MINE' }] } })).json.injection.environment, { MINE: 'mine' });
 });
 // The owner opens its own envelope and seals the key for one more recipient, as a client does.
 function resealed(sealed, own, recipientPublicKey) {

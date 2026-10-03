@@ -29,7 +29,7 @@ export async function openrouterFixture(t, options = {}) {
   const openrouter = options.openrouter || new FakeOpenRouter(), google = new FakeGoogle();
   const f = await fixture(t, { google, services: [entry('openrouter', { oauth: openrouterOauth(openrouter) }), entry('google', { oauth: googleOauth(google) })], ...options });
   async function start(extra = {}) {
-    const result = await f.request('/v1/connections', { method: 'POST', data: { service: 'openrouter', ...extra } });
+    const result = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'openrouter', ...extra } });
     if (result.status !== 200) throw new Error(result.text);
     return new URL(result.json.url);
   }

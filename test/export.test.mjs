@@ -11,7 +11,7 @@ test('hands the owner everything they have, secrets included', async (t) => {
   await f.request('/v1/principals/me/resources?kind=secret&name=notes/plan', { method: 'PUT', token: KEY, raw: 'read me', type: 'text/plain' });
   await f.request('/v1/principals/me/resources?kind=secret&name=keys/token', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
 
-  const exported = await f.request('/v1/export');
+  const exported = await f.request('/v1/principals/me/export');
   assert.equal(exported.status, 200, exported.text);
   assert.match(exported.headers.get('content-disposition'), /attachment; filename="foundation-\d{4}-\d{2}-\d{2}\.json"/);
   const value = exported.json;
@@ -33,12 +33,12 @@ test('keeps the export to the owner\'s own session', async (t) => {
   KEY = (await f.approveKey()).token;
   await f.request('/v1/principals/me/resources?kind=secret&name=keys/token', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
 
-  const asAKey = await f.request('/v1/export', { token: KEY, anonymous: true });
+  const asAKey = await f.request('/v1/principals/me/export', { token: KEY, anonymous: true });
   assert.equal(asAKey.status, 403);
   assert.ok(!asAKey.text.includes('sh-secret-value'));
 
   await f.signin('other@example.test');
-  const asAnother = await f.request('/v1/export');
+  const asAnother = await f.request('/v1/principals/me/export');
   assert.equal(asAnother.status, 200);
   assert.deepEqual(asAnother.json.secrets, []);
 });

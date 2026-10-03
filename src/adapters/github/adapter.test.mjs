@@ -9,7 +9,7 @@ import { FakeGoogle, fixture, entry } from '../../../test/helpers.mjs';
 async function githubFixture(t, github = new FakeGitHub()) {
   const google = new FakeGoogle(), f = await fixture(t, { google, services: [entry('github', { oauth: githubOauth(github) }), entry('google', { oauth: googleOauth(google) })] });
   async function start(extra = {}) {
-    const result = await f.request('/v1/connections', { method: 'POST', data: { service: 'github', name: '', ...extra } });
+    const result = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'github', name: '', ...extra } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
@@ -94,5 +94,5 @@ test('Without a client ID and secret GitHub is offered as unavailable', async t 
   const google = new FakeGoogle(), f = await fixture(t, { google, services: [entry('github', { oauth: githubOauth(new GitHubClient()) }), entry('google', { oauth: googleOauth(google) })] });
   const scheme = (await f.request('/v1/services')).json.services.find(item => item.id === 'github').auth_schemes.oauth;
   assert.equal(scheme.available, false);
-  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'github' } })).status, 503);
+  assert.equal((await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'github' } })).status, 503);
 });

@@ -98,7 +98,7 @@ with sync_playwright() as p:
     review(page)
     page.screenshot(path=str(shots / 'link-done.png'), full_page=True)
     assert call('/v1/requests/' + asked['id'], key)['request']['result']['names'] == ['npm-api-token']
-    delivered = call('/v1/injections', key, 'POST', {'names': [{'name': 'npm-api-token', 'as': 'NPM_TOKEN'}]})
+    delivered = call('/v1/principals/me/injections', key, 'POST', {'names': [{'name': 'npm-api-token', 'as': 'NPM_TOKEN'}]})
     assert delivered['injection']['environment']['NPM_TOKEN'] == SECRET
 
     # The same link opened again reaches nothing.

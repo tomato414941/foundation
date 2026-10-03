@@ -82,7 +82,7 @@ globalThis.fetch = async (url, options = {}) => {
   else if (url === '/v1/principals/agent') data = { principal: { id: 'agent', name: 'Foundation Agent' } };
   else if (url === '/v1/principals/me/compute') data = { compute: { month: '2026-01', used_seconds: 0, limit_seconds: 36000 } };
   else if (url === '/v1/functions') data = { functions: [] };
-  else if (url === '/v1/environments') data = { environments: [] };
+  else if (url === '/v1/principals/me/environments') data = { environments: [] };
   else if (url === '/v1/services') data = { services: [] };
   else if (url === '/v1/principals/me/payment') data = { payment: { available: false, paying: false, payer: 'owner' } };
   else if (url === '/v1/session' && options.method === 'GET') data = { available: true, pending: null };

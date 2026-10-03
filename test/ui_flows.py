@@ -83,7 +83,7 @@ def plain(value):
 
 def injected(request, base, name, headers=None, as_=None):
     """What is kept under a name, as a command would get it: the bytes, with status and text like a response."""
-    response = request.post(base + '/v1/injections' + ('?as=' + as_ if as_ else ''), data=json.dumps({'names': [{'name': name, 'as': 'VALUE', 'filename': 'value'}]}),
+    response = request.post(base + '/v1/principals/' + (as_ or 'me') + '/injections', data=json.dumps({'names': [{'name': name, 'as': 'VALUE', 'filename': 'value'}]}),
                             headers={'content-type': 'application/json', 'origin': base, **(headers or {})})
     value = base64.b64decode(response.json()['injection']['files'][0]['content']) if response.ok else b''
     return types.SimpleNamespace(status=response.status, body=lambda: value, text=lambda: value.decode())

@@ -544,7 +544,7 @@ const SOURCES = {
   // Who acts for this principal: the lines drawn toward it, with who is at their other end.
   agentLines: signal => api('/v1/principals/me/relations?relation=agent&direction=to&limit=200', { signal }).then(result => result.relations),
   functions: signal => api('/v1/functions', { signal }).then(result => result.functions),
-  environments: signal => api('/v1/environments', { signal }).then(result => result.environments.filter(item => item.status !== 'stopped')),
+  environments: signal => api('/v1/principals/me/resources?kind=environment', { signal }).then(result => result.resources.filter(item => item.status !== 'stopped')),
   compute: signal => api('/v1/principals/me/compute', { signal }).then(result => result.compute),
   // The principal the server acts as, whose envelopes it can open.
   foundation: signal => api('/v1/principals/agent', { signal }).then(result => ({ principal_id: result.principal.id })),
@@ -797,7 +797,7 @@ function render() {
       <section class="resource-section" aria-labelledby="passkeys-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="passkeys-title">${esc(t('client.passkey.title'))}</h2><p>${esc(t('client.passkey.description'))}</p></div></div>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} ${esc(t('client.passkey.add'))}</button>` : ''}</div>
         ${passkeys().length ? `<div class="agent-list">${passkeys().map(passkeyRow).join('')}</div>` : ''}</section>
       ${state.payment?.available ? `<section class="resource-section" aria-labelledby="payment-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('card')}</span><div><h2 id="payment-title">${esc(t('client.payment.title'))}</h2><p>${state.payment.paying ? t('client.payment.registeredNote') : t('client.payment.addMethodNote')}</p></div></div><button class="button secondary" data-action="set-payment">${state.payment.paying ? t('client.payment.changeMethod') : t('client.payment.addMethod')}</button></div></section>` : ''}
-      <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">${esc(t('client.account.downloadData'))}</h2><p>${esc(t('client.account.exportDescription'))}</p></div></div><a class="button secondary" href="/v1/export" download>${icon('download')} ${esc(t('client.common.download'))}</a></div></section>
+      <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">${esc(t('client.account.downloadData'))}</h2><p>${esc(t('client.account.exportDescription'))}</p></div></div><a class="button secondary" href="/v1/principals/me/export" download>${icon('download')} ${esc(t('client.common.download'))}</a></div></section>
       <section class="resource-section" aria-labelledby="handover-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('arrow')}</span><div><h2 id="handover-title">${esc(t('client.handover.title'))}</h2><p>${esc(t('client.handover.description'))}</p></div></div><button class="button secondary" data-action="hand-over">${esc(t('client.handover.action'))}</button></div></section>
       <section class="resource-section" aria-labelledby="merge-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="merge-title">${esc(t('client.merge.title'))}</h2></div></div>${passkeysWork() ? `<button class="button secondary" data-action="merge">${esc(t('client.merge.action'))}</button>` : ''}</div></section>
       <section class="resource-section" aria-labelledby="developers-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="developers-title">${esc(t('client.account.developers'))}</h2></div></div><a class="button secondary" href="/principals#apps">${esc(t('client.integration.registration'))}</a></div></section>`);
@@ -992,7 +992,7 @@ function renderRequest() {
     <div class="register-body">${body}</div>
     <button class="text-button full" type="button" data-action="deny-request">${esc(t('client.connection.decline'))}</button>${expiry}</section>`);
   if (way === 'token' && app.querySelector('#token-request-form')) bindForm(async (form) => {
-    await api('/v1/connections', { method: 'POST', data: { request_id: row.id, fields: pastedValues(scheme, form) } });
+    await api('/v1/principals/me/connections', { method: 'POST', data: { request_id: row.id, fields: pastedValues(scheme, form) } });
     await refresh();
   }, app.querySelector('.register-body'));
 }
@@ -1265,7 +1265,7 @@ function connect(serviceId, connectionId, appId, shown = 'oauth') {
     ${connectChoices(service, connectionId, appId)}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.connections.goToService', { name: service.name }))} ${icon('arrow')}</button></form>${connectionId ? '' : otherWays(service, shown)}`);
   bindForm(async (form) => {
     const scopes = String(form.get('scopes') || '').split(/\s+/).filter(Boolean), app = String(form.get('app') || '');
-    const result = await api('/v1/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'oauth', ...(connectionId ? { connection_id: connectionId } : {}),
+    const result = await api('/v1/principals/me/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'oauth', ...(connectionId ? { connection_id: connectionId } : {}),
       ...(scopes.length ? { scopes } : {}), ...(app && app !== 'foundation' ? { app } : {}) } });
     location.assign(result.url);
   });
@@ -1288,7 +1288,7 @@ const instructions = scheme => scheme.instructions ? `<p class="permission-note"
 async function connectByPaste(service, way, { connectionId, requestId } = {}) {
   const scheme = service.auth_schemes[way], replacing = connectionId ? connected().find(item => item.id === connectionId) : null, name = esc(service.name);
   // A role's link is made for this connection; what is pasted finishes that flow.
-  const started = way === 'role' ? await api('/v1/connections', { method: 'POST', data: requestId ? { request_id: requestId } : { service: service.id, auth_scheme: 'role', ...(connectionId ? { connection_id: connectionId } : {}) } }) : null;
+  const started = way === 'role' ? await api('/v1/principals/me/connections', { method: 'POST', data: requestId ? { request_id: requestId } : { service: service.id, auth_scheme: 'role', ...(connectionId ? { connection_id: connectionId } : {}) } }) : null;
   const words = way === 'role'
     ? { title: esc(t('client.connections.createRole', { name: service.name })), link: t('client.connections.openService', { name: service.name }), paste: t('client.connection.pasteCreatedValue'), submit: esc(t('client.connection.connect')) + ' ' + icon('arrow') }
     : { title: replacing ? esc(t('client.connections.replaceValueTitle', { name: replacing.label })) : esc(t('client.connections.tokenTitle', { name: service.name })), lead: esc(t('client.connections.tokenLead', { name: service.name })), link: t('client.connections.createToken', { name: service.name }), submit: replacing ? t('client.common.replaceValue') : t('client.connection.connect') };
@@ -1298,8 +1298,8 @@ async function connectByPaste(service, way, { connectionId, requestId } = {}) {
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${words.submit}</button></form>${replacing || requestId ? '' : otherWays(service, way)}`);
   bindForm(async (form) => {
     const fields = pastedValues(scheme, form), label = String(form.get('name') || '').trim();
-    if (started) await api('/v1/connections/complete', { method: 'POST', data: { state: started.state, fields } });
-    else await api('/v1/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'token', fields, ...(replacing ? { connection_id: replacing.id } : label ? { name: label } : {}) } });
+    if (started) await api('/v1/principals/me/connections', { method: 'PUT', data: { state: started.state, fields } });
+    else await api('/v1/principals/me/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'token', fields, ...(replacing ? { connection_id: replacing.id } : label ? { name: label } : {}) } });
     closeDialog(); await refresh(); toast(replacing && !started ? t('client.connection.valueReplaced') : t('client.connections.connectedName', { name: service.name }));
   });
 }
@@ -1799,7 +1799,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'request-connect') {
       target.disabled = true;
       if (accessRequest.auth_scheme === 'role') { await connectByPaste(localizeService(accessRequest.service, i18n.language), 'role', { requestId }); target.disabled = false; return; }
-      location.assign((await api('/v1/connections', { method: 'POST', data: { request_id: requestId } })).url);
+      location.assign((await api('/v1/principals/me/connections', { method: 'POST', data: { request_id: requestId } })).url);
     }
     if (action === 'deny-request') {
       target.disabled = true;
@@ -1921,17 +1921,17 @@ const resultMessages = { connected: t('client.connection.connected'), denied: t(
   retry: t('client.connection.ongoingAccessFailed'), changed: t('client.connection.stateChanged'), failed: t('client.connection.failedRetry') };
 if (resultCode === 'review') {
   try {
-    const review = await api('/v1/connections/confirmation?state=' + encodeURIComponent(confirmationState));
+    const review = await api('/v1/principals/me/connections/confirmation?state=' + encodeURIComponent(confirmationState));
     const values = items => items.length ? items.join('\n') : t('client.common.none');
     openDialog(`<h2 id="dialog-title">${esc(t('client.connection.reviewChanges'))}</h2><p>${esc(review.connection.service.name)} · ${esc(review.connection.label)}</p>
       <dl class="approval-facts">${presentedChanges(review).map(change => `<div><dt>${esc(change.label)}</dt><dd><p>${esc(t('client.connections.beforeValues', { values: values(change.before) })).replace(/\n/g, '<br>')}</p><p>${esc(t('client.connections.afterValues', { values: values(change.after) })).replace(/\n/g, '<br>')}</p></dd></div>`).join('')}</dl>
       <p class="permission-note">${esc(t('client.connection.updatePermissionWarning'))}</p>
       <form><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="cancel-connection-review">${esc(t('client.common.cancel'))}</button><button type="submit" class="button primary">${esc(t('client.connection.confirmUpdate'))}</button></div></form>`);
     document.querySelector('[data-action="cancel-connection-review"]').addEventListener('click', async () => {
-      try { await api('/v1/connections/confirmation', { method: 'DELETE', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); }
+      try { await api('/v1/principals/me/connections/confirmation', { method: 'DELETE', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); }
       catch (error) { toast(error.message); }
     });
-    bindForm(async () => { await api('/v1/connections/confirmation', { method: 'POST', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); await refresh(); toast(t('client.connection.updated')); });
+    bindForm(async () => { await api('/v1/principals/me/connections/confirmation', { method: 'POST', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); await refresh(); toast(t('client.connection.updated')); });
   } catch (error) { toast(error.message); }
 } else if (resultCode) toast(resultMessages[resultCode] || t('client.connection.checkAndRetry'));
 initializing = false;

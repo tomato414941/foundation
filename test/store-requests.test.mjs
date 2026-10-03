@@ -23,7 +23,7 @@ test('利用者が選んだ名前で保存し、依頼元に実際の保存名�
   assert.deepEqual(done.result.names, ['stripe-test-api-key']);
   const kept = f.app.secrets.list(USER_A);
   assert.deepEqual(kept.map(value => value.name), ['stripe-test-api-key']);
-  const delivered = await f.request('/v1/injections', { method: 'POST', token,
+  const delivered = await f.request('/v1/principals/me/injections', { method: 'POST', token,
     data: { names: [{ name: done.result.names[0], as: 'STRIPE_KEY' }] } });
   assert.equal(delivered.json.injection.environment.STRIPE_KEY, 'fixture-private-value');
 });

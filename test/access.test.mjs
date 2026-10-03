@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
 import { fixture, USER_A, USER_B } from './helpers.mjs';
 
-const revoke = (f, id, options = {}) => f.request(`/v1/principals/${id}/access`, { method: 'DELETE', data: {}, ...options });
+const revoke = (f, id, { as, ...options } = {}) => f.request(`/v1/principals/${id}/access` + (as ? '?as=' + as : ''), { method: 'DELETE', data: {}, ...options });
 async function ask(f, agent, to, kind = 'store') {
   const input = kind === 'store' ? { fields: [{ name: 'requested', label: '値', readable: true }] } : { service: 'google' };
   const result = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: { actor: 'relation', store: 'secret', connect: 'connection', app: 'app' }[kind], ...(kind === 'actor' ? { relation: 'agent' } : input) }], to } });
@@ -34,7 +34,7 @@ test('アクセス許可と個別の閲覧・編集権限を取り消し、相�
       assert.equal((await f.request(`/v1/resources/${saved.json.resource.id}/content`, { token })).status, 403);
       assert.equal((await f.request(`/v1/resources/${saved.json.resource.id}/content`, { token, method: 'PUT', raw: 'changed' })).status, 403);
     }
-    const delivered = await f.request('/v1/injections', { method: 'POST', token, as: USER_A, data: { names: [{ name: 'private', as: 'VALUE' }] } });
+    const delivered = await f.request('/v1/principals/me/injections', { method: 'POST', token, as: USER_A, data: { names: [{ name: 'private', as: 'VALUE' }] } });
     assert.equal(delivered.status, 403);
     assert.equal((await f.read('secret', 'own', { token, as: agent.id })).text, 'own-value');
   }
@@ -93,7 +93,7 @@ test('取り消した相手を同じキーで再承認し、以後に追加し�
   assert.equal(asked.status, 201);
   assert.equal((await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { user_code: asked.json.request.user_code } })).status, 200);
   await f.keep('secret', 'later', 'later-value');
-  const delivered = await f.request('/v1/injections', { method: 'POST', token: agent.token, data: { names: [{ name: 'later', as: 'VALUE' }] } });
+  const delivered = await f.request('/v1/principals/me/injections', { method: 'POST', token: agent.token, data: { names: [{ name: 'later', as: 'VALUE' }] } });
   assert.equal(delivered.status, 200); assert.equal(delivered.json.injection.environment.VALUE, 'later-value');
 });
 
@@ -167,7 +167,7 @@ test('アップロード中にアクセスを取り消すと保存を拒否し�
 test('接続認証の完了前にアクセスを取り消すと、取消済みの依頼として完了を拒否する', async t => {
   const f = await fixture(t), agent = await f.issueKey();
   const asked = await ask(f, agent, USER_A, 'connect');
-  const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'google', request_id: asked.id } });
+  const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', request_id: asked.id } });
   assert.equal(started.status, 200);
   let began, release;
   const exchanging = new Promise(resolve => began = resolve);

@@ -62,7 +62,7 @@ test('公開仕様から操作を見つけ、初回接続・承認・保存・�
   const conflict = await call('putContent', { token, params: { resourceId }, data: plain('stale'), headers: { 'if-match': etag } });
   assert.equal(conflict.status, 412);
   assert.equal(conflict.json.error.code, 'secret_changed');
-  const delivered = await call('inject', { token, query: { as }, data: { names: [{ id: resourceId, as: 'CONFIG_FILE', filename: 'config.json' }] } });
+  const delivered = await call('inject', { token, params: { principalId: as }, data: { names: [{ id: resourceId, as: 'CONFIG_FILE', filename: 'config.json' }] } });
   assert.equal(Buffer.from(delivered.json.injection.files[0].content, 'base64').toString(), 'next');
 });
 
@@ -78,7 +78,7 @@ test('JSON定義を検証し、バイナリ保存とJSONリソースの入力を
   const saved = await f.request('/v1/principals/me/resources?kind=secret&name=binary', { method: 'PUT', raw: binary });
   assert.equal(saved.status, 200);
   assert.equal(saved.json.resource.size, binary.length + 28, 'sealed: iv and tag with the bytes');
-  const delivery = await f.request('/v1/injections', { method: 'POST', data: { names: [{ name: 'binary', as: 'BINARY_FILE', filename: 'data.bin' }] } });
+  const delivery = await f.request('/v1/principals/me/injections', { method: 'POST', data: { names: [{ name: 'binary', as: 'BINARY_FILE', filename: 'data.bin' }] } });
   assert.deepEqual(Buffer.from(delivery.json.injection.files[0].content, 'base64'), binary);
 });
 
@@ -88,7 +88,7 @@ test('省略可能な値にnullを渡した場合も従来の既定値で依頼�
   assert.equal(asked.status, 201);
   assert.deepEqual(asked.json.request.steps, []);
   assert.equal(asked.json.request.expires_at - asked.json.request.created_at, 30 * 60_000);
-  const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'google', scopes: null, app: null } });
+  const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', scopes: null, app: null } });
   assert.equal(started.status, 200);
   assert.equal(new URL(started.json.url).protocol, 'https:');
 });

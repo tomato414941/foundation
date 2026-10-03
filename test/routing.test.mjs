@@ -38,8 +38,8 @@ test('未サインインのAIへOpenAPIで接続先・認証要件・入力形�
   assert.match(page.headers.get('content-type'), /^application\/json/);
   assert.deepEqual(page.json.servers, [{ url: f.base }]);
   assert.match(page.json.paths['/v1/principals'].post.description, /verification_uri and user_code/);
-  assert.deepEqual(page.json.paths['/v1/connections/complete'].post.security, [{ session: [] }]);
-  assert.equal(page.json.paths['/v1/injections'].post.requestBody.content['application/json'].schema.$ref, '#/components/schemas/Inject');
+  assert.deepEqual(page.json.paths['/v1/principals/{principalId}/connections'].put.security, [{ session: [] }]);
+  assert.equal(page.json.paths['/v1/principals/{principalId}/injections'].post.requestBody.content['application/json'].schema.$ref, '#/components/schemas/Inject');
 });
 
 test('OpenAPIに公開用の接続先を示し、HEADでも仕様の形式を確認する', async t => {

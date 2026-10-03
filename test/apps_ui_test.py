@@ -118,8 +118,8 @@ with sync_playwright() as p:
         body: JSON.stringify({name: 'UI test agent', agent: true})})).json();
       const key = { ...made, ...await (await fetch('/v1/principals/' + made.principal.id + '/credentials', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind: 'key'})})).json() };
       const owner = key.principal.acts_for[0];
-      const asked = await (await fetch('/v1/requests?as=' + owner, {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
-        body: JSON.stringify({authorization_details: [{type: 'app', service: 'cloudflare', name: 'メール用'}], binding_message: 'メールの転送を設定できるアプリを使います。',
+      const asked = await (await fetch('/v1/requests', {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
+        body: JSON.stringify({to: owner, authorization_details: [{type: 'app', service: 'cloudflare', name: 'メール用'}], binding_message: 'メールの転送を設定できるアプリを使います。',
           steps: ['CloudflareのOAuth clientsでアプリを作ります。']})})).json();
       return {path: '/requests/' + asked.request.id, id: asked.request.id, token: key.token, owner};
     }""")
@@ -135,7 +135,7 @@ with sync_playwright() as p:
             page.screenshot(path=str(shots / f'app-request-{width}.png'), full_page=True)
     page.get_by_role('button', name='登録する', exact=True).click()
     expect(page.get_by_role('heading', name='OAuthアプリを登録しました', exact=True)).to_be_visible()
-    result = page.evaluate("""async (request) => (await (await fetch('/v1/requests/' + request.id + '?as=' + request.owner,
+    result = page.evaluate("""async (request) => (await (await fetch('/v1/requests/' + request.id,
       {headers: {authorization: 'Bearer ' + request.token}})).json()).request""", request)
     assert result['status'] == 'granted' and result['result']['app_id'], result
     assert 'mail-app-secret' not in json.dumps(result)

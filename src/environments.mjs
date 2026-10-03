@@ -187,7 +187,7 @@ export class Environments {
   }
 
   // Running one command. It is answered when done; the caller may stop waiting and ask again by its id. handed is what
-  // was obtained for it (as POST /v1/injections answers): variables, and files whose paths are variables.
+  // was obtained for it (as POST /v1/principals/{id}/injections answers): variables, and files whose paths are variables.
   run(row, byId, input = {}, handed = null) {
     row = this.usable(row);
     const command = input.command;

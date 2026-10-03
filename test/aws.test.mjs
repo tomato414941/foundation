@@ -22,7 +22,7 @@ test('AWSは鍵を預からず、持ち主が作った役割を外部IDつきで
   // What is pasted back, and what to do at AWS first, are said with the service.
   assert.deepEqual(catalog[0].auth_schemes.role.fields.map(field => field.name), ['role_arn']);
   assert.equal(catalog[0].auth_schemes.role.instructions, 'Policiesで権限を選んで作成します。');
-  const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'aws', auth_scheme: 'role' } });
+  const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'aws', auth_scheme: 'role' } });
   assert.equal(started.status, 200, started.text);
   const parameters = linkParameters(started.json.url);
   assert.match(started.json.url, /^https:\/\/console\.aws\.amazon\.com\/cloudformation\/home\?region=ap-northeast-1#\/stacks\/create\/review\?/);
@@ -33,19 +33,19 @@ test('AWSは鍵を預からず、持ち主が作った役割を外部IDつきで
   assert.ok(aws.calls.some(call => call.options.method === 'PUT'), 'the template was placed in the bucket for the link to reach');
 
   // A wrong paste is answered, and the same flow accepts the right one afterwards.
-  const wrong = await f.request('/v1/connections/complete', { method: 'POST', data: { state: started.json.state, fields: { role_arn: 'not an arn' } } });
+  const wrong = await f.request('/v1/principals/me/connections', { method: 'PUT', data: { state: started.json.state, fields: { role_arn: 'not an arn' } } });
   assert.equal(wrong.status, 400); assert.equal(wrong.json.error.code, 'invalid_role');
   const other = aws.make('some-other-external-id');
-  const refused = await f.request('/v1/connections/complete', { method: 'POST', data: { state: started.json.state, fields: { role_arn: other } } });
+  const refused = await f.request('/v1/principals/me/connections', { method: 'PUT', data: { state: started.json.state, fields: { role_arn: other } } });
   assert.equal(refused.status, 409); assert.equal(refused.json.error.code, 'reconnect_required');
   const arn = aws.make(parameters.param_ExternalId);
-  const done = await f.request('/v1/connections/complete', { method: 'POST', data: { state: started.json.state, fields: { role_arn: arn } } });
+  const done = await f.request('/v1/principals/me/connections', { method: 'PUT', data: { state: started.json.state, fields: { role_arn: arn } } });
   assert.equal(done.status, 200, done.text);
   assert.equal(done.json.connection.auth_scheme, 'role');
   assert.equal(done.json.connection.subject, 'aws:222222222222:foundation-connection-FoundationRole-ABC');
   assert.equal(done.json.connection.label, '222222222222 / foundation-connection-FoundationRole-ABC');
   assert.doesNotMatch(done.text, new RegExp(parameters.param_ExternalId), 'the external ID is Foundation\'s to keep');
-  assert.equal((await f.request('/v1/connections/complete', { method: 'POST', data: { state: started.json.state, fields: { role_arn: arn } } })).status, 400, 'the flow is spent');
+  assert.equal((await f.request('/v1/principals/me/connections', { method: 'PUT', data: { state: started.json.state, fields: { role_arn: arn } } })).status, 400, 'the flow is spent');
 
   // Delivering derives an hour of connections; nothing kept is a connection.
   const key = await f.issueKey();
@@ -69,11 +69,11 @@ test('AWSは鍵を預からず、持ち主が作った役割を外部IDつきで
 
 test('役割の流れは持ち主のブラウザーからだけ始まり、他人の流れを完了させることはできない', async t => {
   const { aws, f } = await connected(t), key = await f.issueKey();
-  assert.equal((await f.request('/v1/connections', { method: 'POST', token: key.token, anonymous: true, data: { service: 'aws', auth_scheme: 'role' } })).status, 403);
-  const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'aws', auth_scheme: 'role' } });
+  assert.equal((await f.request('/v1/principals/me/connections', { method: 'POST', token: key.token, anonymous: true, data: { service: 'aws', auth_scheme: 'role' } })).status, 403);
+  const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'aws', auth_scheme: 'role' } });
   const arn = aws.make(linkParameters(started.json.url).param_ExternalId);
   await f.signin('second@example.test');
-  const foreign = await f.request('/v1/connections/complete', { method: 'POST', data: { state: started.json.state, fields: { role_arn: arn } } });
+  const foreign = await f.request('/v1/principals/me/connections', { method: 'PUT', data: { state: started.json.state, fields: { role_arn: arn } } });
   assert.equal(foreign.status, 400); assert.equal(foreign.json.error.code, 'invalid_state');
   assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).json.resources.length, 0);
 });
@@ -87,21 +87,21 @@ test('サービスの一覧にAWSのロールが並び、Foundation側の用意�
 
 test('AWSの再接続依頼を同じ役割のARNと外部IDで完了し、接続IDを維持する', async t => {
   const { aws, f } = await connected(t), key = await f.issueKey();
-  const start = () => f.request('/v1/connections', { method: 'POST', data: { service: 'aws', auth_scheme: 'role' } });
+  const start = () => f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'aws', auth_scheme: 'role' } });
   const created = await start(), externalId = linkParameters(created.json.url).param_ExternalId;
   const arn = aws.make(externalId), another = aws.make(externalId, '222222222222', 'another-role');
-  const first = await f.request('/v1/connections/complete', { method: 'POST', data: { state: created.json.state, fields: { role_arn: arn } } });
+  const first = await f.request('/v1/principals/me/connections', { method: 'PUT', data: { state: created.json.state, fields: { role_arn: arn } } });
   assert.equal(first.status, 200, first.text);
   const connection = first.json.connection;
   const asked = await f.request('/v1/requests', { method: 'POST', token: key.token, data: {
     authorization_details: [{ type: 'connection', service: 'aws', auth_scheme: 'role', connection_id: connection.id }] } });
   assert.equal(asked.status, 201, asked.text);
-  const flow = await f.request('/v1/connections', { method: 'POST', data: { service: 'aws', auth_scheme: 'role', request_id: asked.json.request.id } });
+  const flow = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'aws', auth_scheme: 'role', request_id: asked.json.request.id } });
   assert.equal(flow.status, 200, flow.text);
-  const wrong = await f.request('/v1/connections/complete', { method: 'POST', data: { state: flow.json.state, fields: { role_arn: another } } });
+  const wrong = await f.request('/v1/principals/me/connections', { method: 'PUT', data: { state: flow.json.state, fields: { role_arn: another } } });
   assert.equal(wrong.status, 409);
   assert.equal(wrong.json.error.code, 'account_changed');
-  const same = await f.request('/v1/connections/complete', { method: 'POST', data: { state: flow.json.state, fields: { role_arn: ' ' + arn + ' ' } } });
+  const same = await f.request('/v1/principals/me/connections', { method: 'PUT', data: { state: flow.json.state, fields: { role_arn: ' ' + arn + ' ' } } });
   assert.equal(same.status, 200, same.text);
   assert.equal(same.json.connection.id, connection.id);
   assert.equal((await f.inject(connection, { token: key.token })).status, 200);

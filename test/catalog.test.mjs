@@ -46,7 +46,7 @@ for (const definition of DEFINITIONS.filter(item => item.auth_schemes.oauth && !
     const app = await f.request('/v1/principals/me/resources?kind=app&name=' + definition.id, { method: 'PUT', data: { service: definition.id, client_id: 'own-client', client_secret: 'own-secret',
       ...Object.fromEntries((spec.app_fields ?? []).map(field => [field.name, SAMPLE[field.name]])) } });
     assert.equal(app.status, 200, app.text);
-    const started = await f.request('/v1/connections', { method: 'POST', data: { service: definition.id, app: app.json.resource.id, ...(spec.scopes ? { scopes: ['one', 'two'] } : {}) } });
+    const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: definition.id, app: app.json.resource.id, ...(spec.scopes ? { scopes: ['one', 'two'] } : {}) } });
     assert.equal(started.status, 200, started.text);
     const url = new URL(started.json.url), done = await f.callback(url, 'code-1');
     assert.match(done.headers.get('location'), /result=connected/, done.headers.get('location'));

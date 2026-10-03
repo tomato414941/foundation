@@ -20,7 +20,7 @@ async function generic(t, definition = DEFINITION) {
   assert.equal(registered.status, 200, registered.text);
   const appId = registered.json.resource.id;
   async function start(input = {}) {
-    const started = await f.request('/v1/connections', { method: 'POST', data: { service: serviceId, app: appId, ...input } });
+    const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: serviceId, app: appId, ...input } });
     assert.equal(started.status, 200, started.text);
     return new URL(started.json.url);
   }
@@ -119,7 +119,7 @@ test('サービスの定義では、インターネット上のhttpsのURLを求
   }
   assert.equal((await f.request('/v1/principals/me/resources?kind=service&name=Other', { method: 'PUT', data: { ...DEFINITION, name: '' } })).json.error.where, 'definition.name');
   const other = (await f.request('/v1/principals/me/resources?kind=service&name=Plain', { method: 'PUT', data: { ...DEFINITION, name: 'Plain' } })).json.resource.id;
-  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: other } })).json.error.code, 'app_required');
+  assert.equal((await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: other } })).json.error.code, 'app_required');
   const listed = (await f.request('/v1/principals/me/resources?kind=app')).json.resources;
   assert.deepEqual(listed.filter(app => !app.foundation).map(app => [app.name, app.service.name]), [['Notes', 'Notes']]);
 });

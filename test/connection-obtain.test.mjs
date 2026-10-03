@@ -112,7 +112,7 @@ test('各サービスの暗号化状態・接続ID・保存名を再起動後も
     ['github', 'octo', 'GH_TOKEN'], ['openrouter', 'personal', 'OPENROUTER_API_KEY'] ];
   const identities = [];
   for (const [service, code, output] of specs) {
-    const start = await first.request('/v1/connections', { method: 'POST', data: { service } });
+    const start = await first.request('/v1/principals/me/connections', { method: 'POST', data: { service } });
     assert.equal(start.status, 200, start.text);
     const url = new URL(start.json.url), callback = new URL(url.searchParams.get('redirect_uri') || url.searchParams.get('callback_url'));
     callback.searchParams.set('state', url.searchParams.get('state') || callback.searchParams.get('state'));

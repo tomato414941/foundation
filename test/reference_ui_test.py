@@ -58,11 +58,11 @@ with sync_playwright() as p:
     connections = context.request.get(args.base + '/v1/principals/me/resources?kind=connection').json()['resources']
     assert len(connections) == 1 and connections[0]['references'] == [kept.json()['resource']['id']], connections
     assert injected(context.request, args.base, 'cloudflare token').text() == 'cf-referenced-1'
-    delivered = context.request.post(args.base + '/v1/injections', data=json.dumps({'names': [{'id': connections[0]['id']}]}), headers={'content-type': 'application/json', 'origin': args.base}).json()
+    delivered = context.request.post(args.base + '/v1/principals/me/injections', data=json.dumps({'names': [{'id': connections[0]['id']}]}), headers={'content-type': 'application/json', 'origin': args.base}).json()
     assert delivered['injection']['environment']['CLOUDFLARE_API_TOKEN'] == 'cf-referenced-1'
     # The secret changes; the connection follows. Referenced, the secret stays.
     assert context.request.put(args.base + '/v1/resources/' + kept.json()['resource']['id'] + '/content', data=plain('cf-referenced-2'), headers={'content-type': 'application/json', 'origin': args.base}).ok
-    delivered = context.request.post(args.base + '/v1/injections', data=json.dumps({'names': [{'id': connections[0]['id']}]}), headers={'content-type': 'application/json', 'origin': args.base}).json()
+    delivered = context.request.post(args.base + '/v1/principals/me/injections', data=json.dumps({'names': [{'id': connections[0]['id']}]}), headers={'content-type': 'application/json', 'origin': args.base}).json()
     assert delivered['injection']['environment']['CLOUDFLARE_API_TOKEN'] == 'cf-referenced-2'
     refused = context.request.delete(args.base + '/v1/resources/' + kept.json()['resource']['id'], data='{}', headers={'content-type': 'application/json', 'origin': args.base})
     assert refused.status == 409 and refused.json()['error']['code'] == 'secret_in_use', refused.text()

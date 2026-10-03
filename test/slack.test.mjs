@@ -10,7 +10,7 @@ const ASKED = ['channels:read', 'chat:write'];
 async function slackFixture(t, slack = new FakeSlack()) {
   const f = await fixture(t, { services: [slack.entry()] });
   async function start(input = {}) {
-    const result = await f.request('/v1/connections', { method: 'POST', data: { service: 'slack', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
+    const result = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'slack', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
@@ -33,7 +33,7 @@ test('Slackの設定を読み込み、未設定なら運営のアプリなしと
   assert.equal(listed.available, false);
   assert.equal(listed.foundation_app, false);
   assert.equal(listed.takes_apps, true);
-  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'slack' } })).status, 503);
+  assert.equal((await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'slack' } })).status, 503);
 });
 
 test('頼まれたBotの権限をカンマ区切りでSlackに求め、ワークスペースごとの接続として保存する', async t => {

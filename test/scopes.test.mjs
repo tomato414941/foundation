@@ -24,16 +24,16 @@ test('形の正しくない権限の指定を、依頼でも接続の開始で�
   for (const scopes of ['openid', [''], ['a b'], ['a"b'], [42], Array.from({ length: 101 }, (_, n) => 'scope.' + n)]) {
     const asked = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'connection', service: 'google', scopes }], binding_message: 'x' } });
     assert.equal(asked.json.error.code, 'invalid_scopes', JSON.stringify(scopes));
-    const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'google', scopes } });
+    const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', scopes } });
     assert.equal(started.json.error.code, 'invalid_scopes', JSON.stringify(scopes));
   }
 });
 
 test('権限を指定できない接続に権限を頼むと、何も始めずに断る', async t => {
   const f = await scoped(t);
-  const started = await f.request('/v1/connections', { method: 'POST', data: { service: 'openrouter', scopes: ['anything'] } });
+  const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'openrouter', scopes: ['anything'] } });
   assert.equal(started.status, 400); assert.equal(started.json.error.code, 'scopes_unsupported');
-  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'openrouter' } })).status, 200);
+  assert.equal((await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'openrouter' } })).status, 200);
 });
 
 test('接続の一覧で、頼める権限の基本と説明の場所を示す', async t => {

@@ -5,7 +5,7 @@ import { fixture } from './helpers.mjs';
 import { entry } from '../src/catalog.mjs';
 
 const tokenFixture = t => fixture(t, { services: [entry('github'), entry('kintone'), entry('openrouter'), entry('zendesk')] });
-const paste = (f, data, options = {}) => f.request('/v1/connections', { method: 'POST', data: { auth_scheme: 'token', ...data }, ...options });
+const paste = (f, data, options = {}) => f.request('/v1/principals/me/connections', { method: 'POST', data: { auth_scheme: 'token', ...data }, ...options });
 
 test('貼られたトークンをその場で接続にし、定義どおりの環境変数でAIに渡す', async t => {
   const f = await tokenFixture(t);
@@ -89,7 +89,7 @@ test('書き出しには、接続の状態を封じたまま封筒とともに�
   const f = await tokenFixture(t);
   await f.signin();
   await paste(f, { service: 'github', fields: { token: 'ghp_export' } });
-  const exported = await f.request('/v1/export');
+  const exported = await f.request('/v1/principals/me/export');
   assert.equal(exported.status, 200, exported.text);
   const [kept] = exported.json.connections, own = await f.keyOf({});
   assert.equal(kept.encoding, 'base64url');
@@ -148,12 +148,12 @@ test('トークンの欄はシークレットを参照でき、使うたびに�
   assert.equal(made.status, 201, made.text);
   assert.deepEqual(made.json.connection.references, [secret.id]);
   assert.doesNotMatch(made.text, /ghp_referenced/);
-  const delivered = await f.request('/v1/injections', { method: 'POST', data: { names: [{ id: made.json.connection.id }] } });
+  const delivered = await f.request('/v1/principals/me/injections', { method: 'POST', data: { names: [{ id: made.json.connection.id }] } });
   assert.equal(delivered.status, 200, delivered.text);
   assert.equal(delivered.json.injection.environment.GITHUB_TOKEN, 'ghp_referenced');
   // The secret changes: the connection follows.
   await f.request('/v1/resources/' + secret.id + '/content', { method: 'PUT', raw: 'ghp_rotated' });
-  assert.equal((await f.request('/v1/injections', { method: 'POST', data: { names: [{ id: made.json.connection.id }] } })).json.injection.environment.GITHUB_TOKEN, 'ghp_rotated');
+  assert.equal((await f.request('/v1/principals/me/injections', { method: 'POST', data: { names: [{ id: made.json.connection.id }] } })).json.injection.environment.GITHUB_TOKEN, 'ghp_rotated');
   // Referenced, it is not removed; the connection replaced with a value, it is.
   const refused = await f.request('/v1/resources/' + secret.id, { method: 'DELETE', data: {} });
   assert.equal(refused.status, 409); assert.equal(refused.json.error.code, 'secret_in_use');
@@ -173,7 +173,7 @@ test('別の持ち主のシークレットを参照する接続は、その線�
   f.app.principals.relate(other.json.principal.id, 'viewer', 'resource', secret.id);
   const made = await paste(f, { service: 'github', name: '借り物', fields: { token: { reference: secret.id } } }, theirs);
   assert.equal(made.status, 201, made.text);
-  const inject = () => f.request('/v1/injections', { ...theirs, method: 'POST', data: { names: [{ id: made.json.connection.id }] } });
+  const inject = () => f.request('/v1/principals/me/injections', { ...theirs, method: 'POST', data: { names: [{ id: made.json.connection.id }] } });
   assert.equal((await inject()).json.injection.environment.GITHUB_TOKEN, 'ghp_shared');
   f.app.principals.unrelate(other.json.principal.id, 'viewer', 'resource', secret.id);
   const stopped = await inject();

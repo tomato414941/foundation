@@ -94,7 +94,7 @@ test('OpenRouter keys are owner-separated, cannot silently replace connections, 
   const database = join(dir, 'state.sqlite'), f = await openrouterFixture(t, { database });
   const account = await f.openrouterAccount(), agent = await f.issueKey();
   assert.ok(!(await readFile(database)).includes(Buffer.from(f.openrouter.key())));
-  const replacement = await f.request('/v1/connections', { method: 'POST', data: { service: 'openrouter', connection_id: account.id } });
+  const replacement = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'openrouter', connection_id: account.id } });
   assert.equal(replacement.json.error.code, 'new_connection_required');
   await f.signin('other@example.test');
   assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).json.resources.length, 0);

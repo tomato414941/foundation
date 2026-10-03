@@ -16,7 +16,7 @@ test('サービスを名前だけで登録し、後からOAuthを設定して接
   const service = registered.json.resource.id;
   assert.deepEqual(registered.json.resource.definition, { name: '社内ツール', auth_schemes: {} });
   assert.equal((await f.request('/v1/principals/me/resources?kind=service')).json.resources.find(item => item.id === service).service.name, '社内ツール');
-  const pending = await f.request('/v1/connections', { method: 'POST', data: { service } });
+  const pending = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service } });
   assert.equal(pending.status, 409, pending.text);
   assert.equal(pending.json.error.code, 'auth_scheme_required');
   const configured = await f.request('/v1/resources/' + service, { method: 'PATCH', token, data: { auth_schemes: { oauth } } });
@@ -27,7 +27,7 @@ test('サービスを名前だけで登録し、後からOAuthを設定して接
   assert.equal(app.status, 200, app.text);
   const asked = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'connection', service, app: app.json.resource.id }], binding_message: 'ノートを取得します。' } });
   assert.equal(asked.status, 201, asked.text);
-  const started = await f.request('/v1/connections', { method: 'POST', data: { request_id: asked.json.request.id } });
+  const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { request_id: asked.json.request.id } });
   assert.equal(started.status, 200, started.text);
   const callback = await f.callback(new URL(started.json.url), 'notes-code');
   assert.match(callback.headers.get('location'), /result=connected/);

@@ -54,7 +54,7 @@ async function setup(t) {
   const key = await f.issueKey();
   const put = await f.request('/v1/principals/me/resources?kind=secret&name=api/token', { method: 'PUT', token: key.token, raw: TOKEN, type: 'text/plain' });
   assert.equal(put.status, 200, put.text);
-  const call = request => f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: request });
+  const call = request => f.request('/v1/principals/me/functions/http.request', { method: 'POST', token: key.token, data: request });
   return { ...api, f, key, call };
 }
 
@@ -144,10 +144,10 @@ test('Foundation itself is not reachable under another name that points at its o
   api.addresses.set('alias.example.test', [{ address: '198.35.26.96', family: 4 }]);
   const f = await fixture(t, { outbound: api.outbound, publicOrigin: 'https://foundation.example.test' });
   const key = await f.issueKey();
-  const refused = await f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://alias.example.test/v1/keys/current' } });
+  const refused = await f.request('/v1/principals/me/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://alias.example.test/v1/keys/current' } });
   assert.equal(refused.status, 400); assert.equal(refused.json.error.code, 'invalid_destination');
   assert.equal(api.received.length, 0);
-  const allowed = await f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/echo' } });
+  const allowed = await f.request('/v1/principals/me/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/echo' } });
   assert.equal(allowed.json.response.status, 200, allowed.text);
 });
 
@@ -158,7 +158,7 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
   assert.equal(input.status, 200);
   f.expire(connection.id);
   const calls = f.google.calls.length;
-  const saved = await f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: {
+  const saved = await f.request('/v1/principals/me/functions/http.request', { method: 'POST', token: key.token, data: {
     url: 'https://api.example.test/echo', ...authorization(inputName, 'Bearer '), save: outputName,
   } });
   assert.equal(saved.status, 200, saved.text);
@@ -172,7 +172,7 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
   assert.equal((await f.read('secret', (outputName), { token: key.token })).status, 403);
   assert.doesNotMatch(saved.text, new RegExp(TOKEN));
 
-  const binary = await f.request('/v1/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/bytes', save: 'binary' } });
+  const binary = await f.request('/v1/principals/me/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/bytes', save: 'binary' } });
   assert.equal(binary.status, 200);
   const owner = f.app.principals.actsFor(key.id)[0];
   assert.deepEqual(f.app.secrets.open(f.app.secrets.find(owner, 'binary')), Buffer.from([0, 255, 1]));
@@ -180,7 +180,7 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
 
 test('The HTTPS function retains destination and owner checks, and validates output names before sending', async t => {
   const { f, key, received } = await setup(t);
-  const call = (data, token = key.token) => f.request('/v1/functions/http.request', { method: 'POST', token, data });
+  const call = (data, token = key.token) => f.request('/v1/principals/me/functions/http.request', { method: 'POST', token, data });
   assert.equal((await call({ url: 'https://127.0.0.1/' })).json.error.code, 'invalid_destination');
   assert.equal((await call({ url: 'https://api.example.test/', save: '' })).json.error.code, 'invalid_name');
   await f.signin('second@example.test');

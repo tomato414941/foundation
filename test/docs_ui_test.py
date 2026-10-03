@@ -47,7 +47,7 @@ with sync_playwright() as p:
     plain = reading.new_page()
     plain.goto(args.base + '/docs', wait_until='networkidle')
     plain.get_by_role('link', name='OpenAPI JSON', exact=True).click()
-    expect(plain.locator('body')).to_contain_text('/v1/injections')
+    expect(plain.locator('body')).to_contain_text('/v1/principals/{principalId}/injections')
     reading.close()
     context.close()
     browser.close()

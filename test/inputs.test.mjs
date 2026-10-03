@@ -8,7 +8,7 @@ test('シークレットの名前を完全一致で扱い、名前とIDで別の
   await f.keep('secret', 'api-token#work', 'work-value');
   await f.keep('secret', plain.id, 'uuid-name-value');
   await f.keep('secret', 'a/aa/aaa', 'slash-value');
-  const used = await f.request('/v1/injections', { method: 'POST', token: agent.token, data: { names: [
+  const used = await f.request('/v1/principals/me/injections', { method: 'POST', token: agent.token, data: { names: [
     { name: 'api-token', as: 'PLAIN' }, { name: 'api-token#work', as: 'WORK' },
     { name: plain.id, as: 'BY_NAME' }, { id: plain.id, as: 'BY_ID' }, { name: 'a/aa/aaa', as: 'SLASH' },
   ] } });
@@ -16,13 +16,13 @@ test('シークレットの名前を完全一致で扱い、名前とIDで別の
   assert.deepEqual(used.json.injection.environment, { PLAIN: 'plain-value', WORK: 'work-value', BY_NAME: 'uuid-name-value', BY_ID: 'plain-value', SLASH: 'slash-value' });
   const namedOnly = '12345678-1234-4234-8234-123456789012';
   await f.keep('secret', namedOnly, 'named-only');
-  const missing = await f.request('/v1/injections', { method: 'POST', data: { names: [{ id: namedOnly, as: 'VALUE' }] } });
+  const missing = await f.request('/v1/principals/me/injections', { method: 'POST', data: { names: [{ id: namedOnly, as: 'VALUE' }] } });
   assert.equal(missing.status, 404);
 });
 
 test('接続の出力を明示して一つ選び、名前を変えたりファイルにしたりして渡す', async t => {
   const f = await fixture(t), connection = await f.connection();
-  const selected = await f.request('/v1/injections', { method: 'POST', data: { names: [
+  const selected = await f.request('/v1/principals/me/injections', { method: 'POST', data: { names: [
     { id: connection.id, output: 'GOOGLE_OAUTH_ACCESS_TOKEN', as: 'TOKEN' },
     { id: connection.id, output: 'GOOGLE_ACCOUNT_EMAIL', as: 'ACCOUNT_FILE', filename: 'account.txt' },
   ] } });
@@ -43,12 +43,12 @@ test('参照の対象と出力を検証し、不正な指定では接続先に�
   for (const input of [{ name: 'value', id: secret.id, as: 'VALUE' }, { name: 'value', output: 'VALUE', as: 'VALUE' },
     { id: secret.id, output: 'VALUE', as: 'VALUE' }, { id: connection.id, output: 'UNKNOWN' }, { id: connection.id, output: '' },
     { name: '', as: 'VALUE' }, { id: null }, { name: 'value', as: 'VALUE', extra: true }]) {
-    const refused = await f.request('/v1/injections', { method: 'POST', data: { names: [input] } });
+    const refused = await f.request('/v1/principals/me/injections', { method: 'POST', data: { names: [input] } });
     assert.equal(refused.status, 400, JSON.stringify(input));
   }
   assert.equal(f.google.calls.length, calls);
   await f.signin('other@example.test');
-  const refused = await f.request('/v1/injections', { method: 'POST', data: { names: [{ id: connection.id, output: 'GOOGLE_OAUTH_ACCESS_TOKEN' }] } });
+  const refused = await f.request('/v1/principals/me/injections', { method: 'POST', data: { names: [{ id: connection.id, output: 'GOOGLE_OAUTH_ACCESS_TOKEN' }] } });
   assert.equal(refused.status, 404);
   assert.equal(f.google.calls.length, calls);
 });

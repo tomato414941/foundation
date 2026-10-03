@@ -64,7 +64,7 @@ test('A key not yet approved cannot ask for a registration, an approval request 
   const refused = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key(), data: registration });
   assert.equal(refused.status, 401); assert.equal(refused.json.error.code, 'not_approved');
   const { row } = await create(f);
-  const attempt = await f.request('/v1/connections', { method: 'POST', data: { service: 'google', request_id: row.id } });
+  const attempt = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', request_id: row.id } });
   assert.equal(attempt.status, 409); assert.equal(attempt.json.error.code, 'approval_only');
   assert.equal(f.app.connections.list(USER_A).length, 0);
   const approved = await f.issueKey();
@@ -108,7 +108,7 @@ test('Approval requires the confirmation code; a registration asks the service f
   assert.equal((await approve(f, row, { user_code: '' })).status, 400);
   const asked = await register(f, { authorization_details: [{ type: 'connection', service: 'google', scopes: [READONLY] }] });
   assert.equal(asked.row.authorization_details[0].type, 'connection'); assert.equal(asked.row.user_code, undefined);
-  const escalation = await f.request('/v1/connections', { method: 'POST', data: { service: 'google', request_id: asked.row.id, scopes: [SEND] } });
+  const escalation = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', request_id: asked.row.id, scopes: [SEND] } });
   assert.equal(escalation.status, 200, escalation.text);
   const scope = new URL(escalation.json.url).searchParams.get('scope').split(' ');
   assert.ok(scope.includes(READONLY)); assert.ok(!scope.includes(SEND), 'the page asks for what the request showed, not more');
@@ -123,7 +123,7 @@ test('A registration request stays with its owner, completes by registering, and
   const ownerCookie = 'fdn_session=' + f.app.sessions.create(USER_A, { proof: 'email', ref: 'owner@example.test' });
   await f.signin('other@example.test');
   assert.equal((await f.request('/v1/requests/' + row.id)).status, 404);
-  const flow = new URL((await f.request('/v1/connections', { method: 'POST', headers: { cookie: ownerCookie }, data: { service: 'google', request_id: row.id } })).json.url);
+  const flow = new URL((await f.request('/v1/principals/me/connections', { method: 'POST', headers: { cookie: ownerCookie }, data: { service: 'google', request_id: row.id } })).json.url);
   await f.callback(flow, 'second', { headers: { cookie: ownerCookie } });
   const done = (await f.request('/v1/requests/' + row.id, { headers: { cookie: ownerCookie } })).json.request;
   assert.equal(done.status, 'granted'); assert.equal(f.app.connections.held(USER_A, done.result.connection_id).subject, 'second@example.test');
@@ -132,7 +132,7 @@ test('A registration request stays with its owner, completes by registering, and
   f.app.requestActions.removePrincipal(USER_A, runtime.id);
   assert.equal((await usable(f, runtime.token)).status, 401);
   assert.equal((await f.request('/v1/requests/' + next.row.id, { headers: { cookie: ownerCookie } })).json.request.status, 'cancelled');
-  const blocked = await f.request('/v1/connections', { method: 'POST', headers: { cookie: ownerCookie }, data: { service: 'google', request_id: next.row.id } });
+  const blocked = await f.request('/v1/principals/me/connections', { method: 'POST', headers: { cookie: ownerCookie }, data: { service: 'google', request_id: next.row.id } });
   assert.equal(blocked.status, 409);
   assert.equal(f.app.principals.agentsOf(USER_A).length, 1, 'Foundation alone acts for the owner');
   assert.equal(f.app.principals.agentsOf(USER_B).length, 1);
@@ -154,7 +154,7 @@ for (const end of ['deny', 'cancel', 'expire']) test(`A ${end} registration requ
   let entered, release;
   const started = new Promise(resolve => { entered = resolve; });
   f.google.exchangeHandler = () => { entered(); return new Promise(resolve => { release = resolve; }); };
-  const start = await f.request('/v1/connections', { method: 'POST', data: { service: 'google', request_id: row.id } });
+  const start = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', request_id: row.id } });
   const callback = f.callback(new URL(start.json.url), 'new');
   await started;
   if (end === 'deny') assert.equal((await f.request('/v1/requests/' + row.id + '/deny', { method: 'POST', data: {} })).status, 200);
@@ -198,7 +198,7 @@ test('What a key sees reflects a connection needing attention, one removed, and 
 test('Unavailable services cannot register through a request; expired request records are deleted without revoking the key', async t => {
   const f = await fixture(t), saved = await f.connection(), { token, row } = await register(f);
   f.google.enabled = false;
-  assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'google', request_id: row.id } })).status, 503);
+  assert.equal((await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', request_id: row.id } })).status, 503);
   f.google.enabled = true;
   f.app.store.db.prepare('UPDATE requests SET expires_at=0 WHERE id=?').run(row.id);
   f.app.store.sweep();
@@ -217,7 +217,7 @@ test('利用者が定義したサービスも、共通の依頼・認証・受�
   const { row, token } = await register(f, { authorization_details: [{ type: 'connection', service, app: app.id }] });
   assert.equal(row.service.name, 'Notes');
   assert.deepEqual(row.app, { id: app.id, name: 'Notesのアプリ', foundation: false });
-  const start = await f.request('/v1/connections', { method: 'POST', data: { request_id: row.id } });
+  const start = await f.request('/v1/principals/me/connections', { method: 'POST', data: { request_id: row.id } });
   assert.equal(start.status, 200, start.text);
   const callback = await f.callback(new URL(start.json.url), 'personal');
   assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?result=connected');
@@ -303,10 +303,10 @@ test('依頼元が認証失敗と再試行の経過を機密入力なしで確�
   const asked = await create(f, token, { to: USER_A }, registration);
   const view = async (id = asked.row.id, as = token) => (await f.request('/v1/requests/' + id, { token: as, anonymous: true })).json.request;
   await f.request('/v1/requests/' + asked.row.id);
-  const start = await f.request('/v1/connections', { method: 'POST', data: { service: 'google', request_id: asked.row.id } });
+  const start = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', request_id: asked.row.id } });
   const authorization = new URL(start.json.url), callback = new URL(authorization.searchParams.get('redirect_uri'));
   await f.request(callback.pathname + '?state=' + authorization.searchParams.get('state') + '&error=access_denied');
-  const again = await f.request('/v1/connections', { method: 'POST', data: { service: 'google', request_id: asked.row.id } });
+  const again = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', request_id: asked.row.id } });
   await f.callback(new URL(again.json.url), 'personal');
   events = (await view()).events;
   assert.deepEqual(events.map(item => item.event), ['page_viewed', 'connect_started', 'connect_failed', 'connect_started', 'connected']);

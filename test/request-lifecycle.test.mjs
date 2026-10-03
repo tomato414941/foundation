@@ -25,7 +25,7 @@ test('依頼の種類と内容を保存し、同じ依頼を二度出しても�
 test('接続の失効・削除後も依頼の完了と結果を維持する', async t => {
   const f = await fixture(t), key = await f.issueKey();
   const request = await ask(f, key.token, 'connect', { service: 'google' });
-  const start = await f.request('/v1/connections', { method: 'POST', data: { service: 'google', request_id: request.id } });
+  const start = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', request_id: request.id } });
   await f.callback(new URL(start.json.url));
   const read = async () => (await f.request('/v1/requests/' + request.id, { token: key.token })).json.request;
   const done = await read(), id = done.result.connection_id;

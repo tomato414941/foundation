@@ -17,7 +17,7 @@ test('WebとAPIキーが同じAPIで固定トークンを保存・更新し、�
     const updated = await f.request(path + '/content', { ...options, method: 'PUT', raw: 'updated-' + name });
     assert.equal(updated.status, 200, updated.text);
     assert.equal(updated.json.resource.id, kept.json.resource.id);
-    const delivered = await f.request('/v1/injections', { ...options, method: 'POST', data: { names: [{ id: kept.json.resource.id, as: 'MY_TOKEN' }] } });
+    const delivered = await f.request('/v1/principals/me/injections', { ...options, method: 'POST', data: { names: [{ id: kept.json.resource.id, as: 'MY_TOKEN' }] } });
     assert.deepEqual(delivered.json.injection.environment, { MY_TOKEN: 'updated-' + name });
     assert.doesNotMatch(kept.text + updated.text, /private-|updated-/);
   }
@@ -40,7 +40,7 @@ test('複数の値を個別のシークレットとして保存し、一度に�
   const f = await fixture(t), key = await f.issueKey();
   await f.keep('secret', 'account', 'account-one');
   await f.keep('secret', 'api token', 'private-token');
-  const delivered = await f.request('/v1/injections', { method: 'POST', token: key.token, anonymous: true, data: {
+  const delivered = await f.request('/v1/principals/me/injections', { method: 'POST', token: key.token, anonymous: true, data: {
     names: [{ name: 'account', as: 'ACCOUNT_ID' }, { name: 'api token', as: 'API_TOKEN' }],
   } });
   assert.deepEqual(delivered.json.injection.environment, { ACCOUNT_ID: 'account-one', API_TOKEN: 'private-token' });
@@ -72,6 +72,6 @@ test('CLIは封をして、MCPはFoundationに封をさせて固定トークン�
   const saved = mcp.json.result.structuredContent.resource;
   assert.equal(saved.kind, 'secret');
   assert.equal((await f.read('secret', 'MCP')).text, 'mcp-private');
-  const delivered = await call('POST', '/v1/injections', { names: [{ id, as: 'CLI_TOKEN' }, { id: saved.id, as: 'MCP_TOKEN' }] });
+  const delivered = await call('POST', '/v1/principals/' + USER_A + '/injections', { names: [{ id, as: 'CLI_TOKEN' }, { id: saved.id, as: 'MCP_TOKEN' }] });
   assert.deepEqual(delivered.json.result.structuredContent.injection.environment, { CLI_TOKEN: 'cli-private', MCP_TOKEN: 'mcp-private' });
 });
