@@ -49,3 +49,39 @@ test('集団として作った相手には、作った者がその者として�
   assert.equal(f.app.authorization.can(USER_A, 'decide', 'principal', { id: group.id }), true);
   assert.equal(f.app.authorization.can(USER_A, 'remove', 'principal', { id: group.id }), true, 'as its owner');
 });
+
+test('プリンシパルの線は、本人と持ち主と執事にだけ、両方の向きで、相手の名前つきで、区切って見える', async t => {
+  const f = await fixture(t);
+  const machine = await f.issueKey('machine'), stranger = await f.become('stranger');
+  const lines = async (id, query = '', options = {}) => f.request('/v1/principals/' + id + '/relations' + query, options);
+  // The owner's own: the machine it owns and that acts for it, and Foundation's principal made its agent at sign-in.
+  const mine = await lines('me');
+  assert.equal(mine.status, 200, mine.text);
+  const seen = mine.json.relations.map(line => [line.direction, line.relation, line.principal?.name]);
+  assert.ok(seen.some(([direction, relation, name]) => direction === 'from' && relation === 'owner' && name === 'machine'), 'what it owns');
+  assert.ok(seen.some(([direction, relation, name]) => direction === 'to' && relation === 'agent' && name === 'machine'), 'who acts for it');
+  assert.ok(seen.some(([direction, relation, name]) => direction === 'to' && relation === 'agent' && name === 'Foundation Agent'));
+  assert.deepEqual(Object.keys(mine.json.relations.find(line => line.principal?.name === 'machine').principal).sort(), ['id', 'name'], 'the other end by id and name, no more');
+  assert.deepEqual((await lines('me', '?relation=owner&direction=from')).json.relations.map(line => line.principal.name), ['machine']);
+  // A line onto a thing names the thing.
+  const kept = (await f.keep('secret', 'shown', 'value')).json.resource;
+  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: machine.id, relation: 'viewer', object_type: 'resource', object_id: kept.id } })).status, 201);
+  const theirs = await lines(machine.id, '?relation=viewer');
+  assert.deepEqual(theirs.json.relations.map(line => [line.direction, line.resource.kind, line.resource.name]), [['from', 'secret', 'shown']], 'the owner reads the lines of what it owns');
+  // A page at a time.
+  const first = await lines('me', '?limit=1');
+  assert.equal(first.json.relations.length, 1); assert.ok(first.json.next);
+  const rest = await lines('me', '?limit=200&after=' + first.json.next);
+  assert.equal(rest.json.next, null);
+  assert.equal(first.json.relations.length + rest.json.relations.length, mine.json.relations.length);
+  assert.equal((await lines('me', '?limit=0')).status, 400);
+  // Nobody else is told whom a principal is joined to: not a stranger, not one who acts for it, not one it acts for.
+  assert.equal((await lines(USER_A, '', { token: stranger.token, anonymous: true })).status, 401);
+  assert.equal((await lines(USER_A, '', { token: machine.token, anonymous: true })).status, 403, 'acting for it is not reading its lines');
+  const group = (await f.request('/v1/principals', { method: 'POST', data: { name: 'team', steward: true } })).json.principal;
+  assert.equal((await lines(group.id)).status, 200, 'a steward reads the group\'s');
+  // The principal the server acts as is found by a name, by anyone.
+  const agent = await f.request('/v1/principals/agent', { token: stranger.token, anonymous: true });
+  assert.equal(agent.status, 200, agent.text);
+  assert.deepEqual([agent.json.principal.id, agent.json.principal.name], [f.app.keys.agentId, 'Foundation Agent']);
+});

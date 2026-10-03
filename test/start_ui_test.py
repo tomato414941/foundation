@@ -83,13 +83,12 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     page.set_viewport_size({'width': 1280, 'height': 800})
 
     # ホームはサービスとの接続の件数を要約し、サービスの画面へ案内する。
-    overview = page.request.get(args.base + '/v1/overview').json()
     for count in [0, 1, 40]:
-        summary = {**overview, 'connections': [
+        summary = {'resources': [
             {'service': {'id': 'google', 'name': 'Google'}, 'auth_scheme': 'oauth', 'label': f'複数の用途で利用する接続先のアカウント {number}@example.test'}
             for number in range(count)
         ]}
-        page.route('**/v1/overview', lambda route: route.fulfill(json=summary))
+        page.route('**/v1/resources?kind=connection', lambda route: route.fulfill(json=summary))
         for width in [1280, 390]:
             page.set_viewport_size({'width': width, 'height': 844})
             page.reload(wait_until='networkidle')
@@ -99,7 +98,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
             expect(card).to_have_text(f'サービス{count} 件')
             if count == 40:
                 page.screenshot(path=str(shots / f'home-connections-{width}.png'), full_page=True)
-        page.unroute('**/v1/overview')
+        page.unroute('**/v1/resources?kind=connection')
     page.set_viewport_size({'width': 1280, 'height': 800})
     page.reload(wait_until='networkidle')
 

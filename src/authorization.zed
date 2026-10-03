@@ -42,7 +42,6 @@ definition principal {
   relation limit_grant: principal
   relation relate_grant: principal
   relation settings_grant: principal
-  relation overview_grant: principal
   relation list_grant: principal
   relation export_grant: principal
   relation usage_grant: principal
@@ -71,7 +70,6 @@ definition principal {
   permission transfer = owner + transfer_grant
   permission relate = manage + relate_grant
   permission settings = manage + settings_grant
-  permission overview = decide + overview_grant
   permission list = decide + list_grant
   permission export = decide + export_grant
   permission usage = manage + use + usage_grant

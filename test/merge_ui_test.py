@@ -38,7 +38,7 @@ with sync_playwright() as p:
     page.get_by_role('button', name='パスキーで始める', exact=True).click()
     page.get_by_role('dialog').get_by_role('button', name='続ける', exact=True).click()
     expect(page.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()
-    other = context.request.get(base + '/v1/overview').json()
+    other = context.request.get(base + '/v1/principals/me').json()
     unlock(page, base)
     hand_to_foundation(page)
     page.get_by_role('button', name='追加', exact=True).click()
@@ -57,8 +57,8 @@ with sync_playwright() as p:
     page.goto(base + '/signin/confirm?' + urlencode({'return_to': '/account'}) + '#' + urlencode({'token': base64.urlsafe_b64encode(hashlib.sha256(email.encode()).digest()).rstrip(b'=').decode(), 'email': email}), wait_until='networkidle')
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(base + '/account')
-    mine = context.request.get(base + '/v1/overview').json()
-    assert mine['user']['id'] != other['user']['id']
+    mine = context.request.get(base + '/v1/principals/me').json()
+    assert mine['principal']['id'] != other['principal']['id']
     review(page)
     page.screenshot(path=str(shots / 'account-390.png'), full_page=True)
     page.get_by_role('region', name='アカウントを統合する').get_by_role('button', name='統合する', exact=True).click()
@@ -69,7 +69,7 @@ with sync_playwright() as p:
     review(page)
     page.screenshot(path=str(shots / 'merge-direction-390.png'), full_page=True)
     dialog.get_by_role('button', name='次へ', exact=True).click()
-    dialog.get_by_label('相手のアカウントの ID', exact=True).fill(other['user']['id'])
+    dialog.get_by_label('相手のアカウントの ID', exact=True).fill(other['principal']['id'])
     review(page)
     dialog.get_by_role('button', name='パスキーで確認する', exact=True).click()
     expect(dialog.get_by_text(other['principal']['name'] + ' の持ち物・パスキー・メールアドレスがこのアカウントのものになり、' + other['principal']['name'] + ' はなくなります。', exact=True)).to_be_visible()
@@ -81,7 +81,7 @@ with sync_playwright() as p:
     assert len(passkeys) == 1, passkeys
     expect(page.get_by_role('region', name='パスキー').get_by_role('heading', name=passkeys[0]['name'], exact=True)).to_be_visible()
     assert [row['name'] for row in context.request.get(base + '/v1/resources?kind=secret').json()['resources']] == ['their secret']
-    assert context.request.get(base + '/v1/principals/' + other['user']['id'] + '/public-key').status == 404, 'the other ended'
+    assert context.request.get(base + '/v1/principals/' + other['principal']['id'] + '/public-key').status == 404, 'the other ended'
 
     # Its secret opens here, with the key made for this account from that passkey; and the passkey signs this account in.
     unlock(page, base)
@@ -93,7 +93,7 @@ with sync_playwright() as p:
     page.get_by_role('button', name='サインアウト', exact=True).click()
     page.get_by_role('button', name='パスキーでサインイン', exact=True).click()
     expect(page.get_by_role('heading', name='シークレット', exact=True)).to_be_visible()
-    assert context.request.get(base + '/v1/overview').json()['user']['id'] == mine['user']['id']
+    assert context.request.get(base + '/v1/principals/me').json()['principal']['id'] == mine['principal']['id']
     assert not errors, errors
     browser.close()
     print('アカウントを統合する: パスキーで始めた相手の秘密・パスキーがこちらのものになり、その鍵で開け、そのパスキーでこちらにサインインできることを確認しました。')

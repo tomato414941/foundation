@@ -30,7 +30,7 @@ test('トークンの接続に名前を付け、同じサービスにいくつ�
   const personal = await paste(f, { service: 'github', name: '個人用', fields: { token: 'ghp_personal' } });
   assert.equal(work.status, 201, work.text);
   assert.equal(personal.status, 201, personal.text);
-  const listed = (await f.request('/v1/overview')).json.connections.filter(item => item.service.id === 'github').map(item => item.name).sort();
+  const listed = (await f.request('/v1/resources?kind=connection')).json.resources.filter(item => item.service.id === 'github').map(item => item.name).sort();
   assert.deepEqual(listed, ['仕事用', '個人用']);
 });
 
@@ -71,7 +71,7 @@ test('トークンの項目が定義に合わなければ、接続を作らず�
   assert.equal(wrongDomain.status, 400);
   const withScopes = await paste(f, { service: 'github', scopes: ['repo'], fields: { token: 'ghp' } });
   assert.equal(withScopes.status, 400);
-  assert.equal((await f.request('/v1/overview')).json.connections.length, 0);
+  assert.equal((await f.request('/v1/resources?kind=connection')).json.resources.length, 0);
 });
 
 test('トークンそのものは見せず、ドメインのような秘密でない項目だけを接続の説明に示す', async t => {
@@ -101,7 +101,7 @@ test('書き出しには、接続の状態を封じたまま封筒とともに�
 test('サービスの説明に、トークンで接続するときの項目と作る場所を示す', async t => {
   const f = await tokenFixture(t);
   await f.signin();
-  const catalog = (await f.request('/v1/overview')).json.catalog;
+  const catalog = (await f.request('/v1/services')).json.services;
   const github = catalog.find(item => item.id === 'github').auth_schemes.token;
   assert.equal(github.console, 'https://github.com/settings/tokens');
   assert.deepEqual(github.fields.map(field => field.name), ['token']);

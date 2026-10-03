@@ -41,11 +41,11 @@ with sync_playwright() as p:
         assert response.ok, response.text()
         return response.text() if raw is not None else response.json()
 
-    def overview():
-        return api('/v1/overview')
+    def listed(kind):
+        return api('/v1/resources?kind=' + kind)['resources']
 
     def service(name):
-        return next(item for item in overview()['services'] if item['name'] == name)
+        return next(item for item in listed('service') if item['name'] == name)
 
     def review(label):
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), label
@@ -121,7 +121,7 @@ with sync_playwright() as p:
     dialog.get_by_role('button', name='追加', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(page.get_by_role('article', name='任意の名前/a', exact=True)).to_be_visible()
-    kept = next(item for item in overview()['secrets'] if item['name'] == '任意の名前/a')
+    kept = next(item for item in listed('secret') if item['name'] == '任意の名前/a')
     assert api('/v1/injections', 'POST', {'names': [{'id': kept['id'], 'as': 'MY_TOKEN'}]})['injection']['environment'] == {'MY_TOKEN': 'fixture-private-token'}
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 900})

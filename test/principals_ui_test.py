@@ -50,8 +50,8 @@ with sync_playwright() as p:
     row = page.get_by_role('article').filter(has=page.get_by_role('heading', name='laptop', exact=True))
     expect(row.get_by_text('全体へのアクセス許可なし', exact=True)).to_be_visible()
     # Made, it reaches nothing of the owner's.
-    me = context.request.get(args.base + '/v1/overview').json()
-    assert me['agents'] == [] or all(item['name'] != 'laptop' for item in me['agents'])
+    agents = context.request.get(args.base + '/v1/principals/me/relations?relation=agent&direction=to').json()['relations']
+    assert all(item['principal']['name'] != 'laptop' for item in agents)
     whoami = p.request.new_context().get(args.base + '/v1/principals/me', headers={'authorization': 'Bearer ' + key}).json()
     assert whoami['acts_for'] == []
 
@@ -64,7 +64,7 @@ with sync_playwright() as p:
     expect(dialog.get_by_text('許可の詳細', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='閉じる', exact=True).last.click()
     expect(row.get_by_text('許可 ', exact=False)).to_be_visible()
-    assert p.request.new_context().get(args.base + '/v1/principals/me', headers={'authorization': 'Bearer ' + key}).json()['acts_for'] == [me['user']['id']]
+    assert p.request.new_context().get(args.base + '/v1/principals/me', headers={'authorization': 'Bearer ' + key}).json()['acts_for'] == [context.request.get(args.base + '/v1/principals/me').json()['principal']['id']]
     row.get_by_role('button', name='取り消す', exact=True).click()
     dialog.get_by_role('button', name='許可を取り消す', exact=True).click()
     expect(dialog).not_to_be_visible()

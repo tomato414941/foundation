@@ -17,7 +17,7 @@ async function cloudflareFixture(t, cloudflare = new FakeCloudflare()) {
     assert.equal(result.status, 200, result.text);
     return new URL(result.json.url);
   }
-  const connections = async () => (await f.request('/v1/overview')).json.connections;
+  const connections = async () => (await f.request('/v1/resources?kind=connection')).json.resources;
   async function connect(code = 'personal', input = {}) {
     const ids = new Set((await connections()).map(item => item.id));
     const done = await f.callback(await start(input), code);

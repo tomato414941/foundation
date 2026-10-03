@@ -41,8 +41,8 @@ export async function openrouterFixture(t, options = {}) {
   async function account(code = 'personal') {
     const result = await callback(await start(), code);
     if (!result.headers.get('location')?.includes('result=connected')) throw new Error(result.headers.get('location'));
-    const state = (await f.request('/v1/overview')).json;
-    return state.connections.filter(item => item.service?.id === 'openrouter').at(-1);
+    const listed = (await f.request('/v1/resources?kind=connection')).json.resources;
+    return listed.filter(item => item.service?.id === 'openrouter').at(-1);
   }
   return { ...f, openrouter, startOpenRouter: start, callbackOpenRouter: callback, openrouterAccount: account };
 }

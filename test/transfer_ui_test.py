@@ -54,12 +54,11 @@ with sync_playwright() as p:
     private = x25519.X25519PrivateKey.generate()
     public = private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     assert other.put(args.base + '/v1/key', data=json.dumps({'public_key': b64url(public)}), headers={**headers, 'content-type': 'application/json'}).ok
-    overview = other.get(args.base + '/v1/overview', headers=headers).json()
-    assert other.post(args.base + '/v1/relations', data=json.dumps({'subject': overview['foundation']['principal_id'], 'relation': 'agent', 'object_type': 'principal', 'object_id': made['principal']['id']}), headers={**headers, 'content-type': 'application/json'}).ok
+    assert other.post(args.base + '/v1/relations', data=json.dumps({'subject': other.get(args.base + '/v1/principals/agent', headers=headers).json()['principal']['id'], 'relation': 'agent', 'object_type': 'principal', 'object_id': made['principal']['id']}), headers={**headers, 'content-type': 'application/json'}).ok
 
     page.reload(wait_until='networkidle')
     # The account shows its own ID, for whoever is to give to it.
-    expect(page.get_by_role('region', name='ID').get_by_text(context.request.get(args.base + '/v1/overview').json()['user']['id'], exact=True)).to_be_visible()
+    expect(page.get_by_role('region', name='ID').get_by_text(context.request.get(args.base + '/v1/principals/me').json()['principal']['id'], exact=True)).to_be_visible()
     section = page.get_by_role('region', name='引き渡す')
     expect(section).to_be_visible()
     review(page)

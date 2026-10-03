@@ -33,8 +33,8 @@ test('OpenRouter exchanges only PKCE code, preserves real expiry and zero budget
   const url = await f.startOpenRouter();
   assert.equal((await f.callbackOpenRouter(url)).headers.get('location'), '/services?result=connected&service=openrouter');
   assert.match((await f.callbackOpenRouter(url)).headers.get('location'), /result=expired/);
-  const response = await f.request('/v1/overview');
-  const account = response.json.connections[0];
+  const response = await f.request('/v1/resources?kind=connection');
+  const account = response.json.resources[0];
   assert.equal(account.service.id, 'openrouter');
   assert.deepEqual(account.variables, ['OPENROUTER_API_KEY']);
   assert.equal(account.facts.key_info.limit, 0);
@@ -72,7 +72,7 @@ test('承認したキーに認証情報と提供元の有効期限を渡し、�
   assert.equal(row.service.auth_schemes.oauth.can_revoke, false);
   const callback = await f.callbackOpenRouter(await f.startOpenRouter({ request_id: row.id }));
   assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?result=connected');
-  const account = (await f.request('/v1/overview')).json.connections[0];
+  const account = (await f.request('/v1/resources?kind=connection')).json.resources[0];
   assert.equal((await f.request('/v1/requests/' + row.id)).json.request.status, 'granted', 'the request is granted');
   const listed = await f.request('/v1/resources?kind=connection', { token });
   assert.deepEqual(listed.json.resources[0].variables, ['OPENROUTER_API_KEY']);
@@ -97,7 +97,7 @@ test('OpenRouter keys are owner-separated, cannot silently replace connections, 
   const replacement = await f.request('/v1/connections', { method: 'POST', data: { service: 'openrouter', connection_id: account.id } });
   assert.equal(replacement.json.error.code, 'new_connection_required');
   await f.signin('other@example.test');
-  assert.equal((await f.request('/v1/overview')).json.connections.length, 0);
+  assert.equal((await f.request('/v1/resources?kind=connection')).json.resources.length, 0);
   assert.equal((await f.request('/v1/resources/' + encodeURIComponent(account.id), { method: 'DELETE', data: { revoke: false } })).status, 403);
   const own = await f.openrouterAccount('other'), other = await f.issueKey();
   assert.equal((await connection(f, account, other.token)).status, 404);

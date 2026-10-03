@@ -15,7 +15,7 @@ test('サービスを名前だけで登録し、後からOAuthを設定して接
   assert.equal(registered.status, 200, registered.text);
   const service = registered.json.resource.id;
   assert.deepEqual(registered.json.resource.definition, { name: '社内ツール', auth_schemes: {} });
-  assert.equal((await f.request('/v1/overview')).json.services.find(item => item.id === service).service.name, '社内ツール');
+  assert.equal((await f.request('/v1/resources?kind=service')).json.resources.find(item => item.id === service).service.name, '社内ツール');
   const pending = await f.request('/v1/connections', { method: 'POST', data: { service } });
   assert.equal(pending.status, 409, pending.text);
   assert.equal(pending.json.error.code, 'auth_scheme_required');

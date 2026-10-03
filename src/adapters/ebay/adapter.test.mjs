@@ -20,7 +20,7 @@ const inspected = (change = {}) => ({ active: true, sub: '1001', username: 'pers
 
 async function ebayFixture(t, ebay = new FakeEbay()) {
   const f = await fixture(t, { services: [entry('ebay', { oauth: ebayOauth(ebay) })] });
-  const connections = async () => (await f.request('/v1/overview')).json.connections;
+  const connections = async () => (await f.request('/v1/resources?kind=connection')).json.resources;
   async function start(input = {}) {
     const result = await f.request('/v1/connections', { method: 'POST', data: { service: 'ebay', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
     assert.equal(result.status, 200, result.text);
@@ -96,7 +96,7 @@ test('依頼を完了し、確認済みのアカウント情報とAPI用トー�
   assert.equal(Number(delivered.json.injection.environment.EBAY_OAUTH_EXPIRES_AT), delivered.json.expires_at);
   assert.doesNotMatch(delivered.text, /ebay-refresh-|test-ebay-secret/);
   assert.equal(f.ebay.refreshes, 0);
-  const kept = (await f.request('/v1/overview')).json.connections;
+  const kept = (await f.request('/v1/resources?kind=connection')).json.resources;
   assert.deepEqual(kept.map(item => ({ id: item.id, auth_scheme: item.auth_scheme })), [{ id: a.id, auth_scheme: 'oauth' }]);
 });
 

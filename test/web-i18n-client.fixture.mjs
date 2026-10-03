@@ -47,8 +47,7 @@ function change(locale) {
   if (guardProbe) picker.remove();
 }
 const heading = () => document.querySelector('main h1')?.textContent;
-const overview = { user: { id: 'owner', email: 'owner@example.test' }, principal: { id: 'owner', name: 'Keeper Sirius' },
-  secrets: [], connections: [], services: [], catalog: [], apps: [], agents: [], principals: [], credentials: [], functions: [], environments: [] };
+const overview = { principal: { id: 'owner', name: 'Keeper Sirius' } };
 const request = { id, to: 'owner', requester_name: 'Test', authorization_details: [{ type: 'relation', relation: 'agent' }], status: 'pending', expires_at: Date.now() + 60_000 };
 if (mode === 'transfer') {
   request.authorization_details[0].relation = 'transfer_grant';
@@ -72,11 +71,22 @@ if (passkey) {
 globalThis.fetch = async (url, options = {}) => {
   calls.push({ url, options });
   let data, status = 200;
-  if (url === '/v1/overview') {
+  if (url === '/v1/principals/me') {
     if (mode === 'boot' && !bootWaited) { bootWaited = true; await new Promise(resolve => { release = resolve; }); }
-    if (signedIn) data = overview;
+    if (signedIn) data = { principal: overview.principal, acts_for: [], owners: [], keys: [], requests: [] };
     else { status = 401; data = { error: { code: 'signin_required', message: 'Sign in' } }; }
-  } else if (url === '/v1/session' && options.method === 'GET') data = { available: true, pending: null };
+  } else if (url === '/v1/credentials' && (options.method ?? 'GET') === 'GET') {
+    if (signedIn) data = { credentials: [{ id: 'e1', kind: 'email', name: 'owner@example.test', created_at: '2026-01-01T00:00:00.000Z', last_used_at: null }] };
+    else { status = 401; data = { error: { code: 'signin_required', message: 'Sign in' } }; }
+  } else if (url === '/v1/principals') data = { principals: [] };
+  else if (url.startsWith('/v1/principals/me/relations')) data = { relations: [], next: null };
+  else if (url === '/v1/principals/agent') data = { principal: { id: 'agent', name: 'Foundation Agent' } };
+  else if (url === '/v1/principals/me/compute') data = { compute: { month: '2026-01', used_seconds: 0, limit_seconds: 36000 } };
+  else if (url === '/v1/functions') data = { functions: [] };
+  else if (url === '/v1/environments') data = { environments: [] };
+  else if (url === '/v1/services') data = { services: [] };
+  else if (url === '/v1/payment') data = { payment: { available: false, paying: false, payer: 'owner' } };
+  else if (url === '/v1/session' && options.method === 'GET') data = { available: true, pending: null };
   else if (url === '/v1/session' && options.method === 'POST') data = { options: { challenge: 'AAAAAAAA', allowCredentials: [] } };
   else if (url === '/v1/credentials' && options.method === 'POST' && JSON.parse(options.body).kind === 'webauthn') data = { options: { challenge: 'AAAAAAAA', user: { id: 'b3duZXI', name: 'Keeper Sirius', displayName: 'Keeper Sirius' } } };
   else if (url === '/v1/credentials' && JSON.parse(options.body).kind === 'email') { status = 400; data = { error: { code: 'invalid_input', message: 'Sample error' } }; }
@@ -137,7 +147,7 @@ if (mode === 'boot') {
     history.forward(); await until(() => location.pathname === '/account');
     assertAccount(other);
     assert.ok(calls.every(({ options }) => !options.method || options.method === 'GET'), 'locale preferences do not mutate account data');
-    assert.equal(overview.user.id, 'owner');
+    assert.equal(overview.principal.id, 'owner');
     assert.equal(overview.principal.name, 'Keeper Sirius');
   } else if (mode === 'account-transfer') {
     const labels = {
@@ -209,7 +219,7 @@ if (mode === 'boot') {
       assertNoTransfer();
       assert.ok(!document.cookie.includes(targetId));
     }
-    assert.equal(overview.user.id, 'owner');
+    assert.equal(overview.principal.id, 'owner');
     assert.equal(overview.principal.name, 'Keeper Sirius');
   } else if (mode === 'transfer') {
     assert.ok(document.querySelector('.access-scope').textContent.includes('所有権を別の相手に渡す'));

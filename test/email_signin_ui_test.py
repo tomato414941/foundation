@@ -37,7 +37,7 @@ with sync_playwright() as p:
     expect(page.get_by_role('button', name='サインイン', exact=True)).to_be_enabled()
     assert page.url == args.base + '/signin/confirm'
     assert calls == [], 'リンクを開いた時点では、確認ボタンの操作を待つ'
-    assert receiver.request.get(args.base + '/v1/overview').status == 401
+    assert receiver.request.get(args.base + '/v1/principals/me').status == 401
     assert page.evaluate('localStorage.length === 0 && sessionStorage.length === 0')
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 844})
@@ -51,16 +51,16 @@ with sync_playwright() as p:
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/secrets')
     page.wait_for_load_state('networkidle')
-    assert receiver.request.get(args.base + '/v1/overview').json()['user']['email'] == email
+    assert [item['name'] for item in receiver.request.get(args.base + '/v1/credentials').json()['credentials'] if item['kind'] == 'email'] == [email]
     assert len(calls) == 1
     assert all(key not in url for url in urls), '鍵をHTTPのURLへ送信しない'
-    assert sender.request.get(args.base + '/v1/overview').status == 401, '受け取った側だけをサインイン済みにする'
+    assert sender.request.get(args.base + '/v1/principals/me').status == 401, '受け取った側だけをサインイン済みにする'
 
     # An already used key leaves the current signin intact and explains the failed attempt.
     page.goto(link, wait_until='networkidle')
     page.get_by_role('button', name='サインイン', exact=True).click()
     expect(page.get_by_role('alert')).to_have_text('リンクが無効か、有効期限が切れています。最新のメールのリンクを開いてください。')
-    assert receiver.request.get(args.base + '/v1/overview').json()['user']['email'] == email
+    assert [item['name'] for item in receiver.request.get(args.base + '/v1/credentials').json()['credentials'] if item['kind'] == 'email'] == [email]
     assert not errors, errors
     receiver.close()
     sender.close()

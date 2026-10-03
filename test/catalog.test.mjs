@@ -59,7 +59,7 @@ for (const definition of DEFINITIONS.filter(item => item.auth_schemes.oauth && !
     assert.equal(sent.code, 'code-1');
     if (spec.client_auth === 'body') assert.equal(sent.client_secret, 'own-secret');
     else assert.equal(token.options.headers.authorization, 'Basic ' + Buffer.from('own-client:own-secret').toString('base64'));
-    const connection = (await f.request('/v1/overview')).json.connections.find(item => item.service?.id === definition.id);
+    const connection = (await f.request('/v1/resources?kind=connection')).json.resources.find(item => item.service?.id === definition.id);
     if (spec.identity) {
       assert.equal(connection.facts.account, spec.identity.from === 'app' ? valueAt(values, spec.identity.id) : [].concat(spec.identity.id).map((_, index) => 'id-' + index).join(':'));
       if (spec.identity.label) assert.equal(connection.label, 'someone@example.test');

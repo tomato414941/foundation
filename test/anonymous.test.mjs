@@ -8,7 +8,7 @@ test('誰にも承認されていない principal は、相手を指定した依
   const f = await fixture(t), stranger = await f.become('stranger');
   const named = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: stranger.token, data: { ...actor, to: USER_A } });
   assert.equal(named.status, 403); assert.equal(named.json.error.code, 'unknown_requester');
-  assert.deepEqual((await f.request('/v1/overview')).json.requests, [], 'nothing reaches the person it named');
+  assert.deepEqual((await f.request('/v1/requests?to=me&status=pending')).json.requests, [], 'nothing reaches the person it named');
   const open = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: stranger.token, data: actor });
   assert.equal(open.status, 201, open.text);
 });
@@ -16,7 +16,7 @@ test('誰にも承認されていない principal は、相手を指定した依
 test('承認された相手は、ほかの人を指定して依頼を出せる', async t => {
   const f = await fixture(t), agent = await f.issueKey();
   await f.signin('other@example.test');
-  const other = (await f.request('/v1/overview')).json.user.id;
+  const other = (await f.request('/v1/principals/me')).json.principal.id;
   const named = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: agent.token, data: { ...actor, to: other } });
   assert.equal(named.status, 201, named.text);
 });

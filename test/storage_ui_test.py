@@ -83,7 +83,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     page.get_by_label('確認コード', exact=True).fill(approval['user_code'])
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
-    owner.append(page.request.get(args.base + '/v1/overview').json()['user']['id'])
+    owner.append(page.request.get(args.base + '/v1/principals/me').json()['principal']['id'])
 
     # Nothing kept yet, and the page says so. The owner's key, from a passkey, and Foundation handed what is kept.
     make_key(page, args.base)

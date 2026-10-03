@@ -24,7 +24,7 @@ async function generic(t, definition = DEFINITION) {
     assert.equal(started.status, 200, started.text);
     return new URL(started.json.url);
   }
-  const connections = async () => (await f.request('/v1/overview')).json.connections.filter(item => item.service?.id === serviceId);
+  const connections = async () => (await f.request('/v1/resources?kind=connection')).json.resources.filter(item => item.service?.id === serviceId);
   async function connect(account = 'personal', input = {}) {
     const before = new Set((await connections()).map(item => item.id));
     const url = await start(input), done = await f.callback(url, account);

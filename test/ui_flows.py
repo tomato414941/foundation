@@ -69,8 +69,9 @@ def hand_to_foundation(page):
 
 def allow_foundation(request, base, headers=None):
     """The same, through the API, for a owner signed in without a key."""
-    overview = request.get(base + '/v1/overview', headers=headers or {}).json()
-    drawn = request.post(base + '/v1/relations', data=json.dumps({'subject': overview['foundation']['principal_id'], 'relation': 'agent', 'object_type': 'principal', 'object_id': overview['user']['id']}),
+    agent = request.get(base + '/v1/principals/agent', headers=headers or {}).json()['principal']['id']
+    me = request.get(base + '/v1/principals/me', headers=headers or {}).json()['principal']['id']
+    drawn = request.post(base + '/v1/relations', data=json.dumps({'subject': agent, 'relation': 'agent', 'object_type': 'principal', 'object_id': me}),
                          headers={'content-type': 'application/json', 'origin': base, **(headers or {})})
     assert drawn.ok, drawn.text()
 

@@ -98,6 +98,26 @@ export class Principals {
   relationsOf(id) {
     return this.db.prepare('SELECT subject_id,relation,object_type,object_id,created_at FROM relations WHERE subject_id=? OR (object_type=? AND object_id=?) ORDER BY created_at').all(id, 'principal', id);
   }
+  // The lines one principal is at an end of, a page at a time, oldest first: those it drew toward others and their
+  // things (from), and those drawn toward it (to). Each says who or what is at the other end, by id and name and no
+  // more: to learn more of them is to be someone to them.
+  lines(id, { relation, direction, limit = 50, after } = {}) {
+    if (direction !== undefined && !['from', 'to'].includes(direction)) fail(400, 'invalid_relation', '関係の向きを確認してください。');
+    const from = direction !== 'to', to = direction !== 'from';
+    const rows = this.db.prepare(`SELECT r.rowid AS at, r.subject_id, r.relation, r.object_type, r.object_id, r.created_at FROM relations r
+      WHERE ((:from AND r.subject_id=:id) OR (:to AND r.object_type='principal' AND r.object_id=:id))
+        AND NOT (r.object_type='principal' AND r.subject_id=r.object_id)
+        AND (:relation IS NULL OR r.relation=:relation) AND r.rowid > :after ORDER BY r.rowid LIMIT :limit`)
+      .all({ id, from: from ? 1 : 0, to: to ? 1 : 0, relation: relation ?? null, after: after ?? 0, limit: limit + 1 });
+    const page = rows.slice(0, limit);
+    const named = other => { const row = this.db.prepare('SELECT id, name FROM principals WHERE id=?').get(other); return row ? { id: row.id, name: row.name } : { id: other, name: '' }; };
+    const thing = other => { const row = this.db.prepare('SELECT id, kind, name FROM resources WHERE id=?').get(other); return row ? { id: row.id, kind: row.kind, name: row.name } : { id: other, kind: null, name: '' }; };
+    return { relations: page.map(row => {
+      const outward = row.subject_id === id;
+      return { relation: row.relation, direction: outward ? 'from' : 'to', created_at: row.created_at,
+        ...(outward && row.object_type === 'resource' ? { resource: thing(row.object_id) } : { principal: named(outward ? row.object_id : row.subject_id) }) };
+    }), next: rows.length > limit ? String(page.at(-1).at) : null };
+  }
   // Lines onto one resource: who may see or change it.
   linesOnto(resourceId) {
     return this.db.prepare("SELECT subject_id,relation,created_at FROM relations WHERE object_type='resource' AND object_id=? ORDER BY created_at").all(resourceId);

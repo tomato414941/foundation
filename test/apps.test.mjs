@@ -21,7 +21,7 @@ async function withApps(t, { offered = true } = {}) {
     assert.equal(started.status, 200, started.text);
     const url = new URL(started.json.url), done = await f.callback(url, code);
     assert.match(done.headers.get('location'), /result=connected/, done.headers.get('location'));
-    return { url, connection: (await f.request('/v1/overview')).json.connections.filter(item => item.service?.id === 'cloudflare').at(-1) };
+    return { url, connection: (await f.request('/v1/resources?kind=connection')).json.resources.filter(item => item.service?.id === 'cloudflare').at(-1) };
   }
   const tokenCalls = () => cloudflare.calls.filter(call => call.url.endsWith('/token')).map(call => call.options.body);
   return { ...f, cloudflare, register, connect, tokenCalls };
@@ -35,7 +35,7 @@ test('アプリは持ち物の一つとして登録し、Foundationのアプリ�
   const listed = (await f.request('/v1/resources?kind=app', { token })).json.resources;
   assert.deepEqual(listed.filter(app => app.service.id === 'cloudflare').map(app => [app.name, app.service.id, app.foundation]).sort(), [['Foundationのアプリ', 'cloudflare', true], ['仕事用', 'cloudflare', false]]);
   assert.equal((await f.request('/v1/resources/' + made.json.resource.id + '/content')).status, 405);
-  const everything = JSON.stringify([made.json, listed, (await f.request('/v1/overview')).json]);
+  const everything = JSON.stringify([made.json, listed]) + await f.visible();
   assert.doesNotMatch(everything, /work-app-secret/);
   assert.equal((await f.register('OpenRouter', { service: 'openrouter', client_id: 'a', client_secret: 'b' })).json.error.code, 'app_unsupported');
   assert.equal((await f.register('足りない', { service: 'cloudflare', client_id: 'a' })).json.error.code, 'invalid_app');
@@ -77,7 +77,7 @@ test('アプリを消すと、そのアプリの接続は権限を保ったま�
   assert.equal(refused.json.error.connections, 1); assert.deepEqual(refused.json.error.yours.map(row => row.id), [connection.id]);
   const removed = await f.request('/v1/resources/' + app.id, { method: 'DELETE', data: { confirm: true } });
   assert.equal(removed.json.connections_stopped, 1);
-  const stopped = (await f.request('/v1/overview')).json.connections.find(item => item.id === connection.id);
+  const stopped = (await f.request('/v1/resources?kind=connection')).json.resources.find(item => item.id === connection.id);
   assert.equal(stopped.status, 'reconnect_required');
   assert.equal(stopped.app, null, 'it names no app, rather than one it was not made through');
   assert.deepEqual(stopped.facts.requested_scopes, ['dns.write', 'offline_access', 'user-details.read']);
@@ -92,7 +92,7 @@ test('アプリを消すと、そのアプリの接続は権限を保ったま�
   const shown = await f.request('/v1/connections/confirmation?state=' + review.searchParams.get('state'));
   assert.ok(shown.json.changes.some(change => change.label === 'OAuthアプリ'));
   assert.equal((await f.request('/v1/connections/confirmation', { method: 'POST', data: { state: review.searchParams.get('state') } })).status, 200);
-  const again = (await f.request('/v1/overview')).json.connections.find(item => item.id === connection.id);
+  const again = (await f.request('/v1/resources?kind=connection')).json.resources.find(item => item.id === connection.id);
   assert.equal(again.id, connection.id); assert.equal(again.status, 'usable');
   assert.deepEqual(again.app, { id: other.id, name: '個人用', foundation: false });
 });
@@ -100,7 +100,7 @@ test('アプリを消すと、そのアプリの接続は権限を保ったま�
 test('線を引かれた人は、そのアプリで自分のアカウントを接続できるが、秘密は読めず、変えるには編集の線が要る', async t => {
   const f = await withApps(t), app = (await f.register('会社のアプリ')).json.resource;
   await f.signin('member@example.test');
-  const member = (await f.request('/v1/overview')).json.user.id;
+  const member = (await f.request('/v1/principals/me')).json.principal.id;
   assert.equal((await f.request('/v1/connections', { method: 'POST', data: { service: 'cloudflare', app: app.id } })).status, 403);
   await f.signin();
   assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: member, relation: 'viewer', object_type: 'resource', object_id: app.id } })).status, 201);

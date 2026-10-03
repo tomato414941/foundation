@@ -154,9 +154,8 @@ test('What is kept is bounded, so one owner cannot fill the disk', async t => {
 test('The owner reads and removes anything kept, including what the key may not read back', async t => {
   const { f, token } = await keyed(t);
   await put(f, token, 'github/token', secret, { env: 'GH_TOKEN', secret: 'true' });
-  const state = await f.request('/v1/overview');
-  assert.deepEqual(state.json.secrets.map(row => row.name), ['github/token']);
-  assert.doesNotMatch(state.text, new RegExp(secret));
+  assert.deepEqual((await f.request('/v1/resources?kind=secret')).json.resources.map(row => row.name), ['github/token']);
+  assert.doesNotMatch(await f.visible(), new RegExp(secret));
   const read = await f.read('secret', 'github/token');
   assert.equal(read.status, 200);
   assert.equal(read.text, secret, 'the owner sees what they are keeping');
@@ -210,7 +209,7 @@ test('A stale editor respects renames, deletion, recreation, and owner boundarie
   const rename = async (from, to) => f.request('/v1/resources/' + (await f.lookup('secret', from)).json.resource.id, { method: 'PATCH', data: { name: to } });
   await rename('original', 'renamed');
   assert.equal((await save()).status, 412);
-  assert.deepEqual((await f.request('/v1/overview')).json.secrets.map(row => row.name), ['renamed']);
+  assert.deepEqual((await f.request('/v1/resources?kind=secret')).json.resources.map(row => row.name), ['renamed']);
   await rename('renamed', 'original');
   await f.drop('secret', 'original');
   assert.equal((await save()).status, 412);
@@ -221,7 +220,7 @@ test('A stale editor respects renames, deletion, recreation, and owner boundarie
   await f.signin('other@example.test');
   assert.equal((await f.read('secret', 'original')).status, 404);
   assert.equal((await f.request(path, { method: 'PUT', raw: 'other owner', headers: { 'if-match': current } })).status, 412);
-  assert.deepEqual((await f.request('/v1/overview')).json.secrets, []);
+  assert.deepEqual((await f.request('/v1/resources?kind=secret')).json.resources, []);
 });
 
 test('The runtime hands what is kept to a command, as bytes and as a file, and nothing else', async t => {

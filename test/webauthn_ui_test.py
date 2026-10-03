@@ -90,7 +90,7 @@ with sync_playwright() as p:
     started.get_by_role('button', name='続ける', exact=True).click()
     expect(fresh.get_by_role('heading', name='Foundation', exact=True)).to_be_visible()
     import re
-    assert re.fullmatch(r"[A-Z][A-Za-z' ]+ [A-Z][A-Za-z' ]+", newcomer.request.get(base + '/v1/overview').json()['principal']['name']), 'named by a role at a star'
+    assert re.fullmatch(r"[A-Z][A-Za-z' ]+ [A-Z][A-Za-z' ]+", newcomer.request.get(base + '/v1/principals/me').json()['principal']['name']), 'named by a role at a star'
     # A name is given on the account page, when wanted.
     fresh.goto(base + '/account', wait_until='networkidle')
     fresh.get_by_role('button', name='名前を変更', exact=True).click()
@@ -98,7 +98,7 @@ with sync_playwright() as p:
     fresh.get_by_role('dialog').get_by_role('button', name='保存', exact=True).click()
     expect(fresh.get_by_role('region', name='名前').get_by_text('はじめての人', exact=True)).to_be_visible()
     review(fresh)
-    assert newcomer.request.get(base + '/v1/overview').json()['principal']['name'] == 'はじめての人'
+    assert newcomer.request.get(base + '/v1/principals/me').json()['principal']['name'] == 'はじめての人'
     assert not errors, errors
     browser.close()
     print('パスキー: アカウントでの追加・パスキーだけでのサインイン・削除によるセッションの終了・パスキーだけで始めることと、スマートフォンの表示を確認しました。')

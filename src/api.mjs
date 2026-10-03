@@ -75,6 +75,8 @@ export const schemas = {
   Key: object({ id, kind: { const: 'key' }, created_at: iso, last_used_at: nullable(iso), environment: nullable(id), environment_id: id, expires_at: time }, ['id']),
   Me: object({ principal: ref('Principal'), key: ref('Key'), acts_for: array(principalId), owners: array(principalId),
     keys: array(ref('Key')), requests: array(ref('Request')) }, ['principal', 'acts_for', 'owners', 'keys', 'requests']),
+  Line: object({ relation: string, direction: { ...choice(['from', 'to']), description: 'from: drawn by the principal asked about. to: drawn toward it.' }, created_at: iso,
+    principal: { ...object({ id: principalId, name: string }, ['id', 'name']), description: 'The principal at the other end.' }, resource: { ...object({ id, kind: nullable(string), name: string }, ['id', 'name']), description: 'The thing at the other end, for a line drawn onto one.' } }, ['relation', 'direction', 'created_at']),
   Relation: object({ subject_id: principalId, relation: string, object_type: choice(['principal', 'resource']), object_id: string, created_at: iso }, ['relation', 'object_type', 'object_id']),
   RelationInput: object({ subject: principalId, relation: string, object_type: choice(['principal', 'resource']), object_id: string }, ['relation', 'object_type', 'object_id']),
   AuthorizationDetail: { anyOf: [relationDetail,
@@ -163,11 +165,6 @@ export const schemas = {
   Usage: object({ secrets: ref('StorageUsage'), objects: nullable(ref('StorageUsage')) }, ['secrets', 'objects']),
   StorageUsage: object({ count: integer, bytes: integer, count_max: integer, bytes_max: integer }, ['count', 'bytes', 'count_max', 'bytes_max']),
   AuditEntry: object({ id, actor_id: string, action: string, object_type: string, object_id: string, detail: object(), at: iso }, ['id', 'actor_id', 'action', 'object_type', 'object_id', 'detail', 'at']),
-  Overview: object({ user: object({ id: principalId, email: nullable(string) }, ['id', 'email']), principal: ref('Principal'),
-    payment: ref('Payment'), credentials: array(ref('Credential')), secrets: array(ref('Secret')), connections: array(ref('Connection')), apps: array(ref('App')), services: array(ref('Service')),
-    catalog: array(ref('ServiceDescription')), principals: array(ref('Principal')), agents: array(ref('Principal')), requests: array(ref('Request')),
-    functions: array(ref('Function')), settings: nullable(ref('Settings')), environments: array(ref('Environment')), compute: ref('Compute'), foundation: object({ principal_id: principalId }, ['principal_id']) },
-    ['user', 'principal', 'payment', 'credentials', 'secrets', 'connections', 'apps', 'services', 'catalog', 'principals', 'agents', 'requests', 'functions', 'settings', 'environments', 'compute', 'foundation']),
   Export: object({ exported_at: iso, owner: nullable(string), origin: string,
     secrets: array({ allOf: [ref('Secret'), object({ content: string, encoding: { const: 'base64url' }, envelopes: map(string) }, ['content', 'encoding', 'envelopes'])] }),
     connections: array({ allOf: [ref('Connection'), object({ content: string, encoding: { const: 'base64url' }, envelopes: map(string) }, ['content', 'encoding', 'envelopes'])] }), services: array(object({ id, name: string, definition: object() })), principals: array(ref('Principal')) }, ['exported_at', 'owner', 'origin', 'secrets', 'connections', 'services', 'principals']),
@@ -240,6 +237,9 @@ export const routes = [
     get: op('getPrincipal', 'Read a principal', one('Principal')), patch: op('renamePrincipal', 'Rename a principal', one('Principal'), { input: 'Rename', 'x-input-error': 'invalid_name' }), delete: okay('removePrincipal', 'Remove an owned principal and its resources'),
   } },
   { name: 'transferPrincipal', group: 'principals', path: '/v1/principals/{principalId}/transfer', methods: { post: op('transferPrincipal', 'Give an owned principal to another principal', one('Principal'), { input: 'Transfer', 'x-input-error': 'invalid_transfer', description: 'By its owner. The owner\'s record and alias move; the principal\'s own lines and keys stay.' }) } },
+  { name: 'principalRelations', group: 'principals', path: '/v1/principals/{principalId}/relations', methods: { get: op('listPrincipalRelations', 'List the lines a principal is at an end of', object({ relations: array(ref('Line')), next: { ...nullable(string), description: 'Pass as after to read the next page; null when there is none.' } }, ['relations', 'next']), {
+    parameters: [query('relation', string, 'Only lines of this relation, such as owner, agent, steward, payer, viewer.'), query('direction', choice(['from', 'to']), 'from: lines this principal drew toward others and their things. to: lines drawn toward it. Both when left out.'), query('limit', integer, 'How many to return: 1-200, 50 by default.'), query('after', string, 'The next value of the page before.')],
+    description: 'For the principal itself, its stewards and its owner; one who only acts for it is not told whom it is joined to. Each line names who or what is at its other end, by id and name. One may be at the end of very many lines - an app owns a principal for each of its users - so they come a page at a time, oldest first. principalId may be me (the caller) or agent (the principal this server acts as).' }) } },
   { name: 'publicKey', group: 'principals', path: '/v1/principals/{principalId}/public-key', methods: { get: op('getPublicKey', 'Read a principal\'s public key', object({ key: ref('PrincipalKey') }, ['key'])) } },
   { name: 'links', group: 'principals', path: '/v1/principals/{principalId}/links', methods: { post: op('issueLink', 'Issue a one-use link for a store request', object({ link: object({ id, request_id: requestId, expires_at: time }, ['id', 'request_id', 'expires_at']), url: string, expires_at: time }, ['link', 'url', 'expires_at']), { input: object({ request_id: string }, ['request_id']), status: 201, 'x-input-error': 'invalid_request' }) } },
   { name: 'access', group: 'principals', path: '/v1/principals/{principalId}/access', methods: { delete: okay('revokeAccess', 'Revoke a principal’s access to the owner', { parameters: [as] }) } },
@@ -319,7 +319,6 @@ export const routes = [
   { name: 'httpRequest', path: '/v1/functions/http.request', methods: { post: op('httpRequest', 'Send an HTTPS request using saved values', 'FetchResult', { input: 'FetchInput', parameters: [as], description: 'Use bindings to place referenced values at JSON Pointer targets in headers or body. Ordinary strings are literal. json and form are encoded after binding; body is raw text or base64. URLs cannot be binding targets. Public HTTPS only, redirects are returned without following, request/response body limit 1 MiB. Bound values are redacted from the response. save stores the response body as a secret under that name and omits it from the response.' }) } },
   { name: 'usage', path: '/v1/usage', methods: { get: op('getUsage', 'Read storage usage and limits', 'Usage', { parameters: [as] }) } },
   { name: 'audit', path: '/v1/audit-log', methods: { get: op('getAuditLog', 'Read the caller’s audit records', many('entries', 'AuditEntry')) } },
-  { name: 'overview', path: '/v1/overview', methods: { get: op('getOverview', 'Read the owner’s workspace', 'Overview', { parameters: [as] }) } },
   { name: 'export', path: '/v1/export', methods: { get: op('exportData', 'Download the owner’s data, including secret bytes', 'Export', { parameters: [as], description: 'Secrets and connection states go out as kept: sealed, with their envelopes; they open with the owner\'s key where an envelope was made for them. Handle as private data.' }) } },
 ];
 

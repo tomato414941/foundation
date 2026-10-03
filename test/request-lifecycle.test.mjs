@@ -88,7 +88,7 @@ test('承認依頼の完了結果を保ち、失効キーの認証を拒否す�
 
 test('APIの認証成功をキーの最終利用として記録する', async t => {
   const f = await fixture(t), key = await f.issueKey();
-  const mine = async () => (await f.request('/v1/overview')).json.agents.find(item => item.id === key.id).keys[0];
+  const mine = async () => (await f.request('/v1/principals/' + key.id)).json.principal.keys[0];
   // Issued and used once already: the machine published its key with it.
   const first = (await mine()).last_used_at;
   assert.ok(first);

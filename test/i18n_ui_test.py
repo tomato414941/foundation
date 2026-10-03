@@ -118,8 +118,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-i18n-ui-') as temporary, syn
         # Even /account has no picker until its signed-in content has loaded.
         for path in ['services', 'account']:
             pending_overview = []
-            page.route('**/v1/overview', lambda route: pending_overview.append(route))
-            with page.expect_request('**/v1/overview'):
+            page.route('**/v1/principals/me', lambda route: pending_overview.append(route))
+            with page.expect_request('**/v1/principals/me'):
                 response = page.goto(args.base + '/' + path, wait_until='domcontentloaded')
             assert 'data-action="change-language"' not in response.text(), 'pending server-rendered shells have no picker'
             expect(page.get_by_role('main')).to_have_attribute('aria-busy', 'true')
@@ -128,7 +128,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-i18n-ui-') as temporary, syn
             assert pending_overview, 'overview is held while checking the pending shell'
             for route in pending_overview:
                 route.continue_()
-            page.unroute('**/v1/overview')
+            page.unroute('**/v1/principals/me')
             expect(page.get_by_role('main')).not_to_have_attribute('aria-busy', 'true')
             expect(page.get_by_role('heading', name=tr(locale, 'nav.' + path), exact=True)).to_be_visible()
             expect(page.locator('#signin-form')).to_have_count(0)
@@ -149,7 +149,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-i18n-ui-') as temporary, syn
         account_language_picker(page, other)
 
         # Existing account controls still work in the selected language and retain the account's ID.
-        owner_id = context.request.get(args.base + '/v1/overview').json()['user']['id']
+        owner_id = context.request.get(args.base + '/v1/principals/me').json()['principal']['id']
         expect(page.get_by_role('region', name=tr(other, 'client.account.id'), exact=True).locator('code')).to_have_text(owner_id)
         page.get_by_role('button', name=tr(other, 'client.account.copyId'), exact=True).click()
         expect(page.locator('#notice')).to_have_text(tr(other, 'client.common.copied'))

@@ -95,7 +95,7 @@ test('reports a refused API call as a tool error the model can act on', async (t
 
 test('keeps foundation_api to the API', async (t) => {
   const f = await connected(t);
-  for (const path of ['/v1/overview', '/health', 'v1/grants', '/v1/../health', '/v1/%2e%2e/openapi.json', '/openapi.json?url=https://elsewhere.example']) {
+  for (const path of ['/health', 'v1/grants', '/v1/../health', '/v1/%2e%2e/openapi.json', '/openapi.json?url=https://elsewhere.example']) {
     const result = await modern(f, { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'foundation_api', arguments: { method: 'GET', path } } });
     assert.equal(result.json.result.isError, true, path);
   }

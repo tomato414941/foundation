@@ -221,7 +221,7 @@ export async function fixture(t, options = {}) {
     const url = await start({ scopes });
     const response = await callback(url, code);
     assert.equal(response.headers.get('location'), '/services?result=connected&service=google', response.text);
-    return (await request('/v1/overview')).json.connections.find((item) => item.subject === code + '@example.test');
+    return (await request('/v1/resources?kind=connection')).json.resources.find((item) => item.subject === code + '@example.test');
   }
   // Injecting a connection for a service derives what it yields now; nothing else reaches the service.
   async function inject(connection, options = {}) {
@@ -236,6 +236,12 @@ export async function fixture(t, options = {}) {
   }
   // Makes a key known to the owner: the key asks to act for whoever opens its request, and the owner types its code.
   // A machine becomes a principal with no connection, is issued a key, asks to act for the person, and is approved.
+  // All that a principal is shown of what it has, across the API: for checking that something kept in confidence
+  // appears nowhere in it.
+  async function visible(options = {}) {
+    const paths = ['/v1/principals/me', '/v1/credentials', '/v1/resources', '/v1/principals', '/v1/principals/me/relations', '/v1/requests?to=me', '/v1/services'];
+    return JSON.stringify(await Promise.all(paths.map(async path => (await request(path, options)).json)));
+  }
   async function become(name = 'laptop') {
     const made = await request('/v1/credentials', { method: 'POST', anonymous: true, data: { kind: 'key', name } });
     assert.equal(made.status, 201, made.text);
@@ -278,5 +284,5 @@ export async function fixture(t, options = {}) {
     app.connections.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
   }
   if (options.signin !== false) await signin();
-  return { app, mailer, known, bind, google, base, request, lookup, read, keep, drop, become, signin, start, callback, connection, inject, connectionFacts, issueKey, approveKey, expire, close, allowFoundation, handEnvelope, keyOf, sealed, cookie: () => cookie };
+  return { app, mailer, known, bind, visible, google, base, request, lookup, read, keep, drop, become, signin, start, callback, connection, inject, connectionFacts, issueKey, approveKey, expire, close, allowFoundation, handEnvelope, keyOf, sealed, cookie: () => cookie };
 }

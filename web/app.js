@@ -527,6 +527,46 @@ function showRefreshError(error, action = 'retry-page') {
   if (!alert) { alert = document.createElement('div'); alert.className = 'page-error'; main.before(alert); }
   alert.innerHTML = `<p role="alert">${esc(error.message)}</p><button class="text-button" data-action="${action}">${esc(t('client.common.reload'))}</button>`;
 }
+// What the pages show comes from the API's own resources, each asked for by the page that shows it; nothing is
+// fetched only because a screen wants it together. Every page needs to know who is signed in and how they come in;
+// the rest is by page.
+const SOURCES = {
+  me: signal => api('/v1/principals/me', { signal }),
+  credentials: signal => api('/v1/credentials', { signal }).then(result => result.credentials),
+  payment: signal => api('/v1/payment', { signal }).then(result => result.payment),
+  secrets: signal => api('/v1/resources?kind=secret', { signal }).then(result => result.resources),
+  connections: signal => api('/v1/resources?kind=connection', { signal }).then(result => result.resources),
+  apps: signal => api('/v1/resources?kind=app', { signal }).then(result => result.resources),
+  services: signal => api('/v1/resources?kind=service', { signal }).then(result => result.resources),
+  catalog: signal => api('/v1/services', { signal }).then(result => result.services),
+  principals: signal => api('/v1/principals', { signal }).then(result => result.principals),
+  // Who acts for this principal: the lines drawn toward it, with who is at their other end.
+  agentLines: signal => api('/v1/principals/me/relations?relation=agent&direction=to&limit=200', { signal }).then(result => result.relations),
+  functions: signal => api('/v1/functions', { signal }).then(result => result.functions),
+  environments: signal => api('/v1/environments', { signal }).then(result => result.environments.filter(item => item.status !== 'stopped')),
+  compute: signal => api('/v1/principals/me/compute', { signal }).then(result => result.compute),
+  // The principal the server acts as, whose envelopes it can open.
+  foundation: signal => api('/v1/principals/agent', { signal }).then(result => ({ principal_id: result.principal.id })),
+};
+const NEEDS = {
+  home: ['connections', 'secrets', 'environments', 'principals', 'agentLines', 'functions'],
+  services: ['connections', 'apps', 'services', 'catalog', 'secrets'],
+  secrets: ['secrets', 'principals', 'agentLines', 'foundation'],
+  objects: ['principals', 'agentLines'],
+  environments: ['environments', 'compute', 'principals', 'agentLines'],
+  principals: ['principals', 'agentLines'],
+  functions: ['functions'],
+  account: ['payment'],
+};
+async function workspace(signal) {
+  // A request's page shows whatever the request is about, so it asks for all of it.
+  const keys = ['me', 'credentials', ...(requestId ? Object.keys(SOURCES).filter(key => key !== 'me' && key !== 'credentials') : NEEDS[page] || [])];
+  const got = Object.fromEntries(await Promise.all(keys.map(async key => [key, await SOURCES[key](signal)])));
+  const { me, agentLines, ...rest } = got;
+  const result = { ...rest, user: { id: me.principal.id, email: got.credentials.find(item => item.kind === 'email')?.name ?? null }, principal: me.principal };
+  if (agentLines) result.agents = agentLines.map(line => ({ id: line.principal.id, name: line.principal.name, approved_at: line.created_at, keys: got.principals?.find(item => item.id === line.principal.id)?.keys ?? [] }));
+  return result;
+}
 async function refresh({ background = false } = {}) {
   if (linked) {
     try { back = back || (await api('/v1/requests/' + requestId + '/return')).back; } catch {}
@@ -540,7 +580,7 @@ async function refresh({ background = false } = {}) {
   const controller = refreshController = new AbortController(), { signal } = controller;
   const current = ++revision, loading = ['home', 'objects'].includes(page) ? loadSpace(signal).then(value => ({ value }), error => ({ error })) : null;
   try {
-    const result = await api('/v1/overview', { signal });
+    const result = await workspace(signal);
     if (requestId && current === revision) {
       try {
         const found = (await api(requestApi, { signal })).request;
@@ -557,7 +597,8 @@ async function refresh({ background = false } = {}) {
     const changed = !state || Object.entries(result).some(([key, value]) => JSON.stringify(state[key]) !== JSON.stringify(value));
     const space = sameOwner ? state.space : undefined;
     if (!sameOwner) { closeDialog(); objectChosen.clear(); }
-    state = { ...result, space };
+    // What this page did not ask for stays as another page left it, for the same principal.
+    state = { ...(sameOwner ? state : {}), ...result, space };
     // The key opened in this page is kept for the next load of it; one kept before is taken up again.
     if (state.user?.id) { if (own) await shelveKey(state.user.id); else own = await takeKey(state.user.id); }
     if (!background || changed) render();
@@ -1323,7 +1364,7 @@ function addKey() {
     openDialog(`<h2 id="dialog-title">${esc(t('client.principals.accessKeyTitle', { name: result.principal.name }))}</h2><p>${esc(t('client.access.keyStorageWarning'))}</p><label for="agent-token">${esc(t('client.access.key'))}</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">${esc(t('client.access.copyKey'))}</button><label for="api-url">${esc(t('client.access.endpoint'))}</label><input id="api-url" readonly value="${esc(location.origin)}/v1"><p class="permission-note">${esc(t('client.access.keySharingWarning'))}</p><button class="button primary full" data-action="close-dialog">${esc(t('client.common.close'))}</button>`);
   });
 }
-const principalById = id => (state.actors || []).find(item => item.id === id) || (state.principals || []).find(item => item.id === id);
+const principalById = id => (state.agents || []).find(item => item.id === id) || (state.principals || []).find(item => item.id === id);
 // Machines lent to this account and still running: who each acts as, until when, and the month's computing.
 function environmentsSection() {
   const running = state.environments || [], compute = state.compute;
@@ -1373,8 +1414,10 @@ function renameMe() {
 // Things of the account's, chosen, given to another principal: each resource and each owned principal, one by one,
 // as the API gives them. A secret goes with an envelope made here when the key is open; otherwise Foundation makes one.
 async function handOver() {
+  // Everything that can be handed over, asked for when the dialog opens: the page it opens from shows none of it.
   let objects = [];
   try { objects = (await api('/v1/resources?kind=object')).resources; } catch {}
+  for (const key of ['secrets', 'connections', 'apps', 'services', 'principals']) state[key] = await SOURCES[key]();
   const groups = [[t('client.handover.secrets'), secrets()], [t('client.handover.connections'), connected().map(item => ({ ...item, name: item.label || item.service.name }))], [t('client.handover.objects'), objects],
     [t('client.handover.apps'), (state.apps || []).filter(item => !item.foundation && item.owner_id === state.user.id)], [t('client.handover.services'), (state.services || []).filter(item => item.owner_id === state.user.id)],
     [t('client.handover.principals'), (state.principals || []).map(item => ({ ...item, kind: 'principal' }))]].filter(([, items]) => items.length);

@@ -32,24 +32,24 @@ test('メールで送ったリンクを、送信元のCookieを持たないブ�
   assert.match(result.headers.getSetCookie().find(value => value.startsWith('fdn_session=')), /HttpOnly; SameSite=Lax; Path=\/; Max-Age=1209600; Secure/);
   assert.equal(result.headers.get('referrer-policy'), 'no-referrer');
   assert.equal(result.headers.get('cache-control'), 'no-store');
-  const state = await f.request('/v1/overview', { headers: { cookie: sessionCookie(result) } });
+  const state = await f.request('/v1/credentials', { headers: { cookie: sessionCookie(result) } });
   assert.equal(state.status, 200);
-  assert.equal(state.json.user.email, 'new@example.test');
-  assert.equal((await f.request('/v1/overview', { headers: { cookie } })).status, 401);
+  assert.deepEqual(state.json.credentials.map(item => [item.kind, item.name]), [['email', 'new@example.test']]);
+  assert.equal((await f.request('/v1/principals/me', { headers: { cookie } })).status, 401);
 });
 
 test('初めて確かめたアドレスは新しいプリンシパルになり、同じアドレスでまたサインインすると同じプリンシパルに戻る', async t => {
   const f = await fixture(t, { signin: false });
   await send(f);
-  const first = await f.request('/v1/overview', { headers: { cookie: sessionCookie(await verify(f)) } });
+  const first = await f.request('/v1/principals/me', { headers: { cookie: sessionCookie(await verify(f)) } });
   await age(f, 60_001);
   await send(f);
-  const again = await f.request('/v1/overview', { headers: { cookie: sessionCookie(await verify(f)) } });
-  assert.match(first.json.user.id, /^[0-9a-f-]{36}$/);
-  assert.equal(again.json.user.id, first.json.user.id);
+  const again = await f.request('/v1/principals/me', { headers: { cookie: sessionCookie(await verify(f)) } });
+  assert.match(first.json.principal.id, /^[0-9a-f-]{36}$/);
+  assert.equal(again.json.principal.id, first.json.principal.id);
   await send(f, 'someone@example.test');
-  const other = await f.request('/v1/overview', { headers: { cookie: sessionCookie(await verify(f, f.mailer.link('someone@example.test'))) } });
-  assert.notEqual(other.json.user.id, first.json.user.id);
+  const other = await f.request('/v1/principals/me', { headers: { cookie: sessionCookie(await verify(f, f.mailer.link('someone@example.test'))) } });
+  assert.notEqual(other.json.principal.id, first.json.principal.id);
 });
 
 test('メールの先読みには確認画面だけを返し、ボタンからの検証を待つ', async t => {
@@ -60,7 +60,7 @@ test('メールの先読みには確認画面だけを返し、ボタンから�
     assert.equal(page.status, 200);
     assert.match(page.headers.get('content-type'), /^text\/html/);
     assert.equal(page.headers.get('cache-control'), 'no-store');
-    assert.equal((await f.request('/v1/overview')).status, 401);
+    assert.equal((await f.request('/v1/principals/me')).status, 401);
   }
   assert.equal((await verify(f)).status, 200);
 });
@@ -82,8 +82,8 @@ test('別のアドレスへの送信状況よりも、確認したリンクの�
   await send(f);
   const cookie = deliveryCookie(await send(f, 'second@example.test'));
   const result = await verify(f, undefined, { headers: { cookie } });
-  const state = await f.request('/v1/overview', { headers: { cookie: sessionCookie(result) } });
-  assert.equal(state.json.user.email, 'new@example.test');
+  const state = await f.request('/v1/credentials', { headers: { cookie: sessionCookie(result) } });
+  assert.deepEqual(state.json.credentials.map(item => item.name), ['new@example.test']);
 });
 
 test('同じリンクの再利用と期限を過ぎたリンクを拒否する', async t => {
@@ -103,7 +103,7 @@ test('リンクを送ったアドレスと違うアドレスでは検証せず�
   const result = await verify(f, { ...f.mailer.link('attacker@example.test'), email: 'owner@example.test' });
   assert.equal(result.status, 401);
   assert.equal(result.json.error.code, 'invalid_link');
-  assert.equal((await f.request('/v1/overview')).json.user.id, USER_A);
+  assert.equal((await f.request('/v1/principals/me')).json.principal.id, USER_A);
 });
 
 test('外部サイトからの送信・検証・送信状況の取り消しを拒否する', async t => {
@@ -181,8 +181,8 @@ test('サインアウトするとそのセッションだけを終え、ほか�
   await send(f);
   const two = sessionCookie(await verify(f));
   assert.equal((await f.request('/v1/session', { method: 'DELETE', headers: { cookie: one } })).status, 200);
-  assert.equal((await f.request('/v1/overview', { headers: { cookie: one } })).status, 401);
-  assert.equal((await f.request('/v1/overview', { headers: { cookie: two } })).status, 200);
+  assert.equal((await f.request('/v1/principals/me', { headers: { cookie: one } })).status, 401);
+  assert.equal((await f.request('/v1/principals/me', { headers: { cookie: two } })).status, 200);
 });
 
 test('プリンシパルが頼んだリンクは、開いて確かめるとそのアドレスをそのプリンシパルの入口にし、誰もサインインさせない', async t => {

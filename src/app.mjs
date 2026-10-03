@@ -813,8 +813,19 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         return send(201, { principal: { ...made, alias: alias ?? null, keys: principals.keys(made.id), acts_for: principals.actsFor(made.id), owners: principals.ownersOf(made.id), stewards: principals.stewardsOf(made.id) } });
       }
       if (route?.group === 'principals') {
-        const id = route.params.principalId === 'me' ? subject.id : route.params.principalId, part = at === 'principal' ? null : at;
+        // Two names stand for ids: me, the caller, and agent, the principal this server acts as.
+        const named = route.params.principalId;
+        const id = named === 'me' ? subject.id : named === 'agent' ? keys.agentId : named, part = at === 'principal' ? null : at;
         const target = principals.at(id);
+        // The lines a principal is at an end of: for whoever may read it - itself, its stewards, its owner. One who
+        // acts for it uses what it holds, and is not told whom it is joined to.
+        if (part === 'principalRelations' && method === 'GET') {
+          permit('read', 'principal', id);
+          const given = url.searchParams.get('limit'), limit = given === null ? 50 : Number(given), after = url.searchParams.get('after');
+          if (!Number.isInteger(limit) || limit < 1 || limit > 200) fail(400, 'invalid_limit', '件数は1〜200で指定してください。');
+          if (after !== null && !/^\d{1,15}$/.test(after)) fail(400, 'invalid_cursor', '続きの位置を確認してください。');
+          return send(200, principals.lines(id, { relation: url.searchParams.get('relation') ?? undefined, direction: url.searchParams.get('direction') ?? undefined, limit, after: after === null ? undefined : Number(after) }));
+        }
         if (part === 'access' && method === 'DELETE') {
           permit('relate', 'principal', ownerId);
           if (id === ownerId) fail(400, 'invalid_principal', '自分自身のアクセスは取り消せません。');
@@ -834,6 +845,9 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           return send(200, { principal: { ...moved, keys: principals.keys(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id) } });
         }
         if (!part) {
+          // What this server acts as is nobody's secret: anyone may learn its id and name, to seal for it or to make it
+          // their agent.
+          if (method === 'GET' && id === keys.agentId) return send(200, { principal: target });
           if (method === 'GET') { permit('read', 'principal', id); return send(200, { principal: { ...target, keys: principals.keys(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id), stewards: principals.stewardsOf(id) } }); }
           if (method === 'PATCH') { permit('rename', 'principal', id); const input = await inputBody(); return send(200, { principal: principals.rename(id, nameValue(input.name)) }); }
           if (method === 'DELETE') {
@@ -1248,18 +1262,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       }
       if (at === 'audit' && method === 'GET') { permit('audit-log', 'principal', subject.id); return send(200, { entries: auditLog.list(subject.id) }); }
       // The owner's screen, in one answer.
-      if (at === 'overview' && method === 'GET') {
-        permit('overview', 'principal', ownerId);
-        return send(200, { user: { id: subject.id, email: emails.of(subject.id)[0] ?? null }, principal: self, payment: payments.view(ownerId), credentials: credentialsOf(ownerId), secrets: secrets.list(ownerId).map(row => secrets.view(row)), connections: connections.list(ownerId).map(row => connections.view(row, { owner: true })),
-          apps: [...apps.list(ownerId).map(row => apps.view(row, { owner: true })), ...apps.lent(ownerId).map(row => apps.view(row)), ...apps.offeredAll()],
-          services: [...services.list(ownerId).map(row => services.view(row, { owner: true })), ...services.lent(ownerId).map(row => services.view(row))],
-          catalog: services.catalogView(), principals: principals.owned(ownerId), agents: principals.agentsOf(ownerId),
-          requests: requests.listTo(ownerId, 'pending').map(row => viewRequest(row, origin)), functions: FUNCTIONS, settings: settings.get(ownerId) ?? null,
-          // Machines lent to the owner and still running, and the computing they spend.
-          environments: environments.list(ownerId).filter(row => row.status !== 'stopped').map(row => environments.view(row)), compute: environments.usage(ownerId), foundation: { principal_id: keys.agentId } });
-      }
-      // Everything, in one file, for the owner alone. Lending someone a place to keep things means they can take
-      // them away again; without this the promise is words.
       if (at === 'export' && method === 'GET') {
         permit('export', 'principal', ownerId);
         // A secret goes out as it is kept, sealed, with its envelopes; so does a connection's state, which opens with the owner's key when one was made for them.

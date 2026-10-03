@@ -26,11 +26,11 @@ test('登録したWebAuthnの資格情報で、ブラウザはCookieのセッシ
   const browser = await signin(f, credential);
   assert.equal(browser.status, 200, browser.text);
   assert.deepEqual(browser.json, { ok: true, return_to: '/' });
-  assert.equal((await f.request('/v1/overview', { anonymous: true, headers: { cookie: sessionCookie(browser) } })).json.user.id, USER_A);
+  assert.equal((await f.request('/v1/principals/me', { anonymous: true, headers: { cookie: sessionCookie(browser) } })).json.principal.id, USER_A);
   const program = await signin(f, credential, { session: 'token' });
   assert.equal(program.status, 200, program.text);
   assert.ok(Math.abs(program.json.expires_at - (Date.now() + 3600_000)) < 60_000);
-  assert.equal((await f.request('/v1/overview', { anonymous: true, token: program.json.token })).json.user.id, USER_A);
+  assert.equal((await f.request('/v1/principals/me', { anonymous: true, token: program.json.token })).json.principal.id, USER_A);
   assert.equal(program.headers.getSetCookie().length, 0);
   const listed = (await f.request('/v1/credentials')).json.credentials.filter(item => item.kind === 'webauthn');
   assert.deepEqual(listed.map(item => item.id), [credential.id]);
@@ -68,8 +68,8 @@ test('WebAuthnの資格情報を削除すると、それで証明したセッシ
   const credential = await register(f);
   const program = await signin(f, credential, { session: 'token' });
   assert.equal((await f.request('/v1/credentials/' + credential.id, { method: 'DELETE', data: {} })).status, 200);
-  assert.equal((await f.request('/v1/overview', { anonymous: true, token: program.json.token })).status, 401);
-  assert.equal((await f.request('/v1/overview')).status, 200, 'the email sign-in goes on');
+  assert.equal((await f.request('/v1/principals/me', { anonymous: true, token: program.json.token })).status, 401);
+  assert.equal((await f.request('/v1/principals/me')).status, 200, 'the email sign-in goes on');
   assert.equal((await signin(f, credential, { session: 'token' })).status, 401);
 });
 
@@ -119,7 +119,7 @@ test('WebAuthnの資格情報だけで新しいプリンシパルになり、ブ
   assert.equal((await f.request('/v1/principals/me', { method: 'PATCH', data: { name: 'はじめての人' }, headers: { cookie: browser.headers.getSetCookie().find(v => v.startsWith('fdn_session='))?.split(';')[0] ?? '' }, anonymous: true })).json.principal.name, 'はじめての人');
   assert.equal(browser.json.return_to, '/secrets');
   const cookie = sessionCookie(browser);
-  assert.equal((await f.request('/v1/overview', { anonymous: true, headers: { cookie } })).json.user.id, browser.json.principal.id);
+  assert.equal((await f.request('/v1/principals/me', { anonymous: true, headers: { cookie } })).json.principal.id, browser.json.principal.id);
   assert.equal((await signin(f, made.credential, { session: 'token' })).status, 200, 'and it signs in with that credential afterwards');
 
   const program = createCredential((await f.request('/v1/credentials', { method: 'POST', data: { kind: 'webauthn', name: 'laptop' }, anonymous: true })).json.options, f.base);

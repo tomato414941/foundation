@@ -53,7 +53,7 @@ with sync_playwright() as p:
         # Beside the page on a wide screen, behind its button on a narrow one: either way the bar it sits in stays put.
         before = page.locator('.topbar').bounding_box()
         pending = []
-        page.route('**/v1/overview', lambda route: pending.append(route))
+        page.route('**/v1/principals/me', lambda route: pending.append(route))
         go('サービス')
         current('サービス')
         expect(page.get_by_role('main')).to_be_focused()
@@ -68,7 +68,7 @@ with sync_playwright() as p:
         assert pending, '最新情報の確認を進める'
         for route in pending:
             route.continue_()
-        page.unroute('**/v1/overview')
+        page.unroute('**/v1/principals/me')
         page.wait_for_load_state('networkidle')
         expect(field).to_have_value('Slack')
         expect(field).to_be_focused()
@@ -97,13 +97,13 @@ with sync_playwright() as p:
 
     # 移動が重なったときは、最後に選んだ画面を表示する。
     pending = []
-    page.route('**/v1/overview', lambda route: pending.append(route))
+    page.route('**/v1/principals/me', lambda route: pending.append(route))
     for label in ['サービス', 'プリンシパル', 'ファンクション']:
         go(label)
         current(label)
     for route in reversed(pending):
         route.continue_()
-    page.unroute('**/v1/overview')
+    page.unroute('**/v1/principals/me')
     page.wait_for_load_state('networkidle')
     current('ファンクション')
     print('連続して移動しても、最後に選んだ画面を表示する。')

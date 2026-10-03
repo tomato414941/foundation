@@ -47,7 +47,7 @@ with sync_playwright() as p:
         page.locator('.page-nav').get_by_role('link', name=label, exact=True).click()
         expect(page.get_by_role('heading', name=label, exact=True)).to_be_visible()
 
-    def release(routes, pattern='**/v1/overview'):
+    def release(routes, pattern='**/v1/principals/me'):
         assert routes, '通信を待機する'
         for route in routes:
             route.continue_()
@@ -64,7 +64,7 @@ with sync_playwright() as p:
     go('サービス')
     page.wait_for_load_state('networkidle')
     pending = []
-    page.route('**/v1/overview', lambda route: pending.append(route))
+    page.route('**/v1/principals/me', lambda route: pending.append(route))
     go('シークレット')
     name_row = page.get_by_role('article', name='name-draft', exact=True)
     name_row.get_by_role('button', name='名前を編集', exact=True).click()
@@ -100,7 +100,7 @@ with sync_playwright() as p:
     go('サービス')
     page.wait_for_load_state('networkidle')
     pending, content = [], []
-    page.route('**/v1/overview', lambda route: pending.append(route))
+    page.route('**/v1/principals/me', lambda route: pending.append(route))
     content_pattern = '**/v1/resources/' + value_resource['id'] + '/content'
     page.route(content_pattern, lambda route: content.append(route))
     go('シークレット')
@@ -138,14 +138,14 @@ with sync_playwright() as p:
     print('サインイン済みの初回HTMLから画面の枠を表示する。')
 
     # 通信失敗と未認証を区別し、同じ場所で再試行する。
-    page.route('**/v1/overview', lambda route: route.fulfill(status=503, json={'error': {'message': '一時的に取得できません。'}}))
+    page.route('**/v1/principals/me', lambda route: route.fulfill(status=503, json={'error': {'message': '一時的に取得できません。'}}))
     page.reload(wait_until='networkidle')
     expect(page.get_by_role('heading', name='シークレット', exact=True)).to_be_visible()
     expect(page.get_by_role('alert')).to_have_text('一時的に取得できません。')
     expect(page.get_by_role('button', name='再読み込み', exact=True)).to_be_enabled()
     if shots:
         page.screenshot(path=str(shots / 'communication-error.png'), full_page=True)
-    page.unroute('**/v1/overview')
+    page.unroute('**/v1/principals/me')
     page.get_by_role('button', name='再読み込み', exact=True).click()
     expect(page.get_by_role('heading', name='saved-name', exact=True)).to_be_visible()
     # 読み込み直した画面では、鍵を開き直してから値を差し替えるする。
@@ -155,13 +155,13 @@ with sync_playwright() as p:
     go('サービス')
     page.wait_for_load_state('networkidle')
     pending = []
-    page.route('**/v1/overview', lambda route: pending.append(route))
+    page.route('**/v1/principals/me', lambda route: pending.append(route))
     go('シークレット')
     value_row.get_by_role('button', name='値を差し替える', exact=True).click()
     value_form.get_by_role('textbox', name='値', exact=True).fill('retained-after-error')
     for route in pending:
         route.fulfill(status=503, json={'error': {'message': '通信を再試行してください。'}})
-    page.unroute('**/v1/overview')
+    page.unroute('**/v1/principals/me')
     expect(page.locator('.page-error').get_by_role('alert')).to_have_text('通信を再試行してください。')
     expect(value_form.get_by_role('textbox', name='値', exact=True)).to_have_value('retained-after-error')
     page.get_by_role('button', name='再読み込み', exact=True).click()

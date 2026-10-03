@@ -53,7 +53,7 @@ test('An app makes one principal per user, and each keeps to itself', async t =>
   assert.equal((await call('/principals', { method: 'POST', data: { alias: 'user-1' } })).json.principal.id, first.account.id, 'the same user is the same principal');
   assert.equal((await f.request('/v1/resources?kind=secret&name=npm-token', { method: 'PUT', anonymous: true, token: first.key.token, raw: 'tok-1', type: 'text/plain' })).status, 200);
   assert.deepEqual((await f.request('/v1/resources?kind=secret', { anonymous: true, token: second.key.token })).json.resources, []);
-  assert.deepEqual((await f.request('/v1/overview')).json.secrets, [], 'nor are they the developer\'s who made the app');
+  assert.deepEqual((await f.request('/v1/resources?kind=secret')).json.resources, [], 'nor are they the developer\'s who made the app');
   // The app's own key reaches none of its users' contents: the app acts for nobody.
   assert.deepEqual((await f.request('/v1/resources?kind=secret', { anonymous: true, token: product })).json.resources, []);
   assert.equal((await f.request('/v1/resources?kind=secret&as=' + first.account.id, { anonymous: true, token: product })).status, 403);
@@ -98,7 +98,7 @@ test('A request from such a user is opened on the app\'s page, and a single-use 
   assert.equal(claimed.status, 200, claimed.text);
   assert.match(claimed.cookie, /HttpOnly/); assert.match(claimed.cookie, new RegExp('Path=/v1/requests/' + request.id));
   assert.equal((await go('/v1/requests/' + request.id)).json.request.id, request.id);
-  assert.equal((await go('/v1/overview')).status, 401, 'the link reaches no other screen');
+  assert.equal((await go('/v1/principals/me')).status, 401, 'the link reaches nothing else');
   assert.equal((await go('/v1/requests/' + other.id)).status, 401);
   const shown = (await go('/v1/requests/' + request.id)).json.request;
   const stored = await go('/v1/requests/' + request.id + '/grant', { method: 'POST', data: { entries: [{ name: 'npm-api-token', ...await f.sealed('npm_value', { anonymous: true }, shown.recipients) }] } });
@@ -179,7 +179,7 @@ test('As with Stripe, an app gives a return page, a refresh page and a signed we
   const settings = (await settingsOf({ return_url: 'https://simplicity.example.test/foundation?from=foundation',
     refresh_url: 'https://simplicity.example.test/foundation/again', webhook_url: 'https://hook.example.test/foundation' })).json.settings;
   assert.match(settings.webhook_secret, /^whsec_/);
-  assert.doesNotMatch(JSON.stringify((await f.request('/v1/overview')).json), /whsec_|fdn_/);
+  assert.doesNotMatch(await f.visible(), /whsec_|fdn_/);
   const product = (await f.request('/v1/credentials?as=' + app.id, { method: 'POST', data: { kind: 'key' } })).json.token;
   const call = (path, options = {}) => f.request('/v1' + path, { anonymous: true, token: product, ...options });
   const user = (await call('/principals', { method: 'POST', data: { alias: 'user-1' } })).json.principal;

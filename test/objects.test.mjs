@@ -177,7 +177,7 @@ test('says what an owner is using and what they may use', async (t) => {
 
 test('無料枠を超えて置こうとすると支払い方法を求め、支払う人は上限まで置ける', async (t) => {
   const f = await space(t);
-  const owner = (await f.request('/v1/overview')).json.user.id;
+  const owner = (await f.request('/v1/principals/me')).json.principal.id;
   const big = (id, size) => {
     f.app.store.db.prepare("INSERT INTO resources (id,owner_id,kind,name,created_at,updated_at) VALUES (?,?,'object',?,'2026-01-01','2026-01-01')").run(id, owner, id);
     f.app.store.db.prepare("INSERT INTO objects (resource_id,size,type) VALUES (?,?,'text/plain')").run(id, size);

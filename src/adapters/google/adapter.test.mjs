@@ -23,7 +23,7 @@ async function googleFixture(t, google = new FakeGoogle()) {
     assert.match(done.headers.get('location'), /result=connected/, done.headers.get('location'));
     return (await connections()).find(item => input.connection_id ? item.id === input.connection_id : !ids.has(item.id));
   }
-  const connections = async () => (await f.request('/v1/overview')).json.connections.filter(item => item.service?.id === 'google');
+  const connections = async () => (await f.request('/v1/resources?kind=connection')).json.resources.filter(item => item.service?.id === 'google');
   const secret = connection => f.app.connections.state(f.app.connections.held(USER_A, connection.id)).private_state;
   return { ...f, connect, connections, secret };
 }
