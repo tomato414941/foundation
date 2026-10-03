@@ -51,9 +51,9 @@ test('代理の許可を取り消した後も、本人を対象とした操作�
   const before = await deliveries(f);
   assert.equal(before.length, 1);
 
-  const removed = await f.request('/v1/relations', {
+  const removed = await f.request('/v1/principals/' + key.id + '/relations', {
     method: 'DELETE',
-    data: { subject: key.id, relation: 'agent', object_type: 'principal', object_id: USER_A },
+    data: { relation: 'agent', object_type: 'principal', object_id: USER_A },
   });
   assert.equal(removed.status, 200, removed.text);
   assert.deepEqual(await deliveries(f), before);

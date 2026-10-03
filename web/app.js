@@ -539,7 +539,8 @@ const SOURCES = {
   apps: signal => api('/v1/resources?kind=app', { signal }).then(result => result.resources),
   services: signal => api('/v1/resources?kind=service', { signal }).then(result => result.resources),
   catalog: signal => api('/v1/services', { signal }).then(result => result.services),
-  principals: signal => api('/v1/principals', { signal }).then(result => result.principals),
+  // What this principal owns: the lines of ownership it drew, with who is at their other end.
+  principals: signal => api('/v1/principals/me/relations?relation=owner&direction=from&limit=200', { signal }).then(result => result.relations.map(line => line.principal)),
   // Who acts for this principal: the lines drawn toward it, with who is at their other end.
   agentLines: signal => api('/v1/principals/me/relations?relation=agent&direction=to&limit=200', { signal }).then(result => result.relations),
   functions: signal => api('/v1/functions', { signal }).then(result => result.functions),
@@ -564,7 +565,7 @@ async function workspace(signal) {
   const got = Object.fromEntries(await Promise.all(keys.map(async key => [key, await SOURCES[key](signal)])));
   const { me, agentLines, ...rest } = got;
   const result = { ...rest, user: { id: me.principal.id, email: got.credentials.find(item => item.kind === 'email')?.name ?? null }, principal: me.principal };
-  if (agentLines) result.agents = agentLines.map(line => ({ id: line.principal.id, name: line.principal.name, approved_at: line.created_at, keys: got.principals?.find(item => item.id === line.principal.id)?.keys ?? [] }));
+  if (agentLines) result.agents = agentLines.map(line => ({ id: line.principal.id, name: line.principal.name, approved_at: line.created_at }));
   return result;
 }
 async function refresh({ background = false } = {}) {
@@ -806,14 +807,13 @@ function render() {
     // A look over everything, and the way to each page. Nothing is managed here.
     const space = state.space, kept = secrets(), connections = connected(), keys = state.agents || [];
     const card = (href, title, line) => `<a class="home-card" href="${href}"><h2>${title}</h2><p>${esc(line)}</p></a>`;
-    const lastUsed = keys.flatMap(key => key.keys.map(item => item.last_used_at)).filter(Boolean).sort().at(-1);
     shell(`<header class="page-heading"><h1>Foundation</h1></header>
       <div class="home-cards">
         ${card('/services', t('client.service.title'), t('client.common.itemCount', { count: connections.length + unconnectedServices().length }))}
         ${card('/secrets', t('client.secret.title'), t('client.common.itemCount', { count: kept.length }))}
         ${card('/objects', t('client.objects.title'), spaceSummary(space))}
         ${card('/environments', t('client.environment.title'), t('client.common.itemCount', { count: (state.environments || []).length }))}
-        ${card('/principals', t('client.access.title'), keys.length ? lastUsed ? t('client.home.accessLastUsed', { count: keys.length, date: formatDate(lastUsed, i18n.language) }) : t('client.home.accessCount', { count: keys.length }) : t('client.common.noItems'))}
+        ${card('/principals', t('client.access.title'), keys.length ? t('client.home.accessCount', { count: keys.length }) : t('client.common.noItems'))}
         ${card('/functions', t('client.functions.title'), t('client.home.functionCount', { count: state.functions?.length || 0 }))}
       </div>`);
     return;
@@ -824,8 +824,7 @@ function render() {
   }
   if (page === 'principals') {
     const agents = state.agents || [], others = (state.principals || []).filter(item => !agents.some(agent => agent.id === item.id));
-    const used = item => { const at = item.keys.map(c => c.last_used_at).filter(Boolean).sort().at(-1); return at ? esc(t('client.principals.lastUsed', { date: formatDate(at, i18n.language) })) : t('client.access.neverUsed'); };
-    const row = (item, allowed) => `<article class="agent-row access-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${used(item)}</p></div><div class="agent-permissions"><span class="muted">${allowed ? esc(t('client.principals.approvedAt', { date: formatDate(item.approved_at, i18n.language, { year: 'numeric', month: 'numeric', day: 'numeric' }) })) : t('client.access.noFullAccess')}</span></div><div class="agent-actions"><button class="text-button" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.details'))}</button>${allowed ? `<button class="text-button danger" data-action="revoke-access" data-id="${esc(item.id)}">${esc(t('client.access.revoke'))}</button>` : ''}</div></article>`;
+    const row = (item, allowed) => `<article class="agent-row access-row"><div class="agent-name"><h3>${esc(item.name)}</h3></div><div class="agent-permissions"><span class="muted">${allowed ? esc(t('client.principals.approvedAt', { date: formatDate(item.approved_at, i18n.language, { year: 'numeric', month: 'numeric', day: 'numeric' }) })) : t('client.access.noFullAccess')}</span></div><div class="agent-actions"><button class="text-button" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.details'))}</button>${allowed ? `<button class="text-button danger" data-action="revoke-access" data-id="${esc(item.id)}">${esc(t('client.access.revoke'))}</button>` : ''}</div></article>`;
     shell(`<header class="page-heading"><h1>${esc(t('client.access.title'))}</h1></header>
       <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><h2 id="access-title">${esc(t('client.access.registeredPrincipals'))}</h2></div><button class="button secondary" data-action="add-key">${icon('plus')} ${esc(t('client.common.add'))}</button></div>
       ${agents.length || others.length ? `<div class="agent-list">${agents.map(item => row(item, true)).join('')}${others.map(item => row(item, false)).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.access.empty'))}</p></div>`}</section>
@@ -1870,7 +1869,7 @@ document.addEventListener('click', async (event) => {
     }
     if (action === 'edit-secret') editSecret(secrets().find(item => item.name === target.dataset.name), target);
     if (action === 'add-key') addKey();
-    if (action === 'make-agent') { target.disabled = true; await api('/v1/relations', { method: 'POST', data: { subject: id, relation: 'agent', object_type: 'principal', object_id: state.user.id } }); await refresh(); await principalDetails(id); }
+    if (action === 'make-agent') { target.disabled = true; await api('/v1/principals/' + encodeURIComponent(id) + '/relations', { method: 'POST', data: { relation: 'agent', object_type: 'principal', object_id: state.user.id } }); await refresh(); await principalDetails(id); }
     if (action === 'revoke-access') revokeAccess(principalById(id));
     if (action === 'close-environment') {
       const item = (state.environments || []).find(row => row.id === id);

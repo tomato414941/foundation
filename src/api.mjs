@@ -76,9 +76,10 @@ export const schemas = {
   Me: object({ principal: ref('Principal'), key: ref('Key'), acts_for: array(principalId), owners: array(principalId),
     keys: array(ref('Key')), requests: array(ref('Request')) }, ['principal', 'acts_for', 'owners', 'keys', 'requests']),
   Line: object({ relation: string, direction: { ...choice(['from', 'to']), description: 'from: drawn by the principal asked about. to: drawn toward it.' }, created_at: iso,
-    principal: { ...object({ id: principalId, name: string }, ['id', 'name']), description: 'The principal at the other end.' }, resource: { ...object({ id, kind: nullable(string), name: string }, ['id', 'name']), description: 'The thing at the other end, for a line drawn onto one.' } }, ['relation', 'direction', 'created_at']),
+    principal: { ...object({ id: principalId, name: string }, ['id', 'name']), description: 'The principal at the other end.' }, resource: { ...object({ id, kind: nullable(string), name: string }, ['id', 'name']), description: 'The thing at the other end, for a line drawn onto one.' },
+    alias: { ...string, description: 'On a line of ownership from the owner: the name the owner gave what it owns, when it gave one.' } }, ['relation', 'direction', 'created_at']),
   Relation: object({ subject_id: principalId, relation: string, object_type: choice(['principal', 'resource']), object_id: string, created_at: iso }, ['relation', 'object_type', 'object_id']),
-  RelationInput: object({ subject: principalId, relation: string, object_type: choice(['principal', 'resource']), object_id: string }, ['relation', 'object_type', 'object_id']),
+  RelationInput: object({ relation: string, object_type: choice(['principal', 'resource']), object_id: string }, ['relation', 'object_type', 'object_id']),
   AuthorizationDetail: { anyOf: [relationDetail,
     detailOf('secret', { fields: { anyOf: [field, { ...array(field), minItems: 1, maxItems: 8 }] } }, ['fields']),
     detailOf('connection', connect.properties, ['service']),
@@ -229,7 +230,6 @@ export const routes = [
     delete: okay('removeMe', 'Remove the caller and its resources'),
   } },
   { name: 'principals', path: '/v1/principals', methods: {
-    get: op('listPrincipals', 'List principals owned by the caller', many('principals', 'Principal')),
     post: op('createPrincipal', 'Make a principal of the caller\'s own', one('Principal'), { input: 'CreatePrincipal', status: 201, 'x-input-error': 'invalid_name',
       description: 'The caller becomes its owner. It has no entry until one is added with POST /v1/credentials?as=<its id> (a key shown once, or a passkey). Becoming a principal by oneself is POST /v1/credentials without a session. To ask someone for access, a principal uses POST /v1/requests with {"authorization_details":[{"type":"relation","relation":"agent"}]} and gives them the returned verification_uri and user_code; GET /v1/principals/me reports acts_for afterward. The CLI performs the bootstrap: foundation init <server> --name <name> makes the principal, foundation join asks for approval.' }),
   } },
@@ -237,7 +237,10 @@ export const routes = [
     get: op('getPrincipal', 'Read a principal', one('Principal')), patch: op('renamePrincipal', 'Rename a principal', one('Principal'), { input: 'Rename', 'x-input-error': 'invalid_name' }), delete: okay('removePrincipal', 'Remove an owned principal and its resources'),
   } },
   { name: 'transferPrincipal', group: 'principals', path: '/v1/principals/{principalId}/transfer', methods: { post: op('transferPrincipal', 'Give an owned principal to another principal', one('Principal'), { input: 'Transfer', 'x-input-error': 'invalid_transfer', description: 'By its owner. The owner\'s record and alias move; the principal\'s own lines and keys stay.' }) } },
-  { name: 'principalRelations', group: 'principals', path: '/v1/principals/{principalId}/relations', methods: { get: op('listPrincipalRelations', 'List the lines a principal is at an end of', object({ relations: array(ref('Line')), next: { ...nullable(string), description: 'Pass as after to read the next page; null when there is none.' } }, ['relations', 'next']), {
+  { name: 'principalRelations', group: 'principals', path: '/v1/principals/{principalId}/relations', methods: {
+    post: okay('addRelation', 'Draw a line from this principal to another principal or to a thing', { input: 'RelationInput', status: 201, 'x-input-error': 'invalid_relation', description: 'The principal in the path is the one the line is from: POST /v1/principals/{agent}/relations {relation: "agent", object_type: "principal", object_id: <owner>} makes it the owner\'s agent. Roles are agent, steward and payer on principals and viewer/editor on things; a single action may be given as <action>_grant. The caller must be able to give it where the line ends. Ownership is not given here.' }),
+    delete: okay('removeRelation', 'Remove a line from this principal', { input: 'RelationInput', 'x-input-error': 'invalid_relation', description: 'By the principal the line is from, or by whoever may share what it is onto.' }),
+    get: op('listPrincipalRelations', 'List the lines a principal is at an end of', object({ relations: array(ref('Line')), next: { ...nullable(string), description: 'Pass as after to read the next page; null when there is none.' } }, ['relations', 'next']), {
     parameters: [query('relation', string, 'Only lines of this relation, such as owner, agent, steward, payer, viewer.'), query('direction', choice(['from', 'to']), 'from: lines this principal drew toward others and their things. to: lines drawn toward it. Both when left out.'), query('limit', integer, 'How many to return: 1-200, 50 by default.'), query('after', string, 'The next value of the page before.')],
     description: 'For the principal itself, its stewards and its owner; one who only acts for it is not told whom it is joined to. Each line names who or what is at its other end, by id and name. One may be at the end of very many lines - an app owns a principal for each of its users - so they come a page at a time, oldest first. principalId may be me (the caller) or agent (the principal this server acts as).' }) } },
   { name: 'publicKey', group: 'principals', path: '/v1/principals/{principalId}/public-key', methods: { get: op('getPublicKey', 'Read a principal\'s public key', object({ key: ref('PrincipalKey') }, ['key'])) } },
@@ -262,11 +265,6 @@ export const routes = [
   } },
   { name: 'grant', group: 'requests', path: '/v1/requests/{requestId}/grant', methods: { post: op('grantRequest', 'Grant a request as the one asked', { anyOf: [one('Request'), object({ stored: { const: true }, names: array(string), replaced: array(string) }, ['stored', 'names', 'replaced']), object({ registered: { const: true }, app_id: id }, ['registered', 'app_id'])] }, { input: 'GrantRequest', security: [...secure, { requestLink: [] }], description: 'Request-link cookies may answer only their own request. App registration requires a browser session. A relation is drawn only where the one granting may draw it. Wrong user codes count toward the attempt limit.' }) } },
   { name: 'deny', group: 'requests', path: '/v1/requests/{requestId}/deny', methods: { post: op('denyRequest', 'Decline a received request', one('Request'), { input: 'Empty', security: [...secure, { requestLink: [] }] }) } },
-  { name: 'relations', path: '/v1/relations', methods: {
-    get: op('listRelations', 'List the caller’s relations', many('relations', 'Relation')),
-    post: okay('addRelation', 'Grant a role or action on a principal or resource', { input: 'RelationInput', status: 201, 'x-input-error': 'invalid_relation', description: 'subject defaults to the caller. Roles include agent on principals and viewer/editor on resources. Specific actions may also be granted. The caller must be able to share the target and exercise everything the new relation grants. Ownership is not granted through this endpoint.' }),
-    delete: okay('removeRelation', 'Remove or give up a relation', { input: 'RelationInput', 'x-input-error': 'invalid_relation' }),
-  } },
   { name: 'environments', path: '/v1/environments', methods: {
     get: op('listEnvironments', 'List execution environments', many('environments', 'Environment'), { parameters: [as] }),
     post: op('createEnvironment', 'Open an execution environment', one('Environment'), { input: 'CreateEnvironment', status: 201, parameters: [as], description: 'Requires a configured runner and available compute allowance. identity is an optional principal the environment may act as; granting it requires pass permission.' }),

@@ -53,10 +53,10 @@ test('持ち主は一つの操作を関係として渡し、渡された相手�
   const connected = await f.connection();
   const disconnect = token => f.request('/v1/resources/' + connected.id, { method: 'DELETE', data: { revoke: false }, token, anonymous: true });
   assert.equal((await disconnect(key.token)).status, 403, '渡される前は解除できない');
-  const given = await f.request('/v1/relations', { method: 'POST', data: { subject: key.id, relation: 'disconnect_grant', object_type: 'resource', object_id: connected.id } });
+  const given = await f.request('/v1/principals/' + key.id + '/relations', { method: 'POST', data: { relation: 'disconnect_grant', object_type: 'resource', object_id: connected.id } });
   assert.equal(given.status, 201, given.text);
-  const listed = await f.request('/v1/relations', { token: key.token, anonymous: true });
-  assert.ok(listed.json.relations.some(row => row.relation === 'disconnect_grant' && row.object_id === connected.id), '役割と同じ一覧に載る');
+  const listed = await f.request('/v1/principals/me/relations', { token: key.token, anonymous: true, as: key.id });
+  assert.ok(listed.json.relations.some(row => row.relation === 'disconnect_grant' && row.resource?.id === connected.id), '役割と同じ一覧に載る');
   const done = await disconnect(key.token);
   assert.equal(done.status, 200, done.text);
   assert.equal((await f.request('/v1/resources?kind=connection')).json.resources.some(item => item.id === connected.id), false);
@@ -65,18 +65,18 @@ test('持ち主は一つの操作を関係として渡し、渡された相手�
 test('一つの操作は、その物にだけ渡せる。持ち主そのものには引けない', async t => {
   const f = await fixture(t), key = await f.issueKey();
   const first = await f.connection('personal');
-  const onto = { subject: key.id, relation: 'disconnect_grant', object_type: 'principal', object_id: USER_A };
-  assert.equal((await f.request('/v1/relations', { method: 'POST', data: onto })).status, 400, '持ち主には、その操作の関係がない');
+  const onto = { relation: 'disconnect_grant', object_type: 'principal', object_id: USER_A };
+  assert.equal((await f.request('/v1/principals/' + key.id + '/relations', { method: 'POST', data: onto })).status, 400, '持ち主には、その操作の関係がない');
   assert.equal((await f.request('/v1/resources/' + first.id, { method: 'DELETE', data: { revoke: false }, token: key.token, anonymous: true })).status, 403);
 });
 
 test('自分がその場所でできないことを含む関係は引けず、所有は引けない', async t => {
   const f = await fixture(t), key = await f.issueKey(), other = await f.issueKey('other');
   const connected = (await f.keep('secret', 'private value', 'value')).json.resource;
-  const draw = (token, data) => f.request('/v1/relations', { method: 'POST', data, token, anonymous: true });
+  const draw = (token, { subject, ...data }) => f.request('/v1/principals/' + subject + '/relations', { method: 'POST', data, token, anonymous: true });
   assert.equal((await draw(key.token, { subject: other.id, relation: 'agent', object_type: 'principal', object_id: USER_A })).status, 403, '代わりに動く者は持ち主に線を引けない');
   assert.equal((await draw(key.token, { subject: other.id, relation: 'viewer', object_type: 'resource', object_id: connected.id })).status, 403, '共有できない物にも引けない');
-  const owner = (data) => f.request('/v1/relations', { method: 'POST', data });
+  const owner = ({ subject, ...data }) => f.request('/v1/principals/' + subject + '/relations', { method: 'POST', data });
   assert.equal((await owner({ subject: key.id, relation: 'nothing_grant', object_type: 'resource', object_id: connected.id })).status, 400, 'ない操作');
   assert.equal((await owner({ subject: key.id, relation: 'link_grant', object_type: 'resource', object_id: connected.id })).status, 400, '種類の違う物の操作');
   assert.equal((await owner({ subject: key.id, relation: 'owner', object_type: 'principal', object_id: other.id })).status, 400, '所有は作るか承認するときだけ');

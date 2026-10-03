@@ -54,7 +54,7 @@ with sync_playwright() as p:
     private = x25519.X25519PrivateKey.generate()
     public = private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     assert other.put(args.base + '/v1/key', data=json.dumps({'public_key': b64url(public)}), headers={**headers, 'content-type': 'application/json'}).ok
-    assert other.post(args.base + '/v1/relations', data=json.dumps({'subject': other.get(args.base + '/v1/principals/agent', headers=headers).json()['principal']['id'], 'relation': 'agent', 'object_type': 'principal', 'object_id': made['principal']['id']}), headers={**headers, 'content-type': 'application/json'}).ok
+    assert other.post(args.base + '/v1/principals/agent/relations', data=json.dumps({'relation': 'agent', 'object_type': 'principal', 'object_id': made['principal']['id']}), headers={**headers, 'content-type': 'application/json'}).ok
 
     page.reload(wait_until='networkidle')
     # The account shows its own ID, for whoever is to give to it.
@@ -78,11 +78,11 @@ with sync_playwright() as p:
     dialog.get_by_role('button', name='引き渡す', exact=True).click()
     expect(dialog).not_to_be_visible()
     assert context.request.get(args.base + '/v1/resources?kind=secret').json()['resources'] == []
-    assert context.request.get(args.base + '/v1/principals').json()['principals'] == []
+    assert context.request.get(args.base + '/v1/principals/me/relations?relation=owner&direction=from').json()['relations'] == []
     theirs = other.get(args.base + '/v1/resources?kind=secret', headers=headers).json()['resources']
     assert [row['name'] for row in theirs] == ['handed']
     assert injected(other, args.base, 'handed', headers=headers).text() == 'hand-me'
-    assert [row['id'] for row in other.get(args.base + '/v1/principals', headers=headers).json()['principals']] == [owned['principal']['id']]
+    assert [row['principal']['id'] for row in other.get(args.base + '/v1/principals/me/relations?relation=owner&direction=from', headers=headers).json()['relations']] == [owned['principal']['id']]
     assert not errors, errors
     browser.close()
     print('引き渡す: 選んだ秘密と相手が別のアカウントのものになり、相手が Foundation を通して使えることを確認しました。')

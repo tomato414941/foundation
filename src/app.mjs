@@ -795,7 +795,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
-      if (at === 'principals' && method === 'GET') { permit('list', 'principal', undefined, subject.id); return send(200, { principals: principals.owned(subject.id) }); }
       // Making a principal. One that is to act for its maker, and to carry a key, can be asked for in the same
       // breath; that is what making oneself a key is.
       if (at === 'principals' && method === 'POST') {
@@ -825,6 +824,30 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           if (!Number.isInteger(limit) || limit < 1 || limit > 200) fail(400, 'invalid_limit', '件数は1〜200で指定してください。');
           if (after !== null && !/^\d{1,15}$/.test(after)) fail(400, 'invalid_cursor', '続きの位置を確認してください。');
           return send(200, principals.lines(id, { relation: url.searchParams.get('relation') ?? undefined, direction: url.searchParams.get('direction') ?? undefined, limit, after: after === null ? undefined : Number(after) }));
+        }
+        // A line from this principal to another, or to a thing: drawn by whoever may give it there, and removed by the
+        // principal it is from, or by whoever may share what it is onto.
+        if (part === 'principalRelations' && (method === 'POST' || method === 'DELETE')) {
+          const input = await inputBody(), subjectId = id;
+          if (typeof input.relation !== 'string' || !['principal', 'resource'].includes(input.object_type) || typeof input.object_id !== 'string') fail(400, 'invalid_relation', '関係の指定を確認してください。');
+          const object = input.object_type === 'principal' ? { id: principals.at(input.object_id).id } : resources.at(input.object_id);
+          if (!reaches(input.relation, input.object_type === 'principal' ? 'principal' : object.kind)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
+          if (method === 'POST') {
+            // Paying for another is taken on, never put on someone: the payer draws its own line.
+            if (input.relation === 'payer' && subjectId !== subject.id) fail(403, 'forbidden', '支払いを引き受けるのは、引き受ける側だけです。');
+            if (input.relation === 'payer' && !payments.payer(subjectId)) fail(402, 'payer_required', '支払いを引き受けるには、支払い方法の登録が必要です。');
+            if (!authorization.mayGive(subject.id, input.relation, input.object_type, object)) fail(403, 'forbidden', 'この操作は許可されていません。');
+            principals.relate(subjectId, input.relation, input.object_type, input.object_id);
+            auditLog.write(subject.id, 'relation.added', input.object_type, input.object_id, { subject: subjectId, relation: input.relation });
+            return send(201, { ok: true });
+          }
+          if (subjectId !== subject.id) {
+            if (input.object_type === 'principal') permit('relate', 'principal', object.id);
+            else permit('share', object.kind, object.id, object.owner_id);
+          }
+          principals.unrelate(subjectId, input.relation, input.object_type, input.object_id);
+          auditLog.write(subject.id, 'relation.removed', input.object_type, input.object_id, { subject: subjectId, relation: input.relation });
+          return send(200, { ok: true });
         }
         if (part === 'access' && method === 'DELETE') {
           permit('relate', 'principal', ownerId);
@@ -901,32 +924,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // Lines: the one record of what a principal was given. A line names a role or one action and points at a
       // principal or a resource. It is drawn by one who may give lines there and may take there all it reaches; it is
       // taken back by one who may give lines there, or given up by the one it was drawn to. Owning is never drawn.
-      if (at === 'relations') {
-        if (method === 'GET') return send(200, { relations: principals.relationsOf(subject.id) });
-        if (method !== 'POST' && method !== 'DELETE') fail(405, 'method_not_allowed', 'この操作は利用できません。');
-        const input = await inputBody();
-        const subjectId = input.subject === undefined ? subject.id : principalId(input.subject);
-        if (typeof input.relation !== 'string' || !['principal', 'resource'].includes(input.object_type) || typeof input.object_id !== 'string') fail(400, 'invalid_relation', '関係の指定を確認してください。');
-        const object = input.object_type === 'principal' ? { id: principals.at(input.object_id).id } : resources.at(input.object_id);
-        if (!reaches(input.relation, input.object_type === 'principal' ? 'principal' : object.kind)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
-        principals.at(subjectId);
-        if (method === 'POST') {
-          // Paying for another is taken on, never put on someone: the payer draws its own line.
-          if (input.relation === 'payer' && subjectId !== subject.id) fail(403, 'forbidden', '支払いを引き受けるのは、引き受ける側だけです。');
-          if (input.relation === 'payer' && !payments.payer(subjectId)) fail(402, 'payer_required', '支払いを引き受けるには、支払い方法の登録が必要です。');
-          if (!authorization.mayGive(subject.id, input.relation, input.object_type, object)) fail(403, 'forbidden', 'この操作は許可されていません。');
-          principals.relate(subjectId, input.relation, input.object_type, input.object_id);
-          auditLog.write(subject.id, 'relation.added', input.object_type, input.object_id, { subject: subjectId, relation: input.relation });
-          return send(201, { ok: true });
-        }
-        if (subjectId !== subject.id) {
-          if (input.object_type === 'principal') permit('relate', 'principal', object.id);
-          else permit('share', object.kind, object.id, object.owner_id);
-        }
-        principals.unrelate(subjectId, input.relation, input.object_type, input.object_id);
-        auditLog.write(subject.id, 'relation.removed', input.object_type, input.object_id, { subject: subjectId, relation: input.relation });
-        return send(200, { ok: true });
-      }
       // Lent machines. An environment is a resource: opened by the owner or whoever acts for them, reached by its id,
       // shared along lines, and able to reach nothing of Foundation's unless given an identity it may act as.
       const passable = identity => {

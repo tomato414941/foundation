@@ -78,8 +78,7 @@ globalThis.fetch = async (url, options = {}) => {
   } else if (url === '/v1/credentials' && (options.method ?? 'GET') === 'GET') {
     if (signedIn) data = { credentials: [{ id: 'e1', kind: 'email', name: 'owner@example.test', created_at: '2026-01-01T00:00:00.000Z', last_used_at: null }] };
     else { status = 401; data = { error: { code: 'signin_required', message: 'Sign in' } }; }
-  } else if (url === '/v1/principals') data = { principals: [] };
-  else if (url.startsWith('/v1/principals/me/relations')) data = { relations: [], next: null };
+  } else if (url.startsWith('/v1/principals/me/relations')) data = { relations: [], next: null };
   else if (url === '/v1/principals/agent') data = { principal: { id: 'agent', name: 'Foundation Agent' } };
   else if (url === '/v1/principals/me/compute') data = { compute: { month: '2026-01', used_seconds: 0, limit_seconds: 36000 } };
   else if (url === '/v1/functions') data = { functions: [] };

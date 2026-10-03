@@ -71,7 +71,7 @@ with sync_playwright() as p:
     user = call('/v1/principals', product, 'POST', {'alias': 'user-1'})['principal']
     key = call('/v1/credentials?as=' + user['id'], product, 'POST', {'kind': 'key'})['token']
     # What the user keeps is injected by Foundation's principal, which the user makes their agent.
-    call('/v1/relations', key, 'POST', {'subject': call('/v1/principals/agent', key)['principal']['id'], 'relation': 'agent', 'object_type': 'principal', 'object_id': call('/v1/principals/me', key)['principal']['id']})
+    call('/v1/principals/agent/relations', key, 'POST', {'relation': 'agent', 'object_type': 'principal', 'object_id': call('/v1/principals/me', key)['principal']['id']})
     asked = call('/v1/requests', key, 'POST', {'authorization_details': [{'type': 'secret', 'fields': {'name': 'npm-token', 'label': 'npm のアクセストークン', 'site': 'https://www.npmjs.com/'}}],
                                              'binding_message': 'パッケージの公開に使います。', 'steps': ['npmjs.com でアクセストークンを作ります。', '表示されたトークンをここに貼ります。']})['request']
     link = call('/v1/principals/' + user['id'] + '/links', product, 'POST', {'request_id': asked['id']})['url']

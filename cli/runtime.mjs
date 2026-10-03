@@ -338,7 +338,7 @@ async function main() {
   };
   if (action === 'keep') {
     const saved = await send(forHolder('/v1/resources?kind=secret&name=' + encodeURIComponent(call.name)), await sealedFor(call.body), { method: 'PUT' });
-    try { await send('/v1/relations', { relation: 'editor', object_type: 'resource', object_id: saved.resource.id }, { method: 'DELETE' }); } catch {}
+    try { await send('/v1/principals/me/relations', { relation: 'editor', object_type: 'resource', object_id: saved.resource.id }, { method: 'DELETE' }); } catch {}
     console.log(JSON.stringify(saved));
     return;
   }
@@ -436,7 +436,7 @@ async function main() {
       let saved;
       try { saved = await send(forHolder('/v1/resources?kind=secret&name=' + encodeURIComponent(output.name)), await sealedFor(bytes), { method: 'PUT' }); }
       catch { throw new Error(recovery()); }
-      try { await send('/v1/relations', { relation: 'editor', object_type: 'resource', object_id: saved.resource.id }, { method: 'DELETE' }); } catch {}
+      try { await send('/v1/principals/me/relations', { relation: 'editor', object_type: 'resource', object_id: saved.resource.id }, { method: 'DELETE' }); } catch {}
       retainOutput = false;
       console.error('Saved output as ' + JSON.stringify(output.name) + '.');
     }

@@ -95,8 +95,8 @@ test('持ち主は持っている相手を別の相手に渡し、別名は消�
   assert.equal(moved.status, 200, moved.text);
   assert.deepEqual(moved.json.principal.owners, [other.json.principal.id]);
   assert.deepEqual(moved.json.principal.acts_for, [USER_A], 'it still acts for whom it acted for');
-  assert.deepEqual((await f.request('/v1/principals')).json.principals.map(row => row.id).sort(), [other.json.principal.id, aliased.json.principal.id].sort(), 'no longer among what the giver owns');
-  assert.deepEqual((await f.request('/v1/principals', { token: other.json.token, anonymous: true })).json.principals.map(row => row.id), [machine.id]);
+  assert.deepEqual((await f.request('/v1/principals/me/relations?relation=owner&direction=from')).json.relations.map(row => row.principal.id).sort(), [other.json.principal.id, aliased.json.principal.id].sort(), 'no longer among what the giver owns');
+  assert.deepEqual((await f.request('/v1/principals/me/relations?relation=owner&direction=from', { token: other.json.token, anonymous: true })).json.relations.map(row => row.principal.id), [machine.id]);
   const withAlias = await f.request('/v1/principals/' + aliased.json.principal.id + '/transfer', { method: 'POST', data: { to: other.json.principal.id } });
   assert.equal(withAlias.status, 200, withAlias.text);
   assert.equal(f.app.principals.aliasOf(USER_A, aliased.json.principal.id), null);

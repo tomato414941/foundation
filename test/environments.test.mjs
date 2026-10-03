@@ -73,7 +73,7 @@ test('editor の線を持つ相手はコマンドを打て、viewer は見るだ
   const viewer = await f.request('/v1/principals', { method: 'POST', data: { name: 'viewer', key: true } });
   const editor = await f.request('/v1/principals', { method: 'POST', data: { name: 'editor', key: true } });
   for (const [who, relation] of [[viewer, 'viewer'], [editor, 'editor']])
-    assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: who.json.principal.id, relation, object_type: 'resource', object_id: opened.id } })).status, 201);
+    assert.equal((await f.request('/v1/principals/' + who.json.principal.id + '/relations', { method: 'POST', data: { relation, object_type: 'resource', object_id: opened.id } })).status, 201);
   const command = { command: node("console.log('shared')") };
   assert.equal((await f.request('/v1/environments/' + opened.id, { anonymous: true, token: viewer.json.token })).status, 200);
   assert.equal((await f.request('/v1/environments/' + opened.id + '/commands', { method: 'POST', anonymous: true, token: viewer.json.token, data: command })).status, 403);

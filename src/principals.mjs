@@ -114,8 +114,10 @@ export class Principals {
     const thing = other => { const row = this.db.prepare('SELECT id, kind, name FROM resources WHERE id=?').get(other); return row ? { id: row.id, kind: row.kind, name: row.name } : { id: other, kind: null, name: '' }; };
     return { relations: page.map(row => {
       const outward = row.subject_id === id;
+      // What an owner calls what it owns is the owner's word, kept beside the line of ownership.
+      const alias = outward && row.relation === 'owner' && row.object_type === 'principal' ? this.aliasOf(id, row.object_id) : null;
       return { relation: row.relation, direction: outward ? 'from' : 'to', created_at: row.created_at,
-        ...(outward && row.object_type === 'resource' ? { resource: thing(row.object_id) } : { principal: named(outward ? row.object_id : row.subject_id) }) };
+        ...(outward && row.object_type === 'resource' ? { resource: thing(row.object_id) } : { principal: named(outward ? row.object_id : row.subject_id) }), ...(alias === null ? {} : { alias }) };
     }), next: rows.length > limit ? String(page.at(-1).at) : null };
   }
   // Lines onto one resource: who may see or change it.

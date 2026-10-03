@@ -446,12 +446,12 @@ test('渡された封筒のあるシークレットは、Foundation が開けな
   assert.equal((await f.request('/v1/requests/' + asked.id + '/grant', { method: 'POST', data: { user_code: asked.user_code } })).status, 200);
   // The owner keeps a secret that only they can open: Foundation is not their agent, and holds no envelope for it.
   const kept = (await f.keep('secret', 'handed/token', 'opened-here')).json.resource;
-  assert.equal((await f.request('/v1/relations', { method: 'DELETE', data: { subject: f.app.keys.agentId, relation: 'agent', object_type: 'principal', object_id: USER_A } })).status, 200);
+  assert.equal((await f.request('/v1/principals/' + f.app.keys.agentId + '/relations', { method: 'DELETE', data: { relation: 'agent', object_type: 'principal', object_id: USER_A } })).status, 200);
   await f.request('/v1/resources/' + kept.id + '/envelopes/' + f.app.keys.agentId, { method: 'DELETE', data: {} });
   const refused = await execute(['exec', 'TOKEN=handed/token', '--', process.execPath, '-e', '0'], env);
   assert.equal(refused.code, 1, 'nobody who may hand it over can open it');
   // Handing it to the machine: a line to see it, and its key sealed for the machine's own.
-  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: machine.id, relation: 'viewer', object_type: 'resource', object_id: kept.id } })).status, 201);
+  assert.equal((await f.request('/v1/principals/' + machine.id + '/relations', { method: 'POST', data: { relation: 'viewer', object_type: 'resource', object_id: kept.id } })).status, 201);
   const mine = await f.request('/v1/resources/' + kept.id + '/content');
   const contentKey = open(Buffer.from(mine.json.envelope, 'base64url'), (await f.keyOf({})).privateKey);
   const theirs = (await f.request('/v1/principals/' + machine.id + '/public-key')).json.key.public_key;

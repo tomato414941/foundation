@@ -317,7 +317,7 @@ test('操作ごとの grant は準備済みのエンバイロメントにだけ�
   const attach = () => f.request(path, { ...asDelegate, method: 'PATCH', data: { identity: USER_A } });
   const remove = () => f.request(path, { ...asDelegate, method: 'DELETE', data: {} });
   const grant = async (relation, object_type = 'resource', object_id = row.id) => {
-    const response = await f.request('/v1/relations', { method: 'POST', data: { subject: delegate.id, relation, object_type, object_id } });
+    const response = await f.request('/v1/principals/' + delegate.id + '/relations', { method: 'POST', data: { relation, object_type, object_id } });
     assert.equal(response.status, 201, response.text);
   };
   assert.equal((await run()).status, 401, 'an unrelated key is not yet approved');

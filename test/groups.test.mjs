@@ -24,8 +24,8 @@ test('集団として作った相手には、作った者がその者として�
   const other = await f.request('/v1/principals', { method: 'POST', data: { name: 'other', key: true } });
   const theirs = { token: other.json.token, anonymous: true, as: group.id };
   assert.equal((await f.request('/v1/resources?kind=secret', theirs)).status, 403);
-  assert.equal((await f.request('/v1/relations', { method: 'POST', token: other.json.token, anonymous: true, data: { subject: other.json.principal.id, relation: 'steward', object_type: 'principal', object_id: group.id } })).status, 403, 'not by oneself');
-  const drawn = await f.request('/v1/relations', { method: 'POST', data: { subject: other.json.principal.id, relation: 'steward', object_type: 'principal', object_id: group.id } });
+  assert.equal((await f.request('/v1/principals/' + other.json.principal.id + '/relations', { method: 'POST', token: other.json.token, anonymous: true, data: { relation: 'steward', object_type: 'principal', object_id: group.id } })).status, 403, 'not by oneself');
+  const drawn = await f.request('/v1/principals/' + other.json.principal.id + '/relations', { method: 'POST', data: { relation: 'steward', object_type: 'principal', object_id: group.id } });
   assert.equal(drawn.status, 201, drawn.text);
   assert.deepEqual((await f.request('/v1/principals/' + group.id)).json.principal.stewards.sort(), [USER_A, other.json.principal.id].sort());
   const shown = await f.request('/v1/resources/' + kept.json.resource.id + '/content', theirs);
@@ -38,7 +38,7 @@ test('集団として作った相手には、作った者がその者として�
   const next = await f.keep('secret', 'forecast', 'q1', { as: group.id });
   assert.ok([USER_A, other.json.principal.id].every(id => next.json.resource.recipients.includes(id)));
   // Foundation made the group's agent by a steward: the group's secrets are injected.
-  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: f.app.keys.agentId, relation: 'agent', object_type: 'principal', object_id: group.id } })).status, 201);
+  assert.equal((await f.request('/v1/principals/' + f.app.keys.agentId + '/relations', { method: 'POST', data: { relation: 'agent', object_type: 'principal', object_id: group.id } })).status, 201);
   const third = await f.keep('secret', 'ledger', 'rows', { as: group.id });
   assert.ok(third.json.resource.recipients.includes(f.app.keys.agentId));
   assert.deepEqual((await f.request('/v1/injections', { method: 'POST', as: group.id, data: { names: [{ name: 'ledger', as: 'LEDGER' }] } })).json.injection.environment, { LEDGER: 'rows' });
@@ -65,7 +65,7 @@ test('プリンシパルの線は、本人と持ち主と執事にだけ、両�
   assert.deepEqual((await lines('me', '?relation=owner&direction=from')).json.relations.map(line => line.principal.name), ['machine']);
   // A line onto a thing names the thing.
   const kept = (await f.keep('secret', 'shown', 'value')).json.resource;
-  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: machine.id, relation: 'viewer', object_type: 'resource', object_id: kept.id } })).status, 201);
+  assert.equal((await f.request('/v1/principals/' + machine.id + '/relations', { method: 'POST', data: { relation: 'viewer', object_type: 'resource', object_id: kept.id } })).status, 201);
   const theirs = await lines(machine.id, '?relation=viewer');
   assert.deepEqual(theirs.json.relations.map(line => [line.direction, line.resource.kind, line.resource.name]), [['from', 'secret', 'shown']], 'the owner reads the lines of what it owns');
   // A page at a time.

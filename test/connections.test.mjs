@@ -42,7 +42,7 @@ test('Stored names and caller-selected environment variables are independent', a
   // What the key kept it may read back, along the line drawn for it; the owner can take that line away.
   assert.equal((await f.read('secret', 'github/gh-token', { token, anonymous: true })).status, 200);
   const keyId = (await f.request('/v1/principals/me', { token, anonymous: true })).json.principal.id;
-  assert.equal((await f.request('/v1/relations', { method: 'DELETE', data: { subject: keyId, relation: 'editor', object_type: 'resource', object_id: kept.json.resource.id } })).status, 200);
+  assert.equal((await f.request('/v1/principals/' + keyId + '/relations', { method: 'DELETE', data: { relation: 'editor', object_type: 'resource', object_id: kept.json.resource.id } })).status, 200);
   const refused = await f.read('secret', 'github/gh-token', { token, anonymous: true });
   assert.equal(refused.status, 403);
   assert.equal(refused.json.error.code, 'forbidden');
@@ -292,7 +292,7 @@ test('閲覧を許された相手は、その保有者の値だけを読み、�
   const kept = await f.request('/v1/resources?kind=secret&name=shared', { method: 'PUT', raw: 'a-value' });
   const made = await f.request('/v1/principals', { method: 'POST', data: { name: 'reader', key: true } });
   assert.equal(made.status, 201, made.text);
-  const granted = await f.request('/v1/relations', { method: 'POST', data: { subject: made.json.principal.id, relation: 'viewer', object_type: 'resource', object_id: kept.json.resource.id } });
+  const granted = await f.request('/v1/principals/' + made.json.principal.id + '/relations', { method: 'POST', data: { relation: 'viewer', object_type: 'resource', object_id: kept.json.resource.id } });
   assert.equal(granted.status, 201, granted.text);
   await f.handEnvelope(kept.json.resource.id, { token: made.json.token, anonymous: true });
   await f.signin('other@example.test');
@@ -308,7 +308,7 @@ test('編集を許された相手はその値を書き換え、値を消すと�
   const kept = await f.request('/v1/resources?kind=secret&name=doc', { method: 'PUT', raw: 'v1' });
   const made = await f.request('/v1/principals', { method: 'POST', data: { name: 'editor', key: true } });
   const token = made.json.token, id = made.json.principal.id;
-  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: id, relation: 'editor', object_type: 'resource', object_id: kept.json.resource.id } })).status, 201);
+  assert.equal((await f.request('/v1/principals/' + id + '/relations', { method: 'POST', data: { relation: 'editor', object_type: 'resource', object_id: kept.json.resource.id } })).status, 201);
   const written = await f.request('/v1/resources?kind=secret&name=doc&as=' + USER_A, { method: 'PUT', raw: 'v2', token, anonymous: true });
   assert.equal(written.status, 200, written.text);
   assert.equal((await f.read('secret', 'doc')).text, 'v2');
@@ -317,6 +317,6 @@ test('編集を許された相手はその値を書き換え、値を消すと�
   await f.drop('secret', 'moved');
   const fresh = await f.request('/v1/resources?kind=secret&name=moved', { method: 'PUT', raw: 'fresh' });
   assert.equal((await f.request('/v1/resources/' + fresh.json.resource.id + '/content', { token, anonymous: true })).status, 403, 'a new thing by the old name starts with no lines');
-  const owner = await f.request('/v1/relations', { method: 'POST', data: { subject: id, relation: 'owner', object_type: 'principal', object_id: USER_A } });
+  const owner = await f.request('/v1/principals/' + id + '/relations', { method: 'POST', data: { relation: 'owner', object_type: 'principal', object_id: USER_A } });
   assert.equal(owner.status, 400, 'ownership is not drawn by hand');
 });

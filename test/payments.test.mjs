@@ -121,14 +121,14 @@ test('持っている相手が使った分は持ち主の枠に数えられ、�
   // Another person takes the group's costs on: only they can draw that line, and from then on the group counts for them.
   // One of its own (made by nobody here), or its costs would only roll up to this owner again.
   const sponsor = await f.request('/v1/credentials', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'sponsor' } });
-  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: sponsor.json.principal.id, relation: 'payer', object_type: 'principal', object_id: group.id } })).status, 403, 'not put on someone');
+  assert.equal((await f.request('/v1/principals/' + sponsor.json.principal.id + '/relations', { method: 'POST', data: { relation: 'payer', object_type: 'principal', object_id: group.id } })).status, 403, 'not put on someone');
   // A sponsor acting as itself: it may give lines on the group only where it may relate there, so the group's steward lends it that first.
   f.app.principals.relate(sponsor.json.principal.id, 'relate_grant', 'principal', group.id);
   f.app.principals.relate(sponsor.json.principal.id, 'payment_grant', 'principal', group.id);
-  const unbound = await f.request('/v1/relations', { method: 'POST', token: sponsor.json.token, anonymous: true, data: { subject: sponsor.json.principal.id, relation: 'payer', object_type: 'principal', object_id: group.id } });
+  const unbound = await f.request('/v1/principals/' + sponsor.json.principal.id + '/relations', { method: 'POST', token: sponsor.json.token, anonymous: true, data: { relation: 'payer', object_type: 'principal', object_id: group.id } });
   assert.equal(unbound.status, 402); assert.equal(unbound.json.error.code, 'payer_required', 'one with no payment method cannot take costs on');
   f.bind(sponsor.json.principal.id);
-  const taken = await f.request('/v1/relations', { method: 'POST', token: sponsor.json.token, anonymous: true, data: { subject: sponsor.json.principal.id, relation: 'payer', object_type: 'principal', object_id: group.id } });
+  const taken = await f.request('/v1/principals/' + sponsor.json.principal.id + '/relations', { method: 'POST', token: sponsor.json.token, anonymous: true, data: { relation: 'payer', object_type: 'principal', object_id: group.id } });
   assert.equal(taken.status, 201, taken.text);
   assert.equal(f.app.payments.payerOf(group.id), sponsor.json.principal.id);
   assert.equal(f.app.environments.usage(USER_A).used_seconds, 26_000, 'the group no longer counts for the maker');

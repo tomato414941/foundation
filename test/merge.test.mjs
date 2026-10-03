@@ -42,7 +42,7 @@ test('別のアカウントをそのパスキーでまとめると、持ち物�
   assert.equal(done.status, 200, done.text);
   assert.deepEqual(done.json.moved, { secrets: 1, connections: 0, objects: 0, apps: 0, services: 0, principals: 1, webauthn_credentials: 1, emails: 1 });
   assert.equal((await f.read('secret', 'theirs')).text, 'their-value', 'opened with this principal\'s key');
-  assert.ok((await f.request('/v1/principals')).json.principals.some(row => row.id === them.owned.id), 'their principal is owned here now');
+  assert.ok((await f.request('/v1/principals/me/relations?relation=owner&direction=from')).json.relations.some(row => row.principal.id === them.owned.id), 'their principal is owned here now');
   assert.deepEqual((await f.request('/v1/credentials')).json.credentials.filter(item => item.kind === 'webauthn').map(row => row.name), ['phone']);
   assert.equal(f.app.emails.principalOf('other@example.test'), USER_A);
   assert.equal(f.app.principals.get(them.id), undefined, 'the other ended');

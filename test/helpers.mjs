@@ -203,7 +203,7 @@ export async function fixture(t, options = {}) {
   // Foundation's principal made the owner's agent: what the owner keeps is sealed for it too, and injected by it.
   async function allowFoundation(options = {}) {
     const owner = options.as ?? (options.token && actsFor.get(options.token)) ?? await subjectOf(options);
-    const drawn = await request('/v1/relations', { ...options, method: 'POST', data: { subject: app.keys.agentId, relation: 'agent', object_type: 'principal', object_id: owner } });
+    const drawn = await request('/v1/principals/' + app.keys.agentId + '/relations', { ...options, method: 'POST', data: { relation: 'agent', object_type: 'principal', object_id: owner } });
     assert.equal(drawn.status, 201, drawn.text);
   }
   // Connecting Google, asking to read Gmail unless other scopes are given.
@@ -239,7 +239,7 @@ export async function fixture(t, options = {}) {
   // All that a principal is shown of what it has, across the API: for checking that something kept in confidence
   // appears nowhere in it.
   async function visible(options = {}) {
-    const paths = ['/v1/principals/me', '/v1/credentials', '/v1/resources', '/v1/principals', '/v1/principals/me/relations', '/v1/requests?to=me', '/v1/services'];
+    const paths = ['/v1/principals/me', '/v1/credentials', '/v1/resources', '/v1/principals/me/relations', '/v1/requests?to=me', '/v1/services'];
     return JSON.stringify(await Promise.all(paths.map(async path => (await request(path, options)).json)));
   }
   async function become(name = 'laptop') {
