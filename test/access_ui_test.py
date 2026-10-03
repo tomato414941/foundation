@@ -59,7 +59,7 @@ with sync_playwright() as p:
     page.get_by_label('確認コード', exact=True).fill(asked['user_code'])
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
-    page.get_by_role('link', name='アクセス管理', exact=True).click()
+    page.get_by_role('link', name='プリンシパル', exact=True).click()
     row = page.locator('.access-row').filter(has_text='laptop の作業用AI')
     expect(row).to_be_visible()
     row.get_by_role('button', name='詳細', exact=True).click()

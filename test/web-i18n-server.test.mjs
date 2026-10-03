@@ -30,7 +30,7 @@ test('SSR resolves request locale for public, pending and authenticated shells',
   const authenticated = await f.request('/account', { headers: { cookie: f.cookie() + '; foundation_locale=en' } });
   assert.match(authenticated.text, /<title>Account · Foundation<\/title>/);
   assert.match(authenticated.text, /Sign out/);
-  assert.match(authenticated.text, /Access management/);
+  assert.match(authenticated.text, /Principals/);
   assert.match(authenticated.text, /aria-current="page">Account/);
   for (const response of [japanese, pending, confirmation, authenticated]) {
     assert.doesNotMatch(response.text, /data-action="change-language"/, 'SSR shells never show the account-only control');

@@ -73,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
         if width != 320:
             page.screenshot(path=str(shots / f'home-{width}.png'), full_page=True)
         for title, path in [('シークレット', '/secrets'), ('サービス', '/services'),
-                            ('オブジェクト', '/objects'), ('アクセス管理', '/principals'),
+                            ('オブジェクト', '/objects'), ('プリンシパル', '/principals'),
                             ('ファンクション', '/functions')]:
             page.get_by_role('main').get_by_role('link', name=re.compile('^' + title)).click()
             expect(page).to_have_url(args.base + path)

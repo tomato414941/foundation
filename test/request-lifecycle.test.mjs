@@ -145,7 +145,7 @@ test('保存と依頼完了を一緒に確定し、失敗した場合は再試�
 });
 
 test('依頼の種類に合った完了表示と移動先を返す', () => {
-  for (const [type, title, href, label] of [['connection', '接続しました', '/services', 'サービス'], ['secret', '登録しました', '/secrets', 'シークレット'], ['relation', '許可しました', '/principals', 'アクセス管理']]) {
+  for (const [type, title, href, label] of [['connection', '接続しました', '/services', 'サービス'], ['secret', '登録しました', '/secrets', 'シークレット'], ['relation', '許可しました', '/principals', 'プリンシパル']]) {
     const view = requestResultView({ authorization_details: [{ type }], status: 'granted' });
     assert.equal(view.title, title); assert.equal(view.href, href); assert.equal(view.completed, true);
     assert.equal(view.label, label);

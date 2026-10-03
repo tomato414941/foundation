@@ -81,10 +81,10 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
     page.get_by_label('確認コード', exact=True).fill(request['user_code'].lower())
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
-    expect(page.get_by_role('link', name='アクセス管理', exact=True)).to_have_attribute('href', '/principals')
-    page.get_by_role('link', name='アクセス管理', exact=True).click()
+    expect(page.get_by_role('link', name='プリンシパル', exact=True)).to_have_attribute('href', '/principals')
+    page.get_by_role('link', name='プリンシパル', exact=True).click()
     expect(page).to_have_url(args.base + '/principals')
-    expect(page.get_by_role('heading', name='アクセス管理', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='プリンシパル', exact=True)).to_be_visible()
     review(page)
     owner_id = cli('api', 'GET', '/v1/principals/me')['acts_for'][0]
     assert cli('api', 'GET', '/v1/resources?kind=secret')['resources'] == []

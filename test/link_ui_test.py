@@ -47,7 +47,7 @@ with sync_playwright() as p:
     owner.wait_for_url('**/account')
     owner.get_by_role('link', name='アプリの登録', exact=True).click()
     owner.wait_for_url('**/principals#apps')
-    expect(owner.get_by_role('heading', name='アクセス管理', exact=True)).to_be_visible()
+    expect(owner.get_by_role('heading', name='プリンシパル', exact=True)).to_be_visible()
     owner.get_by_role('button', name='アプリを登録').click()
     dialog = owner.get_by_role('dialog')
     dialog.get_by_label('名前', exact=True).fill('ai-simplicity')

@@ -96,7 +96,7 @@ with sync_playwright() as p:
     # 移動が重なったときは、最後に選んだ画面を表示する。
     pending = []
     page.route('**/v1/overview', lambda route: pending.append(route))
-    for label in ['サービス', 'アクセス管理', 'ファンクション']:
+    for label in ['サービス', 'プリンシパル', 'ファンクション']:
         go(label)
         current(label)
     for route in reversed(pending):
@@ -108,7 +108,7 @@ with sync_playwright() as p:
 
     # 戻る・進む、キーボード操作、ページ内の行き先を扱う。
     page.go_back()
-    current('アクセス管理')
+    current('プリンシパル')
     page.go_forward()
     current('ファンクション')
     page.get_by_role('link', name='アカウント', exact=True).click()
