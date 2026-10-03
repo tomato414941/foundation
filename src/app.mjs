@@ -680,7 +680,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         permit('add-webauthn-credential', 'principal', subject.id);
         const input = await inputBody(SECRET_MAX);
         const done = merge.complete(subject.id, input);
-        return send(200, { ...done, principal: principals.get(subject.id) });
+        return send(200, { ...done, principal: principals.get(done.into) });
       }
       // Paying for more than the free part: a payment method set on Stripe's page, for the principal itself.
       if (at === 'payment' && method === 'GET') {

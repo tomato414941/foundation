@@ -30,7 +30,7 @@ test('別のアカウントをそのパスキーでまとめると、持ち物�
   const f = await fixture(t), them = await other(f);
   const begun = await begin(f, them.credential);
   assert.equal(begun.status, 200, begun.text);
-  assert.equal(begun.json.from.id, them.id);
+  assert.equal(begun.json.other.id, them.id);
   assert.deepEqual(begun.json.secrets.map(one => one.name), ['theirs']);
   assert.ok(begun.json.secrets[0].envelope, 'their envelope, for their key');
   // The browser opens their envelopes with their key and seals the keys for this principal.
@@ -69,4 +69,22 @@ test('名前がぶつかれば何も動かず、券は一度きりで、封筒�
   const done = await f.request('/v1/merge/complete', { method: 'POST', data: { ticket: again.json.ticket } });
   assert.equal(done.status, 200, done.text);
   assert.equal((await f.read('secret', 'theirs')).text, 'their-value', 'without an envelope from the browser, Foundation sealed it for this principal from its own');
+});
+
+test('残すほうを相手にすれば、こちらの持ち物・パスキー・アドレスが相手のものになり、こちらは終わってセッションも切れる', async t => {
+  const f = await fixture(t), them = await other(f);
+  await f.keep('secret', 'mine', 'my-value');
+  const begun = await begin(f, them.credential);
+  assert.equal(begun.status, 200, begun.text);
+  // The browser seals this account's secrets for the other's key.
+  const mine = await f.keyOf({}), kept = await f.request('/v1/resources/' + (await f.lookup('secret', 'mine')).json.resource.id + '/content');
+  const envelopes = { [kept.json.recipients.length && (await f.lookup('secret', 'mine')).json.resource.id]: b64(seal(open(Buffer.from(kept.json.envelope, 'base64url'), mine.privateKey), Buffer.from(begun.json.key.public_key, 'base64url'))) };
+  const done = await f.request('/v1/merge/complete', { method: 'POST', data: { ticket: begun.json.ticket, into: 'other', envelopes } });
+  assert.equal(done.status, 200, done.text);
+  assert.equal(done.json.into, them.id); assert.equal(done.json.from, USER_A);
+  assert.equal(done.json.moved.secrets, 1); assert.equal(done.json.moved.emails, 1);
+  assert.equal((await f.request('/v1/principals/me')).status, 401, 'this account ended, and its session with it');
+  assert.equal(f.app.emails.principalOf('owner@example.test'), them.id);
+  assert.equal((await f.read('secret', 'mine', them.as)).text, 'my-value', 'opened with the other\'s key');
+  assert.equal((await f.read('secret', 'theirs', them.as)).text, 'their-value');
 });

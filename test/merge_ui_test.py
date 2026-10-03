@@ -61,12 +61,16 @@ with sync_playwright() as p:
     assert mine['user']['id'] != other['user']['id']
     review(page)
     page.screenshot(path=str(shots / 'account-390.png'), full_page=True)
-    page.get_by_role('region', name='別のアカウントをまとめる').get_by_role('button', name='まとめる', exact=True).click()
+    page.get_by_role('region', name='アカウントを統合する').get_by_role('button', name='統合する', exact=True).click()
     dialog = page.get_by_role('dialog')
+    expect(dialog.get_by_role('radio', name='このアカウント（' + other['principal']['name'] + ' を取り込む）')).to_be_checked()
     expect(dialog.get_by_text(other['principal']['name'] + ' の持ち物・パスキー・メールアドレスがこのアカウントのものになり、' + other['principal']['name'] + ' はなくなります。', exact=True)).to_be_visible()
+    dialog.get_by_role('radio', name=other['principal']['name'] + '（このアカウントを取り込む）').check()
+    expect(dialog.get_by_text('このアカウントの持ち物・パスキー・メールアドレスが ' + other['principal']['name'] + ' のものになり、このアカウントはなくなります。終わるとサインインの画面に戻ります。', exact=True)).to_be_visible()
+    dialog.get_by_role('radio', name='このアカウント（' + other['principal']['name'] + ' を取り込む）').check()
     review(page)
     page.screenshot(path=str(shots / 'merge-390.png'), full_page=True)
-    dialog.get_by_role('button', name='まとめる', exact=True).click()
+    dialog.get_by_role('button', name='統合する', exact=True).click()
     expect(dialog).not_to_be_visible()
     passkeys = context.request.get(base + '/v1/webauthn-credentials').json()['webauthn_credentials']
     assert len(passkeys) == 1, passkeys
@@ -87,4 +91,4 @@ with sync_playwright() as p:
     assert context.request.get(base + '/v1/overview').json()['user']['id'] == mine['user']['id']
     assert not errors, errors
     browser.close()
-    print('別のアカウントをまとめる: パスキーで始めた相手の秘密・パスキーがこちらのものになり、その鍵で開け、そのパスキーでこちらにサインインできることを確認しました。')
+    print('アカウントを統合する: パスキーで始めた相手の秘密・パスキーがこちらのものになり、その鍵で開け、そのパスキーでこちらにサインインできることを確認しました。')

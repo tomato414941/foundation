@@ -454,9 +454,13 @@ export const ja = {
   "client.handover.services": "サービス",
   "client.handover.principals": "登録した相手",
   "client.handover.itemFailure": "{{group}}：{{name}}：{{message}}",
-  "client.merge.title": "別のアカウントをまとめる",
-  "client.merge.action": "まとめる",
-  "client.merge.confirmation": "{{name}} の持ち物・パスキー・メールアドレスがこのアカウントのものになり、{{name}} はなくなります。"
+  "client.merge.title": "アカウントを統合する",
+  "client.merge.action": "統合する",
+  "client.merge.remaining": "残すアカウント",
+  "client.merge.intoThis": "このアカウント（{{other}} を取り込む）",
+  "client.merge.intoOther": "{{other}}（このアカウントを取り込む）",
+  "client.merge.confirmThis": "{{name}} の持ち物・パスキー・メールアドレスがこのアカウントのものになり、{{name}} はなくなります。",
+  "client.merge.confirmOther": "このアカウントの持ち物・パスキー・メールアドレスが {{name}} のものになり、このアカウントはなくなります。終わるとサインインの画面に戻ります。"
 };
 
 export const en = {
@@ -914,7 +918,11 @@ export const en = {
   "client.handover.services": "Services",
   "client.handover.principals": "Registered principals",
   "client.handover.itemFailure": "{{group}}: {{name}}: {{message}}",
-  "client.merge.title": "Merge another account",
+  "client.merge.title": "Merge accounts",
   "client.merge.action": "Merge",
-  "client.merge.confirmation": "Everything {{name}} owns, its passkeys and its email addresses become this account's, and {{name}} ends."
+  "client.merge.remaining": "Account to keep",
+  "client.merge.intoThis": "This account (bring in {{other}})",
+  "client.merge.intoOther": "{{other}} (bring this account into it)",
+  "client.merge.confirmThis": "Everything {{name}} owns, its passkeys and its email addresses become this account's, and {{name}} ends.",
+  "client.merge.confirmOther": "Everything this account owns, its passkeys and its email addresses become {{name}}'s, and this account ends. You will be returned to sign-in."
 };
