@@ -1250,10 +1250,11 @@ function disconnect(connection) {
     toast(result.service_revoked === false ? t('client.connection.disconnectedWithoutRevoking') : t('client.connection.disconnected'));
   });
 }
+// Adding a principal makes it and issues its key; it reaches nothing until a line is drawn to it, from its details.
 function addKey() {
-  openDialog(`<h2 id="dialog-title">${esc(t('client.access.addPrincipal'))}</h2><p>${accessSummary()}</p><form><label for="agent-name">${esc(t('client.common.name'))}</label><input id="agent-name" name="name" placeholder="${esc(t('client.access.namePlaceholder'))}" required maxlength="80" autocomplete="off"><p class="permission-note">${esc(t('client.access.durationIncludingFuture'))}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.access.addAndIssueKey'))}</button></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.access.addPrincipal'))}</h2><form><label for="agent-name">${esc(t('client.common.name'))}</label><input id="agent-name" name="name" placeholder="${esc(t('client.access.namePlaceholder'))}" required maxlength="80" autocomplete="off"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.access.addAndIssueKey'))}</button></form>`);
   bindForm(async (form) => {
-    const result = await api('/v1/principals', { method: 'POST', data: { name: form.get('name'), agent: true, key: true } });
+    const result = await api('/v1/principals', { method: 'POST', data: { name: form.get('name'), key: true } });
     await refresh(); if (!state) return;
     openDialog(`<h2 id="dialog-title">${esc(t('client.principals.accessKeyTitle', { name: result.principal.name }))}</h2><p>${esc(t('client.access.keyStorageWarning'))}</p><label for="agent-token">${esc(t('client.access.key'))}</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">${esc(t('client.access.copyKey'))}</button><label for="api-url">${esc(t('client.access.endpoint'))}</label><input id="api-url" readonly value="${esc(location.origin)}/v1"><p class="permission-note">${esc(t('client.access.keySharingWarning'))}</p><button class="button primary full" data-action="close-dialog">${esc(t('client.common.close'))}</button>`);
   });
@@ -1279,7 +1280,7 @@ async function principalDetails(id) {
   const keys = item.keys;
   openDialog(`<div class="principal-heading"><h2 id="dialog-title">${esc(item.name)}</h2>${owned ? `<button class="icon-button" data-action="rename-principal" data-id="${esc(id)}" aria-label="${esc(t('client.common.editName'))}" title="${esc(t('client.common.editName'))}">${icon('edit')}</button>` : ''}</div>
     <p>${allowed ? t('client.access.allowed') : t('client.access.noFullAccess')}</p>
-    ${allowed ? `<p>${t('client.access.grantedSummary')}</p>${accessDetails()}` : ''}
+    ${allowed ? `<p>${t('client.access.grantedSummary')}</p>${accessDetails()}` : owned ? `<p>${accessSummary()}</p><p class="permission-note">${esc(t('client.access.durationIncludingFuture'))}</p><button class="button secondary" data-action="make-agent" data-id="${esc(id)}">${esc(t('client.access.makeAgent'))}</button>` : ''}
     ${owned ? `<section class="principal-keys"><div class="section-heading"><h3>${esc(t('client.access.key'))}</h3><button class="text-button" data-action="issue-key" data-id="${esc(id)}">${esc(t('client.access.issueKey'))}</button></div>
       ${keys.length ? `<ul class="connection-list">${keys.map(key => `<li><div><code>${esc(key.id.slice(0, 8))}</code><p>${key.environment_id ? t('client.access.environmentKey') : esc(t('client.principals.keyIssuedAt', { date: formatDate(key.created_at, i18n.language) }))}</p></div><button class="text-button danger" data-action="revoke-key" data-id="${esc(id)}" data-key="${esc(key.id)}">${esc(t('client.access.revokeKey'))}</button></li>`).join('')}</ul>` : `<p class="muted">${esc(t('client.access.noKeys'))}</p>`}</section>
       <div class="principal-delete"><button class="text-button danger" data-action="remove-principal" data-id="${esc(id)}">${esc(t('client.access.deleteRegistration'))}</button></div>` : ''}`);
@@ -1757,6 +1758,7 @@ document.addEventListener('click', async (event) => {
     }
     if (action === 'edit-secret') editSecret(secrets().find(item => item.name === target.dataset.name), target);
     if (action === 'add-key') addKey();
+    if (action === 'make-agent') { target.disabled = true; await api('/v1/relations', { method: 'POST', data: { subject: id, relation: 'agent', object_type: 'principal', object_id: state.user.id } }); await refresh(); await principalDetails(id); }
     if (action === 'revoke-access') revokeAccess(principalById(id));
     if (action === 'close-environment') {
       const item = (state.environments || []).find(row => row.id === id);
