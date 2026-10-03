@@ -33,14 +33,13 @@ test('Name prefix filtering uses literal, case-sensitive text rather than wildca
   }
 });
 
-test('The function catalog is authenticated and describes explicit inputs and optional saved outputs', async t => {
+test('認証した呼び出し元に、入力と保存方法を含む関数一覧を返す', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
   assert.equal((await f.request('/v1/functions', { anonymous: true })).status, 401);
   const catalog = await f.request('/v1/functions', { token });
   assert.deepEqual(catalog.json.functions.map(fn => fn.id), ['http.request']);
   for (const fn of catalog.json.functions) {
     assert.ok(fn.input && fn.output && fn.save);
-    assert.equal(fn.endpoint, '/v1/functions/' + fn.id);
   }
 });
 

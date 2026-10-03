@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { fixture } from './helpers.mjs';
+import { uriTemplate } from '../src/uri-template.mjs';
 
 const TOKEN = 'sk-fetch-fixture-value-1234567890';
 const authorization = (name = 'api/token', prefix = '') => ({ headers: { authorization: '' },
@@ -57,6 +58,28 @@ async function setup(t) {
   const call = request => f.request('/v1/principals/me/functions/http.request', { method: 'POST', token: key.token, data: request });
   return { ...api, f, key, call };
 }
+
+test('関数一覧の実行先から、自分または委任先の値を使ってHTTPSリクエストを送信する', async t => {
+  const { f, key, received } = await setup(t);
+  const catalog = await f.request('/v1/functions', { token: key.token });
+  assert.equal(catalog.status, 200, catalog.text);
+  const operation = catalog.json.functions.find(fn => fn.id === 'http.request');
+  const endpoint = uriTemplate(operation.endpoint);
+  for (const [principalId, credentials] of [
+    [key.acts_for[0], { authorization: 'Bearer ' + key.token }],
+    ['me', { cookie: f.cookie(), origin: f.base }],
+  ]) {
+    const response = await fetch(f.base + endpoint.expand({ principalId }), {
+      method: 'POST', headers: { ...credentials, 'content-type': 'application/json' },
+      body: JSON.stringify({ url: 'https://api.example.test/echo', ...authorization() }),
+    });
+    const answer = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(answer));
+    assert.equal(answer.response.status, 200);
+    assert.equal(received.at(-1).headers.authorization, TOKEN);
+    assert.equal(JSON.parse(answer.response.body).authorization, '[redacted]');
+  }
+});
 
 test('A request goes out with what is kept in its headers and body, and comes back without it', async t => {
   const { received, call, f } = await setup(t);
