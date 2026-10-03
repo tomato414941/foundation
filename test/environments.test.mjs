@@ -23,6 +23,38 @@ test('エンバイロメントは何の ID も持たずに開き、コマンド�
   assert.deepEqual((await f.request('/v1/resources?kind=environment', { token: agent.token })).json.resources.map(row => row.id), [environment.id]);
 });
 
+test('コマンドに渡したシークレットは、変数とファイルでそのコマンドだけに届き、出力からは伏せられる', async t => {
+  const f = await lent(t), agent = await f.issueKey();
+  await f.request('/v1/resources?kind=secret&name=token', { method: 'PUT', raw: 'kept-secret-value', type: 'text/plain' });
+  await f.request('/v1/resources?kind=secret&name=config', { method: 'PUT', raw: 'line one\nline two\n', type: 'text/plain' });
+  const opened = (await f.request('/v1/environments', { method: 'POST', token: agent.token, data: {} })).json.environment;
+  const ran = await f.request('/v1/environments/' + opened.id + '/commands', { method: 'POST', token: agent.token, data: {
+    command: node("const fs = require('node:fs');", "console.log(process.env.TOKEN, process.env.TOKEN.length);", "console.log(fs.readFileSync(process.env.CONFIG, 'utf8').split('\\n').length);"),
+    inputs: [{ name: 'token', as: 'TOKEN' }, { name: 'config', as: 'CONFIG', filename: 'config.txt' }] } });
+  assert.equal(ran.status, 200, ran.text);
+  assert.equal(ran.json.command.exit_code, 0, ran.json.command.stderr);
+  assert.equal(ran.json.command.stdout, '[redacted] 17\n3\n');
+  const after = await f.request('/v1/environments/' + opened.id + '/commands', { method: 'POST', token: agent.token,
+    data: { command: node("console.log(process.env.TOKEN === undefined, require('node:fs').readdirSync('.foundation/run').length)") } });
+  assert.equal(after.json.command.stdout.trim(), 'true 0');
+  const missing = await f.request('/v1/environments/' + opened.id + '/commands', { method: 'POST', token: agent.token, data: { command: ['true'], inputs: [{ name: 'nothing', as: 'X' }] } });
+  assert.equal(missing.status, 404);
+  const run = await f.request('/v1/runs', { method: 'POST', token: agent.token, data: { command: node('console.log(process.env.TOKEN)'), inputs: [{ name: 'token', as: 'TOKEN' }] } });
+  assert.equal(run.json.command.stdout.trim(), '[redacted]');
+});
+
+test('エンバイロメントは開く者が選んだイメージから作られ、選ばなければ実行基盤の既定のイメージになる', async t => {
+  const runner = new LocalRunner();
+  runner.image = 'registry.example/general:1';
+  const f = await lent(t, { runner });
+  const chosen = await f.request('/v1/environments', { method: 'POST', data: { image: 'python:3.12-slim' } });
+  assert.equal(chosen.status, 201, chosen.text);
+  assert.equal(chosen.json.environment.image, 'python:3.12-slim');
+  assert.equal((await f.request('/v1/environments', { method: 'POST', data: {} })).json.environment.image, 'registry.example/general:1');
+  const refused = await f.request('/v1/environments', { method: 'POST', data: { image: 'not an image; rm -rf /' } });
+  assert.equal(refused.status, 400); assert.equal(refused.json.error.code, 'invalid_image');
+});
+
 test('ID を付けたエンバイロメントは、その principal として動き、渡した値は出力から伏せられ、閉じると鍵が失効する', async t => {
   const f = await lent(t), agent = await f.issueKey();
   await f.request('/v1/resources?kind=secret&name=token', { method: 'PUT', raw: 'kept-secret-value', type: 'text/plain' });

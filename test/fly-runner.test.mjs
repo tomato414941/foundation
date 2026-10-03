@@ -19,10 +19,12 @@ function fakeFly() {
     if (init.method === 'GET' && action === 'wait') return answer(200, { ok: true });
     if (init.method === 'DELETE') { machines.delete(id); return answer(200, { ok: true }); }
     const [, , , label, first, ...rest] = body.command;
-    if (label === 'put') { machine.files.set(first, Buffer.from(rest[0], 'base64').toString()); return ok(); }
+    if (label === 'put') { machine.files.set(first, (rest[2] === '0' ? '' : machine.files.get(first)) + Buffer.from(rest[0], 'base64').toString()); return ok(); }
     if (label === 'start') {
       const input = machine.files.get(first + '/stdin') ?? '';
-      machine.files.set(first + '/stdout', 'ran ' + rest.join(' ') + (input ? ' <' + input : ''));
+      const env = (machine.files.get(first + '/env') ?? '').split('\n').filter(Boolean).map(line => line.split(' '))
+        .map(([name, value]) => name + '=' + (value.startsWith('@') ? '$HOME/' + first + '/files/' + value.slice(1) : Buffer.from(value, 'base64').toString()));
+      machine.files.set(first + '/stdout', 'ran ' + rest.join(' ') + (input ? ' <' + input : '') + (env.length ? ' with ' + env.join(' ') : ''));
       machine.files.set(first + '/code', '4');
       return ok();
     }
@@ -41,6 +43,7 @@ test('Fly の実行基盤は、使い捨てのマシンを作り、中で標準�
   assert.equal(made.authorization, 'Bearer fly-token');
   assert.equal(made.body.region, 'nrt');
   assert.equal(made.body.config.image, 'registry.fly.io/runners:1');
+  assert.deepEqual(made.body.config.init, { exec: ['sleep', 'infinity'] }, 'whatever the image would run, the machine waits for commands');
   assert.equal(made.body.config.auto_destroy, true);
   assert.deepEqual(made.body.config.guest, { cpu_kind: 'shared', cpus: 2, memory_mb: 1024 });
   assert.equal(made.body.config.env.FOUNDATION_RUNTIME_KEY_FILE, '/root/.foundation/key', 'a path under home is placed under the machine\'s home');
@@ -48,6 +51,9 @@ test('Fly の実行基盤は、使い捨てのマシンを作り、中で標準�
   const ran = await runner.exec('m1', { command: ['echo', 'hi'], stdin: 'input', timeoutMs: 5000 });
   assert.equal(ran.exitCode, 4); assert.equal(ran.stdout.toString(), 'ran echo hi <input'); assert.equal(ran.timedOut, false);
   assert.ok(fly.calls.every(call => !call.body || call.body.stdin === undefined), 'standard input goes in as a file, since Fly\'s exec carries none');
+  const handed = await runner.exec('m1', { command: ['env'], env: { TOKEN: 'a b=c' }, files: [{ env: 'CONFIG', filename: 'config.json', content: Buffer.from('{}') }], timeoutMs: 5000 });
+  assert.match(handed.stdout.toString(), /^ran env with TOKEN=a b=c CONFIG=\$HOME\/\.foundation\/run\/[a-z0-9]+\/files\/config\.json$/);
+  assert.equal([...fly.machines.get('m1').files].find(([path]) => path.endsWith('/files/config.json'))[1], '{}');
   await runner.put('m1', '.foundation/key', 'fdn_secret\n');
   assert.equal(fly.machines.get('m1').files.get('.foundation/key'), 'fdn_secret\n');
   await runner.stop('m1');
@@ -70,6 +76,23 @@ function scriptedFly(steps) {
   const runner = new FlyRunner({ token: 'fly-token', app: 'runners', image: 'registry.fly.io/runners:1', fetcher });
   return { runner, calls };
 }
+
+test('Fly の実行基盤は、開く者が選んだイメージで機械を作り、組織の保管庫のイメージは貸さない', async () => {
+  const fly = fakeFly(), runner = new FlyRunner({ token: 'fly-token', app: 'runners', image: 'registry.fly.io/runners:1', fetcher: fly.fetcher });
+  await runner.start({ id: 'env-2', image: 'python:3.12-slim' });
+  assert.equal(fly.calls[0].body.config.image, 'python:3.12-slim');
+  assert.equal(runner.reserved('registry.fly.io/other-app:latest'), true);
+  assert.equal(runner.reserved('python:3.12-slim'), false);
+});
+
+test('Fly に置くファイルは、大きくても分けて送られ、元のとおりに置かれる', async () => {
+  const fly = fakeFly(), runner = new FlyRunner({ token: 'fly-token', app: 'runners', image: 'image', fetcher: fly.fetcher });
+  await runner.start({ id: 'env-3' });
+  const content = Buffer.alloc(300 * 1024, 'x');
+  await runner.put('m1', 'big.txt', content);
+  assert.equal(fly.machines.get('m1').files.get('big.txt'), content.toString());
+  assert.ok(fly.calls.filter(call => call.body?.command?.[3] === 'put').every(call => call.body.command[5].length < 131072), 'each piece fits in one argument');
+});
 
 test('Fly の削除が失敗したときは、機械が止まったとは答えない', async t => {
   for (const failure of [

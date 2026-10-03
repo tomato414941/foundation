@@ -8,6 +8,9 @@ import { resourceName } from './resources.mjs';
 // machine is given a role. Only a principal the giver may act as can be given; the machine then holds a key for it
 // that dies with the machine.
 //
+// What it is made from is the opener's to choose, as with any cloud machine: an image, or Foundation's general one,
+// which holds common tools and nothing of Foundation's. What a command needs of Foundation is handed to that command.
+//
 // The machine is lent; the computing it uses is spent. What each principal spends is counted against a monthly limit
 // its owner may set, so whoever pays for many principals can bound each of them.
 export const SIZES = { small: 1, medium: 2, large: 4 };
@@ -15,9 +18,11 @@ export const KEY_PATH = '.foundation/key';
 const COMMAND_PARTS = 200, COMMAND_LENGTH = 100_000, STDIN_MAX = 1024 * 1024, KEPT_OUTPUT = 256 * 1024, STOPPED_KEPT = 3600_000;
 // The lease outlasts a runner stop call; crashed attempts become due again without an in-memory queue.
 const STOP_LEASE = 120_000, STOP_RETRY = 5000, STOP_RETRY_MAX = 300_000;
-const COLUMNS = 'r.id,r.owner_id,r.kind,r.name,r.created_at,r.updated_at,e.size,e.lifetime,e.idle_seconds,e.max_seconds,e.identity,e.runner,e.machine,e.status,e.started_at,e.last_active_at,e.expires_at,e.stop_attempts,e.stop_retry_at,e.remove_requested';
+const COLUMNS = 'r.id,r.owner_id,r.kind,r.name,r.created_at,r.updated_at,e.image,e.size,e.lifetime,e.idle_seconds,e.max_seconds,e.identity,e.runner,e.machine,e.status,e.started_at,e.last_active_at,e.expires_at,e.stop_attempts,e.stop_retry_at,e.remove_requested';
 const FROM = 'FROM resources r JOIN environments e ON e.resource_id=r.id';
 const month = (at = Date.now()) => new Date(at).toISOString().slice(0, 7);
+// An OCI image reference: [registry/]repository[:tag][@digest], at most 255 characters.
+const IMAGE = /^(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::\d{1,5})?\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$/;
 const iso = value => value === null || value === undefined ? null : new Date(value).toISOString();
 
 export class Environments {
@@ -45,7 +50,7 @@ export class Environments {
   }
   list(ownerId) { return this.db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE r.owner_id=? ORDER BY r.created_at,r.id`).all(ownerId); }
   view(row) {
-    return { ...this.resources.view(row), size: row.size, lifetime: { end: row.lifetime, idle_seconds: row.idle_seconds, max_seconds: row.max_seconds },
+    return { ...this.resources.view(row), image: row.image, size: row.size, lifetime: { end: row.lifetime, idle_seconds: row.idle_seconds, max_seconds: row.max_seconds },
       identity: row.identity, status: row.status, started_at: iso(row.started_at), last_active_at: iso(row.last_active_at), expires_at: iso(row.expires_at) };
   }
 
@@ -94,9 +99,19 @@ export class Environments {
     if (used_seconds >= limit_seconds) fail(429, 'compute_limit', '今月の計算時間の上限に達しました。');
   }
 
+  // An image named by the opener. The runner's own registry holds what only Foundation may use, so of it only the
+  // general image may be named.
+  image(value) {
+    if (value === undefined || value === null) return this.runner.image ?? null;
+    if (typeof value !== 'string' || value.length > 255 || !IMAGE.test(value)) fail(400, 'invalid_image', 'image はイメージの参照（例: python:3.12-slim）で指定してください。');
+    if (value !== this.runner.image && this.runner.reserved?.(value)) fail(400, 'invalid_image', 'このイメージは使えません。');
+    return value;
+  }
+
   // Opening one. The identity is checked by the caller: it must be one the opener may act as.
   async open(ownerId, input = {}, origin = this.origin) {
     this.check();
+    const image = this.image(input.image);
     const size = input.size ?? 'small';
     if (!Object.hasOwn(SIZES, size)) fail(400, 'invalid_size', 'size は small / medium / large のいずれかです。');
     const lifetime = input.lifetime ?? {}, end = lifetime.end ?? 'idle';
@@ -111,12 +126,12 @@ export class Environments {
       if (this.db.prepare(`SELECT count(*) n ${FROM} WHERE r.owner_id=? AND e.status<>'stopped'`).get(ownerId).n >= this.limits.concurrent) fail(429, 'environment_limit', `同時に開けるエンバイロメントは${this.limits.concurrent}つまでです。`);
       this.within(ownerId);
       this.resources.insert(id, ownerId, 'environment', name);
-      this.db.prepare("INSERT INTO environments (resource_id,size,lifetime,idle_seconds,max_seconds,identity,runner,status,started_at,last_active_at,expires_at) VALUES (?,?,?,?,?,NULL,?,'starting',?,?,?)")
-        .run(id, size, end, idle, max, this.runner.name, now, now, now + max * 1000);
+      this.db.prepare("INSERT INTO environments (resource_id,image,size,lifetime,idle_seconds,max_seconds,identity,runner,status,started_at,last_active_at,expires_at) VALUES (?,?,?,?,?,?,NULL,?,'starting',?,?,?)")
+        .run(id, image, size, end, idle, max, this.runner.name, now, now, now + max * 1000);
     });
     this.opening.add(id);
     try {
-      const started = await this.runner.start({ id, size, env: { FOUNDATION_URL: origin, FOUNDATION_RUNTIME_KEY_FILE: '~/' + KEY_PATH },
+      const started = await this.runner.start({ id, image, size, env: { FOUNDATION_URL: origin, FOUNDATION_RUNTIME_KEY_FILE: '~/' + KEY_PATH },
         onCreated: machine => this.db.prepare('UPDATE environments SET machine=? WHERE resource_id=?').run(machine, id) });
       this.db.prepare("UPDATE environments SET machine=?,status=CASE WHEN status='starting' THEN 'ready' ELSE status END WHERE resource_id=?").run(started.machine, id);
       this.opening.delete(id);
@@ -171,8 +186,9 @@ export class Environments {
     this.revealed.set(id, kept);
   }
 
-  // Running one command. It is answered when done; the caller may stop waiting and ask again by its id.
-  run(row, byId, input = {}) {
+  // Running one command. It is answered when done; the caller may stop waiting and ask again by its id. handed is what
+  // was obtained for it (as POST /v1/injections answers): variables, and files whose paths are variables.
+  run(row, byId, input = {}, handed = null) {
     row = this.usable(row);
     const command = input.command;
     if (!Array.isArray(command) || !command.length || command.length > COMMAND_PARTS || command.some(part => typeof part !== 'string' || part.length > COMMAND_LENGTH) || !command[0])
@@ -189,7 +205,9 @@ export class Environments {
       this.db.prepare("UPDATE environments SET status='busy',last_active_at=? WHERE resource_id=?").run(now, row.id);
       this.db.prepare("INSERT INTO environment_commands (id,environment_id,by_id,command,status,started_at) VALUES (?,?,?,?,'running',?)").run(id, row.id, byId, JSON.stringify(command), now);
     });
-    const done = this.runner.exec(row.machine, { command, stdin: input.stdin ?? null, timeoutMs: timeout * 1000 })
+    const env = handed?.environment ?? {}, files = (handed?.files ?? []).map(file => ({ env: file.env, filename: file.filename, content: Buffer.from(file.content, 'base64') }));
+    this.reveal(row.id, [...Object.values(env), ...files.map(file => file.content.toString('utf8'))]);
+    const done = this.runner.exec(row.machine, { command, stdin: input.stdin ?? null, env, files, timeoutMs: timeout * 1000 })
       .then(result => this.finish(row.id, id, result), error => this.finish(row.id, id, { exitCode: null, stdout: Buffer.alloc(0), stderr: Buffer.from(String(error.message || 'failed')), failed: true }));
     this.pending.set(id, done);
     done.then(() => this.pending.delete(id), () => this.pending.delete(id));

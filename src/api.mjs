@@ -41,8 +41,9 @@ const detailOf = (type, fields, required = []) => object({ type: { const: type }
 const appValues = { ...object({ service: string, name: resourceName, client_id: string, client_secret: { ...string, writeOnly: true } }),
   description: 'Client fields are top-level keys. Additional service-specific keys (for example runame or domain) are declared by app_fields in GET /v1/services or the service resource. Client secrets are write-only.' };
 const lifetime = errorCode(nullable(object({ end: errorCode(nullable(choice(['exit', 'idle'])), 'invalid_lifetime'), idle_seconds: errorCode(nullable(integer), 'invalid_lifetime'), max_seconds: errorCode(nullable(integer), 'invalid_lifetime') })), 'invalid_lifetime');
-const command = { command: errorCode({ ...array(string), minItems: 1 }, 'invalid_command'), stdin: errorCode(nullable(string), 'invalid_stdin'), timeout_seconds: errorCode(nullable(integer), 'invalid_timeout') };
-const environment = { name: resourceName, size: errorCode(nullable(choice(['small', 'medium', 'large'])), 'invalid_size'), lifetime, identity: errorCode(nullable(principalId), 'invalid_principal') };
+const command = { command: errorCode({ ...array(string), minItems: 1 }, 'invalid_command'), stdin: errorCode(nullable(string), 'invalid_stdin'), timeout_seconds: errorCode(nullable(integer), 'invalid_timeout'),
+  inputs: { ...errorCode({ ...array(ref('InjectionInput')), minItems: 1, maxItems: 16 }, 'invalid_names'), description: 'Secrets and connections handed to this command alone, as in POST /v1/injections: a variable, or a file whose path is the variable. Taken out of what it prints.' } };
+const environment = { name: resourceName, image: { ...errorCode(nullable(string), 'invalid_image'), description: 'An OCI image reference, such as python:3.12-slim. It needs sh and the usual commands (cat, base64, mkdir). Foundation\'s general one when left out.' }, size: errorCode(nullable(choice(['small', 'medium', 'large'])), 'invalid_size'), lifetime, identity: errorCode(nullable(principalId), 'invalid_principal') };
 const oauthFields = array(object({ name: string, label: string, required: boolean, placeholder: string, note: string, pattern: string, leading: boolean }, ['name', 'label']));
 const tokenFields = array(object({ name: string, label: string, required: boolean, placeholder: string, note: string, pattern: string, secret: boolean }, ['name', 'label']));
 const resourceBase = { id: string, kind: choice(KINDS), name: string, owner_id: principalId, created_at: iso, updated_at: iso, lines: array(object({ subject_id: principalId, relation: string, created_at: iso }, ['subject_id', 'relation', 'created_at'])) };
@@ -146,7 +147,7 @@ export const schemas = {
     generation: integer, expires_at: nullable(time), can_reconnect: boolean, can_revoke: boolean, available: boolean }),
   App: resource('app', { service: ref('ServiceSummary'), foundation: boolean, client_id: string, settings: map(string), connections: integer }),
   Service: resource('service', { definition: object(), service: ref('ServiceDescription'), dependents: integer }),
-  Environment: resource('environment', { size: string, lifetime, identity: nullable(principalId), status: { ...choice(['starting', 'ready', 'busy', 'stopping', 'stopped']), description: 'stopping closes access immediately; stop confirmation and failed attempts are retried durably before stopped.' },
+  Environment: resource('environment', { image: nullable(string), size: string, lifetime, identity: nullable(principalId), status: { ...choice(['starting', 'ready', 'busy', 'stopping', 'stopped']), description: 'stopping closes access immediately; stop confirmation and failed attempts are retried durably before stopped.' },
     started_at: nullable(iso), last_active_at: nullable(iso), expires_at: nullable(iso) }),
   Resource: { oneOf: ['Secret', 'Object', 'Connection', 'App', 'Service', 'Environment'].map(ref) },
   PatchResource: { ...object({ name: resourceName, auth_schemes: object({ oauth: ref('OAuthDefinition') }), client_id: string, client_secret: string }), description: 'Apps also accept their service-specific top-level client fields, as declared by app_fields.' },

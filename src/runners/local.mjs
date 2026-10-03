@@ -1,21 +1,26 @@
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 // What a runner promises, whatever it runs on. Foundation keeps everything else - who may use a machine, how long it
 // lives, what it costs - so a runner only has to do these:
-//   start({ id, size, env, onCreated })            -> { machine, home }   make one machine; env is set for every command, and a
+//   start({ id, image, size, env, onCreated })     -> { machine, home }   make one machine from image (the runner's own
+//                                       when not given); env is set for every command, and a
 //                                       value beginning with ~/ names a path under the machine's home
 //                                       call onCreated(machine) as soon as its ID is known, before waiting for ready;
 //                                       reject with notCreated only when creation was definitively rejected
-//   exec(machine, { command, stdin, timeoutMs }) -> { exitCode, stdout, stderr, timedOut }   run one command
+//   exec(machine, { command, stdin, env, files, timeoutMs }) -> { exitCode, stdout, stderr, timedOut }   run one
+//                                       command, with env set and each of files ({ env, filename, content }) placed
+//                                       for it alone, its path in its variable
+//   reserved(image)                     (optional) whether an image may not be named by an opener
 //   put(machine, path, content, mode)   write one file (path relative to home)
 //   remove(machine, path)               remove one file
 //   stop(machine)                       resolve only once the machine is gone; already gone succeeds
 //
-// This one runs each machine as a directory on this host. It isolates nothing and is for tests and development only.
+// This one runs each machine as a directory on this host, whatever image is named. It isolates nothing and is for
+// tests and development only.
 const OUTPUT_MAX = 1024 * 1024;
 
 export class LocalRunner {
@@ -38,10 +43,12 @@ export class LocalRunner {
     if (!target.startsWith(home + '/')) throw new Error('outside the machine');
     return target;
   }
-  exec(machine, { command, stdin = null, timeoutMs }) {
+  async exec(machine, { command, stdin = null, env: handed = {}, files = [], timeoutMs }) {
     const { home, env, running } = this.at(machine);
-    return new Promise(done => {
-      const child = spawn(command[0], command.slice(1), { cwd: home, env: { PATH: process.env.PATH, HOME: home, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const run = join(home, '.foundation', 'run', randomUUID()), placed = {};
+    for (const file of files) { await this.put(machine, join('.foundation', 'run', basename(run), 'files', file.filename), file.content); placed[file.env] = join(run, 'files', file.filename); }
+    const result = await new Promise(done => {
+      const child = spawn(command[0], command.slice(1), { cwd: home, env: { PATH: process.env.PATH, HOME: home, ...env, ...handed, ...placed }, stdio: ['pipe', 'pipe', 'pipe'] });
       running.add(child);
       const out = [], err = [];
       let outLength = 0, errLength = 0, timedOut = false;
@@ -53,6 +60,8 @@ export class LocalRunner {
       child.on('close', code => finish(code ?? 137));
       child.stdin.end(stdin ?? undefined);
     });
+    await rm(run, { recursive: true, force: true });
+    return result;
   }
   async put(machine, path, content, mode = 0o600) {
     const { home } = this.at(machine), target = this.within(home, path);

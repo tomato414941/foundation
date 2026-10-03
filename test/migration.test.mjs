@@ -440,7 +440,7 @@ test('40版のエンバイロメントは ID・コマンド・鍵・使用量を
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   for (const table of tables) assert.deepEqual(next.db.prepare('SELECT * FROM ' + table).all(), before[table], table);
   assert.deepEqual(next.db.prepare('SELECT * FROM environments ORDER BY resource_id').all().map(row => ({ ...row })),
-    rows.map(row => ({ ...row, stop_attempts: 0, stop_retry_at: null, remove_requested: 0 })));
+    rows.map(row => ({ ...row, stop_attempts: 0, stop_retry_at: null, remove_requested: 0, image: null })));
   next.db.prepare("UPDATE environments SET status='stopping',stop_attempts=1,stop_retry_at=?,remove_requested=1 WHERE resource_id='busy'").run(expires);
   assert.equal(next.db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
   assert.deepEqual(next.db.prepare('PRAGMA foreign_key_check').all(), []);
@@ -545,7 +545,7 @@ test('43版のシークレットはそれぞれの鍵で封じ直され、開い
     resources.insert(id, holder, 'secret', id);
     store.db.prepare('INSERT INTO secrets (resource_id,size,content) VALUES (?,?,?)').run(id, value.length, vault.sealBytes(Buffer.from(value), `secret:${holder}:${id}`));
   }
-  store.db.exec("ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE connection_references; DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation Agent'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP INDEX emails_id; ALTER TABLE emails DROP COLUMN id; ALTER TABLE emails DROP COLUMN created_at; PRAGMA user_version=43");
+  store.db.exec("ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE connection_references; DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation Agent'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP INDEX emails_id; ALTER TABLE emails DROP COLUMN id; ALTER TABLE emails DROP COLUMN created_at; ALTER TABLE environments DROP COLUMN image; PRAGMA user_version=43");
   store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
@@ -570,7 +570,7 @@ test('44版の持ち物の列は owner_id になり、持ち物も線も封筒�
   resources.insert('o1', USER_B, 'object', 'theirs');
   principals.relate(USER_B, 'viewer', 'resource', kept.id);
   const before = store.db.prepare('SELECT id, owner_id, kind, name FROM resources ORDER BY id').all().map(row => ({ ...row }));
-  store.db.exec("DROP TABLE connection_references; ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP INDEX emails_id; ALTER TABLE emails DROP COLUMN id; ALTER TABLE emails DROP COLUMN created_at; PRAGMA user_version=44"); store.close();
+  store.db.exec("DROP TABLE connection_references; ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP INDEX emails_id; ALTER TABLE emails DROP COLUMN id; ALTER TABLE emails DROP COLUMN created_at; ALTER TABLE environments DROP COLUMN image; PRAGMA user_version=44"); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   assert.deepEqual(next.db.prepare('SELECT id, owner_id, kind, name FROM resources ORDER BY id').all().map(row => ({ ...row })), before);
@@ -589,7 +589,7 @@ test('45版の確認値の表は、まとめる手続きの券も入る形にな
   store.db.prepare('INSERT INTO challenges VALUES (?,?,?,?,?,?,?)').run('c1', 'email', 'owner@example.test', null, '{}', 1, 9999999999999);
   modules(store).principals.ensure(USER_A);
   store.db.prepare('INSERT INTO webauthn_credentials (id,principal_id,public_key,sign_count,name,created_at) VALUES (?,?,?,?,?,?)').run('credential-0000000046', USER_A, Buffer.alloc(8), 0, 'phone', 1);
-  store.db.exec('DROP INDEX emails_id; ALTER TABLE emails DROP COLUMN id; ALTER TABLE emails DROP COLUMN created_at; PRAGMA user_version=45'); store.close();
+  store.db.exec('DROP INDEX emails_id; ALTER TABLE emails DROP COLUMN id; ALTER TABLE emails DROP COLUMN created_at; ALTER TABLE environments DROP COLUMN image; PRAGMA user_version=45'); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   assert.deepEqual({ ...next.db.prepare('SELECT id, purpose, subject FROM challenges').get() }, { id: 'c1', purpose: 'email', subject: 'owner@example.test' });
@@ -606,7 +606,7 @@ test('46版の接続の状態は、接続ごとの鍵で封じ直され、Founda
   resources.insert('c1', USER_A, 'connection', 'GitHub');
   const state = { private_state: { fields: { token: 'ghp_x' } }, facts: {}, expires_at: null };
   store.db.prepare("INSERT INTO connections (resource_id,service,auth_scheme,subject,status,generation,state) VALUES ('c1','github','token',NULL,'usable',3,?)").run(vault.seal(state, `connection:${USER_A}:c1`));
-  store.db.exec("DROP TABLE connection_references; DELETE FROM envelopes; DROP INDEX emails_id; ALTER TABLE emails DROP COLUMN id; ALTER TABLE emails DROP COLUMN created_at; PRAGMA user_version=46"); store.close();
+  store.db.exec("DROP TABLE connection_references; DELETE FROM envelopes; DROP INDEX emails_id; ALTER TABLE emails DROP COLUMN id; ALTER TABLE emails DROP COLUMN created_at; ALTER TABLE environments DROP COLUMN image; PRAGMA user_version=46"); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   const m = modules(next);
@@ -619,7 +619,7 @@ test('46版の接続の状態は、接続ごとの鍵で封じ直され、Founda
 test('47版に、接続が参照するシークレットの記録の表が加わる', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-48-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
-  store.db.exec('DROP TABLE connection_references; DROP INDEX emails_id; ALTER TABLE emails DROP COLUMN id; ALTER TABLE emails DROP COLUMN created_at; PRAGMA user_version=47'); store.close();
+  store.db.exec('DROP TABLE connection_references; DROP INDEX emails_id; ALTER TABLE emails DROP COLUMN id; ALTER TABLE emails DROP COLUMN created_at; ALTER TABLE environments DROP COLUMN image; PRAGMA user_version=47'); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   assert.ok(next.db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='connection_references'").get());

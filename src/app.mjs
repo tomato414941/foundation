@@ -939,6 +939,16 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         permit('pass', 'principal', id);
         return id;
       };
+      // What a command is handed: obtained as POST /v1/injections obtains it, in the caller's name, for that command alone.
+      const handedTo = async input => {
+        if (input.inputs === undefined || input.inputs === null) return null;
+        permit('inject', 'principal', ownerId);
+        limit('issue', 30);
+        return (await inputs.inject(ownerId, input.inputs)).injection;
+      };
+      const recordHanded = (input, environmentId) => {
+        if (Array.isArray(input.inputs)) auditLog.write(subject.id, 'injection', 'resource', environmentId, { inputs: input.inputs.map(({ as, filename, ...reference }) => reference) });
+      };
       if (at === 'environments' && method === 'GET') { permit('list', 'environment'); return send(200, { environments: environments.list(ownerId).map(row => environments.view(row)) }); }
       if ((at === 'environments' || at === 'runs') && method === 'POST') {
         permit('open', 'environment');
@@ -946,11 +956,12 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         limit('environments', 20);
         const input = await inputBody(1024 * 1024 + 20_000);
         const identity = passable(input.identity);
-        const run = at === 'runs';
+        const run = at === 'runs', handed = run ? await handedTo(input) : null;
         const opened = await environments.open(ownerId, { ...input, identity, ...(run ? { lifetime: { ...(input.lifetime ?? {}), end: 'exit' } } : {}) }, origin);
-        auditLog.write(subject.id, 'environment.opened', 'resource', opened.id, { identity, size: opened.size, lifetime: opened.lifetime });
+        auditLog.write(subject.id, 'environment.opened', 'resource', opened.id, { identity, image: opened.image, size: opened.size, lifetime: opened.lifetime });
         if (!run) return send(201, { environment: environments.view(opened) });
-        const started = environments.run(opened, subject.id, input);
+        const started = environments.run(opened, subject.id, input, handed);
+        recordHanded(input, opened.id);
         auditLog.write(subject.id, 'environment.command', 'resource', opened.id, { command: String(input.command?.[0] ?? '').slice(0, 100) });
         const answered = await environments.answer(opened.id, started.id, 20_000);
         return send(answered.status === 'running' ? 202 : 200, { environment: environments.view(environments.get(opened.id)), command: answered });
@@ -979,7 +990,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         if (at === 'commands' && method === 'POST') {
           permit('exec', 'environment', held.id, held.owner_id);
           const input = await inputBody(1024 * 1024 + 20_000);
-          const started = environments.run(held, subject.id, input);
+          const started = environments.run(held, subject.id, input, await handedTo(input));
+          recordHanded(input, held.id);
           auditLog.write(subject.id, 'environment.command', 'resource', held.id, { command: String(input.command?.[0] ?? '').slice(0, 100) });
           const answered = await environments.answer(held.id, started.id, 20_000);
           return send(answered.status === 'running' ? 202 : 200, { command: answered });

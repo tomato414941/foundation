@@ -3,7 +3,7 @@ import { checkDefinition } from './service-definition.mjs';
 import { ensureAgent } from './keys.mjs';
 import { newContentKey, sealContent, seal } from '../cli/envelope.mjs';
 
-export const SCHEMA_VERSION = 49;
+export const SCHEMA_VERSION = 50;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -26,6 +26,7 @@ export const STEPS = {
   47: sealedConnections,
   48: connectionReferences,
   49: emailEntries,
+  50: environmentImages,
 };
 
 // A stop is kept until the runner confirms it. Rebuilding widens the status check without changing resource IDs.
@@ -455,6 +456,8 @@ function emailEntries({ db }) {
   for (const row of db.prepare('SELECT address FROM emails').all()) db.prepare('UPDATE emails SET id=?, created_at=? WHERE address=?').run(randomUUID(), now, row.address);
   db.exec('CREATE UNIQUE INDEX emails_id ON emails(id)');
 }
+// What a machine was made from is chosen by whoever opens it, and kept with it.
+function environmentImages({ db }) { db.exec('ALTER TABLE environments ADD COLUMN image TEXT'); }
 const REFERENCES = `
   CREATE TABLE connection_references (
     connection_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE, secret_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
@@ -579,10 +582,10 @@ export const SCHEMA = `
   );
   -- A service a owner described, for one Foundation's catalog does not know.
   CREATE TABLE services (resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE, definition TEXT NOT NULL);
-  -- A machine lent to a owner: what it is, how long it lives, who it acts as inside (if anyone), and where it runs.
+  -- A machine lent to a owner: what it is made from, how long it lives, who it acts as inside (if anyone), and where it runs.
   CREATE TABLE environments (
     resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
-    size TEXT NOT NULL, lifetime TEXT NOT NULL CHECK(lifetime IN ('exit','idle')), idle_seconds INTEGER NOT NULL, max_seconds INTEGER NOT NULL,
+    image TEXT, size TEXT NOT NULL, lifetime TEXT NOT NULL CHECK(lifetime IN ('exit','idle')), idle_seconds INTEGER NOT NULL, max_seconds INTEGER NOT NULL,
     identity TEXT, runner TEXT NOT NULL, machine TEXT,
     status TEXT NOT NULL CHECK(status IN ('starting','ready','busy','stopping','stopped')),
     started_at INTEGER NOT NULL, last_active_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
