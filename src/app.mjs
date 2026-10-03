@@ -162,7 +162,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   const challenges = new Challenges(store, challengeSecret ? { secret: challengeSecret } : {}), webauthn = new WebauthnCredentials(store, challenges);
   const authorization = new Authorization(principals, resources);
   const services = new Services(store, resources, catalog, { authorization, ...(serviceFetcher ? { fetcher: serviceFetcher } : {}) });
-  const apps = new Apps(store, resources, services), connections = new Connections(store, resources, services, apps);
+  const apps = new Apps(store, resources, services), connections = new Connections(store, resources, services, apps, authorization);
   const keys = new Keys(store), secrets = new Secrets(store, resources, keys);
   // Opening a secret to use it in Foundation's name: only for a owner that made Foundation's principal its agent.
   const agentFor = ownerId => { if (!authorization.can(keys.agentId, 'inject', 'principal', { id: ownerId })) fail(403, 'foundation_not_agent', 'Foundation はこの持ち主の代わりに動く許可がありません。'); };

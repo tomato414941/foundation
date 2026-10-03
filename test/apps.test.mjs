@@ -112,6 +112,17 @@ test('線を引かれた人は、そのアプリで自分のアカウントを�
   assert.equal((await f.request('/v1/resources/' + app.id + '/content')).status, 405);
   assert.equal((await f.request('/v1/resources/' + app.id, { method: 'PATCH', data: { client_id: 'x', client_secret: 'y' } })).status, 403);
   assert.equal((await f.request('/v1/resources/' + app.id, { method: 'DELETE', data: { confirm: true } })).status, 403);
+  // The app is the owner's to let be used, every time: the line taken back stops the connection through it.
+  assert.equal((await f.inject(connection)).status, 200);
+  await f.signin();
+  assert.equal((await f.request('/v1/relations', { method: 'DELETE', data: { subject: member, relation: 'viewer', object_type: 'resource', object_id: app.id } })).status, 200);
+  await f.signin('member@example.test');
+  const stopped = await f.inject(connection);
+  assert.equal(stopped.status, 403, stopped.text); assert.equal(stopped.json.error.code, 'app_not_usable');
+  await f.signin();
+  assert.equal((await f.request('/v1/relations', { method: 'POST', data: { subject: member, relation: 'viewer', object_type: 'resource', object_id: app.id } })).status, 201);
+  await f.signin('member@example.test');
+  assert.equal((await f.inject(connection)).status, 200, 'drawn again, it goes on');
   await f.signin();
   const owner = await f.request('/v1/resources/' + app.id, { method: 'DELETE', data: {} });
   assert.equal(owner.json.error.connections, 1, "the member's connection counts");

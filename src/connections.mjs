@@ -12,9 +12,17 @@ const FROM = 'FROM resources r JOIN connections c ON c.resource_id=r.id';
 const invalidResult = () => fail(502, 'service_response', '接続先からの応答を確認できませんでした。');
 
 export class Connections {
-  // services: where a connection works (services.mjs); apps: the OAuth apps connections are made through (apps.mjs).
-  constructor(store, resources, services, apps) {
-    Object.assign(this, { store, db: store.db, vault: store.vault, resources, services, apps, pending: new Map() });
+  // services: where a connection works (services.mjs); apps: the OAuth apps connections are made through (apps.mjs);
+  // authorization: whether what a connection relies on is still the owner's to use, asked each time it is used.
+  constructor(store, resources, services, apps, authorization) {
+    Object.assign(this, { store, db: store.db, vault: store.vault, resources, services, apps, authorization, pending: new Map() });
+  }
+  // A connection through someone's app is theirs to let be used: the line is looked at every time, not only when the
+  // connection was made, so that taking it back takes effect.
+  usable(row) {
+    if (row.auth_scheme !== 'oauth' || !row.app_id || row.app_id === FOUNDATION_APP) return;
+    const app = this.apps.get(row.app_id);
+    if (!app || !this.authorization.can(row.owner_id, 'use', 'app', { id: app.id, owner: app.owner_id })) fail(403, 'app_not_usable', 'この接続が通るアプリを使う許可がありません。');
   }
   // The scheme as it speaks for this connection: through the app it was made with, for OAuth.
   schemeFor(row) { return row.auth_scheme === 'oauth' ? this.apps.scheme(row.service, row.app_id) : this.services.scheme(row.service, row.auth_scheme); }
@@ -164,6 +172,7 @@ export class Connections {
   // What this managed authorization yields right now.
   // Values are a Map of variable name to {content, filename?}.
   async derive(row) {
+    this.usable(row);
     const result = await this.obtain(row);
     return { values: result.values, expires_at: result.state.expires_at, facts: { ...result.state.facts, ...scopeFacts(result.state) } };
   }
