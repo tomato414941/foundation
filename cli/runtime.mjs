@@ -15,7 +15,7 @@ import { newContentKey, sealContent, seal, open as openEnvelope, openContent, ge
 //
 // Everything Foundation offers is plain HTTP, and an agent with the key can call it directly; a command
 // wrapper around those calls would only narrow what the agent is allowed to think of. Two things are left:
-//   start    say which server, and make this machine's WebAuthn credential: the machine becomes a principal there, of
+//   init     say which server, and make this machine's WebAuthn credential: the machine becomes a principal there, of
 //            nobody's. Its private key has to exist as a private file before anything can be asked, and nothing prints it.
 //   join     ask a person to make this machine their agent, so that it may act for them.
 //   token    prove this machine with its credential and print a bearer token that lasts an hour, for calling the API.
@@ -26,8 +26,9 @@ import { newContentKey, sealContent, seal, open as openEnvelope, openContent, ge
 // a verb for every endpoint, and without deciding for an agent how it ought to use any of them.
 // The key file: this machine's WebAuthn credential - its id, whose it is, and its private key - kept private, and
 // the machine's own key for what is sealed for it (envelope.mjs). Both private halves are made here and never leave;
-// Foundation keeps only the public halves. An older file holds the access key Foundation issued instead, and is
-// replaced with a credential the first time it is used.
+// Foundation keeps only the public halves. A file may instead hold an access key Foundation issued - as handed out on the
+// web for a machine, or given to a lent machine - and, unless it is a lent machine's, it is replaced with a credential the
+// first time it is used.
 async function readKey(path, { missingOk = false } = {}) {
   let handle;
   try {
@@ -42,7 +43,7 @@ async function readKey(path, { missingOk = false } = {}) {
     if (own !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(own?.private_key ?? '')) throw new Error('Invalid runtime key file.');
     return { credential, own };
   } catch (error) {
-    if (error.code === 'ENOENT') { if (missingOk) return null; throw new Error('No key yet. Run: foundation start'); }
+    if (error.code === 'ENOENT') { if (missingOk) return null; throw new Error('No key yet. Run: foundation init'); }
     if (error.code === 'ELOOP') throw new Error('Runtime key file must not be a symbolic link.');
     throw error;
   } finally { await handle?.close(); }
@@ -58,7 +59,7 @@ async function writeKey(path, content, privateDirectory) {
 }
 
 const VERSION = createRequire(import.meta.url)('./package.json').version;
-// Which server this machine talks to is a setting, not part of the program: `start <url>` writes it here,
+// Which server this machine talks to is a setting, not part of the program: `init <url>` writes it here,
 // and FOUNDATION_URL, when set, wins for that one run.
 const configPath = () => join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'foundation', 'config.json');
 async function savedUrl() {
@@ -73,7 +74,7 @@ async function saveUrl(origin) {
 }
 function serverUrl(value) {
   let url;
-  try { url = new URL(value); } catch { throw new Error('No Foundation server yet. Run: foundation start <url>'); }
+  try { url = new URL(value); } catch { throw new Error('No Foundation server yet. Run: foundation init <url>'); }
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('The Foundation URL must be an HTTPS origin (HTTP is allowed only on localhost).');
   return url;
 }
@@ -109,7 +110,7 @@ async function outputBytes(path) {
 const HELP = `Usage: foundation <command> [options]
 
 Commands:
-  start [<url>] [--name <name>]        Make this machine's credential: it becomes a principal of its own.
+  init [<url>] [--name <name>]         Make this machine's credential: it becomes a principal of its own.
                                        With <url>, remember that Foundation server for later commands.
   join                                 Ask a person to make this machine their agent.
   token                                Print a bearer token for the API, valid for an hour.
@@ -127,7 +128,7 @@ API specification:
   foundation api GET /openapi.json      Read the server's OpenAPI specification; no key required.
 
 Environment:
-  FOUNDATION_URL               The server for this run (otherwise the one saved by start).
+  FOUNDATION_URL               The server for this run (otherwise the one saved by init).
   FOUNDATION_AGENT             Your name, such as claude or codex; gives each agent its own key file.
   FOUNDATION_RUNTIME_KEY_FILE  Where the key file (this machine's credential) is.
 `;
@@ -172,9 +173,9 @@ async function main() {
     }
   }
   let call, serverGiven, name;
-  if (action === 'start') {
+  if (action === 'init') {
     const parsed = parseArgs({ args, options: { name: { type: 'string' } }, strict: true, allowPositionals: true });
-    if (parsed.positionals.length > 1) throw new Error('Usage: start [<url>] [--name <name>]');
+    if (parsed.positionals.length > 1) throw new Error('Usage: init [<url>] [--name <name>]');
     serverGiven = parsed.positionals[0];
     name = parsed.values.name;
   } else if (action === 'join') {
@@ -202,12 +203,12 @@ async function main() {
   } else if (action === 'token') {
     if (args.length) throw new Error('Usage: token');
   } else if (!(action === 'exec' && (names.length || output) && command.length)) {
-    throw new Error('Usage: start [<url>] [--name <name>] | join | token | exec [<ENV>=<name> ... | --inputs <json>] [--output <json>] -- <command> [args...] | keep <name> --from <file> | read <name> | api <method> </path> [--json <body>] [--from <file>]');
+    throw new Error('Usage: init [<url>] [--name <name>] | join | token | exec [<ENV>=<name> ... | --inputs <json>] [--output <json>] -- <command> [args...] | keep <name> --from <file> | read <name> | api <method> </path> [--json <body>] [--from <file>]');
   }
   const url = serverUrl(serverGiven ?? configured);
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
   const publicSpec = action === 'api' && call.method === 'GET' && call.target === '/openapi.json';
-  let key = publicSpec ? null : await readKey(keyPath, { missingOk: action === 'start' }), token = key?.token ?? null;
+  let key = publicSpec ? null : await readKey(keyPath, { missingOk: action === 'init' }), token = key?.token ?? null;
   // The credential proves this machine for an hour at a time: the challenge is answered for the server actually reached.
   async function prove() {
     const begin = await fetch(url.origin + '/v1/signin/webauthn/options', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', redirect: 'error', signal: AbortSignal.timeout(30_000) });
@@ -225,7 +226,7 @@ async function main() {
     if (!response.ok && !accept?.(data)) throw new Error('Foundation request failed (' + response.status + ', ' + (data.error?.code || 'unknown') + '). ' + (data.error?.message || 'Check the connection and runtime permission.'));
     return data;
   }
-  // An older key file: register a WebAuthn credential with the access key it holds, and keep the credential instead.
+  // A key file holding an issued access key: register a WebAuthn credential with it, and keep the credential instead.
   // A lent machine's key stays as it is; it ends with the machine.
   async function upgrade(label) {
     const me = await send('/v1/principals/me', undefined, { method: 'GET' });
@@ -246,11 +247,11 @@ async function main() {
     key.own = { private_key: made.privateKey.toString('base64url') };
     await writeKey(keyPath, JSON.stringify({ webauthn_credential: key.credential, key: key.own }), !process.env.FOUNDATION_RUNTIME_KEY_FILE);
   }
-  if (key?.token && action !== 'start') { await upgrade(hostname() + ' の ' + (agentName || 'AI')); }
-  // A credential this server no longer knows leaves starting over; anything else needs it.
+  if (key?.token && action !== 'init') { await upgrade(hostname() + ' の ' + (agentName || 'AI')); }
+  // A credential this server no longer knows leaves initialising again; anything else needs it.
   if (key?.credential) {
     try { token = await prove(); await publishKey(); }
-    catch (error) { if (action !== 'start') throw error; key = null; token = null; }
+    catch (error) { if (action !== 'init') throw error; key = null; token = null; }
   }
   if (action === 'token') { console.log(token); return; }
   // One request, as this machine, and the answer printed as it came. Nothing here knows the endpoints.
@@ -267,9 +268,9 @@ async function main() {
     if (!response.ok) process.exitCode = 1;
     return;
   }
-  // Becoming a principal here: a key this server knows has nothing to make; starting again only changes which server
-  // is remembered. The key itself is never printed: it stays in the file.
-  if (action === 'start') {
+  // Becoming a principal here: a key this server knows has nothing to make; initialising again only changes which
+  // server is remembered. The key itself is never printed: it stays in the file.
+  if (action === 'init') {
     const wanted = name ?? hostname() + ' の ' + (agentName || 'AI');
     let me = null;
     if (token) me = await send('/v1/principals/me', undefined, { method: 'GET', accept: data => data.error?.code === 'not_approved' });

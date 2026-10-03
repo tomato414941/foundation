@@ -471,7 +471,7 @@ async function refresh({ background = false } = {}) {
     try { back = back || (await api('/v1/requests/' + requestId + '/return')).back; } catch {}
     try { accessRequest = (await api(requestApi)).request; requestError = ''; }
     catch (error) { accessRequest = null; requestError = error.status === 401 ? t('client.request.linkExpired') : error.message; }
-    state = { user: { email: '' }, secrets: [], connections: [], actors: [], principals: [], catalog: [], services: [], apps: [], space: null };
+    state = { user: { email: '' }, secrets: [], connections: [], agents: [], principals: [], catalog: [], services: [], apps: [], space: null };
     render();
     return;
   }
@@ -698,7 +698,7 @@ function render() {
   }
   if (page === 'home') {
     // A look over everything, and the way to each page. Nothing is managed here.
-    const space = state.space, kept = secrets(), connections = connected(), keys = state.actors || [];
+    const space = state.space, kept = secrets(), connections = connected(), keys = state.agents || [];
     const card = (href, title, line) => `<a class="home-card" href="${href}"><h2>${title}</h2><p>${esc(line)}</p></a>`;
     const lastUsed = keys.flatMap(key => key.keys.map(item => item.last_used_at)).filter(Boolean).sort().at(-1);
     shell(`<header class="page-heading"><h1>Foundation</h1></header>
@@ -712,12 +712,12 @@ function render() {
     return;
   }
   if (page === 'principals') {
-    const actors = state.actors || [], others = (state.principals || []).filter(item => !actors.some(actor => actor.id === item.id));
+    const agents = state.agents || [], others = (state.principals || []).filter(item => !agents.some(agent => agent.id === item.id));
     const used = item => { const at = item.keys.map(c => c.last_used_at).filter(Boolean).sort().at(-1); return at ? esc(t('client.principals.lastUsed', { date: formatDate(at, i18n.language) })) : t('client.access.neverUsed'); };
     const row = (item, allowed) => `<article class="agent-row access-row"><div class="agent-name"><h3>${esc(item.name)}</h3><p>${used(item)}</p></div><div class="agent-permissions"><span class="muted">${allowed ? esc(t('client.principals.approvedAt', { date: formatDate(item.approved_at, i18n.language, { year: 'numeric', month: 'numeric', day: 'numeric' }) })) : t('client.access.noFullAccess')}</span></div><div class="agent-actions"><button class="text-button" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.details'))}</button>${allowed ? `<button class="text-button danger" data-action="revoke-access" data-id="${esc(item.id)}">${esc(t('client.access.revoke'))}</button>` : ''}</div></article>`;
     shell(`<header class="page-heading"><h1>${esc(t('client.access.title'))}</h1></header>
       <section class="resource-section" aria-labelledby="access-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('device')}</span><h2 id="access-title">${esc(t('client.access.registeredPrincipals'))}</h2></div><button class="button secondary" data-action="add-key">${icon('plus')} ${esc(t('client.common.add'))}</button></div>
-      ${actors.length || others.length ? `<div class="agent-list">${actors.map(item => row(item, true)).join('')}${others.map(item => row(item, false)).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.access.empty'))}</p></div>`}</section>
+      ${agents.length || others.length ? `<div class="agent-list">${agents.map(item => row(item, true)).join('')}${others.map(item => row(item, false)).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.access.empty'))}</p></div>`}</section>
       ${environmentsSection()}
       <div class="integration-entry" id="apps"><button class="text-button" data-action="add-integration">${esc(t('client.integration.register'))}</button></div>`);
     return;
@@ -740,7 +740,7 @@ function render() {
   if (page === 'secrets') {
     const focused = document.activeElement, focusedRow = focused.closest('.secret-row')?.getAttribute('aria-label');
     const focusedAction = focused.getAttribute('aria-label') || focused.dataset.action;
-    const kept = secrets(), handed = (state.actors || []).some(item => item.id === state.foundation?.principal_id);
+    const kept = secrets(), handed = (state.agents || []).some(item => item.id === state.foundation?.principal_id);
     // What the page can do here: nothing with a value until the owner's key is open.
     const keyLine = own ? '' : !(state.webauthn_credentials || []).length
       ? `<div class="access-empty key-state"><p>${esc(t('client.secret.passkeyRequired'))}</p>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} ${esc(t('client.passkey.add'))}</button>` : ''}</div>`

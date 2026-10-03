@@ -51,7 +51,7 @@ with sync_playwright() as p:
     expect(row.get_by_text('全体へのアクセス許可なし', exact=True)).to_be_visible()
     # Made, it reaches nothing of the owner's.
     me = context.request.get(args.base + '/v1/overview').json()
-    assert me['actors'] == [] or all(item['name'] != 'laptop' for item in me['actors'])
+    assert me['agents'] == [] or all(item['name'] != 'laptop' for item in me['agents'])
     whoami = p.request.new_context().get(args.base + '/v1/principals/me', headers={'authorization': 'Bearer ' + key}).json()
     assert whoami['acts_for'] == []
 

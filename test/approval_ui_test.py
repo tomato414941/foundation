@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-approval-cli-') as key_dir, 
         return json.loads(result.stdout.split('\n\nKey file')[0]) if success else None
 
     # 1. A new key asks only to be approved. The owner types the code; nothing is registered here.
-    cli('start', '--name', 'laptop のAI'); request = cli('join')['request']
+    cli('init', '--name', 'laptop のAI'); request = cli('join')['request']
     assert '/requests/' in request['verification_uri'] and request['user_code']
     browser = p.chromium.launch(headless=True)
     context = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 1050})

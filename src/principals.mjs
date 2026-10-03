@@ -125,7 +125,7 @@ export class Principals {
   aliasOf(ownerId, principalId) { return this.db.prepare('SELECT alias FROM aliases WHERE owner_id=? AND principal_id=?').get(ownerId, principalId)?.alias ?? null; }
   // Whom this principal acts for, and who acts for it.
   actsFor(id) { return this.db.prepare("SELECT object_id AS id FROM relations WHERE subject_id=? AND relation='agent' AND object_type='principal'").all(id).map(row => row.id); }
-  actorsOf(id) {
+  agentsOf(id) {
     return this.db.prepare(`SELECT p.id, p.name, p.created_at, r.created_at AS approved_at FROM relations r JOIN principals p ON p.id=r.subject_id
       WHERE r.relation='agent' AND r.object_type='principal' AND r.object_id=? ORDER BY r.created_at`).all(id).map(row => ({ ...row, keys: this.keys(row.id) }));
   }

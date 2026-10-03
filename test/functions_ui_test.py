@@ -34,7 +34,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-functions-ui-') as key_dir, 
             assert result.returncode == 0, result.stderr
         return result.stdout
 
-    cli('start', '--name', 'laptop のAI'); approval = json.loads(cli('join'))['request']
+    cli('init', '--name', 'laptop のAI'); approval = json.loads(cli('join'))['request']
     browser = p.chromium.launch(headless=True)
     page = browser.new_context(locale='ja-JP', viewport={'width': 1280, 'height': 1000}).new_page()
     errors = []

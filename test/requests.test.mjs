@@ -55,7 +55,7 @@ test('A new key asks only to be approved: no access before approval, the same pr
   assert.equal(delivered.json.injection.environment.GOOGLE_OAUTH_ACCESS_TOKEN, 'google-access-personal');
 
   assert.equal((await approve(f, row)).status, 409);
-  assert.equal(f.app.principals.actorsOf(USER_A).length, 2);
+  assert.equal(f.app.principals.agentsOf(USER_A).length, 2);
   assert.ok(!JSON.stringify(f.app.store.db.prepare('SELECT * FROM requests').all()).includes(token));
 });
 
@@ -134,8 +134,8 @@ test('A registration request stays with its owner, completes by registering, and
   assert.equal((await f.request('/v1/requests/' + next.row.id, { headers: { cookie: ownerCookie } })).json.request.status, 'cancelled');
   const blocked = await f.request('/v1/connections', { method: 'POST', headers: { cookie: ownerCookie }, data: { service: 'google', request_id: next.row.id } });
   assert.equal(blocked.status, 409);
-  assert.equal(f.app.principals.actorsOf(USER_A).length, 1, 'Foundation alone acts for the owner');
-  assert.equal(f.app.principals.actorsOf(USER_B).length, 1);
+  assert.equal(f.app.principals.agentsOf(USER_A).length, 1, 'Foundation alone acts for the owner');
+  assert.equal(f.app.principals.agentsOf(USER_B).length, 1);
   assert.equal(f.app.connections.list(USER_A).length, 2);
 });
 
@@ -191,7 +191,7 @@ test('What a key sees reflects a connection needing attention, one removed, and 
   assert.equal((await usable(f, token)).json.resources[0].status, 'reconnect_required');
   f.app.connections.disconnect(USER_A, saved.id);
   assert.deepEqual((await usable(f, token)).json.resources, []);
-  f.app.requestActions.removePrincipal(USER_A, f.app.principals.actorsOf(USER_A).find(item => item.name !== 'Foundation').id);
+  f.app.requestActions.removePrincipal(USER_A, f.app.principals.agentsOf(USER_A).find(item => item.name !== 'Foundation').id);
   assert.equal((await usable(f, token)).status, 401);
 });
 
@@ -252,7 +252,7 @@ test('The approval page never receives the confirmation code; entry is normalize
   assert.equal(locked.status, 400); assert.equal(locked.json.error.code, 'confirmation_locked');
   assert.equal(rowStatus(f, second.row.id), 'denied');
   assert.equal((await approve(f, second.row)).status, 409);
-  assert.equal(f.app.principals.actorsOf(USER_A).length, 2);
+  assert.equal(f.app.principals.agentsOf(USER_A).length, 2);
 });
 
 test('An access key introduces itself: whoami, the owner can rename it, it can rename itself, and it can leave', async t => {
@@ -273,16 +273,16 @@ test('An access key introduces itself: whoami, the owner can rename it, it can r
   const agentId = me.json.principal.id;
   assert.equal((await f.request('/v1/principals/' + agentId, { method: 'PATCH', data: { name: '' } })).status, 400);
   assert.equal((await f.request('/v1/principals/' + agentId, { method: 'PATCH', data: { name: '作業用' } })).status, 200);
-  assert.equal(f.app.principals.actorsOf(USER_A).find(item => item.id === agentId).name, '作業用');
+  assert.equal(f.app.principals.agentsOf(USER_A).find(item => item.id === agentId).name, '作業用');
   assert.equal((await f.request('/v1/principals/' + agentId, { method: 'PATCH', headers: { origin: 'https://evil.test' }, data: { name: 'x' } })).status, 403);
   const renamed = await f.request('/v1/principals/me', { method: 'PATCH', token, anonymous: true, data: { name: '作業用 Claude' } });
   assert.equal(renamed.status, 200, renamed.text); assert.equal(renamed.json.principal.name, '作業用 Claude');
   assert.equal((await f.request('/v1/principals/me', { method: 'PATCH', token, anonymous: true, data: { name: '' } })).status, 400);
-  assert.equal(f.app.principals.actorsOf(USER_A).find(item => item.id === agentId).name, '作業用 Claude');
+  assert.equal(f.app.principals.agentsOf(USER_A).find(item => item.id === agentId).name, '作業用 Claude');
   // Leaving revokes the key but keeps the connections.
   assert.equal((await f.request('/v1/principals/me', { method: 'DELETE', token, anonymous: true, data: {} })).status, 200);
   assert.equal((await f.request('/v1/resources?kind=connection', { token, anonymous: true })).status, 401);
-  assert.equal(f.app.principals.actorsOf(USER_A).length, 1, 'Foundation stays');
+  assert.equal(f.app.principals.agentsOf(USER_A).length, 1, 'Foundation stays');
   assert.equal(f.app.connections.list(USER_A).length, 1);
 });
 

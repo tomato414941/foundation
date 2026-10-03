@@ -1202,7 +1202,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         return send(200, { user: { id: subject.id, email: emails.of(subject.id)[0] ?? null }, principal: self, payment: payments.view(ownerId), webauthn_credentials: webauthn.list(ownerId).map(row => webauthn.view(row)), secrets: secrets.list(ownerId).map(row => secrets.view(row)), connections: connections.list(ownerId).map(row => connections.view(row, { owner: true })),
           apps: [...apps.list(ownerId).map(row => apps.view(row, { owner: true })), ...apps.lent(ownerId).map(row => apps.view(row)), ...apps.offeredAll()],
           services: [...services.list(ownerId).map(row => services.view(row, { owner: true })), ...services.lent(ownerId).map(row => services.view(row))],
-          catalog: services.catalogView(), principals: principals.owned(ownerId), actors: principals.actorsOf(ownerId),
+          catalog: services.catalogView(), principals: principals.owned(ownerId), agents: principals.agentsOf(ownerId),
           requests: requests.listTo(ownerId, 'pending').map(row => viewRequest(row, origin)), functions: FUNCTIONS, settings: settings.get(ownerId) ?? null,
           // Machines lent to the owner and still running, and the computing they spend.
           environments: environments.list(ownerId).filter(row => row.status !== 'stopped').map(row => environments.view(row)), compute: environments.usage(ownerId), foundation: { principal_id: keys.agentId } });

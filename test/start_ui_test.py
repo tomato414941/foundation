@@ -111,8 +111,8 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
     assert response.json()['servers'] == [{'url': args.base}]
     public.dispose()
 
-    # A new CLI starts, asks to join, and the owner approves through the existing UI.
-    started = cli('start', args.base, '--name', '初めて使うAI')
+    # A new CLI initialises, asks to join, and the owner approves through the existing UI.
+    started = cli('init', args.base, '--name', '初めて使うAI')
     assert started.returncode == 0, started.stderr
     connected = cli('join')
     assert connected.returncode == 0, connected.stderr

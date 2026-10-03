@@ -43,7 +43,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
         assert SECRET not in result.stdout + result.stderr
         return json.loads(result.stdout.split('\n\nKey file')[0])
 
-    # Everything but start, join and exec is plain HTTP, which is how an agent uses it.
+    # Everything but init, join and exec is plain HTTP, which is how an agent uses it.
     def api(method, path, body=None, headers=None):
         if 'as=' not in path: path += ('&' if '?' in path else '?') + 'as=' + owner[0]
         # A secret placed by the key is handed to Foundation to seal, as the key cannot.
@@ -55,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
 
     # Whose the key acts for, known once the owner has signed in and allowed it.
     owner = []
-    cli('start', '--name', 'laptop のAI'); approval = cli('join')['request']
+    cli('init', '--name', 'laptop のAI'); approval = cli('join')['request']
     # What the agent sends as a bearer: an hour's token its WebAuthn credential proves, not anything in the key file.
     key = subprocess.run(['node', 'cli/runtime.mjs', 'token'], env=env, capture_output=True, text=True, timeout=15).stdout.strip()
     # The owner's name for a thing finds its id; the id reaches the thing.

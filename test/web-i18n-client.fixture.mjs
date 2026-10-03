@@ -48,7 +48,7 @@ function change(locale) {
 }
 const heading = () => document.querySelector('main h1')?.textContent;
 const overview = { user: { id: 'owner', email: 'owner@example.test' }, principal: { id: 'owner', name: 'Keeper Sirius' },
-  secrets: [], connections: [], services: [], catalog: [], apps: [], actors: [], principals: [], webauthn_credentials: [], functions: [], environments: [] };
+  secrets: [], connections: [], services: [], catalog: [], apps: [], agents: [], principals: [], webauthn_credentials: [], functions: [], environments: [] };
 const request = { id, to: 'owner', requester_name: 'Test', authorization_details: [{ type: 'relation', relation: 'agent' }], status: 'pending', expires_at: Date.now() + 60_000 };
 if (mode === 'transfer') {
   request.authorization_details[0].relation = 'transfer_grant';

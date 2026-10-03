@@ -47,7 +47,7 @@ test('OpenRouter exchanges only PKCE code, preserves real expiry and zero budget
   assert.deepEqual(Object.keys(body).sort(), ['code', 'code_challenge_method', 'code_verifier']);
   assert.equal(createHash('sha256').update(body.code_verifier).digest('base64url'), url.searchParams.get('code_challenge'));
   assert.equal(f.openrouter.calls[1].url, OPENROUTER_API + '/key');
-  assert.deepEqual(f.app.principals.actorsOf(USER_A).map(item => item.name), ['Foundation'], 'connecting alone grants no runtime');
+  assert.deepEqual(f.app.principals.agentsOf(USER_A).map(item => item.name), ['Foundation'], 'connecting alone grants no runtime');
 });
 
 test('OpenRouter callback cannot use another session, forged state, or a denied authorization', async t => {
@@ -82,7 +82,7 @@ test('承認したキーに認証情報と提供元の有効期限を渡し、�
   assert.deepEqual(issued.json.injection.environment, { OPENROUTER_API_KEY: f.openrouter.key() });
   assert.equal(issued.json.expires_at, null);
   assert.equal(issued.json.expires_in, null);
-  const machine = f.app.principals.actorsOf(USER_A).find(item => item.keys.length);
+  const machine = f.app.principals.agentsOf(USER_A).find(item => item.keys.length);
   assert.ok(machine.keys[0].last_used_at);
   await f.request('/v1/principals/' + machine.id, { method: 'DELETE', data: {} });
   assert.equal((await connection(f, account, token)).status, 401);
@@ -192,7 +192,7 @@ test('CLI asks for approval, then injects the OpenRouter key only into the child
   const f = await openrouterFixture(t), account = await f.openrouterAccount();
   const dir = await mkdtemp(join(tmpdir(), 'foundation-openrouter-cli-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: join(dir, 'runtime-key') };
-  const started = await execute(['start', '--name', 'laptop'], env);
+  const started = await execute(['init', '--name', 'laptop'], env);
   assert.equal(started.code, 0, started.err);
   const start = await execute(['join'], env);
   assert.equal(start.code, 0, start.err);
