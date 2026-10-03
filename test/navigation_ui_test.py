@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright, expect
-from ui_flows import allow_foundation, plain
+from ui_flows import allow_foundation, plain, open_menu
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--base', required=True)
@@ -36,12 +36,13 @@ with sync_playwright() as p:
     assert created.ok, created.status
 
     def go(label):
+        open_menu(page)
         page.get_by_role('navigation').get_by_role('link', name=label, exact=True).click()
         expect(page.get_by_role('heading', name=label, exact=True)).to_be_visible()
 
     def current(label):
         expect(page.get_by_role('heading', name=label, exact=True)).to_be_visible()
-        expect(page.get_by_role('navigation').get_by_role('link', name=label, exact=True)).to_have_attribute('aria-current', 'page')
+        expect(page.locator('.page-nav a[aria-current="page"]')).to_have_text(label)
         expect(page).to_have_title(label + ' · Foundation')
 
     # 通信の完了を待っている間も、移動先とメニューを表示して操作を受け付ける。
@@ -49,13 +50,14 @@ with sync_playwright() as p:
         page.set_viewport_size({'width': width, 'height': 900})
         go('シークレット')
         page.wait_for_load_state('networkidle')
-        before = page.get_by_role('navigation').bounding_box()
+        # Beside the page on a wide screen, behind its button on a narrow one: either way the bar it sits in stays put.
+        before = page.locator('.topbar').bounding_box()
         pending = []
         page.route('**/v1/overview', lambda route: pending.append(route))
         go('サービス')
         current('サービス')
         expect(page.get_by_role('main')).to_be_focused()
-        assert page.get_by_role('navigation').bounding_box() == before, 'メニューの位置と大きさを保って切り替える'
+        assert page.locator('.topbar').bounding_box() == before, 'メニューの位置と大きさを保って切り替える'
         page.get_by_role('button', name='サービスを追加', exact=True).click()
         field = page.get_by_label('サービスを探す', exact=True)
         field.fill('Slack')

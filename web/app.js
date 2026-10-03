@@ -352,6 +352,15 @@ async function needRawKey() {
   if (own && !sealing.isHeld(own.privateKey)) return;
   if (passkeys().length) await unlockKey();
 }
+// The menu behind its button, on a narrow screen: opened by it, closed by it, by choosing a page, or by Escape.
+const closeMenu = () => { const bar = app.querySelector('.topbar'); bar?.classList.remove('menu-open'); bar?.querySelector('.menu-toggle')?.setAttribute('aria-expanded', 'false'); };
+document.addEventListener('click', event => {
+  const toggle = event.target.closest?.('[data-action="toggle-menu"]');
+  if (!toggle) return;
+  const open = toggle.closest('.topbar').classList.toggle('menu-open');
+  toggle.setAttribute('aria-expanded', String(open));
+});
+document.addEventListener('keydown', event => { if (event.key === 'Escape' && app.querySelector('.topbar.menu-open')) closeMenu(); });
 // A field that grows with its content, where the browser does not do so by itself (field-sizing).
 const grow = field => { if (typeof CSS === 'undefined' || !CSS.supports?.('field-sizing', 'content')) { field.style.height = 'auto'; field.style.height = field.scrollHeight + 2 + 'px'; } };
 document.addEventListener('input', event => { if (event.target.matches?.('textarea[data-grow]')) grow(event.target); });
@@ -704,6 +713,7 @@ function render() {
       if (link.getAttribute('href') === pagePath) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     });
+    closeMenu();
     document.title = pageTitle(pagePath, t);
     app.querySelector('[data-action="signout"]').disabled = false;
     app.querySelector('main').removeAttribute('aria-busy');

@@ -22,6 +22,13 @@ import types
 from playwright.sync_api import expect
 
 
+def open_menu(page):
+    """On a narrow screen the menu is behind its button; on a wide one it is beside the page and there is no button."""
+    button = page.get_by_role('button', name='メニュー', exact=True)
+    if button.is_visible():
+        button.click()
+
+
 def b64url(data):
     return base64.urlsafe_b64encode(data).rstrip(b'=').decode()
 

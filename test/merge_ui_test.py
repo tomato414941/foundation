@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright, expect
-from ui_flows import virtual_authenticator, unlock, hand_to_foundation, plain, injected
+from ui_flows import virtual_authenticator, unlock, hand_to_foundation, plain, injected, open_menu
 
 # An account begun with a passkey, then made one with the email account from the account page: its secret, its
 # passkey and its key come over, opened here with that passkey.
@@ -49,7 +49,7 @@ with sync_playwright() as p:
     expect(page.get_by_role('article', name='their secret', exact=True)).to_be_visible()
 
     # This account: signed in by email, in the same browser.
-    page.get_by_role('link', name='アカウント', exact=True).click()
+    open_menu(page)
     page.get_by_role('button', name='サインアウト', exact=True).click()
     page.get_by_role('textbox', name='メールアドレス', exact=True).fill(email)
     page.get_by_role('button', name='サインインメールを送信', exact=True).click()
@@ -89,10 +89,10 @@ with sync_playwright() as p:
     expect(row.get_by_role('button', name='値を表示', exact=True)).to_be_enabled()
     row.get_by_role('button', name='値を表示', exact=True).click()
     expect(row.locator('.kept-document')).to_have_text('their-value')
-    page.get_by_role('link', name='アカウント', exact=True).click()
+    open_menu(page)
     page.get_by_role('button', name='サインアウト', exact=True).click()
     page.get_by_role('button', name='パスキーでサインイン', exact=True).click()
-    expect(page.get_by_role('heading', name='アカウント', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='シークレット', exact=True)).to_be_visible()
     assert context.request.get(base + '/v1/overview').json()['user']['id'] == mine['user']['id']
     assert not errors, errors
     browser.close()

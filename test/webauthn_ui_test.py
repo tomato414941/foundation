@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 from playwright.sync_api import sync_playwright, expect
+from ui_flows import open_menu
 
 # Passkeys in the browser, with Chromium's virtual authenticator standing in for the device: added from the account
 # page, used to sign in, and removed - which ends the session it proved. WebAuthn needs a hostname, so the fixture
@@ -59,6 +60,7 @@ with sync_playwright() as p:
     review(page)
 
     # Signing out and back in with the passkey alone, back to the page left.
+    open_menu(page)
     page.get_by_role('button', name='サインアウト', exact=True).click()
     page.get_by_role('button', name='パスキーでサインイン', exact=True).click()
     expect(page.get_by_role('heading', name='アカウント', exact=True)).to_be_visible()

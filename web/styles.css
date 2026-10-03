@@ -273,8 +273,6 @@ textarea[data-grow] { field-sizing: content; max-height: 45vh; overflow-y: auto;
 #notice { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); max-width: min(640px, calc(100% - 32px)); width: max-content; padding: 14px 20px; background: var(--accent); color: var(--on-accent); border-radius: 9px; box-shadow: 0 8px 35px #0008; z-index: 20; font-size: 14px; overflow-wrap: anywhere; }
 @media (max-width: 800px) {
   .workspace { padding: 0 24px 48px; }
-  .topbar { flex-wrap: wrap; row-gap: 0; padding-bottom: 8px; }
-  .page-nav { order: 3; flex-basis: 100%; margin-left: -12px; flex-wrap: wrap; gap: 0; }
   .user-menu { margin-left: auto; }
   .section-heading { padding: 12px 18px; gap: 10px; flex-wrap: wrap; }
   .credential-workspace { grid-template-columns: 220px minmax(0, 1fr); }
@@ -287,9 +285,7 @@ textarea[data-grow] { field-sizing: content; max-height: 45vh; overflow-y: auto;
   .topbar { min-height: 76px; gap: 10px; align-items: center; flex-wrap: wrap; padding: 16px 0; }
   .brand { font-size: 19px; gap: 8px; }
   .brand-mark { width: 28px; height: 28px; border-radius: 6px; }
-  .page-nav { margin-left: -10px; }
-  .page-nav a { padding: 0 10px; }
-  .user-menu { width: 100%; justify-content: flex-end; gap: 16px; }
+  :not(.with-menu) > .topbar .user-menu { width: 100%; justify-content: flex-end; gap: 16px; }
   .page-heading { padding: 18px 0 12px; }
   h1 { font-size: 27px; }
   .section-heading { padding: 12px 16px; }
@@ -336,10 +332,32 @@ textarea[data-grow] { field-sizing: content; max-height: 45vh; overflow-y: auto;
 .page-nav { display: flex; gap: 4px; margin-left: 12px; }
 .page-nav a { min-height: 44px; display: inline-flex; align-items: center; white-space: nowrap; padding: 0 12px; border-radius: 8px; font-size: 15px; font-weight: 500; color: var(--muted, #62716a); text-decoration: none; }
 .page-nav a[aria-current="page"] { background: var(--selected); color: inherit; }
-@media (min-width: 801px) and (max-width: 1100px) {
-  .topbar { flex-wrap: wrap; row-gap: 0; padding-bottom: 8px; }
-  .page-nav { order: 3; flex-basis: 100%; margin-left: -12px; flex-wrap: wrap; }
-  .user-menu { margin-left: auto; }
+/* The menu: beside the page where there is room for it, behind a button where there is not. */
+.nav-group { display: flex; flex-direction: column; gap: 2px; }
+.menu-toggle { display: none; color: inherit; }
+.menu-toggle svg { width: 24px; height: 24px; }
+.site-menu { display: contents; }
+@media (min-width: 901px) {
+  .workspace.with-menu { display: grid; grid-template-columns: 208px minmax(0, 1fr); column-gap: 40px; max-width: 1336px; align-items: start; }
+  .with-menu > .topbar { position: sticky; top: 0; height: 100vh; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 28px; padding: 28px 20px 28px 0; border-bottom: 0; border-right: 1px solid var(--line); }
+  .with-menu .site-menu { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; margin-left: -12px; }
+  .with-menu .page-nav { flex-direction: column; margin-left: 0; gap: 18px; }
+  .with-menu .user-menu { margin-top: auto; padding: 20px 0 0 12px; flex-direction: column; align-items: flex-start; gap: 12px; }
+  .with-menu .user-menu .text-button { padding-left: 0; }
+  .with-menu > main { padding-top: 12px; }
+}
+@media (max-width: 900px) {
+  .with-menu > .topbar { position: relative; flex-wrap: nowrap; padding-bottom: 0; }
+  .menu-toggle { display: inline-flex; margin-left: auto; width: 44px; height: 44px; }
+  .with-menu .site-menu { display: none; }
+  .with-menu .topbar.menu-open .site-menu { display: flex; flex-direction: column; gap: 28px; position: absolute; z-index: 20; top: 100%; left: 0; right: 0; min-height: calc(100dvh - 100%); padding: 20px 0 40px; background: var(--canvas); box-shadow: 0 0 0 100vmax var(--canvas); clip-path: inset(0 -100vmax); }
+  .with-menu .page-nav { flex-direction: column; margin: 0 -12px; gap: 20px; }
+  .with-menu .page-nav a { min-height: 48px; font-size: 17px; }
+  .with-menu .user-menu { width: auto; margin: 0; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 16px; font-size: 16px; }
+  .with-menu .user-menu .text-button { padding-left: 0; }
+}
+@media (min-width: 801px) and (max-width: 900px) {
+  .with-menu > .topbar { min-height: 76px; }
 }
 .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin: 0 0 8px; font-size: 15px; }
 .crumbs span { color: var(--muted, #62716a); }
