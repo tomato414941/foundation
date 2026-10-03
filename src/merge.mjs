@@ -11,10 +11,19 @@ const TICKET_TTL = 5 * 60_000;
 
 export class Merge {
   constructor(parts) { Object.assign(this, parts); }
-  async begin(principalId, response, { origin }) {
+  // The other account's passkeys are the ones that may answer; the one that does must be that account's.
+  options(principalId, otherId, { origin }) {
+    const other = this.principals.at(otherId).id;
+    if (other === principalId) fail(400, 'invalid_merge', 'このアカウント自身とは統合できません。');
+    const credentials = this.webauthn.list(other).map(row => row.id);
+    if (!credentials.length) fail(409, 'no_passkey', '相手のアカウントにパスキーがありません。');
+    return this.webauthn.authentication({ origin, purpose: 'merge', allowCredentials: credentials });
+  }
+  async begin(principalId, response, { origin, expected }) {
     const proven = await this.webauthn.authenticate(response, { origin, purpose: 'merge' });
     const other = proven.principalId;
     if (other === principalId) fail(400, 'invalid_merge', 'このパスキーはこのアカウントのものです。');
+    if (expected !== undefined && other !== expected) fail(400, 'invalid_merge', 'このパスキーは指定したアカウントのものではありません。');
     if (this.environments.list(other).some(row => row.status !== 'stopped')) fail(409, 'environments_open', '相手のアカウントに開いている環境があります。先に閉じてください。');
     const ticket = this.challenges.issue('merge', principalId + ':' + other, { data: { credential: proven.credentialId }, ttl: TICKET_TTL });
     const secrets = this.secrets.list(other).map(row => ({ id: row.id, name: row.name, envelope: this.keys.envelopeOf(row.id, other)?.toString('base64url') ?? null }));

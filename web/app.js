@@ -1320,53 +1320,58 @@ async function handOver() {
     closeDialog(); await refresh();
   });
 }
-// Two accounts made one: the other's passkey answers for it, here, and the person chooses which remains. The one
-// that ends has its secrets sealed anew for the remaining one's key in this page - the other's key is what the
-// passkey yields, this one's is open here or published - and ends with its lines and sessions.
-async function mergeAccount(button) {
-  button.disabled = true;
-  try {
-    const { options } = await api('/v1/merge/options', { method: 'POST', data: {} });
-    const given = await navigator.credentials.get({ publicKey: { ...options, challenge: bytes(options.challenge), allowCredentials: described(options.allowCredentials), extensions: { prf: { eval: { first: PRF_INPUT } } } } });
-    const yielded = yieldedBy(given);
-    const credential = { id: given.id, rawId: text64(given.rawId), type: given.type, clientExtensionResults: {},
-      response: { clientDataJSON: text64(given.response.clientDataJSON), authenticatorData: text64(given.response.authenticatorData), signature: text64(given.response.signature), ...(given.response.userHandle ? { userHandle: text64(given.response.userHandle) } : {}) } };
-    const begun = await api('/v1/merge', { method: 'POST', data: { credential } });
-    const other = begun.other.name || begun.other.id;
-    openDialog(`<h2 id="dialog-title">${esc(t('client.merge.title'))}</h2><form><fieldset class="handover-group"><legend>${esc(t('client.merge.remaining'))}</legend>
-      <label class="handover-item"><input type="radio" name="into" value="this" checked> ${esc(t('client.merge.intoThis', { other }))}</label>
-      <label class="handover-item"><input type="radio" name="into" value="other"> ${esc(t('client.merge.intoOther', { other }))}</label></fieldset>
-      <p id="merge-consequence">${esc(t('client.merge.confirmThis', { name: other }))}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.merge.action'))}</button></form>`);
-    const consequence = dialog.querySelector('#merge-consequence');
-    dialog.querySelector('form').addEventListener('change', () => { consequence.textContent = new FormData(dialog.querySelector('form')).get('into') === 'other' ? t('client.merge.confirmOther', { name: other }) : t('client.merge.confirmThis', { name: other }); });
+// Two accounts made one. First which way: the other into this, or this into the other. Then the other, by its id, and
+// its passkey, which proves it and yields its key. The one that ends has its secrets sealed anew for the remaining
+// one's key in this page, and ends with its lines and sessions.
+function mergeAccount() {
+  openDialog(`<h2 id="dialog-title">${esc(t('client.merge.title'))}</h2><form><fieldset class="handover-group">
+    <label class="handover-item"><input type="radio" name="into" value="this" checked> ${esc(t('client.merge.intoThis'))}</label>
+    <label class="handover-item"><input type="radio" name="into" value="other"> ${esc(t('client.merge.intoOther'))}</label></fieldset>
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.next'))}</button></form>`);
+  bindForm(async (form) => {
+    const into = String(form.get('into'));
+    openDialog(`<h2 id="dialog-title">${esc(t('client.merge.title'))}</h2><form><label for="merge-other">${esc(t('client.merge.otherId'))}</label><input id="merge-other" name="other" required maxlength="64" autocomplete="off" spellcheck="false">
+      <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.merge.confirmWithPasskey'))}</button></form>`);
     bindForm(async (form) => {
-      const into = String(form.get('into')), envelopes = {};
-      if (into === 'this') {
-        // This account's key: open here, or published, or made now with what the passkey yielded.
-        let mine = own, made = null;
-        if (!mine) { const { key } = await api('/v1/key'); if (key.public_key) mine = { publicKey: unb64(key.public_key) }; else if (yielded) { made = await sealing.generateKey(); mine = made; } }
-        if (begun.wrap && yielded && mine && begun.key.public_key) {
-          const theirs = { privateKey: await sealing.unwrap(unb64(begun.wrap), yielded), publicKey: unb64(begun.key.public_key) };
-          for (const item of begun.secrets) { if (item.envelope) envelopes[item.id] = b64(await sealing.seal(await sealing.open(unb64(item.envelope), theirs.privateKey, theirs.publicKey), mine.publicKey)); }
+      const otherId = String(form.get('other') || '').trim();
+      const { options } = await api('/v1/merge/options', { method: 'POST', data: { principal_id: otherId } });
+      let given;
+      try { given = await navigator.credentials.get({ publicKey: { ...options, challenge: bytes(options.challenge), allowCredentials: described(options.allowCredentials), extensions: { prf: { eval: { first: PRF_INPUT } } } } }); }
+      catch (error) { if (passkeyDeclined(error)) return; throw error; }
+      const yielded = yieldedBy(given);
+      const credential = { id: given.id, rawId: text64(given.rawId), type: given.type, clientExtensionResults: {},
+        response: { clientDataJSON: text64(given.response.clientDataJSON), authenticatorData: text64(given.response.authenticatorData), signature: text64(given.response.signature), ...(given.response.userHandle ? { userHandle: text64(given.response.userHandle) } : {}) } };
+      const begun = await api('/v1/merge', { method: 'POST', data: { credential, principal_id: otherId } });
+      const name = begun.other.name || begun.other.id;
+      openDialog(`<h2 id="dialog-title">${esc(t('client.merge.title'))}</h2><form><p>${esc(t(into === 'this' ? 'client.merge.confirmThis' : 'client.merge.confirmOther', { name }))}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.merge.action'))}</button></form>`);
+      bindForm(async () => {
+        const envelopes = {};
+        if (into === 'this') {
+          // This account's key: open here, or published, or made now with what the passkey yielded.
+          let mine = own, made = null;
+          if (!mine) { const { key } = await api('/v1/key'); if (key.public_key) mine = { publicKey: unb64(key.public_key) }; else if (yielded) { made = await sealing.generateKey(); mine = made; } }
+          if (begun.wrap && yielded && mine && begun.key.public_key) {
+            const theirs = { privateKey: await sealing.unwrap(unb64(begun.wrap), yielded), publicKey: unb64(begun.key.public_key) };
+            for (const item of begun.secrets) { if (item.envelope) envelopes[item.id] = b64(await sealing.seal(await sealing.open(unb64(item.envelope), theirs.privateKey, theirs.publicKey), mine.publicKey)); }
+          }
+          const wrap = yielded && (made || own) ? b64(await sealing.wrap((made || own).privateKey, yielded)) : undefined;
+          await api('/v1/merge/complete', { method: 'POST', data: { ticket: begun.ticket, into, envelopes, ...(wrap ? { wrap } : {}), ...(made ? { public_key: b64(made.publicKey) } : {}) } });
+          if (made) { own = made; keyUnavailable = false; }
+          closeDialog(); await refresh();
+          return;
         }
-        const wrap = yielded && (made || own) ? b64(await sealing.wrap((made || own).privateKey, yielded)) : undefined;
-        await api('/v1/merge/complete', { method: 'POST', data: { ticket: begun.ticket, into, envelopes, ...(wrap ? { wrap } : {}), ...(made ? { public_key: b64(made.publicKey) } : {}) } });
-        if (made) { own = made; keyUnavailable = false; }
-        closeDialog(); await refresh();
-        return;
-      }
-      // This account ends: its secrets go sealed for the other's key, with this key when it is open here.
-      if (own && begun.key.public_key) {
-        for (const item of secrets()) {
-          try { const kept = await api('/v1/resources/' + item.id + '/content'); if (kept.envelope) envelopes[item.id] = b64(await sealing.seal(await openKey(kept), unb64(begun.key.public_key))); } catch {}
+        // This account ends: its secrets go sealed for the other's key, with this key when it is open here.
+        if (own && begun.key.public_key) {
+          for (const item of secrets()) {
+            try { const kept = await api('/v1/resources/' + item.id + '/content'); if (kept.envelope) envelopes[item.id] = b64(await sealing.seal(await openKey(kept), unb64(begun.key.public_key))); } catch {}
+          }
         }
-      }
-      await api('/v1/merge/complete', { method: 'POST', data: { ticket: begun.ticket, into, envelopes } });
-      own = null;
-      location.replace('/');
+        await api('/v1/merge/complete', { method: 'POST', data: { ticket: begun.ticket, into, envelopes } });
+        own = null;
+        location.replace('/');
+      });
     });
-  } catch (error) { if (!passkeyDeclined(error)) toast(error.message); }
-  finally { if (button.isConnected) button.disabled = false; }
+  });
 }
 async function issueKey(item) {
   const result = await api(`/v1/principals/${item.id}/keys`, { method: 'POST', data: {} });
@@ -1758,7 +1763,7 @@ document.addEventListener('click', async (event) => {
     if (action === 'rename-me') renameMe();
     if (action === 'copy-id') { try { await navigator.clipboard.writeText(state.user.id); toast(t('client.common.copied')); } catch { toast(t('client.errors.copyFailed')); } }
     if (action === 'hand-over') handOver();
-    if (action === 'merge') mergeAccount(target);
+    if (action === 'merge') mergeAccount();
     if (action === 'copy-token') {
       const token = document.querySelector('#agent-token');
       try { await navigator.clipboard.writeText(token.value); toast(t('client.access.keyCopied')); }

@@ -668,13 +668,13 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // Another account made one with this: its passkey answers for it, this session for this one.
       if (at === 'mergeOptions' && method === 'POST') {
         permit('add-webauthn-credential', 'principal', subject.id);
-        await inputBody();
-        return send(200, { options: await webauthn.authentication({ origin, purpose: 'merge' }) });
+        const input = await inputBody();
+        return send(200, { options: await merge.options(subject.id, principalId(input.principal_id), { origin }) });
       }
       if (at === 'mergeBegin' && method === 'POST') {
         permit('add-webauthn-credential', 'principal', subject.id);
         const input = await inputBody();
-        return send(200, await merge.begin(subject.id, input.credential, { origin }));
+        return send(200, await merge.begin(subject.id, input.credential, { origin, expected: input.principal_id === undefined ? undefined : principalId(input.principal_id) }));
       }
       if (at === 'mergeComplete' && method === 'POST') {
         permit('add-webauthn-credential', 'principal', subject.id);

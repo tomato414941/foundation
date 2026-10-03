@@ -64,9 +64,10 @@ export class WebauthnCredentials {
 
   // Signing in - or, for another purpose named, proving a credential is at hand: any credential may answer, and the
   // one that does says whose it is.
-  async authentication({ origin, purpose = 'signin' }) {
+  // allowCredentials: the credentials that may answer, when it is one principal's that is asked for; otherwise any.
+  async authentication({ origin, purpose = 'signin', allowCredentials = [] }) {
     const challenge = this.challenges.issue('webauthn', purpose, { ttl: TTL });
-    return generateAuthenticationOptions({ rpID: new URL(origin).hostname, challenge, userVerification: 'preferred', allowCredentials: [] });
+    return generateAuthenticationOptions({ rpID: new URL(origin).hostname, challenge, userVerification: 'preferred', allowCredentials: allowCredentials.map(id => ({ id })) });
   }
   async authenticate(response, { origin, purpose = 'signin' }) {
     const challenge = answered(response), spent = this.challenges.take('webauthn', challenge);
