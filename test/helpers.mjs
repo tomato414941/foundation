@@ -114,7 +114,7 @@ export async function fixture(t, options = {}) {
     if (!id) return null;
     if (!privateKeys.has(id)) privateKeys.set(id, generateKey());
     if (!published.has(id)) {
-      const response = await request('/v1/key', { ...options, method: 'PUT', data: { public_key: b64(privateKeys.get(id).publicKey) }, raw: undefined });
+      const response = await request('/v1/principals/me/key', { ...options, method: 'PUT', data: { public_key: b64(privateKeys.get(id).publicKey) }, raw: undefined });
       if (response.status !== 200 && response.json?.error?.code !== 'key_exists') return null;
       published.add(id);
     }
@@ -136,7 +136,7 @@ export async function fixture(t, options = {}) {
       const { key: _, ...rest } = data;
       const made = await request(path, { method, data: rest, token, anonymous, headers, as });
       if (made.status !== 201) return made;
-      const issued = await request('/v1/credentials?as=' + encodeURIComponent(made.json.principal.id), { method: 'POST', data: { kind: 'key' }, token, anonymous, headers });
+      const issued = await request('/v1/principals/' + encodeURIComponent(made.json.principal.id) + '/credentials', { method: 'POST', data: { kind: 'key' }, token, anonymous, headers });
       if (issued.status !== 201) return issued;
       const json = { principal: { ...made.json.principal, keys: [{ id: issued.json.credential.id, created_at: issued.json.credential.created_at, last_used_at: null }] }, token: issued.json.token, key: { id: issued.json.credential.id, kind: 'key' } };
       return { status: 201, json, text: JSON.stringify(json), headers: issued.headers };
@@ -186,7 +186,7 @@ export async function fixture(t, options = {}) {
     // The other tests need a verified identity, not a real email delivery or its resend cooldown.
     known(email);
     const token = app.challenges.issue('email', email, { ttl: 900_000 });
-    const response = await request('/v1/credentials', { method: 'PUT', data: { kind: 'email', email, token } });
+    const response = await request('/v1/session', { method: 'PUT', data: { kind: 'email', email, token } });
     assert.equal(response.status, 200, response.text);
     assert.equal(response.json.return_to, '/');
     cookie = response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
@@ -239,11 +239,11 @@ export async function fixture(t, options = {}) {
   // All that a principal is shown of what it has, across the API: for checking that something kept in confidence
   // appears nowhere in it.
   async function visible(options = {}) {
-    const paths = ['/v1/principals/me', '/v1/credentials', '/v1/resources', '/v1/principals/me/relations', '/v1/requests?to=me', '/v1/services'];
+    const paths = ['/v1/principals/me', '/v1/principals/me/credentials', '/v1/resources', '/v1/principals/me/relations', '/v1/requests?to=me', '/v1/services'];
     return JSON.stringify(await Promise.all(paths.map(async path => (await request(path, options)).json)));
   }
   async function become(name = 'laptop') {
-    const made = await request('/v1/credentials', { method: 'POST', anonymous: true, data: { kind: 'key', name } });
+    const made = await request('/v1/principals', { method: 'POST', anonymous: true, data: { kind: 'key', name } });
     assert.equal(made.status, 201, made.text);
     // A machine publishes its key as soon as it has a credential, as the CLI does.
     await keyOf({ token: made.json.token, anonymous: true });

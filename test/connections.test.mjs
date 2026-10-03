@@ -276,7 +276,7 @@ test('保存値の一覧には認証を要求し、OpenAPIは認証前に取得�
 
 test('Anyone becomes a principal with no connection, is issued a key once, and reaches nothing until a line is drawn', async t => {
   const f = await fixture(t);
-  const made = await f.request('/v1/credentials', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'a new machine' } });
+  const made = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'a new machine' } });
   assert.equal(made.status, 201, made.text);
   assert.match(made.json.token, /^fdn_[A-Za-z0-9_-]{43}$/);
   const me = await f.request('/v1/principals/me', { token: made.json.token, anonymous: true });

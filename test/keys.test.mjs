@@ -10,42 +10,45 @@ import { generateKey, publicKeyOf, open, seal, wrap, unwrap } from '../cli/envel
 const b64 = buffer => Buffer.from(buffer).toString('base64url');
 
 test('主体は公開鍵を一度だけ公開し、相手の公開鍵は誰でも読める', async t => {
-  const f = await fixture(t, { signin: false }), machine = await f.request('/v1/credentials', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'machine' } });
+  const f = await fixture(t, { signin: false }), machine = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'machine' } });
   const options = { token: machine.json.token, anonymous: true }, made = generateKey();
-  assert.deepEqual((await f.request('/v1/key', options)).json.key, { principal_id: machine.json.principal.id, public_key: null, wraps: {} });
-  const published = await f.request('/v1/key', { ...options, method: 'PUT', data: { public_key: b64(made.publicKey) } });
+  assert.deepEqual((await f.request('/v1/principals/me/key', options)).json.key, { principal_id: machine.json.principal.id, public_key: null, wraps: {} });
+  const published = await f.request('/v1/principals/me/key', { ...options, method: 'PUT', data: { public_key: b64(made.publicKey) } });
   assert.equal(published.status, 200, published.text);
   assert.equal(published.json.key.public_key, b64(made.publicKey));
-  const again = await f.request('/v1/key', { ...options, method: 'PUT', data: { public_key: b64(generateKey().publicKey) } });
+  const again = await f.request('/v1/principals/me/key', { ...options, method: 'PUT', data: { public_key: b64(generateKey().publicKey) } });
   assert.equal(again.status, 409); assert.equal(again.json.error.code, 'key_exists');
-  assert.equal((await f.request('/v1/key', { ...options, method: 'PUT', data: { public_key: 'short' } })).json.error.code, 'invalid_key');
+  assert.equal((await f.request('/v1/principals/me/key', { ...options, method: 'PUT', data: { public_key: 'short' } })).json.error.code, 'invalid_key');
   await f.signin();
-  assert.equal((await f.request('/v1/principals/' + machine.json.principal.id + '/public-key')).json.key.public_key, b64(made.publicKey));
+  assert.equal((await f.request('/v1/principals/' + machine.json.principal.id + '/key')).json.key.public_key, b64(made.publicKey));
 });
 
 test('秘密鍵はパスキーごとに包んで預け、そのパスキーで証明したセッションに返す', async t => {
   const f = await fixture(t), yielded = Buffer.alloc(32, 9), made = generateKey();
   // A credential registered by a browser, standing in for one here.
   f.app.store.db.prepare('INSERT INTO webauthn_credentials (id,principal_id,public_key,sign_count,name,user_handle,created_at) VALUES (?,?,?,?,?,?,?)').run('credential-0000000001', USER_A, Buffer.alloc(8), 0, 'phone', USER_A, Date.now());
-  const published = await f.request('/v1/key', { method: 'PUT', data: { public_key: b64(made.publicKey), wraps: { 'credential-0000000001': b64(wrap(made.privateKey, yielded)) } } });
+  const published = await f.request('/v1/principals/me/key', { method: 'PUT', data: { public_key: b64(made.publicKey), wraps: { 'credential-0000000001': b64(wrap(made.privateKey, yielded)) } } });
   assert.equal(published.status, 409, 'the signin already published one');
-  const kept = await f.request('/v1/credentials/credential-0000000001/wrap', { method: 'PUT', data: { wrapped: b64(wrap(made.privateKey, yielded)) } });
+  const kept = await f.request('/v1/principals/me/credentials/credential-0000000001/wrap', { method: 'PUT', data: { wrapped: b64(wrap(made.privateKey, yielded)) } });
   assert.equal(kept.status, 200, kept.text);
-  const { wraps } = (await f.request('/v1/key')).json.key;
+  const { wraps } = (await f.request('/v1/principals/me/key')).json.key;
   assert.deepEqual(Object.keys(wraps), ['credential-0000000001']);
   assert.deepEqual(unwrap(Buffer.from(wraps['credential-0000000001'], 'base64url'), yielded), made.privateKey);
-  assert.equal((await f.request('/v1/principals/' + USER_A + '/public-key')).json.key.wraps, undefined, 'wraps are the principal\'s own');
-  assert.equal((await f.request('/v1/credentials/credential-0000000009/wrap', { method: 'PUT', data: { wrapped: 'x' } })).status, 404);
+  const someone = await f.become('someone');
+  const shown = await f.request('/v1/principals/' + USER_A + '/key', { token: someone.token, anonymous: true });
+  assert.equal(shown.json.key.public_key, b64((await f.keyOf({})).publicKey), 'anyone may read the public half, to seal for it');
+  assert.equal(shown.json.key.wraps, undefined, 'wraps are the principal\'s own');
+  assert.equal((await f.request('/v1/principals/me/credentials/credential-0000000009/wrap', { method: 'PUT', data: { wrapped: 'x' } })).status, 404);
 });
 
 test('宛先は持ち主と、持ち主の代わりに動くFoundationで、Foundationが代わりに動かなければ注入も預けもできない', async t => {
   const f = await fixture(t, { signin: false });
   f.known('owner@example.test');
   const token = f.app.challenges.issue('email', 'owner@example.test', { ttl: 900_000 });
-  const session = await fetch(f.base + '/v1/credentials', { method: 'PUT', headers: { 'content-type': 'application/json', origin: f.base }, body: JSON.stringify({ kind: 'email', email: 'owner@example.test', token }) });
+  const session = await fetch(f.base + '/v1/session', { method: 'PUT', headers: { 'content-type': 'application/json', origin: f.base }, body: JSON.stringify({ kind: 'email', email: 'owner@example.test', token }) });
   const cookie = session.headers.getSetCookie()[0].split(';')[0], as = { headers: { cookie }, anonymous: true };
   const made = generateKey();
-  assert.equal((await f.request('/v1/key', { ...as, method: 'PUT', data: { public_key: b64(made.publicKey) } })).status, 200);
+  assert.equal((await f.request('/v1/principals/me/key', { ...as, method: 'PUT', data: { public_key: b64(made.publicKey) } })).status, 200);
   assert.deepEqual((await f.request('/v1/recipients', as)).json.recipients, [{ principal_id: USER_A, public_key: b64(made.publicKey) }], 'nobody but the owner');
   const sealed = await f.sealed('mine', as, [{ principal_id: USER_A, public_key: b64(made.publicKey) }]);
   const kept = await f.request('/v1/resources?kind=secret&name=mine', { ...as, method: 'PUT', data: sealed });
@@ -97,7 +100,7 @@ test('封筒は共有できる者が渡し、Foundationに封をさせること�
 test('保管の依頼は宛先を示し、読み返す依頼では頼んだ側も宛先に入って、CLIがその封筒を開く', async t => {
   const f = await fixture(t);
   const dir = await mkdtemp(join(tmpdir(), 'foundation-read-')); t.after(() => rm(dir, { recursive: true, force: true }));
-  const machine = await f.request('/v1/credentials', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'machine' } });
+  const machine = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'machine' } });
   const keyPath = join(dir, 'key'), env = { ...process.env, FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
   await writeFile(keyPath, machine.json.token, { mode: 0o600 });
   const cli = args => new Promise((resolve, reject) => {
@@ -107,7 +110,7 @@ test('保管の依頼は宛先を示し、読み返す依頼では頼んだ側�
     child.once('error', reject); child.once('exit', code => resolve({ code, out, err }));
   });
   // The first run makes the machine's credential and publishes its key.
-  const first = await cli(['api', 'GET', '/v1/key']);
+  const first = await cli(['api', 'GET', '/v1/principals/me/key']);
   assert.equal(first.code, 0, first.err);
   const file = JSON.parse(await readFile(keyPath, 'utf8'));
   assert.match(file.key.private_key, /^[A-Za-z0-9_-]{43}$/);

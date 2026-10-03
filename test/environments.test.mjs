@@ -46,7 +46,7 @@ test('ID を付けたエンバイロメントは、その principal として動
 
 test('付けられる ID は、付ける者がその principal として動けるものだけで、外すと中の鍵は効かなくなる', async t => {
   const f = await lent(t), agent = await f.issueKey();
-  const stranger = (await f.request('/v1/credentials', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'someone else' } })).json.principal;
+  const stranger = (await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'someone else' } })).json.principal;
   assert.equal((await f.request('/v1/environments', { method: 'POST', token: agent.token, data: { identity: stranger.id } })).status, 403);
   const opened = (await f.request('/v1/environments', { method: 'POST', token: agent.token, data: { identity: agent.id } })).json.environment;
   assert.equal(opened.identity, agent.id);

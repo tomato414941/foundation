@@ -45,15 +45,15 @@ with sync_playwright() as p:
     kept = context.request.put(args.base + '/v1/resources?kind=secret&name=handed', data=plain('hand-me'), headers={'content-type': 'application/json', 'origin': args.base})
     assert kept.ok, kept.text()
     owned = context.request.post(args.base + '/v1/principals', data=json.dumps({'name': 'my agent', 'agent': True}), headers={'content-type': 'application/json', 'origin': args.base}).json()
-    owned.update(context.request.post(args.base + '/v1/credentials?as=' + owned['principal']['id'], data=json.dumps({'kind': 'key'}), headers={'content-type': 'application/json', 'origin': args.base}).json())
+    owned.update(context.request.post(args.base + '/v1/principals/' + owned['principal']['id'] + '/credentials', data=json.dumps({'kind': 'key'}), headers={'content-type': 'application/json', 'origin': args.base}).json())
 
     # The one given to: a principal of its own, with a key, and Foundation as its agent.
     other = p.request.new_context()
-    made = other.post(args.base + '/v1/credentials', data=json.dumps({'kind': 'key', 'name': 'receiver'}), headers={'content-type': 'application/json'}).json()
+    made = other.post(args.base + '/v1/principals', data=json.dumps({'kind': 'key', 'name': 'receiver'}), headers={'content-type': 'application/json'}).json()
     headers = {'authorization': 'Bearer ' + made['token']}
     private = x25519.X25519PrivateKey.generate()
     public = private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    assert other.put(args.base + '/v1/key', data=json.dumps({'public_key': b64url(public)}), headers={**headers, 'content-type': 'application/json'}).ok
+    assert other.put(args.base + '/v1/principals/me/key', data=json.dumps({'public_key': b64url(public)}), headers={**headers, 'content-type': 'application/json'}).ok
     assert other.post(args.base + '/v1/principals/agent/relations', data=json.dumps({'relation': 'agent', 'object_type': 'principal', 'object_id': made['principal']['id']}), headers={**headers, 'content-type': 'application/json'}).ok
 
     page.reload(wait_until='networkidle')

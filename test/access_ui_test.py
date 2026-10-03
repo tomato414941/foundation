@@ -23,7 +23,7 @@ with sync_playwright() as p:
         assert result.ok, str(result.status)
         return result.json()
 
-    actor = post('/v1/credentials', {'kind': 'key', 'name': 'laptop の作業用AI'})
+    actor = post('/v1/principals', {'kind': 'key', 'name': 'laptop の作業用AI'})
     token = actor['token']
     asked = post('/v1/requests', {'authorization_details': [{'type': 'relation', 'relation': 'agent'}], 'binding_message': '保存した認証情報を使って接続を確認します。'}, token)['request']
     page = context.new_page()

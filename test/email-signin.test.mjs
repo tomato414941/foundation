@@ -8,8 +8,8 @@ import { fixture, USER_A } from './helpers.mjs';
 
 const deliveryCookie = response => response.headers.getSetCookie().find(value => value.startsWith('fdn_signin=')).split(';')[0];
 const sessionCookie = response => response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];
-const send = (f, email = 'new@example.test', cookie, return_to) => f.request('/v1/credentials', { method: 'POST', data: { kind: 'email', address: email, return_to }, headers: cookie ? { cookie } : {} });
-const verify = (f, link = f.mailer.link('new@example.test'), options = {}) => f.request('/v1/credentials', { method: 'PUT', data: { kind: 'email', email: link.email, token: link.token }, ...options,
+const send = (f, email = 'new@example.test', cookie, return_to) => f.request('/v1/session', { method: 'POST', data: { kind: 'email', address: email, return_to }, headers: cookie ? { cookie } : {} });
+const verify = (f, link = f.mailer.link('new@example.test'), options = {}) => f.request('/v1/session', { method: 'PUT', data: { kind: 'email', email: link.email, token: link.token }, ...options,
 });
 // Moves what Foundation remembers of the sign-ins under way back in time.
 const age = (f, ms) => f.app.store.db.prepare('UPDATE challenges SET created_at=created_at-?, expires_at=expires_at-?').run(ms, ms);
@@ -32,7 +32,7 @@ test('メールで送ったリンクを、送信元のCookieを持たないブ�
   assert.match(result.headers.getSetCookie().find(value => value.startsWith('fdn_session=')), /HttpOnly; SameSite=Lax; Path=\/; Max-Age=1209600; Secure/);
   assert.equal(result.headers.get('referrer-policy'), 'no-referrer');
   assert.equal(result.headers.get('cache-control'), 'no-store');
-  const state = await f.request('/v1/credentials', { headers: { cookie: sessionCookie(result) } });
+  const state = await f.request('/v1/principals/me/credentials', { headers: { cookie: sessionCookie(result) } });
   assert.equal(state.status, 200);
   assert.deepEqual(state.json.credentials.map(item => [item.kind, item.name]), [['email', 'new@example.test']]);
   assert.equal((await f.request('/v1/principals/me', { headers: { cookie } })).status, 401);
@@ -82,7 +82,7 @@ test('別のアドレスへの送信状況よりも、確認したリンクの�
   await send(f);
   const cookie = deliveryCookie(await send(f, 'second@example.test'));
   const result = await verify(f, undefined, { headers: { cookie } });
-  const state = await f.request('/v1/credentials', { headers: { cookie: sessionCookie(result) } });
+  const state = await f.request('/v1/principals/me/credentials', { headers: { cookie: sessionCookie(result) } });
   assert.deepEqual(state.json.credentials.map(item => item.name), ['new@example.test']);
 });
 
@@ -109,7 +109,7 @@ test('リンクを送ったアドレスと違うアドレスでは検証せず�
 test('外部サイトからの送信・検証・送信状況の取り消しを拒否する', async t => {
   const f = await fixture(t, { signin: false });
   const data = { kind: 'email', address: 'new@example.test' };
-  assert.equal((await f.request('/v1/credentials', { method: 'POST', data, headers: { origin: 'https://evil.example' } })).status, 403);
+  assert.equal((await f.request('/v1/session', { method: 'POST', data, headers: { origin: 'https://evil.example' } })).status, 403);
   const cookie = deliveryCookie(await send(f));
   const link = f.mailer.link('new@example.test');
   for (const origin of ['https://evil.example', 'null', '']) {
@@ -126,11 +126,11 @@ test('不正な入力と外部への戻り先を拒否し、許可されたペ�
   const link = f.mailer.link('new@example.test');
   assert.equal(new URL(link.url).searchParams.get('return_to'), '/secrets');
   for (const changes of [{ email: '' }, { email: 'not-an-email' }, { token: 'short' }, { token: ['ambiguous'] }, { return_to: 'https://evil.example' }, { return_to: '//evil.example' }, { return_to: '/\\evil.example' }, { return_to: '/objects?redirect=https://evil.example' }, { return_to: '/services?prefix=private' }, { return_to: '/signin/confirm' }]) {
-    const result = await f.request('/v1/credentials', { method: 'PUT', data: { kind: 'email', email: link.email, token: link.token, ...changes } });
+    const result = await f.request('/v1/session', { method: 'PUT', data: { kind: 'email', email: link.email, token: link.token, ...changes } });
     assert.equal(result.status, 400, result.text);
   }
-  assert.equal((await f.request('/v1/credentials', { method: 'PUT', raw: 'token=' + link.token, type: 'application/x-www-form-urlencoded' })).status, 415);
-  const result = await f.request('/v1/credentials', { method: 'PUT', data: { kind: 'email', email: link.email, token: link.token, return_to: '/secrets' } });
+  assert.equal((await f.request('/v1/session', { method: 'PUT', raw: 'token=' + link.token, type: 'application/x-www-form-urlencoded' })).status, 415);
+  const result = await f.request('/v1/session', { method: 'PUT', data: { kind: 'email', email: link.email, token: link.token, return_to: '/secrets' } });
   assert.equal(result.status, 200);
   assert.equal(result.json.return_to, '/secrets');
 });
@@ -189,30 +189,30 @@ test('プリンシパルが頼んだリンクは、開いて確かめるとそ�
   const f = await fixture(t);
   // One that came by a key alone asks for an address, as any client may.
   const machine = await f.become('machine'), as = { token: machine.token, anonymous: true };
-  const asked = await f.request('/v1/credentials', { ...as, method: 'POST', data: { kind: 'email', address: ' Machine@Example.Test ' } });
+  const asked = await f.request('/v1/principals/me/credentials', { ...as, method: 'POST', data: { kind: 'email', address: ' Machine@Example.Test ' } });
   assert.equal(asked.status, 202, asked.text);
   assert.equal(asked.json.pending.email, 'machine@example.test');
   assert.equal(f.mailer.sent.at(-1).subject, 'Foundationにメールアドレスを追加');
   const link = f.mailer.link('machine@example.test');
   assert.equal(new URLSearchParams(new URL(link.url).hash.slice(1)).get('attach'), 'machine', 'the page says whose it becomes');
   // Whoever opens the link confirms it, in any browser: the address is attached, and that browser is signed in as nobody.
-  const opened = await f.request('/v1/credentials', { method: 'PUT', anonymous: true, data: { kind: 'email', email: link.email, token: link.token } });
+  const opened = await f.request('/v1/session', { method: 'PUT', anonymous: true, data: { kind: 'email', email: link.email, token: link.token } });
   assert.equal(opened.status, 200, opened.text);
   assert.equal(opened.json.attached, true);
   assert.equal(opened.headers.getSetCookie().some(value => value.startsWith('fdn_session=')), false);
-  const entries = (await f.request('/v1/credentials', as)).json.credentials;
+  const entries = (await f.request('/v1/principals/me/credentials', as)).json.credentials;
   assert.deepEqual(entries.map(item => [item.kind, item.name]), [['email', 'machine@example.test'], ['key', null]]);
   assert.equal(f.app.emails.principalOf('machine@example.test'), machine.id, 'and it signs that principal in from then on');
-  assert.equal((await f.request('/v1/credentials', { method: 'PUT', anonymous: true, data: { kind: 'email', email: link.email, token: link.token } })).status, 401, 'the link is spent');
+  assert.equal((await f.request('/v1/session', { method: 'PUT', anonymous: true, data: { kind: 'email', email: link.email, token: link.token } })).status, 401, 'the link is spent');
   // An address another principal has is not taken from it.
-  const taken = await f.request('/v1/credentials', { ...as, method: 'POST', data: { kind: 'email', address: 'owner@example.test' } });
+  const taken = await f.request('/v1/principals/me/credentials', { ...as, method: 'POST', data: { kind: 'email', address: 'owner@example.test' } });
   assert.equal(taken.status, 409); assert.equal(taken.json.error.code, 'email_taken');
   // Whoever manages a principal adds its entries: an owner for what it owns, and nobody for a stranger.
   const agent = await f.issueKey();
-  assert.equal((await f.request('/v1/credentials?as=' + agent.id, { method: 'POST', data: { kind: 'email', address: 'agent@example.test' } })).status, 202);
-  assert.equal((await f.request('/v1/credentials?as=' + USER_A, { ...as, method: 'POST', data: { kind: 'email', address: 'mine@example.test' } })).status, 401);
+  assert.equal((await f.request('/v1/principals/' + agent.id + '/credentials', { method: 'POST', data: { kind: 'email', address: 'agent@example.test' } })).status, 202);
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/credentials', { ...as, method: 'POST', data: { kind: 'email', address: 'mine@example.test' } })).status, 401);
   // An address is removed like any other entry.
   const address = entries.find(item => item.kind === 'email');
-  assert.equal((await f.request('/v1/credentials/' + address.id, { ...as, method: 'DELETE', data: {} })).status, 200);
+  assert.equal((await f.request('/v1/principals/me/credentials/' + address.id, { ...as, method: 'DELETE', data: {} })).status, 200);
   assert.equal(f.app.emails.principalOf('machine@example.test'), undefined);
 });

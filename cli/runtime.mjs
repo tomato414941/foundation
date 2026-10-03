@@ -231,9 +231,9 @@ async function main() {
   async function upgrade(label) {
     const me = await send('/v1/principals/me', undefined, { method: 'GET' });
     if (me.key?.environment) return;
-    const { options } = await send('/v1/credentials?as=' + encodeURIComponent(me.principal.id), { kind: 'webauthn' });
+    const { options } = await send('/v1/principals/' + encodeURIComponent(me.principal.id) + '/credentials', { kind: 'webauthn' });
     const made = createCredential(options, url.origin);
-    await send('/v1/credentials?as=' + encodeURIComponent(me.principal.id), { kind: 'webauthn', name: label, credential: made.response }, { method: 'PUT' });
+    await send('/v1/principals/' + encodeURIComponent(me.principal.id) + '/credentials', { kind: 'webauthn', name: label, credential: made.response }, { method: 'PUT' });
     await writeKey(keyPath, JSON.stringify({ webauthn_credential: made.credential }), !process.env.FOUNDATION_RUNTIME_KEY_FILE);
     key = { credential: made.credential };
   }
@@ -242,7 +242,7 @@ async function main() {
   async function publishKey() {
     if (key.own) return;
     const made = generateKey();
-    const published = await send('/v1/key', { public_key: made.publicKey.toString('base64url') }, { method: 'PUT', accept: data => data.error?.code === 'key_exists' });
+    const published = await send('/v1/principals/me/key', { public_key: made.publicKey.toString('base64url') }, { method: 'PUT', accept: data => data.error?.code === 'key_exists' });
     if (published.error) return;
     key.own = { private_key: made.privateKey.toString('base64url') };
     await writeKey(keyPath, JSON.stringify({ webauthn_credential: key.credential, key: key.own }), !process.env.FOUNDATION_RUNTIME_KEY_FILE);
@@ -278,7 +278,7 @@ async function main() {
       // No key, or one this server does not know: a WebAuthn credential made here, proven by nobody, makes this machine a
       // principal there, of nobody's - the same call a browser's passkey makes.
       key = null; me = null;
-      const post = (method, payload) => fetch(url.origin + '/v1/credentials', { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), redirect: 'error', signal: AbortSignal.timeout(30_000) });
+      const post = (method, payload) => fetch(url.origin + '/v1/principals', { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), redirect: 'error', signal: AbortSignal.timeout(30_000) });
       const begun = await post('POST', { kind: 'webauthn', name: wanted });
       const { options, error } = await begun.json();
       if (!begun.ok) throw new Error('Foundation did not begin a credential (' + begun.status + ', ' + (error?.code || 'unknown') + ').');

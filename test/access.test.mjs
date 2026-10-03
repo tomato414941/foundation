@@ -20,7 +20,7 @@ test('アクセス許可と個別の閲覧・編集権限を取り消し、相�
   await f.handEnvelope(given.json.resource.id, { token: agent.token });
   await f.handEnvelope(given.json.resource.id, { token: other.token });
   await f.keep('secret', 'own', 'own-value', { token: agent.token, as: agent.id });
-  const second = await f.request('/v1/credentials?as=' + agent.id, { method: 'POST', data: { kind: 'key' } });
+  const second = await f.request('/v1/principals/' + agent.id + '/credentials', { method: 'POST', data: { kind: 'key' } });
   assert.equal(second.status, 201);
   assert.equal((await f.read('secret', 'private', { token: agent.token })).text, 'owner-value');
   assert.equal((await revoke(f, agent.id)).status, 200);
@@ -121,8 +121,8 @@ test('オブジェクトへの個別共有も取り消し、進行中の取得�
 
 test('個別のキーを失効させても他のキーから同じアクセス許可を利用する', async t => {
   const f = await fixture(t), agent = await f.issueKey();
-  const second = await f.request('/v1/credentials?as=' + agent.id, { method: 'POST', data: { kind: 'key' } });
-  assert.equal((await f.request('/v1/credentials/' + agent.key_id, { method: 'DELETE', data: {} })).status, 200);
+  const second = await f.request('/v1/principals/' + agent.id + '/credentials', { method: 'POST', data: { kind: 'key' } });
+  assert.equal((await f.request('/v1/principals/' + agent.id + '/credentials/' + agent.key_id, { method: 'DELETE', data: {} })).status, 200);
   assert.equal((await f.request('/v1/principals/me', { token: agent.token })).status, 401);
   const result = await f.request('/v1/principals/me', { token: second.json.token });
   assert.equal(result.status, 200); assert.deepEqual(result.json.acts_for, [USER_A]);

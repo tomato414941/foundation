@@ -9,9 +9,9 @@ const b64 = buffer => Buffer.from(buffer).toString('base64url');
 // Another account, begun with a passkey (the CLI's software authenticator stands in for the device), with things of
 // its own: a secret, a connection, an owned principal, an address.
 async function other(f, name = 'Navigator Vega') {
-  const options = (await f.request('/v1/credentials', { method: 'POST', data: { kind: 'webauthn' }, anonymous: true })).json.options;
+  const options = (await f.request('/v1/principals', { method: 'POST', data: { kind: 'webauthn' }, anonymous: true })).json.options;
   const made = createCredential(options, f.base);
-  const became = await f.request('/v1/credentials', { method: 'PUT', anonymous: true, data: { kind: 'webauthn', principal_name: name, name: 'phone', credential: made.response, session: 'token' } });
+  const became = await f.request('/v1/principals', { method: 'PUT', anonymous: true, data: { kind: 'webauthn', principal_name: name, name: 'phone', credential: made.response, session: 'token' } });
   assert.equal(became.status, 201, became.text);
   const as = { token: became.json.token, anonymous: true };
   await f.allowFoundation({ ...as, as: became.json.principal.id });
@@ -43,7 +43,7 @@ test('別のアカウントをそのパスキーでまとめると、持ち物�
   assert.deepEqual(done.json.moved, { secrets: 1, connections: 0, objects: 0, apps: 0, services: 0, principals: 1, webauthn_credentials: 1, emails: 1 });
   assert.equal((await f.read('secret', 'theirs')).text, 'their-value', 'opened with this principal\'s key');
   assert.ok((await f.request('/v1/principals/me/relations?relation=owner&direction=from')).json.relations.some(row => row.principal.id === them.owned.id), 'their principal is owned here now');
-  assert.deepEqual((await f.request('/v1/credentials')).json.credentials.filter(item => item.kind === 'webauthn').map(row => row.name), ['phone']);
+  assert.deepEqual((await f.request('/v1/principals/me/credentials')).json.credentials.filter(item => item.kind === 'webauthn').map(row => row.name), ['phone']);
   assert.equal(f.app.emails.principalOf('other@example.test'), USER_A);
   assert.equal(f.app.principals.get(them.id), undefined, 'the other ended');
   assert.equal((await f.request('/v1/principals/me', them.as)).status, 401, 'and so did its sessions');

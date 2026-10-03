@@ -75,7 +75,7 @@ globalThis.fetch = async (url, options = {}) => {
     if (mode === 'boot' && !bootWaited) { bootWaited = true; await new Promise(resolve => { release = resolve; }); }
     if (signedIn) data = { principal: overview.principal, acts_for: [], owners: [], keys: [], requests: [] };
     else { status = 401; data = { error: { code: 'signin_required', message: 'Sign in' } }; }
-  } else if (url === '/v1/credentials' && (options.method ?? 'GET') === 'GET') {
+  } else if (url === '/v1/principals/me/credentials' && (options.method ?? 'GET') === 'GET') {
     if (signedIn) data = { credentials: [{ id: 'e1', kind: 'email', name: 'owner@example.test', created_at: '2026-01-01T00:00:00.000Z', last_used_at: null }] };
     else { status = 401; data = { error: { code: 'signin_required', message: 'Sign in' } }; }
   } else if (url.startsWith('/v1/principals/me/relations')) data = { relations: [], next: null };
@@ -86,11 +86,11 @@ globalThis.fetch = async (url, options = {}) => {
   else if (url === '/v1/services') data = { services: [] };
   else if (url === '/v1/payment') data = { payment: { available: false, paying: false, payer: 'owner' } };
   else if (url === '/v1/session' && options.method === 'GET') data = { available: true, pending: null };
-  else if (url === '/v1/session' && options.method === 'POST') data = { options: { challenge: 'AAAAAAAA', allowCredentials: [] } };
-  else if (url === '/v1/credentials' && options.method === 'POST' && JSON.parse(options.body).kind === 'webauthn') data = { options: { challenge: 'AAAAAAAA', user: { id: 'b3duZXI', name: 'Keeper Sirius', displayName: 'Keeper Sirius' } } };
-  else if (url === '/v1/credentials' && JSON.parse(options.body).kind === 'email') { status = 400; data = { error: { code: 'invalid_input', message: 'Sample error' } }; }
-  else if (url === '/v1/credentials' || url === '/v1/session') { signedIn = true; data = { return_to: '/', backed_up: mode !== 'passkey-local' }; }
-  else if (url === '/v1/key') data = { key: {} };
+  else if (url === '/v1/session' && options.method === 'POST' && JSON.parse(options.body).kind === 'webauthn') data = { options: { challenge: 'AAAAAAAA', allowCredentials: [] } };
+  else if (url === '/v1/principals' && options.method === 'POST' && JSON.parse(options.body).kind === 'webauthn') data = { options: { challenge: 'AAAAAAAA', user: { id: 'b3duZXI', name: 'Keeper Sirius', displayName: 'Keeper Sirius' } } };
+  else if (url === '/v1/session' && options.method !== 'DELETE' && JSON.parse(options.body).kind === 'email') { status = 400; data = { error: { code: 'invalid_input', message: 'Sample error' } }; }
+  else if (url === '/v1/principals' || url === '/v1/session') { signedIn = true; data = { return_to: '/', backed_up: mode !== 'passkey-local' }; }
+  else if (url === '/v1/principals/me/key') data = { key: {} };
   else if (url === '/v1/requests/' + id) data = { request };
   else if (url.endsWith('/deny')) { await new Promise(resolve => { release = resolve; }); request.status = 'denied'; data = {}; }
   else if (url.startsWith('/v1/resources?')) data = { resources: [] };
@@ -174,7 +174,7 @@ if (mode === 'boot') {
     };
     const assertNoTransfer = () => {
       assert.equal(calls.filter(({ url }) => url.endsWith('/transfer')).length, 0, 'changing language never transfers ownership');
-      assert.equal(calls.filter(({ url }) => url.endsWith('/public-key')).length, 0, 'changing language never starts the transfer flow');
+      assert.equal(calls.filter(({ url }) => /\/v1\/principals\/[^/]+\/key$/.test(url) && !url.includes('/me/')).length, 0, 'changing language never starts the transfer flow');
       assert.ok(calls.every(({ options }) => options.method === 'GET' || !options.method), 'copy, language changes, and cancellation do not write to the API');
     };
     assertAccount('ja');
@@ -277,7 +277,7 @@ if (mode === 'boot') {
     await until(() => document.documentElement.lang === 'en' && heading() === 'Foundation');
     change('ja'); await until(() => document.documentElement.lang === 'ja');
     if (mode !== 'passkey-signin') {
-      const created = calls.filter(call => call.url === '/v1/credentials' && call.options.method === 'PUT');
+      const created = calls.filter(call => call.url === '/v1/principals' && call.options.method === 'PUT');
       assert.equal(created.length, 1, 'locale changes never regenerate a stored identity');
       assert.equal(JSON.parse(created[0].options.body).principal_name, 'Keeper Sirius');
     }

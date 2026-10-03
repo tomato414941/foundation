@@ -116,7 +116,7 @@ with sync_playwright() as p:
     request = page.evaluate("""async () => {
       const made = await (await fetch('/v1/principals', {method: 'POST', headers: {'content-type': 'application/json'},
         body: JSON.stringify({name: 'UI test agent', agent: true})})).json();
-      const key = { ...made, ...await (await fetch('/v1/credentials?as=' + made.principal.id, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind: 'key'})})).json() };
+      const key = { ...made, ...await (await fetch('/v1/principals/' + made.principal.id + '/credentials', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind: 'key'})})).json() };
       const owner = key.principal.acts_for[0];
       const made = await (await fetch('/v1/requests?as=' + owner, {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
         body: JSON.stringify({authorization_details: [{type: 'app', service: 'cloudflare', name: 'メール用'}], binding_message: 'メールの転送を設定できるアプリを使います。',

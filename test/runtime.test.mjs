@@ -419,7 +419,7 @@ test('アクセスキーの鍵ファイルを持つAIは、次に動いたとき
   assert.equal(after.webauthn_credential.private_key.kty, 'EC');
   assert.ok(!JSON.stringify(after).includes(before.trim()), 'the access key is no longer kept in the file');
   assert.equal((await stat(f.env.FOUNDATION_RUNTIME_KEY_FILE)).mode & 0o777, 0o600);
-  const credentials = (await f.request('/v1/credentials?as=' + f.runtime.id, { anonymous: true, token: f.runtime.token })).json.credentials.filter(item => item.kind === 'webauthn');
+  const credentials = (await f.request('/v1/principals/' + f.runtime.id + '/credentials', { anonymous: true, token: f.runtime.token })).json.credentials.filter(item => item.kind === 'webauthn');
   assert.deepEqual(credentials.map(item => item.id), [after.webauthn_credential.id]);
   assert.equal(JSON.parse((await execute(['api', 'GET', '/v1/principals/me'], f.env)).out).principal.id, f.runtime.id, 'and the credential is what proves it from then on');
 });
@@ -454,7 +454,7 @@ test('渡された封筒のあるシークレットは、Foundation が開けな
   assert.equal((await f.request('/v1/principals/' + machine.id + '/relations', { method: 'POST', data: { relation: 'viewer', object_type: 'resource', object_id: kept.id } })).status, 201);
   const mine = await f.request('/v1/resources/' + kept.id + '/content');
   const contentKey = open(Buffer.from(mine.json.envelope, 'base64url'), (await f.keyOf({})).privateKey);
-  const theirs = (await f.request('/v1/principals/' + machine.id + '/public-key')).json.key.public_key;
+  const theirs = (await f.request('/v1/principals/' + machine.id + '/key')).json.key.public_key;
   const handed = await f.request('/v1/resources/' + kept.id + '/envelopes/' + machine.id, { method: 'PUT', data: { wrapped: seal(contentKey, Buffer.from(theirs, 'base64url')).toString('base64url') } });
   assert.equal(handed.status, 200, handed.text);
   const run = await execute(['exec', 'TOKEN=handed/token', '--', process.execPath, '-e', 'process.stdout.write(process.env.TOKEN)'], env);

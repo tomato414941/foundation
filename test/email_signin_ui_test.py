@@ -30,7 +30,7 @@ with sync_playwright() as p:
     errors, calls, urls = [], [], []
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.on('request', lambda request: urls.append(request.url))
-    page.on('request', lambda request: calls.append(request) if request.url.endswith('/v1/credentials') and request.method == 'PUT' else None)
+    page.on('request', lambda request: calls.append(request) if request.url.endswith('/v1/session') and request.method == 'PUT' else None)
     page.goto(link, wait_until='networkidle')
     expect(page.get_by_role('heading', name='サインイン', exact=True)).to_be_visible()
     expect(page.get_by_text(email, exact=True)).to_be_visible()
@@ -51,7 +51,7 @@ with sync_playwright() as p:
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/secrets')
     page.wait_for_load_state('networkidle')
-    assert [item['name'] for item in receiver.request.get(args.base + '/v1/credentials').json()['credentials'] if item['kind'] == 'email'] == [email]
+    assert [item['name'] for item in receiver.request.get(args.base + '/v1/principals/me/credentials').json()['credentials'] if item['kind'] == 'email'] == [email]
     assert len(calls) == 1
     assert all(key not in url for url in urls), '鍵をHTTPのURLへ送信しない'
     assert sender.request.get(args.base + '/v1/principals/me').status == 401, '受け取った側だけをサインイン済みにする'
@@ -60,7 +60,7 @@ with sync_playwright() as p:
     page.goto(link, wait_until='networkidle')
     page.get_by_role('button', name='サインイン', exact=True).click()
     expect(page.get_by_role('alert')).to_have_text('リンクが無効か、有効期限が切れています。最新のメールのリンクを開いてください。')
-    assert [item['name'] for item in receiver.request.get(args.base + '/v1/credentials').json()['credentials'] if item['kind'] == 'email'] == [email]
+    assert [item['name'] for item in receiver.request.get(args.base + '/v1/principals/me/credentials').json()['credentials'] if item['kind'] == 'email'] == [email]
     assert not errors, errors
     receiver.close()
     sender.close()
