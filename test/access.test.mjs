@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
 import { fixture, USER_A, USER_B } from './helpers.mjs';
 
-const revoke = (f, id, { as, ...options } = {}) => f.request(`/v1/principals/${id}/access` + (as ? '?as=' + as : ''), { method: 'DELETE', data: {}, ...options });
+const revoke = (f, id, { as = 'me', ...options } = {}) => f.request(`/v1/principals/${as}/access/${id}`, { method: 'DELETE', data: {}, ...options });
 async function ask(f, agent, to, kind = 'store') {
   const input = kind === 'store' ? { fields: [{ name: 'requested', label: '値', readable: true }] } : { service: 'google' };
   const result = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: { actor: 'relation', store: 'secret', connect: 'connection', app: 'app' }[kind], ...(kind === 'actor' ? { relation: 'agent' } : input) }], to } });

@@ -1534,7 +1534,7 @@ function removePrincipal(item) {
 }
 function revokeAccess(item) {
   openDialog(`<h2 id="dialog-title">${esc(t('client.access.confirmRevokeAccess'))}</h2><p>${esc(item.name)}</p><form><p>${esc(t('client.access.revokeAccessWarning'))}</p><p class="permission-note">${esc(t('client.access.revokeExternalCredentials'))}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">${esc(t('client.common.cancel'))}</button><button type="submit" class="button destructive">${esc(t('client.access.revokePermission'))}</button></div></form>`);
-  bindForm(async () => { await api(`/v1/principals/${item.id}/access`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast(t('client.access.revoked')); });
+  bindForm(async () => { await api(`/v1/principals/me/access/${item.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast(t('client.access.revoked')); });
 }
 // Sealing for everyone a secret of the owner's is for: those the server names (the owner, and Foundation when it
 // acts for them), and whoever already had the secret's key.

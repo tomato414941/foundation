@@ -186,7 +186,6 @@ const json = schema => ({ 'application/json': { schema: typeof schema === 'strin
 const response = (schema, description = 'Success') => ({ description, content: json(schema) });
 const body = schema => ({ required: true, content: json(schema) });
 const secure = [{ bearer: [] }, { session: [] }], session = [{ session: [] }];
-const as = query('as', principalId, 'Principal whose resources to use. Defaults to the caller. Requires an agent relation or the relevant resource permission. CLI/MCP select it automatically only when acts_for has exactly one entry.');
 // status: the success status, or every one an operation answers with (the same shape for each).
 function op(operationId, summary, output, { input, status = 200, description, parameters = [], security = secure, ...rest } = {}) {
   return { operationId, summary, ...(description ? { description } : {}), security, parameters,
@@ -248,7 +247,7 @@ export const routes = [
   { name: 'principalCredential', group: 'principals', path: '/v1/principals/{principalId}/credentials/{credentialId}', methods: { delete: okay('removeCredential', 'Remove an entry of any kind; the sessions it proved end') } },
   { name: 'principalCredentialWrap', group: 'principals', path: '/v1/principals/{principalId}/credentials/{credentialId}/wrap', methods: { put: okay('keepWrap', 'Keep the principal\'s private key wrapped for this passkey', { input: object({ wrapped: string }, ['wrapped']), 'x-input-error': 'invalid_wrap' }) } },
   { name: 'links', group: 'principals', path: '/v1/principals/{principalId}/links', methods: { post: op('issueLink', 'Issue a one-use link for a store request', object({ link: object({ id, request_id: requestId, expires_at: time }, ['id', 'request_id', 'expires_at']), url: string, expires_at: time }, ['link', 'url', 'expires_at']), { input: object({ request_id: string }, ['request_id']), status: 201, 'x-input-error': 'invalid_request' }) } },
-  { name: 'access', group: 'principals', path: '/v1/principals/{principalId}/access', methods: { delete: okay('revokeAccess', 'Revoke a principal’s access to the owner', { parameters: [as] }) } },
+  { name: 'access', group: 'principals', path: '/v1/principals/{principalId}/access/{otherId}', methods: { delete: okay('revokeAccess', 'Take away another principal’s access to this one and to what it holds', { description: 'The principal in the path is the one whose things were reached; otherId is the one who loses the lines onto it and onto what it holds, and its open requests to it.' }) } },
   { name: 'principalRecipients', group: 'principals', path: '/v1/principals/{principalId}/recipients', methods: { get: op('listRecipients', 'Whom a secret kept by the principal is sealed for', object({ recipients: array(ref('Recipient')) }, ['recipients']), { description: 'The principal, those who stand for it, and Foundation\'s principal when it is the principal\'s agent, each with a public key. Make an envelope for each when placing a secret.' }) } },
   { name: 'principalPayment', group: 'principals', path: '/v1/principals/{principalId}/payment', methods: {
     get: op('getPayment', 'Read whether the principal pays for use beyond the free part', object({ payment: ref('Payment') }, ['payment'])),
@@ -329,7 +328,7 @@ export const routes = [
 
 // A WebAuthn credential is known by the id its authenticator gave it (base64url, up to 1023 bytes).
 const credentialId = { type: 'string', pattern: '^[A-Za-z0-9_-]{16,1364}$' };
-const pathSchemas = { principalId, requestId, resourceId: id, keyId: id, commandId: id, credentialId };
+const pathSchemas = { principalId, otherId: principalId, requestId, resourceId: id, keyId: id, commandId: id, credentialId };
 const compiled = routes.map(route => {
   const names = [...route.path.matchAll(/\{(\w+)\}/g)].map(match => match[1]);
   const pattern = route.path.split(/(\{\w+\})/).map(part => part.startsWith('{')

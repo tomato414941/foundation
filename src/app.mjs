@@ -554,10 +554,9 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // In whose name. A principal acts as itself unless the path names another (/v1/principals/{id}/...); whether it may is
       // the same question as any other, answered from the lines.
       const actsFor = principals.actsFor(subject.id);
-      const asked = url.searchParams.get('as');
       // A principal's own things are listed and placed under it, where the path names it.
       const under = route?.group !== 'principals' && route?.params?.principalId;
-      const ownerId = under ? (under === 'me' ? subject.id : principalId(under)) : asked && at === 'access' ? principalId(asked) : subject.id;
+      const ownerId = under ? (under === 'me' ? subject.id : principalId(under)) : subject.id;
       let asked_ = null;
       const permit = (name, type, id, owner = type === 'principal' ? id : ownerId) => {
         asked_ = { subject, action: { name }, resource: { type, ...(id === undefined ? {} : { id }), owner } };
@@ -741,10 +740,11 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           return send(200, { ok: true });
         }
         if (part === 'access' && method === 'DELETE') {
-          permit('relate', 'principal', ownerId);
-          if (id === ownerId) fail(400, 'invalid_principal', '自分自身のアクセスは取り消せません。');
+          const other = principalId(route.params.otherId);
+          permit('relate', 'principal', id);
+          if (other === id) fail(400, 'invalid_principal', '自分自身のアクセスは取り消せません。');
           await inputBody();
-          requestActions.revokeAccess(ownerId, id);
+          requestActions.revokeAccess(id, other);
           return send(200, { ok: true });
         }
         // A principal's key: the public half, for anyone who would seal for it; with the private half wrapped per passkey,
