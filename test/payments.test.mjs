@@ -110,7 +110,7 @@ test('支払っていない人たちの計算時間は、全体でも上限を�
 test('持っている相手が使った分は持ち主の枠に数えられ、相手を増やしても無料枠は増えず、負担は引き受ける側だけが引ける', async t => {
   const fake = fakeStripe(), f = await fixture(t, { stripe: fake.stripe }), month = new Date().toISOString().slice(0, 7);
   const agent = await f.issueKey('box'), group = (await f.request('/v1/principals', { method: 'POST', data: { name: 'team', steward: true } })).json.principal;
-  assert.equal((await f.request('/v1/principals/me/payment', { token: agent.token, anonymous: true, as: agent.id })).json.payment.payer, USER_A, 'an owned principal is paid for by its owner');
+  assert.equal((await f.request('/v1/principals/me/payment', { token: agent.token, anonymous: true })).json.payment.payer, USER_A, 'an owned principal is paid for by its owner');
   assert.equal(f.app.payments.payerOf(group.id), USER_A);
   f.app.store.db.prepare('INSERT INTO compute_usage (principal_id,month,seconds) VALUES (?,?,?)').run(agent.id, month, 20_000);
   f.app.store.db.prepare('INSERT INTO compute_usage (principal_id,month,seconds) VALUES (?,?,?)').run(group.id, month, 10_000);
@@ -140,7 +140,7 @@ test('支払い方法のないプリンシパルには負担者がおらず、�
   const fake = fakeStripe(), f = await fixture(t, { stripe: fake.stripe });
   // One that came by itself: nobody made it, nobody pays for it.
   const alone = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'alone' } });
-  const as = { token: alone.json.token, anonymous: true, as: alone.json.principal.id };
+  const as = { token: alone.json.token, anonymous: true };
   assert.deepEqual((await f.request('/v1/principals/me/payment', as)).json.payment, { available: true, paying: false, payer: null });
   assert.throws(() => f.app.environments.within(alone.json.principal.id), { status: 402, code: 'payer_required' });
   assert.throws(() => f.app.objects.fits(alone.json.principal.id, 1, 1), { status: 402, code: 'payer_required' });

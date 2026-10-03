@@ -25,7 +25,7 @@ test('ほかの人の依頼が溜まっても、承認された相手の依頼�
   const f = await fixture(t), agent = await f.issueKey();
   const insert = f.app.store.db.prepare("INSERT INTO requests (id,from_id,to_id,type,detail,binding_message,steps,status,created_at,expires_at) VALUES (?,?,NULL,'relation','{}','','[]','pending',?,?)");
   f.app.store.transaction(() => { for (let at = 0; at < 1200; at++) insert.run('filler' + String(at).padStart(37, '0'), 'someone-' + at, Date.now(), Date.now() + 3600_000); });
-  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'secret', fields: [{ name: 'npm-token', label: 'npm のトークン' }] }] } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { to: USER_A, authorization_details: [{ type: 'secret', fields: [{ name: 'npm-token', label: 'npm のトークン' }] }] } });
   assert.equal(asked.status, 201, asked.text);
 });
 

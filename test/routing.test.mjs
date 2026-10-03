@@ -108,7 +108,7 @@ test('同じURLでCookieとBearerを受け付け、Bearerがある場合はそ�
   await f.connection('work');
   const browser = await f.request('/v1/principals/me/resources?kind=connection');
   assert.equal(browser.json.resources[0].subject, 'work@example.test');
-  const agent = await f.request('/v1/principals/me/resources?kind=connection', { token: key.token });
+  const agent = await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: key.token });
   assert.deepEqual(agent.json.resources.map(item => item.id), [first.id]);
   const anonymous = await f.request('/v1/services', { anonymous: true });
   assert.deepEqual(anonymous.json.services.map(item => item.id), ['google']);

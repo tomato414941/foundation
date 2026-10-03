@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture } from './helpers.mjs';
+import { fixture, USER_A } from './helpers.mjs';
 
 let KEY;
 
 test('lets the owner change what something is called, without the value being handed back', async (t) => {
   const f = await fixture(t);
   KEY = (await f.approveKey()).token;
-  await f.request('/v1/principals/me/resources?kind=secret&name=cloudflare/registrar-api-token',
+  await f.request('/v1/principals/' + USER_A + '/resources?kind=secret&name=cloudflare/registrar-api-token',
     { method: 'PUT', token: KEY, raw: 'cf-token-value', type: 'text/plain' });
 
   const moved = await f.request('/v1/resources/' + (await f.lookup('secret', 'cloudflare/registrar-api-token')).json.resource.id,
@@ -16,7 +16,7 @@ test('lets the owner change what something is called, without the value being ha
   assert.equal(moved.json.resource.name, 'cloudflare/cloudflare-api-token');
 
   // Renaming storage does not decide the environment variable.
-  const delivered = await f.request('/v1/principals/me/injections', { method: 'POST', token: KEY, anonymous: true, data: { names: [{ name: 'cloudflare/cloudflare-api-token', as: 'CLOUDFLARE_API_TOKEN' }] } });
+  const delivered = await f.request('/v1/principals/' + USER_A + '/injections', { method: 'POST', token: KEY, anonymous: true, data: { names: [{ name: 'cloudflare/cloudflare-api-token', as: 'CLOUDFLARE_API_TOKEN' }] } });
   assert.deepEqual(delivered.json.injection.environment, { CLOUDFLARE_API_TOKEN: 'cf-token-value' });
 });
 
@@ -24,7 +24,7 @@ test('refuses to move something onto a name already in use', async (t) => {
   const f = await fixture(t);
   KEY = (await f.approveKey()).token;
   for (const path of ['a/one', 'a/two']) {
-    await f.request('/v1/principals/me/resources?kind=secret&name=' + path + '', { method: 'PUT', token: KEY, raw: 'x', type: 'text/plain' });
+    await f.request('/v1/principals/' + USER_A + '/resources?kind=secret&name=' + path + '', { method: 'PUT', token: KEY, raw: 'x', type: 'text/plain' });
   }
   const refused = await f.request('/v1/resources/' + (await f.lookup('secret', 'a/one')).json.resource.id, { method: 'PATCH', data: { name: 'a/two' } });
   assert.equal(refused.status, 409);
@@ -34,8 +34,8 @@ test('refuses to move something onto a name already in use', async (t) => {
 test('hands the same value over under whatever names the caller asks for', async (t) => {
   const f = await fixture(t);
   KEY = (await f.approveKey()).token;
-  await f.request('/v1/principals/me/resources?kind=secret&name=github/token', { method: 'PUT', token: KEY, raw: 'ghp_value', type: 'text/plain' });
-  const delivered = await f.request('/v1/principals/me/injections', { method: 'POST', token: KEY, anonymous: true,
+  await f.request('/v1/principals/' + USER_A + '/resources?kind=secret&name=github/token', { method: 'PUT', token: KEY, raw: 'ghp_value', type: 'text/plain' });
+  const delivered = await f.request('/v1/principals/' + USER_A + '/injections', { method: 'POST', token: KEY, anonymous: true,
     data: { names: [{ name: 'github/token', as: 'GH_TOKEN' }, { name: 'github/token', as: 'GITHUB_TOKEN' }] } });
   assert.equal(delivered.status, 200, delivered.text);
   assert.deepEqual(delivered.json.injection.environment, { GH_TOKEN: 'ghp_value', GITHUB_TOKEN: 'ghp_value' });
@@ -44,8 +44,8 @@ test('hands the same value over under whatever names the caller asks for', async
 test('requires the caller to specify the delivery variable', async (t) => {
   const f = await fixture(t);
   KEY = (await f.approveKey()).token;
-  await f.request('/v1/principals/me/resources?kind=secret&name=notes/2026-09-23', { method: 'PUT', token: KEY, raw: 'x', type: 'text/plain' });
-  const refused = await f.request('/v1/principals/me/injections', { method: 'POST', token: KEY, anonymous: true, data: { names: [{ name: 'notes/2026-09-23' }] } });
+  await f.request('/v1/principals/' + USER_A + '/resources?kind=secret&name=notes/2026-09-23', { method: 'PUT', token: KEY, raw: 'x', type: 'text/plain' });
+  const refused = await f.request('/v1/principals/' + USER_A + '/injections', { method: 'POST', token: KEY, anonymous: true, data: { names: [{ name: 'notes/2026-09-23' }] } });
   assert.equal(refused.status, 400);
   assert.equal(refused.json.error.code, 'no_variable');
 });
@@ -54,7 +54,7 @@ test('asks for several things at once, and keeps them together or not at all', a
   const f = await fixture(t);
   KEY = (await f.approveKey()).token;
   const asked = await f.request('/v1/requests', { method: 'POST', token: KEY, anonymous: true, data: {
-    authorization_details: [{ type: 'secret', fields: [
+    to: USER_A, authorization_details: [{ type: 'secret', fields: [
       { name: 'apple/auth-key', label: '.p8 の中身', multiline: true, type: 'text/plain' },
       { name: 'apple/key-id', label: 'Key ID', readable: true },
       { name: 'apple/issuer-id', label: 'Issuer ID', readable: true },
@@ -68,12 +68,12 @@ test('asks for several things at once, and keeps them together or not at all', a
   const partial = await f.request('/v1/requests/' + asked.json.request.id + '/grant',
     { method: 'POST', data: { entries: [{ name: 'apple/auth-key', content: 'KEY' }, { name: 'apple/key-id', content: 'ABC123' }] } });
   assert.equal(partial.status, 400);
-  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=secret', { token: KEY, anonymous: true })).json.resources, []);
+  assert.deepEqual((await f.request('/v1/principals/' + USER_A + '/resources?kind=secret', { token: KEY, anonymous: true })).json.resources, []);
 
   const stored = await f.request('/v1/requests/' + asked.json.request.id + '/grant',
     { method: 'POST', data: { entries: [{ name: 'apple/auth-key', content: 'KEY' }, { name: 'apple/key-id', content: 'ABC123' }, { name: 'apple/issuer-id', content: 'UUID' }] } });
   assert.equal(stored.status, 200, stored.text);
-  const kept = await f.request('/v1/principals/me/resources?kind=secret', { token: KEY, anonymous: true });
+  const kept = await f.request('/v1/principals/' + USER_A + '/resources?kind=secret', { token: KEY, anonymous: true });
   assert.deepEqual(kept.json.resources.map(one => one.name), ['apple/auth-key', 'apple/issuer-id', 'apple/key-id']);
   assert.equal((await f.read('secret', 'apple/key-id', { token: KEY, anonymous: true })).status, 200, 'an identifier asked for as readable is on a line to the asker');
   assert.equal((await f.read('secret', 'apple/auth-key', { token: KEY, anonymous: true })).status, 403);
@@ -87,7 +87,7 @@ test('lets the owner put something there themselves', async (t) => {
   assert.equal(put.status, 200, put.text);
   assert.equal(put.json.resource.name, 'aws/session-token');
 
-  const delivered = await f.request('/v1/principals/me/injections', { method: 'POST', token: KEY, anonymous: true, data: { names: [{ name: 'aws/session-token', as: 'SESSION_TOKEN' }] } });
+  const delivered = await f.request('/v1/principals/' + USER_A + '/injections', { method: 'POST', token: KEY, anonymous: true, data: { names: [{ name: 'aws/session-token', as: 'SESSION_TOKEN' }] } });
   assert.deepEqual(delivered.json.injection.environment, { SESSION_TOKEN: 'sh-token-value' });
 
   const open = await f.request('/v1/principals/me/resources?kind=secret&name=' + encodeURIComponent('aws/region') + '',

@@ -9,7 +9,7 @@ const READONLY = 'https://www.googleapis.com/auth/gmail.readonly', SEND = 'https
 const key = () => 'fdn_' + randomBytes(32).toString('base64url');
 // A key nobody knows asks to act for whoever opens its request; a key that acts for someone asks them for a registration.
 const asking = { authorization_details: [{ type: 'relation', relation: 'agent' }] };
-const registration = { authorization_details: [{ type: 'connection', service: 'google' }], binding_message: '届いたメールの確認' };
+const registration = { to: USER_A, authorization_details: [{ type: 'connection', service: 'google' }], binding_message: '届いたメールの確認' };
 const askingWith = ({ name, ...rest } = {}) => ({ ...asking, ...rest });
 async function create(f, token = null, overrides = {}, base = asking) {
   token ??= (await f.become(overrides.name ?? 'laptop のAI')).token;
@@ -24,7 +24,7 @@ async function register(f, overrides = {}, agent = null) {
 }
 const approve = (f, row, overrides = {}) => f.request('/v1/requests/' + row.id + '/grant', { method: 'POST', data: { user_code: row.user_code, ...overrides } });
 // Once approved, a machine names the person it acts for on every call, as the CLI does.
-const usable = (f, token) => f.request('/v1/principals/me/resources?kind=connection', { token, anonymous: true, as: USER_A });
+const usable = (f, token) => f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token, anonymous: true });
 const cancel = (f, token) => f.request('/v1/principals/me', { method: 'DELETE', token, anonymous: true, data: {} });
 const rowStatus = (f, id) => f.app.store.db.prepare('SELECT status FROM requests WHERE id=?').get(id)?.status;
 
@@ -68,7 +68,7 @@ test('A key not yet approved cannot ask for a registration, an approval request 
   assert.equal(attempt.status, 409); assert.equal(attempt.json.error.code, 'approval_only');
   assert.equal(f.app.connections.list(USER_A).length, 0);
   const approved = await f.issueKey();
-  const bare = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: approved.token, data: { binding_message: '何もない' } });
+  const bare = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: approved.token, data: { to: USER_A, binding_message: '何もない' } });
   assert.equal(bare.status, 400); assert.equal(bare.json.error.code, 'invalid_authorization_details');
   // A key that already acts for someone may still ask to act for another; that is a new request, not a repeat.
   const again = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: approved.token, data: asking });
@@ -80,7 +80,7 @@ test('Request creation is idempotent, and asking for something else makes a new 
   assert.equal((await create(f, token)).row.id, row.id);
   const first = await register(f);
   assert.equal((await create(f, first.token, {}, registration)).row.id, first.row.id);
-  const changed = await f.request('/v1/requests', { method: 'POST', token: first.token, data: { ...registration, authorization_details: [{ type: 'connection', service: 'google', scopes: [SEND] }] } });
+  const changed = await f.request('/v1/requests', { method: 'POST', token: first.token, data: { to: USER_A, ...registration, authorization_details: [{ type: 'connection', service: 'google', scopes: [SEND] }] } });
   assert.equal(changed.status, 201); assert.notEqual(changed.json.request.id, first.row.id);
   assert.deepEqual((await f.request('/v1/requests/' + first.row.id, { token: first.token })).json.request.authorization_details, [{ ...registration.authorization_details[0], auth_scheme: 'oauth' }]);
 });
@@ -177,7 +177,7 @@ test('Cross-site creation, invalid names and cross-origin approval are rejected'
     assert.equal((await f.request('/v1/requests', { method: 'POST', token, data: asking, headers })).status, 403);
   }
   const agent = await f.issueKey();
-  assert.equal((await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { ...registration, authorization_details: [{ type: 'connection', connector: 'unknown' }] } })).status, 400);
+  assert.equal((await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { to: USER_A, ...registration, authorization_details: [{ type: 'connection', connector: 'unknown' }] } })).status, 400);
   const { row } = await create(f, token);
   const response = await f.request('/v1/requests/' + row.id + '/grant', { method: 'POST', headers: { origin: 'https://evil.test' }, data: { user_code: row.user_code } });
   assert.equal(response.status, 403);
@@ -225,7 +225,7 @@ test('利用者が定義したサービスも、共通の依頼・認証・受�
   assert.equal(saved.service, service); assert.equal(saved.subject, 'user:id-personal');
   const injected = await f.inject(saved, { token });
   assert.deepEqual(injected.json.injection.environment, { NOTES_TOKEN: 'access-personal-0' });
-  const listed = (await f.request('/v1/principals/me/resources?kind=connection', { token })).json.resources[0];
+  const listed = (await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token })).json.resources[0];
   assert.deepEqual(listed.variables, ['NOTES_TOKEN']); assert.equal(listed.service.name, 'Notes');
 });
 
@@ -350,17 +350,17 @@ test('A key may have several requests open at once, each at its own address, and
   const f = await fixture(t), issued = await f.issueKey(), other = await f.issueKey('other');
   const asks = [];
   for (const scopes of [[READONLY], [SEND]]) {
-    const made = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { authorization_details: [{ type: 'connection', service: 'google', scopes }], binding_message: scopes[0] } });
+    const made = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { to: USER_A, authorization_details: [{ type: 'connection', service: 'google', scopes }], binding_message: scopes[0] } });
     assert.equal(made.status, 201, made.text); asks.push(made.json.request);
   }
   assert.notEqual(asks[0].id, asks[1].id);
   assert.equal(asks[1].verification_uri, f.base + '/requests/' + asks[1].id);
-  const again = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { authorization_details: [{ type: 'connection', service: 'google', scopes: [READONLY] }], binding_message: READONLY } });
+  const again = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { to: USER_A, authorization_details: [{ type: 'connection', service: 'google', scopes: [READONLY] }], binding_message: READONLY } });
   assert.equal(again.json.request.id, asks[0].id, 'asking again for the same thing is the same request');
   assert.deepEqual((await f.request('/v1/requests?status=pending', { token: issued.token })).json.requests.map(row => row.id), asks.map(row => row.id));
   assert.deepEqual((await f.request('/v1/requests', { token: other.token })).json.requests, []);
-  for (let n = 2; n < 10; n++) assert.equal((await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { authorization_details: [{ type: 'connection', service: 'google' }], binding_message: 'more ' + n } })).status, 201);
-  const full = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { authorization_details: [{ type: 'connection', service: 'google' }], binding_message: 'one too many' } });
+  for (let n = 2; n < 10; n++) assert.equal((await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { to: USER_A, authorization_details: [{ type: 'connection', service: 'google' }], binding_message: 'more ' + n } })).status, 201);
+  const full = await f.request('/v1/requests', { method: 'POST', token: issued.token, data: { to: USER_A, authorization_details: [{ type: 'connection', service: 'google' }], binding_message: 'one too many' } });
   assert.equal(full.status, 409); assert.equal(full.json.error.code, 'too_many_pending');
   assert.equal((await f.request('/v1/requests?status=nope', { token: issued.token })).json.error.code, 'invalid_status');
 });
@@ -391,5 +391,5 @@ test('代わりに動く AI は持ち主に追加の関係を頼み、持ち主�
   const granted = await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: {} });
   assert.equal(granted.status, 200, granted.text);
   assert.deepEqual(granted.json.request.result, { relation: 'disconnect_grant', object_type: 'resource', object_id: connected.id });
-  assert.equal((await f.request('/v1/resources/' + connected.id, { method: 'DELETE', data: { revoke: false }, token: agent.token, anonymous: true, as: USER_A })).status, 200);
+  assert.equal((await f.request('/v1/resources/' + connected.id, { method: 'DELETE', data: { revoke: false }, token: agent.token, anonymous: true })).status, 200);
 });

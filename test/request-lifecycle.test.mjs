@@ -5,7 +5,7 @@ import { fixture, USER_A } from './helpers.mjs';
 import { requestResultView } from '../web/request-view.js';
 
 async function ask(f, token, kind, input) {
-  const answer = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: { actor: 'relation', store: 'secret', connect: 'connection', app: 'app' }[kind], ...(kind === 'actor' ? { relation: 'agent' } : input) }] } });
+  const answer = await f.request('/v1/requests', { method: 'POST', token, data: { to: USER_A, authorization_details: [{ type: { actor: 'relation', store: 'secret', connect: 'connection', app: 'app' }[kind], ...(kind === 'actor' ? { relation: 'agent' } : input) }] } });
   assert.equal(answer.status, 201, answer.text);
   return answer.json.request;
 }
@@ -13,13 +13,13 @@ async function ask(f, token, kind, input) {
 test('依頼の種類と内容を保存し、同じ依頼を二度出しても一つとして扱う', async t => {
   const f = await fixture(t), key = await f.issueKey();
   const request = await ask(f, key.token, 'connect', { service: 'google' });
-  const again = await f.request('/v1/requests', { method: 'POST', token: key.token, data: { authorization_details: [{ type: 'connection', service: 'google' }] } });
+  const again = await f.request('/v1/requests', { method: 'POST', token: key.token, data: { to: USER_A, authorization_details: [{ type: 'connection', service: 'google' }] } });
   assert.equal(again.json.request.id, request.id);
   assert.deepEqual(request.authorization_details, [{ type: 'connection', service: 'google', auth_scheme: 'oauth' }]);
   for (const data of [
     { authorization_details: [{ type: 'other' }] }, { authorization_details: [{ type: 'connection', fields: [] }] },
     { authorization_details: [{ type: 'secret', service: 'google' }] }, { service: 'google' },
-  ]) assert.equal((await f.request('/v1/requests', { method: 'POST', token: key.token, data })).status, 400);
+  ]) assert.equal((await f.request('/v1/requests', { method: 'POST', token: key.token, data: { to: USER_A, ...data } })).status, 400);
 });
 
 test('接続の失効・削除後も依頼の完了と結果を維持する', async t => {
@@ -31,7 +31,7 @@ test('接続の失効・削除後も依頼の完了と結果を維持する', as
   const done = await read(), id = done.result.connection_id;
   assert.equal(done.status, 'granted');
   f.app.connections.reconnectRequired(f.app.connections.held(USER_A, id));
-  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: key.token })).json.resources[0].status, 'reconnect_required');
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: key.token })).json.resources[0].status, 'reconnect_required');
   for (const remove of [false, true]) {
     if (remove) await f.request('/v1/resources/' + id, { method: 'DELETE', data: { revoke: false } });
     const current = await read();
@@ -72,7 +72,7 @@ test('キー失効時に未完了の依頼を取り消し、同じトークン�
   const again = await f.approveKey('再承認');
   assert.equal((await f.request('/v1/requests/' + doneRequest.id, { token: again.token })).status, 404);
   assert.deepEqual((await f.request('/v1/requests', { token: again.token })).json.requests.map(row => row.authorization_details[0].relation), ['agent'], 'a newly approved machine is a new principal, with only its own asking behind it');
-  assert.equal((await f.request('/v1/principals/me/resources?kind=secret', { token: again.token })).json.resources[0].name, 'kept');
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=secret', { token: again.token })).json.resources[0].name, 'kept');
 });
 
 test('承認依頼の完了結果を保ち、失効キーの認証を拒否する', async t => {
@@ -94,7 +94,7 @@ test('APIの認証成功をキーの最終利用として記録する', async t 
   assert.ok(first);
   await new Promise(resolve => setTimeout(resolve, 5));
   const before = Date.now();
-  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: key.token })).status, 200);
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: key.token })).status, 200);
   const current = await mine();
   assert.ok(Date.parse(current.last_used_at) >= before);
   assert.ok(Date.parse(current.last_used_at) > Date.parse(first));

@@ -8,8 +8,8 @@ let KEY;
 test('hands the owner everything they have, secrets included', async (t) => {
   const f = await fixture(t);
   KEY = (await f.approveKey()).token;
-  await f.request('/v1/principals/me/resources?kind=secret&name=notes/plan', { method: 'PUT', token: KEY, raw: 'read me', type: 'text/plain' });
-  await f.request('/v1/principals/me/resources?kind=secret&name=keys/token', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
+  await f.request('/v1/principals/' + USER_A + '/resources?kind=secret&name=notes/plan', { method: 'PUT', token: KEY, raw: 'read me', type: 'text/plain' });
+  await f.request('/v1/principals/' + USER_A + '/resources?kind=secret&name=keys/token', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
 
   const exported = await f.request('/v1/principals/me/export');
   assert.equal(exported.status, 200, exported.text);
@@ -31,9 +31,9 @@ test('hands the owner everything they have, secrets included', async (t) => {
 test('keeps the export to the owner\'s own session', async (t) => {
   const f = await fixture(t);
   KEY = (await f.approveKey()).token;
-  await f.request('/v1/principals/me/resources?kind=secret&name=keys/token', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
+  await f.request('/v1/principals/' + USER_A + '/resources?kind=secret&name=keys/token', { method: 'PUT', token: KEY, raw: 'sh-secret-value', type: 'text/plain' });
 
-  const asAKey = await f.request('/v1/principals/me/export', { token: KEY, anonymous: true });
+  const asAKey = await f.request('/v1/principals/' + USER_A + '/export', { token: KEY, anonymous: true });
   assert.equal(asAKey.status, 403);
   assert.ok(!asAKey.text.includes('sh-secret-value'));
 

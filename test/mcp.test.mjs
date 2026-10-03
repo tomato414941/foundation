@@ -66,7 +66,7 @@ test('共通APIツールで最新のOpenAPI仕様を取得する', async (t) => 
 
 test('makes an API call with the caller\'s own key and returns what it said', async (t) => {
   const f = await connected(t);
-  const stored = await f.request('/v1/principals/me/resources?kind=secret&name=notes/plan', { method: 'PUT', token: KEY, raw: 'one line', type: 'text/plain' });
+  const stored = await f.request('/v1/principals/' + USER_A + '/resources?kind=secret&name=notes/plan', { method: 'PUT', token: KEY, raw: 'one line', type: 'text/plain' });
   assert.equal(stored.status, 200, stored.text);
   const result = await modern(f, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'foundation_api', arguments: { method: 'GET', path: '/v1/principals/' + USER_A + '/resources?kind=secret' } } });
   assert.equal(result.status, 200, result.text);

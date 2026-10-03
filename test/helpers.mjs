@@ -96,8 +96,10 @@ export async function fixture(t, options = {}) {
   const base = 'http://127.0.0.1:' + app.server.address().port;
   let cookie;
   // `data` is sent as JSON; `raw` is sent as given, with `type` as its content type.
-  // A token that acts for exactly one principal names them on every call, as the CLI and the MCP tool do.
+  // Whom a token acts for, for the helpers below that take things by name: they name that owner in the path, as the CLI does.
   const actsFor = new Map();
+  const holder = ({ as, token } = {}) => '/v1/principals/' + (as ?? (token && actsFor.get(token)) ?? 'me');
+  const plain = ({ as, ...options } = {}) => options;
   // Secrets are sealed by the client: a test that places one as `raw` has it sealed here, for the owner's
   // recipients and the caller, with a key the caller publishes on first use; one that reads a secret gets its
   // bytes opened with that key, as a client would.
@@ -122,7 +124,7 @@ export async function fixture(t, options = {}) {
   }
   async function sealed(content, options, recipients, also = []) {
     const own = await keyOf(options);
-    if (!recipients) { const listed = await request('/v1/principals/' + (options?.as ?? (options?.token && actsFor.get(options.token)) ?? 'me') + '/recipients', { ...options, method: 'GET', data: undefined, raw: undefined }); recipients = listed.status === 200 ? listed.json.recipients : []; }
+    if (!recipients) { const listed = await request('/v1/principals/' + (options?.as ?? 'me') + '/recipients', { ...plain(options), method: 'GET', data: undefined, raw: undefined }); recipients = listed.status === 200 ? listed.json.recipients : []; }
     recipients = [...recipients, ...also.filter(one => !recipients.some(item => item.principal_id === one.principal_id))];
     // The placer is a recipient too: placing something new for another makes it the thing's editor.
     if (own && !recipients.some(item => item.principal_id === own.id)) recipients.push({ principal_id: own.id, public_key: b64(own.publicKey) });
@@ -130,11 +132,11 @@ export async function fixture(t, options = {}) {
     return { content: b64(sealContent(contentKey, Buffer.from(content))), envelopes: Object.fromEntries(recipients.map(item => [item.principal_id, b64(seal(contentKey, Buffer.from(item.public_key, 'base64url')))])) };
   }
   const secretPath = path => /^\/v1\/principals\/[^/?]+\/resources\?.*kind=secret/.test(path) || (path.match(/^\/v1\/resources\/([^/?]+)\/content/) && app.resources.get(RegExp.$1)?.kind === 'secret');
-  async function request(path, { method = 'GET', data, raw, type = 'application/octet-stream', token, anonymous = false, headers = {}, as } = {}) {
+  async function request(path, { method = 'GET', data, raw, type = 'application/octet-stream', token, anonymous = false, headers = {} } = {}) {
     // Making a principal and giving it a key are two calls; a test that wants both at once gets them joined here.
     if (method === 'POST' && /^\/v1\/principals(\?|$)/.test(path) && data?.key === true) {
       const { key: _, ...rest } = data;
-      const made = await request(path, { method, data: rest, token, anonymous, headers, as });
+      const made = await request(path, { method, data: rest, token, anonymous, headers });
       if (made.status !== 201) return made;
       const issued = await request('/v1/principals/' + encodeURIComponent(made.json.principal.id) + '/credentials', { method: 'POST', data: { kind: 'key' }, token, anonymous, headers });
       if (issued.status !== 201) return issued;
@@ -143,10 +145,7 @@ export async function fixture(t, options = {}) {
     }
     const OWNED = '(?:resources|environments|runs|connections|injections|functions|export|recipients)';
     const named = path.match(new RegExp('^/v1/principals/([^/?]+)/' + OWNED))?.[1];
-    const owner = as ?? (named && named !== 'me' ? named : undefined) ?? (token && actsFor.get(token)) ?? new URL(path, base).searchParams.get('as') ?? undefined;
-    if (owner && named === 'me') path = '/v1/principals/' + owner + path.slice('/v1/principals/me'.length);
-    // One who acts for an owner asks that owner, unless the request says whom.
-    if (owner && method === 'POST' && path === '/v1/requests' && data && data.to === undefined && data.authorization_details?.[0]?.type !== 'relation') data = { ...data, to: owner };
+    const owner = named && named !== 'me' ? named : undefined;
     if (method === 'PUT' && raw !== undefined && secretPath(path)) {
       // Over what is there, the new key goes to everyone who had the old one.
       let existing = null;
@@ -229,10 +228,10 @@ export async function fixture(t, options = {}) {
   }
   // Injecting a connection for a service derives what it yields now; nothing else reaches the service.
   async function inject(connection, options = {}) {
-    return request('/v1/principals/me/injections', { method: 'POST', data: { names: [{ id: connection.id }] }, ...options });
+    return request(holder(options) + '/injections', { method: 'POST', data: { names: [{ id: connection.id }] }, ...plain(options) });
   }
   async function connectionFacts(connection, options = {}) {
-    const listed = await request('/v1/principals/me/resources?kind=connection', options);
+    const listed = await request(holder(options) + '/resources?kind=connection', plain(options));
     assert.equal(listed.status, 200, listed.text);
     const found = listed.json.resources.find(item => item.id === connection.id);
     assert.ok(found, '接続の一覧から対象を取得する');
@@ -264,15 +263,15 @@ export async function fixture(t, options = {}) {
   }
   // A key the owner makes from the dashboard: a principal that acts for them, carrying a key.
   // Resources by name: the owner's name finds the id, and the id reaches the thing.
-  const lookup = (kind, name, options = {}) => request('/v1/principals/me/resources?' + new URLSearchParams({ kind, name }), options);
+  const lookup = (kind, name, options = {}) => request(holder(options) + '/resources?' + new URLSearchParams({ kind, name }), plain(options));
   async function read(kind, name, options = {}) {
     const found = await lookup(kind, name, options);
-    return found.status === 200 ? request('/v1/resources/' + found.json.resource.id + '/content', options) : found;
+    return found.status === 200 ? request('/v1/resources/' + found.json.resource.id + '/content', plain(options)) : found;
   }
-  const keep = (kind, name, raw, options = {}) => request('/v1/principals/me/resources?' + new URLSearchParams({ kind, name }), { method: 'PUT', raw, type: 'text/plain', ...options });
+  const keep = (kind, name, raw, options = {}) => request(holder(options) + '/resources?' + new URLSearchParams({ kind, name }), { method: 'PUT', raw, type: 'text/plain', ...plain(options) });
   async function drop(kind, name, options = {}) {
     const found = await lookup(kind, name, options);
-    return found.status === 200 ? request('/v1/resources/' + found.json.resource.id, { method: 'DELETE', data: {}, ...options }) : found;
+    return found.status === 200 ? request('/v1/resources/' + found.json.resource.id, { method: 'DELETE', data: {}, ...plain(options) }) : found;
   }
   async function issueKey(name = 'laptop') {
     const result = await request('/v1/principals', { method: 'POST', data: { name, agent: true, key: true } });

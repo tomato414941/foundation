@@ -25,16 +25,16 @@ test('アクセス許可と個別の閲覧・編集権限を取り消し、相�
   assert.equal((await f.read('secret', 'private', { token: agent.token })).text, 'owner-value');
   assert.equal((await revoke(f, agent.id)).status, 200);
   for (const token of [agent.token, second.json.token]) {
-    const me = await f.request('/v1/principals/me', { token, as: agent.id });
+    const me = await f.request('/v1/principals/me', { token });
     assert.equal(me.status, 200); assert.equal(me.json.principal.id, agent.id);
     assert.deepEqual(me.json.acts_for, []);
     assert.equal(me.json.keys.length, 2);
-    assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token, as: USER_A })).status, 403);
+    assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token })).status, 403);
     for (const saved of [given, written]) {
       assert.equal((await f.request(`/v1/resources/${saved.json.resource.id}/content`, { token })).status, 403);
       assert.equal((await f.request(`/v1/resources/${saved.json.resource.id}/content`, { token, method: 'PUT', raw: 'changed' })).status, 403);
     }
-    const delivered = await f.request('/v1/principals/me/injections', { method: 'POST', token, as: USER_A, data: { names: [{ name: 'private', as: 'VALUE' }] } });
+    const delivered = await f.request('/v1/principals/' + USER_A + '/injections', { method: 'POST', token, data: { names: [{ name: 'private', as: 'VALUE' }] } });
     assert.equal(delivered.status, 403);
     assert.equal((await f.read('secret', 'own', { token, as: agent.id })).text, 'own-value');
   }
@@ -79,11 +79,11 @@ test('保有者が自分への許可だけを取り消し、相手の所有権�
   assert.equal((await revoke(f, agent.id, { token: stranger.token, as: USER_A })).status, 401);
   assert.equal((await revoke(f, agent.id, { token: agent.token, as: USER_A })).status, 403);
   assert.equal((await revoke(f, USER_A)).status, 400);
-  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).status, 200);
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: agent.token })).status, 200);
   f.app.principals.unrelate(USER_A, 'owner', 'principal', agent.id);
   assert.equal((await revoke(f, agent.id)).status, 200);
   assert.equal((await f.request('/v1/principals/me', { token: agent.token })).status, 200);
-  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).status, 401);
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: agent.token })).status, 401);
 });
 
 test('取り消した相手を同じキーで再承認し、以後に追加したデータも利用する', async t => {
@@ -93,7 +93,7 @@ test('取り消した相手を同じキーで再承認し、以後に追加し�
   assert.equal(asked.status, 201);
   assert.equal((await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { user_code: asked.json.request.user_code } })).status, 200);
   await f.keep('secret', 'later', 'later-value');
-  const delivered = await f.request('/v1/principals/me/injections', { method: 'POST', token: agent.token, data: { names: [{ name: 'later', as: 'VALUE' }] } });
+  const delivered = await f.request('/v1/principals/' + USER_A + '/injections', { method: 'POST', token: agent.token, data: { names: [{ name: 'later', as: 'VALUE' }] } });
   assert.equal(delivered.status, 200); assert.equal(delivered.json.injection.environment.VALUE, 'later-value');
 });
 
@@ -126,7 +126,7 @@ test('個別のキーを失効させても他のキーから同じアクセス�
   assert.equal((await f.request('/v1/principals/me', { token: agent.token })).status, 401);
   const result = await f.request('/v1/principals/me', { token: second.json.token });
   assert.equal(result.status, 200); assert.deepEqual(result.json.acts_for, [USER_A]);
-  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: second.json.token, as: USER_A })).status, 200);
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: second.json.token })).status, 200);
 });
 
 test('認証情報の更新中にアクセスを取り消すと受け渡しを止め、保有者は接続を利用し続ける', async t => {

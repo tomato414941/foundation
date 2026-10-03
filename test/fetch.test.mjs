@@ -7,7 +7,7 @@ import { connect } from 'node:tls';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { fixture } from './helpers.mjs';
+import { fixture, USER_A, USER_B } from './helpers.mjs';
 import { uriTemplate } from '../src/uri-template.mjs';
 
 const TOKEN = 'sk-fetch-fixture-value-1234567890';
@@ -53,9 +53,9 @@ async function setup(t) {
   const api = await service(t);
   const f = await fixture(t, { outbound: api.outbound });
   const key = await f.issueKey();
-  const put = await f.request('/v1/principals/me/resources?kind=secret&name=api/token', { method: 'PUT', token: key.token, raw: TOKEN, type: 'text/plain' });
+  const put = await f.request('/v1/principals/' + USER_A + '/resources?kind=secret&name=api/token', { method: 'PUT', token: key.token, raw: TOKEN, type: 'text/plain' });
   assert.equal(put.status, 200, put.text);
-  const call = request => f.request('/v1/principals/me/functions/http.request', { method: 'POST', token: key.token, data: request });
+  const call = request => f.request('/v1/principals/' + USER_A + '/functions/http.request', { method: 'POST', token: key.token, data: request });
   return { ...api, f, key, call };
 }
 
@@ -134,9 +134,9 @@ test('What goes out is checked: the key may use each path, headers are its own, 
   for (const name of ['host', 'Content-Length', 'accept-encoding', 'proxy-authorization', 'x-forwarded-for']) {
     assert.equal((await call({ url: 'https://api.example.test/', headers: { [name]: 'x' } })).json.error.code, 'invalid_headers', name);
   }
-  await f.request('/v1/principals/me/resources?kind=secret&name=api/multiline', { method: 'PUT', token: key.token, raw: 'line1\nline2', type: 'text/plain' });
+  await f.request('/v1/principals/' + USER_A + '/resources?kind=secret&name=api/multiline', { method: 'PUT', token: key.token, raw: 'line1\nline2', type: 'text/plain' });
   assert.equal((await call({ url: 'https://api.example.test/', ...authorization('api/multiline') })).json.error.code, 'invalid_headers');
-  await f.request('/v1/principals/me/resources?kind=secret&name=api/binary', { method: 'PUT', token: key.token, raw: Buffer.from([0xff, 0xfe, 0x00]), type: 'application/octet-stream' });
+  await f.request('/v1/principals/' + USER_A + '/resources?kind=secret&name=api/binary', { method: 'PUT', token: key.token, raw: Buffer.from([0xff, 0xfe, 0x00]), type: 'application/octet-stream' });
   assert.equal((await call({ url: 'https://api.example.test/', method: 'POST', body: '', bindings: [{ target: '/body', parts: [{ name: 'api/binary' }] }] })).json.error.code, 'not_text');
   assert.equal((await call({ url: 'https://api.example.test/', method: 'GET', body: 'x' })).json.error.code, 'invalid_body');
   assert.equal(received.length, 0, 'nothing refused ever went out');
@@ -167,21 +167,21 @@ test('Foundation itself is not reachable under another name that points at its o
   api.addresses.set('alias.example.test', [{ address: '198.35.26.96', family: 4 }]);
   const f = await fixture(t, { outbound: api.outbound, publicOrigin: 'https://foundation.example.test' });
   const key = await f.issueKey();
-  const refused = await f.request('/v1/principals/me/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://alias.example.test/v1/keys/current' } });
+  const refused = await f.request('/v1/principals/' + USER_A + '/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://alias.example.test/v1/keys/current' } });
   assert.equal(refused.status, 400); assert.equal(refused.json.error.code, 'invalid_destination');
   assert.equal(api.received.length, 0);
-  const allowed = await f.request('/v1/principals/me/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/echo' } });
+  const allowed = await f.request('/v1/principals/' + USER_A + '/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/echo' } });
   assert.equal(allowed.json.response.status, 200, allowed.text);
 });
 
 test('The HTTPS function binds opaque stored names explicitly and saves only its selected response body', async t => {
   const { f, key, received } = await setup(t), connection = await f.connection();
   const inputName = '{{入力}} /..,=x', outputName = '結果 /?';
-  const input = await f.request('/v1/principals/me/resources?kind=secret&name=' + encodeURIComponent(inputName) + '', { method: 'PUT', token: key.token, raw: TOKEN });
+  const input = await f.request('/v1/principals/' + USER_A + '/resources?kind=secret&name=' + encodeURIComponent(inputName) + '', { method: 'PUT', token: key.token, raw: TOKEN });
   assert.equal(input.status, 200);
   f.expire(connection.id);
   const calls = f.google.calls.length;
-  const saved = await f.request('/v1/principals/me/functions/http.request', { method: 'POST', token: key.token, data: {
+  const saved = await f.request('/v1/principals/' + USER_A + '/functions/http.request', { method: 'POST', token: key.token, data: {
     url: 'https://api.example.test/echo', ...authorization(inputName, 'Bearer '), save: outputName,
   } });
   assert.equal(saved.status, 200, saved.text);
@@ -195,7 +195,7 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
   assert.equal((await f.read('secret', (outputName), { token: key.token })).status, 403);
   assert.doesNotMatch(saved.text, new RegExp(TOKEN));
 
-  const binary = await f.request('/v1/principals/me/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/bytes', save: 'binary' } });
+  const binary = await f.request('/v1/principals/' + USER_A + '/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/bytes', save: 'binary' } });
   assert.equal(binary.status, 200);
   const owner = f.app.principals.actsFor(key.id)[0];
   assert.deepEqual(f.app.secrets.open(f.app.secrets.find(owner, 'binary')), Buffer.from([0, 255, 1]));
@@ -203,12 +203,12 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
 
 test('The HTTPS function retains destination and owner checks, and validates output names before sending', async t => {
   const { f, key, received } = await setup(t);
-  const call = (data, token = key.token) => f.request('/v1/principals/me/functions/http.request', { method: 'POST', token, data });
+  const call = (data, token = key.token, owner = USER_A) => f.request('/v1/principals/' + owner + '/functions/http.request', { method: 'POST', token, data });
   assert.equal((await call({ url: 'https://127.0.0.1/' })).json.error.code, 'invalid_destination');
   assert.equal((await call({ url: 'https://api.example.test/', save: '' })).json.error.code, 'invalid_name');
   await f.signin('second@example.test');
   const other = await f.issueKey();
-  const refused = await call({ url: 'https://api.example.test/', ...authorization() }, other.token);
+  const refused = await call({ url: 'https://api.example.test/', ...authorization() }, other.token, USER_B);
   assert.equal(refused.status, 404);
   assert.equal(received.length, 0);
 });

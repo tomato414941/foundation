@@ -69,7 +69,7 @@ test('AWSは鍵を預からず、持ち主が作った役割を外部IDつきで
 
 test('役割の流れは持ち主のブラウザーからだけ始まり、他人の流れを完了させることはできない', async t => {
   const { aws, f } = await connected(t), key = await f.issueKey();
-  assert.equal((await f.request('/v1/principals/me/connections', { method: 'POST', token: key.token, anonymous: true, data: { service: 'aws', auth_scheme: 'role' } })).status, 403);
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/connections', { method: 'POST', token: key.token, anonymous: true, data: { service: 'aws', auth_scheme: 'role' } })).status, 403);
   const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'aws', auth_scheme: 'role' } });
   const arn = aws.make(linkParameters(started.json.url).param_ExternalId);
   await f.signin('second@example.test');
@@ -94,7 +94,7 @@ test('AWSの再接続依頼を同じ役割のARNと外部IDで完了し、接続
   assert.equal(first.status, 200, first.text);
   const connection = first.json.connection;
   const asked = await f.request('/v1/requests', { method: 'POST', token: key.token, data: {
-    authorization_details: [{ type: 'connection', service: 'aws', auth_scheme: 'role', connection_id: connection.id }] } });
+    to: USER_A, authorization_details: [{ type: 'connection', service: 'aws', auth_scheme: 'role', connection_id: connection.id }] } });
   assert.equal(asked.status, 201, asked.text);
   const flow = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'aws', auth_scheme: 'role', request_id: asked.json.request.id } });
   assert.equal(flow.status, 200, flow.text);

@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { fixture, USER_A, USER_B } from './helpers.mjs';
 
 async function deliver(f, key, owner, name) {
-  const response = await f.request('/v1/principals/me/injections', {
-    method: 'POST', token: key.token, anonymous: true, as: owner,
+  const response = await f.request('/v1/principals/' + owner + '/injections', {
+    method: 'POST', token: key.token, anonymous: true,
     data: { names: [{ name, as: 'VALUE' }] },
   });
   assert.equal(response.status, 200, response.text);

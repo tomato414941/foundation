@@ -10,7 +10,7 @@ const lent = (t, options = {}) => fixture(t, { runner: new LocalRunner(), ...opt
 
 test('エンバイロメントは何の ID も持たずに開き、コマンドを動かしても Foundation には届かない', async t => {
   const f = await lent(t), agent = await f.issueKey();
-  const opened = await f.request('/v1/principals/me/environments', { method: 'POST', token: agent.token, data: { name: 'scratch' } });
+  const opened = await f.request('/v1/principals/' + USER_A + '/environments', { method: 'POST', token: agent.token, data: { name: 'scratch' } });
   assert.equal(opened.status, 201, opened.text);
   const environment = opened.json.environment;
   assert.equal(environment.kind, 'environment'); assert.equal(environment.identity, null); assert.equal(environment.owner_id, USER_A);
@@ -20,14 +20,14 @@ test('エンバイロメントは何の ID も持たずに開き、コマンド�
   assert.equal(ran.json.command.exit_code, 0); assert.equal(ran.json.command.stdout.trim(), 'sum 3 false');
   const cli = await f.request('/v1/environments/' + environment.id + '/commands', { method: 'POST', token: agent.token, data: { command: [process.execPath, CLI, 'api', 'GET', '/v1/principals/me'] } });
   assert.notEqual(cli.json.command.exit_code, 0, 'no key, no Foundation');
-  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=environment', { token: agent.token })).json.resources.map(row => row.id), [environment.id]);
+  assert.deepEqual((await f.request('/v1/principals/' + USER_A + '/resources?kind=environment', { token: agent.token })).json.resources.map(row => row.id), [environment.id]);
 });
 
 test('コマンドに渡したシークレットは、変数とファイルでそのコマンドだけに届き、出力からは伏せられる', async t => {
   const f = await lent(t), agent = await f.issueKey();
   await f.request('/v1/principals/me/resources?kind=secret&name=token', { method: 'PUT', raw: 'kept-secret-value', type: 'text/plain' });
   await f.request('/v1/principals/me/resources?kind=secret&name=config', { method: 'PUT', raw: 'line one\nline two\n', type: 'text/plain' });
-  const opened = (await f.request('/v1/principals/me/environments', { method: 'POST', token: agent.token, data: {} })).json.environment;
+  const opened = (await f.request('/v1/principals/' + USER_A + '/environments', { method: 'POST', token: agent.token, data: {} })).json.environment;
   const ran = await f.request('/v1/environments/' + opened.id + '/commands', { method: 'POST', token: agent.token, data: {
     command: node("const fs = require('node:fs');", "console.log(process.env.TOKEN, process.env.TOKEN.length);", "console.log(fs.readFileSync(process.env.CONFIG, 'utf8').split('\\n').length);"),
     inputs: [{ name: 'token', as: 'TOKEN' }, { name: 'config', as: 'CONFIG', filename: 'config.txt' }] } });
@@ -39,7 +39,7 @@ test('コマンドに渡したシークレットは、変数とファイルで�
   assert.equal(after.json.command.stdout.trim(), 'true 0');
   const missing = await f.request('/v1/environments/' + opened.id + '/commands', { method: 'POST', token: agent.token, data: { command: ['true'], inputs: [{ name: 'nothing', as: 'X' }] } });
   assert.equal(missing.status, 404);
-  const run = await f.request('/v1/principals/me/runs', { method: 'POST', token: agent.token, data: { command: node('console.log(process.env.TOKEN)'), inputs: [{ name: 'token', as: 'TOKEN' }] } });
+  const run = await f.request('/v1/principals/' + USER_A + '/runs', { method: 'POST', token: agent.token, data: { command: node('console.log(process.env.TOKEN)'), inputs: [{ name: 'token', as: 'TOKEN' }] } });
   assert.equal(run.json.command.stdout.trim(), '[redacted]');
 });
 
@@ -58,7 +58,7 @@ test('エンバイロメントは開く者が選んだイメージから作ら�
 test('ID を付けたエンバイロメントは、その principal として動き、渡した値は出力から伏せられ、閉じると鍵が失効する', async t => {
   const f = await lent(t), agent = await f.issueKey();
   await f.request('/v1/principals/me/resources?kind=secret&name=token', { method: 'PUT', raw: 'kept-secret-value', type: 'text/plain' });
-  const opened = await f.request('/v1/principals/me/environments', { method: 'POST', token: agent.token, data: { identity: USER_A } });
+  const opened = await f.request('/v1/principals/' + USER_A + '/environments', { method: 'POST', token: agent.token, data: { identity: USER_A } });
   assert.equal(opened.status, 201, opened.text);
   const id = opened.json.environment.id;
   assert.equal(opened.json.environment.identity, USER_A);
@@ -79,8 +79,8 @@ test('ID を付けたエンバイロメントは、その principal として動
 test('付けられる ID は、付ける者がその principal として動けるものだけで、外すと中の鍵は効かなくなる', async t => {
   const f = await lent(t), agent = await f.issueKey();
   const stranger = (await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'someone else' } })).json.principal;
-  assert.equal((await f.request('/v1/principals/me/environments', { method: 'POST', token: agent.token, data: { identity: stranger.id } })).status, 403);
-  const opened = (await f.request('/v1/principals/me/environments', { method: 'POST', token: agent.token, data: { identity: agent.id } })).json.environment;
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/environments', { method: 'POST', token: agent.token, data: { identity: stranger.id } })).status, 403);
+  const opened = (await f.request('/v1/principals/' + USER_A + '/environments', { method: 'POST', token: agent.token, data: { identity: agent.id } })).json.environment;
   assert.equal(opened.identity, agent.id);
   const removed = await f.request('/v1/environments/' + opened.id, { method: 'PATCH', token: agent.token, data: { identity: null } });
   assert.equal(removed.json.environment.identity, null);
@@ -90,7 +90,7 @@ test('付けられる ID は、付ける者がその principal として動け�
 
 test('一回の実行は、開いて動かして止め、結果を返す', async t => {
   const f = await lent(t), agent = await f.issueKey();
-  const run = await f.request('/v1/principals/me/runs', { method: 'POST', token: agent.token, data: { identity: USER_A, command: node("process.stdout.write('done'); process.exit(3)") } });
+  const run = await f.request('/v1/principals/' + USER_A + '/runs', { method: 'POST', token: agent.token, data: { identity: USER_A, command: node("process.stdout.write('done'); process.exit(3)") } });
   assert.equal(run.status, 200, run.text);
   assert.equal(run.json.command.stdout, 'done'); assert.equal(run.json.command.exit_code, 3);
   assert.equal(run.json.environment.status, 'stopped');
@@ -147,6 +147,6 @@ test('放置が続いたエンバイロメントは止まり、しばらくし�
 
 test('実行基盤がなければエンバイロメントは使えないと答える', async t => {
   const f = await fixture(t), agent = await f.issueKey();
-  const refused = await f.request('/v1/principals/me/environments', { method: 'POST', token: agent.token, data: {} });
+  const refused = await f.request('/v1/principals/' + USER_A + '/environments', { method: 'POST', token: agent.token, data: {} });
   assert.equal(refused.status, 503); assert.equal(refused.json.error.code, 'environments_unavailable');
 });

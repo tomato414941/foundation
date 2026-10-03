@@ -76,7 +76,7 @@ test('WebAuthnの資格情報を削除すると、それで証明したセッシ
 test('鍵で動くAIが自分のWebAuthnの資格情報を登録し、その後はWebAuthnの資格情報で証明して働く', async t => {
   const f = await fixture(t);
   const agent = await f.issueKey();
-  const credential = await register(f, 'laptop', { token: agent.token, anonymous: true, as: agent.id });
+  const credential = await register(f, 'laptop', { token: agent.token, anonymous: true });
   const program = await signin(f, credential, { session: 'token' });
   const me = await f.request('/v1/principals/me', { anonymous: true, token: program.json.token });
   assert.equal(me.json.principal.id, agent.id);
@@ -90,7 +90,7 @@ test('パスキーはそのプリンシパル自身と持ち主が足し、他�
   const agent = await f.issueKey(), stranger = await f.become('stranger');
   assert.equal((await f.request('/v1/principals/' + agent.id + '/credentials', { method: 'POST', data: { kind: 'webauthn' } })).status, 200, 'the owner manages its entries');
   assert.equal((await f.request('/v1/principals/' + agent.id + '/credentials', { method: 'POST', token: stranger.token, anonymous: true, data: { kind: 'webauthn' } })).status, 401, 'a key acting for nobody is told so');
-  const credential = await register(f, 'laptop', { token: agent.token, anonymous: true, as: agent.id });
+  const credential = await register(f, 'laptop', { token: agent.token, anonymous: true });
   assert.equal((await f.request('/v1/principals/' + agent.id + '/credentials')).json.credentials.filter(item => item.kind === 'webauthn').length, 1);
   assert.equal((await f.request('/v1/principals/' + agent.id + '/credentials/' + credential.id, { method: 'DELETE', data: {} })).status, 200);
 });
@@ -101,7 +101,7 @@ test('名前のないWebAuthnの資格情報や、ほかのプリンシパル向
   const made = createCredential(asked.json.options, f.base);
   assert.equal((await f.request('/v1/principals/me/credentials', { method: 'PUT', data: { kind: 'webauthn', name: '', credential: made.response } })).status, 400);
   const agent = await f.issueKey();
-  const stolen = await f.request('/v1/principals/me/credentials', { method: 'PUT', anonymous: true, token: agent.token, as: agent.id, data: { kind: 'webauthn', name: 'x', credential: made.response } });
+  const stolen = await f.request('/v1/principals/me/credentials', { method: 'PUT', anonymous: true, token: agent.token, data: { kind: 'webauthn', name: 'x', credential: made.response } });
   assert.equal(stolen.status, 400);
   assert.equal((await f.request('/v1/principals/me/credentials')).json.credentials.filter(item => item.kind === 'webauthn').length, 0);
 });

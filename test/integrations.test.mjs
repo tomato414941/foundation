@@ -191,7 +191,7 @@ test('As with Stripe, an app gives a return page, a refresh page and a signed we
   assert.equal(back.refresh_url, 'https://simplicity.example.test/foundation/again?foundation_request=' + first.id);
   assert.equal(new URL(back.return_url).searchParams.get('from'), 'foundation', 'the app\'s own query is kept');
   const own = await f.issueKey('own');
-  const unheld = (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: own.token, data: { authorization_details: [{ type: 'secret', fields: { name: 'x', label: 'x' } }], binding_message: 'p' } })).json.request;
+  const unheld = (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: own.token, data: { to: USER_A, authorization_details: [{ type: 'secret', fields: { name: 'x', label: 'x' } }], binding_message: 'p' } })).json.request;
   assert.equal((await f.request('/v1/requests/' + unheld.id + '/return', { anonymous: true })).status, 404, 'no way back for a request no app handles');
   // Done and cancelled: each is told to the app, signed with the secret it was given.
   const made = (await call('/principals/' + user.id + '/links', { method: 'POST', data: { request_id: first.id } })).json;

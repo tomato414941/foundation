@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
-import { fixture, USER_A, GMAIL } from './helpers.mjs';
+import { fixture, USER_A, GMAIL, USER_B } from './helpers.mjs';
 
 test('Signin gives a private state behind a safe session cookie', async (t) => {
   const f = await fixture(t);
@@ -56,9 +56,9 @@ test('Connections expose explicit connection outputs independently of saved name
   assert.equal(b.label, 'work@example.test');
   const saved = await f.request('/v1/principals/me/resources?kind=secret&name=gmail%2Fpersonal-example-test', { method: 'PUT', raw: 'independent-value' });
   assert.equal(saved.status, 200);
-  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=secret', { token: agent.token })).json.resources.map(row => row.name), ['gmail/personal-example-test']);
-  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).json.resources.map(row => row.auth_scheme), ['oauth', 'oauth'], 'managed authorizations are listed independently of secrets');
-  const connections = await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token });
+  assert.deepEqual((await f.request('/v1/principals/' + USER_A + '/resources?kind=secret', { token: agent.token })).json.resources.map(row => row.name), ['gmail/personal-example-test']);
+  assert.deepEqual((await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: agent.token })).json.resources.map(row => row.auth_scheme), ['oauth', 'oauth'], 'managed authorizations are listed independently of secrets');
+  const connections = await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: agent.token });
   assert.deepEqual(connections.json.resources.map(item => item.id), [a.id, b.id]);
   assert.deepEqual(connections.json.resources[0].service, { id: 'google', name: 'Google', catalog: true });
   assert.doesNotMatch(connections.text, /refresh_token|google-access-|"state":/);
@@ -84,10 +84,10 @@ test('Owners cannot see, disconnect or reach each other\'s connections', async (
   assert.deepEqual((await f.request('/v1/principals/me/relations?relation=agent&direction=to')).json.relations.map(item => item.principal.name), ['Foundation Agent']);
   assert.equal((await f.request('/v1/resources/' + encodeURIComponent(first.id), { method: 'DELETE', data: { revoke: true } })).status, 403);
   const intruder = await f.issueKey('intruder');
-  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection', { token: intruder.token })).json.resources, []);
+  assert.deepEqual((await f.request('/v1/principals/' + USER_B + '/resources?kind=connection', { token: intruder.token })).json.resources, []);
   assert.equal((await f.inject(first, { token: intruder.token })).status, 404);
   await f.request('/v1/principals/' + runtime.id, { method: 'DELETE', data: {} });
-  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: runtime.token })).json.resources.length, 1, 'the owner keeps it when one key is revoked');
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: runtime.token })).json.resources.length, 1, 'the owner keeps it when one key is revoked');
   const second = await f.connection();
   assert.notEqual(second.id, first.id);
   assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).json.resources.filter(row => row.service !== null).length, 1);
@@ -98,10 +98,10 @@ test('Connecting again pins the Google account', async (t) => {
   let flow = await f.start({ scopes: GMAIL.metadata, connection_id: a.id });
   assert.equal(flow.searchParams.get('login_hint'), 'personal@example.test');
   assert.equal((await f.callback(flow, 'work')).headers.get('location'), '/services?result=wrong_account&service=google');
-  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).json.resources.length, 1);
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: agent.token })).json.resources.length, 1);
   flow = await f.start({ scopes: GMAIL.metadata, connection_id: a.id });
   assert.equal((await f.callback(flow, 'personal')).headers.get('location'), '/services?result=connected&service=google');
-  const seen = (await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).json.resources;
+  const seen = (await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: agent.token })).json.resources;
   assert.equal(seen.length, 1); assert.equal(seen[0].id, a.id);
 });
 
@@ -110,7 +110,7 @@ test('同じGmailユーザーの新たな認可を別の接続として保存す
   const flow = await f.start();
   assert.equal((await f.callback(flow, 'personal')).headers.get('location'), '/services?result=connected&service=google');
   assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).json.resources.filter(row => row.service !== null)[0].id, a.id);
-  const connections = (await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).json.resources;
+  const connections = (await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: agent.token })).json.resources;
   assert.equal(connections.length, 2);
   assert.equal(new Set(connections.map(item => item.id)).size, 2);
 });
@@ -157,6 +157,6 @@ test('Disconnecting preserves saved values even when service revocation fails, a
   assert.deepEqual((await f.request('/v1/principals/me/resources?kind=secret')).json.resources.map(row => row.name), ['gmail/personal-example-test/token']);
   assert.equal((await f.read('secret', 'gmail/personal-example-test/token')).text, 'independent-copy');
   assert.equal((await f.inject(a, { token: agent.token })).status, 404);
-  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).json.resources, []);
+  assert.deepEqual((await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: agent.token })).json.resources, []);
 });
 

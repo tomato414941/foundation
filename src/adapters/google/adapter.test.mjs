@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { GoogleClient, GOOGLE_BASE_SCOPES } from './client.mjs';
 import { googleOauth, configuration } from './index.mjs';
 import { FakeGoogle } from './fixture.mjs';
-import { fixture, json, USER_A, entry } from '../../../test/helpers.mjs';
+import { fixture, json, USER_A, entry, USER_B } from '../../../test/helpers.mjs';
 
 const CLOUD = 'https://www.googleapis.com/auth/cloud-platform', READONLY = 'https://www.googleapis.com/auth/gmail.readonly', SEND = 'https://www.googleapis.com/auth/gmail.send';
 const with_ = (...scopes) => [...new Set([...GOOGLE_BASE_SCOPES, ...scopes])].sort();
@@ -57,13 +57,13 @@ test('Googleの同意を、頼まれた権限と本人確認の権限、state・
 
 test('AIが頼んだ権限で接続の依頼を完了し、確認結果と短期トークンを分けて渡す', async t => {
   const f = await googleFixture(t), agent = await f.issueKey();
-  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'connection', service: 'google', scopes: [READONLY, SEND] }], binding_message: 'メールを読み、返信を送ります。' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { to: USER_A, authorization_details: [{ type: 'connection', service: 'google', scopes: [READONLY, SEND] }], binding_message: 'メールを読み、返信を送ります。' } });
   assert.equal(asked.status, 201, asked.text);
   assert.deepEqual(asked.json.request.authorization_details[0].scopes, [READONLY, SEND]);
   const a = await f.connect('personal', { request_id: asked.json.request.id });
   const done = await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token });
   assert.equal(done.json.request.status, 'granted'); assert.equal(done.json.request.result.connection_id, a.id);
-  const [listed] = (await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).json.resources;
+  const [listed] = (await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: agent.token })).json.resources;
   assert.equal(listed.label, 'personal@example.test');
   assert.deepEqual(listed.facts.scopes, with_(READONLY, SEND));
   assert.deepEqual(listed.facts.requested_scopes, with_(READONLY, SEND));
@@ -96,7 +96,7 @@ test('複数アカウントをメールアドレスで区別し、別の所有�
   assert.equal((await f.inject(b, { token: agent.token })).json.injection.environment.GOOGLE_ACCOUNT_EMAIL, 'work@example.test');
   await f.signin('second@example.test');
   const stranger = await f.issueKey();
-  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection', { token: stranger.token })).json.resources, []);
+  assert.deepEqual((await f.request('/v1/principals/' + USER_B + '/resources?kind=connection', { token: stranger.token })).json.resources, []);
   assert.equal((await f.inject(a, { token: stranger.token })).status, 404);
   assert.equal((await f.request('/v1/resources/' + a.id, { method: 'DELETE', data: { revoke: false } })).status, 403);
 });

@@ -35,12 +35,12 @@ test('答えは subject・action・resource から decision だけを返し、�
 test('ルートは同じ問いを立て、許されない主体には 403、依頼だけを渡された利用者には 401 で答える', async t => {
   const f = await fixture(t), key = await f.issueKey();
   const kept = await f.keep('secret', 'x', 'value');
-  for (const [path, options] of [['/v1/principals/' + USER_A + '/relations', {}], ['/v1/principals/me/export', {}],
-    ['/v1/resources/' + kept.json.resource.id, { method: 'PATCH', data: { name: 'y' } }], ['/v1/principals/me/connections', { method: 'POST', data: { service: 'google' } }]]) {
+  for (const [path, options] of [['/v1/principals/' + USER_A + '/relations', {}], ['/v1/principals/' + USER_A + '/export', {}],
+    ['/v1/resources/' + kept.json.resource.id, { method: 'PATCH', data: { name: 'y' } }], ['/v1/principals/' + USER_A + '/connections', { method: 'POST', data: { service: 'google' } }]]) {
     const refused = await f.request(path, { ...options, token: key.token, anonymous: true });
     assert.equal(refused.status, 403, path + ' ' + refused.text); assert.equal(refused.json.error.code, 'forbidden');
   }
-  assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token: key.token, anonymous: true })).status, 200, 'what both may do still works');
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: key.token, anonymous: true })).status, 200, 'what both may do still works');
   assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).status, 200);
   assert.equal((await f.request('/v1/functions')).status, 200, 'the owner may do what those acting for them may');
   assert.equal((await f.request('/v1/principals/' + key.id, { method: 'DELETE', token: key.token, anonymous: true, data: {} })).status, 403, 'nobody removes what they do not own');
@@ -55,7 +55,7 @@ test('持ち主は一つの操作を関係として渡し、渡された相手�
   assert.equal((await disconnect(key.token)).status, 403, '渡される前は解除できない');
   const given = await f.request('/v1/principals/' + key.id + '/relations', { method: 'POST', data: { relation: 'disconnect_grant', object_type: 'resource', object_id: connected.id } });
   assert.equal(given.status, 201, given.text);
-  const listed = await f.request('/v1/principals/me/relations', { token: key.token, anonymous: true, as: key.id });
+  const listed = await f.request('/v1/principals/me/relations', { token: key.token, anonymous: true });
   assert.ok(listed.json.relations.some(row => row.relation === 'disconnect_grant' && row.resource?.id === connected.id), '役割と同じ一覧に載る');
   const done = await disconnect(key.token);
   assert.equal(done.status, 200, done.text);

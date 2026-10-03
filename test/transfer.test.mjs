@@ -38,7 +38,7 @@ test('渡せるのは持ち主と、渡す操作を渡された相手だけで�
   assert.equal((await give(f, kept.json.resource.id, { to: other.json.principal.id }, { token: agent.token })).status, 403, 'an agent uses, it does not give away');
   assert.equal((await give(f, kept.json.resource.id, { to: USER_A })).json.error.code, 'invalid_transfer');
   assert.equal((await give(f, kept.json.resource.id, { to: 'no-such' })).status, 404);
-  await f.request('/v1/principals/me/resources?kind=secret&name=thing', { method: 'PUT', raw: 'theirs', token: other.json.token, anonymous: true, as: other.json.principal.id });
+  await f.request('/v1/principals/me/resources?kind=secret&name=thing', { method: 'PUT', raw: 'theirs', token: other.json.token, anonymous: true });
   assert.equal((await give(f, kept.json.resource.id, { to: other.json.principal.id })).json.error.code, 'name_taken');
   f.app.principals.relate(agent.id, 'transfer_grant', 'resource', kept.json.resource.id);
   const byGrant = await give(f, kept.json.resource.id, { to: agent.id }, { token: agent.token });

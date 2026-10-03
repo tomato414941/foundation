@@ -11,7 +11,7 @@ const ASKED = ['https://api.ebay.com/oauth/api_scope/sell.account', 'https://api
 const GRANTED = [...new Set([...EBAY_BASE_SCOPES, ...ASKED])].sort();
 import { ebayOauth, configuration, create } from './index.mjs';
 import { FakeEbay } from './fixture.mjs';
-import { fixture, json, USER_A, entry } from '../../../test/helpers.mjs';
+import { fixture, json, USER_A, entry, USER_B } from '../../../test/helpers.mjs';
 
 const grant = (change = {}) => ({ access_token: 'ebay-access-personal-0', refresh_token: 'ebay-refresh-personal',
   expires_in: 7200, refresh_token_expires_in: 47304000, token_type: 'User Access Token', ...change });
@@ -79,12 +79,12 @@ test('RuNameとstateで同意を開始し、同じセッションで一度だけ
 
 test('依頼を完了し、確認済みのアカウント情報とAPI用トークンを分けて渡す', async t => {
   const f = await ebayFixture(t), agent = await f.issueKey();
-  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'connection', service: 'ebay', scopes: ASKED }], binding_message: '出品情報を管理します。' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { to: USER_A, authorization_details: [{ type: 'connection', service: 'ebay', scopes: ASKED }], binding_message: '出品情報を管理します。' } });
   assert.equal(asked.status, 201);
   const a = await f.connect('personal', { request_id: asked.json.request.id });
   const done = (await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token })).json.request;
   assert.equal(done.status, 'granted'); assert.equal(done.result.connection_id, a.id);
-  const catalog = await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token });
+  const catalog = await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: agent.token });
   assert.equal(catalog.json.resources[0].label, 'personal-seller');
   assert.deepEqual(catalog.json.resources[0].facts.scopes, GRANTED);
   assert.doesNotMatch(catalog.text, /ebay-access-|ebay-refresh-|test-ebay-secret/);
@@ -112,7 +112,7 @@ test('アカウントを固定IDで区別し、名前の変更を反映して別
   assert.equal(reconnected.id, a.id); assert.equal(reconnected.label, 'renamed-seller');
   await f.signin('second@example.test');
   const stranger = await f.issueKey();
-  assert.deepEqual((await f.request('/v1/principals/me/resources?kind=connection', { token: stranger.token })).json.resources, []);
+  assert.deepEqual((await f.request('/v1/principals/' + USER_B + '/resources?kind=connection', { token: stranger.token })).json.resources, []);
   assert.equal((await f.inject(a, { token: stranger.token })).status, 404);
   assert.equal((await f.request('/v1/resources/' + a.id, { method: 'DELETE', data: { revoke: true } })).status, 403);
 });

@@ -22,8 +22,8 @@ test('集団として作った相手には、作った者がその者として�
   assert.equal((await f.read('secret', 'budget', { as: group.id })).text, 'q4-budget');
   // Another person: nothing, until made a steward by one who stands as the group; then the secret, once handed its key.
   const other = await f.request('/v1/principals', { method: 'POST', data: { name: 'other', key: true } });
-  const theirs = { token: other.json.token, anonymous: true, as: group.id };
-  assert.equal((await f.request('/v1/principals/me/resources?kind=secret', theirs)).status, 403);
+  const theirs = { token: other.json.token, anonymous: true };
+  assert.equal((await f.request('/v1/principals/' + group.id + '/resources?kind=secret', theirs)).status, 403);
   assert.equal((await f.request('/v1/principals/' + other.json.principal.id + '/relations', { method: 'POST', token: other.json.token, anonymous: true, data: { relation: 'steward', object_type: 'principal', object_id: group.id } })).status, 403, 'not by oneself');
   const drawn = await f.request('/v1/principals/' + other.json.principal.id + '/relations', { method: 'POST', data: { relation: 'steward', object_type: 'principal', object_id: group.id } });
   assert.equal(drawn.status, 201, drawn.text);
@@ -31,9 +31,9 @@ test('集団として作った相手には、作った者がその者として�
   const shown = await f.request('/v1/resources/' + kept.json.resource.id + '/content', theirs);
   assert.equal(shown.status, 200); assert.equal(shown.json.envelope, null, 'allowed, not yet handed the key');
   const mine = await f.keyOf({}), theirKey = await f.keyOf(theirs);
-  const contentKey = open(Buffer.from((await f.request('/v1/resources/' + kept.json.resource.id + '/content', { as: group.id })).json.envelope, 'base64url'), mine.privateKey);
-  assert.equal((await f.request('/v1/resources/' + kept.json.resource.id + '/envelopes/' + other.json.principal.id, { method: 'PUT', as: group.id, data: { wrapped: b64(seal(contentKey, theirKey.publicKey)) } })).status, 200);
-  assert.equal((await f.read('secret', 'budget', theirs)).text, 'q4-budget');
+  const contentKey = open(Buffer.from((await f.request('/v1/resources/' + kept.json.resource.id + '/content')).json.envelope, 'base64url'), mine.privateKey);
+  assert.equal((await f.request('/v1/resources/' + kept.json.resource.id + '/envelopes/' + other.json.principal.id, { method: 'PUT', data: { wrapped: b64(seal(contentKey, theirKey.publicKey)) } })).status, 200);
+  assert.equal((await f.read('secret', 'budget', { ...theirs, as: group.id })).text, 'q4-budget');
   // What the group keeps from now on is sealed for both stewards.
   const next = await f.keep('secret', 'forecast', 'q1', { as: group.id });
   assert.ok([USER_A, other.json.principal.id].every(id => next.json.resource.recipients.includes(id)));
@@ -41,10 +41,10 @@ test('集団として作った相手には、作った者がその者として�
   assert.equal((await f.request('/v1/principals/' + f.app.keys.agentId + '/relations', { method: 'POST', data: { relation: 'agent', object_type: 'principal', object_id: group.id } })).status, 201);
   const third = await f.keep('secret', 'ledger', 'rows', { as: group.id });
   assert.ok(third.json.resource.recipients.includes(f.app.keys.agentId));
-  assert.deepEqual((await f.request('/v1/principals/me/injections', { method: 'POST', as: group.id, data: { names: [{ name: 'ledger', as: 'LEDGER' }] } })).json.injection.environment, { LEDGER: 'rows' });
+  assert.deepEqual((await f.request('/v1/principals/' + group.id + '/injections', { method: 'POST', data: { names: [{ name: 'ledger', as: 'LEDGER' }] } })).json.injection.environment, { LEDGER: 'rows' });
   // Owning a group manages it; standing as it decides for it. USER_B, owning nothing here, reaches nothing.
   await f.signin('other@example.test');
-  assert.equal((await f.request('/v1/principals/me/resources?kind=secret', { as: group.id })).status, 403);
+  assert.equal((await f.request('/v1/principals/' + group.id + '/resources?kind=secret')).status, 403);
   assert.equal(f.app.authorization.can(USER_B, 'decide', 'principal', { id: group.id }), false);
   assert.equal(f.app.authorization.can(USER_A, 'decide', 'principal', { id: group.id }), true);
   assert.equal(f.app.authorization.can(USER_A, 'remove', 'principal', { id: group.id }), true, 'as its owner');

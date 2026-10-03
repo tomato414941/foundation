@@ -67,14 +67,14 @@ test('承認したキーに認証情報と提供元の有効期限を渡し、�
   const f = await openrouterFixture(t); let token = 'fdn_' + randomBytes(32).toString('base64url');
   assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token, anonymous: true })).status, 401, 'a key nobody knows is nobody');
   token = (await f.approveKey()).token;
-  const created = await f.request('/v1/requests', { method: 'POST', token, data: { authorization_details: [{ type: 'connection', service: 'openrouter' }], binding_message: 'キー情報を確認。モデルは実行しない。' } });
+  const created = await f.request('/v1/requests', { method: 'POST', token, data: { to: USER_A, authorization_details: [{ type: 'connection', service: 'openrouter' }], binding_message: 'キー情報を確認。モデルは実行しない。' } });
   const row = created.json.request;
   assert.equal(row.service.auth_schemes.oauth.can_revoke, false);
   const callback = await f.callbackOpenRouter(await f.startOpenRouter({ request_id: row.id }));
   assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?result=connected');
   const account = (await f.request('/v1/principals/me/resources?kind=connection')).json.resources[0];
   assert.equal((await f.request('/v1/requests/' + row.id)).json.request.status, 'granted', 'the request is granted');
-  const listed = await f.request('/v1/principals/me/resources?kind=connection', { token });
+  const listed = await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token });
   assert.deepEqual(listed.json.resources[0].variables, ['OPENROUTER_API_KEY']);
   assert.doesNotMatch(listed.text, /sk-or-v1-/);
   const issued = await connection(f, account, token);
@@ -123,7 +123,7 @@ test('Provider expiry, revocation and budget updates are checked before every AP
   let issued = await connection(f, account, agent.token);
   assert.equal(issued.json.expires_at, Date.parse(f.openrouter.info.expires_at));
   assert.ok(issued.json.expires_in > 80_000, 'not replaced with a fictitious short lifetime');
-  const listed = (await f.request('/v1/principals/me/resources?kind=connection', { token: agent.token })).json.resources[0];
+  const listed = (await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: agent.token })).json.resources[0];
   assert.equal(listed.label, account.label, 'what the key can see about it is on the connection, not the delivery');
   assert.equal(listed.facts.expires_at, Date.parse(f.openrouter.info.expires_at));
   assert.equal(listed.facts.key_info.limit, 10);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture } from './helpers.mjs';
+import { fixture, USER_A } from './helpers.mjs';
 
 test('シークレットの名前を完全一致で扱い、名前とIDで別の保存値を指定する', async t => {
   const f = await fixture(t), agent = await f.issueKey();
@@ -8,7 +8,7 @@ test('シークレットの名前を完全一致で扱い、名前とIDで別の
   await f.keep('secret', 'api-token#work', 'work-value');
   await f.keep('secret', plain.id, 'uuid-name-value');
   await f.keep('secret', 'a/aa/aaa', 'slash-value');
-  const used = await f.request('/v1/principals/me/injections', { method: 'POST', token: agent.token, data: { names: [
+  const used = await f.request('/v1/principals/' + USER_A + '/injections', { method: 'POST', token: agent.token, data: { names: [
     { name: 'api-token', as: 'PLAIN' }, { name: 'api-token#work', as: 'WORK' },
     { name: plain.id, as: 'BY_NAME' }, { id: plain.id, as: 'BY_ID' }, { name: 'a/aa/aaa', as: 'SLASH' },
   ] } });

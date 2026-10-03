@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { open, openContent } from '../cli/envelope.mjs';
-import { fixture } from './helpers.mjs';
+import { fixture, USER_A } from './helpers.mjs';
 import { entry } from '../src/catalog.mjs';
 
 const tokenFixture = t => fixture(t, { services: [entry('github'), entry('kintone'), entry('openrouter'), entry('zendesk')] });
-const paste = (f, data, options = {}) => f.request('/v1/principals/me/connections', { method: 'POST', data: { auth_scheme: 'token', ...data }, ...options });
+const paste = (f, data, { owner = 'me', ...options } = {}) => f.request('/v1/principals/' + owner + '/connections', { method: 'POST', data: { auth_scheme: 'token', ...data }, ...options });
 
 test('貼られたトークンをその場で接続にし、定義どおりの環境変数でAIに渡す', async t => {
   const f = await tokenFixture(t);
@@ -50,11 +50,11 @@ test('鍵で動くAIも、接続を任されていればトークンで接続す
   const f = await tokenFixture(t);
   await f.signin();
   const agent = await f.issueKey();
-  const refused = await paste(f, { service: 'github', fields: { token: 'ghp_agent' } }, { token: agent.token, anonymous: true });
+  const refused = await paste(f, { service: 'github', fields: { token: 'ghp_agent' } }, { token: agent.token, anonymous: true, owner: USER_A });
   assert.equal(refused.status, 403);
   const given = await f.request('/v1/principals/' + agent.id + '/relations', { method: 'POST', data: { relation: 'connection_connect_grant', object_type: 'principal', object_id: agent.acts_for[0] } });
   assert.equal(given.status, 201, given.text);
-  const made = await paste(f, { service: 'github', fields: { token: 'ghp_agent' } }, { token: agent.token, anonymous: true });
+  const made = await paste(f, { service: 'github', fields: { token: 'ghp_agent' } }, { token: agent.token, anonymous: true, owner: USER_A });
   assert.equal(made.status, 201, made.text);
   assert.equal(made.json.connection.owner_id, agent.acts_for[0]);
 });
@@ -113,7 +113,7 @@ test('トークンでの接続を頼まれた人が貼ると、依頼は叶い�
   await f.signin();
   const agent = await f.issueKey();
   const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, anonymous: true,
-    data: { authorization_details: [{ type: 'connection', service: 'github', auth_scheme: 'token' }], binding_message: 'リポジトリを読みます。' } });
+    data: { to: USER_A, authorization_details: [{ type: 'connection', service: 'github', auth_scheme: 'token' }], binding_message: 'リポジトリを読みます。' } });
   assert.equal(asked.status, 201, asked.text);
   const made = await paste(f, { request_id: asked.json.request.id, fields: { token: 'ghp_asked' } });
   assert.equal(made.status, 201, made.text);
@@ -167,7 +167,7 @@ test('トークンの欄はシークレットを参照でき、使うたびに�
 
 test('別の持ち主のシークレットを参照する接続は、その線が消えた次の使用から止まる', async t => {
   const f = await tokenFixture(t), other = await f.request('/v1/principals', { method: 'POST', data: { name: 'other', key: true } });
-  const theirs = { token: other.json.token, anonymous: true, as: other.json.principal.id };
+  const theirs = { token: other.json.token, anonymous: true };
   await f.allowFoundation(theirs);
   const secret = (await f.keep('secret', 'shared', 'ghp_shared')).json.resource;
   f.app.principals.relate(other.json.principal.id, 'viewer', 'resource', secret.id);
