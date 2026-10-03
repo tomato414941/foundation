@@ -108,6 +108,7 @@ export class Principals {
       LEFT JOIN objects o ON o.resource_id=x.id LEFT JOIN secrets s ON s.resource_id=x.id
       WHERE l.subject_id=? AND l.object_type='resource' ORDER BY l.created_at`).all(id);
   }
+  stewardsOf(id) { return this.db.prepare("SELECT subject_id AS id FROM relations WHERE relation='steward' AND object_type='principal' AND object_id=?").all(id).map(row => row.id); }
   ownersOf(id) { return this.db.prepare("SELECT subject_id AS id FROM relations WHERE relation='owner' AND object_type='principal' AND object_id=?").all(id).map(row => row.id); }
   // The principals this one owns, each with the name it gave them and the access keys they carry.
   owned(ownerId) {

@@ -672,7 +672,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // Whom to seal a secret of the owner's for: the owner, and Foundation's principal when it acts for them.
       if (at === 'recipients' && method === 'GET') {
         permit('write', 'secret');
-        const ids = [ownerId, ...(authorization.can(keys.agentId, 'inject', 'principal', { id: ownerId }) ? [keys.agentId] : [])];
+        // The owner, those who stand for it (a group's stewards), and Foundation when it acts for them.
+        const ids = [ownerId, ...principals.stewardsOf(ownerId), ...(authorization.can(keys.agentId, 'inject', 'principal', { id: ownerId }) ? [keys.agentId] : [])];
         return send(200, { recipients: ids.map(id => ({ principal_id: id, public_key: keys.publicKeyOf(id) })).filter(item => item.public_key).map(item => ({ ...item, public_key: item.public_key.toString('base64url') })) });
       }
       // Another account made one with this: its passkey answers for it, this session for this one.
@@ -731,11 +732,14 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const { made, issued } = store.transaction(() => {
           const made = principals.create(subject.id, { name: input.name === undefined ? (alias ?? '相手') : nameValue(input.name), alias });
           if (input.agent === true) principals.relate(made.id, 'agent', 'principal', subject.id);
+          // Made as a group (steward: true): its maker stands as it, until others are made stewards too. A principal made
+          // for someone else to come in as (an app's user, given a key later) is nobody's to stand as.
+          if (input.steward === true) principals.relate(subject.id, 'steward', 'principal', made.id);
           const issued = input.key === true ? principals.issueKey(made.id) : null;
           return { made, issued };
         });
         auditLog.write(subject.id, 'principal.created', 'principal', made.id, { alias: alias ?? null, agent: input.agent === true, key: Boolean(issued) });
-        return send(201, { principal: { ...made, alias: alias ?? null, keys: principals.keys(made.id), acts_for: principals.actsFor(made.id) }, ...(issued ? { token: issued.token, key: { id: issued.id, kind: 'key' } } : {}) });
+        return send(201, { principal: { ...made, alias: alias ?? null, keys: principals.keys(made.id), acts_for: principals.actsFor(made.id), owners: principals.ownersOf(made.id), stewards: principals.stewardsOf(made.id) }, ...(issued ? { token: issued.token, key: { id: issued.id, kind: 'key' } } : {}) });
       }
       if (route?.group === 'principals') {
         const id = route.params.principalId === 'me' ? subject.id : route.params.principalId, part = at === 'principal' ? null : at === 'accessKey' ? 'keys' : at, keyId = route.params.keyId;
@@ -759,7 +763,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           return send(200, { principal: { ...moved, keys: principals.keys(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id) } });
         }
         if (!part) {
-          if (method === 'GET') { permit('read', 'principal', id); return send(200, { principal: { ...target, keys: principals.keys(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id) } }); }
+          if (method === 'GET') { permit('read', 'principal', id); return send(200, { principal: { ...target, keys: principals.keys(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id), stewards: principals.stewardsOf(id) } }); }
           if (method === 'PATCH') { permit('rename', 'principal', id); const input = await inputBody(); return send(200, { principal: principals.rename(id, nameValue(input.name)) }); }
           if (method === 'DELETE') {
             permit('remove', 'principal', id);
@@ -1375,7 +1379,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   return {
-    server, store, resources, services, secrets, keys, connections, inputs, apps, objects, environments, payments, principals, sessions, emails, challenges, webauthn, flows, requests, requestActions, settings, auditLog,
+    server, store, resources, services, secrets, keys, connections, inputs, apps, authorization, objects, environments, payments, principals, sessions, emails, challenges, webauthn, flows, requests, requestActions, settings, auditLog,
     async close() {
       clearInterval(timer);
       if (server.listening) await new Promise((resolve) => { server.close(resolve); server.closeIdleConnections(); });

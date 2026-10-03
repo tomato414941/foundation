@@ -1,10 +1,11 @@
 // Who may do what, as relations and what they compute. A relation is a recorded fact: a line someone drew, or what
-// a owner holds. A permission is computed from them and never recorded. Routes ask one permission and nothing
+// an owner holds. A permission is computed from them and never recorded. Routes ask one permission and nothing
 // else; the names here are the ones they ask by.
 //
-// People and AIs are the same principal. What a principal reaches comes only from these lines; nothing from how it
-// came in. Owning a principal is managing it, not reaching what it holds. The owner of a thing decides for it; an
-// agent uses it; a viewer sees it; an editor changes it; and any single action can be given on its own.
+// People, AIs and groups are the same principal. What a principal reaches comes only from these lines; nothing from
+// how it came in. A principal stands for itself; a group, which nobody comes in as, has stewards who stand for it.
+// Owning a principal is managing it, not reaching what it holds. The owner of a thing decides for it; an agent uses
+// it; a viewer sees it; an editor changes it; and any single action can be given on its own.
 
 definition credential {}
 
@@ -12,16 +13,20 @@ definition principal {
   relation self: principal
   relation owner: principal
   relation agent: principal
+  relation steward: principal
   relation entry: credential
 
+  // Who stands as this principal: itself, and whoever stewards it (a group's people).
+  permission stands = self + steward
+
   // Managing: the name, the keys and credentials, the limits, removal. By the principal, or whoever owns it.
-  permission manage = self + owner
+  permission manage = stands + owner
   // Using what it holds, without necessarily seeing it. By the principal, or whoever acts as its agent.
-  permission use = self + agent
+  permission use = stands + agent
   // Seeing the bytes of what it holds. Not an agent's: an agent injects a secret into a command, never reads it.
-  permission disclose = self
+  permission disclose = stands
   // Deciding for it: giving things away, exporting, paying, connecting. The principal alone.
-  permission decide = self
+  permission decide = stands
 
   // Each one action over the principal itself, so it can be given on its own.
   relation read_grant: principal
