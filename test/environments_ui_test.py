@@ -58,10 +58,59 @@ with sync_playwright() as p:
     expect(page.get_by_text('リソースなし', exact=True)).to_be_visible()
     expect(page.get_by_text('今月の計算時間', exact=False)).to_be_visible()
 
-    # The AI opens two: one acting as the owner, one with no identity at all.
-    as_owner = call('POST', '/v1/principals/' + owner + '/environments', {'name': 'ビルド', 'identity': owner}, token)['environment']
-    call('POST', '/v1/principals/' + owner + '/environments', {'name': '調べもの'}, token)
-    page.reload(wait_until='networkidle')
+    # 名前と自動停止時間を選び、詳細設定を開いて環境を作成する。
+    page.get_by_role('button', name='作成', exact=True).click()
+    dialog = page.get_by_role('dialog')
+    expect(dialog.get_by_role('heading', name='エンバイロメントを作成', exact=True)).to_be_visible()
+    expect(dialog.get_by_label('自動停止', exact=True)).to_have_value('60')
+    for width in [1280, 390, 320]:
+        page.set_viewport_size({'width': width, 'height': 900})
+        review(page)
+        page.screenshot(path=str(shots / f'environment-create-{width}.png'), full_page=True)
+    dialog.get_by_label('名前', exact=False).fill('ビルド')
+    dialog.get_by_label('自動停止', exact=True).select_option('30')
+    dialog.get_by_text('詳細設定', exact=True).click()
+    dialog.get_by_label('イメージ', exact=False).fill('python:3.12-slim')
+    dialog.get_by_label('サイズ', exact=True).select_option('medium')
+    dialog.get_by_label('実行権限', exact=True).select_option(owner)
+    review(page)
+    page.screenshot(path=str(shots / 'environment-create-options-320.png'), full_page=True)
+
+    # 作成中は重複送信を防ぎ、失敗したときは入力を保って再試行する。
+    pending = []
+    endpoint = args.base + '/v1/principals/' + owner + '/environments'
+    page.route(endpoint, lambda route: pending.append(route))
+    dialog.get_by_role('button', name='作成', exact=True).click()
+    expect(dialog.get_by_role('button', name='作成中…', exact=True)).to_be_disabled()
+    expect(dialog.get_by_label('名前', exact=False)).to_be_disabled()
+    page.keyboard.press('Enter')
+    assert len(pending) == 1
+    pending[0].fulfill(status=503, content_type='application/json', body=json.dumps({'error': {'code': 'runner_unavailable', 'message': '現在作成できません。もう一度お試しください。'}}))
+    expect(dialog.get_by_role('alert')).to_have_text('現在作成できません。もう一度お試しください。')
+    expect(dialog.get_by_label('名前', exact=False)).to_have_value('ビルド')
+    expect(dialog.get_by_label('イメージ', exact=False)).to_have_value('python:3.12-slim')
+    expect(dialog.get_by_label('自動停止', exact=True)).to_have_value('30')
+    expect(dialog.get_by_role('button', name='作成', exact=True)).to_be_enabled()
+    page.unroute(endpoint)
+    dialog.get_by_role('button', name='作成', exact=True).click()
+    expect(page.get_by_text('作成しました。', exact=True)).to_be_visible()
+    as_owner = next(item for item in call('GET', '/v1/principals/' + owner + '/resources?kind=environment', token=token)['resources'] if item['name'] == 'ビルド')
+    assert as_owner['identity'] == owner
+    assert as_owner['image'] == 'python:3.12-slim'
+    assert as_owner['size'] == 'medium'
+    assert as_owner['lifetime']['max_seconds'] == 1800
+    assert as_owner['lifetime']['idle_seconds'] == 1800
+
+    # 名前だけ入力した環境は、権限なし・Small・1時間の設定で作成する。
+    page.get_by_role('button', name='作成', exact=True).click()
+    dialog.get_by_label('名前', exact=False).fill('調べもの')
+    dialog.get_by_role('button', name='作成', exact=True).click()
+    expect(page.locator('.access-row').filter(has_text='調べもの')).to_be_visible()
+    research = next(item for item in call('GET', '/v1/principals/' + owner + '/resources?kind=environment', token=token)['resources'] if item['name'] == '調べもの')
+    assert research['identity'] is None
+    assert research['size'] == 'small'
+    assert research['lifetime']['max_seconds'] == 3600
+    assert research['lifetime']['idle_seconds'] == 3600
     building = page.locator('.access-row').filter(has_text='ビルド')
     expect(building.get_by_text('待機中 · あなたとして動作', exact=True)).to_be_visible()
     expect(page.locator('.access-row').filter(has_text='調べもの').get_by_text('待機中 · 権限なし', exact=True)).to_be_visible()
@@ -81,7 +130,18 @@ with sync_playwright() as p:
     expect(page.locator('.access-row').filter(has_text='ビルド')).to_have_count(0)
     gone = caller.get('/v1/resources/' + as_owner['id'], headers={'authorization': 'Bearer ' + token})
     assert gone.status == 404, 'closed from the page, it is gone'
+
+    # 英語表示でも作成フォームを操作し、名前を省略して作成する。
+    context.add_cookies([{'name': 'foundation_locale', 'value': 'en', 'url': args.base}])
+    page.reload(wait_until='networkidle')
+    page.get_by_role('button', name='Create', exact=True).click()
+    expect(dialog.get_by_role('heading', name='Create environment', exact=True)).to_be_visible()
+    expect(dialog.get_by_label('Stop automatically', exact=True)).to_have_value('60')
+    page.screenshot(path=str(shots / 'environment-create-en.png'), full_page=True)
+    dialog.get_by_role('button', name='Create', exact=True).click()
+    expect(page.get_by_text('Environment created.', exact=True)).to_be_visible()
+    expect(page.locator('.access-row').filter(has_text='エンバイロメント')).to_be_visible()
     assert not errors, errors
     context.close()
     browser.close()
-    print('Environments on the access page: listed with who they act as, the month\'s computing, closed from the page, desktop and mobile.')
+    print('画面から環境を作成する。設定を反映し、失敗時は入力を保って再試行する。日本語・英語とデスクトップ・モバイルで表示し、環境を閉じる。')

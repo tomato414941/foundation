@@ -828,7 +828,7 @@ function render() {
     return;
   }
   if (page === 'environments') {
-    shell(`<header class="page-heading"><h1>${esc(t('client.environment.title'))}</h1></header>${environmentsSection()}`);
+    shell(`<header class="page-heading page-heading-actions"><h1>${esc(t('client.environment.title'))}</h1><button class="button secondary" data-action="create-environment">${icon('plus')} ${esc(t('client.environment.create'))}</button></header>${environmentsSection()}`);
     return;
   }
   if (page === 'principals') {
@@ -1404,6 +1404,33 @@ function createPrincipal() {
 // The one whose details are open is known even before the next load lists it.
 let detailed = null;
 const principalById = id => (detailed?.id === id ? detailed : undefined) || (state.agents || []).find(item => item.id === id) || (state.principals || []).find(item => item.id === id) || connectedPrincipals().find(item => item.id === id);
+function createEnvironment() {
+  const owner = state.user.id;
+  openDialog(`<h2 id="dialog-title">${esc(t('client.environment.createTitle'))}</h2><form>
+    <label for="environment-name">${esc(t('client.common.optionalLabel', { label: t('client.common.name') }))}</label><input id="environment-name" name="name" maxlength="200" autocomplete="off">
+    <label for="environment-lifetime">${esc(t('client.environment.autoStop'))}</label><select id="environment-lifetime" name="minutes">${[15, 30, 60].map(minutes => `<option value="${minutes}"${minutes === 60 ? ' selected' : ''}>${esc(t('client.environment.afterMinutes', { count: minutes }))}</option>`).join('')}</select>
+    <details class="environment-options"><summary>${esc(t('client.environment.options'))}</summary>
+      <label for="environment-image">${esc(t('client.common.optionalLabel', { label: t('client.environment.image') }))}</label><input id="environment-image" name="image" maxlength="255" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(t('client.environment.defaultImage'))}">
+      <label for="environment-size">${esc(t('client.environment.size'))}</label><select id="environment-size" name="size"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select>
+      <p class="permission-note">${esc(t('client.environment.sizeUsage'))}</p>
+      <label for="environment-identity">${esc(t('client.environment.permissions'))}</label><select id="environment-identity" name="identity"><option value="">${esc(t('client.environment.noPermissions'))}</option><option value="${esc(owner)}">${esc(t('client.environment.actingAsYou'))}</option></select>
+    </details><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.environment.create'))}</button></form>`);
+  const formElement = dialog.querySelector('form'), submit = formElement.querySelector('[type="submit"]'), fields = [...formElement.querySelectorAll('input, select')];
+  let pending = false;
+  bindForm(async form => {
+    if (pending) return;
+    pending = true; submit.textContent = t('client.environment.creating'); fields.forEach(field => { field.disabled = true; });
+    const name = String(form.get('name')).trim(), image = String(form.get('image')).trim(), seconds = Number(form.get('minutes')) * 60;
+    try {
+      await api('/v1/principals/' + owner + '/environments', { method: 'POST', data: {
+        ...(name ? { name } : {}), ...(image ? { image } : {}), size: form.get('size'), identity: form.get('identity') || null,
+        lifetime: { end: 'idle', idle_seconds: seconds, max_seconds: seconds },
+      } });
+      if (formElement.isConnected) closeDialog();
+      await refresh(); toast(t('client.environment.created'));
+    } finally { pending = false; submit.textContent = t('client.environment.create'); fields.forEach(field => { field.disabled = false; }); }
+  });
+}
 // Machines lent to this account and still running: who each acts as, until when, and the month's computing.
 function environmentsSection() {
   const running = state.environments || [], compute = state.compute;
@@ -1949,6 +1976,7 @@ document.addEventListener('click', async (event) => {
       if (left) { await refresh(); await principalDetails(id); } else { closeDialog(); await refresh(); }
     }
     if (action === 'revoke-access') revokeAccess(principalById(id));
+    if (action === 'create-environment') createEnvironment();
     if (action === 'close-environment') {
       const item = (state.environments || []).find(row => row.id === id);
       if (item) confirmRemoval(t('client.environments.closeTitle', { name: item.name }), t('client.environment.closeWarning'), () => api('/v1/resources/' + item.id, { method: 'DELETE', data: {} }), t('client.environment.closed'), t('client.environment.close'));
