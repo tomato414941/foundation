@@ -5,7 +5,7 @@ import { rmSync, readdirSync, constants } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { homedir, hostname, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import { validEnvName } from './env-name.mjs';
 import { createCredential, answer } from './webauthn.mjs';
@@ -106,6 +106,39 @@ async function outputBytes(path) {
   } finally { await handle?.close(); }
 }
 
+// Taking a principal's data out: what the server's export holds, and each stored object's bytes, fetched straight from
+// where they are kept by a time-limited URL so that they never pass through the server. The directory is new, private,
+// and written into only.
+async function exportTo({ directory, principal }, send) {
+  try { await mkdir(directory, { mode: 0o700 }); }
+  catch (error) { throw error.code === 'EEXIST' ? new Error('Choose a directory that does not exist yet: ' + directory) : error; }
+  const base = '/v1/principals/' + encodeURIComponent(principal);
+  await writeFile(join(directory, 'export.json'), JSON.stringify(await send(base + '/export', undefined, { method: 'GET' }), null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+  const { resources = [] } = await send(base + '/resources?kind=object', undefined, { method: 'GET', accept: data => data.error?.code === 'space_unavailable' });
+  const kept = [];
+  for (const object of resources) {
+    // The server answers a burst of links with rate_limit; its window is a minute.
+    let link;
+    for (let attempt = 0; !link; attempt++) {
+      const answered = await send('/v1/resources/' + object.id + '/link', {}, { accept: data => data.error?.code === 'rate_limit' && attempt < 5 });
+      if (answered.error) await new Promise(done => setTimeout(done, Number(process.env.FOUNDATION_EXPORT_WAIT_MS ?? 15_000)));
+      else link = answered;
+    }
+    const response = await fetch(link.url, { redirect: 'error', signal: AbortSignal.timeout(300_000) });
+    if (!response.ok) throw new Error('Could not download ' + object.name + ' (' + response.status + ').');
+    const bytes = Buffer.from(await response.arrayBuffer());
+    // A name becomes a path under objects/ when every part of it is a plain name; otherwise, or where that path is
+    // taken, the object is saved under its id.
+    const parts = object.name.split('/');
+    let file = parts.every(part => part && part !== '.' && part !== '..' && !part.includes(sep) && !/[\u0000-\u001f]/.test(part)) ? join(directory, 'objects', ...parts) : null;
+    try { if (!file) throw new Error('unsafe'); await mkdir(dirname(file), { recursive: true, mode: 0o700 }); await writeFile(file, bytes, { mode: 0o600, flag: 'wx' }); }
+    catch { file = join(directory, 'objects', object.id); await mkdir(dirname(file), { recursive: true, mode: 0o700 }); await writeFile(file, bytes, { mode: 0o600, flag: 'wx' }); }
+    kept.push({ id: object.id, name: object.name, type: object.type ?? null, size: bytes.length, file: file.slice(directory.length + 1) });
+  }
+  await writeFile(join(directory, 'objects.json'), JSON.stringify(kept, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+  console.log(JSON.stringify({ directory, objects: kept.length }));
+}
+
 // --help describes the CLI. The server publishes its API contract at /openapi.json.
 const HELP = `Usage: foundation <command> [options]
 
@@ -122,6 +155,9 @@ Commands:
   exec --output '<json>' -- <command>  Also save a file the command writes.
   keep <name> --from <file>            Save a file as a secret, sealed here for whoever may open it.
   read <name>                          Print a secret this machine was handed an envelope for.
+  export <directory> [--principal <id>]
+                                       Save a principal's data (this machine's by default) into a new directory:
+                                       export.json as the server gives it, and every stored object under objects/.
   version                              Print the version.
 
 API specification:
@@ -202,8 +238,12 @@ async function main() {
     call = { name: args[0] };
   } else if (action === 'token') {
     if (args.length) throw new Error('Usage: token');
+  } else if (action === 'export') {
+    const parsed = parseArgs({ args, options: { principal: { type: 'string' } }, strict: true, allowPositionals: true });
+    if (parsed.positionals.length !== 1 || (parsed.values.principal !== undefined && !/^[0-9a-f-]{36}$/.test(parsed.values.principal))) throw new Error('Usage: export <directory> [--principal <id>]');
+    call = { directory: resolve(parsed.positionals[0]), principal: parsed.values.principal ?? 'me' };
   } else if (!(action === 'exec' && (names.length || output) && command.length)) {
-    throw new Error('Usage: init [<url>] [--name <name>] | join | token | exec [<ENV>=<name> ... | --inputs <json>] [--output <json>] -- <command> [args...] | keep <name> --from <file> | read <name> | api <method> </path> [--json <body>] [--from <file>]');
+    throw new Error('Usage: init [<url>] [--name <name>] | join | token | exec [<ENV>=<name> ... | --inputs <json>] [--output <json>] -- <command> [args...] | keep <name> --from <file> | read <name> | export <directory> [--principal <id>] | api <method> </path> [--json <body>] [--from <file>]');
   }
   const url = serverUrl(serverGiven ?? configured);
   const keyPath = process.env.FOUNDATION_RUNTIME_KEY_FILE || join(homedir(), '.local', 'state', 'foundation', createHash('sha256').update(url.origin).digest('hex').slice(0, 24) + (agentName ? '-' + agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '.key');
@@ -254,6 +294,7 @@ async function main() {
     catch (error) { if (action !== 'init') throw error; key = null; token = null; }
   }
   if (action === 'token') { console.log(token); return; }
+  if (action === 'export') { await exportTo(call, send); return; }
   // One request, as this machine, and the answer printed as it came. Nothing here knows the endpoints.
   if (action === 'api') {
     const response = await fetch(url.origin + call.target, { method: call.method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), ...(call.body === undefined ? {} : { 'content-type': call.type }) },

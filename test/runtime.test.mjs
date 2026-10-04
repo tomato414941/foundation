@@ -465,3 +465,39 @@ test('渡された封筒のあるシークレットは、Foundation が開けな
   assert.equal(asFile.out, 'opened-here');
   assert.equal(JSON.parse(await readFile(env.FOUNDATION_RUNTIME_KEY_FILE, 'utf8')).key.private_key.length, 43, 'opened with the key this machine keeps');
 });
+
+test('exportは書き出しと、置いたものの中身を保管場所から直接取って、新しいディレクトリに保存する', async t => {
+  const stored = new Map();
+  const served = createServer((req, res) => { const body = stored.get(decodeURIComponent(new URL(req.url, 'http://x').pathname.slice(1))); res.writeHead(body ? 200 : 404); res.end(body); });
+  await new Promise(done => served.listen(0, '127.0.0.1', done));
+  t.after(() => served.close());
+  const bucket = { enabled: true,
+    async put(prefix, key, body) { stored.set(prefix + key, Buffer.from(body)); },
+    async get(prefix, key) { return { content: stored.get(prefix + key), contentType: 'application/octet-stream' }; },
+    async remove(prefix, key) { stored.delete(prefix + key); },
+    async list() { return { objects: [], cursor: null }; },
+    async link(prefix, key) { return 'http://127.0.0.1:' + served.address().port + '/' + encodeURIComponent(prefix + key); } };
+  const f = await fixture(t, { space: bucket }), runtime = await f.issueKey();
+  const dir = await mkdtemp(join(tmpdir(), 'foundation-export-test-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const keyPath = join(dir, 'runtime-key');
+  await writeFile(keyPath, runtime.token, { mode: 0o600 });
+  const env = { FOUNDATION_URL: f.base, FOUNDATION_RUNTIME_KEY_FILE: keyPath };
+  for (const [name, body] of [['notes/today.txt', 'mine'], ['report.pdf', '%PDF-1.4']]) {
+    const put = await f.request('/v1/principals/' + runtime.id + '/resources?kind=object&name=' + encodeURIComponent(name), { method: 'PUT', anonymous: true, token: runtime.token, raw: Buffer.from(body), type: 'application/octet-stream' });
+    assert.equal(put.status, 200, put.text);
+  }
+  const out = join(dir, 'out');
+  const done = await execute(['export', out], env);
+  assert.equal(done.code, 0, done.err);
+  assert.deepEqual(JSON.parse(done.out), { directory: out, objects: 2 });
+  assert.equal(await readFile(join(out, 'objects', 'notes', 'today.txt'), 'utf8'), 'mine');
+  assert.equal(await readFile(join(out, 'objects', 'report.pdf'), 'utf8'), '%PDF-1.4');
+  assert.deepEqual(JSON.parse(await readFile(join(out, 'objects.json'), 'utf8')).map(row => [row.name, row.file, row.size]).sort(), [['notes/today.txt', 'objects/notes/today.txt', 4], ['report.pdf', 'objects/report.pdf', 8]]);
+  assert.ok(Array.isArray(JSON.parse(await readFile(join(out, 'export.json'), 'utf8')).secrets));
+  assert.equal((await stat(out)).mode & 0o777, 0o700);
+  assert.equal((await stat(join(out, 'export.json'))).mode & 0o777, 0o600);
+  const again = await execute(['export', out], env);
+  assert.notEqual(again.code, 0);
+  assert.match(again.err, /does not exist yet/);
+});
