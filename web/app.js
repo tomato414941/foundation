@@ -809,9 +809,10 @@ function reachHtml() {
     : reach.kind === 'connection' ? plain(presentConnection(entry).service?.name || entry.name || '', entry.label || '')
     : reach.kind === 'object' ? plain(entry.name, entry.size === undefined ? '' : kiloBytes(entry.size))
     : plain(entry.name, entry.status || '');
-  const why = { agent: t('client.reach.asAgent'), member: t('client.reach.asMember') };
-  const section = (title, note, body) => `<section class="resource-section reach-section" aria-label="${esc(title)}"><div class="section-heading"><div class="section-label"><div><h2>${esc(title)}</h2>${note ? `<p>${esc(note)}</p>` : ''}</div></div></div>${body}</section>`;
-  return [...reach.sources.map(source => section(t('client.reach.of', { name: source.name }), why[source.relation], source.items === null ? `<div class="access-empty"><p>${esc(t('client.reach.unreadable'))}</p></div>` : `<div class="agent-list">${source.items.map(item).join('')}</div>`)),
+  // Whose they are is said by name, and what that one is to the principal shown by the same badge as in the list.
+  const what = { agent: t('client.principals.relation.delegator'), member: t('client.principals.relation.group') };
+  const section = (title, badge, body) => `<section class="resource-section reach-section" aria-label="${esc(title)}"><div class="section-heading"><div class="section-label"><h2>${esc(title)}</h2>${badge ? `<span class="relation-badge">${esc(badge)}</span>` : ''}</div></div>${body}</section>`;
+  return [...reach.sources.map(source => section(source.name, what[source.relation], source.items === null ? `<div class="access-empty"><p>${esc(t('client.reach.unreadable'))}</p></div>` : `<div class="agent-list">${source.items.map(item).join('')}</div>`)),
     ...(reach.shown.length ? [section(t('client.reach.shared'), '', `<div class="agent-list">${reach.shown.map(item).join('')}</div>`)] : [])].join('');
 }
 function secretRow(entry, { others = false } = {}) {

@@ -131,7 +131,7 @@ with sync_playwright() as p:
     expect(fresh.get_by_text('分けた置き場所 を表示中', exact=True)).to_have_count(0)
     # Not among one's own; having placed it there, one may still use it, and it is listed as shared.
     expect(fresh.get_by_role('region', name='シークレット', exact=True).get_by_role('heading', name='分けた鍵', exact=True)).to_have_count(0)
-    expect(fresh.get_by_role('region', name='共有されたもの', exact=True).get_by_role('heading', name='分けた鍵', exact=True)).to_be_visible()
+    expect(fresh.get_by_role('region', name='共有アイテム', exact=True).get_by_role('heading', name='分けた鍵', exact=True)).to_be_visible()
     assert not errors, errors
     browser.close()
     print('パスキー: アカウントでの追加・パスキーだけでのサインイン・削除によるセッションの終了・パスキーだけで始めることと、スマートフォンの表示を確認しました。')

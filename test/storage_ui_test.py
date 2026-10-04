@@ -165,7 +165,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     expect(page.get_by_text('laptop のAI を表示中', exact=True)).to_be_visible()
     reached = page.locator('.reach-section')
     expect(reached).to_have_count(1)
-    expect(reached.get_by_text('エージェントとして', exact=True)).to_be_visible()
+    expect(reached.get_by_text('委任元', exact=True)).to_be_visible()
     expect(reached.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
     expect(reached.get_by_role('heading', name='release/2026-09-23', exact=True)).to_be_visible()
     review(page)
