@@ -1,32 +1,33 @@
-import { fail } from './errors.mjs';
+import { routeOf } from './request-calls.mjs';
 
 // How often one asking may look again at what became of its request (RFC 8628 and CIBA: interval, then slow_down).
 export const INTERVAL = 5;
+const ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
 
-// A request as anyone sees it: who asks (by name), what for, and where it is answered. The one asked by an
-// app's user is sent to that app's own page, which knows who they are.
-export function requestView({ requests, services, principals, settings, connections, apps, resources, keys, authorization }, row, origin, { events = false, code = false, interval = INTERVAL } = {}) {
+// A request as anyone sees it: who asks (by name), the calls it asks for - each with what the API calls it - and where
+// it is answered. The one asked by an app's user is sent to that app's own page, which knows who they are. The one
+// asked also sees, for every id a call names, who or what it is to them; and, when a call keeps a sealed secret, whom
+// to seal it for.
+export function requestView({ requests, principals, settings, resources, recipientsOf }, row, origin, { events = false, code = false, asked = false, interval = INTERVAL } = {}) {
   const value = requests.summary(row, { includeEvents: events, includeCode: code });
-  const from = principals.get(row.from_id), asked = requests.detail(row);
-  let service;
-  if (['connection', 'app'].includes(row.type)) { try { service = services.describe(asked.service); } catch {} }
-  // The scheme a connection will be made by: the one asked for, or the service's first.
-  const scheme = row.type === 'connection' && service ? asked.auth_scheme ?? Object.keys(service.auth_schemes)[0] : undefined;
-  // The app a connection will be made through, by the name its owner gave it: the one asked for, or Foundation's.
-  const app = scheme === 'oauth' && service.auth_schemes.oauth?.takes_apps ? apps.reference(asked.app ?? 'foundation') : undefined;
-  const target = service && asked.connection_id ? connections.held(row.to_id, asked.connection_id) : undefined;
+  const from = principals.get(row.from_id);
+  const operations = value.operations.map(call => {
+    const operation = routeOf(call)?.operation;
+    return { ...call, operation_id: operation?.operationId ?? null, summary: operation?.summary ?? '' };
+  });
   const back = row.to_id ? settings.returnUrlFor(row.to_id) : undefined;
   const verification_uri = back ? back + (back.includes('?') ? '&' : '?') + 'foundation_request=' + row.id : origin + '/requests/' + row.id;
-  // What a relation is asked onto, by the name its owner knows it by.
-  let object;
-  if (row.type === 'relation' && asked.object_type === 'principal') object = { type: 'principal', id: asked.object_id, name: principals.get(asked.object_id)?.name ?? '' };
-  if (row.type === 'relation' && asked.object_type === 'resource') { const held = resources.get(asked.object_id); object = { type: 'resource', id: asked.object_id, kind: held?.kind ?? null, name: held?.name ?? '' }; }
-  // Whom what is kept for a store request is sealed for: the one asked, Foundation's principal when it acts for them,
-  // and the asker when it asked to read any of it back; each with a key.
-  const recipients = row.type === 'secret' && row.to_id ? [row.to_id, ...(authorization.can(keys.agentId, 'inject', 'principal', { id: row.to_id }) ? [keys.agentId] : []), ...(asked.fields.some(one => one.readable) ? [row.from_id] : [])]
-    .map(id => ({ principal_id: id, public_key: keys.publicKeyOf(id)?.toString('base64url') })).filter(one => one.public_key) : undefined;
-  return { ...value, requester_name: from?.name ?? row.requester_name, verification_uri, interval, ...(object ? { object } : {}), ...(recipients ? { recipients } : {}),
-    ...(service ? { service, ...(scheme ? { auth_scheme: scheme } : {}), ...(asked.connection_id ? { connection: target ? connections.view(target) : null } : {}) } : {}),
-    ...(app !== undefined ? { app } : {}),
-    ...(row.type === 'secret' ? { store: asked.fields } : {}) };
+  let names, recipients;
+  if (asked) {
+    names = {};
+    for (const id of new Set(JSON.stringify(value.operations).match(ID) ?? [])) {
+      const principal = principals.get(id);
+      if (principal) { names[id] = { type: 'principal', name: principal.name }; continue; }
+      const held = resources.get(id);
+      if (held && held.owner_id === row.to_id) names[id] = { type: 'resource', kind: held.kind, name: held.name };
+    }
+    if (row.to_id && value.operations.some(call => call.inputs?.some(input => input.kind === 'sealed'))) recipients = recipientsOf(row.to_id);
+  }
+  return { ...value, operations, requester_name: from?.name ?? row.requester_name, verification_uri, interval,
+    ...(names ? { names } : {}), ...(recipients ? { recipients } : {}) };
 }

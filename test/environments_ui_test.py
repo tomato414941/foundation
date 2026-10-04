@@ -34,7 +34,7 @@ with sync_playwright() as p:
 
     actor = call('POST', '/v1/principals', {'kind': 'key', 'name': '作業用AI'})
     token = actor['token']
-    asked = call('POST', '/v1/requests', {'authorization_details': [{'type': 'relation', 'relation': 'agent'}]}, token)['request']
+    asked = call('POST', '/v1/requests', {'operations': [{'method': 'POST', 'path': '/v1/principals/' + actor['principal']['id'] + '/relations', 'body': {'relation': 'agent', 'object_type': 'principal', 'object_id': 'me'}}]}, token)['request']
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))

@@ -8,8 +8,18 @@ import { Store } from '../src/store.mjs';
 import { Vault, digest } from '../src/crypto.mjs';
 import { Principals } from '../src/principals.mjs';
 import { SCHEMA_VERSION, STEPS } from '../src/migrations.mjs';
-// A database from before functions were a kind of thing has neither their table nor the index of their names.
-const before52 = store => store.db.exec('DROP TABLE IF EXISTS functions; DROP INDEX IF EXISTS resources_function_name');
+// A database from before functions were a kind of thing has neither their table nor the index of their names, and
+// its requests asked for one authorization detail each rather than for calls.
+const before52 = store => store.db.exec(`DROP TABLE IF EXISTS functions; DROP INDEX IF EXISTS resources_function_name; DROP TABLE requests;
+  CREATE TABLE requests (
+    id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,
+    type TEXT NOT NULL CHECK(type IN ('relation','secret','connection','app')), detail TEXT NOT NULL,
+    requester_name TEXT NOT NULL DEFAULT '', binding_message TEXT NOT NULL, steps TEXT NOT NULL, user_code TEXT, attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, result TEXT, reason TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','granted','denied','cancelled')),
+    created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX requests_from ON requests(from_id, created_at);
+  CREATE INDEX requests_to ON requests(to_id, created_at);`);
 import { OAuth2Client, inject } from '../src/schemes/oauth.mjs';
 import { Authorization } from '../src/authorization.mjs';
 import { Environments } from '../src/environments.mjs';
@@ -299,9 +309,6 @@ test('31版のシークレットと固定トークンを値・ID・共有権限�
   // An action that was drawn onto the holder, reaching all they hold, has no place in the schema and is gone (42).
   assert.equal(authorization.can(old.reader, 'list', 'secret', { owner: USER_A }), false);
   assert.equal(authorization.can(old.reader, 'list', 'connection', { owner: USER_A }), false);
-  assert.equal(store.db.prepare("SELECT status FROM requests WHERE id='request-pending'").get().status, 'cancelled');
-  assert.deepEqual(JSON.parse(store.db.prepare("SELECT result FROM requests WHERE id='request-done'").get().result), { connection_id: 'single' });
-  assert.deepEqual({ ...store.db.prepare("SELECT type,status,user_code FROM requests WHERE id='request-done'").get() }, { type: 'connection', status: 'granted', user_code: null }, 'a request says what it asks as a detail, and is granted');
   assert.deepEqual(store.db.prepare('PRAGMA foreign_key_check').all(), []);
   assert.deepEqual(principals.lines(old.reader, { direction: 'from' }).relations.filter(line => line.resource?.id === 'plain').map(line => line.resource.kind), ['secret', 'secret']);
 });
@@ -407,16 +414,12 @@ test('41版の代わりに動く線は agent に、一つの操作の線はそ�
   line.run(USER_B, 'actor', 'principal', USER_A, '2026-01-01'); line.run(USER_A, 'owner', 'principal', USER_B, '2026-01-01');
   line.run(USER_B, 'connection.disconnect', 'resource', 'c1', '2026-01-01'); line.run(USER_B, 'connection.disconnect', 'principal', USER_A, '2026-01-01');
   line.run(USER_B, 'viewer', 'resource', 's1', '2026-01-01');
-  store.db.prepare("INSERT INTO requests (id,from_id,to_id,type,detail,binding_message,steps,status,result,created_at,expires_at) VALUES ('r1',?,?,'relation',?,'','[]','granted',?,0,9999999999999)")
-    .run(USER_B, USER_A, JSON.stringify({ relation: 'actor' }), JSON.stringify({ relation: 'actor', object_type: 'principal', object_id: USER_A }));
   store.db.exec("ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE connection_references; DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation Agent'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP INDEX emails_id; ALTER TABLE emails DROP COLUMN id; ALTER TABLE emails DROP COLUMN created_at; PRAGMA user_version=41"); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   assert.deepEqual(next.db.prepare('SELECT relation, object_type, object_id FROM relations ORDER BY relation, object_id').all().map(row => ({ ...row })),
     [{ relation: 'agent', object_type: 'principal', object_id: USER_A }, { relation: 'disconnect_grant', object_type: 'resource', object_id: 'c1' },
       { relation: 'owner', object_type: 'principal', object_id: USER_B }, { relation: 'viewer', object_type: 'resource', object_id: 's1' }]);
-  const request = next.db.prepare("SELECT detail, result FROM requests WHERE id='r1'").get();
-  assert.equal(JSON.parse(request.detail).relation, 'agent'); assert.equal(JSON.parse(request.result).relation, 'agent');
 });
 
 test('40版のエンバイロメントは ID・コマンド・鍵・使用量を保って停止再試行可能な43版へ移る', async t => {
@@ -513,14 +516,12 @@ test('mainの42版DBは認可と課金を保って43版へ移り、停止の読�
   line.run(USER_B, 'agent', 'principal', USER_A, '2026-01-01');
   line.run(USER_B, 'exec_grant', 'resource', 'environment-42', '2026-01-01');
   line.run(USER_A, 'owner', 'principal', USER_B, '2026-01-01');
-  store.db.prepare("INSERT INTO requests (id,from_id,to_id,type,detail,binding_message,steps,status,result,created_at,expires_at) VALUES ('r42',?,?,'relation',?,'','[]','granted',?,0,9999999999999)")
-    .run(USER_B, USER_A, JSON.stringify({ relation: 'agent' }), JSON.stringify({ relation: 'agent', object_type: 'principal', object_id: USER_A }));
   store.db.prepare("INSERT INTO environment_commands VALUES ('command-42','environment-42',?,'[\"true\"]','done',0,'kept','',?,?)").run(USER_A, now - 1000, now);
   store.db.prepare("INSERT INTO payment_accounts VALUES (?,'cus_42','sub_42','active',1)").run(USER_A);
   store.db.prepare("INSERT INTO meter_events VALUES ('sent-42',?,'compute',23,100,200)").run(USER_A);
   store.db.prepare("INSERT INTO meter_events VALUES ('pending-42',?,'compute',7,300,NULL)").run(USER_A);
   store.db.prepare('INSERT INTO compute_usage VALUES (?,?,30)').run(USER_A, new Date(now).toISOString().slice(0, 7));
-  const tables = ['resources', 'relations', 'requests', 'environment_commands', 'access_keys', 'payment_accounts', 'meter_events', 'compute_usage'];
+  const tables = ['resources', 'relations', 'environment_commands', 'access_keys', 'payment_accounts', 'meter_events', 'compute_usage'];
   const before = Object.fromEntries(tables.map(table => [table, store.db.prepare('SELECT * FROM ' + table).all()]));
   store.db.exec("ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE connection_references; DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation Agent'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP INDEX emails_id; ALTER TABLE emails DROP COLUMN id; ALTER TABLE emails DROP COLUMN created_at; PRAGMA user_version=42"); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());

@@ -4,9 +4,10 @@ import { request as httpRequest } from 'node:http';
 import { fixture, USER_A, USER_B } from './helpers.mjs';
 
 const revoke = (f, id, { as = 'me', ...options } = {}) => f.request(`/v1/principals/${as}/access/${id}`, { method: 'DELETE', data: {}, ...options });
+// Asking to keep a value the one asked types, or to connect Google.
 async function ask(f, agent, to, kind = 'store') {
-  const input = kind === 'store' ? { fields: [{ name: 'requested', label: '値', readable: true }] } : { service: 'google' };
-  const result = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: { actor: 'relation', store: 'secret', connect: 'connection', app: 'app' }[kind], ...(kind === 'actor' ? { relation: 'agent' } : input) }], to } });
+  const call = kind === 'store' ? { method: 'PUT', path: '/v1/principals/me/resources?kind=secret&name=requested', inputs: [{ at: '', label: '値', kind: 'sealed' }] } : f.connecting({ service: 'google' });
+  const result = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { operations: [call], to } });
   assert.equal(result.status, 201, result.text);
   return result.json.request;
 }
@@ -47,13 +48,13 @@ test('アクセス許可と個別の閲覧・編集権限を取り消し、相�
 test('自分宛ての未完了依頼を取り消し、他のアカウントの権限・依頼・共有を維持する', async t => {
   const f = await fixture(t), agent = await f.issueKey();
   const pendingA = await ask(f, agent, USER_A), connectA = await ask(f, agent, USER_A, 'connect');
-  const completed = await f.request('/v1/requests/' + pendingA.id + '/grant', { method: 'POST', data: { entries: [{ name: 'kept', content: 'value' }] } });
+  const completed = await f.request('/v1/requests/' + pendingA.id + '/grant', { method: 'POST', data: { values: [{ '': 'value' }] } });
   assert.equal(completed.status, 200);
   const nextA = await ask(f, agent, USER_A);
   await f.signin('other@example.test');
-  const approval = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'relation', relation: 'agent' }], to: USER_B } });
+  const approval = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { operations: [f.takingOn(agent.id)], to: USER_B } });
   assert.equal(approval.status, 201);
-  assert.equal((await f.request(`/v1/requests/${approval.json.request.id}/grant`, { method: 'POST', data: { user_code: approval.json.request.user_code } })).status, 200);
+  assert.equal((await f.request(`/v1/requests/${approval.json.request.id}/grant`, { method: 'POST', data: {} })).status, 200);
   const privateB = await f.keep('secret', 'private-b', 'other-value');
   f.app.principals.relate(agent.id, 'viewer', 'resource', privateB.json.resource.id);
   await f.handEnvelope(privateB.json.resource.id, { token: agent.token });
@@ -66,12 +67,12 @@ test('自分宛ての未完了依頼を取り消し、他のアカウントの�
   for (const request of [nextA, connectA]) {
     const current = (await f.request('/v1/requests/' + request.id, { token: agent.token })).json.request;
     assert.equal(current.status, 'cancelled'); assert.equal(current.reason, 'access_revoked');
-    assert.equal((await f.request('/v1/requests/' + request.id + '/grant', { method: 'POST', data: { entries: [{ name: 'later', content: 'value' }] } })).status, 409);
+    assert.equal((await f.request('/v1/requests/' + request.id + '/grant', { method: 'POST', data: { values: [{ '': 'value' }] } })).status, 409);
   }
   assert.equal((await f.request('/v1/requests/' + pendingA.id, { token: agent.token })).json.request.status, 'granted');
   assert.equal((await f.request('/v1/requests/' + pendingB.id, { token: agent.token })).json.request.status, 'pending');
   await f.signin('other@example.test');
-  assert.equal((await f.request('/v1/requests/' + pendingB.id + '/grant', { method: 'POST', data: { entries: [{ name: 'requested', content: 'b-value' }] } })).status, 200);
+  assert.equal((await f.request('/v1/requests/' + pendingB.id + '/grant', { method: 'POST', data: { values: [{ '': 'b-value' }] } })).status, 200);
 });
 
 test('保有者が自分への許可だけを取り消し、相手の所有権を持たなくても停止する', async t => {
@@ -89,8 +90,8 @@ test('保有者が自分への許可だけを取り消し、相手の所有権�
 test('取り消した相手を同じキーで再承認し、以後に追加したデータも利用する', async t => {
   const f = await fixture(t), agent = await f.issueKey();
   await revoke(f, agent.id);
-  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { authorization_details: [{ type: 'relation', relation: 'agent' }], binding_message: '作業の再開' } });
-  assert.equal(asked.status, 201);
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { to: USER_A, operations: [f.takingOn(agent.id)], binding_message: '作業の再開' } });
+  assert.equal(asked.status, 201, asked.text);
   assert.equal((await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { user_code: asked.json.request.user_code } })).status, 200);
   await f.keep('secret', 'later', 'later-value');
   const delivered = await f.request('/v1/principals/' + USER_A + '/injections', { method: 'POST', token: agent.token, data: { names: [{ name: 'later', as: 'VALUE' }] } });
@@ -167,12 +168,12 @@ test('アップロード中にアクセスを取り消すと保存を拒否し�
 test('接続認証の完了前にアクセスを取り消すと、取消済みの依頼として完了を拒否する', async t => {
   const f = await fixture(t), agent = await f.issueKey();
   const asked = await ask(f, agent, USER_A, 'connect');
-  const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', request_id: asked.id } });
-  assert.equal(started.status, 200);
+  const started = await f.request('/v1/requests/' + asked.id + '/grant', { method: 'POST', data: {} });
+  assert.equal(started.status, 200, started.text);
   let began, release;
   const exchanging = new Promise(resolve => began = resolve);
   f.google.exchangeHandler = () => { began(); return new Promise(resolve => release = resolve); };
-  const returning = f.callback(new URL(started.json.url));
+  const returning = f.callback(new URL(started.json.continue.url));
   await exchanging;
   await revoke(f, agent.id);
   release();

@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, USER_A } from './helpers.mjs';
+// Asking whoever stands as the asker to keep a value they type, sealed by their own client.
+const keeping = (name, label) => ({ method: 'PUT', path: '/v1/principals/me/resources?kind=secret&name=' + encodeURIComponent(name), inputs: [{ at: '', label, kind: 'sealed' }] });
 
 // An app is a principal its developer made and gave settings and a key. With that key it makes a principal for
 // each of its own users (calling them by names of its own), issues them keys, hands one of them to one request
@@ -24,7 +26,7 @@ async function setup(t) {
     return { account: ensured.json.principal, key: { id: key.json.credential.id, token: key.json.token } };
   };
   const ask = async key => {
-    const asked = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { authorization_details: [{ type: 'secret', fields: { name: 'npm-token', label: 'npm のトークン' } }], binding_message: '公開に使います', steps: ['トークンを作る'] } });
+    const asked = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { operations: [keeping('npm-token', 'npm のトークン')], binding_message: '公開に使います', steps: ['トークンを作る'] } });
     assert.equal(asked.status, 201, asked.text);
     return asked.json.request;
   };
@@ -102,16 +104,16 @@ test('A request from such a user is opened on the app\'s page, and a single-use 
   assert.equal((await go('/v1/principals/me')).status, 401, 'the link reaches nothing else');
   assert.equal((await go('/v1/requests/' + other.id)).status, 401);
   const shown = (await go('/v1/requests/' + request.id)).json.request;
-  const stored = await go('/v1/requests/' + request.id + '/grant', { method: 'POST', data: { entries: [{ name: 'npm-api-token', ...await f.sealed('npm_value', { anonymous: true }, shown.recipients) }] } });
+  const stored = await go('/v1/requests/' + request.id + '/grant', { method: 'POST', data: { values: [{ '': await f.sealed('npm_value', { anonymous: true }, shown.recipients) }] } });
   assert.equal(stored.status, 200, stored.text);
-  assert.deepEqual((await go('/v1/requests/' + request.id)).json.request.result.names, ['npm-api-token']);
-  const delivered = await f.request('/v1/principals/me/injections', { method: 'POST', anonymous: true, token: key.token, data: { names: [{ name: 'npm-api-token', as: 'NPM_TOKEN' }] } });
+  assert.equal((await go('/v1/requests/' + request.id)).json.request.results[0].body.resource.name, 'npm-token');
+  const delivered = await f.request('/v1/principals/me/injections', { method: 'POST', anonymous: true, token: key.token, data: { names: [{ name: 'npm-token', as: 'NPM_TOKEN' }] } });
   assert.equal(delivered.json.injection.environment.NPM_TOKEN, 'npm_value');
   // Spent once; another visitor gets nowhere with it.
   assert.equal((await visitor()('/v1/links/exchange', { method: 'POST', data: { request_id: request.id, link: token } })).status, 410);
 });
 
-test('A link is made only for the app\'s own users\' open store requests, and expires', async t => {
+test('A link is made only for the app\'s own users\' open requests, and expires', async t => {
   const { f, call, account, ask, link, visitor } = await setup(t);
   const { account: user, key } = await account('user-1');
   const ownKey = await f.issueKey();
@@ -126,8 +128,6 @@ test('A link is made only for the app\'s own users\' open store requests, and ex
   const token = new URLSearchParams(new URL(made.json.url).hash.slice(1)).get('link');
   f.app.store.db.prepare('UPDATE request_links SET expires_at=0').run();
   assert.equal((await visitor()('/v1/links/exchange', { method: 'POST', data: { request_id: request.id, link: token } })).status, 410);
-  const connect = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { authorization_details: [{ type: 'connection', service: 'google' }], binding_message: '確認' } });
-  assert.equal((await link(user, connect.json.request.id)).json.error.code, 'link_unsupported');
 });
 
 test('Removing a user takes what they hold with it; removing the app stops its key but not its users', async t => {
@@ -185,21 +185,21 @@ test('As with Stripe, an app gives a return page, a refresh page and a signed we
   const call = (path, options = {}) => f.request('/v1' + path, { anonymous: true, token: product, ...options });
   const user = (await call('/principals', { method: 'POST', data: { alias: 'user-1' } })).json.principal;
   const key = (await call('/principals/' + user.id + '/credentials', { method: 'POST', data: { kind: 'key' } })).json;
-  const ask = async (name = 'npm-token') => (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { authorization_details: [{ type: 'secret', fields: { name, label: 'npm' } }], binding_message: 'p', steps: [] } })).json.request;
+  const ask = async (name = 'npm-token') => (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: key.token, data: { operations: [keeping(name, 'npm')], binding_message: 'p', steps: [] } })).json.request;
   const first = await ask();
   const back = (await f.request('/v1/requests/' + first.id + '/return', { anonymous: true })).json.back;
   assert.equal(back.name, 'ai-simplicity');
   assert.equal(back.refresh_url, 'https://simplicity.example.test/foundation/again?foundation_request=' + first.id);
   assert.equal(new URL(back.return_url).searchParams.get('from'), 'foundation', 'the app\'s own query is kept');
   const own = await f.issueKey('own');
-  const unheld = (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: own.token, data: { to: USER_A, authorization_details: [{ type: 'secret', fields: { name: 'x', label: 'x' } }], binding_message: 'p' } })).json.request;
+  const unheld = (await f.request('/v1/requests', { method: 'POST', anonymous: true, token: own.token, data: { to: USER_A, operations: [keeping('x', 'x')], binding_message: 'p' } })).json.request;
   assert.equal((await f.request('/v1/requests/' + unheld.id + '/return', { anonymous: true })).status, 404, 'no way back for a request no app handles');
   // Done and cancelled: each is told to the app, signed with the secret it was given.
   const made = (await call('/principals/' + user.id + '/links', { method: 'POST', data: { request_id: first.id } })).json;
   const link = new URLSearchParams(new URL(made.url).hash.slice(1)).get('link');
   const claimed = await fetch(f.base + '/v1/links/exchange', { method: 'POST', headers: { 'content-type': 'application/json', origin: f.base }, body: JSON.stringify({ request_id: first.id, link }) });
   const cookie = claimed.headers.getSetCookie()[0].split(';')[0];
-  assert.equal((await f.request('/v1/requests/' + first.id + '/grant', { method: 'POST', anonymous: true, headers: { cookie }, data: { entries: [{ name: 'npm-token', content: 'value' }] } })).status, 200, 'sealed for the one asked and Foundation');
+  assert.equal((await f.request('/v1/requests/' + first.id + '/grant', { method: 'POST', anonymous: true, headers: { cookie }, data: { values: [{ '': 'value' }] } })).status, 200, 'sealed for the one asked and Foundation');
   // The first request's name is now taken, so the next asks for another.
   const second = await ask('npm-token-next');
   await f.request('/v1/requests/' + second.id, { method: 'DELETE', anonymous: true, token: key.token, data: {} });

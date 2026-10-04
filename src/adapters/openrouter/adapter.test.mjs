@@ -67,9 +67,8 @@ test('承認したキーに認証情報と提供元の有効期限を渡し、�
   const f = await openrouterFixture(t); let token = 'fdn_' + randomBytes(32).toString('base64url');
   assert.equal((await f.request('/v1/principals/me/resources?kind=connection', { token, anonymous: true })).status, 401, 'a key nobody knows is nobody');
   token = (await f.approveKey()).token;
-  const created = await f.request('/v1/requests', { method: 'POST', token, data: { to: USER_A, authorization_details: [{ type: 'connection', service: 'openrouter' }], binding_message: 'キー情報を確認。モデルは実行しない。' } });
+  const created = await f.request('/v1/requests', { method: 'POST', token, data: { to: USER_A, operations: [f.connecting({ service: 'openrouter' })], binding_message: 'キー情報を確認。モデルは実行しない。' } });
   const row = created.json.request;
-  assert.equal(row.service.auth_schemes.oauth.can_revoke, false);
   const callback = await f.callbackOpenRouter(await f.startOpenRouter({ request_id: row.id }));
   assert.equal(callback.headers.get('location'), '/requests/' + row.id + '?result=connected');
   const account = (await f.request('/v1/principals/me/resources?kind=connection')).json.resources[0];

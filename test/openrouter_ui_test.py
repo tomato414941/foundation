@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
     owner_id = cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0]
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': owner_id, 'authorization_details': [{'type': 'connection', 'service': 'openrouter'}], 'binding_message': '接続したキーの情報を確認。モデルは実行しません。'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': owner_id, 'operations': [{'method': 'POST', 'path': '/v1/principals/me/connections', 'body': {'service': 'openrouter'}}], 'binding_message': '接続したキーの情報を確認。モデルは実行しません。'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='OpenRouterに接続', exact=True)).to_be_visible()
     assert page.url == request['verification_uri']
@@ -72,18 +72,18 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
         route.fulfill(status=302, headers={'location': callback + '&' + urlencode(params)}, body='')
 
     page.route('https://openrouter.ai/auth?*', consent)
-    page.get_by_role('button', name='OpenRouterの画面へ', exact=True).click()
+    page.get_by_role('button', name='許可して実行する', exact=True).click()
     expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
     assert cli('api', 'GET', '/v1/principals/' + owner_id + '/resources?kind=connection')['resources'] == []
     authorization['deny'] = False
-    page.get_by_role('button', name='OpenRouterの画面へ', exact=True).click()
-    expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
+    page.get_by_role('button', name='許可して実行する', exact=True).click()
+    expect(page.get_by_role('heading', name='依頼に応えました', exact=True)).to_be_visible()
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1050})
         review(page)
         if width != 320:
             page.screenshot(path=str(shots / ('approval-desktop.png' if width == 1280 else 'approval-mobile.png')), full_page=True)
-    connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['connection_id']
+    connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['results'][0]['body']['connection']['id']
     command = subprocess.run(['node', 'cli/runtime.mjs', 'exec', '--inputs', json.dumps([{'id': connection, 'output': 'OPENROUTER_API_KEY'}]), '--', 'node', '-e', 'if(!process.env.OPENROUTER_API_KEY)process.exit(2);console.log("ready")'], env=env, capture_output=True, text=True, timeout=15)
     assert command.returncode == 0 and command.stdout.strip() == 'ready', command.stderr
 

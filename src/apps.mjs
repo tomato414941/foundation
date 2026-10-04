@@ -15,6 +15,13 @@ import { resourceName } from './resources.mjs';
 // or sealed (its client secret): nobody reads a sealed value back, not its owner and not anyone given a line to it.
 // A viewer line lets someone connect their own accounts through the app; an editor line also lets them change it.
 export const FOUNDATION_APP = 'foundation';
+// Which app to connect through: Foundation's own ('foundation') or a held one, by id.
+export function appReference(value) {
+  if (value === undefined || value === null) return undefined;
+  if (value === FOUNDATION_APP) return value;
+  if (typeof value !== 'string' || !/^[0-9a-f-]{36}$/.test(value)) fail(400, 'invalid_app', 'アプリはIDで指定してください（Foundationのアプリは foundation）。');
+  return value;
+}
 // What any app holds. A service adds what it needs as well (eBay: its RuName; kintone: its domain).
 export const APP_FIELDS = [
   { name: 'client_id', label: 'クライアントID', required: true },

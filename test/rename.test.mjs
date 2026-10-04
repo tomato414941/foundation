@@ -52,30 +52,29 @@ test('requires the caller to specify the delivery variable', async (t) => {
 
 test('asks for several things at once, and keeps them together or not at all', async (t) => {
   const f = await fixture(t);
-  KEY = (await f.approveKey()).token;
+  const approved = await f.approveKey();
+  KEY = approved.token;
+  const keeping = (name, label, extra = {}) => ({ method: 'PUT', path: '/v1/principals/me/resources?kind=secret&name=' + encodeURIComponent(name), inputs: [{ at: '', label, kind: 'sealed', ...extra }] });
+  // The key ID is to be read back: a line to the asker, and its key sealed for the asker by Foundation.
   const asked = await f.request('/v1/requests', { method: 'POST', token: KEY, anonymous: true, data: {
-    to: USER_A, authorization_details: [{ type: 'secret', fields: [
-      { name: 'apple/auth-key', label: '.p8 の中身', multiline: true, type: 'text/plain' },
-      { name: 'apple/key-id', label: 'Key ID', readable: true },
-      { name: 'apple/issuer-id', label: 'Issuer ID', readable: true },
-    ] }],
+    to: USER_A, operations: [keeping('apple/auth-key', '.p8 の中身', { multiline: true }), keeping('apple/key-id', 'Key ID'), keeping('apple/issuer-id', 'Issuer ID'),
+      { method: 'POST', path: '/v1/principals/' + approved.principal_id + '/relations', body: { relation: 'viewer', object_type: 'resource', object_id: '{$1/resource/id}' } },
+      { method: 'POST', path: '/v1/resources/{$1/resource/id}/envelopes/' + approved.principal_id, body: {} }],
     binding_message: 'ビルドの提出に使います。' } });
   assert.equal(asked.status, 201, asked.text);
-  assert.equal(asked.json.request.authorization_details[0].type, 'secret');
-  assert.deepEqual(asked.json.request.store.map(one => one.name), ['apple/auth-key', 'apple/key-id', 'apple/issuer-id']);
+  assert.deepEqual(asked.json.request.operations.slice(0, 3).map(call => call.inputs[0].label), ['.p8 の中身', 'Key ID', 'Issuer ID']);
 
   // One missing value keeps none of them.
-  const partial = await f.request('/v1/requests/' + asked.json.request.id + '/grant',
-    { method: 'POST', data: { entries: [{ name: 'apple/auth-key', content: 'KEY' }, { name: 'apple/key-id', content: 'ABC123' }] } });
+  const partial = await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { values: [{ '': 'KEY' }, { '': 'ABC123' }] } });
   assert.equal(partial.status, 400);
+  assert.equal(partial.json.error.code, 'input_required');
   assert.deepEqual((await f.request('/v1/principals/' + USER_A + '/resources?kind=secret', { token: KEY, anonymous: true })).json.resources, []);
 
-  const stored = await f.request('/v1/requests/' + asked.json.request.id + '/grant',
-    { method: 'POST', data: { entries: [{ name: 'apple/auth-key', content: 'KEY' }, { name: 'apple/key-id', content: 'ABC123' }, { name: 'apple/issuer-id', content: 'UUID' }] } });
+  const stored = await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { values: [{ '': 'KEY' }, { '': 'ABC123' }, { '': 'UUID' }] } });
   assert.equal(stored.status, 200, stored.text);
   const kept = await f.request('/v1/principals/' + USER_A + '/resources?kind=secret', { token: KEY, anonymous: true });
   assert.deepEqual(kept.json.resources.map(one => one.name), ['apple/auth-key', 'apple/issuer-id', 'apple/key-id']);
-  assert.equal((await f.read('secret', 'apple/key-id', { token: KEY, anonymous: true })).status, 200, 'an identifier asked for as readable is on a line to the asker');
+  assert.equal((await f.read('secret', 'apple/key-id', { token: KEY, anonymous: true })).status, 200, 'an identifier asked to be read back is on a line to the asker');
   assert.equal((await f.read('secret', 'apple/auth-key', { token: KEY, anonymous: true })).status, 403);
 });
 

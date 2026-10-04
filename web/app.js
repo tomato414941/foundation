@@ -1,4 +1,4 @@
-import { requestResultView, knownRequestKind, detailOf } from './request-view.js';
+import { requestResultView, takesOn } from './request-view.js';
 import { pages, brand, pageTitle, workspaceView, pendingView, languagePicker } from './workspace-view.js';
 import * as sealing from './sealing.js';
 import { createI18n, formatDate, formatNumber, compareText, isLocale } from './i18n.js';
@@ -1038,113 +1038,29 @@ const codeComplete = form => /^[0-9A-Z]{8}$/.test((form.elements.confirmationCod
 function codeField(enabled = true) {
   return `<label for="confirmation-code">${esc(t('client.request.confirmationCode'))}</label><input id="confirmation-code" name="confirmationCode" required maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" aria-describedby="confirmation-help" ${enabled ? '' : 'disabled'}><p class="permission-note" id="confirmation-help">${esc(t('client.request.codeInstructions'))}</p>`;
 }
-// The link of a request shows the one screen its kind calls for:
-//   approve   a key not yet approved: the owner accepts it with the code. Nothing is registered here.
-//   connect   an approved key: Foundation performs the connection itself. No code.
-//   store     an approved key: the owner puts something into storage, following the AI's instructions.
+// A request is calls of the API. Its page shows each call in the words of the one asked - what it does, to what,
+// and with what - and asks for what only they can supply. One from someone nobody knows yet asks only to act for
+// whoever answers, and is answered with the code it shows.
 function renderRequest() {
   document.title = t('client.request.review') + ' · Foundation';
   const row = accessRequest;
   const shell = (content) => `<div class="workspace"><header class="topbar">${brand(t)}${linked ? '' : `<div class="user-menu"><a href="/account"${page === 'account' ? ' aria-current="page"' : ''}>${esc(t('client.account.title'))}</a><button class="text-button" data-action="signout">${esc(t('client.signin.signout'))}</button></div>`}</header><main class="approval-main">${content}</main></div>`;
-  const type = detailOf(row).type, asked = detailOf(row);
-  if (!row || row.status !== 'pending' || !knownRequestKind(type)) {
+  if (!row || row.status !== 'pending') {
     const view = requestResultView(row, requestError, t);
-    const subject = view.completed ? type === 'secret' ? new Intl.ListFormat(i18n.language).format(row.result.names) : type === 'connection' ? connected().find(item => item.id === row.result.connection_id)?.label : row.requester_name : '';
+    // What the calls made, by the names they answered with: an account connected, a thing kept.
+    const made = row?.status === 'granted' ? (row.results || []).map(result => result?.body?.connection?.label ?? result?.body?.resource?.name).filter(Boolean) : [];
     const link = !linked ? '<a class="button secondary" href="' + view.href + '">' + esc(view.label) + ' ' + icon('arrow') + '</a>'
       : back ? '<a class="button secondary" href="' + esc(backTo(row)) + '">' + esc(t('client.requests.returnTo', { name: back.name })) + '</a>' : '';
-    app.innerHTML = shell('<section class="approval-card approval-result"><span class="approval-symbol">' + icon(view.completed ? 'check' : 'lock') + '</span><h1>' + esc(view.title) + '</h1>' + (subject ? '<p>' + esc(subject) + '</p>' : '') + (view.description ? '<p>' + esc(view.description) + '</p>' : '') + link + '</section>');
+    app.innerHTML = shell('<section class="approval-card approval-result"><span class="approval-symbol">' + icon(view.completed ? 'check' : 'lock') + '</span><h1>' + esc(view.title) + '</h1>' + (made.length ? '<p>' + esc(new Intl.ListFormat(i18n.language).format(made)) + '</p>' : '') + (view.description ? '<p>' + esc(view.description) + '</p>' : '') + link + '</section>');
     return;
   }
-  const expiry = `<p class="request-expiry">${esc(type === 'relation' ? t('client.requests.approvalExpiry', { time: formatDate(row.expires_at, i18n.language, { hour: '2-digit', minute: '2-digit' }) }) : t('client.requests.requestExpiry', { time: formatDate(row.expires_at, i18n.language, { hour: '2-digit', minute: '2-digit' }) }))}</p>`;
-  if (type === 'relation') { renderApproval(row, shell, expiry); return; }
-  if (type === 'secret') { renderStore(row, shell, expiry); return; }
-  if (type === 'app') { renderAppRequest(row, shell, expiry); return; }
-  const service = localizeService(row.service, i18n.language);
-  if (!service) {
-    app.innerHTML = shell(`<section class="approval-card"><h1>${esc(t('client.connection.title'))}</h1><p>${esc(t('client.connection.serviceUnavailable'))}</p><button class="text-button full" data-action="deny-request">${esc(t('client.connection.decline'))}</button>${expiry}</section>`);
-    return;
-  }
-  const way = row.auth_scheme, scheme = service.auth_schemes[way], name = service.name;
-  const reconnecting = Boolean(asked.connection_id), title = reconnecting ? t('client.connections.reconnectName', { name }) : t('client.connections.connectName', { name });
-  const facts = `<dl class="approval-facts">${requestPurpose(row)}${row.connection ? `<div><dt>${esc(t('client.connection.connectionToUpdate'))}</dt><dd>${esc(row.connection.label)}${accountDetails(row.connection)}</dd></div>` : ''}
-    <div><dt>${esc(t('client.connection.method'))}</dt><dd>${WAYS()[way]}${way === 'oauth' ? requestedScopesView(row, scheme) : ''}</dd></div>${row.app && !row.app.foundation ? `<div><dt>${esc(t('client.oauth.app'))}</dt><dd>${esc(row.app.name)}</dd></div>` : ''}</dl>`;
-  let body;
-  if (reconnecting && !row.connection) body = `<p class="form-error" role="status">${esc(t('client.connection.updateTargetMissing'))}</p>`;
-  else if (row.app === null) body = `<p class="form-error" role="status">${esc(t('client.oauth.appMissing'))}</p>`;
-  else if (!scheme.available && (way !== 'oauth' || row.app?.foundation || !scheme.takes_apps)) body = `<p class="form-error" role="status">${esc(t('client.connections.unavailableName', { name }))}</p>`;
-  else if (way === 'token') body = `${serviceLink(scheme.console, t('client.connections.createToken', { name }))}${instructions(scheme)}<form id="token-request-form">${pastedFields(scheme, 'request-token')}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${reconnecting ? t('client.common.replaceValue') : t('client.connection.connect')}</button></form>`;
-  else body = `<button class="button primary full request-connect" type="button" data-action="request-connect">${esc(way === 'role' ? t('client.connection.createIamRole') : t('client.connections.goToService', { name }))} ${icon('arrow')}</button>`;
-  app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, title)}${facts}
-    ${stepsBlock(row.steps)}
-    <div class="register-body">${body}</div>
-    <button class="text-button full" type="button" data-action="deny-request">${esc(t('client.connection.decline'))}</button>${expiry}</section>`);
-  if (way === 'token' && app.querySelector('#token-request-form')) bindForm(async (form) => {
-    await api('/v1/principals/me/connections', { method: 'POST', data: { request_id: row.id, fields: pastedValues(scheme, form) } });
-    await refresh();
-  }, app.querySelector('.register-body'));
+  const first = row.to === null;
+  const expiry = `<p class="request-expiry">${esc(first ? t('client.requests.approvalExpiry', { time: formatDate(row.expires_at, i18n.language, { hour: '2-digit', minute: '2-digit' }) }) : t('client.requests.requestExpiry', { time: formatDate(row.expires_at, i18n.language, { hour: '2-digit', minute: '2-digit' }) }))}</p>`;
+  if (takesOn(row)) { renderApproval(row, shell, expiry); return; }
+  renderCalls(row, shell, expiry);
 }
-// The scopes a request asks the service for, as the service names them; the owner sees each before agreeing.
-function requestedScopesView(row, scheme) {
-  const detail = detailOf(row), asked = detail.scopes || [];
-  if (!scheme.scopes) return '';
-  if (!asked.length) return `<small class="muted block">${detail.connection_id ? t('client.connection.reconnectSamePermissions') : t('client.connection.identityPermissionsOnly')}</small>`;
-  return `<small class="muted block">${esc(detail.connection_id ? t('client.requests.additionalScopes') : t('client.requests.requestedScopes'))}</small><ul class="scope-list">${asked.map(scope => `<li><code>${esc(scope)}</code></li>`).join('')}</ul>`;
-}
-// The owner registers an OAuth app for a key: its values go into the app, and the key learns only which app it is.
-function renderAppRequest(row, shell, expiry) {
-  const service = localizeService(row.service, i18n.language);
-  if (!service?.auth_schemes.oauth?.takes_apps) {
-    app.innerHTML = shell(`<section class="approval-card"><h1>${esc(t('client.oauth.registration'))}</h1><p>${esc(t('client.oauth.registrationUnavailable'))}</p><button class="text-button full" data-action="deny-request">${esc(t('client.common.declineRegistration'))}</button>${expiry}</section>`);
-    return;
-  }
-  const title = t('client.apps.registerService', { name: service.name });
-  app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, title)}
-    <dl class="approval-facts">${requestPurpose(row)}</dl>${stepsBlock(row.steps)}
-    <form id="app-request-form"><label for="request-app-name">${esc(t('client.common.name'))}</label><input id="request-app-name" name="name" required maxlength="200" autocomplete="off" value="${esc(detailOf(row).name || t('client.apps.defaultName', { name: service.name }))}">
-      ${appFields(service, 'request-app')}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.register'))} ${icon('arrow')}</button></form>
-    <button class="text-button full" type="button" data-action="deny-request">${esc(t('client.common.declineRegistration'))}</button>${expiry}</section>`);
-  bindForm(async (form) => {
-    const values = Object.fromEntries(service.auth_schemes.oauth.app_fields.map(({ name }) => [name, String(form.get(name) || '')]));
-    await api('/v1/requests/' + row.id + '/grant', { method: 'POST', data: { name: String(form.get('name') || ''), ...values } });
-    await refresh();
-  }, app);
-}
-// The owner puts something into storage for a key. Everything specific to the service is the AI's words;
-// Foundation shows only where it will go and how it will be handed over.
-function renderStore(row, shell, expiry) {
-  const asked = detailOf(row).fields, replacing = asked.some(one => one.replace);
-  const title = asked.length === 1 ? replacing ? t('client.requests.replaceField', { name: asked[0].label }) : t('client.requests.storeField', { name: asked[0].label }) : replacing ? t('client.requests.replaceFields', { count: asked.length }) : t('client.requests.storeFields', { count: asked.length });
-  const site = asked.find(one => one.site)?.site;
-  const field = (one, at) => one.multiline
-    ? `<textarea id="stored-${at}" name="value-${at}" rows="6" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>`
-    : `<input id="stored-${at}" name="value-${at}" type="${one.readable ? 'text' : 'password'}" required maxlength="16384" autocomplete="off" spellcheck="false">`;
-  app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, title)}
-    <dl class="approval-facts">${requestPurpose(row)}</dl>
-    ${stepsBlock(row.steps)}
-    ${site ? `<a class="button secondary full setup-link" href="${esc(site)}" target="_blank" rel="noopener noreferrer"><span>${esc(t('client.requests.openSite', { host: new URL(site).host }))}</span></a>` : ''}
-    <form id="store-request-form">${asked.map((one, at) => `<div class="declared-field"><label for="stored-name-${at}">${esc(t('client.secret.storageName'))}</label><input id="stored-name-${at}" name="name-${at}" value="${esc(one.name)}" aria-describedby="stored-label-${at}" required maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">${one.replace ? `<p class="permission-note replace-note" id="replace-note-${at}" data-name="${esc(one.name)}">${esc(t('client.requests.replaceExisting', { name: one.name }))}</p>` : ''}<label id="stored-label-${at}" for="stored-${at}">${esc(one.label)}</label>${field(one, at)}</div>`).join('')}
-    <p class="permission-note">${esc(t('client.secret.validationNote'))}</p>
-    <p class="form-error" role="alert"></p>
-    <button class="button primary full" type="submit">${esc(t('client.common.register'))} ${icon('arrow')}</button></form>
-    <button class="text-button full" type="button" data-action="deny-request">${esc(t('client.common.declineRegistration'))}</button>${expiry}</section>`);
-  // A replacement the owner renames becomes a new value; the note says which it is now.
-  app.querySelectorAll('.replace-note').forEach(note => {
-    const nameInput = note.parentElement.querySelector('input[name^="name-"]');
-    const update = () => { note.textContent = nameInput.value === note.dataset.name ? t('client.requests.replaceExisting', { name: note.dataset.name }) : t('client.requests.storeRenamed', { previous: note.dataset.name, name: nameInput.value }); };
-    nameInput.addEventListener('input', update);
-  });
-  bindForm(async (data) => {
-    const entries = [];
-    for (const [at] of asked.entries()) entries.push({ name: String(data.get('name-' + at) ?? ''), ...await sealFor(new TextEncoder().encode(String(data.get('value-' + at) ?? '')), row.recipients || []) });
-    try { await api(`/v1/requests/${row.id}/grant`, { method: 'POST', data: { entries } }); }
-    catch (error) { if ([401, 404].includes(error.status)) await refresh(); throw error; }
-    await refresh(); toast(t('client.common.registered'));
-  }, app);
-}
-const accessSummary = () => t('client.access.summary');
 const accessScope = () => `<ul class="access-scope"><li>${esc(t('client.access.dataScope'))}</li><li>${esc(t('client.access.serviceScope'))}</li></ul>`;
 const accessExclusions = () => t('client.access.exclusions');
-const accessDetails = () => `<details class="access-permissions"><summary>${esc(t('client.access.permissionDetails'))}</summary>${accessScope()}<p>${accessExclusions()}</p></details>`;
 // What one action lets its owner do, in the words of whoever grants it.
 const ACTION_WORDS = () => ({
   transfer_grant: t('client.permissions.transfer'),
@@ -1158,15 +1074,122 @@ const ACTION_WORDS = () => ({
   'principal.inject': t('client.permissions.principalInject'), 'principal.invoke': t('client.permissions.principalInvoke'),
 });
 const actionWords = relation => ACTION_WORDS()[relation] ?? { viewer: t('client.permissions.viewer'), editor: t('client.permissions.editor') }[relation] ?? relation.replace(/^[a-z_]+\./, '').replace(/-/g, ' ');
-// A relation asked for: to act for the one answering, asked by a key nobody knows yet and confirmed with its code; or
-// one permission onto something, asked by a key already known.
+// What a call does, in the words of the one asked: its operation, and of a resource its kind.
+const ID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
+const KIND_WORDS = () => ({ secret: t('client.kinds.secret'), object: t('client.kinds.object'), app: t('client.kinds.app'), service: t('client.kinds.service'), connection: t('client.kinds.connection'), environment: t('client.kinds.environment'), function: t('client.kinds.function') });
+const kindWord = kind => KIND_WORDS()[kind] ?? t('client.kinds.resource');
+function callKind(row, call) {
+  return kindWord(new URL(call.path, location.origin).searchParams.get('kind') || (call.path.match(ID_PATTERN) ?? []).map(id => row.names?.[id]?.kind).find(Boolean));
+}
+const OPERATION_WORDS = kind => ({
+  createPrincipal: t('client.operations.createPrincipal'), getPrincipal: t('client.operations.getPrincipal'), renamePrincipal: t('client.operations.renamePrincipal'), removePrincipal: t('client.operations.removePrincipal'),
+  transferPrincipal: t('client.operations.transferPrincipal'), addRelation: t('client.operations.addRelation'), removeRelation: t('client.operations.removeRelation'), listPrincipalRelations: t('client.operations.listPrincipalRelations'),
+  getKey: t('client.operations.getKey'), publishKey: t('client.operations.publishKey'), listCredentials: t('client.operations.listCredentials'), removeCredential: t('client.operations.removeCredential'),
+  revokeAccess: t('client.operations.revokeAccess'), listRecipients: t('client.operations.listRecipients'), getPayment: t('client.operations.getPayment'), getUsage: t('client.operations.getUsage'),
+  getAuditLog: t('client.operations.getAuditLog'), getCompute: t('client.operations.getCompute'), setCompute: t('client.operations.setCompute'), getSettings: t('client.operations.getSettings'),
+  putSettings: t('client.operations.putSettings'), removeSettings: t('client.operations.removeSettings'), createEnvironment: t('client.operations.createEnvironment'), run: t('client.operations.run'),
+  startCommand: t('client.operations.startCommand'), getCommand: t('client.operations.getCommand'), invokeFunction: t('client.operations.invokeFunction'), listResources: t('client.operations.listResources', { kind }),
+  putResource: t('client.operations.putResource', { kind }), getResource: t('client.operations.getResource', { kind }), replaceDefinition: t('client.operations.replaceDefinition', { kind }), patchResource: t('client.operations.patchResource', { kind }),
+  removeResource: t('client.operations.removeResource', { kind }), getContent: t('client.operations.getContent', { kind }), putContent: t('client.operations.putContent', { kind }), keepEnvelope: t('client.operations.keepEnvelope', { kind }),
+  resealEnvelope: t('client.operations.resealEnvelope', { kind }), dropEnvelope: t('client.operations.dropEnvelope', { kind }), transferResource: t('client.operations.transferResource', { kind }), createObjectLink: t('client.operations.createObjectLink'),
+  connectService: t('client.operations.connectService'), inject: t('client.operations.inject'), exportData: t('client.operations.exportData'),
+});
+// Connecting a service is said with the service's name, as connecting it from its page is.
+function callTitle(row, call) {
+  if (call.operation_id === 'connectService' && typeof call.body?.service === 'string') {
+    const service = serviceById(call.body.service), name = service ? localizeService(service, i18n.language).name : call.body.service;
+    return t(call.body.connection_id ? 'client.connections.reconnectName' : 'client.connections.connectName', { name });
+  }
+  return OPERATION_WORDS(callKind(row, call))[call.operation_id] ?? call.summary;
+}
+// Who or what an id names, as the one asked knows it; me is them.
+const nameOf = (row, id) => id === 'me' ? t('client.requests.you') : row.names?.[id] ? row.names[id].name + (row.names[id].kind ? ' (' + kindWord(row.names[id].kind) + ')' : '') : id;
+// What a call is about, but for the one asked themselves: what they do is in their own name anyway.
+function callTargets(row, call) {
+  const ids = [...new Set(new URL(call.path, location.origin).pathname.match(ID_PATTERN) ?? [])];
+  return ids.length ? `<div><dt>${esc(t('client.access.target'))}</dt><dd>${ids.map(id => esc(nameOf(row, id))).join('<br>')}</dd></div>` : '';
+}
+// The fields a call most often carries, in the words of the page; any other by its own name.
+const FIELD_WORDS = () => ({ name: t('client.common.name'), service: t('client.kinds.service'), scopes: t('client.access.permissions'), connection_id: t('client.kinds.connection'), app: t('client.kinds.app') });
+// What the call carries, but for what the one asked supplies: each value as it is, an id by its name, a line by what it lets do.
+function callDetails(row, call) {
+  const open = new Set((call.inputs || []).map(input => input.at));
+  const shown = (key, value) => Array.isArray(value) ? value.map(item => shown(key, item)).join('\n')
+    : typeof value !== 'string' ? JSON.stringify(value)
+    : row.names?.[value] ? nameOf(row, value) : value === 'me' ? t('client.requests.you')
+    : key === 'service' && serviceById(value) ? localizeService(serviceById(value), i18n.language).name : value;
+  // The path's query says what is named (a name), and the body the rest; kind is already in the title.
+  const query = [...new URL(call.path, location.origin).searchParams].filter(([key]) => key !== 'kind');
+  const entries = [...query, ...Object.entries(call.body || {}).filter(([key]) => !open.has('/' + key) && !open.has(''))];
+  if (call.operation_id === 'addRelation' || call.operation_id === 'removeRelation') {
+    const relation = call.body?.relation;
+    return `<div><dt>${esc(t('client.access.permissions'))}</dt><dd>${relation === 'agent' ? `${accessScope()}<small class="muted block">${accessExclusions()}</small>` : `<ul class="access-scope"><li>${esc(actionWords(relation || ''))}</li></ul>`}</dd></div>`
+      + (call.body?.object_id ? `<div><dt>${esc(t('client.access.target'))}</dt><dd>${esc(shown('object_id', call.body.object_id))}</dd></div>` : '');
+  }
+  return entries.map(([key, value]) => `<div><dt>${esc(FIELD_WORDS()[key] ?? key)}</dt><dd>${esc(shown(key, value).slice(0, 2000)).replace(/\n/g, '<br>')}</dd></div>`).join('');
+}
+// What only the one asked can supply, asked as the asker asked for it: shown, hidden, or sealed here for those who may open it.
+function callInputs(call, at) {
+  return (call.inputs || []).map((input, n) => {
+    const id = `call-${at}-input-${n}`, hidden = input.kind !== 'text';
+    const field = input.multiline ? `<textarea id="${id}" name="${id}" rows="6" required maxlength="100000" autocomplete="off" spellcheck="false"></textarea>`
+      : `<input id="${id}" name="${id}" type="${hidden ? 'password' : 'text'}" required maxlength="16384" autocomplete="off" spellcheck="false">`;
+    return `${input.site ? `<a class="button secondary full setup-link" href="${esc(input.site)}" target="_blank" rel="noopener noreferrer"><span>${esc(t('client.requests.openSite', { host: new URL(input.site).host }))}</span></a>` : ''}<label for="${id}">${esc(input.label)}</label>${field}`;
+  }).join('');
+}
+function renderCalls(row, shell, expiry) {
+  // One call says why beside what it does; several say why once, above them.
+  const single = row.operations.length === 1;
+  const cards = row.operations.map((call, at) => {
+    const done = row.results?.[at] !== null && row.results?.[at] !== undefined;
+    // One call is the page's own heading; several each have theirs.
+    const title = row.operations.length > 1 ? `<h2 id="call-${at}-title">${done ? icon('check') + ' ' : ''}${esc(callTitle(row, call))}</h2>` : '';
+    return `<section class="request-call${done ? ' done' : ''}"${title ? ` aria-labelledby="call-${at}-title"` : ''}>${title}
+      ${call.method === 'DELETE' ? `<p class="form-error">${esc(t('client.requests.irreversible'))}</p>` : ''}
+      <dl class="approval-facts">${single ? requestPurpose(row) : ''}${callTargets(row, call)}${callDetails(row, call)}</dl><p class="permission-note replace-note" data-call="${at}" hidden></p>${single ? stepsBlock(row.steps) : ''}${done ? `<p class="muted">${esc(t('client.requests.done'))}</p>` : callInputs(call, at)}</section>`;
+  }).join('');
+  app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, row.operations.length === 1 ? callTitle(row, row.operations[0]) : t('client.requests.calls', { count: row.operations.length }))}
+    ${row.binding_message && !single ? `<dl class="approval-facts">${requestPurpose(row)}</dl>` : ''}${single ? '' : stepsBlock(row.steps)}
+    <form id="calls-form">${cards}<p class="form-error" role="alert"></p>
+    <button class="button primary full" type="submit">${esc(t('client.requests.allowAndRun'))} ${icon('arrow')}</button></form>
+    <button class="text-button full" type="button" data-action="deny-request">${esc(t('client.access.decline'))}</button>${expiry}</section>`);
+  // Keeping something under a name where something is kept already replaces it: the one asked is told before they allow it.
+  for (const [at, call] of row.operations.entries()) {
+    if (call.method !== 'PUT' || call.operation_id !== 'putResource' || !/^\/v1\/principals\/me\/resources\?/.test(call.path) || row.results?.[at]) continue;
+    const name = new URL(call.path, location.origin).searchParams.get('name');
+    if (name) void api(call.path).then(() => {
+      const note = app.querySelector(`.replace-note[data-call="${at}"]`);
+      if (note) { note.textContent = t('client.requests.replaces', { name }); note.hidden = false; }
+    }).catch(() => {});
+  }
+  bindForm(async (form) => {
+    const values = [];
+    for (const [at, call] of row.operations.entries()) {
+      const supplied = {};
+      for (const [n, input] of (call.inputs || []).entries()) {
+        const value = String(form.get(`call-${at}-input-${n}`) ?? '');
+        supplied[input.at] = input.kind === 'sealed' ? await sealFor(new TextEncoder().encode(value), row.recipients || []) : value;
+      }
+      values.push(supplied);
+    }
+    let answered;
+    try { answered = await api(`${requestApi}/grant`, { method: 'POST', data: { values } }); }
+    catch (error) { if ([401, 404].includes(error.status)) await refresh(); throw error; }
+    // A call that goes on at a service: a page to consent on, or a role to make there and name here.
+    if (answered.continue?.state) {
+      const service = serviceById(row.operations[row.results.findIndex(result => result === null)]?.body?.service);
+      if (service) { await connectByPaste(localizeService(service, i18n.language), 'role', { started: answered.continue }); return; }
+    }
+    if (answered.continue?.url) { location.assign(answered.continue.url); return; }
+    await refresh();
+  }, app);
+}
+// The one asked lets the asker act for them from now on. One nobody knew yet shows a code, and they type it.
 function renderApproval(row, shell, expiry) {
-  const asked = detailOf(row), first = row.to === null, acting = asked.relation === 'agent';
-  const target = row.object ? `<div><dt>${esc(t('client.access.target'))}</dt><dd>${esc(row.object.name || row.object.id)}</dd></div>` : '';
-  const scope = acting ? `${accessScope()}<small class="muted block">${accessExclusions()}</small>` : `<ul class="access-scope"><li>${esc(actionWords(asked.relation))}</li></ul>`;
-  app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, acting ? t('client.access.allowAccess') : t('client.access.grantPermissions'), 'device')}
-    <dl class="approval-facts">${requestPurpose(row)}<div><dt>${esc(t('client.access.permissions'))}</dt><dd>${scope}</dd></div>${target}
-    <div><dt>${esc(t('client.access.durationLabel'))}</dt><dd>${esc(acting ? t('client.access.durationAll') : t('client.access.duration'))}</dd></div></dl>
+  const first = row.to === null;
+  app.innerHTML = shell(`<section class="approval-card">${requestHeading(row, t('client.access.allowAccess'), 'device')}
+    <dl class="approval-facts">${requestPurpose(row)}<div><dt>${esc(t('client.access.permissions'))}</dt><dd>${accessScope()}<small class="muted block">${accessExclusions()}</small></dd></div>
+    <div><dt>${esc(t('client.access.durationLabel'))}</dt><dd>${esc(t('client.access.durationAll'))}</dd></div></dl>
     <form id="access-request-form">${first ? codeField() : ''}
     <p class="form-error" role="alert"></p>
     <button class="button primary full" type="submit"${first ? ' disabled' : ''}>${esc(t('client.access.allow'))} ${icon('arrow')}</button></form>
@@ -1181,7 +1204,6 @@ function renderApproval(row, shell, expiry) {
     const errorElement = form.querySelector('[role="alert"]'); errorElement.textContent = '';
     try {
       await api(`${requestApi}/grant`, { method: 'POST', data: first ? { user_code: form.elements.confirmationCode.value } : {} });
-      await handEnvelope(row);
       await refresh();
     } catch (error) { if (form.isConnected) { errorElement.textContent = error.message; submit.disabled = false; } }
   });
@@ -1373,17 +1395,18 @@ dialog.addEventListener('change', event => {
 });
 const serviceLink = (href, label) => href ? `<a class="button secondary full" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>` : '';
 const instructions = scheme => scheme.instructions ? `<p class="permission-note">${esc(scheme.instructions)}</p>` : '';
-async function connectByPaste(service, way, { connectionId, requestId } = {}) {
+// started: a role's flow already begun - by answering a request for it.
+async function connectByPaste(service, way, { connectionId, started: begun } = {}) {
   const scheme = service.auth_schemes[way], replacing = connectionId ? connected().find(item => item.id === connectionId) : null, name = esc(service.name);
   // A role's link is made for this connection; what is pasted finishes that flow.
-  const started = way === 'role' ? await api(held() + '/connections', { method: 'POST', data: requestId ? { request_id: requestId } : { service: service.id, auth_scheme: 'role', ...(connectionId ? { connection_id: connectionId } : {}) } }) : null;
+  const started = begun ?? (way === 'role' ? await api(held() + '/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'role', ...(connectionId ? { connection_id: connectionId } : {}) } }) : null);
   const words = way === 'role'
     ? { title: esc(t('client.connections.createRole', { name: service.name })), link: t('client.connections.openService', { name: service.name }), paste: t('client.connection.pasteCreatedValue'), submit: esc(t('client.connection.connect')) + ' ' + icon('arrow') }
     : { title: replacing ? esc(t('client.connections.replaceValueTitle', { name: replacing.label })) : esc(t('client.connections.tokenTitle', { name: service.name })), lead: esc(t('client.connections.tokenLead', { name: service.name })), link: t('client.connections.createToken', { name: service.name }), submit: replacing ? t('client.common.replaceValue') : t('client.connection.connect') };
   const naming = way === 'token' && !replacing ? `<label for="pasted-name">${esc(t('client.common.name'))}</label><input id="pasted-name" name="name" maxlength="80" autocomplete="off" value="${esc(t('client.connections.tokenDefaultName', { name: service.name }))}">` : '';
   openDialog(`<h2 id="dialog-title">${words.title}</h2>${words.lead ? `<p>${words.lead}</p>` : ''}${serviceLink(started ? started.url : scheme.console, words.link)}${instructions(scheme)}
     <form>${words.paste ? `<p>${words.paste}</p>` : ''}${naming}${pastedFields(scheme, 'pasted')}
-    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${words.submit}</button></form>${replacing || requestId ? '' : otherWays(service, way)}`);
+    <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${words.submit}</button></form>${replacing || begun ? '' : otherWays(service, way)}`);
   bindForm(async (form) => {
     const fields = pastedValues(scheme, form), label = String(form.get('name') || '').trim();
     if (started) await api(held() + '/connections', { method: 'PUT', data: { state: started.state, fields } });
@@ -1731,19 +1754,6 @@ async function receiveFromFoundation() {
     await refresh();
   } catch (error) { toast(error.message); } finally { receiving = false; }
 }
-// A line drawn onto a secret reaches its bytes only with an envelope: Foundation makes one from its own, or the
-// owner's key does here.
-async function handEnvelope(row) {
-  if (row.object?.kind !== 'secret' || !['viewer', 'editor', 'content_grant', 'write_grant', 'share_grant'].includes(detailOf(row).relation)) return;
-  const path = '/v1/resources/' + row.object.id + '/envelopes/' + row.from;
-  try { await api(path, { method: 'POST', data: {} }); return; } catch (error) { if (error.code !== 'not_sealed_for_foundation') { toast(error.message); return; } }
-  try {
-    await needKey();
-    const kept = await api('/v1/resources/' + row.object.id + '/content'), { key } = await api('/v1/principals/' + row.from + '/key');
-    if (!kept.envelope || !key.public_key) return;
-    await api(path, { method: 'PUT', data: { wrapped: b64(await sealing.seal(await openKey(kept), unb64(key.public_key))) } });
-  } catch (error) { toast(error.message); }
-}
 // One confirmation, for removing something a key kept. Nothing here can be undone, and nothing reaches the service.
 // The name and the way it reaches a command, changed without the value ever being handed back.
 // Something the owner has in hand, put there without an agent asking for it first.
@@ -1980,11 +1990,6 @@ document.addEventListener('click', async (event) => {
     if (action === 'retry-page') { target.disabled = true; try { await refresh(); } finally { if (target.isConnected) target.disabled = false; } }
     if (action === 'retry-signin') { target.disabled = true; await showSignin(); }
     if (action === 'signout') { target.disabled = true; await api('/v1/session', { method: 'DELETE', data: {} }); await showSignin(); }
-    if (action === 'request-connect') {
-      target.disabled = true;
-      if (accessRequest.auth_scheme === 'role') { await connectByPaste(localizeService(accessRequest.service, i18n.language), 'role', { requestId }); target.disabled = false; return; }
-      location.assign((await api('/v1/principals/me/connections', { method: 'POST', data: { request_id: requestId } })).url);
-    }
     if (action === 'deny-request') {
       target.disabled = true;
       await api(`${requestApi}/deny`, { method: 'POST', data: {} });

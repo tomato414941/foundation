@@ -28,16 +28,19 @@ const requestId = { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$' };
 const scopes = errorCode({ type: ['array', 'null'], items: errorCode(string, 'invalid_scopes') }, 'invalid_scopes');
 const scheme = choice(['oauth', 'role', 'token']);
 const app = nullable({ anyOf: [id, { const: 'foundation' }] });
-const field = object({ name: resourceName, label: string, site: string, readable: boolean, multiline: boolean, replace: boolean }, ['name', 'label']);
 const connect = object({ service: string, auth_scheme: scheme, connection_id: id, scopes, app,
   fields: { ...map({ anyOf: [string, object({ reference: id }, ['reference'])] }), description: 'token: the values the service\'s token scheme lists, by field name - each a value, or { reference: <secret id> } for a secret of the owner\'s (or one they may read) whose bytes are used, and whose line is looked at, every time.' }, name: { ...string, description: 'token: what to call the connection; defaults to the service name followed by のトークン.' } }, ['service']);
 const requestProperties = {
   to: errorCode(principalId, 'invalid_principal'), binding_message: errorCode({ type: 'string', maxLength: 240 }, 'invalid_purpose'), steps: errorCode({ type: ['array', 'null'], items: errorCode(string, 'invalid_steps'), maxItems: 20 }, 'invalid_steps'),
   valid_minutes: errorCode({ type: ['integer', 'null'], description: 'Expiry in minutes; default 30, from 1 to 1440. null uses the default.' }, 'invalid_validity'),
 };
-// One authorization detail (RFC 9396): a type and what that type needs.
-const relationDetail = object({ type: { const: 'relation' }, relation: string, object_type: choice(['principal', 'resource']), object_id: string }, ['type', 'relation']);
-const detailOf = (type, fields, required = []) => object({ type: { const: type }, ...fields }, ['type', ...required]);
+// A call a request asks for, as the one asked would send it, and where they supply what only they have.
+const requestInput = object({ at: { ...string, description: 'Where in body the value goes (JSON Pointer). "" is the whole body, for a sealed secret.' },
+  label: { ...string, description: 'What to ask the one asked for, in their words: 1-60 characters.' },
+  kind: { ...choice(['text', 'hidden', 'sealed']), description: 'text: typed and shown. hidden: typed and not shown. sealed: typed and sealed by their own client for those who may open it, placed as a SecretInput (content, envelopes). text by default.' },
+  multiline: boolean, site: { ...string, description: 'An https page where the value is made or found.' } }, ['at', 'label']);
+const call = object({ method: choice(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']), path: { ...string, description: 'A path of this API, with its query. me in it means the one who makes the call: the one asked.' },
+  body: object(), inputs: { ...array(requestInput), maxItems: 16 } }, ['method', 'path']);
 const appValues = { ...object({ service: string, name: resourceName, client_id: string, client_secret: { ...string, writeOnly: true } }),
   description: 'Client fields are top-level keys. Additional service-specific keys (for example runame or domain) are declared by app_fields in GET /v1/services or the service resource. Client secrets are write-only.' };
 const lifetime = errorCode(nullable(object({ end: errorCode(nullable(choice(['exit', 'idle'])), 'invalid_lifetime'), idle_seconds: errorCode(nullable(integer), 'invalid_lifetime'), max_seconds: errorCode(nullable(integer), 'invalid_lifetime') })), 'invalid_lifetime');
@@ -87,24 +90,20 @@ export const schemas = {
     principal: { ...object({ id: principalId, name: string }, ['id', 'name']), description: 'The principal at the other end.' }, resource: { ...object({ id, kind: nullable(string), name: string, owner_id: nullable(principalId) }, ['id', 'name']), description: 'The thing at the other end, for a line drawn onto one, and who holds it.' },
     alias: { ...string, description: 'On a line of ownership from the owner: the name the owner gave what it owns, when it gave one.' } }, ['relation', 'direction', 'created_at']),
   Relation: object({ subject_id: principalId, relation: string, object_type: choice(['principal', 'resource']), object_id: string, created_at: iso }, ['relation', 'object_type', 'object_id']),
-  RelationInput: object({ relation: string, object_type: choice(['principal', 'resource']), object_id: string }, ['relation', 'object_type', 'object_id']),
-  AuthorizationDetail: { anyOf: [relationDetail,
-    detailOf('secret', { fields: { anyOf: [field, { ...array(field), minItems: 1, maxItems: 8 }] } }, ['fields']),
-    detailOf('connection', connect.properties, ['service']),
-    detailOf('app', { service: string, name: resourceName }, ['service'])] },
-  CreateRequest: errorCode(object({ ...requestProperties, authorization_details: errorCode({ ...array(ref('AuthorizationDetail')), minItems: 1, maxItems: 1 }, 'invalid_authorization_details') }, ['authorization_details']), 'invalid_authorization_details'),
-  Request: object({ id: requestId, authorization_details: array(ref('AuthorizationDetail')), from: principalId, to: nullable(principalId),
+  RelationInput: object({ relation: string, object_type: choice(['principal', 'resource']), object_id: { ...string, description: 'A principal or a resource by id; me for the caller.' } }, ['relation', 'object_type', 'object_id']),
+  Call: call,
+  CreateRequest: errorCode(object({ ...requestProperties, operations: errorCode({ ...array(ref('Call')), minItems: 1, maxItems: 8 }, 'invalid_operations') }, ['operations']), 'invalid_operations'),
+  Request: object({ id: requestId, operations: array({ allOf: [ref('Call'), object({ operation_id: nullable(string), summary: string })] }), results: { ...array(nullable(object({ status: integer, body: nullable(object()) }, ['status', 'body']))), description: 'What each call answered once made, in order; null until then.' },
+    from: principalId, to: nullable(principalId),
     binding_message: string, steps: array(string), status: choice(['pending', 'granted', 'denied', 'cancelled']), created_at: time, expires_at: time, expires_in: integer, interval: integer,
     verification_uri: string, requester_name: string, user_code: string, reason: string,
-    result: object({ names: array(string), replaced: array(string), relation: string, object_type: string, object_id: string, connection_id: id, app_id: id }),
-    events: array(object({ event: string, at: time, detail: object() })), service: ref('ServiceDescription'),
-    connection: nullable(ref('Connection')), auth_scheme: scheme, app: nullable(object({ id: string, name: string, foundation: boolean })), store: array(field),
-    recipients: { ...array(ref('Recipient')), description: 'For a store request: whom to seal each entry for.' },
-  }, ['id', 'authorization_details', 'from', 'to', 'status', 'verification_uri', 'expires_at', 'interval']),
-  GrantRequest: { anyOf: [
-    object({ entries: array(object({ name: resourceName, content: string, envelopes: map(string) }, ['name', 'content'])) }, ['entries']),
-    object({ user_code: string }), appValues,
-  ], description: 'secret: entries in the requested field order, each sealed as a SecretInput for the asker and its recipients; relation: the user_code the asker showed, when the request was addressed to nobody; app: name, client_id, client_secret and service-specific top-level app fields. connection is granted through /v1/principals/{principalId}/connections and the service consent flow. Wrong user codes, including missing ones, count toward the attempt limit.' },
+    events: array(object({ event: string, at: time, detail: object() })),
+    names: { ...map(object({ type: choice(['principal', 'resource']), kind: string, name: string }, ['type', 'name'])), description: 'For the one asked: who or what each id in the calls is.' },
+    recipients: { ...array(ref('Recipient')), description: 'For the one asked, when a call keeps a sealed secret: whom to seal it for.' },
+  }, ['id', 'operations', 'results', 'from', 'to', 'status', 'verification_uri', 'expires_at', 'interval']),
+  GrantRequest: { ...object({ values: { ...array(map({})), description: 'Per call, in order: what the one answering supplies, by each input\'s at - a string, or for a sealed input a SecretInput.' },
+    user_code: { ...string, description: 'The code the asker showed, when the request was addressed to nobody. Wrong codes count toward the attempt limit.' } }),
+    description: 'Makes the calls asked for, in order, as the one answering. A call that begins a service\'s consent returns continue (where to go); the request is answered when it comes back. A call that fails stops here with its error; answering again goes on from it.' },
   Settings: object({ principal_id: principalId, return_url: string, refresh_url: string, webhook_url: nullable(string),
     notifies: boolean, webhook_secret: string, created_at: iso }, ['principal_id', 'return_url', 'refresh_url', 'notifies']),
   SettingsInput: object({ return_url: string, refresh_url: string, webhook_url: string }, ['return_url']),
@@ -157,7 +156,7 @@ export const schemas = {
   Resource: { oneOf: ['Secret', 'Object', 'Connection', 'App', 'Service', 'Environment', 'KeptFunction'].map(ref) },
   PatchResource: { ...object({ name: resourceName, identity: { ...nullable(principalId), description: 'For an environment: the principal it runs as, or null to take it away.' }, auth_schemes: object({ oauth: ref('OAuthDefinition') }), client_id: string, client_secret: string }), description: 'Apps also accept their service-specific top-level client fields, as declared by app_fields.' },
   DeleteResource: object({ revoke: boolean, confirm: boolean }),
-  Connect: { ...object({ ...connect.properties, request_id: requestId }), description: 'With request_id the stored request determines service, scheme, app and scopes. Otherwise service is required. oauth and role need a browser session and return where to go next. token connects at once with the given fields; with connection_id it replaces that connection\'s values. Use a connection detail at POST /v1/requests to ask a person to connect.' },
+  Connect: { ...connect, description: 'oauth and role need a browser session and return where to go next. token connects at once with the given fields; with connection_id it replaces that connection\'s values. To ask a person to connect, ask for this call at POST /v1/requests.' },
   ConnectResult: object({ url: string, state: string, connection: ref('Connection') }),
   Confirmation: object({ connection: ref('Connection'), changes: array(object()) }, ['connection', 'changes']),
   CreateEnvironment: object(environment),
@@ -226,7 +225,7 @@ export const routes = [
     description: 'For Stripe only: events signed with the endpoint secret (Stripe-Signature). Subscription changes set whether a principal pays.' }) } },
   { name: 'principals', path: '/v1/principals', methods: {
     post: op('createPrincipal', 'Make a principal of the caller\'s own, or become one', 'Became', { input: 'Become', status: [200, 201], security: [{}, ...secure], 'x-input-error': 'invalid_name',
-      description: 'Anyone may become a principal, saying nothing of who they are. By a key: POST {kind: "key", name} makes the principal and shows its key once. By a passkey: POST {kind: "webauthn"} returns options, and PUT finishes. With a session or key, POST makes a principal the caller owns; it has no entry until one is added at /v1/principals/{id}/credentials. To ask someone for access, a principal uses POST /v1/requests with {"authorization_details":[{"type":"relation","relation":"agent"}]} and gives them the returned verification_uri and user_code; GET /v1/principals/me reports acts_for afterward. The CLI performs the bootstrap: foundation init <server> --name <name> makes the principal, foundation join asks for approval.' }),
+      description: 'Anyone may become a principal, saying nothing of who they are. By a key: POST {kind: "key", name} makes the principal and shows its key once. By a passkey: POST {kind: "webauthn"} returns options, and PUT finishes. With a session or key, POST makes a principal the caller owns; it has no entry until one is added at /v1/principals/{id}/credentials. To ask someone for access, a principal uses POST /v1/requests with {"operations":[{"method":"POST","path":"/v1/principals/{its id}/relations","body":{"relation":"agent","object_type":"principal","object_id":"me"}}]} and gives them the returned verification_uri and user_code; GET /v1/principals/me reports acts_for afterward. The CLI performs the bootstrap: foundation init <server> --name <name> makes the principal, foundation join asks for approval.' }),
     put: op('becomePrincipal', 'Finish becoming a principal with the passkey just made', 'Became', { input: 'BecomeComplete', status: 201, security: [], 'x-input-error': 'invalid_webauthn_credential', description: 'The credential makes the principal and a session: a cookie for a browser (with Origin), or an hour\'s token for a program (session "token").' }),
   } },
   { name: 'principal', group: 'principals', path: '/v1/principals/{principalId}', methods: {
@@ -276,13 +275,13 @@ export const routes = [
   } },
   { name: 'requests', group: 'requests', path: '/v1/requests', methods: {
     get: op('listRequests', 'List sent or received requests', many('requests', 'Request'), { parameters: [query('status', choice(['pending', 'granted', 'denied', 'cancelled'])), query('to', string, 'Use me for received requests; otherwise lists sent requests.')] }),
-    post: op('createRequest', 'Ask someone for a relation, secrets, a connected service or a registered app', one('Request'), { input: 'CreateRequest', status: 201, 'x-input-error': 'invalid_authorization_details', description: 'authorization_details holds one detail (RFC 9396). A relation with no object, asked of nobody, is how a principal nobody knows asks to act for whoever answers; it returns a user_code to show beside verification_uri (as in RFC 8628). Otherwise the request goes to to, or the owner of the object, who answers where they are (as in CIBA); binding_message tells them why. Poll GET /v1/requests/{requestId} no more often than interval seconds; faster polling is answered with slow_down, and an expired request with expired_token. Do not collect secrets in chat.' }),
+    post: op('createRequest', 'Ask someone to make calls of this API that they may make and the caller may not', one('Request'), { input: 'CreateRequest', status: 201, 'x-input-error': 'invalid_operations', description: 'operations are calls of this API (1-8), as the one asked would send them: method, path (me in it is the one asked) and body; inputs leave places in body for the one asked to supply (a value only they have, a secret they type and seal). Any call they may make may be asked for, except those only they can make where they are (proving with their device, payment, merging, a consent flow already begun, issuing request links). The request goes to to, or else to whoever stands as the caller itself (as a person does for the account an app keeps for them). One nobody has taken on yet asks nobody, and may ask only for POST /v1/principals/{itself}/relations {relation: "agent", object_type: "principal", object_id: "me"}: whoever opens verification_uri and types the returned user_code (as in RFC 8628) answers, and owns it from then on. binding_message tells the one asked why. Poll GET /v1/requests/{requestId} no more often than interval seconds; faster polling is answered with slow_down, and an expired request with expired_token. results holds what each call answered. Do not collect secrets in chat.' }),
   } },
   { name: 'request', group: 'requests', path: '/v1/requests/{requestId}', methods: {
     get: op('getRequest', 'Read a request and its outcome', one('Request'), { security: [...secure, { requestLink: [] }] }),
     delete: op('cancelRequest', 'Cancel a sent request', one('Request'), { input: 'Empty' }),
   } },
-  { name: 'grant', group: 'requests', path: '/v1/requests/{requestId}/grant', methods: { post: op('grantRequest', 'Grant a request as the one asked', { anyOf: [one('Request'), object({ stored: { const: true }, names: array(string), replaced: array(string) }, ['stored', 'names', 'replaced']), object({ registered: { const: true }, app_id: id }, ['registered', 'app_id'])] }, { input: 'GrantRequest', security: [...secure, { requestLink: [] }], description: 'Request-link cookies may answer only their own request. App registration requires a browser session. A relation is drawn only where the one granting may draw it. Wrong user codes count toward the attempt limit.' }) } },
+  { name: 'grant', group: 'requests', path: '/v1/requests/{requestId}/grant', methods: { post: op('grantRequest', 'Answer a request by making the calls it asks for', object({ request: ref('Request'), continue: { ...object({ url: string }), description: 'Where a call goes on: a service\'s consent. The request is answered when it comes back.' } }, ['request']), { input: 'GrantRequest', security: [...secure, { requestLink: [] }], description: 'Request-link cookies may answer only their own request. Each call is handled as if the one answering had sent it, by the same rules.' }) } },
   { name: 'deny', group: 'requests', path: '/v1/requests/{requestId}/deny', methods: { post: op('denyRequest', 'Decline a received request', one('Request'), { input: 'Empty', security: [...secure, { requestLink: [] }] }) } },
   { name: 'environments', path: '/v1/principals/{principalId}/environments', methods: {
     post: op('createEnvironment', 'Open an execution environment', one('Environment'), { input: 'CreateEnvironment', status: 201, description: 'Requires a configured runner and available compute allowance. identity is an optional principal the environment may act as; granting it requires pass permission.' }),

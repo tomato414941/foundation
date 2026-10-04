@@ -113,13 +113,14 @@ test('トークンでの接続を頼まれた人が貼ると、依頼は叶い�
   await f.signin();
   const agent = await f.issueKey();
   const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, anonymous: true,
-    data: { to: USER_A, authorization_details: [{ type: 'connection', service: 'github', auth_scheme: 'token' }], binding_message: 'リポジトリを読みます。' } });
+    data: { to: USER_A, operations: [{ ...f.connecting({ service: 'github', auth_scheme: 'token' }), inputs: [{ at: '/fields/token', label: 'GitHub のトークン', kind: 'hidden' }] }], binding_message: 'リポジトリを読みます。' } });
   assert.equal(asked.status, 201, asked.text);
-  const made = await paste(f, { request_id: asked.json.request.id, fields: { token: 'ghp_asked' } });
-  assert.equal(made.status, 201, made.text);
+  const made = await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { values: [{ '/fields/token': 'ghp_asked' }] } });
+  assert.equal(made.status, 200, made.text);
   const seen = await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token, anonymous: true });
   assert.equal(seen.json.request.status, 'granted');
-  assert.deepEqual(seen.json.request.result, { connection_id: made.json.connection.id });
+  assert.equal(seen.json.request.results[0].status, 201);
+  assert.doesNotMatch(JSON.stringify(seen.json.request), /ghp_asked/);
 });
 
 test('サインインで接続するサービスでも、サービスが出すキーを貼って接続し、同じ環境変数で渡す', async t => {

@@ -96,10 +96,11 @@ test('AWSの再接続依頼を同じ役割のARNと外部IDで完了し、接続
   assert.equal(first.status, 200, first.text);
   const connection = first.json.connection;
   const asked = await f.request('/v1/requests', { method: 'POST', token: key.token, data: {
-    to: USER_A, authorization_details: [{ type: 'connection', service: 'aws', auth_scheme: 'role', connection_id: connection.id }] } });
+    to: USER_A, operations: [f.connecting({ service: 'aws', auth_scheme: 'role', connection_id: connection.id })] } });
   assert.equal(asked.status, 201, asked.text);
-  const flow = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'aws', auth_scheme: 'role', request_id: asked.json.request.id } });
-  assert.equal(flow.status, 200, flow.text);
+  const answered = await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: {} });
+  assert.equal(answered.status, 200, answered.text);
+  const flow = { json: answered.json.continue };
   const wrong = await f.request('/v1/principals/me/connections', { method: 'PUT', data: { state: flow.json.state, fields: { role_arn: another } } });
   assert.equal(wrong.status, 409);
   assert.equal(wrong.json.error.code, 'account_changed');
@@ -109,5 +110,5 @@ test('AWSの再接続依頼を同じ役割のARNと外部IDで完了し、接続
   assert.equal((await f.inject(connection, { token: key.token })).status, 200);
   const completed = (await f.request('/v1/requests/' + asked.json.request.id, { token: key.token })).json.request;
   assert.equal(completed.status, 'granted');
-  assert.equal(completed.result.connection_id, connection.id);
+  assert.equal(f.connected(completed).id, connection.id);
 });

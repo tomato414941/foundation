@@ -6,7 +6,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 from playwright.sync_api import sync_playwright, expect
 from ui_flows import allow_foundation, plain, injected
 
@@ -71,13 +71,16 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
     # What the owner keeps is used by the AI through Foundation, made the owner's agent.
     allow_foundation(page.request, args.base)
 
-    # A longer purpose reads vertically on desktop as well as narrow screens.
+    owner_id = cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0]
+
+    def keeping(name, label, **extra):
+        return {'method': 'PUT', 'path': '/v1/principals/me/resources?kind=secret&name=' + quote(name), 'inputs': [{'at': '', 'label': label, 'kind': 'sealed', **extra}]}
+
+    # A longer purpose reads vertically on desktop as well as narrow screens; the owner may decline.
     purpose = 'Foundationに預けた認証情報でnpmアカウントへの接続を確認します。パッケージの公開や変更は行いません。'
-    npm_request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0], 
-        'authorization_details': [{'type': 'secret', 'fields': {'name': 'npm token', 'label': 'npmアクセストークン', 'site': 'https://www.npmjs.com/'}}],
-        'binding_message': purpose}))['request']
+    npm_request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': owner_id, 'operations': [keeping('npm token', 'npmアクセストークン', site='https://www.npmjs.com/')], 'binding_message': purpose}))['request']
     page.goto(npm_request['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_role('heading', name='npmアクセストークンを登録する', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='シークレットを保存する', exact=True)).to_be_visible()
     expect(page.get_by_text('laptop のAIの依頼', exact=True)).to_be_visible()
     expect(page.get_by_text('owner@example.test', exact=True)).to_be_visible()
     expect(page.get_by_text(purpose, exact=True)).to_be_visible()
@@ -86,126 +89,86 @@ with tempfile.TemporaryDirectory(prefix='foundation-ask-ui-') as key_dir, sync_p
         review(page)
         if width != 320:
             page.screenshot(path=str(shots / ('purpose-desktop.png' if width == 1280 else 'purpose-mobile.png')), full_page=True)
-    page.get_by_role('button', name='登録しない', exact=True).click()
-    expect(page.get_by_role('heading', name='登録しませんでした', exact=True)).to_be_visible()
+    page.get_by_role('button', name='許可しない', exact=True).click()
+    expect(page.get_by_role('heading', name='依頼を断りました', exact=True)).to_be_visible()
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
-    # A rotation: the AI declares a replacement, the page says so, and renaming it makes it a new value instead.
+    # Asked to keep a value under a name already in use, the page says it replaces what is there before it is allowed.
     kept = page.request.put(args.base + '/v1/principals/me/resources?kind=secret&name=npm token', headers={'content-type': 'application/json', 'origin': args.base}, data=plain('old-token'))
     assert kept.status == 200
-    rotation = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0], 
-        'authorization_details': [{'type': 'secret', 'fields': {'name': 'npm token', 'label': 'npmアクセストークン', 'replace': True}}], 'binding_message': '期限切れのトークンを新しいものに入れ替えます。'}))['request']
-    assert rotation['store'][0]['replace'] is True
+    rotation = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': owner_id, 'operations': [keeping('npm token', 'npmアクセストークン')], 'binding_message': '期限切れのトークンを新しいものに入れ替えます。'}))['request']
     page.goto(rotation['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_role('heading', name='npmアクセストークンを置き換える', exact=True)).to_be_visible()
-    expect(page.get_by_text('既存の「npm token」を置き換えます。', exact=True)).to_be_visible()
+    expect(page.get_by_text('すでにある「npm token」を置き換えます。', exact=True)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'replace-desktop.png'), full_page=True)
-    page.get_by_label('保存名', exact=True).fill('npm token 2')
-    expect(page.get_by_text('「npm token」はそのまま残り、「npm token 2」として新しく保管します。', exact=True)).to_be_visible()
-    page.get_by_label('保存名', exact=True).fill('npm token')
-    expect(page.get_by_text('既存の「npm token」を置き換えます。', exact=True)).to_be_visible()
     page.get_by_label('npmアクセストークン', exact=True).fill('new-token')
-    page.get_by_role('button', name='登録する', exact=True).click()
-    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    page.get_by_role('button', name='許可して実行する', exact=True).click()
+    expect(page.get_by_role('heading', name='依頼に応えました', exact=True)).to_be_visible()
     assert read(page, 'npm token').text() == 'new-token'
-    finished = cli('api', 'GET', '/v1/requests/' + rotation['id'])['request']
-    assert finished['result'] == {'names': ['npm token'], 'replaced': ['npm token']}
+    assert cli('api', 'GET', '/v1/requests/' + rotation['id'])['request']['results'][0]['status'] == 200
     page.request.delete(args.base + '/v1/resources/' + held(page, 'npm token'), headers={'content-type': 'application/json', 'origin': args.base}, data='{}')
 
-    # The AI suggests a name; the owner chooses the name used for storage.
-    asked = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0], 
-        'authorization_details': [{'type': 'secret', 'fields': {'name': 'cloudflare/cloudflare-api-token', 'label': 'CloudflareのAPIトークン',
-                  'site': 'https://dash.cloudflare.com/profile/api-tokens'}}],
+    # The AI says where the value is made and how; the owner types it, hidden, and allows it.
+    asked = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': owner_id,
+        'operations': [keeping('cloudflare/cloudflare-api-token', 'CloudflareのAPIトークン', site='https://dash.cloudflare.com/profile/api-tokens')],
         'binding_message': 'DNSレコードの確認に使います。',
         'steps': ['APIトークンを作成 を押し、テンプレートから「Edit zone DNS」を選びます。', '対象のゾーンを選んで作成し、表示されたトークンを貼ってください。']}))['request']
-    assert asked['authorization_details'][0]['type'] == 'secret'
     assert 'user_code' not in asked
-
     page.goto(asked['verification_uri'], wait_until='networkidle')
-    expect(page.get_by_role('heading', name='CloudflareのAPIトークンを登録する', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='シークレットを保存する', exact=True)).to_be_visible()
     expect(page.get_by_text('laptop のAIの依頼', exact=True)).to_be_visible()
     expect(page.get_by_text('DNSレコードの確認に使います。', exact=True)).to_be_visible()
     expect(page.get_by_text('APIトークンを作成 を押し', exact=False)).to_be_visible()
+    expect(page.locator('.approval-facts')).to_contain_text('cloudflare/cloudflare-api-token')
     expect(page.get_by_role('link', name='dash.cloudflare.com を開く ↗', exact=True)).to_have_attribute('target', '_blank')
     value = page.get_by_label('CloudflareのAPIトークン', exact=True)
     expect(value).to_have_attribute('type', 'password')
-    saved_name = page.get_by_label('保存名', exact=True)
-    expect(saved_name).to_have_value('cloudflare/cloudflare-api-token')
     for width in [1280, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
         review(page)
         if width != 320:
             page.screenshot(path=str(shots / ('ask-desktop.png' if width == 1280 else 'ask-mobile.png')), full_page=True)
     page.set_viewport_size({'width': 1280, 'height': 1000})
-
-    # Another value may be saved after the request page opens. The submitted name is checked again.
-    existing = page.request.put(args.base + '/v1/principals/me/resources?kind=secret&name=cloudflare/cloudflare-api-token',
-                               headers={'content-type': 'application/json', 'origin': args.base}, data=plain('existing-value'))
-    assert existing.status == 200
     value.fill(SECRET)
-    page.get_by_role('button', name='登録する', exact=True).click()
-    expect(page.get_by_role('alert')).to_have_text('「cloudflare/cloudflare-api-token」はすでに使われています。別の保存名を入力してください。')
-    expect(saved_name).to_have_value('cloudflare/cloudflare-api-token')
-    expect(value).to_have_value(SECRET)
-    assert read(page, 'cloudflare/cloudflare-api-token').text() == 'existing-value'
-    for width in [1280, 390, 320]:
-        page.set_viewport_size({'width': width, 'height': 1000})
-        review(page)
-        if width != 320:
-            page.screenshot(path=str(shots / ('name-conflict-desktop.png' if width == 1280 else 'name-conflict-mobile.png')), full_page=True)
-    page.set_viewport_size({'width': 1280, 'height': 1000})
-    saved_name.fill('cloudflare-api-token')
-    page.get_by_role('button', name='登録する', exact=True).click()
-    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
-    assert cli('api', 'GET', '/v1/requests/' + asked['id'])['request']['result']['names'] == ['cloudflare-api-token']
-    review(page)
-
-    # The completion link takes the owner straight to the saved value on desktop and mobile.
+    page.get_by_role('button', name='許可して実行する', exact=True).click()
+    expect(page.get_by_role('heading', name='依頼に応えました', exact=True)).to_be_visible()
+    expect(page.get_by_text('cloudflare/cloudflare-api-token', exact=True)).to_be_visible()
+    assert cli('api', 'GET', '/v1/requests/' + asked['id'])['request']['results'][0]['body']['resource']['name'] == 'cloudflare/cloudflare-api-token'
     for width in [1280, 390]:
         page.set_viewport_size({'width': width, 'height': 1000})
         page.goto(asked['verification_uri'], wait_until='networkidle')
-        expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+        expect(page.get_by_role('heading', name='依頼に応えました', exact=True)).to_be_visible()
         review(page)
         page.screenshot(path=str(shots / ('completed-desktop.png' if width == 1280 else 'completed-mobile.png')), full_page=True)
-        page.get_by_role('link', name='シークレット', exact=True).click()
-        expect(page).to_have_url(args.base + '/secrets')
-        expect(page.get_by_role('heading', name='シークレット', exact=True)).to_be_visible()
-        expect(page.locator('[aria-label="シークレット"]').get_by_role('heading', name='cloudflare-api-token', exact=True)).to_be_visible()
-        review(page)
     page.set_viewport_size({'width': 1280, 'height': 1000})
 
-    # The value is available to the AI under the name the owner chose.
-    kept = cli('api', 'GET', '/v1/principals/' + cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0] + '/resources?kind=secret')['resources']
-    assert [row['name'] for row in kept] == ['cloudflare-api-token', 'cloudflare/cloudflare-api-token']
+    # The value is the AI's to use through Foundation, never to read.
+    kept = cli('api', 'GET', '/v1/principals/' + owner_id + '/resources?kind=secret')['resources']
+    assert [row['name'] for row in kept] == ['cloudflare/cloudflare-api-token']
     refused = subprocess.run(['node', 'cli/runtime.mjs', 'api', 'GET', '/v1/resources/' + kept[0]['id'] + '/content'], env=env, capture_output=True, text=True, timeout=15)
     assert refused.returncode == 1 and SECRET not in refused.stdout + refused.stderr
-
-    used = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'CLOUDFLARE_API_TOKEN=cloudflare-api-token', '--', 'node', '-e',
+    used = subprocess.run(['node', 'cli/runtime.mjs', 'exec', 'CLOUDFLARE_API_TOKEN=cloudflare/cloudflare-api-token', '--', 'node', '-e',
                            'if(process.env.CLOUDFLARE_API_TOKEN!==process.argv[1])process.exit(2);console.log("ready")', SECRET],
                           env=env, capture_output=True, text=True, timeout=15)
     assert used.returncode == 0 and used.stdout.strip() == 'ready', used.stderr
-
     page.goto(args.base + '/secrets', wait_until='networkidle')
-    expect(page.locator('[aria-label="シークレット"]').get_by_role('heading', name='cloudflare-api-token', exact=True)).to_be_visible()
+    expect(page.locator('[aria-label="シークレット"]').get_by_role('heading', name='cloudflare/cloudflare-api-token', exact=True)).to_be_visible()
     review(page)
 
-    # Stored names are not DOM form-property names, either.
+    # Several values at once, under names that are not DOM form-property names either.
     names = ['querySelector', 'elements', '__proto__']
-    multiple = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0], 
-        'authorization_details': [{'type': 'secret', 'fields': [{'name': name, 'label': '入力 ' + str(index + 1)} for index, name in enumerate(names)]}],
-        'binding_message': '値を保存します。'}))['request']
+    multiple = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': owner_id, 'operations': [keeping(name, '入力 ' + str(index + 1)) for index, name in enumerate(names)], 'binding_message': '値を保存します。'}))['request']
     page.goto(multiple['verification_uri'], wait_until='networkidle')
     for index in range(len(names)):
         page.get_by_label('入力 ' + str(index + 1), exact=True).fill('fixture-value-' + str(index))
-    page.get_by_role('button', name='登録する', exact=True).click()
-    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    page.get_by_role('button', name='許可して実行する', exact=True).click()
+    expect(page.get_by_role('heading', name='依頼に応えました', exact=True)).to_be_visible()
     complete = cli('api', 'GET', '/v1/requests/' + multiple['id'])['request']
-    assert complete['result']['names'] == names
+    assert [result['body']['resource']['name'] for result in complete['results']] == names
     for name in names:
         expect(page.get_by_text(name, exact=False)).to_be_visible()
     review(page)
     assert not errors, errors
     context.close()
     browser.close()
-    print('Ask flow passed: the owner chooses the saved name, resolves a name conflict, and the AI receives the completed names.')
+    print('Ask flow passed: the owner types values the AI asked for, is told of a replacement, and the AI receives what was kept.')

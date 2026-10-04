@@ -181,7 +181,7 @@ test('公開後のnpm確認が一時的に失敗しても反映の確認を続�
 });
 
 // What is published under a version is fixed: the files of the package as they were when the version was set.
-const SHIPPED = { version: '0.26.0', digest: '3dfc7234b483e68a2867aade36bef266a2778862f36810ae0fba5994c26c8785' };
+const SHIPPED = { version: '0.27.0', digest: '7475db315d8575174a18cf88be9c50e21eefc0ffd5ba44930381d5cd16b5b291' };
 test('CLIのファイルを変えるとバージョンも変える', async () => {
   const { createHash } = await import('node:crypto'), { readFileSync } = await import('node:fs');
   const shipped = JSON.parse(readFileSync(new URL('../cli/package.json', import.meta.url)));

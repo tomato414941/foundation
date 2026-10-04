@@ -86,7 +86,7 @@ test('errors retain dynamic context and custom data while localizing known field
   assert.equal(localizeErrorMessage('このアプリで作った接続が3件あります。削除すると、つなぎ直すまで使えなくなります。', en), '3 connections were created with this app. Deleting it will make them unavailable until you reconnect.');
   assert.equal(localizeErrorMessage('このアプリで作った接続が1件あります。削除すると、つなぎ直すまで使えなくなります。', en), '1 connection was created with this app. Deleting it will make the connection unavailable until you reconnect.');
   assert.equal(localizeErrorMessage('ヘッダ x-custom の値が不正です。', en), 'The value of the x-custom header is invalid.');
-  assert.equal(localizeErrorMessage('「利用者の名前」はすでに使われています。別の保存名を入力してください。', en), '“利用者の名前” is already in use. Enter another storage name.');
+  assert.equal(localizeErrorMessage('「利用者の名前」を入力してください。', en), 'Enter 利用者の名前.', 'a label the asker wrote stays as written');
   assert.equal(localizeErrorMessage('クライアントシークレットを入力してください。', en), 'Enter Client secret.');
   assert.equal(localizeErrorMessage('利用者独自項目を入力してください。', en), 'Enter 利用者独自項目.');
   assert.equal(localizeErrorMessage('APIトークンを確認してください。', en), 'Check API token.');

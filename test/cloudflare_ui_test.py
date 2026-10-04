@@ -93,18 +93,18 @@ with sync_playwright() as p:
       const key = { ...made, ...await (await fetch('/v1/principals/' + made.principal.id + '/credentials', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind: 'key'})})).json() };
       const owner = key.principal.acts_for[0];
       const response = await fetch('/v1/requests', {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
-        body: JSON.stringify({to: owner, authorization_details: [{type: 'connection', service: 'cloudflare', connection_id: id}], binding_message: '共有アカウントへの接続を更新'})});
+        body: JSON.stringify({to: owner, operations: [{method: 'POST', path: '/v1/principals/me/connections', body: {service: 'cloudflare', connection_id: id}}], binding_message: '共有アカウントへの接続を更新'})});
       if (response.status !== 201) throw new Error(await response.text());
       return '/requests/' + (await response.json()).request.id;
     }""", first_id)
     authorization['code'] = 'personal-shared'
     page.goto(args.base + request_path, wait_until='networkidle')
     expect(page.get_by_role('heading', name='Cloudflareに接続し直す', exact=True)).to_be_visible()
-    expect(page.get_by_text('更新する接続', exact=True)).to_be_visible()
+    expect(page.locator('.approval-facts')).to_contain_text('Cloudflare')
     expect(page.locator('.approval-facts')).to_contain_text('personal@example.test')
     if shots:
         page.screenshot(path=str(shots / 'cloudflare-reconnect-request.png'), full_page=True)
-    page.get_by_role('button', name='Cloudflareの画面へ', exact=True).click()
+    page.get_by_role('button', name='許可して実行する', exact=True).click()
     expect(dialog.get_by_role('heading', name='接続の変更を確認', exact=True)).to_be_visible()
     expect(dialog.get_by_text('変更前：Personal account', exact=False)).to_be_visible()
     expect(dialog.get_by_text('変更後：Shared account', exact=False)).to_be_visible()
@@ -117,7 +117,7 @@ with sync_playwright() as p:
         if shots:
             page.screenshot(path=str(shots / ('cloudflare-review-' + str(width) + '.png')), full_page=True)
     dialog.get_by_role('button', name='この内容で更新', exact=True).click()
-    expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='依頼に応えました', exact=True)).to_be_visible()
     connections = page.evaluate("async () => (await (await fetch('/v1/principals/me/resources?kind=connection')).json()).resources")
     assert len(connections) == 2
     assert next(c for c in connections if c['id'] == first_id)['facts']['observed_accounts']['items'][0]['name'] == 'Shared account'
