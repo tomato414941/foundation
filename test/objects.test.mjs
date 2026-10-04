@@ -92,6 +92,22 @@ test('removes an object', async (t) => {
   assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=object', { token: KEY })).json.resources.length, 0);
 });
 
+test('principal がいなくなると、自分で去っても持ち主に消されても、置いたものの中身は保管庫から消える', async (t) => {
+  const f = await space(t);
+  for (const by of ['itself', 'owner']) {
+    const made = await f.request('/v1/principals', { method: 'POST', data: { name: 'leaving-' + by, key: true } });
+    const id = made.json.principal.id, token = made.json.token;
+    const put = await f.request('/v1/principals/' + id + '/resources?kind=object&name=kept.txt', { method: 'PUT', anonymous: true, token, raw: Buffer.from('bytes'), type: 'text/plain' });
+    assert.equal(put.status, 200, put.text);
+    assert.equal(f.bucket.objects.has('resources/' + put.json.resource.id), true);
+    const removed = by === 'itself'
+      ? await f.request('/v1/principals/me', { method: 'DELETE', anonymous: true, token, data: {} })
+      : await f.request('/v1/principals/' + id, { method: 'DELETE', data: {} });
+    assert.equal(removed.status, 200, removed.text);
+    assert.equal(f.bucket.objects.has('resources/' + put.json.resource.id), false, by);
+  }
+});
+
 test('hands out a time-limited URL for something that only takes a URL', async (t) => {
   const f = await space(t);
   await f.request('/v1/principals/' + USER_A + '/resources?kind=object&name=template.yaml', { method: 'PUT', token: KEY, raw: Buffer.from('Resources: {}'), type: 'text/plain' });

@@ -682,6 +682,14 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         auditLog.write(subject.id, 'principal.created', 'principal', made.id, { alias: alias ?? null, agent: input.agent === true });
         return send(201, { principal: { ...made, alias: alias ?? null, keys: principals.keys(made.id), acts_for: principals.actsFor(made.id), owners: principals.ownersOf(made.id), members: principals.membersOf(made.id) } });
       }
+      // A principal that ends takes what it holds with it, whoever ends it: its machines are stopped and its files'
+      // bytes removed first, as neither can be undone within the database's transaction; then its records go, along
+      // with whatever the way it ended removes (removing).
+      const removeWithHoldings = async (id, removing) => {
+        if (objects.enabled) for (const row of objects.list(id)) await objects.remove(row);
+        await environments.removeAll(id);
+        return store.transaction(() => { environments.assertRemoved(id); resources.removeAll(id); return removing(); });
+      };
       if (route?.group === 'principals') {
         // Two names stand for ids: me, the caller, and agent, the principal this server acts as.
         const named = route.params.principalId;
@@ -839,21 +847,14 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           // Leaving: a principal takes itself away, its open requests with it. What it acted for stays where it was.
           if (method === 'DELETE' && id === subject.id) {
             await inputBody();
-            await environments.removeAll(subject.id);
-            const cancelled = store.transaction(() => { environments.assertRemoved(subject.id); const rows = requests.cancelFrom(subject.id, 'requester_left'); resources.removeAll(subject.id); principals.remove(subject.id); return rows; });
+            const cancelled = await removeWithHoldings(subject.id, () => { const rows = requests.cancelFrom(subject.id, 'requester_left'); principals.remove(subject.id); return rows; });
             for (const row of cancelled) requestActions.changed(row);
             return send(200, { ok: true });
           }
           if (method === 'DELETE') {
             permit('remove', 'principal', id);
             await inputBody();
-            if (objects.enabled) for (const row of objects.list(id)) await objects.remove(row);
-            await environments.removeAll(id);
-            store.transaction(() => {
-              environments.assertRemoved(id);
-              requestActions.removePrincipal(subject.id, id);
-              resources.removeAll(id);
-            });
+            await removeWithHoldings(id, () => requestActions.removePrincipal(subject.id, id));
             return send(200, { ok: true });
           }
         }
