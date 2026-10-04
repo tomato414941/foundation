@@ -55,7 +55,7 @@ with sync_playwright() as p:
     page.locator('.page-nav').get_by_role('link', name='エンバイロメント', exact=True).click()
     expect(page).to_have_url(args.base + '/environments')
     expect(page.get_by_role('heading', name='エンバイロメント', exact=True)).to_be_visible()
-    expect(page.get_by_text('開いているエンバイロメントはありません。', exact=True)).to_be_visible()
+    expect(page.get_by_text('リソースなし', exact=True)).to_be_visible()
     expect(page.get_by_text('今月の計算時間', exact=False)).to_be_visible()
 
     # The AI opens two: one acting as the owner, one with no identity at all.
