@@ -91,6 +91,7 @@ with sync_playwright() as p:
         page.screenshot(path=str(shots / f'environment-create-{width}.png'), full_page=True)
     dialog.get_by_label('名前', exact=False).fill('ビルド')
     dialog.get_by_label('自動停止', exact=True).select_option('30')
+    dialog.get_by_text('詳細設定', exact=True).click()
     expect(dialog.get_by_label('イメージ', exact=True)).to_have_value('default')
     dialog.get_by_label('イメージ', exact=True).select_option('hub')
     dialog.get_by_label('Docker Hubを検索', exact=True).fill('python')
@@ -127,7 +128,6 @@ with sync_playwright() as p:
     expect(dialog.get_by_label('タグ', exact=True)).to_be_enabled()
     dialog.get_by_label('タグ', exact=True).select_option('3.12-slim')
     expect(dialog.get_by_role('link', name='Docker Hub ↗', exact=True)).to_have_attribute('href', 'https://hub.docker.com/_/python')
-    dialog.get_by_text('詳細設定', exact=True).click()
     dialog.get_by_label('サイズ', exact=True).select_option('medium')
     dialog.get_by_label('Foundationへのアクセス', exact=True).select_option(owner)
     for width in [1280, 390, 320]:

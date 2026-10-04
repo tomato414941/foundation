@@ -1425,6 +1425,8 @@ function createEnvironment() {
   const owner = state.user.id;
   openDialog(`<h2 id="dialog-title">${esc(t('client.environment.createTitle'))}</h2><form class="environment-form">
     <label for="environment-name">${esc(t('client.common.optionalLabel', { label: t('client.common.name') }))}</label><input id="environment-name" name="name" maxlength="200" autocomplete="off">
+    <label for="environment-lifetime">${esc(t('client.environment.autoStop'))}</label><select id="environment-lifetime" name="minutes">${[15, 30, 60].map(minutes => `<option value="${minutes}"${minutes === 60 ? ' selected' : ''}>${esc(t('client.environment.afterMinutes', { count: minutes }))}</option>`).join('')}</select>
+    <details class="environment-options"><summary>${esc(t('client.environment.options'))}</summary>
     <label for="environment-image-choice">${esc(t('client.environment.image'))}</label><select id="environment-image-choice" name="image_choice"><option value="default">${esc(t('client.environment.defaultImage'))}</option><option value="hub">${esc(t('client.environment.dockerHub'))}</option><option value="custom">${esc(t('client.environment.customImage'))}</option></select>
     <div id="environment-custom-image" hidden><label for="environment-image">${esc(t('client.environment.imageName'))}</label><input id="environment-image" name="image" required disabled maxlength="255" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
     <div class="image-catalog" id="environment-hub" hidden>
@@ -1436,8 +1438,6 @@ function createEnvironment() {
         <button class="text-button image-more" id="environment-more-tags" type="button" hidden disabled>${esc(t('client.environment.moreTags'))}</button></div>
       <p class="image-catalog-status" role="status" id="environment-image-status"></p><button class="text-button image-more" id="environment-retry-tags" type="button" hidden disabled>${esc(t('client.environment.retry'))}</button>
     </div>
-    <label for="environment-lifetime">${esc(t('client.environment.autoStop'))}</label><select id="environment-lifetime" name="minutes">${[15, 30, 60].map(minutes => `<option value="${minutes}"${minutes === 60 ? ' selected' : ''}>${esc(t('client.environment.afterMinutes', { count: minutes }))}</option>`).join('')}</select>
-    <details class="environment-options"><summary>${esc(t('client.environment.options'))}</summary>
       <label for="environment-size">${esc(t('client.environment.size'))}</label><select id="environment-size" name="size"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select>
       <label for="environment-identity">${esc(t('client.environment.permissions'))}</label><select id="environment-identity" name="identity"><option value="">${esc(t('client.environment.noAccess'))}</option><option value="${esc(owner)}">${esc(t('client.environment.ownAccess'))}</option></select>
     </details><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.environment.create'))}</button></form>`);
