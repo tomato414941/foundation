@@ -1,3 +1,4 @@
+import re
 import argparse
 import base64
 import hashlib
@@ -45,7 +46,7 @@ with sync_playwright() as p:
     href = link.get_attribute('href')
     assert href.startswith('https://console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/create/review?'), href
     parameters = parse_qs(urlparse(href).fragment.split('?', 1)[1])
-    assert parameters['stackName'] == ['foundation-connection']
+    assert re.fullmatch(r'foundation-[0-9a-f]{12}', parameters['stackName'][0]), parameters['stackName']
     assert parameters['param_FoundationRoleArn'] == ['arn:aws:iam::111111111111:role/foundation-host-InstanceRole']
     assert link.get_attribute('target') == '_blank'
     if shots:

@@ -11,7 +11,7 @@
         {
           "name": "role_arn",
           "label": "作成されたIAMロールのARN",
-          "placeholder": "arn:aws:iam::123456789012:role/foundation-connection-FoundationRole-..."
+          "placeholder": "arn:aws:iam::123456789012:role/foundation-...-FoundationRole-..."
         }
       ],
       "instructions": "Policiesで権限を選んで作成します。",

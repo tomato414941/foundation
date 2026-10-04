@@ -8,7 +8,6 @@ export const AWS_DOCS = 'https://docs.aws.amazon.com/';
 export const AWS_CONSOLE = 'https://console.aws.amazon.com/iam/home#/roles';
 const ROLE_ARN = /^arn:(aws[a-z-]*):iam::(\d{12}):role\/([\w+=,.@/-]{1,200})$/;
 const TEMPLATE_KEY = 'foundation/aws-connection.yaml';
-const STACK_NAME = 'foundation-connection';
 const SESSION_SECONDS = 3600;
 const invalidResponse = () => fail(502, 'service_response', 'AWSからの応答を確認できませんでした。');
 const sha256 = value => createHash('sha256').update(value).digest('hex');
@@ -40,7 +39,9 @@ export class AwsClient {
     const templateUrl = presignAws({ service: 's3', region: this.region, host, path, expires: 3600, credentials });
     const url = new URL('https://console.aws.amazon.com/cloudformation/home');
     url.search = new URLSearchParams({ region: this.region }).toString();
-    url.hash = '/stacks/create/review?' + new URLSearchParams({ templateURL: templateUrl, stackName: STACK_NAME, param_FoundationRoleArn: this.roleArn, param_ExternalId: externalId }).toString();
+    // Each connection is its own stack, so one account may be connected as often as its owner wants.
+    const stackName = 'foundation-' + randomBytes(6).toString('hex');
+    url.hash = '/stacks/create/review?' + new URLSearchParams({ templateURL: templateUrl, stackName, param_FoundationRoleArn: this.roleArn, param_ExternalId: externalId }).toString();
     return { url: url.href, externalId };
   }
   parseRole(value) {

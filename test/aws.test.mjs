@@ -27,7 +27,7 @@ test('AWSは鍵を預からず、持ち主が作った役割を外部IDつきで
   const parameters = linkParameters(started.json.url);
   assert.match(started.json.url, /^https:\/\/console\.aws\.amazon\.com\/cloudformation\/home\?region=ap-northeast-1#\/stacks\/create\/review\?/);
   assert.match(parameters.templateURL, /^https:\/\/fixture-bucket\.s3\.ap-northeast-1\.amazonaws\.com\/foundation\/aws-connection\.yaml\?X-Amz-Algorithm=/);
-  assert.equal(parameters.stackName, 'foundation-connection');
+  assert.match(parameters.stackName, /^foundation-[0-9a-f]{12}$/);
   assert.equal(parameters.param_FoundationRoleArn, 'arn:aws:iam::111111111111:role/foundation-host-InstanceRole');
   assert.match(parameters.param_ExternalId, /^[A-Za-z0-9_-]{32}$/);
   assert.ok(aws.calls.some(call => call.options.method === 'PUT'), 'the template was placed in the bucket for the link to reach');
@@ -65,6 +65,8 @@ test('AWSは鍵を預からず、持ち主が作った役割を外部IDつきで
   const gone = await f.inject(done.json.connection, { token: key.token });
   assert.equal(gone.status, 409); assert.equal(gone.json.error.code, 'reconnect_required');
   assert.equal((await f.request('/v1/principals/me/resources?kind=connection')).json.resources[0].status, 'reconnect_required');
+  const another = linkParameters((await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'aws', auth_scheme: 'role' } })).json.url);
+  assert.notEqual(another.stackName, parameters.stackName, 'each connection is its own stack, so one account may be connected again');
 });
 
 test('役割の流れは持ち主のブラウザーからだけ始まり、他人の流れを完了させることはできない', async t => {
