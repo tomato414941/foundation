@@ -15,7 +15,9 @@ let viewing = null; try { viewing = sessionStorage.getItem('fdn_viewing'); } cat
 const held = () => '/v1/principals/' + (viewing ? encodeURIComponent(viewing) : 'me');
 const view = id => { viewing = id || null; try { if (viewing) sessionStorage.setItem('fdn_viewing', viewing); else sessionStorage.removeItem('fdn_viewing'); } catch {} };
 // The pages that show what a principal holds follow the one chosen; who one is, and whom one is on a line with, do not.
-const followsView = () => ['home', 'services', 'secrets', 'objects', 'environments'].includes(page);
+const followsView = () => ['home', 'services', 'secrets', 'objects', 'environments', 'principals'].includes(page);
+// The principal the pages are about: the one chosen, or oneself.
+const here = () => state.viewing || { id: state.user.id, name: state.principal.name };
 const PRF_INPUT = new TextEncoder().encode('foundation-key');
 const b64 = sealing.toBase64url, unb64 = sealing.fromBase64url;
 
@@ -557,10 +559,10 @@ const SOURCES = {
   services: signal => api(held() + '/resources?kind=service', { signal }).then(result => result.resources),
   catalog: signal => api('/v1/services', { signal }).then(result => result.services),
   // What this principal owns: the lines of ownership it drew, with who is at their other end.
-  principals: signal => api('/v1/principals/me/relations?relation=owner&direction=from&limit=200', { signal }).then(result => result.relations.map(line => line.principal)),
+  principals: signal => api(held() + '/relations?relation=owner&direction=from&limit=200', { signal }).then(result => result.relations.map(line => line.principal)),
   // Who acts for this principal: the lines drawn toward it, with who is at their other end.
-  lines: signal => api('/v1/principals/me/relations?limit=50', { signal }),
-  agentLines: signal => api('/v1/principals/me/relations?relation=agent&direction=to&limit=200', { signal }).then(result => result.relations),
+  lines: signal => api(held() + '/relations?limit=50', { signal }),
+  agentLines: signal => api(held() + '/relations?relation=agent&direction=to&limit=200', { signal }).then(result => result.relations),
   functions: signal => api('/v1/functions', { signal }).then(result => result.functions),
   environments: signal => api(held() + '/resources?kind=environment', { signal }).then(result => result.resources.filter(item => item.status !== 'stopped')),
   compute: signal => api(held() + '/compute', { signal }).then(result => result.compute),
@@ -568,8 +570,21 @@ const SOURCES = {
   // what it has been shown thing by thing. Read from its lines; each holder's things are asked of that holder.
   reach: async signal => {
     const kind = { secrets: 'secret', services: 'connection', objects: 'object', environments: 'environment' }[page];
-    if (!kind) return null;
+    if (!kind && page !== 'home') return null;
     const { relations } = await api(held() + '/relations?direction=from&limit=200', { signal });
+    // The front page only counts: each holder's things, of every kind.
+    if (!kind) {
+      const counts = { secret: 0, connection: 0, object: 0, environment: 0 };
+      // A thing held by one whose things are counted whole is not counted again for the line onto it.
+      const whole = new Set(relations.filter(line => line.principal && ['agent', 'member'].includes(line.relation)).map(line => line.principal.id));
+      for (const line of relations) {
+        if (line.resource?.kind in counts && !whole.has(line.resource.owner_id)) counts[line.resource.kind]++;
+        if (!line.principal || !['agent', 'member'].includes(line.relation)) continue;
+        try { for (const item of (await api('/v1/principals/' + encodeURIComponent(line.principal.id) + '/resources', { signal })).resources) if (item.kind in counts) counts[item.kind]++; }
+        catch (error) { if (signal?.aborted) throw error; }
+      }
+      return { kind: null, counts };
+    }
     const holders = relations.filter(line => line.principal && ['agent', 'member'].includes(line.relation));
     const sources = await Promise.all(holders.map(async line => {
       try { return { ...line.principal, relation: line.relation, items: (await api('/v1/principals/' + encodeURIComponent(line.principal.id) + '/resources?kind=' + kind, { signal })).resources }; }
@@ -587,7 +602,7 @@ const SOURCES = {
   foundation: signal => api('/v1/principals/agent', { signal }).then(result => ({ principal_id: result.principal.id })),
 };
 const NEEDS = {
-  home: ['connections', 'secrets', 'environments', 'principals', 'lines', 'functions'],
+  home: ['connections', 'secrets', 'environments', 'principals', 'lines', 'functions', 'reach'],
   services: ['connections', 'apps', 'services', 'catalog', 'secrets', 'reach'],
   secrets: ['secrets', 'principals', 'agentLines', 'foundation', 'reach'],
   objects: ['principals', 'agentLines', 'reach'],
@@ -870,13 +885,14 @@ function render() {
   if (page === 'home') {
     // A look over everything, and the way to each page. Nothing is managed here.
     const space = state.space, kept = secrets(), connections = connected();
+    const usable = kind => { const count = state.reach?.counts?.[kind] || 0; return count ? ' ・ ' + t('client.reach.usableCount', { count }) : ''; };
     const card = (href, title, line) => `<a class="home-card" href="${href}"><h2>${title}</h2><p>${esc(line)}</p></a>`;
     shell(`<header class="page-heading"><h1>Foundation</h1></header>
       <div class="home-cards">
-        ${card('/services', t('client.service.title'), t('client.common.itemCount', { count: connections.length + unconnectedServices().length }))}
-        ${card('/secrets', t('client.secret.title'), t('client.common.itemCount', { count: kept.length }))}
-        ${card('/objects', t('client.objects.title'), spaceSummary(space))}
-        ${card('/environments', t('client.environment.title'), t('client.common.itemCount', { count: (state.environments || []).length }))}
+        ${card('/services', t('client.service.title'), t('client.common.itemCount', { count: connections.length + unconnectedServices().length }) + usable('connection'))}
+        ${card('/secrets', t('client.secret.title'), t('client.common.itemCount', { count: kept.length }) + usable('secret'))}
+        ${card('/objects', t('client.objects.title'), spaceSummary(space) + usable('object'))}
+        ${card('/environments', t('client.environment.title'), t('client.common.itemCount', { count: (state.environments || []).length }) + usable('environment'))}
         ${card('/principals', t('client.access.title'), t(state.lines?.next ? 'client.home.principalCountAtLeast' : 'client.common.itemCount', { count: connectedPrincipals().length + 1 }))}
         ${card('/functions', t('client.functions.title'), t('client.home.functionCount', { count: state.functions?.length || 0 }))}
       </div>`);
@@ -888,9 +904,9 @@ function render() {
   }
   if (page === 'principals') {
     // Oneself first: a principal like the others, read the same way.
-    const rows = [{ id: state.user.id, name: state.principal.name, self: true, lines: [] }, ...connectedPrincipals()];
-    const row = item => `<article class="agent-row access-row" data-principal-name="${esc(item.name.toLowerCase())}"><div class="agent-name"><h3>${esc(item.name)}</h3></div><div class="relation-badges">${item.self ? `<span class="relation-badge">${esc(t('client.principals.self'))}</span>` : ''}${item.lines.map(line => `<span class="relation-badge">${esc(relationLabel(line))}</span>`).join('')}</div><div class="agent-actions"><button class="text-button" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.details'))}</button></div></article>`;
-    shell(`<header class="page-heading page-heading-actions"><h1>${esc(t('client.access.title'))}</h1><button class="button secondary" data-action="create-principal">${icon('plus')} ${esc(t('client.principals.create'))}</button></header>
+    const rows = [{ ...here(), self: true, lines: [] }, ...connectedPrincipals()];
+    const row = item => `<article class="agent-row access-row" data-principal-name="${esc(item.name.toLowerCase())}"><div class="agent-name"><h3>${esc(item.name)}</h3></div><div class="relation-badges">${item.self ? `<span class="relation-badge">${esc(state.viewing ? t('client.principals.shown') : t('client.principals.self'))}</span>` : ''}${item.lines.map(line => `<span class="relation-badge">${esc(relationLabel(line))}</span>`).join('')}</div><div class="agent-actions"><button class="text-button" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.details'))}</button></div></article>`;
+    shell(`<header class="page-heading page-heading-actions"><h1>${esc(t('client.access.title'))}</h1>${state.viewing ? '' : `<button class="button secondary" data-action="create-principal">${icon('plus')} ${esc(t('client.principals.create'))}</button>`}</header>
       <section class="resource-section" aria-label="${esc(t('client.access.title'))}">
       <div class="list-filter"><input type="search" id="principal-filter" aria-label="${esc(t('client.principals.filter'))}" placeholder="${esc(t('client.principals.filter'))}" autocomplete="off"></div>
         <div class="agent-list" id="principal-list">${rows.map(row).join('')}</div><div class="access-empty" id="principal-none" hidden><p>${esc(t('client.principals.noMatch'))}</p></div>
@@ -1632,8 +1648,8 @@ function environmentsSection() {
 }
 async function principalDetails(id) {
   // Asked afresh each time: what is loaded for the page waits while a dialog is open.
-  const self = id === state.user.id;
-  const lines = self ? [] : (await api('/v1/principals/me/relations?limit=200&principal=' + encodeURIComponent(id))).relations.filter(line => line.relation !== 'payer');
+  const self = id === here().id;
+  const lines = self ? [] : (await api(held() + '/relations?limit=200&principal=' + encodeURIComponent(id))).relations.filter(line => line.relation !== 'payer');
   // What is one's own to change: oneself, and what one owns.
   const owned = self || lines.some(line => line.relation === 'owner' && line.direction === 'from');
   const item = owned ? (await api(`/v1/principals/${id}`)).principal : lines[0]?.principal || principalById(id);
@@ -1645,11 +1661,11 @@ async function principalDetails(id) {
   const button = (action, text, extra = '') => `<button class="text-button${extra.includes('danger') ? ' danger' : ''}" data-action="${action}" data-id="${esc(id)}"${extra.replace('danger', '')}>${esc(text)}</button>`;
   // A line of ownership is not taken off, and one who acts for this principal is taken off as an agent, below.
   const others = lines.filter(line => line.relation !== 'owner' && !(line.relation === 'agent' && line.direction === 'to'));
-  const me = state.principal.name;
+  const me = here().name;
   // Every way in, of whatever kind: a passkey, an address, a key.
   const entries = owned ? (await api(`/v1/principals/${id}/credentials`)).credentials : [];
   // What it is to others than this principal, where that can be read: its owner reads its lines.
-  const theirs = owned && !self ? (await api(`/v1/principals/${id}/relations?limit=200`)).relations.filter(line => line.principal && line.principal.id !== state.user.id && line.relation !== 'payer') : [];
+  const theirs = owned && !self ? (await api(`/v1/principals/${id}/relations?limit=200`)).relations.filter(line => line.principal && line.principal.id !== here().id && line.relation !== 'payer') : [];
   const rows = [
     row(esc(t('client.common.name')), esc(item.name), owned ? button('rename-principal', t('client.common.change')) : ''),
     row(esc(t('client.principals.id')), `<code>${esc(id)}</code>`, button('copy-principal-id', t('client.common.copy'))),
@@ -1657,13 +1673,13 @@ async function principalDetails(id) {
     ...others.map(line => row(esc(t('client.principals.relations')), esc(relationLabel(line)), button('remove-line', t('client.principals.removeLine'), `danger data-relation="${esc(line.relation)}" data-direction="${esc(line.direction)}"`))),
     ...theirs.map((line, at) => row(at ? '' : esc(t('client.principals.otherRelations')), esc(toOther(line)))),
     ...(owned ? [
-      ...entries.map((entry, at) => row(at ? '' : esc(t('client.principals.credentials')), `<span class="credential-item">${esc(credentialKindLabel(entry))} <code>${esc(entry.kind === 'key' ? entry.id.slice(0, 8) : entry.name || entry.id.slice(0, 8))}</code><br><span class="muted">${esc(entry.environment ? t('client.access.environmentKey') : t('client.principals.credentialAdded', { date: formatDate(entry.created_at, i18n.language) }))}${entry.last_used_at ? ' · ' + esc(t('client.account.passkeyLastUsed', { date: formatDate(entry.last_used_at, i18n.language) })) : ''}</span></span>`, (self && entries.length === 1 ? '' : button('remove-credential', t('client.common.delete'), `danger data-key="${esc(entry.id)}"`)))),
+      ...entries.map((entry, at) => row(at ? '' : esc(t('client.principals.credentials')), `<span class="credential-item">${esc(credentialKindLabel(entry))} <code>${esc(entry.kind === 'key' ? entry.id.slice(0, 8) : entry.name || entry.id.slice(0, 8))}</code><br><span class="muted">${esc(entry.environment ? t('client.access.environmentKey') : t('client.principals.credentialAdded', { date: formatDate(entry.created_at, i18n.language) }))}${entry.last_used_at ? ' · ' + esc(t('client.account.passkeyLastUsed', { date: formatDate(entry.last_used_at, i18n.language) })) : ''}</span></span>`, (id === state.user.id && entries.length === 1 ? '' : button('remove-credential', t('client.common.delete'), `danger data-key="${esc(entry.id)}"`)))),
       row(entries.length ? '' : esc(t('client.principals.credentials')), entries.length ? '' : `<span class="muted">${esc(t('client.principals.noCredentials'))}</span>`, button('add-credential', t('client.common.add'))),
       row(esc(t('client.principals.payerTitle')), esc(payerText(item.payer))),
     ] : []),
   ].join('');
   openDialog(`<div class="principal-heading"><h2 id="dialog-title">${esc(item.name)}</h2></div>
-    <div class="relation-badges">${self ? `<span class="relation-badge">${esc(t('client.principals.self'))}</span>` : ''}${lines.map(line => `<span class="relation-badge">${esc(relationLabel(line))}</span>`).join('')}</div>
+    <div class="relation-badges">${self ? `<span class="relation-badge">${esc(state.viewing ? t('client.principals.shown') : t('client.principals.self'))}</span>` : ''}${lines.map(line => `<span class="relation-badge">${esc(relationLabel(line))}</span>`).join('')}</div>
     <dl class="detail-rows">${rows}</dl>
     ${owned && !self ? `<div class="principal-switch"><button class="button secondary" data-action="view-principal" data-id="${esc(id)}">${esc(t('client.principals.switch'))}</button></div>` : ''}
     ${owned && !self ? `<div class="principal-delete">${button('remove-principal', t('client.common.delete'), 'danger')}</div>` : ''}`);
@@ -1821,7 +1837,7 @@ function removePrincipal(item) {
 }
 function revokeAccess(item) {
   openDialog(`<h2 id="dialog-title">${esc(t('client.principals.confirmRevoke', { name: item.name }))}</h2><form><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="close-dialog">${esc(t('client.common.cancel'))}</button><button type="submit" class="button destructive">${esc(t('client.access.revokePermission'))}</button></div></form>`);
-  bindForm(async () => { await api(`/v1/principals/me/access/${item.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast(t('client.access.revoked')); });
+  bindForm(async () => { await api(`${held()}/access/${item.id}`, { method: 'DELETE', data: {} }); closeDialog(); await refresh(); toast(t('client.access.revoked')); });
 }
 // Sealing for everyone a secret of the owner's is for: those the server names (the owner, and Foundation when it
 // acts for them), and whoever already had the secret's key.
@@ -2170,12 +2186,12 @@ document.addEventListener('click', async (event) => {
     if (action === 'view-self') { view(null); await refresh(); }
     if (action === 'create-principal') createPrincipal();
     if (action === 'copy-principal-id') { try { await navigator.clipboard.writeText(id); toast(t('client.common.copied')); } catch { toast(t('client.errors.copyFailed')); } }
-    if (action === 'more-principals') { target.disabled = true; const next = await api('/v1/principals/me/relations?limit=50&after=' + encodeURIComponent(state.lines.next)); state.lines = { relations: [...state.lines.relations, ...next.relations], next: next.next }; render(); }
+    if (action === 'more-principals') { target.disabled = true; const next = await api(held() + '/relations?limit=50&after=' + encodeURIComponent(state.lines.next)); state.lines = { relations: [...state.lines.relations, ...next.relations], next: next.next }; render(); }
     if (action === 'remove-line') {
       target.disabled = true;
       const outward = target.dataset.direction === 'from';
-      await api('/v1/principals/' + encodeURIComponent(outward ? state.user.id : id) + '/relations', { method: 'DELETE', data: { relation: target.dataset.relation, object_type: 'principal', object_id: outward ? id : state.user.id } });
-      const left = (await api('/v1/principals/me/relations?limit=1&principal=' + encodeURIComponent(id))).relations.length;
+      await api('/v1/principals/' + encodeURIComponent(outward ? here().id : id) + '/relations', { method: 'DELETE', data: { relation: target.dataset.relation, object_type: 'principal', object_id: outward ? id : here().id } });
+      const left = (await api(held() + '/relations?limit=1&principal=' + encodeURIComponent(id))).relations.length;
       if (left) { await refresh(); await principalDetails(id); } else { closeDialog(); await refresh(); }
     }
     if (action === 'revoke-access') revokeAccess(principalById(id));
