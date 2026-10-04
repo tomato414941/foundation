@@ -587,7 +587,7 @@ const SOURCES = {
   foundation: signal => api('/v1/principals/agent', { signal }).then(result => ({ principal_id: result.principal.id })),
 };
 const NEEDS = {
-  home: ['connections', 'secrets', 'environments', 'principals', 'agentLines', 'functions'],
+  home: ['connections', 'secrets', 'environments', 'principals', 'lines', 'functions'],
   services: ['connections', 'apps', 'services', 'catalog', 'secrets', 'reach'],
   secrets: ['secrets', 'principals', 'agentLines', 'foundation', 'reach'],
   objects: ['principals', 'agentLines', 'reach'],
@@ -869,7 +869,7 @@ function render() {
   }
   if (page === 'home') {
     // A look over everything, and the way to each page. Nothing is managed here.
-    const space = state.space, kept = secrets(), connections = connected(), keys = state.agents || [];
+    const space = state.space, kept = secrets(), connections = connected();
     const card = (href, title, line) => `<a class="home-card" href="${href}"><h2>${title}</h2><p>${esc(line)}</p></a>`;
     shell(`<header class="page-heading"><h1>Foundation</h1></header>
       <div class="home-cards">
@@ -877,7 +877,7 @@ function render() {
         ${card('/secrets', t('client.secret.title'), t('client.common.itemCount', { count: kept.length }))}
         ${card('/objects', t('client.objects.title'), spaceSummary(space))}
         ${card('/environments', t('client.environment.title'), t('client.common.itemCount', { count: (state.environments || []).length }))}
-        ${card('/principals', t('client.access.title'), keys.length ? t('client.home.accessCount', { count: keys.length }) : t('client.common.noItems'))}
+        ${card('/principals', t('client.access.title'), t(state.lines?.next ? 'client.home.principalCountAtLeast' : 'client.common.itemCount', { count: connectedPrincipals().length + 1 }))}
         ${card('/functions', t('client.functions.title'), t('client.home.functionCount', { count: state.functions?.length || 0 }))}
       </div>`);
     return;

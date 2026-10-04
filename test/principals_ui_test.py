@@ -40,6 +40,15 @@ with sync_playwright() as p:
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/principals')
 
+    # ホームは、一覧に載る自分と関係先のプリンシパルを数える。
+    def home_count(count):
+        page.get_by_role('link', name='Foundation ホーム', exact=True).click()
+        card = page.locator('.home-card[href="/principals"]')
+        expect(card.locator('p')).to_have_text(f'{count} 件')
+        return card
+
+    home_count(1).click()
+
     # Oneself is listed first and read like any other: its name, its id, every way in, who pays.
     mine = page.locator('.access-row').first
     expect(mine.get_by_text('自分', exact=True)).to_be_visible()
@@ -85,6 +94,13 @@ with sync_playwright() as p:
     dialog.get_by_role('button', name='閉じる', exact=True).last.click()
     row = page.get_by_role('article').filter(has=page.get_by_role('heading', name='laptop', exact=True))
     expect(row.get_by_text('サブプリンシパル', exact=True)).to_be_visible()
+    card = home_count(3)
+    for width in [1280, 390]:
+        page.set_viewport_size({'width': width, 'height': 900})
+        review(page)
+        page.screenshot(path=str(shots / f'home-principals-{width}.png'), full_page=True)
+    card.click()
+    page.set_viewport_size({'width': 1280, 'height': 900})
     # Made, it reaches nothing of the owner's.
     agents = context.request.get(args.base + '/v1/principals/me/relations?relation=agent&direction=to').json()['relations']
     assert all(item['principal']['name'] != 'laptop' for item in agents)
@@ -119,11 +135,30 @@ with sync_playwright() as p:
     expect(dialog.locator('.detail-row').filter(has_text='解除')).to_contain_text('のエージェント')
     dialog.get_by_role('button', name='閉じる', exact=True).last.click()
     expect(row.get_by_text('エージェント', exact=True)).to_be_visible()
+    # 同じ相手に所有と委任の両方の関係があっても、一つのプリンシパルとして数える。
+    home_count(4).click()
     assert context.request.get(args.base + '/v1/principals/me').json()['principal']['id'] in p.request.new_context().get(args.base + '/v1/principals/me', headers={'authorization': 'Bearer ' + key}).json()['principal']['acts_for']
     revoke_access(page, 'laptop').get_by_role('button', name='解除', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(row.get_by_text('エージェント', exact=True)).to_have_count(0)
     expect(row.get_by_text('サブプリンシパル', exact=True)).to_be_visible()
+
+    # 取得した関係に続きがある間は、確認できたプリンシパルの数を下限として表示する。
+    def partial_relations(route):
+        response = route.fetch()
+        data = response.json()
+        data['next'] = '50'
+        route.fulfill(response=response, json=data)
+    page.route('**/v1/principals/me/relations?limit=50', partial_relations)
+    page.get_by_role('link', name='Foundation ホーム', exact=True).click()
+    card = page.locator('.home-card[href="/principals"]')
+    expect(card.locator('p')).to_have_text('4 件以上')
+    page.unroute('**/v1/principals/me/relations?limit=50')
+    context.add_cookies([{'name': 'foundation_locale', 'value': 'en', 'url': args.base}])
+    page.reload(wait_until='networkidle')
+    expect(card.get_by_role('heading')).to_have_text('Principals')
+    expect(card.locator('p')).to_have_text('4 items')
+    page.screenshot(path=str(shots / 'home-principals-en.png'), full_page=True)
     assert not errors, errors
     browser.close()
     print('相手の追加: 作っただけでは何も届かず、詳細から代理人にすると線が引かれ、取り消せることを確認しました。')
