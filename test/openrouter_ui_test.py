@@ -99,9 +99,9 @@ with tempfile.TemporaryDirectory(prefix='foundation-openrouter-ui-') as key_dir,
 
     page.goto(args.base + '/principals', wait_until='networkidle')
     dialog = revoke_access(page, 'laptop のAI')
-    expect(dialog.get_by_role('heading', name='laptop のAI をエージェントから外しますか？', exact=True)).to_be_visible()
+    expect(dialog.get_by_role('heading', name='laptop のAI のエージェントを解除しますか？', exact=True)).to_be_visible()
     review(page)
-    dialog.get_by_role('button', name='外す', exact=True).click()
+    dialog.get_by_role('button', name='解除', exact=True).click()
     expect(dialog).not_to_be_visible()
     cli('api', 'GET', '/v1/principals/' + owner_id + '/resources?kind=connection', success=False)
 

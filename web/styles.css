@@ -436,3 +436,5 @@ textarea[data-grow] { field-sizing: content; max-height: 45vh; overflow-y: auto;
 .detail-action { justify-self: end; white-space: nowrap; }
 dialog .relation-badges { margin-top: 8px; }
 @media (max-width: 480px) { .detail-row { grid-template-columns: minmax(0, 1fr) auto; } .detail-row dt { grid-column: 1 / -1; } }
+.credential-item { display: block; }
+.detail-row dd > :first-child { margin-top: 0; }

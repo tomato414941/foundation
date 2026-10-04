@@ -1381,6 +1381,16 @@ const relationLabel = line => ({
   'agent:from': t('client.principals.relation.delegator'), 'agent:to': t('client.principals.relation.agent'),
   'member:from': t('client.principals.relation.group'), 'member:to': t('client.principals.relation.member'),
 })[line.relation + ':' + line.direction] ?? t('client.principals.relation.grant');
+const credentialKindLabel = entry => entry.kind === 'webauthn' ? t('client.passkey.title') : entry.kind === 'email' ? t('client.account.email') : t('client.principals.keyKind');
+// What a principal is to another, said with the other's name, for reading one principal's lines to others.
+const toOther = line => {
+  const name = line.principal.name;
+  return ({
+    'agent:from': t('client.principals.other.agentOf', { name }), 'agent:to': t('client.principals.other.hasAgent', { name }),
+    'member:from': t('client.principals.other.memberOf', { name }), 'member:to': t('client.principals.other.hasMember', { name }),
+    'owner:from': t('client.principals.other.ownerOf', { name }), 'owner:to': t('client.principals.other.subprincipalOf', { name }),
+  })[line.relation + ':' + line.direction] ?? t('client.principals.other.grant', { name });
+};
 function createPrincipal() {
   openDialog(`<h2 id="dialog-title">${esc(t('client.principals.createTitle'))}</h2><form><label for="agent-name">${esc(t('client.common.name'))}</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.principals.create'))}</button></form>`);
   bindForm(async (form) => {
@@ -1391,7 +1401,7 @@ function createPrincipal() {
 }
 // The one whose details are open is known even before the next load lists it.
 let detailed = null;
-const principalById = id => (state.agents || []).find(item => item.id === id) || (state.principals || []).find(item => item.id === id) || connectedPrincipals().find(item => item.id === id) || (detailed?.id === id ? detailed : undefined);
+const principalById = id => (detailed?.id === id ? detailed : undefined) || (state.agents || []).find(item => item.id === id) || (state.principals || []).find(item => item.id === id) || connectedPrincipals().find(item => item.id === id);
 // Machines lent to this account and still running: who each acts as, until when, and the month's computing.
 function environmentsSection() {
   const running = state.environments || [], compute = state.compute;
@@ -1417,16 +1427,21 @@ async function principalDetails(id) {
   const button = (action, text, extra = '') => `<button class="text-button${extra.includes('danger') ? ' danger' : ''}" data-action="${action}" data-id="${esc(id)}"${extra.replace('danger', '')}>${esc(text)}</button>`;
   // A line of ownership is not taken off, and one who acts for this principal is taken off as an agent, below.
   const others = lines.filter(line => line.relation !== 'owner' && !(line.relation === 'agent' && line.direction === 'to'));
-  const keys = item.keys || [], me = state.principal.name;
+  const me = state.principal.name;
+  // Every way in, of whatever kind: a passkey, an address, a key.
+  const entries = owned ? (await api(`/v1/principals/${id}/credentials`)).credentials : [];
+  // What it is to others than this principal, where that can be read: its owner reads its lines.
+  const theirs = owned ? (await api(`/v1/principals/${id}/relations?limit=200`)).relations.filter(line => line.principal && line.principal.id !== state.user.id && line.relation !== 'payer') : [];
   const rows = [
     row(esc(t('client.common.name')), esc(item.name), owned ? button('rename-principal', t('client.common.change')) : ''),
     row(esc(t('client.principals.id')), `<code>${esc(id)}</code>`, button('copy-principal-id', t('client.common.copy'))),
-    agent ? row(esc(t('client.principals.relation.agent')), `${esc(t('client.principals.agentCan', { name: me }))}${accessDetails()}`, button('revoke-access', t('client.principals.removeLine'), 'danger'))
-      : owned ? row(esc(t('client.principals.relation.agent')), esc(t('client.principals.agentWould', { name: me })), button('make-agent', t('client.principals.makeAgent'))) : '',
+    agent ? row(esc(t('client.principals.relation.agent')), esc(t('client.principals.other.agentOf', { name: me })), button('revoke-access', t('client.principals.removeLine'), 'danger'))
+      : owned ? row(esc(t('client.principals.relation.agent')), `<span class="muted">${esc(t('client.principals.notAgent'))}</span>`, button('ask-make-agent', t('client.principals.makeAgent'))) : '',
     ...others.map(line => row(esc(t('client.principals.relations')), esc(relationLabel(line)), button('remove-line', t('client.principals.removeLine'), `danger data-relation="${esc(line.relation)}" data-direction="${esc(line.direction)}"`))),
+    ...theirs.map((line, at) => row(at ? '' : esc(t('client.principals.otherRelations')), esc(toOther(line)))),
     ...(owned ? [
-      ...keys.map((key, at) => row(at ? '' : esc(t('client.access.key')), `<span class="key-list-item"><code>${esc(key.id.slice(0, 8))}</code> <span class="muted">${key.environment_id ? t('client.access.environmentKey') : esc(t('client.principals.keyIssuedAt', { date: formatDate(key.created_at, i18n.language) }))}</span></span>`, button('revoke-key', t('client.access.revokeKey'), `danger data-key="${esc(key.id)}"`))),
-      row(keys.length ? '' : esc(t('client.access.key')), keys.length ? '' : `<span class="muted">${esc(t('client.access.noKeys'))}</span>`, button('issue-key', t('client.access.issueKey'))),
+      ...entries.map((entry, at) => row(at ? '' : esc(t('client.principals.credentials')), `<span class="credential-item">${esc(credentialKindLabel(entry))} <code>${esc(entry.kind === 'key' ? entry.id.slice(0, 8) : entry.name || entry.id.slice(0, 8))}</code><br><span class="muted">${esc(entry.environment ? t('client.access.environmentKey') : t('client.principals.credentialAdded', { date: formatDate(entry.created_at, i18n.language) }))}${entry.last_used_at ? ' · ' + esc(t('client.account.passkeyLastUsed', { date: formatDate(entry.last_used_at, i18n.language) })) : ''}</span></span>`, button('remove-credential', t('client.common.delete'), `danger data-key="${esc(entry.id)}"`))),
+      row(entries.length ? '' : esc(t('client.principals.credentials')), entries.length ? '' : `<span class="muted">${esc(t('client.principals.noCredentials'))}</span>`, button('issue-key', t('client.access.issueKey'))),
       row(esc(t('client.principals.payerTitle')), esc(payerText(item.payer))),
     ] : []),
   ].join('');
@@ -1552,9 +1567,14 @@ async function issueKey(item) {
   await refresh();
   openDialog(`<h2 id="dialog-title">${esc(t('client.principals.accessKeyTitle', { name: item.name }))}</h2><p>${esc(t('client.access.keyShownOnce'))}</p><label for="agent-token">${esc(t('client.access.key'))}</label><textarea id="agent-token" rows="2" readonly spellcheck="false">${esc(result.token)}</textarea><button class="button secondary full" data-action="copy-token">${esc(t('client.access.copyKey'))}</button><button class="button primary full" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.done'))}</button>`);
 }
-function revokeKey(item, key) {
-  openDialog(`<h2 id="dialog-title">${esc(t('client.access.confirmRevokeKey'))}</h2><p>${esc(item.name)} · ${esc(key.slice(0, 8))}</p><form><p>${esc(t('client.access.revokeKeyWarning'))}</p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.cancel'))}</button><button type="submit" class="button destructive">${esc(t('client.access.confirmRevoke'))}</button></div></form>`);
-  bindForm(async () => { await api('/v1/principals/' + encodeURIComponent(item.id) + '/credentials/' + encodeURIComponent(key), { method: 'DELETE', data: {} }); await refresh(); await principalDetails(item.id); toast(t('client.access.keyRevoked')); });
+function removeCredential(item, credential) {
+  openDialog(`<h2 id="dialog-title">${esc(t('client.principals.confirmRemoveCredential', { name: item.name }))}</h2><form><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.cancel'))}</button><button type="submit" class="button destructive">${esc(t('client.common.confirmDelete'))}</button></div></form>`);
+  bindForm(async () => { await api('/v1/principals/' + encodeURIComponent(item.id) + '/credentials/' + encodeURIComponent(credential), { method: 'DELETE', data: {} }); await refresh(); await principalDetails(item.id); toast(t('client.principals.credentialRemoved')); });
+}
+// Making one an agent is said in full where it is decided, once, not on every agent's page.
+function askMakeAgent(item) {
+  openDialog(`<h2 id="dialog-title">${esc(t('client.principals.confirmMakeAgent', { name: item.name }))}</h2><form><p>${esc(t('client.principals.agentWould', { name: state.principal.name }))}</p>${accessDetails()}<p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.cancel'))}</button><button type="submit" class="button primary">${esc(t('client.principals.makeAgent'))}</button></div></form>`);
+  bindForm(async () => { await api('/v1/principals/' + encodeURIComponent(item.id) + '/relations', { method: 'POST', data: { relation: 'agent', object_type: 'principal', object_id: state.user.id } }); await refresh(); await principalDetails(item.id); });
 }
 function addIntegration() {
   openDialog(`<h2 id="dialog-title">${esc(t('client.integration.register'))}</h2><form>
@@ -1926,7 +1946,6 @@ document.addEventListener('click', async (event) => {
       const left = (await api('/v1/principals/me/relations?limit=1&principal=' + encodeURIComponent(id))).relations.length;
       if (left) { await refresh(); await principalDetails(id); } else { closeDialog(); await refresh(); }
     }
-    if (action === 'make-agent') { target.disabled = true; await api('/v1/principals/' + encodeURIComponent(id) + '/relations', { method: 'POST', data: { relation: 'agent', object_type: 'principal', object_id: state.user.id } }); await refresh(); await principalDetails(id); }
     if (action === 'revoke-access') revokeAccess(principalById(id));
     if (action === 'close-environment') {
       const item = (state.environments || []).find(row => row.id === id);
@@ -1934,7 +1953,8 @@ document.addEventListener('click', async (event) => {
     }
     if (action === 'principal-details') await principalDetails(id);
     if (action === 'issue-key') { target.disabled = true; await issueKey(principalById(id)); }
-    if (action === 'revoke-key') revokeKey(principalById(id), target.dataset.key);
+    if (action === 'remove-credential') removeCredential(principalById(id), target.dataset.key);
+    if (action === 'ask-make-agent') askMakeAgent(principalById(id));
     if (action === 'add-integration') addIntegration();
     if (action === 'remove-principal') removePrincipal(principalById(id));
     if (action === 'rename-principal') renamePrincipal(principalById(id));

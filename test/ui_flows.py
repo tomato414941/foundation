@@ -94,5 +94,5 @@ def revoke_access(page, name):
     row = page.locator('.access-row').filter(has_text=name)
     row.get_by_role('button', name='詳細', exact=True).click()
     dialog = page.get_by_role('dialog')
-    dialog.locator('.detail-row').filter(has_text='エージェント').get_by_role('button', name='外す', exact=True).click()
+    dialog.locator('.detail-row').filter(has_text='エージェント').get_by_role('button', name='解除', exact=True).click()
     return dialog

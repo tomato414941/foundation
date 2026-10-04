@@ -1,6 +1,7 @@
 import argparse
 import base64
 import hashlib
+import json
 from pathlib import Path
 from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright, expect
@@ -38,13 +39,13 @@ with sync_playwright() as p:
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/principals')
 
-    page.get_by_role('button', name='作る', exact=True).click()
+    page.get_by_role('button', name='作成', exact=True).click()
     dialog = page.get_by_role('dialog')
-    expect(dialog.get_by_role('heading', name='プリンシパルを作る', exact=True)).to_be_visible()
+    expect(dialog.get_by_role('heading', name='サブプリンシパルを作成', exact=True)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'add-principal.png'), full_page=True)
     dialog.get_by_label('名前', exact=True).fill('laptop')
-    dialog.get_by_role('button', name='作る', exact=True).click()
+    dialog.get_by_role('button', name='作成', exact=True).click()
     # Made, its details open: who bears its use, and a key issued there.
     expect(dialog.get_by_role('heading', name='laptop', exact=True)).to_be_visible()
     expect(dialog.get_by_text('費用の負担', exact=True)).to_be_visible()
@@ -53,7 +54,7 @@ with sync_playwright() as p:
     expect(dialog.get_by_label('アクセスキー', exact=True)).to_be_visible()
     key = dialog.get_by_label('アクセスキー', exact=True).input_value()
     dialog.get_by_role('button', name='完了', exact=True).click()
-    expect(dialog.locator('.key-list-item')).to_have_count(1)
+    expect(dialog.locator('.credential-item')).to_have_count(1)
     dialog.get_by_role('button', name='閉じる', exact=True).last.click()
     row = page.get_by_role('article').filter(has=page.get_by_role('heading', name='laptop', exact=True))
     expect(row.get_by_text('サブプリンシパル', exact=True)).to_be_visible()
@@ -69,17 +70,28 @@ with sync_playwright() as p:
     page.get_by_label('名前で絞り込む', exact=True).fill('lap')
     expect(row).to_be_visible()
 
+    # What it is to others shows too, where its owner can read it: here, another's agent as well.
+    made = context.request.post(args.base + '/v1/principals', data=json.dumps({'name': 'helper'}), headers={'content-type': 'application/json', 'origin': args.base}).json()['principal']
+    laptop = next(line['principal']['id'] for line in context.request.get(args.base + '/v1/principals/me/relations?relation=owner&direction=from').json()['relations'] if line['principal']['name'] == 'laptop')
+    drawn = context.request.post(args.base + '/v1/principals/' + laptop + '/relations', data=json.dumps({'relation': 'agent', 'object_type': 'principal', 'object_id': made['id']}), headers={'content-type': 'application/json', 'origin': args.base})
+    assert drawn.status == 201, drawn.text()
     # From its details, made the owner's agent: a line drawn, and the list says so.
     row.get_by_role('button', name='詳細', exact=True).click()
     expect(dialog.get_by_role('heading', name='laptop', exact=True)).to_be_visible()
+    expect(dialog.locator('.detail-row').filter(has_text='ほかの関係')).to_contain_text('helper のエージェント')
     review(page)
     page.screenshot(path=str(shots / 'principal-details.png'), full_page=True)
-    dialog.get_by_role('button', name='エージェントにする', exact=True).click()
+    dialog.get_by_role('button', name='エージェントに設定', exact=True).click()
+    # What an agent may do is said here, where it is decided.
+    expect(dialog.get_by_role('heading', name='laptop をエージェントに設定しますか？', exact=True)).to_be_visible()
     expect(dialog.get_by_text('許可の詳細', exact=True)).to_be_visible()
+    review(page)
+    dialog.locator('.dialog-actions').get_by_role('button', name='エージェントに設定', exact=True).click()
+    expect(dialog.locator('.detail-row').filter(has_text='エージェント').first).to_contain_text('のエージェント')
     dialog.get_by_role('button', name='閉じる', exact=True).last.click()
     expect(row.get_by_text('エージェント', exact=True)).to_be_visible()
-    assert p.request.new_context().get(args.base + '/v1/principals/me', headers={'authorization': 'Bearer ' + key}).json()['principal']['acts_for'] == [context.request.get(args.base + '/v1/principals/me').json()['principal']['id']]
-    revoke_access(page, 'laptop').get_by_role('button', name='外す', exact=True).click()
+    assert context.request.get(args.base + '/v1/principals/me').json()['principal']['id'] in p.request.new_context().get(args.base + '/v1/principals/me', headers={'authorization': 'Bearer ' + key}).json()['principal']['acts_for']
+    revoke_access(page, 'laptop').get_by_role('button', name='解除', exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(row.get_by_text('エージェント', exact=True)).to_have_count(0)
     expect(row.get_by_text('サブプリンシパル', exact=True)).to_be_visible()

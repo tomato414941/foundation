@@ -145,7 +145,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-start-cli-') as temporary, s
 
     page.goto(args.base + '/principals', wait_until='networkidle')
     row = page.locator('.access-row').filter(has_text='初めて使うAI')
-    revoke_access(page, '初めて使うAI').get_by_role('button', name='外す', exact=True).click()
+    revoke_access(page, '初めて使うAI').get_by_role('button', name='解除', exact=True).click()
     expect(row.get_by_text('サブプリンシパル', exact=True)).to_be_visible()
     expect(row.get_by_text('エージェント', exact=True)).to_have_count(0)
     refused = cli(*command)
