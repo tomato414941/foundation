@@ -885,7 +885,7 @@ function render() {
   if (page === 'home') {
     // A look over everything, and the way to each page. Nothing is managed here.
     const space = state.space, kept = secrets(), connections = connected();
-    const usable = kind => { const count = state.reach?.counts?.[kind] || 0; return count ? ' ・ ' + t('client.reach.usableCount', { count }) : ''; };
+    const usable = kind => { const count = state.reach?.counts?.[kind] || 0; return count ? t('client.reach.sharedCount', { count }) : ''; };
     const card = (href, title, line) => `<a class="home-card" href="${href}"><h2>${title}</h2><p>${esc(line)}</p></a>`;
     shell(`<header class="page-heading"><h1>Foundation</h1></header>
       <div class="home-cards">

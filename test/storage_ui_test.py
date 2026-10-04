@@ -172,7 +172,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     page.screenshot(path=str(shots / 'reach-1280.png'), full_page=True)
     # The front page counts what it may use, and the Principals page is the agent's own: itself, and whom it is to.
     page.goto(args.base + '/', wait_until='networkidle')
-    expect(page.locator('.home-card').filter(has_text='シークレット')).to_contain_text('使えるもの 2 件')
+    expect(page.locator('.home-card').filter(has_text='シークレット')).to_contain_text('0 件（共有 2 件）')
     page.goto(args.base + '/principals', wait_until='networkidle')
     expect(page.get_by_text('laptop のAI を表示中', exact=True)).to_be_visible()
     expect(page.locator('.access-row').first).to_contain_text('laptop のAI')
