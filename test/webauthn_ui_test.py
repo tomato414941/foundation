@@ -99,6 +99,18 @@ with sync_playwright() as p:
     expect(fresh.get_by_role('region', name='名前').get_by_text('はじめての人', exact=True)).to_be_visible()
     review(fresh)
     assert newcomer.request.get(base + '/v1/principals/me').json()['principal']['name'] == 'はじめての人'
+    # A passkey is added to a subprincipal the same way as to oneself: made here, listed among its credentials.
+    fresh.goto(base + '/principals', wait_until='networkidle')
+    fresh.get_by_role('button', name='作成', exact=True).click()
+    box = fresh.get_by_role('dialog')
+    box.get_by_label('名前', exact=True).fill('分けた置き場所')
+    box.get_by_role('button', name='作成', exact=True).click()
+    expect(box.get_by_role('heading', name='分けた置き場所', exact=True)).to_be_visible()
+    box.get_by_role('button', name='追加', exact=True).click()
+    box.get_by_role('button', name='パスキー', exact=True).click()
+    box.locator('form button[type=submit]').click()
+    expect(box.locator('.detail-row').filter(has_text='クレデンシャル')).to_contain_text('パスキー')
+    review(fresh)
     assert not errors, errors
     browser.close()
     print('パスキー: アカウントでの追加・パスキーだけでのサインイン・削除によるセッションの終了・パスキーだけで始めることと、スマートフォンの表示を確認しました。')

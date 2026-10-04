@@ -395,13 +395,15 @@ async function arrive(path) {
 // The principal's entries of one kind, from the overview.
 const passkeys = () => (state?.credentials || []).filter(item => item.kind === 'webauthn');
 const deviceName = () => navigator.userAgentData?.platform || t('client.passkey.thisDevice');
-async function createPasskey(name) {
-  // The key is wrapped for the new passkey too, so that one opens it as well: an old passkey gives it first.
-  try { await needRawKey(); } catch (error) { if (!passkeyDeclined(error)) throw error; }
-  const { options } = await api('/v1/principals/me/credentials', { method: 'POST', data: { kind: 'webauthn' } });
+async function createPasskey(name, id = state.user.id) {
+  // One's own key is wrapped for the new passkey too, so that one opens it as well: an old passkey gives it first.
+  // A passkey made for another principal carries no key of this one's.
+  const mine = id === state.user.id, path = '/v1/principals/' + encodeURIComponent(id) + '/credentials';
+  if (mine) try { await needRawKey(); } catch (error) { if (!passkeyDeclined(error)) throw error; }
+  const { options } = await api(path, { method: 'POST', data: { kind: 'webauthn' } });
   const { credential, yielded } = await makePasskey(options);
-  const wrap = own && !sealing.isHeld(own.privateKey) && yielded ? { wrap: b64(await sealing.wrap(own.privateKey, yielded)) } : {};
-  return api('/v1/principals/me/credentials', { method: 'PUT', data: { kind: 'webauthn', name, credential, ...wrap } });
+  const wrap = mine && own && !sealing.isHeld(own.privateKey) && yielded ? { wrap: b64(await sealing.wrap(own.privateKey, yielded)) } : {};
+  return api(path, { method: 'PUT', data: { kind: 'webauthn', name, credential, ...wrap } });
 }
 // Starting with a passkey alone: the passkey made here makes the principal, signed in at once.
 // Starting with a passkey alone: one press makes the passkey, and with it the principal, signed in at once. Nothing
@@ -1479,7 +1481,7 @@ async function principalDetails(id) {
     ...theirs.map((line, at) => row(at ? '' : esc(t('client.principals.otherRelations')), esc(toOther(line)))),
     ...(owned ? [
       ...entries.map((entry, at) => row(at ? '' : esc(t('client.principals.credentials')), `<span class="credential-item">${esc(credentialKindLabel(entry))} <code>${esc(entry.kind === 'key' ? entry.id.slice(0, 8) : entry.name || entry.id.slice(0, 8))}</code><br><span class="muted">${esc(entry.environment ? t('client.access.environmentKey') : t('client.principals.credentialAdded', { date: formatDate(entry.created_at, i18n.language) }))}${entry.last_used_at ? ' · ' + esc(t('client.account.passkeyLastUsed', { date: formatDate(entry.last_used_at, i18n.language) })) : ''}</span></span>`, (self && entries.length === 1 ? '' : button('remove-credential', t('client.common.delete'), `danger data-key="${esc(entry.id)}"`)))),
-      row(entries.length ? '' : esc(t('client.principals.credentials')), entries.length ? '' : `<span class="muted">${esc(t('client.principals.noCredentials'))}</span>`, button('issue-key', t('client.access.issueKey'))),
+      row(entries.length ? '' : esc(t('client.principals.credentials')), entries.length ? '' : `<span class="muted">${esc(t('client.principals.noCredentials'))}</span>`, button('add-credential', t('client.common.add'))),
       row(esc(t('client.principals.payerTitle')), esc(payerText(item.payer))),
     ] : []),
   ].join('');
@@ -1495,11 +1497,12 @@ function renamePrincipal(item) {
   bindForm(async (form) => { await api(`/v1/principals/${item.id}`, { method: 'PATCH', data: { name: form.get('name') } }); await refresh(); await principalDetails(item.id); });
 }
 // Asking for an address: the API sends the link; whoever opens it confirms there.
-function addEmail() {
+function addEmail(id) {
   openDialog(`<h2 id="dialog-title">${esc(t('client.account.addEmail'))}</h2><form><label for="new-email">${esc(t('client.signin.emailAddress'))}</label><input id="new-email" name="address" type="email" required maxlength="254" autocomplete="email"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.account.sendConfirmation'))}</button></form>`);
   bindForm(async (form) => {
-    await api('/v1/principals/me/credentials', { method: 'POST', data: { kind: 'email', address: form.get('address').trim() } });
-    closeDialog(); toast(t('client.account.emailLinkSent'));
+    await api('/v1/principals/' + encodeURIComponent(id || state.user.id) + '/credentials', { method: 'POST', data: { kind: 'email', address: form.get('address').trim() } });
+    if (id) await principalDetails(id); else closeDialog();
+    toast(t('client.account.emailLinkSent'));
   });
 }
 function renameMe() {
@@ -1608,6 +1611,11 @@ async function issueKey(item) {
 function removeCredential(item, credential) {
   openDialog(`<h2 id="dialog-title">${esc(t('client.principals.confirmRemoveCredential', { name: item.name }))}</h2><form><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.cancel'))}</button><button type="submit" class="button destructive">${esc(t('client.common.confirmDelete'))}</button></div></form>`);
   bindForm(async () => { await api('/v1/principals/' + encodeURIComponent(item.id) + '/credentials/' + encodeURIComponent(credential), { method: 'DELETE', data: {} }); await refresh(); await principalDetails(item.id); toast(t('client.principals.credentialRemoved')); });
+}
+// Every way in is added from one place: a passkey here, an address that is then confirmed by its mail, or a key.
+function addCredential(item) {
+  const choice = (action, label) => `<button class="button secondary full" data-action="${action}" data-id="${esc(item.id)}">${esc(label)}</button>`;
+  openDialog(`<h2 id="dialog-title">${esc(t('client.principals.addCredential'))}</h2><div class="credential-choices">${passkeysWork() ? choice('add-passkey', t('client.passkey.title')) : ''}${choice('add-email', t('client.account.email'))}${choice('issue-key', t('client.principals.keyKind'))}</div>`);
 }
 // Making one an agent is said in full where it is decided, once, not on every agent's page.
 function askMakeAgent(item) {
@@ -1872,14 +1880,15 @@ function bindSecretValue(entry, row) {
 }
 // A passkey for this browser's device or password manager. One kept only on this device is said so: losing the device
 // loses it.
-function addPasskey() {
+function addPasskey(id) {
   openDialog(`<h2 id="dialog-title">${esc(t('client.passkey.add'))}</h2><form><label for="passkey-name">${esc(t('client.common.name'))}</label><input id="passkey-name" name="name" required maxlength="80" autocomplete="off" value="${esc(deviceName())}">
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.add'))}</button></form>`);
   bindForm(async (form) => {
     let made;
-    try { made = await createPasskey(String(form.get('name') || '').trim()); }
+    try { made = await createPasskey(String(form.get('name') || '').trim(), id); }
     catch (error) { throw passkeyDeclined(error) ? new Error(t('client.passkey.createFailed')) : error; }
     closeDialog(); await refresh();
+    if (id) await principalDetails(id);
     toast(made.backed_up ? t('client.passkey.added') : t('client.passkey.addedDeviceOnly'));
   });
 }
@@ -1893,7 +1902,7 @@ document.addEventListener('click', async (event) => {
   activeOperations++;
   try {
     if (action === 'close-dialog') closeDialog();
-    if (action === 'add-passkey') addPasskey();
+    if (action === 'add-passkey') addPasskey(id);
     if (action === 'set-payment') { target.disabled = true; location.assign((await api('/v1/principals/me/payment', { method: 'POST', data: {} })).url); }
     if (action === 'remove-passkey') {
       const item = passkeys().find(entry => entry.id === id);
@@ -1998,7 +2007,8 @@ document.addEventListener('click', async (event) => {
     if (action === 'remove-principal') removePrincipal(principalById(id));
     if (action === 'rename-principal') renamePrincipal(principalById(id));
     if (action === 'rename-me') renameMe();
-    if (action === 'add-email') addEmail();
+    if (action === 'add-email') addEmail(id);
+    if (action === 'add-credential') addCredential(principalById(id));
     if (action === 'copy-id') { try { await navigator.clipboard.writeText(state.user.id); toast(t('client.common.copied')); } catch { toast(t('client.errors.copyFailed')); } }
     if (action === 'hand-over') handOver();
     if (action === 'merge') mergeAccount();

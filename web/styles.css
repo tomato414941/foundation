@@ -441,3 +441,5 @@ dialog .relation-badges { margin-top: 8px; }
 @media (max-width: 480px) { .detail-row { grid-template-columns: minmax(0, 1fr) auto; } .detail-row dt { grid-column: 1 / -1; } }
 .credential-item { display: block; }
 .detail-row dd > :first-child { margin-top: 0; }
+
+.credential-choices { display: grid; gap: 8px; margin-top: 16px; }
