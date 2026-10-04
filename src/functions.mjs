@@ -4,12 +4,6 @@ import { prepare as prepareFetch, send as sendFetch } from './fetch.mjs';
 
 // Built-in operations, not user-supplied code. Definitions describe invocation;
 // neither a definition nor a stored value implies an execution.
-export const FUNCTIONS = [
-  { id: 'http.request', description: 'Send one HTTPS request with explicitly referenced connections.',
-    endpoint: '/v1/principals/{principalId}/functions/http.request', input: { url: 'HTTPS URL', method: 'HTTP method', headers: 'literal header values', body: 'literal text or base64 body', json: 'JSON body', form: 'form fields', bindings: 'JSON Pointer targets and literal/reference parts' },
-    output: 'response', save: 'optional name to keep the response body under, as a secret' },
-];
-
 // Explicit operations. Their results may be returned or saved; neither choice is inferred
 // from a stored name, and neither operation changes a request's completion state.
 export class Functions {

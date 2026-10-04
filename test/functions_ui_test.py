@@ -49,18 +49,19 @@ with tempfile.TemporaryDirectory(prefix='foundation-functions-ui-') as key_dir, 
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
 
-    # The page describes the operations available through the same API catalog.
+    # The page lists the functions the principal keeps: none at first, then the one placed through the API.
     page.goto(args.base + '/functions', wait_until='networkidle')
     expect(page.get_by_role('heading', name='ファンクション', exact=True)).to_be_visible()
-    expect(page.get_by_role('heading', name='HTTPS リクエスト', exact=True)).to_be_visible()
-    catalog = json.loads(cli('api', 'GET', '/v1/functions'))['functions']
-    for function in catalog:
-        expect(page.locator('.agent-row code').get_by_text(function['id'], exact=True)).to_be_visible()
-    expect(page.get_by_text('預けたものを使ってHTTPSリクエストを送ります。', exact=True)).to_be_visible()
+    expect(page.get_by_text('ファンクションはありません。', exact=True)).to_be_visible()
+    owner = json.loads(cli('api', 'GET', '/v1/principals/me'))['principal']['acts_for'][0]
+    cli('api', 'PUT', '/v1/principals/' + owner + '/resources?kind=function&name=notes/add', '--json', json.dumps({'description': 'メモを足す', 'parameters': {'title': {'required': True}}, 'request': {'url': 'https://api.example.test/notes', 'method': 'POST', 'json': {'title': ''}, 'bindings': [{'target': '/json/title', 'parts': [{'parameter': 'title'}]}]}}))
+    page.reload(wait_until='networkidle')
+    expect(page.get_by_role('heading', name='notes/add', exact=True)).to_be_visible()
+    expect(page.get_by_text('メモを足す', exact=True)).to_be_visible()
     review(page)
     page.goto(args.base, wait_until='networkidle')
     card = page.locator('.home-card').filter(has=page.get_by_role('heading', name='ファンクション', exact=True))
-    expect(card).to_contain_text(str(len(catalog)) + ' 種類')
+    expect(card).to_contain_text('1 件')
     card.click()
     expect(page).to_have_url(args.base + '/functions')
     review(page)

@@ -76,8 +76,6 @@ test('makes an API call with the caller\'s own key and returns what it said', as
 test('MCP delivers what a connected grant yields, and never its renewal state', async t => {
   const f = await connected(t), connection = await f.connection();
   const call = (method, path, body) => modern(f, { jsonrpc: '2.0', id: 20, method: 'tools/call', params: { name: 'foundation_api', arguments: { method, path, body } } });
-  const catalog = await call('GET', '/v1/functions');
-  assert.deepEqual(catalog.json.result.structuredContent.functions.map(fn => fn.id), ['http.request']);
   const delivered = await call('POST', '/v1/principals/' + USER_A + '/injections', { names: [{ id: connection.id }] });
   assert.equal(delivered.json.result.structuredContent.injection.environment.GOOGLE_ACCOUNT_EMAIL, 'personal@example.test');
   assert.doesNotMatch(delivered.text, /refresh-personal/);

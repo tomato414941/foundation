@@ -55,23 +55,20 @@ async function setup(t) {
   const key = await f.issueKey();
   const put = await f.request('/v1/principals/' + USER_A + '/resources?kind=secret&name=api/token', { method: 'PUT', token: key.token, raw: TOKEN, type: 'text/plain' });
   assert.equal(put.status, 200, put.text);
-  const call = request => f.request('/v1/principals/' + USER_A + '/functions/http.request', { method: 'POST', token: key.token, data: request });
+  const call = request => f.request('/v1/principals/' + USER_A + '/runs', { method: 'POST', token: key.token, data: { request } });
   return { ...api, f, key, call };
 }
 
-test('関数一覧の実行先から、自分または委任先の値を使ってHTTPSリクエストを送信する', async t => {
+test('1回だけの実行として、自分または委任先の値を使ってHTTPSリクエストを送信する', async t => {
   const { f, key, received } = await setup(t);
-  const catalog = await f.request('/v1/functions', { token: key.token });
-  assert.equal(catalog.status, 200, catalog.text);
-  const operation = catalog.json.functions.find(fn => fn.id === 'http.request');
-  const endpoint = uriTemplate(operation.endpoint);
+  const endpoint = uriTemplate('/v1/principals/{principalId}/runs');
   for (const [principalId, credentials] of [
     [key.acts_for[0], { authorization: 'Bearer ' + key.token }],
     ['me', { cookie: f.cookie(), origin: f.base }],
   ]) {
     const response = await fetch(f.base + endpoint.expand({ principalId }), {
       method: 'POST', headers: { ...credentials, 'content-type': 'application/json' },
-      body: JSON.stringify({ url: 'https://api.example.test/echo', ...authorization() }),
+      body: JSON.stringify({ request: { url: 'https://api.example.test/echo', ...authorization() } }),
     });
     const answer = await response.json();
     assert.equal(response.status, 200, JSON.stringify(answer));
@@ -167,10 +164,10 @@ test('Foundation itself is not reachable under another name that points at its o
   api.addresses.set('alias.example.test', [{ address: '198.35.26.96', family: 4 }]);
   const f = await fixture(t, { outbound: api.outbound, publicOrigin: 'https://foundation.example.test' });
   const key = await f.issueKey();
-  const refused = await f.request('/v1/principals/' + USER_A + '/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://alias.example.test/v1/keys/current' } });
+  const refused = await f.request('/v1/principals/' + USER_A + '/runs', { method: 'POST', token: key.token, data: { request: { url: 'https://alias.example.test/v1/keys/current' } } });
   assert.equal(refused.status, 400); assert.equal(refused.json.error.code, 'invalid_destination');
   assert.equal(api.received.length, 0);
-  const allowed = await f.request('/v1/principals/' + USER_A + '/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/echo' } });
+  const allowed = await f.request('/v1/principals/' + USER_A + '/runs', { method: 'POST', token: key.token, data: { request: { url: 'https://api.example.test/echo' } } });
   assert.equal(allowed.json.response.status, 200, allowed.text);
 });
 
@@ -181,9 +178,9 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
   assert.equal(input.status, 200);
   f.expire(connection.id);
   const calls = f.google.calls.length;
-  const saved = await f.request('/v1/principals/' + USER_A + '/functions/http.request', { method: 'POST', token: key.token, data: {
+  const saved = await f.request('/v1/principals/' + USER_A + '/runs', { method: 'POST', token: key.token, data: { request: {
     url: 'https://api.example.test/echo', ...authorization(inputName, 'Bearer '), save: outputName,
-  } });
+  } } });
   assert.equal(saved.status, 200, saved.text);
   assert.equal(received[0].headers.authorization, 'Bearer ' + TOKEN);
   assert.deepEqual(saved.json.saved.map(row => row.name), [outputName]);
@@ -195,7 +192,7 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
   assert.equal((await f.read('secret', (outputName), { token: key.token })).status, 403);
   assert.doesNotMatch(saved.text, new RegExp(TOKEN));
 
-  const binary = await f.request('/v1/principals/' + USER_A + '/functions/http.request', { method: 'POST', token: key.token, data: { url: 'https://api.example.test/bytes', save: 'binary' } });
+  const binary = await f.request('/v1/principals/' + USER_A + '/runs', { method: 'POST', token: key.token, data: { request: { url: 'https://api.example.test/bytes', save: 'binary' } } });
   assert.equal(binary.status, 200);
   const owner = f.app.principals.actsFor(key.id)[0];
   assert.deepEqual(f.app.secrets.open(f.app.secrets.find(owner, 'binary')), Buffer.from([0, 255, 1]));
@@ -203,7 +200,7 @@ test('The HTTPS function binds opaque stored names explicitly and saves only its
 
 test('The HTTPS function retains destination and owner checks, and validates output names before sending', async t => {
   const { f, key, received } = await setup(t);
-  const call = (data, token = key.token, owner = USER_A) => f.request('/v1/principals/' + owner + '/functions/http.request', { method: 'POST', token, data });
+  const call = (data, token = key.token, owner = USER_A) => f.request('/v1/principals/' + owner + '/runs', { method: 'POST', token, data: { request: data } });
   assert.equal((await call({ url: 'https://127.0.0.1/' })).json.error.code, 'invalid_destination');
   assert.equal((await call({ url: 'https://api.example.test/', save: '' })).json.error.code, 'invalid_name');
   await f.signin('second@example.test');
@@ -326,6 +323,6 @@ test('呼べるだけの相手は、そのファンクションを呼べるが�
   assert.doesNotMatch(called.text, new RegExp(TOKEN));
   // The line reaches the function and nothing it uses.
   assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=secret', as)).status, 403);
-  assert.equal((await f.request('/v1/principals/' + USER_A + '/functions/http.request', { ...as, method: 'POST', data: { url: 'https://api.example.test/', ...authorization() } })).status, 403);
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/runs', { ...as, method: 'POST', data: { request: { url: 'https://api.example.test/', ...authorization() } } })).status, 403);
   assert.equal((await f.request('/v1/principals/' + USER_A + '/injections', { ...as, method: 'POST', data: { names: [{ name: 'api/token', as: 'T' }] } })).status, 403);
 });

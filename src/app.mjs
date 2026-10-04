@@ -33,7 +33,7 @@ import { EnvironmentImages } from './environment-images.mjs';
 import { Resources, KINDS } from './resources.mjs';
 import { respond } from './mcp.mjs';
 import { FETCH_BODY_MAX } from './fetch.mjs';
-import { FUNCTIONS, Functions } from './functions.mjs';
+import { Functions } from './functions.mjs';
 import { KeptFunctions } from './kept-functions.mjs';
 import { matchRoute, openapi, validateBody } from './api.mjs';
 import { serveDocs } from './api-docs.mjs';
@@ -975,11 +975,22 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       const recordHanded = (input, environmentId) => {
         if (Array.isArray(input.inputs)) auditLog.write(subject.id, 'injection', 'resource', environmentId, { inputs: input.inputs.map(({ as, filename, ...reference }) => reference) });
       };
+      // One thing run once, decided by the caller, with what the owner holds handed to it alone. A command runs on a
+      // machine lent for it; an HTTPS request is sent from here, and no machine is lent.
+      const once = at === 'runs' && method === 'POST' ? await inputBody(Math.max(1024 * 1024 + 20_000, FETCH_BODY_MAX * 2)) : null;
+      if (once && once.request !== undefined) {
+        if (Object.keys(once).some(key => key !== 'request')) fail(400, 'invalid_request', 'request だけを指定してください。');
+        permit('invoke', 'principal', ownerId);
+        limit('fetch', 30);
+        const result = await functions.request({ ownerId, still }, once.request, [url.hostname, ...(external ? [external.hostname] : [])]);
+        auditLog.write(subject.id, 'function', 'principal', ownerId, { function: 'http.request', target: String(once.request?.url).slice(0, 200), status: result.response?.status ?? null });
+        return send(200, result);
+      }
       if ((at === 'environments' || at === 'runs') && method === 'POST') {
         permit('open', 'environment');
         environments.check();
         limit('environments', 20);
-        const input = await inputBody(1024 * 1024 + 20_000);
+        const input = once ?? await inputBody(1024 * 1024 + 20_000);
         const identity = passable(input.identity);
         const run = at === 'runs', handed = run ? await handedTo(input) : null;
         const opened = await environments.open(ownerId, { ...input, identity, ...(run ? { lifetime: { ...(input.lifetime ?? {}), end: 'exit' } } : {}) }, origin);
@@ -1468,15 +1479,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         if (subject.via.environment) environments.reveal(subject.via.environment, [...Object.values(injection.environment), ...injection.files.map(file => Buffer.from(file.content, 'base64').toString('utf8'))]);
         auditLog.write(subject.id, 'injection', 'principal', ownerId, { inputs: names.map(({ as, filename, ...reference }) => reference) });
         return send(200, { injection, expires_at, expires_in: expires_at === null ? null : Math.max(0, Math.floor((expires_at - Date.now()) / 1000)) });
-      }
-      if (at === 'functions' && method === 'GET') { permit('functions', 'principal', subject.id); return send(200, { functions: FUNCTIONS }); }
-      if (at === 'httpRequest' && method === 'POST') {
-        permit('invoke', 'principal', ownerId);
-        const input = await inputBody(FETCH_BODY_MAX * 2);
-        limit('fetch', 30);
-        const result = await functions.request({ ownerId, still }, input, [url.hostname, ...(external ? [external.hostname] : [])]);
-        auditLog.write(subject.id, 'function', 'principal', ownerId, { function: 'http.request', target: String(input.url).slice(0, 200), status: result.response?.status ?? null });
-        return send(200, result);
       }
       // The MCP door. It carries no capability of its own: a tool call is the same request to the same
       // API, made with the same key. Agents whose harness connects them to nothing else arrive here.

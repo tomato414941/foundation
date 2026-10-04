@@ -15,7 +15,7 @@ let viewing = null; try { viewing = sessionStorage.getItem('fdn_viewing'); } cat
 const held = () => '/v1/principals/' + (viewing ? encodeURIComponent(viewing) : 'me');
 const view = id => { viewing = id || null; try { if (viewing) sessionStorage.setItem('fdn_viewing', viewing); else sessionStorage.removeItem('fdn_viewing'); } catch {} };
 // The pages that show what a principal holds follow the one chosen; who one is, and whom one is on a line with, do not.
-const followsView = () => ['home', 'services', 'secrets', 'objects', 'environments', 'principals'].includes(page);
+const followsView = () => ['home', 'services', 'secrets', 'objects', 'environments', 'principals', 'functions'].includes(page);
 // The principal the pages are about: the one chosen, or oneself.
 const here = () => state.viewing || { id: state.user.id, name: state.principal.name };
 const PRF_INPUT = new TextEncoder().encode('foundation-key');
@@ -563,7 +563,7 @@ const SOURCES = {
   // Who acts for this principal: the lines drawn toward it, with who is at their other end.
   lines: signal => api(held() + '/relations?limit=50', { signal }),
   agentLines: signal => api(held() + '/relations?relation=agent&direction=to&limit=200', { signal }).then(result => result.relations),
-  functions: signal => api('/v1/functions', { signal }).then(result => result.functions),
+  functions: signal => api(held() + '/resources?kind=function', { signal }).then(result => result.resources),
   environments: signal => api(held() + '/resources?kind=environment', { signal }).then(result => result.resources.filter(item => item.status !== 'stopped')),
   compute: signal => api(held() + '/compute', { signal }).then(result => result.compute),
   // What the principal shown may use though another holds it: what those it acts for or is a member of hold, and
@@ -851,12 +851,11 @@ function render() {
     return;
   }
   if (page === 'functions') {
-    // Available operations, independent of their invocations.
-    const known = { 'http.request': [t('client.functions.httpRequest'), t('client.functions.httpRequestDescription')] };
+    // What the principal shown keeps to be called by name: each a decided operation and the arguments it takes.
+    const kept = state.functions || [];
     shell(`<header class="page-heading"><h1>${esc(t('client.functions.title'))}</h1></header>
-      <section class="resource-section" aria-labelledby="functions-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('network')}</span><div><h2 id="functions-title">${esc(t('client.functions.operations'))}</h2></div></div></div>
-      <div class="agent-list">${(state.functions || []).map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(known[item.id]?.[0] || item.id)}</h3><p><code>${esc(item.id)}</code></p></div><div class="agent-permissions"><span class="muted">${esc(known[item.id]?.[1] || item.description)}</span></div><div class="agent-actions"></div></article>`).join('')}</div></section>
-      `);
+      <section class="resource-section" aria-label="${esc(t('client.functions.title'))}">
+      ${kept.length ? `<div class="agent-list">${kept.map(item => `<article class="agent-row"><div class="agent-name"><h3>${esc(item.name)}</h3></div><div class="agent-permissions"><span class="muted">${esc(item.description || '')}</span></div><div class="agent-actions"></div></article>`).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.functions.empty'))}</p></div>`}</section>`);
     return;
   }
   if (page === 'account' && paymentReturn) {
@@ -895,7 +894,7 @@ function render() {
         ${card('/objects', t('client.objects.title'), spaceSummary(space) + usable('object'))}
         ${card('/environments', t('client.environment.title'), t('client.common.itemCount', { count: (state.environments || []).length }) + usable('environment'))}
         ${card('/principals', t('client.access.title'), t(state.lines?.next ? 'client.home.principalCountAtLeast' : 'client.common.itemCount', { count: connectedPrincipals().length + 1 }))}
-        ${card('/functions', t('client.functions.title'), t('client.home.functionCount', { count: state.functions?.length || 0 }))}
+        ${card('/functions', t('client.functions.title'), t('client.common.itemCount', { count: state.functions?.length || 0 }))}
       </div>`);
     return;
   }

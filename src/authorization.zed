@@ -47,7 +47,6 @@ definition principal {
   relation usage_grant: principal
   relation audit_log_grant: principal
   relation inject_grant: principal
-  relation functions_grant: principal
   relation invoke_grant: principal
   relation transfer_grant: principal
   // An action on something that does not exist yet is an action on the owner, named by what it would make.
@@ -74,7 +73,6 @@ definition principal {
   permission usage = manage + use + usage_grant
   permission audit_log = decide + audit_log_grant
   permission inject = use + inject_grant
-  permission functions = use + functions_grant
   permission invoke = use + invoke_grant
   permission connection_connect = decide + connection_connect_grant
 }
