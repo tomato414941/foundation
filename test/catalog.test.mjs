@@ -13,6 +13,35 @@ const SAMPLE = { domain: 'example.cybozu.com', shop: 'example', subdomain: 'exam
 const put = (target, pointer, value) => { const keys = pointerTokens(pointer); let at = target; for (const key of keys.slice(0, -1)) at = at[key] ??= {}; at[keys.at(-1)] = value; return target; };
 const fill = (template, values) => uriTemplate(template).expand(values);
 const reply = (status, body) => ({ ok: status >= 200 && status < 300, status, text: JSON.stringify(body) });
+
+for (const [id, name, variable, token, consoleUrl] of [
+  ['sakura-vps', 'さくらのVPS', 'SAKURA_VPS_API_TOKEN', 'sakura-vps-key', 'https://secure.sakura.ad.jp/vps/'],
+  ['xserver', 'XServer', 'XSERVER_API_KEY', 'xs_example_key', 'https://secure.xserver.ne.jp/xapanel/login/xvps/'],
+]) {
+  test(`${name}を標準サービスから選んでAPIキーで接続し、更新したキーを実行環境に渡す`, async t => {
+    const f = await fixture(t, { services: builtins({}) });
+    await f.signin();
+    const listed = (await f.request('/v1/services', { anonymous: true })).json.services.find(service => service.id === id);
+    assert.equal(listed.name, name);
+    assert.equal(listed.catalog, true);
+    assert.equal(listed.auth_schemes.token.available, true);
+    assert.equal(listed.auth_schemes.token.console, consoleUrl);
+    assert.equal(listed.auth_schemes.token.fields.find(field => field.name === 'token').secret, true);
+
+    const made = await f.request('/v1/principals/me/connections', { method: 'POST',
+      data: { service: id, auth_scheme: 'token', name: '収録サーバー', fields: { token } } });
+    assert.equal(made.status, 201, made.text);
+    assert.equal(made.json.connection.service.id, id);
+    assert.deepEqual((await f.inject(made.json.connection)).json.injection.environment, { [variable]: token });
+
+    const changed = await f.request('/v1/principals/me/connections', { method: 'POST',
+      data: { service: id, auth_scheme: 'token', connection_id: made.json.connection.id, fields: { token: token + '-rotated' } } });
+    assert.equal(changed.status, 200, changed.text);
+    assert.equal(changed.json.connection.id, made.json.connection.id);
+    assert.deepEqual((await f.inject(changed.json.connection)).json.injection.environment, { [variable]: token + '-rotated' });
+  });
+}
+
 const who = (identity, body) => {
   [].concat(identity?.id ?? []).forEach((path, index) => put(body, path, 'id-' + index));
   const label = [].concat(identity?.label ?? [])[0];

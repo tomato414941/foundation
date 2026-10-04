@@ -89,6 +89,33 @@ with sync_playwright() as p:
     expect(page.locator('.connection-row').filter(has_text='仕事用')).to_have_count(1)
     page.get_by_role('button', name='サービスを追加', exact=True).click()
 
+    # VPS providers are selected from the built-in catalog, with a masked API-key field and a link to issue it.
+    for service_id, name, console_url, token, instruction in [
+        ('sakura-vps', 'さくらのVPS', 'https://secure.sakura.ad.jp/vps/', 'sakura-vps-ui-key', '対象サーバーと必要な操作に限定したロール'),
+        ('xserver', 'XServer', 'https://secure.xserver.ne.jp/xapanel/login/xvps/', 'xs_ui_key', '利用するサービス・操作対象・必要な権限'),
+    ]:
+        search.fill(name)
+        dialog.get_by_role('button', name=name, exact=True).click()
+        expect(dialog.get_by_role('heading', name=f'{name}にトークンで接続', exact=True)).to_be_visible()
+        expect(dialog.get_by_role('link', name=f'{name}でトークンを作る ↗', exact=True)).to_have_attribute('href', console_url)
+        expect(dialog.get_by_text(instruction, exact=False)).to_be_visible()
+        key = dialog.get_by_label('APIキー', exact=True)
+        expect(key).to_have_attribute('type', 'password')
+        key.fill(token)
+        dialog.get_by_label('名前', exact=True).fill(f'{name}の収録サーバー')
+        for width in [1280, 390]:
+            page.set_viewport_size({'width': width, 'height': 1000})
+            review(page)
+            if shots:
+                page.screenshot(path=str(shots / f'{service_id}-{width}.png'), full_page=True)
+        page.set_viewport_size({'width': 1280, 'height': 1000})
+        dialog.get_by_role('button', name='接続する', exact=True).click()
+        expect(dialog).not_to_be_visible()
+        row = page.locator('.connection-row').filter(has_text=f'{name}の収録サーバー')
+        expect(row.get_by_role('heading', name=name, exact=True)).to_be_visible()
+        expect(row.get_by_text('トークン', exact=True)).to_be_visible()
+        page.get_by_role('button', name='サービスを追加', exact=True).click()
+
     # kintone has no app of Foundation's, so pasting a token comes first; logging in starts with the owner's app,
     # which names their kintone domain.
     search.fill('kin')

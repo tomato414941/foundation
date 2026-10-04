@@ -5,7 +5,7 @@ const catalogIds = new Set([
   'airtable', 'asana', 'atlassian', 'aws', 'bitbucket', 'box', 'calendly', 'chatwork',
   'cloudflare', 'digitalocean', 'discord', 'dropbox', 'ebay', 'freee', 'github', 'gitlab',
   'google', 'heroku', 'hubspot', 'kintone', 'linear', 'microsoft', 'netlify', 'notion',
-  'openrouter', 'salesforce', 'shopify', 'slack', 'spotify', 'x', 'zendesk', 'zoom',
+  'openrouter', 'sakura-vps', 'salesforce', 'shopify', 'slack', 'spotify', 'x', 'xserver', 'zendesk', 'zoom',
 ]);
 const appKeys = { client_id: 'service.oauth.clientId', client_secret: 'service.oauth.clientSecret' };
 
