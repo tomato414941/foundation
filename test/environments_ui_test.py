@@ -91,6 +91,7 @@ with sync_playwright() as p:
         page.set_viewport_size({'width': width, 'height': 900})
         review(page)
         page.screenshot(path=str(shots / f'environment-create-{width}.png'), full_page=True)
+    page.set_viewport_size({'width': 1280, 'height': 1000})
     dialog.get_by_label('名前', exact=False).fill('ビルド')
     dialog.get_by_label('自動停止', exact=True).select_option('30')
     dialog.get_by_text('詳細設定', exact=True).click()
@@ -105,6 +106,7 @@ with sync_playwright() as p:
         page.set_viewport_size({'width': width, 'height': 1000})
         review(page)
         page.screenshot(path=str(shots / f'environment-image-search-{width}.png'), full_page=True)
+    page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # 前の検索が遅れて届いても、今入力した名前の候補を選択する。
     dialog.get_by_role('combobox', name='イメージ', exact=True).fill('slow')
@@ -137,6 +139,7 @@ with sync_playwright() as p:
         page.set_viewport_size({'width': width, 'height': 1000})
         review(page)
         page.screenshot(path=str(shots / f'environment-create-options-{width}.png'), full_page=True)
+    page.set_viewport_size({'width': 1280, 'height': 1000})
 
     # 作成中は重複送信を防ぎ、失敗したときは入力を保って再試行する。
     pending = []

@@ -1483,11 +1483,11 @@ let detailed = null;
 const principalById = id => (detailed?.id === id ? detailed : undefined) || (state.agents || []).find(item => item.id === id) || (state.principals || []).find(item => item.id === id) || connectedPrincipals().find(item => item.id === id);
 function createEnvironment() {
   const owner = state.user.id;
-  const pickerField = (id, label, placeholder) => `<div class="environment-picker" id="${id}-picker"><label for="${id}">${esc(label)}</label><div class="environment-picker-control">
-    <input id="${id}" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-list" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" maxlength="255" placeholder="${esc(placeholder)}">
+  const pickerField = (id, label, placeholder) => `<div class="environment-picker" id="${id}-picker"><div class="environment-picker-summary"><label id="${id}-label" for="${id}-choice">${esc(label)}</label><button type="button" class="environment-picker-choice" id="${id}-choice" aria-labelledby="${id}-label ${id}-value" aria-haspopup="dialog"><span id="${id}-value"></span><span aria-hidden="true">›</span></button></div><div class="environment-picker-panel"><div class="environment-picker-heading"><label for="${id}">${esc(label)}</label><h2 id="${id}-title">${esc(label)}</h2><button type="button" class="text-button environment-picker-cancel">${esc(t('client.common.cancel'))}</button></div><div class="environment-picker-control">
+    <input id="${id}" role="combobox" aria-label="${esc(label)}" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-list" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" maxlength="255" placeholder="${esc(placeholder)}">
     <button type="button" class="environment-picker-toggle" tabindex="-1" aria-label="${esc(label)}"><span aria-hidden="true">⌄</span></button>
     <div class="environment-picker-popup" tabindex="-1" hidden><div id="${id}-list" role="listbox" aria-label="${esc(label)}"></div><p class="image-catalog-status" role="status"></p><button class="text-button image-more" type="button" data-picker-more hidden>${esc(t('client.environment.moreImages'))}</button><button class="text-button image-more" type="button" data-picker-retry hidden>${esc(t('client.environment.retry'))}</button></div>
-  </div></div>`;
+  </div></div></div>`;
   openDialog(`<h2 id="dialog-title">${esc(t('client.environment.createTitle'))}</h2><form class="environment-form">
     <label for="environment-name">${esc(t('client.common.optionalLabel', { label: t('client.common.name') }))}</label><input id="environment-name" name="name" maxlength="200" autocomplete="off">
     <label for="environment-lifetime">${esc(t('client.environment.autoStop'))}</label><select id="environment-lifetime" name="minutes">${[15, 30, 60].map(minutes => `<option value="${minutes}"${minutes === 60 ? ' selected' : ''}>${esc(t('client.environment.afterMinutes', { count: minutes }))}</option>`).join('')}</select>
@@ -1500,15 +1500,39 @@ function createEnvironment() {
   let pending = false, imageRevision = 0;
   const pickers = [];
   const touch = () => window.matchMedia('(pointer: coarse)').matches;
+  const compact = () => window.matchMedia('(max-width: 600px)').matches;
   // The field itself searches and holds the chosen value. Arrow keys explore; Enter chooses; Escape restores it.
   function picker(id, load, choose, emptyText) {
-    const root = formElement.querySelector('#' + id + '-picker'), input = root.querySelector('input'), popup = root.querySelector('.environment-picker-popup');
+    const root = formElement.querySelector('#' + id + '-picker'), input = root.querySelector('input'), popup = root.querySelector('.environment-picker-popup'), panel = root.querySelector('.environment-picker-panel');
+    const choice = root.querySelector('.environment-picker-choice'), valueLabel = choice.querySelector('span');
     const list = root.querySelector('[role="listbox"]'), status = root.querySelector('[role="status"]'), more = root.querySelector('[data-picker-more]'), retry = root.querySelector('[data-picker-retry]');
     let selected = null, items = [], active = -1, next = null, query = '', controller, debounce, loading = false, returning = false;
+    let muted = [];
+    const leaveScreen = () => {
+      muted.forEach(element => { element.inert = false; }); muted = [];
+      if (dialog.getAttribute('aria-labelledby') === id + '-title') dialog.setAttribute('aria-labelledby', 'dialog-title');
+      root.classList.remove('environment-picker-mobile'); root.style.minHeight = ''; panel.removeAttribute('style');
+    };
     const cancel = () => { clearTimeout(debounce); controller?.abort(); loading = false; input.removeAttribute('aria-busy'); };
     const position = () => {
       if (popup.hidden) return;
-      const field = input.getBoundingClientRect(), bounds = dialog.getBoundingClientRect(), viewport = window.visualViewport;
+      const viewport = window.visualViewport;
+      // On a phone the search field stays at the top of the visible area, away from floating browser controls.
+      if (compact()) {
+        if (!root.classList.contains('environment-picker-mobile')) {
+          root.style.minHeight = root.getBoundingClientRect().height + 'px';
+          // This dialog now contains just the selection task, including for keyboard and screen-reader users.
+          for (let branch = root; branch !== dialog; branch = branch.parentElement) {
+            for (const sibling of branch.parentElement.children) if (sibling !== branch && !sibling.inert) { sibling.inert = true; muted.push(sibling); }
+          }
+          dialog.setAttribute('aria-labelledby', id + '-title');
+        }
+        Object.assign(panel.style, { top: (viewport?.offsetTop || 0) + 'px', left: (viewport?.offsetLeft || 0) + 'px', width: (viewport?.width || window.innerWidth) + 'px', height: (viewport?.height || window.innerHeight) + 'px' });
+        root.classList.add('environment-picker-mobile'); popup.style.maxHeight = ''; popup.classList.remove('opens-up');
+        return;
+      }
+      leaveScreen();
+      const field = input.getBoundingClientRect(), bounds = dialog.getBoundingClientRect();
       // The keyboard can shrink and pan only the visual viewport, leaving the dialog's bounds unchanged.
       const top = Math.max(bounds.top, viewport?.offsetTop || 0), bottom = Math.min(bounds.bottom, viewport ? viewport.offsetTop + viewport.height : window.innerHeight);
       const below = bottom - field.bottom - 14, above = field.top - top - 14, upward = below < 240 && above > below;
@@ -1525,8 +1549,12 @@ function createEnvironment() {
       list.innerHTML = items.map((item, index) => `<div role="option" id="${id}-option-${index}" data-option="${index}" aria-selected="false" aria-label="${esc(item.title || item.label)}"><span class="image-result-title"><strong>${esc(item.title || item.label)}</strong>${item.official ? `<span class="image-official">${esc(t('client.environment.officialImage'))}</span>` : ''}</span>${item.description ? `<span class="image-description">${esc(item.description)}</span>` : ''}</div>`).join('');
       active = -1; input.removeAttribute('aria-activedescendant'); more.hidden = !next; position();
     };
-    const set = item => { selected = item; input.value = item?.label || ''; };
-    const close = () => { popup.hidden = true; if (!input.value.trim()) input.value = selected?.label || ''; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); active = -1; };
+    const set = item => { selected = item; input.value = item?.label || ''; valueLabel.textContent = item?.label || input.placeholder; };
+    const close = () => {
+      popup.hidden = true; leaveScreen();
+      if (!input.value.trim()) input.value = selected?.label || '';
+      input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); active = -1;
+    };
     async function search(text, page = 1) {
       cancel(); query = text;
       const request = controller = new AbortController(); loading = true; retry.hidden = true; more.disabled = true; status.textContent = t('client.common.loading');
@@ -1549,14 +1577,19 @@ function createEnvironment() {
       popup.hidden = false; input.setAttribute('aria-expanded', 'true'); position();
       if (fetch) void search(input.value === selected?.label ? '' : input.value.trim());
     };
-    const focusResults = () => { returning = true; (touch() ? popup : input).focus({ preventScroll: true }); returning = false; };
-    const accept = item => { cancel(); set(item); close(); if (touch()) input.blur(); else focusResults(); choose(item); };
+    const focusResults = () => { returning = true; (compact() || touch() ? popup : input).focus({ preventScroll: true }); returning = false; };
+    const restoreFocus = () => { returning = true; if (compact()) choice.focus({ preventScroll: true }); else if (touch()) input.blur(); else input.focus({ preventScroll: true }); returning = false; };
+    const dismiss = () => { cancel(); set(selected); close(); restoreFocus(); };
+    const accept = item => { cancel(); set(item); close(); restoreFocus(); choose(item); };
+    choice.addEventListener('click', () => { open(); focusResults(); });
+    root.querySelector('.environment-picker-cancel').addEventListener('click', dismiss);
     input.addEventListener('focus', () => { if (returning) return; if (popup.hidden) open(); input.select(); });
     input.addEventListener('click', () => { if (popup.hidden) { open(); input.select(); } });
     input.addEventListener('input', () => { cancel(); open(false); items = []; next = null; render(); status.textContent = t('client.common.loading'); debounce = setTimeout(() => { void search(input.value.trim()); }, 250); });
-    input.addEventListener('keydown', event => {
+    root.addEventListener('keydown', event => {
       if (event.isComposing) return;
-      if (event.key === 'Escape' && !popup.hidden) { event.preventDefault(); event.stopPropagation(); cancel(); set(selected); close(); return; }
+      if (event.key === 'Escape' && !popup.hidden) { event.preventDefault(); event.stopPropagation(); dismiss(); return; }
+      if (event.target !== input && event.target !== popup) return;
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault(); if (popup.hidden) { open(); return; }
         highlight(Math.max(0, Math.min(items.length - 1, active + (event.key === 'ArrowDown' ? 1 : -1))));
@@ -1576,6 +1609,7 @@ function createEnvironment() {
     more.addEventListener('click', () => { if (next && !loading) searchPage(next); });
     retry.addEventListener('click', () => { searchPage(1); });
     const control = { root, input, set, close, open, search, cancel, position, focusResults, value: () => input.value === selected?.label ? selected : null,
+      disable: disabled => { input.disabled = disabled; choice.disabled = disabled; },
       reset: () => { cancel(); set(null); items = []; next = null; retry.hidden = true; status.textContent = ''; render(); close(); } };
     pickers.push(control); return control;
   }
@@ -1597,12 +1631,12 @@ function createEnvironment() {
     return { items: data.images.map(item => ({ ...item, id: 'hub:' + item.name, kind: 'hub', label: item.name })), next: data.next };
   }, async item => {
     const revision = ++imageRevision;
-    repository = item.kind === 'hub' ? item.name : null; automaticVersion = Boolean(repository); version.reset(); version.root.hidden = !repository; version.input.disabled = Boolean(repository);
+    repository = item.kind === 'hub' ? item.name : null; automaticVersion = Boolean(repository); version.reset(); version.root.hidden = !repository; version.disable(Boolean(repository));
     submit.disabled = Boolean(repository);
     if (!repository) return;
     const data = await version.search('');
     if (revision !== imageRevision || !formElement.isConnected) return;
-    version.input.disabled = false;
+    version.disable(false);
     if (data?.default_tag) version.set(versionItem(data.default_tag));
     else { version.open(false); version.focusResults(); }
     submit.disabled = false;
@@ -1612,7 +1646,7 @@ function createEnvironment() {
   dialog.addEventListener('scroll', reposition); window.addEventListener('resize', reposition);
   window.visualViewport?.addEventListener('resize', reposition); window.visualViewport?.addEventListener('scroll', reposition);
   dialog.addEventListener('close', () => {
-    pickers.forEach(control => control.cancel()); dialog.removeEventListener('scroll', reposition); window.removeEventListener('resize', reposition);
+    pickers.forEach(control => { control.cancel(); control.close(); }); dialog.removeEventListener('scroll', reposition); window.removeEventListener('resize', reposition);
     window.visualViewport?.removeEventListener('resize', reposition); window.visualViewport?.removeEventListener('scroll', reposition);
   }, { once: true });
   bindForm(async form => {
