@@ -107,7 +107,7 @@ with sync_playwright() as p:
     assert own.json()['principal']['acts_for'] == []
     assert caller.get('/v1/principals/' + owner + '/resources?kind=connection', headers={'authorization': 'Bearer ' + second_token}).status == 403
     row.get_by_role('button', name='詳細', exact=True).click()
-    expect(dialog.get_by_role('button', name='エージェントに設定', exact=True)).to_be_visible()
+    expect(dialog.locator('.detail-row').filter(has_text='解除')).to_have_count(0)
     expect(dialog.locator('.credential-item')).to_have_count(1)
     assert not errors, errors
     caller.dispose()

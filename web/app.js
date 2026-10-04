@@ -1475,8 +1475,7 @@ async function principalDetails(id) {
   const rows = [
     row(esc(t('client.common.name')), esc(item.name), owned ? button('rename-principal', t('client.common.change')) : ''),
     row(esc(t('client.principals.id')), `<code>${esc(id)}</code>`, button('copy-principal-id', t('client.common.copy'))),
-    agent ? row(esc(t('client.principals.relation.agent')), esc(t('client.principals.other.agentOf', { name: me })), button('revoke-access', t('client.principals.removeLine'), 'danger'))
-      : owned && !self ? row(esc(t('client.principals.relation.agent')), `<span class="muted">${esc(t('client.principals.notAgent'))}</span>`, button('ask-make-agent', t('client.principals.makeAgent'))) : '',
+    agent ? row(esc(t('client.principals.relation.agent')), esc(t('client.principals.other.agentOf', { name: me })), button('revoke-access', t('client.principals.removeLine'), 'danger')) : '',
     ...others.map(line => row(esc(t('client.principals.relations')), esc(relationLabel(line)), button('remove-line', t('client.principals.removeLine'), `danger data-relation="${esc(line.relation)}" data-direction="${esc(line.direction)}"`))),
     ...theirs.map((line, at) => row(at ? '' : esc(t('client.principals.otherRelations')), esc(toOther(line)))),
     ...(owned ? [
@@ -1616,11 +1615,6 @@ function removeCredential(item, credential) {
 function addCredential(item) {
   const choice = (action, label) => `<button class="button secondary full" data-action="${action}" data-id="${esc(item.id)}">${esc(label)}</button>`;
   openDialog(`<h2 id="dialog-title">${esc(t('client.principals.addCredential'))}</h2><div class="credential-choices">${passkeysWork() ? choice('add-passkey', t('client.passkey.title')) : ''}${choice('add-email', t('client.account.email'))}${choice('issue-key', t('client.principals.keyKind'))}</div>`);
-}
-// Making one an agent is said in full where it is decided, once, not on every agent's page.
-function askMakeAgent(item) {
-  openDialog(`<h2 id="dialog-title">${esc(t('client.principals.confirmMakeAgent', { name: item.name }))}</h2><form><p>${esc(t('client.principals.agentWould', { name: state.principal.name }))}</p>${accessDetails()}<p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.cancel'))}</button><button type="submit" class="button primary">${esc(t('client.principals.makeAgent'))}</button></div></form>`);
-  bindForm(async () => { await api('/v1/principals/' + encodeURIComponent(item.id) + '/relations', { method: 'POST', data: { relation: 'agent', object_type: 'principal', object_id: state.user.id } }); await refresh(); await principalDetails(item.id); });
 }
 function addIntegration() {
   openDialog(`<h2 id="dialog-title">${esc(t('client.integration.register'))}</h2><form>
@@ -2002,7 +1996,6 @@ document.addEventListener('click', async (event) => {
     if (action === 'principal-details') await principalDetails(id);
     if (action === 'issue-key') { target.disabled = true; await issueKey(principalById(id)); }
     if (action === 'remove-credential') removeCredential(principalById(id), target.dataset.key);
-    if (action === 'ask-make-agent') askMakeAgent(principalById(id));
     if (action === 'add-integration') addIntegration();
     if (action === 'remove-principal') removePrincipal(principalById(id));
     if (action === 'rename-principal') renamePrincipal(principalById(id));

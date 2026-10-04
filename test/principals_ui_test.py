@@ -102,19 +102,21 @@ with sync_playwright() as p:
     laptop = next(line['principal']['id'] for line in context.request.get(args.base + '/v1/principals/me/relations?relation=owner&direction=from').json()['relations'] if line['principal']['name'] == 'laptop')
     drawn = context.request.post(args.base + '/v1/principals/' + laptop + '/relations', data=json.dumps({'relation': 'agent', 'object_type': 'principal', 'object_id': made['id']}), headers={'content-type': 'application/json', 'origin': args.base})
     assert drawn.status == 201, drawn.text()
-    # From its details, made the owner's agent: a line drawn, and the list says so.
+    # Its details say what it is to others.
     row.get_by_role('button', name='詳細', exact=True).click()
     expect(dialog.get_by_role('heading', name='laptop', exact=True)).to_be_visible()
     expect(dialog.locator('.detail-row').filter(has_text='ほかの関係')).to_contain_text('helper のエージェント')
     review(page)
     page.screenshot(path=str(shots / 'principal-details.png'), full_page=True)
-    dialog.get_by_role('button', name='エージェントに設定', exact=True).click()
-    # What an agent may do is said here, where it is decided.
-    expect(dialog.get_by_role('heading', name='laptop をエージェントに設定しますか？', exact=True)).to_be_visible()
-    expect(dialog.get_by_text('許可の詳細', exact=True)).to_be_visible()
-    review(page)
-    dialog.locator('.dialog-actions').get_by_role('button', name='エージェントに設定', exact=True).click()
-    expect(dialog.locator('.detail-row').filter(has_text='エージェント').first).to_contain_text('のエージェント')
+    expect(dialog.locator('.detail-row').filter(has_text='エージェント').filter(has_text='解除')).to_have_count(0)
+    # Made the owner's agent by a line drawn through the API: the details and the list then say so.
+    mine = context.request.get(args.base + '/v1/principals/me').json()['principal']['id']
+    agent = context.request.post(args.base + '/v1/principals/' + laptop + '/relations', data=json.dumps({'relation': 'agent', 'object_type': 'principal', 'object_id': mine}), headers={'content-type': 'application/json', 'origin': args.base})
+    assert agent.status == 201, agent.text()
+    dialog.get_by_role('button', name='閉じる', exact=True).last.click()
+    page.reload(wait_until='networkidle')
+    row.get_by_role('button', name='詳細', exact=True).click()
+    expect(dialog.locator('.detail-row').filter(has_text='解除')).to_contain_text('のエージェント')
     dialog.get_by_role('button', name='閉じる', exact=True).last.click()
     expect(row.get_by_text('エージェント', exact=True)).to_be_visible()
     assert context.request.get(args.base + '/v1/principals/me').json()['principal']['id'] in p.request.new_context().get(args.base + '/v1/principals/me', headers={'authorization': 'Bearer ' + key}).json()['principal']['acts_for']
