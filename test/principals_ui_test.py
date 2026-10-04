@@ -40,6 +40,17 @@ with sync_playwright() as p:
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/principals')
 
+    # Oneself is listed first and read like any other: its name, its id, every way in, who pays.
+    mine = page.locator('.access-row').first
+    expect(mine.get_by_text('自分', exact=True)).to_be_visible()
+    mine.get_by_role('button', name='詳細', exact=True).click()
+    own = page.get_by_role('dialog')
+    expect(own.locator('.detail-row').filter(has_text='クレデンシャル')).to_contain_text(email)
+    expect(own.locator('.detail-row').filter(has_text='費用の負担')).to_be_visible()
+    expect(own.get_by_role('button', name='削除', exact=True)).to_have_count(0)
+    review(page)
+    page.screenshot(path=str(shots / 'own-details.png'), full_page=True)
+    own.get_by_role('button', name='閉じる', exact=True).last.click()
     # A name left empty is drawn for it, as for any principal that gives none.
     page.get_by_role('button', name='作成', exact=True).click()
     dialog = page.get_by_role('dialog')

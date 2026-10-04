@@ -832,12 +832,13 @@ function render() {
     return;
   }
   if (page === 'principals') {
-    const rows = connectedPrincipals();
-    const row = item => `<article class="agent-row access-row" data-principal-name="${esc(item.name.toLowerCase())}"><div class="agent-name"><h3>${esc(item.name)}</h3></div><div class="relation-badges">${item.lines.map(line => `<span class="relation-badge">${esc(relationLabel(line))}</span>`).join('')}</div><div class="agent-actions"><button class="text-button" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.details'))}</button></div></article>`;
+    // Oneself first: a principal like the others, read the same way.
+    const rows = [{ id: state.user.id, name: state.principal.name, self: true, lines: [] }, ...connectedPrincipals()];
+    const row = item => `<article class="agent-row access-row" data-principal-name="${esc(item.name.toLowerCase())}"><div class="agent-name"><h3>${esc(item.name)}</h3></div><div class="relation-badges">${item.self ? `<span class="relation-badge">${esc(t('client.principals.self'))}</span>` : ''}${item.lines.map(line => `<span class="relation-badge">${esc(relationLabel(line))}</span>`).join('')}</div><div class="agent-actions"><button class="text-button" data-action="principal-details" data-id="${esc(item.id)}">${esc(t('client.common.details'))}</button></div></article>`;
     shell(`<header class="page-heading page-heading-actions"><h1>${esc(t('client.access.title'))}</h1><button class="button secondary" data-action="create-principal">${icon('plus')} ${esc(t('client.principals.create'))}</button></header>
       <section class="resource-section" aria-label="${esc(t('client.access.title'))}">
-      ${rows.length ? `<div class="list-filter"><input type="search" id="principal-filter" aria-label="${esc(t('client.principals.filter'))}" placeholder="${esc(t('client.principals.filter'))}" autocomplete="off"></div>
-        <div class="agent-list" id="principal-list">${rows.map(row).join('')}</div><div class="access-empty" id="principal-none" hidden><p>${esc(t('client.principals.noMatch'))}</p></div>` : `<div class="access-empty"><p>${esc(t('client.principals.empty'))}</p></div>`}
+      <div class="list-filter"><input type="search" id="principal-filter" aria-label="${esc(t('client.principals.filter'))}" placeholder="${esc(t('client.principals.filter'))}" autocomplete="off"></div>
+        <div class="agent-list" id="principal-list">${rows.map(row).join('')}</div><div class="access-empty" id="principal-none" hidden><p>${esc(t('client.principals.noMatch'))}</p></div>
       ${state.lines?.next ? `<div class="list-more"><button class="button secondary" data-action="more-principals">${esc(t('client.principals.more'))}</button></div>` : ''}</section>`);
     return;
   }
@@ -1445,8 +1446,10 @@ function environmentsSection() {
 }
 async function principalDetails(id) {
   // Asked afresh each time: what is loaded for the page waits while a dialog is open.
-  const lines = (await api('/v1/principals/me/relations?limit=200&principal=' + encodeURIComponent(id))).relations.filter(line => line.relation !== 'payer');
-  const owned = lines.some(line => line.relation === 'owner' && line.direction === 'from');
+  const self = id === state.user.id;
+  const lines = self ? [] : (await api('/v1/principals/me/relations?limit=200&principal=' + encodeURIComponent(id))).relations.filter(line => line.relation !== 'payer');
+  // What is one's own to change: oneself, and what one owns.
+  const owned = self || lines.some(line => line.relation === 'owner' && line.direction === 'from');
   const item = owned ? (await api(`/v1/principals/${id}`)).principal : lines[0]?.principal || principalById(id);
   if (!item) return;
   detailed = { id, name: item.name };
@@ -1460,24 +1463,24 @@ async function principalDetails(id) {
   // Every way in, of whatever kind: a passkey, an address, a key.
   const entries = owned ? (await api(`/v1/principals/${id}/credentials`)).credentials : [];
   // What it is to others than this principal, where that can be read: its owner reads its lines.
-  const theirs = owned ? (await api(`/v1/principals/${id}/relations?limit=200`)).relations.filter(line => line.principal && line.principal.id !== state.user.id && line.relation !== 'payer') : [];
+  const theirs = owned && !self ? (await api(`/v1/principals/${id}/relations?limit=200`)).relations.filter(line => line.principal && line.principal.id !== state.user.id && line.relation !== 'payer') : [];
   const rows = [
     row(esc(t('client.common.name')), esc(item.name), owned ? button('rename-principal', t('client.common.change')) : ''),
     row(esc(t('client.principals.id')), `<code>${esc(id)}</code>`, button('copy-principal-id', t('client.common.copy'))),
     agent ? row(esc(t('client.principals.relation.agent')), esc(t('client.principals.other.agentOf', { name: me })), button('revoke-access', t('client.principals.removeLine'), 'danger'))
-      : owned ? row(esc(t('client.principals.relation.agent')), `<span class="muted">${esc(t('client.principals.notAgent'))}</span>`, button('ask-make-agent', t('client.principals.makeAgent'))) : '',
+      : owned && !self ? row(esc(t('client.principals.relation.agent')), `<span class="muted">${esc(t('client.principals.notAgent'))}</span>`, button('ask-make-agent', t('client.principals.makeAgent'))) : '',
     ...others.map(line => row(esc(t('client.principals.relations')), esc(relationLabel(line)), button('remove-line', t('client.principals.removeLine'), `danger data-relation="${esc(line.relation)}" data-direction="${esc(line.direction)}"`))),
     ...theirs.map((line, at) => row(at ? '' : esc(t('client.principals.otherRelations')), esc(toOther(line)))),
     ...(owned ? [
-      ...entries.map((entry, at) => row(at ? '' : esc(t('client.principals.credentials')), `<span class="credential-item">${esc(credentialKindLabel(entry))} <code>${esc(entry.kind === 'key' ? entry.id.slice(0, 8) : entry.name || entry.id.slice(0, 8))}</code><br><span class="muted">${esc(entry.environment ? t('client.access.environmentKey') : t('client.principals.credentialAdded', { date: formatDate(entry.created_at, i18n.language) }))}${entry.last_used_at ? ' · ' + esc(t('client.account.passkeyLastUsed', { date: formatDate(entry.last_used_at, i18n.language) })) : ''}</span></span>`, button('remove-credential', t('client.common.delete'), `danger data-key="${esc(entry.id)}"`))),
+      ...entries.map((entry, at) => row(at ? '' : esc(t('client.principals.credentials')), `<span class="credential-item">${esc(credentialKindLabel(entry))} <code>${esc(entry.kind === 'key' ? entry.id.slice(0, 8) : entry.name || entry.id.slice(0, 8))}</code><br><span class="muted">${esc(entry.environment ? t('client.access.environmentKey') : t('client.principals.credentialAdded', { date: formatDate(entry.created_at, i18n.language) }))}${entry.last_used_at ? ' · ' + esc(t('client.account.passkeyLastUsed', { date: formatDate(entry.last_used_at, i18n.language) })) : ''}</span></span>`, (self && entries.length === 1 ? '' : button('remove-credential', t('client.common.delete'), `danger data-key="${esc(entry.id)}"`)))),
       row(entries.length ? '' : esc(t('client.principals.credentials')), entries.length ? '' : `<span class="muted">${esc(t('client.principals.noCredentials'))}</span>`, button('issue-key', t('client.access.issueKey'))),
       row(esc(t('client.principals.payerTitle')), esc(payerText(item.payer))),
     ] : []),
   ].join('');
   openDialog(`<div class="principal-heading"><h2 id="dialog-title">${esc(item.name)}</h2></div>
-    <div class="relation-badges">${lines.map(line => `<span class="relation-badge">${esc(relationLabel(line))}</span>`).join('')}</div>
+    <div class="relation-badges">${self ? `<span class="relation-badge">${esc(t('client.principals.self'))}</span>` : ''}${lines.map(line => `<span class="relation-badge">${esc(relationLabel(line))}</span>`).join('')}</div>
     <dl class="detail-rows">${rows}</dl>
-    ${owned ? `<div class="principal-delete">${button('remove-principal', t('client.common.delete'), 'danger')}</div>` : ''}`);
+    ${owned && !self ? `<div class="principal-delete">${button('remove-principal', t('client.common.delete'), 'danger')}</div>` : ''}`);
 }
 // Who bears a principal's use, said from where the reader stands.
 const payerText = payer => !payer ? t('client.principals.payerNone') : payer.id === state.user.id ? state.principal.name : payer.name;

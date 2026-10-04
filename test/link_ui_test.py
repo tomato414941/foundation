@@ -59,7 +59,7 @@ with sync_playwright() as p:
     owner.get_by_role('link', name='プリンシパル', exact=True).click()
     section = owner.get_by_role('region', name='プリンシパル', exact=True)
     expect(section.get_by_role('heading', name='ai-simplicity', exact=True)).to_be_visible()
-    section.get_by_role('button', name='詳細', exact=True).click()
+    section.get_by_role('article').filter(has_text='ai-simplicity').get_by_role('button', name='詳細', exact=True).click()
     expect(dialog.get_by_text('クレデンシャル', exact=True)).to_be_visible()
     expect(dialog.locator('.credential-item')).to_have_count(1)
     dialog.get_by_role('button', name='閉じる', exact=True).click()
