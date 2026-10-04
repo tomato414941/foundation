@@ -53,7 +53,7 @@ test('Japanese and English dictionaries have exactly matching keys and interpola
 });
 
 test('literal translation lookups resolve in both locales, including plural families', async () => {
-  for (const filename of ['app.js', 'workspace-view.js', 'request-view.js', 'service-i18n.js']) {
+  for (const filename of ['app.js', 'workspace-view.js', 'request-view.js', 'service-i18n.js', 'components/environment-form.jsx']) {
     const source = await readFile(new URL('../web/' + filename, import.meta.url), 'utf8');
     for (const [, key] of source.matchAll(/\bt\(\s*['"]([^'"]+)['"]/g)) {
       for (const locale of ['ja', 'en']) {

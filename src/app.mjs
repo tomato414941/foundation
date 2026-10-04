@@ -60,6 +60,8 @@ STATIC.set('/request-view.js', ['request-view.js', 'text/javascript; charset=utf
 STATIC.set('/workspace-view.js', ['workspace-view.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/sealing.js', ['sealing.js', 'text/javascript; charset=utf-8']);
 STATIC.set('/styles.css', ['styles.css', 'text/css; charset=utf-8']);
+STATIC.set('/ui/environment-form.js', ['ui/environment-form.js', 'text/javascript; charset=utf-8']);
+STATIC.set('/ui/environment-form.css', ['ui/environment-form.css', 'text/css; charset=utf-8']);
 STATIC.set('/service-logos.svg', ['service-logos.svg', 'image/svg+xml']);
 // The logo as images, for browsers that do not take the page's SVG icon (Safari asks for these by name).
 STATIC.set('/favicon.ico', ['favicon.png', 'image/png']);
@@ -258,7 +260,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
     if (external) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-    res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self' 'sha256-${IMPORT_MAP_HASH}'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`);
+    const styleNonce = randomBytes(18).toString('base64');
+    res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self' 'sha256-${IMPORT_MAP_HASH}'; style-src 'self' 'nonce-${styleNonce}'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`);
     let progressRequestId = null;
     try {
       const port = server.address()?.port;
@@ -290,9 +293,9 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           const frame = ownerFrame ? workspaceView(path, { pending: true, t })
             : path !== '/' ? pendingView(path, { t })
               : `<div class="workspace signin-shell"><header class="topbar">${brand(t)}</header><main class="signin-main"><h1>Foundation</h1><footer id="public-info" class="public-info"><a href="/docs" data-i18n="server.docs.api">${escapeHtml(t('server.docs.api'))}</a></footer></main></div>`;
-          const slots = { locale, title: escapeHtml(pageTitle(path, t)), importmap: IMPORT_MAP,
+          const slots = { locale, title: escapeHtml(pageTitle(path, t)), importmap: IMPORT_MAP, nonce: styleNonce,
             app: frame, noscript: escapeHtml(t('server.noscript.signin')) };
-          content = content.toString().replace(/\{\{foundation-(locale|title|importmap|app|noscript)\}\}/g, (_, key) => slots[key]);
+          content = content.toString().replace(/\{\{foundation-(locale|title|importmap|nonce|app|noscript)\}\}/g, (_, key) => slots[key]);
           res.setHeader('Content-Language', locale);
           res.setHeader('Vary', 'Accept-Language, Cookie');
           res.setHeader('Cache-Control', path === SIGNIN_CONFIRM ? 'no-store' : 'private, no-store');

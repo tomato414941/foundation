@@ -16,7 +16,10 @@ shots.mkdir(parents=True, exist_ok=True)
 
 with sync_playwright() as p:
     browser = getattr(p, args.engine).launch(headless=True)
-    context = browser.new_context(locale='ja-JP', viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True)
+    device = p.devices['iPhone 13' if args.engine == 'webkit' else 'Pixel 7']
+    context = browser.new_context(**{**device, 'locale': 'ja-JP'})
+    if args.engine == 'webkit':
+        context.add_init_script("Object.defineProperty(navigator, 'platform', {get: () => 'iPhone'});")
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -39,145 +42,99 @@ with sync_playwright() as p:
     page.get_by_role('button', name='サインイン', exact=True).click()
     expect(page.get_by_role('heading', name='エンバイロメント', exact=True)).to_be_visible()
 
-    # OSキーボードはheadlessでは出ないため、表示領域だけを縮め、隠れる場所をタップできなくする。
-    # レイアウトの高さはそのままにし、入力欄に合わせた表示領域の移動も再現する。
-    page.evaluate('''() => {
-      const viewport = window.visualViewport, nativeHeight = viewport.height;
-      let height = nativeHeight, top = 0;
-      Object.defineProperties(viewport, { height: { get: () => height }, offsetTop: { get: () => top } });
-      window.setKeyboard = (field, visibleHeight, pan = 0) => {
-        const previousHeight = height, previousTop = top;
-        document.querySelectorAll('[data-keyboard-mask]').forEach(mask => mask.remove());
-        height = visibleHeight || nativeHeight;
-        top = field ? Math.max(0, document.querySelector(field).getBoundingClientRect().bottom + 12 - height) + pan : 0;
-        if (field) for (const [edge, size] of [['top', top], ['bottom', Math.max(0, innerHeight - top - height)]]) {
-          const mask = document.createElement('div');
-          mask.dataset.keyboardMask = '';
-          Object.assign(mask.style, { position: 'fixed', left: '0', right: '0', [edge]: '0', height: size + 'px', zIndex: '1000', background: '#353538' });
-          document.querySelector('dialog').append(mask);
-        }
-        if (field) {
-          const address = document.createElement('div');
-          address.dataset.keyboardMask = '';
-          Object.assign(address.style, { position: 'fixed', top: (top + height - 72) + 'px', left: '16%', right: '16%', height: '44px', zIndex: '1001', borderRadius: '24px', background: '#353538' });
-          document.querySelector('dialog').append(address);
-        }
-        if (height !== previousHeight) viewport.dispatchEvent(new Event('resize'));
-        if (top !== previousTop) viewport.dispatchEvent(new Event('scroll'));
-      };
-    }''')
+    # HeadlessブラウザではOSキーボードが出ないため、表示領域を縮めて候補を操作する。
 
-    def keyboard(field=None, height=None, pan=0):
-        page.evaluate('([field, height, pan]) => window.setKeyboard(field, height, pan)', [field, height, pan])
+    def capture(filename):
+        # 共通部品の開閉アニメーションが終わった表示をレビューする。
+        page.wait_for_timeout(400)
+        page.screenshot(scale='css', path=str(shots / filename))
 
-    def visible_candidates(field):
-        popup = page.locator(field + '-picker .environment-picker-popup')
-        expect(popup).to_be_visible()
-        bounds = popup.bounding_box()
-        viewport = page.evaluate('({top: visualViewport.offsetTop, bottom: visualViewport.offsetTop + visualViewport.height})')
-        assert bounds['y'] >= viewport['top'], (bounds, viewport)
-        assert bounds['y'] + bounds['height'] <= viewport['bottom'], (bounds, viewport)
-        assert bounds['y'] + bounds['height'] <= viewport['bottom'] - 72, '候補一覧をブラウザの操作部分より上に表示する'
-        assert bounds['height'] >= 48, bounds
+    def search(label):
+        picker = page.get_by_role('dialog', name=label, exact=True)
+        expect(picker).to_be_visible()
+        return picker.get_by_role('searchbox', name=label, exact=True).or_(picker.get_by_role('combobox', name=label, exact=True))
+
+    def reachable(field, option):
+        expect(field).to_be_in_viewport()
+        expect(option).to_be_in_viewport()
+        for element in [field, option]:
+            page.wait_for_function("""element => {
+              const r = element.getBoundingClientRect();
+              const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+              return element.contains(hit) && r.top >= -1 && r.bottom <= visualViewport.height + 1;
+            }""", arg=element.element_handle())
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-        # Safariのアドレスバーが下部に重なっても、検索欄を直接タップする。
-        assert page.locator(field).evaluate('''input => {
-          const box = input.getBoundingClientRect();
-          return document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) === input;
-        }'''), '検索欄をブラウザの操作部分に重ねずに表示する'
 
-    for width, height in [(390, 340), (320, 260)]:
+    for width, keyboard_height in [(390, 340), (320, 260)]:
         page.set_viewport_size({'width': width, 'height': 844})
         page.get_by_role('button', name='作成', exact=True).tap()
-        dialog = page.get_by_role('dialog')
+        dialog = page.get_by_role('dialog', name='エンバイロメントを作成', exact=True)
         name = f'スマホの作業 {width}'
         dialog.get_by_label('名前', exact=False).fill(name)
-        dialog.get_by_text('詳細設定', exact=True).tap()
+        capture(f'create-{width}.png')
+        dialog.get_by_role('button', name='詳細設定', exact=True).tap()
         image_choice = dialog.get_by_role('button', name=re.compile('^イメージ '))
         version_choice = dialog.get_by_role('button', name=re.compile('^バージョン・種類 '))
-        # 選択画面を開いてもキーボードは出さず、キャンセルすると元の設定とフォームに戻る。
+
+        # 検索を取り消すと、入力済みの名前と選択値を保ってフォームへ戻る。
         image_choice.tap()
-        expect(page.get_by_role('dialog', name='イメージ', exact=True)).to_be_visible()
-        expect(dialog.get_by_role('heading', name='イメージ', exact=True)).to_be_in_viewport()
-        expect(dialog.get_by_role('option', name='標準イメージ', exact=True)).to_have_attribute('aria-selected', 'true')
-        page.screenshot(path=str(shots / f'image-initial-{width}.png'))
-        assert page.evaluate('document.activeElement.tagName !== "INPUT"')
-        image = dialog.get_by_role('combobox', name='イメージ', exact=True)
-        image.fill('cancelled search')
-        # 検索欄から画面の見出しへタップしても、候補を選ぶ画面で操作を続ける。
-        dialog.get_by_role('heading', name='イメージ', exact=True).tap()
-        expect(page.get_by_role('dialog', name='イメージ', exact=True)).to_be_visible()
-        dialog.get_by_role('button', name='キャンセル', exact=True).tap()
-        expect(dialog.get_by_role('heading', name='エンバイロメントを作成', exact=True)).to_be_visible()
-        expect(dialog.get_by_label('名前', exact=False)).to_have_value(name)
+        field = search('イメージ')
+        field.fill('cancelled search')
+        page.touchscreen.tap(width / 2, 10)
+        expect(dialog).to_be_visible()
         expect(image_choice).to_contain_text('標準イメージ')
+        expect(dialog.get_by_label('名前', exact=False)).to_have_value(name)
+
         image_choice.tap()
-        image.tap()
-        image.fill('python')
-        expect(dialog.get_by_role('option', name='python', exact=True)).to_be_visible()
-        keyboard('#environment-image', height)
-        visible_candidates('#environment-image')
-        page.screenshot(path=str(shots / f'image-keyboard-{width}.png'))
-        # 一覧を末尾までスクロールしても検索欄を使え、候補をタップしてフォームに戻る。
-        last = dialog.get_by_role('option', name='example/python-11', exact=True)
+        field = search('イメージ')
+        field.fill('python')
+        first = page.get_by_role('option', name='python', exact=True)
+        expect(first).to_be_visible()
+        page.set_viewport_size({'width': width, 'height': keyboard_height})
+        reachable(field, first)
+        capture(f'image-keyboard-{width}.png')
+        # 一覧をスクロールして後ろの候補も選択する。
+        listing = page.get_by_role('listbox')
+        listing.evaluate('element => {element.scrollTop = element.scrollHeight}')
+        last = page.get_by_role('option', name='example/python-11', exact=True)
+        expect(last).to_be_visible()
         last.scroll_into_view_if_needed()
-        visible_candidates('#environment-image')
+        reachable(field, last)
         last.tap()
+        page.set_viewport_size({'width': width, 'height': 844})
         expect(image_choice).to_contain_text('example/python-11')
-        expect(dialog.get_by_role('heading', name='エンバイロメントを作成', exact=True)).to_be_visible()
-        version = dialog.get_by_role('combobox', name='バージョン・種類', exact=True)
         expect(version_choice).to_contain_text('既定（latest）')
-        assert page.evaluate('document.activeElement.tagName !== "INPUT"')
-        keyboard()
+        page.wait_for_function('() => document.activeElement.tagName !== "INPUT"')
 
         version_choice.tap()
-        expect(page.get_by_role('dialog', name='バージョン・種類', exact=True)).to_be_visible()
-        expect(dialog.get_by_role('heading', name='バージョン・種類', exact=True)).to_be_in_viewport()
-        expect(dialog.get_by_role('option', name='既定（latest）', exact=True)).to_have_attribute('aria-selected', 'true')
-        page.screenshot(path=str(shots / f'version-initial-{width}.png'))
-        assert page.evaluate('document.activeElement.tagName !== "INPUT"')
+        field = search('バージョン・種類')
+        field.fill('3.12')
+        version = page.get_by_role('option', name='3.12-slim', exact=True)
+        expect(version).to_be_visible()
+        page.set_viewport_size({'width': width, 'height': keyboard_height})
+        reachable(field, version)
+        capture(f'version-keyboard-{width}.png')
         version.tap()
-        version.fill('3.12')
-        expect(dialog.get_by_role('option', name='3.12-slim', exact=True)).to_be_visible()
-        keyboard('#environment-version', height)
-        visible_candidates('#environment-version')
-        keyboard('#environment-version', height, 16)
-        visible_candidates('#environment-version')
-        keyboard('#environment-version', height - 40)
-        visible_candidates('#environment-version')
-        page.screenshot(path=str(shots / f'version-keyboard-{width}.png'))
-        dialog.get_by_role('option', name='3.12-slim', exact=True).tap()
+        page.set_viewport_size({'width': width, 'height': 844})
         expect(version_choice).to_contain_text('3.12-slim')
-        assert page.evaluate('document.activeElement.tagName !== "INPUT"')
-        keyboard()
+        page.wait_for_function('() => document.activeElement.tagName !== "INPUT"')
 
-        # バージョン一覧は、キーボードを出さずにそのまま選択する。
+        # 検索せずにバージョンを選び直し、その設定で環境を作成する。
         version_choice.tap()
-        expect(dialog.get_by_role('option', name='3.13-slim', exact=True)).to_be_visible()
-        assert page.evaluate('document.activeElement.tagName !== "INPUT"')
-        dialog.get_by_role('option', name='3.13-slim', exact=True).tap()
+        expect(search('バージョン・種類')).to_have_value('')
+        expect(page.get_by_role('option', name='既定（latest）', exact=True)).to_be_visible()
+        choice = page.get_by_role('option', name='3.13-slim', exact=True)
+        reachable(search('バージョン・種類'), choice)
+        choice.tap()
         expect(version_choice).to_contain_text('3.13-slim')
-
-        # 検索キーで入力を終え、候補一覧をタップする。
-        image_choice.tap()
-        image.tap()
-        image.fill('py')
-        keyboard('#environment-image', height)
-        image.press('Enter')
-        assert page.evaluate('document.activeElement.tagName !== "INPUT"')
-        keyboard()
-        dialog.get_by_role('option', name='python', exact=True).tap()
-        expect(image_choice).to_contain_text('python')
-        expect(version_choice).to_contain_text('既定（latest）')
-        expect(dialog.get_by_role('button', name='作成', exact=True)).to_be_enabled()
-        page.screenshot(path=str(shots / f'selection-form-{width}.png'))
+        capture(f'selection-form-{width}.png')
         dialog.get_by_role('button', name='作成', exact=True).tap()
         expect(page.locator('.access-row').filter(has_text=name)).to_be_visible()
         resources = context.request.get(args.base + '/v1/principals/me/resources?kind=environment').json()['resources']
         created = next(item for item in resources if item['name'] == name)
-        assert created['image'] == 'python:latest'
+        assert created['image'] == 'example/python-11:3.13-slim'
 
     assert not errors, errors
     context.close()
     browser.close()
-    print('スマートフォンでキーボード表示中もイメージとバージョンをタップして選択する。候補の選択と検索の確定でキーボードを閉じる。')
+    print('スマートフォンで検索を取り消し、表示領域が狭いときもイメージとバージョンをタップして環境を作成する。')

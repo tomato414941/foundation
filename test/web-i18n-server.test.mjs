@@ -142,3 +142,20 @@ test('localized assets are same-origin and the import map has only a fixed CSP h
   assert.match(invalid.text, /<html lang="en">/);
   assert.ok(!invalid.text.includes('&lt;script&gt;'));
 });
+
+test('環境作成フォームの部品を配信し、画面ごとのnonceで共通部品のスタイルを許可する', async t => {
+  const f = await fixture(t, { signin: false });
+  const page = await f.request('/environments');
+  const nonce = page.text.match(/<meta name="csp-nonce" content="([^"]+)"/)[1];
+  assert.ok(nonce.length >= 24);
+  assert.ok(page.headers.get('content-security-policy').includes("style-src 'self' 'nonce-" + nonce + "'"));
+  const next = await f.request('/environments');
+  assert.notEqual(next.text.match(/<meta name="csp-nonce" content="([^"]+)"/)[1], nonce);
+  for (const [path, type] of [['/ui/environment-form.js', 'text/javascript'], ['/ui/environment-form.css', 'text/css']]) {
+    const asset = await f.request(path);
+    assert.equal(asset.status, 200);
+    assert.ok(asset.headers.get('content-type').startsWith(type));
+    const cached = await f.request(path, { headers: { 'if-none-match': asset.headers.get('etag') } });
+    assert.equal(cached.status, 304);
+  }
+});

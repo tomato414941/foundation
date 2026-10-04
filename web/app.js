@@ -526,7 +526,7 @@ async function loadSpace(signal) {
   return { available: true, objects, usage: usage.objects };
 }
 // These elements live for the whole edit/operation, including blur, network waits and failed saves.
-const editingPage = () => dialog.open || Boolean(app.querySelector('.secret-name-editor, .secret-value-panel.editing, .secret-value-panel[aria-busy="true"], [data-uploading]'));
+const editingPage = () => dialog.open || Boolean(environmentDialog) || Boolean(app.querySelector('.secret-name-editor, .secret-value-panel.editing, .secret-value-panel[aria-busy="true"], [data-uploading]'));
 function resumeRefresh() {
   queueMicrotask(() => { void applyPendingLanguage(); });
   const current = revision;
@@ -1191,6 +1191,7 @@ function openDialog(content) {
   if (!dialog.open) dialog.showModal();
 }
 function closeDialog() {
+  environmentDialog?.abort();
   if (dialog.open) dialog.close();
   dialog.innerHTML = '';
   resumeRefresh();
@@ -1481,194 +1482,27 @@ function createPrincipal() {
 // The one whose details are open is known even before the next load lists it.
 let detailed = null;
 const principalById = id => (detailed?.id === id ? detailed : undefined) || (state.agents || []).find(item => item.id === id) || (state.principals || []).find(item => item.id === id) || connectedPrincipals().find(item => item.id === id);
-function createEnvironment() {
-  const owner = state.user.id;
-  const pickerField = (id, label, placeholder) => `<div class="environment-picker" id="${id}-picker"><div class="environment-picker-summary"><label id="${id}-label" for="${id}-choice">${esc(label)}</label><button type="button" class="environment-picker-choice" id="${id}-choice" aria-labelledby="${id}-label ${id}-value" aria-haspopup="dialog"><span id="${id}-value"></span><span aria-hidden="true">›</span></button></div><div class="environment-picker-panel"><div class="environment-picker-heading"><label for="${id}">${esc(label)}</label><h2 id="${id}-title">${esc(label)}</h2><button type="button" class="text-button environment-picker-cancel">${esc(t('client.common.cancel'))}</button></div><div class="environment-picker-control">
-    <input id="${id}" role="combobox" aria-label="${esc(label)}" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-list" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" maxlength="255" placeholder="${esc(placeholder)}">
-    <button type="button" class="environment-picker-toggle" tabindex="-1" aria-label="${esc(label)}"><span aria-hidden="true">⌄</span></button>
-    <div class="environment-picker-popup" tabindex="-1" hidden><div id="${id}-list" role="listbox" aria-label="${esc(label)}"></div><p class="image-catalog-status" role="status"></p><button class="text-button image-more" type="button" data-picker-more hidden>${esc(t('client.environment.moreImages'))}</button><button class="text-button image-more" type="button" data-picker-retry hidden>${esc(t('client.environment.retry'))}</button></div>
-  </div></div></div>`;
-  openDialog(`<h2 id="dialog-title">${esc(t('client.environment.createTitle'))}</h2><form class="environment-form">
-    <label for="environment-name">${esc(t('client.common.optionalLabel', { label: t('client.common.name') }))}</label><input id="environment-name" name="name" maxlength="200" autocomplete="off">
-    <label for="environment-lifetime">${esc(t('client.environment.autoStop'))}</label><select id="environment-lifetime" name="minutes">${[15, 30, 60].map(minutes => `<option value="${minutes}"${minutes === 60 ? ' selected' : ''}>${esc(t('client.environment.afterMinutes', { count: minutes }))}</option>`).join('')}</select>
-    <details class="environment-options"><summary>${esc(t('client.environment.options'))}</summary>
-      <div class="environment-image-fields">${pickerField('environment-image', t('client.environment.image'), t('client.environment.searchImages'))}${pickerField('environment-version', t('client.environment.version'), t('client.environment.chooseVersion'))}</div>
-      <label for="environment-size">${esc(t('client.environment.size'))}</label><select id="environment-size" name="size"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select>
-      <label for="environment-identity">${esc(t('client.environment.permissions'))}</label><select id="environment-identity" name="identity"><option value="">${esc(t('client.environment.noAccess'))}</option><option value="${esc(owner)}">${esc(t('client.environment.ownAccess'))}</option></select>
-    </details><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.environment.create'))}</button></form>`);
-  const formElement = dialog.querySelector('form'), submit = formElement.querySelector('[type="submit"]');
-  let pending = false, imageRevision = 0;
-  const pickers = [];
-  const touch = () => window.matchMedia('(pointer: coarse)').matches;
-  const compact = () => window.matchMedia('(max-width: 600px)').matches;
-  // The field itself searches and holds the chosen value. Arrow keys explore; Enter chooses; Escape restores it.
-  function picker(id, load, choose, emptyText) {
-    const root = formElement.querySelector('#' + id + '-picker'), input = root.querySelector('input'), popup = root.querySelector('.environment-picker-popup'), panel = root.querySelector('.environment-picker-panel');
-    const choice = root.querySelector('.environment-picker-choice'), valueLabel = choice.querySelector('span');
-    const list = root.querySelector('[role="listbox"]'), status = root.querySelector('[role="status"]'), more = root.querySelector('[data-picker-more]'), retry = root.querySelector('[data-picker-retry]');
-    let selected = null, items = [], active = -1, next = null, query = '', controller, debounce, loading = false, returning = false;
-    let muted = [];
-    const leaveScreen = () => {
-      muted.forEach(element => { element.inert = false; }); muted = [];
-      if (dialog.getAttribute('aria-labelledby') === id + '-title') dialog.setAttribute('aria-labelledby', 'dialog-title');
-      root.classList.remove('environment-picker-mobile'); root.style.minHeight = ''; panel.removeAttribute('style'); panel.classList.remove('environment-picker-compact');
-    };
-    const cancel = () => { clearTimeout(debounce); controller?.abort(); loading = false; input.removeAttribute('aria-busy'); };
-    const position = () => {
-      if (popup.hidden) return;
-      const viewport = window.visualViewport;
-      // On a phone the search field stays at the top of the visible area, away from floating browser controls.
-      if (compact()) {
-        if (!root.classList.contains('environment-picker-mobile')) {
-          root.style.minHeight = root.getBoundingClientRect().height + 'px';
-          // This dialog now contains just the selection task, including for keyboard and screen-reader users.
-          for (let branch = root; branch !== dialog; branch = branch.parentElement) {
-            for (const sibling of branch.parentElement.children) if (sibling !== branch && !sibling.inert) { sibling.inert = true; muted.push(sibling); }
-          }
-          dialog.setAttribute('aria-labelledby', id + '-title');
-        }
-        const height = viewport?.height || window.innerHeight;
-        Object.assign(panel.style, { top: (viewport?.offsetTop || 0) + 'px', left: (viewport?.offsetLeft || 0) + 'px', width: (viewport?.width || window.innerWidth) + 'px', height: height + 'px' });
-        panel.classList.toggle('environment-picker-compact', height < 400);
-        root.classList.add('environment-picker-mobile'); popup.style.maxHeight = ''; popup.classList.remove('opens-up');
-        return;
-      }
-      leaveScreen();
-      const field = input.getBoundingClientRect(), bounds = dialog.getBoundingClientRect();
-      // The keyboard can shrink and pan only the visual viewport, leaving the dialog's bounds unchanged.
-      const top = Math.max(bounds.top, viewport?.offsetTop || 0), bottom = Math.min(bounds.bottom, viewport ? viewport.offsetTop + viewport.height : window.innerHeight);
-      const below = bottom - field.bottom - 14, above = field.top - top - 14, upward = below < 240 && above > below;
-      popup.classList.toggle('opens-up', upward);
-      popup.style.maxHeight = Math.max(0, Math.min(300, upward ? above : below)) + 'px';
-    };
-    const highlight = index => {
-      active = index;
-      [...list.children].forEach((option, at) => option.setAttribute('aria-selected', String(at === active)));
-      if (active >= 0 && list.children[active]) { input.setAttribute('aria-activedescendant', list.children[active].id); list.children[active].scrollIntoView({ block: 'nearest' }); }
-      else input.removeAttribute('aria-activedescendant');
-    };
-    const render = () => {
-      list.innerHTML = items.map((item, index) => `<div role="option" id="${id}-option-${index}" data-option="${index}" aria-selected="${item.id === selected?.id}" aria-label="${esc(item.title || item.label)}"><span class="image-result-title"><strong>${esc(item.title || item.label)}</strong>${item.official ? `<span class="image-official">${esc(t('client.environment.officialImage'))}</span>` : ''}${item.id === selected?.id ? '<span class="image-current" aria-hidden="true">✓</span>' : ''}</span>${item.description ? `<span class="image-description">${esc(item.description)}</span>` : ''}</div>`).join('');
-      active = -1; input.removeAttribute('aria-activedescendant'); more.hidden = !next; position();
-    };
-    const set = item => { selected = item; input.value = item?.label || ''; valueLabel.textContent = item?.label || input.placeholder; };
-    const close = () => {
-      popup.hidden = true; leaveScreen();
-      if (!input.value.trim()) input.value = selected?.label || '';
-      input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); active = -1;
-    };
-    async function search(text, page = 1) {
-      cancel(); query = text;
-      const request = controller = new AbortController(); loading = true; retry.hidden = true; more.disabled = true; status.textContent = t('client.common.loading');
-      input.setAttribute('aria-busy', 'true');
-      if (page === 1) { items = []; next = null; render(); }
-      try {
-        const data = await load(text, page, request.signal);
-        if (request.signal.aborted || !formElement.isConnected) return;
-        for (const item of data.items) if (!items.some(existing => existing.id === item.id)) items.push(item);
-        next = data.next; render();
-        status.textContent = items.length ? '' : emptyText;
-        return data;
-      } catch (error) { if (!request.signal.aborted && formElement.isConnected) { status.textContent = error.message; retry.hidden = false; } }
-      finally { if (!request.signal.aborted) { loading = false; more.disabled = false; input.removeAttribute('aria-busy'); position(); } }
-    }
-    const open = (fetch = true) => {
-      if (input.disabled) return;
-      pickers.forEach(other => { if (other.input !== input) other.close(); });
-      if (input.value === selected?.label) input.value = '';
-      popup.hidden = false; input.setAttribute('aria-expanded', 'true'); position();
-      if (fetch) void search(input.value === selected?.label ? '' : input.value.trim());
-    };
-    const focusResults = () => { returning = true; (compact() || touch() ? popup : input).focus({ preventScroll: true }); returning = false; };
-    const restoreFocus = () => { returning = true; if (compact()) choice.focus({ preventScroll: true }); else if (touch()) input.blur(); else input.focus({ preventScroll: true }); returning = false; };
-    const dismiss = () => { cancel(); set(selected); close(); restoreFocus(); };
-    const accept = item => { cancel(); set(item); close(); restoreFocus(); choose(item); };
-    choice.addEventListener('click', () => { open(); focusResults(); });
-    root.querySelector('.environment-picker-cancel').addEventListener('click', dismiss);
-    input.addEventListener('focus', () => { if (returning) return; if (popup.hidden) open(); input.select(); });
-    input.addEventListener('click', () => { if (popup.hidden) { open(); input.select(); } });
-    input.addEventListener('input', () => { cancel(); open(false); items = []; next = null; render(); status.textContent = t('client.common.loading'); debounce = setTimeout(() => { void search(input.value.trim()); }, 250); });
-    root.addEventListener('keydown', event => {
-      if (event.isComposing) return;
-      if (event.key === 'Escape' && !popup.hidden) { event.preventDefault(); event.stopPropagation(); dismiss(); return; }
-      if (event.target !== input && event.target !== popup) return;
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        event.preventDefault(); if (popup.hidden) { open(); return; }
-        highlight(Math.max(0, Math.min(items.length - 1, active + (event.key === 'ArrowDown' ? 1 : -1))));
-      }
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        const item = active >= 0 ? items[active] : items.find(item => item.label === input.value);
-        if (!popup.hidden && item) accept(item); else { open(false); void search(input.value === selected?.label ? '' : input.value.trim()); focusResults(); }
-      }
-    });
-    root.querySelector('.environment-picker-toggle').addEventListener('mousedown', event => event.preventDefault());
-    root.querySelector('.environment-picker-toggle').addEventListener('click', () => { if (popup.hidden) { open(); focusResults(); } else { close(); if (touch()) input.blur(); } });
-    list.addEventListener('mousedown', event => event.preventDefault());
-    list.addEventListener('click', event => { const option = event.target.closest('[data-option]'); if (option && !pending) accept(items[Number(option.dataset.option)]); });
-    root.addEventListener('focusout', event => { if (!compact() && !root.contains(event.relatedTarget)) close(); });
-    const searchPage = page => { focusResults(); void search(query, page); };
-    more.addEventListener('click', () => { if (next && !loading) searchPage(next); });
-    retry.addEventListener('click', () => { searchPage(1); });
-    const control = { root, input, set, close, open, search, cancel, position, focusResults, value: () => input.value === selected?.label ? selected : null,
-      disable: disabled => { input.disabled = disabled; choice.disabled = disabled; },
-      reset: () => { cancel(); set(null); items = []; next = null; retry.hidden = true; status.textContent = ''; render(); close(); } };
-    pickers.push(control); return control;
-  }
-  const defaultImage = { id: 'default', kind: 'default', label: t('client.environment.defaultImage') };
-  let repository = null, automaticVersion = false;
-  const versionItem = name => ({ id: name, label: name === 'latest' ? t('client.environment.defaultVersion') : name });
-  const version = picker('environment-version', async (query, page, signal) => {
-    const data = await api('/v1/environment-images/tags?' + new URLSearchParams({ repository, query, page }), { signal });
-    if (automaticVersion && data.default_tag) { automaticVersion = false; version.set(versionItem(data.default_tag)); version.close(); }
-    return { ...data, items: [...(data.default_tag ? [versionItem(data.default_tag)] : []), ...data.tags.map(tag => versionItem(tag.name))] };
-  }, () => {}, t('client.environment.noVersions'));
-  version.root.hidden = true;
-  version.input.addEventListener('input', () => { automaticVersion = false; });
-  const image = picker('environment-image', async (query, page, signal) => {
-    const direct = query && !/\s/.test(query) ? { id: 'custom:' + query, kind: 'custom', label: query, title: t('client.environment.useImage', { name: query }), description: t('client.environment.useImageName') } : null;
-    if (!query) return { items: [defaultImage], next: null };
-    if (/[:@]/.test(query) || /^[^/]*\.[^/]*\//.test(query)) return { items: direct ? [direct] : [], next: null };
-    const data = await api('/v1/environment-images?' + new URLSearchParams({ query, page }), { signal });
-    return { items: data.images.map(item => ({ ...item, id: 'hub:' + item.name, kind: 'hub', label: item.name })), next: data.next };
-  }, async item => {
-    const revision = ++imageRevision;
-    repository = item.kind === 'hub' ? item.name : null; automaticVersion = Boolean(repository); version.reset(); version.root.hidden = !repository; version.disable(Boolean(repository));
-    submit.disabled = Boolean(repository);
-    if (!repository) return;
-    const data = await version.search('');
-    if (revision !== imageRevision || !formElement.isConnected) return;
-    version.disable(false);
-    if (data?.default_tag) version.set(versionItem(data.default_tag));
-    else { version.open(false); version.focusResults(); }
-    submit.disabled = false;
-  }, t('client.environment.noImages'));
-  image.set(defaultImage);
-  const reposition = () => pickers.forEach(control => control.position());
-  dialog.addEventListener('scroll', reposition); window.addEventListener('resize', reposition);
-  window.visualViewport?.addEventListener('resize', reposition); window.visualViewport?.addEventListener('scroll', reposition);
-  dialog.addEventListener('close', () => {
-    pickers.forEach(control => { control.cancel(); control.close(); }); dialog.removeEventListener('scroll', reposition); window.removeEventListener('resize', reposition);
-    window.visualViewport?.removeEventListener('resize', reposition); window.visualViewport?.removeEventListener('scroll', reposition);
-  }, { once: true });
-  bindForm(async form => {
-    if (pending) return;
-    const chosen = image.value(), chosenVersion = version.value();
-    if (!chosen || (chosen.kind === 'hub' && !chosenVersion)) throw new Error(t('client.environment.chooseImageVersion'));
-    pickers.forEach(control => { control.cancel(); control.close(); });
-    const fields = [...formElement.querySelectorAll('input:enabled, select:enabled, button:enabled')];
-    pending = true; submit.textContent = t('client.environment.creating'); fields.forEach(field => { field.disabled = true; });
-    const name = String(form.get('name')).trim(), seconds = Number(form.get('minutes')) * 60;
-    const reference = chosen.kind === 'hub' ? chosen.name + ':' + chosenVersion.id : chosen.label;
-    try {
-      await api('/v1/principals/' + owner + '/environments', { method: 'POST', data: {
-        ...(name ? { name } : {}), ...(chosen.kind !== 'default' ? { image: reference } : {}), size: form.get('size'), identity: form.get('identity') || null,
-        lifetime: { end: 'idle', idle_seconds: seconds, max_seconds: seconds },
-      } });
-      if (formElement.isConnected) closeDialog();
-      await refresh(); toast(t('client.environment.created'));
-    } finally { pending = false; submit.textContent = t('client.environment.create'); fields.forEach(field => { field.disabled = false; }); }
-  });
+let environmentDialog, environmentUI;
+async function createEnvironment() {
+  if (environmentDialog) return;
+  const controller = environmentDialog = new AbortController();
+  try {
+    environmentUI ||= Promise.all([
+      import('./ui/environment-form.js'),
+      new Promise((resolve, reject) => {
+        const style = document.createElement('link');
+        style.rel = 'stylesheet'; style.href = '/ui/environment-form.css';
+        style.onload = resolve;
+        style.onerror = () => { style.remove(); reject(new Error(t('client.errors.networkCheck'))); };
+        document.head.append(style);
+      })
+    ]).catch(() => { environmentUI = null; throw new Error(t('client.errors.networkCheck')); });
+    const [{openEnvironmentForm}] = await environmentUI;
+    if (controller.signal.aborted) return;
+    const created = await openEnvironmentForm({owner: state.user.id, api, t, signal: controller.signal});
+    environmentDialog = null;
+    if (created) { await refresh(); toast(t('client.environment.created')); }
+  } finally { environmentDialog = null; resumeRefresh(); }
 }
 // Machines lent to this account and still running: who each acts as, until when, and the month's computing.
 function environmentsSection() {
@@ -2231,7 +2065,7 @@ document.addEventListener('click', async (event) => {
       if (left) { await refresh(); await principalDetails(id); } else { closeDialog(); await refresh(); }
     }
     if (action === 'revoke-access') revokeAccess(principalById(id));
-    if (action === 'create-environment') createEnvironment();
+    if (action === 'create-environment') await createEnvironment();
     if (action === 'close-environment') {
       const item = (state.environments || []).find(row => row.id === id);
       if (item) confirmRemoval(t('client.environments.closeTitle', { name: item.name }), t('client.environment.closeWarning'), () => api('/v1/resources/' + item.id, { method: 'DELETE', data: {} }), t('client.environment.closed'), t('client.environment.close'));

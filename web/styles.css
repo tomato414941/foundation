@@ -9,7 +9,7 @@
 body { margin: 0; color: var(--ink); background: var(--canvas); font: 15px/1.7 var(--sans); -webkit-font-smoothing: antialiased; }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
-button:disabled { cursor: not-allowed; background: #1c1c1c; color: #6e6e6e; border-color: var(--line); }
+button:disabled:not(:where(.foundation-ui *)) { cursor: not-allowed; background: #1c1c1c; color: #6e6e6e; border-color: var(--line); }
 a { color: inherit; text-decoration: none; }
 a:hover { text-decoration: underline; text-underline-offset: 4px; }
 h1, h2, h3, p { margin: 0; }
@@ -17,9 +17,9 @@ h1, h2, h3 { font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
 h1 { font-size: 24px; letter-spacing: -.02em; }
 h2 { font-size: 19px; }
 h3 { font-size: 17px; }
-svg { width: 19px; height: 19px; flex-shrink: 0; }
+svg:not(:where(.foundation-ui *)) { width: 19px; height: 19px; flex-shrink: 0; }
 [hidden] { display: none !important; }
-:is(button, a, input, textarea, select, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+:is(button, a, input, textarea, select, summary):focus-visible:not(:where(.foundation-ui *)) { outline: 2px solid var(--accent); outline-offset: 4px; }
 main[tabindex="-1"]:focus { outline: none; }
 .muted, .optional { color: var(--muted); }
 .block { display: block; }
@@ -228,10 +228,10 @@ dialog .service-grid { max-height: 50dvh; overflow-y: auto; margin-bottom: 12px;
 .signin-delivery { margin-top: 20px; }
 .signin-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 12px; margin-top: 5px; }
 .signin-actions button:disabled { background: none; }
-label:not(.choice), legend { display: block; font-size: 14px; font-weight: 600; margin: 18px 0 7px; }
-input:not([type=checkbox], [type=radio]), textarea, select { display: block; width: 100%; min-width: 0; min-height: 46px; border: 1px solid var(--line-strong); border-radius: 6px; padding: 10px 12px; background: var(--sunken); font-size: 16px; }
-input:disabled { background: var(--soft); }
-input[readonly], textarea[readonly] { background: var(--soft); }
+label:not(.choice):not(:where(.foundation-ui *)), legend:not(:where(.foundation-ui *)) { display: block; font-size: 14px; font-weight: 600; margin: 18px 0 7px; }
+input:not([type=checkbox], [type=radio]):not(:where(.foundation-ui *)), textarea:not(:where(.foundation-ui *)), select:not(:where(.foundation-ui *)) { display: block; width: 100%; min-width: 0; min-height: 46px; border: 1px solid var(--line-strong); border-radius: 6px; padding: 10px 12px; background: var(--sunken); font-size: 16px; }
+input:disabled:not(:where(.foundation-ui *)) { background: var(--soft); }
+input[readonly]:not(:where(.foundation-ui *)), textarea[readonly]:not(:where(.foundation-ui *)) { background: var(--soft); }
 textarea { resize: vertical; }
 ::placeholder { color: #7a7a7a; opacity: 1; }
 .form-error { min-height: 0; color: var(--danger); font-size: 14px; margin: 12px 0; overflow-wrap: anywhere; }
@@ -248,54 +248,6 @@ legend { padding: 0; margin-top: 0; }
 .choice small { display: block; font-size: 14px; color: var(--muted); margin-top: 3px; }
 .revoke-choice { margin-top: 18px; }
 .permission-note { font-size: 14px; color: var(--muted); margin: 14px 0; }
-.environment-options { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); }
-.environment-options summary { color: var(--muted); cursor: pointer; font-size: 14px; }
-.environment-form .form-error { margin-top: 32px; }
-.environment-image-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 14px; }
-.environment-picker { min-width: 0; }
-.environment-picker-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.environment-picker-summary, .environment-picker-cancel, .environment-picker-heading h2 { display: none; }
-.environment-picker-choice { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 48px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--sunken); text-align: left; font-size: 16px; }
-.environment-picker-choice span:first-child { min-width: 0; overflow-wrap: anywhere; }
-.environment-picker-choice span:last-child { flex: none; color: var(--muted); }
-.environment-picker-control { position: relative; }
-.environment-picker-control input { padding-right: 42px; }
-.environment-picker-toggle { position: absolute; top: 0; right: 0; height: 100%; width: 38px; border: 0; border-radius: 0 6px 6px 0; color: var(--muted); background: transparent; cursor: pointer; }
-.environment-picker-popup { position: absolute; z-index: 5; top: calc(100% + 5px); left: 0; right: 0; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); box-shadow: 0 8px 28px #0008; }
-.environment-picker-popup.opens-up { top: auto; bottom: calc(100% + 5px); }
-.environment-picker-popup [role=option] { padding: 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
-.environment-picker-popup [role=option]:hover, .environment-picker-popup [aria-selected=true] { background: var(--selected); }
-.image-result-title { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.image-current { margin-left: auto; }
-.image-result-title strong { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
-.image-official { color: var(--muted); font-size: 11px; border: 1px solid var(--line-strong); padding: 1px 5px; border-radius: 4px; }
-.image-description { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
-.environment-picker-popup .image-more { margin: 4px 12px; font-size: 13px; }
-.image-catalog-status { margin: 12px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
-.image-catalog-status:empty { display: none; }
-@media (min-width: 600px) {
-  .environment-image-fields:has(#environment-version-picker:not([hidden])) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-}
-@media (max-width: 600px) {
-  .environment-picker-summary { display: block; }
-  .environment-picker-panel, .environment-picker-mobile .environment-picker-summary { display: none; }
-  .environment-picker-mobile .environment-picker-panel { position: fixed; z-index: 10; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto minmax(0, 1fr); gap: 12px; padding: 12px 16px max(16px, env(safe-area-inset-bottom)); overflow: hidden; background: var(--surface); }
-  .environment-picker-mobile .environment-picker-heading { display: contents; }
-  .environment-picker-mobile .environment-picker-heading label { display: none; }
-  .environment-picker-mobile .environment-picker-heading h2 { display: block; grid-area: 1 / 1; align-self: center; margin: 0; padding: 0; font-size: 18px; }
-  .environment-picker-mobile .environment-picker-cancel { display: inline-flex; grid-area: 1 / 2; }
-  .environment-picker-mobile .environment-picker-control { display: contents; }
-  .environment-picker-mobile input { grid-area: 2 / 1 / 3 / 3; padding-right: 12px; }
-  .environment-picker-mobile .environment-picker-toggle { display: none; }
-  .environment-picker-mobile .environment-picker-popup { position: static; grid-area: 3 / 1 / 4 / 3; min-height: 0; border: 0; border-radius: 0; box-shadow: none; }
-  .environment-picker-mobile .environment-picker-popup [role=option] { min-height: 48px; padding: 14px 12px; }
-  .environment-picker-mobile .image-result-title strong { font-size: 15px; }
-  /* A short viewport uses a single search bar so a keyboard still leaves room to choose. */
-  .environment-picker-mobile .environment-picker-compact { grid-template-rows: auto minmax(0, 1fr); padding-bottom: max(80px, env(safe-area-inset-bottom)); }
-  .environment-picker-mobile .environment-picker-compact h2 { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); }
-  .environment-picker-mobile .environment-picker-compact input { grid-area: 1 / 1; }
-  .environment-picker-mobile .environment-picker-compact .environment-picker-popup { grid-area: 2 / 1 / 3 / 3; }
-}
 
 dialog { width: min(520px, calc(100% - 32px)); max-height: calc(100dvh - 40px); border: 1px solid var(--line); border-radius: 12px; padding: 30px; box-shadow: 0 20px 80px #000a; color: var(--ink); background: var(--surface); }
 /* While a dialog is open the page behind it stays put: nothing scrolls it, and scrolling to the end of the dialog does not carry on into it (Safari lets it). */
