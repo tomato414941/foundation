@@ -70,11 +70,15 @@ with sync_playwright() as p:
     dialog.get_by_label('名前', exact=False).fill('ビルド')
     dialog.get_by_label('自動停止', exact=True).select_option('30')
     dialog.get_by_text('詳細設定', exact=True).click()
-    dialog.get_by_label('イメージ', exact=False).fill('python:3.12-slim')
+    expect(dialog.get_by_label('イメージ', exact=True)).to_have_value('default')
+    dialog.get_by_label('イメージ', exact=True).select_option('custom')
+    dialog.get_by_label('コンテナイメージ名', exact=True).fill('python:3.12-slim')
     dialog.get_by_label('サイズ', exact=True).select_option('medium')
-    dialog.get_by_label('実行権限', exact=True).select_option(owner)
-    review(page)
-    page.screenshot(path=str(shots / 'environment-create-options-320.png'), full_page=True)
+    dialog.get_by_label('Foundationへのアクセス', exact=True).select_option(owner)
+    for width in [1280, 390, 320]:
+        page.set_viewport_size({'width': width, 'height': 1000})
+        review(page)
+        page.screenshot(path=str(shots / f'environment-create-options-{width}.png'), full_page=True)
 
     # 作成中は重複送信を防ぎ、失敗したときは入力を保って再試行する。
     pending = []
@@ -88,7 +92,8 @@ with sync_playwright() as p:
     pending[0].fulfill(status=503, content_type='application/json', body=json.dumps({'error': {'code': 'runner_unavailable', 'message': '現在作成できません。もう一度お試しください。'}}))
     expect(dialog.get_by_role('alert')).to_have_text('現在作成できません。もう一度お試しください。')
     expect(dialog.get_by_label('名前', exact=False)).to_have_value('ビルド')
-    expect(dialog.get_by_label('イメージ', exact=False)).to_have_value('python:3.12-slim')
+    expect(dialog.get_by_label('イメージ', exact=True)).to_have_value('custom')
+    expect(dialog.get_by_label('コンテナイメージ名', exact=True)).to_have_value('python:3.12-slim')
     expect(dialog.get_by_label('自動停止', exact=True)).to_have_value('30')
     expect(dialog.get_by_role('button', name='作成', exact=True)).to_be_enabled()
     page.unroute(endpoint)
@@ -101,13 +106,18 @@ with sync_playwright() as p:
     assert as_owner['lifetime']['max_seconds'] == 1800
     assert as_owner['lifetime']['idle_seconds'] == 1800
 
-    # 名前だけ入力した環境は、権限なし・Small・1時間の設定で作成する。
+    # カスタムから標準へ戻すと、標準イメージ・権限なし・Small・1時間の設定で作成する。
     page.get_by_role('button', name='作成', exact=True).click()
     dialog.get_by_label('名前', exact=False).fill('調べもの')
+    dialog.get_by_text('詳細設定', exact=True).click()
+    dialog.get_by_label('イメージ', exact=True).select_option('custom')
+    dialog.get_by_label('コンテナイメージ名', exact=True).fill('python:3.12-slim')
+    dialog.get_by_label('イメージ', exact=True).select_option('default')
     dialog.get_by_role('button', name='作成', exact=True).click()
     expect(page.locator('.access-row').filter(has_text='調べもの')).to_be_visible()
     research = next(item for item in call('GET', '/v1/principals/' + owner + '/resources?kind=environment', token=token)['resources'] if item['name'] == '調べもの')
     assert research['identity'] is None
+    assert research['image'] is None
     assert research['size'] == 'small'
     assert research['lifetime']['max_seconds'] == 3600
     assert research['lifetime']['idle_seconds'] == 3600
@@ -137,6 +147,9 @@ with sync_playwright() as p:
     page.get_by_role('button', name='Create', exact=True).click()
     expect(dialog.get_by_role('heading', name='Create environment', exact=True)).to_be_visible()
     expect(dialog.get_by_label('Stop automatically', exact=True)).to_have_value('60')
+    dialog.get_by_text('Options', exact=True).click()
+    expect(dialog.get_by_label('Image', exact=True)).to_have_value('default')
+    expect(dialog.get_by_label('Foundation access', exact=True)).to_have_value('')
     page.screenshot(path=str(shots / 'environment-create-en.png'), full_page=True)
     dialog.get_by_role('button', name='Create', exact=True).click()
     expect(page.get_by_text('Environment created.', exact=True)).to_be_visible()

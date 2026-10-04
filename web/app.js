@@ -1407,24 +1407,30 @@ let detailed = null;
 const principalById = id => (detailed?.id === id ? detailed : undefined) || (state.agents || []).find(item => item.id === id) || (state.principals || []).find(item => item.id === id) || connectedPrincipals().find(item => item.id === id);
 function createEnvironment() {
   const owner = state.user.id;
-  openDialog(`<h2 id="dialog-title">${esc(t('client.environment.createTitle'))}</h2><form>
+  openDialog(`<h2 id="dialog-title">${esc(t('client.environment.createTitle'))}</h2><form class="environment-form">
     <label for="environment-name">${esc(t('client.common.optionalLabel', { label: t('client.common.name') }))}</label><input id="environment-name" name="name" maxlength="200" autocomplete="off">
     <label for="environment-lifetime">${esc(t('client.environment.autoStop'))}</label><select id="environment-lifetime" name="minutes">${[15, 30, 60].map(minutes => `<option value="${minutes}"${minutes === 60 ? ' selected' : ''}>${esc(t('client.environment.afterMinutes', { count: minutes }))}</option>`).join('')}</select>
     <details class="environment-options"><summary>${esc(t('client.environment.options'))}</summary>
-      <label for="environment-image">${esc(t('client.common.optionalLabel', { label: t('client.environment.image') }))}</label><input id="environment-image" name="image" maxlength="255" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(t('client.environment.defaultImage'))}">
+      <label for="environment-image-choice">${esc(t('client.environment.image'))}</label><select id="environment-image-choice" name="image_choice"><option value="default">${esc(t('client.environment.defaultImage'))}</option><option value="custom">${esc(t('client.environment.customImage'))}</option></select>
+      <div id="environment-custom-image" hidden><label for="environment-image">${esc(t('client.environment.imageName'))}</label><input id="environment-image" name="image" required disabled maxlength="255" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
       <label for="environment-size">${esc(t('client.environment.size'))}</label><select id="environment-size" name="size"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select>
-      <p class="permission-note">${esc(t('client.environment.sizeUsage'))}</p>
-      <label for="environment-identity">${esc(t('client.environment.permissions'))}</label><select id="environment-identity" name="identity"><option value="">${esc(t('client.environment.noPermissions'))}</option><option value="${esc(owner)}">${esc(t('client.environment.actingAsYou'))}</option></select>
+      <label for="environment-identity">${esc(t('client.environment.permissions'))}</label><select id="environment-identity" name="identity"><option value="">${esc(t('client.environment.noAccess'))}</option><option value="${esc(owner)}">${esc(t('client.environment.ownAccess'))}</option></select>
     </details><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.environment.create'))}</button></form>`);
-  const formElement = dialog.querySelector('form'), submit = formElement.querySelector('[type="submit"]'), fields = [...formElement.querySelectorAll('input, select')];
+  const formElement = dialog.querySelector('form'), submit = formElement.querySelector('[type="submit"]');
+  const imageChoice = formElement.querySelector('#environment-image-choice'), customImage = formElement.querySelector('#environment-custom-image');
+  imageChoice.addEventListener('change', () => {
+    const custom = imageChoice.value === 'custom';
+    customImage.hidden = !custom; customImage.querySelector('input').disabled = !custom;
+  });
   let pending = false;
   bindForm(async form => {
     if (pending) return;
+    const fields = [...formElement.querySelectorAll('input:enabled, select:enabled')];
     pending = true; submit.textContent = t('client.environment.creating'); fields.forEach(field => { field.disabled = true; });
-    const name = String(form.get('name')).trim(), image = String(form.get('image')).trim(), seconds = Number(form.get('minutes')) * 60;
+    const name = String(form.get('name')).trim(), image = String(form.get('image') || '').trim(), seconds = Number(form.get('minutes')) * 60;
     try {
       await api('/v1/principals/' + owner + '/environments', { method: 'POST', data: {
-        ...(name ? { name } : {}), ...(image ? { image } : {}), size: form.get('size'), identity: form.get('identity') || null,
+        ...(name ? { name } : {}), ...(form.get('image_choice') === 'custom' ? { image } : {}), size: form.get('size'), identity: form.get('identity') || null,
         lifetime: { end: 'idle', idle_seconds: seconds, max_seconds: seconds },
       } });
       if (formElement.isConnected) closeDialog();

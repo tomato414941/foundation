@@ -250,6 +250,7 @@ legend { padding: 0; margin-top: 0; }
 .permission-note { font-size: 14px; color: var(--muted); margin: 14px 0; }
 .environment-options { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); }
 .environment-options summary { color: var(--muted); cursor: pointer; font-size: 14px; }
+.environment-form .form-error { margin-top: 32px; }
 dialog { width: min(520px, calc(100% - 32px)); max-height: calc(100dvh - 40px); border: 1px solid var(--line); border-radius: 12px; padding: 30px; box-shadow: 0 20px 80px #000a; color: var(--ink); background: var(--surface); }
 /* While a dialog is open the page behind it stays put: nothing scrolls it, and scrolling to the end of the dialog does not carry on into it (Safari lets it). */
 html:has(dialog[open]) { overflow: hidden; }
