@@ -1423,111 +1423,142 @@ let detailed = null;
 const principalById = id => (detailed?.id === id ? detailed : undefined) || (state.agents || []).find(item => item.id === id) || (state.principals || []).find(item => item.id === id) || connectedPrincipals().find(item => item.id === id);
 function createEnvironment() {
   const owner = state.user.id;
+  const pickerField = (id, label, placeholder) => `<div class="environment-picker" id="${id}-picker"><label for="${id}">${esc(label)}</label><div class="environment-picker-control">
+    <input id="${id}" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-list" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="255" placeholder="${esc(placeholder)}">
+    <button type="button" class="environment-picker-toggle" tabindex="-1" aria-label="${esc(label)}"><span aria-hidden="true">⌄</span></button>
+    <div class="environment-picker-popup" hidden><div id="${id}-list" role="listbox" aria-label="${esc(label)}"></div><p class="image-catalog-status" role="status"></p><button class="text-button image-more" type="button" data-picker-more hidden>${esc(t('client.environment.moreImages'))}</button><button class="text-button image-more" type="button" data-picker-retry hidden>${esc(t('client.environment.retry'))}</button></div>
+  </div></div>`;
   openDialog(`<h2 id="dialog-title">${esc(t('client.environment.createTitle'))}</h2><form class="environment-form">
     <label for="environment-name">${esc(t('client.common.optionalLabel', { label: t('client.common.name') }))}</label><input id="environment-name" name="name" maxlength="200" autocomplete="off">
     <label for="environment-lifetime">${esc(t('client.environment.autoStop'))}</label><select id="environment-lifetime" name="minutes">${[15, 30, 60].map(minutes => `<option value="${minutes}"${minutes === 60 ? ' selected' : ''}>${esc(t('client.environment.afterMinutes', { count: minutes }))}</option>`).join('')}</select>
     <details class="environment-options"><summary>${esc(t('client.environment.options'))}</summary>
-    <label for="environment-image-choice">${esc(t('client.environment.image'))}</label><select id="environment-image-choice" name="image_choice"><option value="default">${esc(t('client.environment.defaultImage'))}</option><option value="hub">${esc(t('client.environment.dockerHub'))}</option><option value="custom">${esc(t('client.environment.customImage'))}</option></select>
-    <div id="environment-custom-image" hidden><label for="environment-image">${esc(t('client.environment.imageName'))}</label><input id="environment-image" name="image" required disabled maxlength="255" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-    <div class="image-catalog" id="environment-hub" hidden>
-      <div id="environment-image-search-panel"><label for="environment-image-search">${esc(t('client.environment.searchImages'))}</label><div class="image-search-field"><input id="environment-image-search" type="search" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false" disabled><button class="button secondary" id="environment-search-button" type="button" disabled>${esc(t('client.common.search'))}</button></div>
-        <div class="image-results" id="environment-image-results"></div><button class="text-button image-more" id="environment-more-images" type="button" hidden disabled>${esc(t('client.environment.moreImages'))}</button></div>
-      <div id="environment-image-tags-panel" hidden><div class="image-selected"><strong id="environment-selected-image"></strong><button class="text-button" id="environment-change-image" type="button" disabled>${esc(t('client.common.change'))}</button><a id="environment-image-link" target="_blank" rel="noopener noreferrer">Docker Hub ↗</a></div>
-        <label for="environment-tag-search">${esc(t('client.environment.filterTags'))}</label><input id="environment-tag-search" type="search" maxlength="128" autocomplete="off" autocapitalize="off" spellcheck="false" disabled>
-        <label for="environment-tag">${esc(t('client.environment.tag'))}</label><select id="environment-tag" name="tag" disabled><option value="">${esc(t('client.environment.chooseTag'))}</option></select>
-        <button class="text-button image-more" id="environment-more-tags" type="button" hidden disabled>${esc(t('client.environment.moreTags'))}</button></div>
-      <p class="image-catalog-status" role="status" id="environment-image-status"></p><button class="text-button image-more" id="environment-retry-tags" type="button" hidden disabled>${esc(t('client.environment.retry'))}</button>
-    </div>
+      <div class="environment-image-fields">${pickerField('environment-image', t('client.environment.image'), t('client.environment.searchImages'))}${pickerField('environment-version', t('client.environment.version'), t('client.environment.chooseVersion'))}</div>
       <label for="environment-size">${esc(t('client.environment.size'))}</label><select id="environment-size" name="size"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select>
       <label for="environment-identity">${esc(t('client.environment.permissions'))}</label><select id="environment-identity" name="identity"><option value="">${esc(t('client.environment.noAccess'))}</option><option value="${esc(owner)}">${esc(t('client.environment.ownAccess'))}</option></select>
     </details><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.environment.create'))}</button></form>`);
   const formElement = dialog.querySelector('form'), submit = formElement.querySelector('[type="submit"]');
-  const imageChoice = formElement.querySelector('#environment-image-choice'), customImage = formElement.querySelector('#environment-custom-image');
-  const hub = formElement.querySelector('#environment-hub'), searchPanel = hub.querySelector('#environment-image-search-panel'), tagsPanel = hub.querySelector('#environment-image-tags-panel');
-  const searchInput = hub.querySelector('#environment-image-search'), searchButton = hub.querySelector('#environment-search-button'), results = hub.querySelector('#environment-image-results');
-  const tagSearch = hub.querySelector('#environment-tag-search'), tagSelect = hub.querySelector('#environment-tag'), status = hub.querySelector('#environment-image-status');
-  const moreImages = hub.querySelector('#environment-more-images'), moreTags = hub.querySelector('#environment-more-tags');
-  const retryTags = hub.querySelector('#environment-retry-tags');
-  let pending = false, repository = null, images = [], tags = [], imagePage = null, tagPage = null, lookup, debounce;
-  const cancelLookup = () => { clearTimeout(debounce); lookup?.abort(); };
-  dialog.addEventListener('close', cancelLookup, { once: true });
-  const tagOptions = () => { tagSelect.innerHTML = `<option value="">${esc(t('client.environment.chooseTag'))}</option>` + tags.map(tag => `<option value="${esc(tag.name)}">${esc(tag.name)}</option>`).join(''); };
-  async function searchImages(page = 1) {
-    cancelLookup();
-    const query = searchInput.value.trim();
-    if (!query) { images = []; results.innerHTML = ''; moreImages.hidden = true; status.textContent = ''; return; }
-    const controller = lookup = new AbortController();
-    searchButton.disabled = true; moreImages.disabled = true; status.textContent = t('client.common.loading');
-    if (page === 1) { images = []; results.innerHTML = ''; moreImages.hidden = true; }
-    try {
-      const data = await api('/v1/environment-images?' + new URLSearchParams({ query, page }), { signal: controller.signal });
-      if (controller.signal.aborted || !formElement.isConnected) return;
-      images.push(...data.images); imagePage = data.next;
-      results.innerHTML = images.map((item, index) => `<button type="button" class="image-result" data-image-index="${index}" aria-label="${esc(item.name)}"><span class="image-result-title"><strong>${esc(item.name)}</strong>${item.official ? `<span class="image-official">${esc(t('client.environment.officialImage'))}</span>` : ''}</span>${item.description ? `<span class="image-description">${esc(item.description)}</span>` : ''}</button>`).join('');
-      moreImages.hidden = !imagePage; status.textContent = images.length ? '' : t('client.environment.noImages');
-    } catch (error) { if (!controller.signal.aborted && formElement.isConnected) status.textContent = error.message; }
-    finally { if (!controller.signal.aborted) { searchButton.disabled = false; moreImages.disabled = false; } }
+  let pending = false, imageRevision = 0;
+  const pickers = [];
+  // The field itself searches and holds the chosen value. Arrow keys explore; Enter chooses; Escape restores it.
+  function picker(id, load, choose, emptyText) {
+    const root = formElement.querySelector('#' + id + '-picker'), input = root.querySelector('input'), popup = root.querySelector('.environment-picker-popup');
+    const list = root.querySelector('[role="listbox"]'), status = root.querySelector('[role="status"]'), more = root.querySelector('[data-picker-more]'), retry = root.querySelector('[data-picker-retry]');
+    let selected = null, items = [], active = -1, next = null, query = '', controller, debounce, loading = false, returning = false;
+    const cancel = () => { clearTimeout(debounce); controller?.abort(); loading = false; input.removeAttribute('aria-busy'); };
+    const position = () => {
+      if (popup.hidden) return;
+      const field = input.getBoundingClientRect(), bounds = dialog.getBoundingClientRect();
+      const below = bounds.bottom - field.bottom - 14, above = field.top - bounds.top - 14, upward = below < 240 && above > below;
+      popup.classList.toggle('opens-up', upward);
+      popup.style.maxHeight = Math.max(110, Math.min(300, upward ? above : below)) + 'px';
+    };
+    const highlight = index => {
+      active = index;
+      [...list.children].forEach((option, at) => option.setAttribute('aria-selected', String(at === active)));
+      if (active >= 0 && list.children[active]) { input.setAttribute('aria-activedescendant', list.children[active].id); list.children[active].scrollIntoView({ block: 'nearest' }); }
+      else input.removeAttribute('aria-activedescendant');
+    };
+    const render = () => {
+      list.innerHTML = items.map((item, index) => `<div role="option" id="${id}-option-${index}" data-option="${index}" aria-selected="false" aria-label="${esc(item.title || item.label)}"><span class="image-result-title"><strong>${esc(item.title || item.label)}</strong>${item.official ? `<span class="image-official">${esc(t('client.environment.officialImage'))}</span>` : ''}</span>${item.description ? `<span class="image-description">${esc(item.description)}</span>` : ''}</div>`).join('');
+      active = -1; input.removeAttribute('aria-activedescendant'); more.hidden = !next; position();
+    };
+    const set = item => { selected = item; input.value = item?.label || ''; };
+    const close = () => { popup.hidden = true; if (!input.value.trim()) input.value = selected?.label || ''; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); active = -1; };
+    async function search(text, page = 1) {
+      cancel(); query = text;
+      const request = controller = new AbortController(); loading = true; retry.hidden = true; more.disabled = true; status.textContent = t('client.common.loading');
+      input.setAttribute('aria-busy', 'true');
+      if (page === 1) { items = []; next = null; render(); }
+      try {
+        const data = await load(text, page, request.signal);
+        if (request.signal.aborted || !formElement.isConnected) return;
+        for (const item of data.items) if (!items.some(existing => existing.id === item.id)) items.push(item);
+        next = data.next; render();
+        status.textContent = items.length ? '' : emptyText;
+        return data;
+      } catch (error) { if (!request.signal.aborted && formElement.isConnected) { status.textContent = error.message; retry.hidden = false; } }
+      finally { if (!request.signal.aborted) { loading = false; more.disabled = false; input.removeAttribute('aria-busy'); position(); } }
+    }
+    const open = (fetch = true) => {
+      if (input.disabled) return;
+      pickers.forEach(other => { if (other.input !== input) other.close(); });
+      if (input.value === selected?.label) input.value = '';
+      popup.hidden = false; input.setAttribute('aria-expanded', 'true'); position();
+      if (fetch) void search(input.value === selected?.label ? '' : input.value.trim());
+    };
+    const accept = item => { cancel(); set(item); close(); returning = true; input.focus({ preventScroll: true }); returning = false; choose(item); };
+    input.addEventListener('focus', () => { if (returning) return; if (popup.hidden) open(); input.select(); });
+    input.addEventListener('click', () => { if (popup.hidden) { open(); input.select(); } });
+    input.addEventListener('input', () => { cancel(); open(false); items = []; next = null; render(); status.textContent = t('client.common.loading'); debounce = setTimeout(() => { void search(input.value.trim()); }, 250); });
+    input.addEventListener('keydown', event => {
+      if (event.isComposing) return;
+      if (event.key === 'Escape' && !popup.hidden) { event.preventDefault(); event.stopPropagation(); cancel(); set(selected); close(); return; }
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault(); if (popup.hidden) { open(); return; }
+        highlight(Math.max(0, Math.min(items.length - 1, active + (event.key === 'ArrowDown' ? 1 : -1))));
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        const item = active >= 0 ? items[active] : items.find(item => item.label === input.value);
+        if (!popup.hidden && item) accept(item); else { open(false); void search(input.value === selected?.label ? '' : input.value.trim()); }
+      }
+    });
+    root.querySelector('.environment-picker-toggle').addEventListener('mousedown', event => event.preventDefault());
+    root.querySelector('.environment-picker-toggle').addEventListener('click', () => { if (popup.hidden) { input.focus(); if (popup.hidden) open(); } else close(); });
+    list.addEventListener('mousedown', event => event.preventDefault());
+    list.addEventListener('click', event => { const option = event.target.closest('[data-option]'); if (option && !pending) accept(items[Number(option.dataset.option)]); });
+    root.addEventListener('focusout', event => { if (!root.contains(event.relatedTarget)) close(); });
+    const searchPage = page => { returning = true; input.focus({ preventScroll: true }); returning = false; void search(query, page); };
+    more.addEventListener('click', () => { if (next && !loading) searchPage(next); });
+    retry.addEventListener('click', () => { searchPage(1); });
+    const control = { root, input, set, close, open, search, cancel, position, value: () => input.value === selected?.label ? selected : null,
+      reset: () => { cancel(); set(null); items = []; next = null; retry.hidden = true; status.textContent = ''; render(); close(); } };
+    pickers.push(control); return control;
   }
-  async function loadTags(page = 1) {
-    cancelLookup();
-    const controller = lookup = new AbortController(), chosen = tagSelect.value;
-    tagSelect.disabled = true; moreTags.disabled = true; retryTags.hidden = true; status.textContent = t('client.common.loading');
-    if (page === 1) { tags = []; tagOptions(); moreTags.hidden = true; }
-    try {
-      const data = await api('/v1/environment-images/tags?' + new URLSearchParams({ repository: repository.name, query: tagSearch.value.trim(), page }), { signal: controller.signal });
-      if (controller.signal.aborted || !formElement.isConnected) return;
-      tags.push(...data.tags.filter(tag => !tags.some(item => item.name === tag.name))); tagPage = data.next;
-      tagOptions(); if (page > 1) tagSelect.value = chosen;
-      moreTags.hidden = !tagPage; status.textContent = tags.length ? '' : t('client.environment.noTags');
-    } catch (error) { if (!controller.signal.aborted && formElement.isConnected) { status.textContent = error.message; retryTags.hidden = false; } }
-    finally { if (!controller.signal.aborted) { tagSelect.disabled = false; moreTags.disabled = false; } }
-  }
-  searchButton.addEventListener('click', () => { void searchImages(); });
-  searchInput.addEventListener('input', () => {
-    cancelLookup(); images = []; results.innerHTML = ''; moreImages.hidden = true; status.textContent = ''; searchButton.disabled = false;
-    debounce = setTimeout(() => { void searchImages(); }, 350);
-  });
-  searchInput.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); void searchImages(); } });
-  moreImages.addEventListener('click', () => { void searchImages(imagePage); });
-  moreTags.addEventListener('click', () => { void loadTags(tagPage); });
-  retryTags.addEventListener('click', () => { void loadTags(); });
-  tagSearch.addEventListener('input', () => {
-    cancelLookup(); tags = []; tagOptions(); tagSelect.disabled = true; moreTags.hidden = true;
-    debounce = setTimeout(() => { void loadTags(); }, 350);
-  });
-  tagSearch.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); void loadTags(); } });
-  results.addEventListener('click', event => {
-    const button = event.target.closest('[data-image-index]'); if (!button || pending) return;
-    repository = images[Number(button.dataset.imageIndex)];
-    searchPanel.hidden = true; tagsPanel.hidden = false; tagSearch.value = ''; tagSelect.required = true;
-    hub.querySelector('#environment-selected-image').textContent = repository.name;
-    hub.querySelector('#environment-image-link').href = 'https://hub.docker.com/' + (repository.name.includes('/') ? 'r/' + repository.name : '_/' + repository.name);
-    tagSearch.focus(); void loadTags();
-  });
-  hub.querySelector('#environment-change-image').addEventListener('click', () => {
-    cancelLookup(); repository = null; tagsPanel.hidden = true; searchPanel.hidden = false; tagSelect.required = false; retryTags.hidden = true;
-    status.textContent = ''; searchButton.disabled = false; moreImages.disabled = false; searchInput.focus();
-  });
-  imageChoice.addEventListener('change', () => {
-    cancelLookup(); status.textContent = ''; retryTags.hidden = true;
-    const custom = imageChoice.value === 'custom';
-    customImage.hidden = !custom; customImage.querySelector('input').disabled = !custom;
-    hub.hidden = imageChoice.value !== 'hub';
-    hub.querySelectorAll('input, select, button').forEach(field => { field.disabled = hub.hidden; });
-    tagSelect.required = !hub.hidden && Boolean(repository);
-    if (!hub.hidden && repository && !tags.length) void loadTags();
-  });
+  const defaultImage = { id: 'default', kind: 'default', label: t('client.environment.defaultImage') };
+  let repository = null, automaticVersion = false;
+  const versionItem = name => ({ id: name, label: name === 'latest' ? t('client.environment.defaultVersion') : name });
+  const version = picker('environment-version', async (query, page, signal) => {
+    const data = await api('/v1/environment-images/tags?' + new URLSearchParams({ repository, query, page }), { signal });
+    if (automaticVersion && data.default_tag) { automaticVersion = false; version.set(versionItem(data.default_tag)); version.close(); }
+    return { ...data, items: [...(data.default_tag ? [versionItem(data.default_tag)] : []), ...data.tags.map(tag => versionItem(tag.name))] };
+  }, () => {}, t('client.environment.noVersions'));
+  version.root.hidden = true;
+  version.input.addEventListener('input', () => { automaticVersion = false; });
+  const image = picker('environment-image', async (query, page, signal) => {
+    const direct = query && !/\s/.test(query) ? { id: 'custom:' + query, kind: 'custom', label: query, title: t('client.environment.useImage', { name: query }), description: t('client.environment.useImageName') } : null;
+    if (!query) return { items: [defaultImage], next: null };
+    if (/[:@]/.test(query) || /^[^/]*\.[^/]*\//.test(query)) return { items: direct ? [direct] : [], next: null };
+    const data = await api('/v1/environment-images?' + new URLSearchParams({ query, page }), { signal });
+    return { items: data.images.map(item => ({ ...item, id: 'hub:' + item.name, kind: 'hub', label: item.name })), next: data.next };
+  }, async item => {
+    const revision = ++imageRevision;
+    repository = item.kind === 'hub' ? item.name : null; automaticVersion = Boolean(repository); version.reset(); version.root.hidden = !repository; version.input.disabled = Boolean(repository);
+    submit.disabled = Boolean(repository);
+    if (!repository) return;
+    const data = await version.search('');
+    if (revision !== imageRevision || !formElement.isConnected) return;
+    version.input.disabled = false;
+    if (data?.default_tag) version.set(versionItem(data.default_tag));
+    else { version.open(false); version.input.focus({ preventScroll: true }); }
+    submit.disabled = false;
+  }, t('client.environment.noImages'));
+  image.set(defaultImage);
+  const reposition = () => pickers.forEach(control => control.position());
+  dialog.addEventListener('scroll', reposition); window.addEventListener('resize', reposition);
+  dialog.addEventListener('close', () => { pickers.forEach(control => control.cancel()); dialog.removeEventListener('scroll', reposition); window.removeEventListener('resize', reposition); }, { once: true });
   bindForm(async form => {
     if (pending) return;
-    const fromHub = form.get('image_choice') === 'hub';
-    if (fromHub && (!repository || !form.get('tag'))) throw new Error(t('client.environment.chooseImageAndTag'));
-    cancelLookup();
+    const chosen = image.value(), chosenVersion = version.value();
+    if (!chosen || (chosen.kind === 'hub' && !chosenVersion)) throw new Error(t('client.environment.chooseImageVersion'));
+    pickers.forEach(control => { control.cancel(); control.close(); });
     const fields = [...formElement.querySelectorAll('input:enabled, select:enabled, button:enabled')];
     pending = true; submit.textContent = t('client.environment.creating'); fields.forEach(field => { field.disabled = true; });
-    const name = String(form.get('name')).trim(), image = fromHub ? repository.name + ':' + form.get('tag') : String(form.get('image') || '').trim(), seconds = Number(form.get('minutes')) * 60;
+    const name = String(form.get('name')).trim(), seconds = Number(form.get('minutes')) * 60;
+    const reference = chosen.kind === 'hub' ? chosen.name + ':' + chosenVersion.id : chosen.label;
     try {
       await api('/v1/principals/' + owner + '/environments', { method: 'POST', data: {
-        ...(name ? { name } : {}), ...(form.get('image_choice') !== 'default' ? { image } : {}), size: form.get('size'), identity: form.get('identity') || null,
+        ...(name ? { name } : {}), ...(chosen.kind !== 'default' ? { image: reference } : {}), size: form.get('size'), identity: form.get('identity') || null,
         lifetime: { end: 'idle', idle_seconds: seconds, max_seconds: seconds },
       } });
       if (formElement.isConnected) closeDialog();

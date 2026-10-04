@@ -251,23 +251,26 @@ legend { padding: 0; margin-top: 0; }
 .environment-options { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); }
 .environment-options summary { color: var(--muted); cursor: pointer; font-size: 14px; }
 .environment-form .form-error { margin-top: 32px; }
-.image-catalog { margin-top: 12px; padding: 0 14px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunken); }
-.image-search-field { display: flex; gap: 8px; }
-.image-search-field input { flex: 1; }
-.image-search-field button { flex: 0 0 auto; padding-inline: 14px; }
-.image-results { max-height: 244px; overflow-y: auto; overscroll-behavior: contain; }
-.image-result { display: block; width: 100%; padding: 13px 0; border: 0; border-bottom: 1px solid var(--line); background: transparent; text-align: left; color: var(--ink); cursor: pointer; }
-.image-result:hover { background: var(--soft); }
+.environment-image-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 14px; }
+.environment-picker { min-width: 0; }
+.environment-picker-control { position: relative; }
+.environment-picker-control input { padding-right: 42px; }
+.environment-picker-toggle { position: absolute; top: 0; right: 0; height: 100%; width: 38px; border: 0; border-radius: 0 6px 6px 0; color: var(--muted); background: transparent; cursor: pointer; }
+.environment-picker-popup { position: absolute; z-index: 5; top: calc(100% + 5px); left: 0; right: 0; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); box-shadow: 0 8px 28px #0008; }
+.environment-picker-popup.opens-up { top: auto; bottom: calc(100% + 5px); }
+.environment-picker-popup [role=option] { padding: 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.environment-picker-popup [role=option]:hover, .environment-picker-popup [aria-selected=true] { background: var(--selected); }
 .image-result-title { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.image-result-title strong, .image-selected strong { font-size: 14px; overflow-wrap: anywhere; }
+.image-result-title strong { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
 .image-official { color: var(--muted); font-size: 11px; border: 1px solid var(--line-strong); padding: 1px 5px; border-radius: 4px; }
 .image-description { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
-.image-selected { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 12px; padding-top: 14px; }
-.image-selected a { grid-column: 1 / -1; width: fit-content; color: var(--muted); font-size: 12px; }
-.image-selected button, .image-more { font-size: 13px; }
-.image-more { margin-top: 12px; }
-.image-catalog-status { margin: 12px 0 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.environment-picker-popup .image-more { margin: 4px 12px; font-size: 13px; }
+.image-catalog-status { margin: 12px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .image-catalog-status:empty { display: none; }
+@media (min-width: 600px) {
+  .environment-image-fields:has(#environment-version-picker:not([hidden])) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+
 dialog { width: min(520px, calc(100% - 32px)); max-height: calc(100dvh - 40px); border: 1px solid var(--line); border-radius: 12px; padding: 30px; box-shadow: 0 20px 80px #000a; color: var(--ink); background: var(--surface); }
 /* While a dialog is open the page behind it stays put: nothing scrolls it, and scrolling to the end of the dialog does not carry on into it (Safari lets it). */
 html:has(dialog[open]) { overflow: hidden; }

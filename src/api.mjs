@@ -211,7 +211,7 @@ export const routes = [
   { name: 'environmentImages', path: '/v1/environment-images', methods: { get: op('searchEnvironmentImages', 'Search public Docker Hub images', object({ images: array(object({ name: string, description: string, official: boolean }, ['name', 'description', 'official'])), next: nullable(integer) }, ['images', 'next']), {
     parameters: [query('query', string, 'Image search, up to 200 characters.'), query('page', integer, 'Page number, starting at 1.')],
   }) } },
-  { name: 'environmentImageTags', path: '/v1/environment-images/tags', methods: { get: op('listEnvironmentImageTags', 'List Linux amd64 tags of a public Docker Hub image', object({ tags: array(object({ name: string }, ['name'])), next: nullable(integer) }, ['tags', 'next']), {
+  { name: 'environmentImageTags', path: '/v1/environment-images/tags', methods: { get: op('listEnvironmentImageTags', 'List Linux amd64 tags of a public Docker Hub image', object({ tags: array(object({ name: string }, ['name'])), next: nullable(integer), default_tag: { ...nullable(string), description: 'On the first unfiltered page: latest if that tag supports Linux amd64, otherwise null.' } }, ['tags', 'next']), {
     parameters: [query('repository', string, 'Docker Hub repository, such as python or a namespace/name.', true), query('query', string, 'Filter tag names.'), query('page', integer, 'Page number, starting at 1.')],
   }) } },
   { name: 'return', path: '/v1/requests/{requestId}/return', methods: { get: op('getRequestReturn', 'Read the return destination for a request', result('back', object({ name: string, return_url: string, refresh_url: string }, ['name', 'return_url', 'refresh_url'])), { security: [] }) } },

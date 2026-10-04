@@ -26,6 +26,7 @@ test('Docker Hubのタグを名前で絞り込み、Linux amd64で使えるタ�
   const sent = [];
   const f = await fixture(t, { imageFetcher: async url => {
     sent.push(new URL(url));
+    if (new URL(url).pathname.endsWith('/latest')) return json({ name: 'latest', images: [{ os: 'linux', architecture: 'amd64' }] });
     return json({ next: 'https://hub.docker.com/next', results: [
       { name: '3.12-slim', images: [{ os: 'unknown', architecture: 'unknown' }, { os: 'linux', architecture: 'amd64' }] },
       { name: '3.12-windows', images: [{ os: 'windows', architecture: 'amd64' }] },
@@ -39,8 +40,16 @@ test('Docker Hubのタグを名前で絞り込み、Linux amd64で使えるタ�
   assert.equal(sent[0].pathname, '/v2/namespaces/library/repositories/python/tags');
   assert.equal(sent[0].searchParams.get('name'), '3.12');
   assert.equal(sent[0].searchParams.get('page'), '2');
-  await f.request('/v1/environment-images/tags?repository=example/tools');
-  assert.equal(sent[1].pathname, '/v2/namespaces/example/repositories/tools/tags');
+  const initial = await f.request('/v1/environment-images/tags?repository=example/tools');
+  assert.equal(initial.json.default_tag, 'latest');
+  assert.ok(sent.some(url => url.pathname === '/v2/namespaces/example/repositories/tools/tags'));
+});
+
+test('既定のバージョンがあると自動選択に使い、既定を持たないイメージでは選べるバージョンを返す', async () => {
+  for (const [response, expected] of [[json({ name: 'latest', images: [{ os: 'linux', architecture: 'amd64' }] }), 'latest'], [json({}, 404), null], [json({ name: 'latest', images: [{ os: 'windows', architecture: 'amd64' }] }), null]]) {
+    const catalog = new EnvironmentImages(async url => url.endsWith('/latest') ? response : json({ results: [{ name: '1.0', images: [{ os: 'linux', architecture: 'amd64' }] }], next: null }));
+    assert.deepEqual(await catalog.tags('example/tool'), { tags: [{ name: '1.0' }], next: null, default_tag: expected });
+  }
 });
 
 test('検索には認証を求め、画像名やページの不正な指定を入力エラーとして返す', async t => {

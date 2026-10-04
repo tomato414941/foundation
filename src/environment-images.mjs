@@ -2,6 +2,7 @@ import { fail, HttpError } from './errors.mjs';
 
 const repositoryPattern = /^[a-z0-9]+(?:[._-]+[a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-]+[a-z0-9]+)*)?$/;
 const tagPattern = /^[\w][\w.-]{0,127}$/;
+const compatible = tag => Array.isArray(tag?.images) && tag.images.some(image => image?.os === 'linux' && image.architecture === 'amd64');
 const invalid = () => fail(400, 'invalid_image_search', 'イメージの検索条件を確認してください。');
 const unavailable = () => fail(503, 'image_catalog_unavailable', 'Docker Hubに接続できません。しばらく待ってからお試しください。');
 function parameters(query, page) {
@@ -33,7 +34,6 @@ export class EnvironmentImages {
           chunks.push(chunk);
         }
         const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        if (!Array.isArray(data.results)) unavailable();
         return project(data);
       } catch (error) {
         if (error instanceof HttpError) throw error;
@@ -58,16 +58,22 @@ export class EnvironmentImages {
     }));
   }
 
-  tags(repository, query = '', page = 1) {
+  async tags(repository, query = '', page = 1) {
     ({ query, page } = parameters(query, page));
     if (typeof repository !== 'string' || repository.length > 200 || !repositoryPattern.test(repository)) invalid();
     const [namespace, name] = repository.includes('/') ? repository.split('/') : ['library', repository];
-    const url = `https://hub.docker.com/v2/namespaces/${namespace}/repositories/${name}/tags?` + new URLSearchParams({ page_size: '50', page: String(page), ...(query ? { name: query } : {}) });
-    return this.read(url, data => ({
+    const path = `https://hub.docker.com/v2/namespaces/${namespace}/repositories/${name}/tags`;
+    const first = !query && page === 1;
+    const defaults = first ? this.read(path + '/latest', data => {
+      if (data.name !== 'latest' || !Array.isArray(data.images)) unavailable();
+      return compatible(data) ? 'latest' : null;
+    }).catch(error => { if (error.status === 404) return null; throw error; }) : null;
+    const [listed, defaultTag] = await Promise.all([this.read(path + '?' + new URLSearchParams({ page_size: '50', page: String(page), ...(query ? { name: query } : {}) }), data => ({
       tags: data.results.slice(0, 50).filter(item => typeof item?.name === 'string' && tagPattern.test(item.name) && repository.length + 1 + item.name.length <= 255 &&
-        Array.isArray(item.images) && item.images.some(image => image.os === 'linux' && image.architecture === 'amd64'))
+        compatible(item))
         .map(item => ({ name: item.name })),
       next: data.next ? page + 1 : null,
-    }));
+    })), defaults]);
+    return { ...listed, ...(first ? { default_tag: defaultTag } : {}) };
   }
 }
