@@ -466,3 +466,5 @@ dialog .relation-badges { margin-top: 8px; }
 
 .viewing-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding: 10px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel, transparent); }
 .principal-switch { margin-top: 20px; }
+
+.reach-section { margin-top: 20px; }

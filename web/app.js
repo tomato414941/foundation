@@ -564,15 +564,34 @@ const SOURCES = {
   functions: signal => api('/v1/functions', { signal }).then(result => result.functions),
   environments: signal => api(held() + '/resources?kind=environment', { signal }).then(result => result.resources.filter(item => item.status !== 'stopped')),
   compute: signal => api(held() + '/compute', { signal }).then(result => result.compute),
+  // What the principal shown may use though another holds it: what those it acts for or is a member of hold, and
+  // what it has been shown thing by thing. Read from its lines; each holder's things are asked of that holder.
+  reach: async signal => {
+    const kind = { secrets: 'secret', services: 'connection', objects: 'object', environments: 'environment' }[page];
+    if (!kind) return null;
+    const { relations } = await api(held() + '/relations?direction=from&limit=200', { signal });
+    const holders = relations.filter(line => line.principal && ['agent', 'member'].includes(line.relation));
+    const sources = await Promise.all(holders.map(async line => {
+      try { return { ...line.principal, relation: line.relation, items: (await api('/v1/principals/' + encodeURIComponent(line.principal.id) + '/resources?kind=' + kind, { signal })).resources }; }
+      catch (error) { if (signal?.aborted) throw error; return { ...line.principal, relation: line.relation, items: null }; }
+    }));
+    // A thing held by one already listed whole is not listed again for the line onto it.
+    const whole = new Set(holders.map(line => line.principal.id));
+    const shown = (await Promise.all(relations.filter(line => line.resource?.kind === kind && !whole.has(line.resource.owner_id)).map(async line => {
+      try { return { ...(await api('/v1/resources/' + line.resource.id, { signal })).resource, relation: line.relation }; }
+      catch (error) { if (signal?.aborted) throw error; return { ...line.resource, relation: line.relation }; }
+    })));
+    return { kind, sources: sources.filter(source => source.items === null || source.items.length), shown };
+  },
   // The principal the server acts as, whose envelopes it can open.
   foundation: signal => api('/v1/principals/agent', { signal }).then(result => ({ principal_id: result.principal.id })),
 };
 const NEEDS = {
   home: ['connections', 'secrets', 'environments', 'principals', 'agentLines', 'functions'],
-  services: ['connections', 'apps', 'services', 'catalog', 'secrets'],
-  secrets: ['secrets', 'principals', 'agentLines', 'foundation'],
-  objects: ['principals', 'agentLines'],
-  environments: ['environments', 'compute', 'principals', 'agentLines'],
+  services: ['connections', 'apps', 'services', 'catalog', 'secrets', 'reach'],
+  secrets: ['secrets', 'principals', 'agentLines', 'foundation', 'reach'],
+  objects: ['principals', 'agentLines', 'reach'],
+  environments: ['environments', 'compute', 'principals', 'agentLines', 'reach'],
   principals: ['principals', 'agentLines', 'lines'],
   functions: ['functions'],
   account: ['payment'],
@@ -763,8 +782,28 @@ function scopeDetails(facts) {
   return `<details class="scope-details"><summary>${esc(t('client.connections.grantedScopes', { count: granted.length }))}</summary>${list(granted)}</details>`
     + (missing.length ? `<details class="scope-details"><summary class="warning-text">${esc(t('client.connections.missingScopes', { count: missing.length }))}</summary>${list(missing)}</details>` : '');
 }
-function secretRow(entry) {
-  return `<article class="secret-row" aria-label="${esc(entry.name)}"><div class="secret-field"><span class="secret-field-label">${esc(t('client.common.name'))}</span><div class="agent-name secret-title"><h3>${esc(entry.name)}</h3><button class="icon-button" data-action="copy-name" data-name="${esc(entry.name)}" aria-label="${esc(t('client.secret.copyName'))}" title="${esc(t('client.secret.copyName'))}">${icon('copy')}</button><button class="icon-button" data-action="edit-secret" data-name="${esc(entry.name)}" aria-label="${esc(t('client.common.editName'))}" title="${esc(t('client.common.editName'))}">${icon('edit')}</button></div></div>
+// What may be used though another holds it, under whose it is and why it is reached. A secret that may be read
+// (shown to this principal, or a group's) has its value there; the rest are named.
+const reachedSecrets = () => state.reach?.kind === 'secret' ? [...state.reach.sources.filter(source => source.relation === 'member').flatMap(source => source.items || []), ...state.reach.shown.filter(item => ['viewer', 'editor'].includes(item.relation) && item.size !== undefined)] : [];
+function reachHtml() {
+  const reach = state.reach;
+  if (!reach || reach.kind !== { secrets: 'secret', services: 'connection', objects: 'object', environments: 'environment' }[page]) return '';
+  const readable = new Set(reachedSecrets().map(item => item.id));
+  const plain = (title, detail) => `<article class="agent-row access-row"><div class="agent-name"><h3>${esc(title)}</h3></div><div class="agent-permissions"><span class="muted">${esc(detail || '')}</span></div><div></div></article>`;
+  const item = entry => reach.kind === 'secret' ? (readable.has(entry.id) ? secretRow(entry, { others: true }) : plain(entry.name, entry.size === undefined ? '' : kiloBytes(entry.size - 28)))
+    : reach.kind === 'connection' ? plain(presentConnection(entry).service?.name || entry.name || '', entry.label || '')
+    : reach.kind === 'object' ? plain(entry.name, entry.size === undefined ? '' : kiloBytes(entry.size))
+    : plain(entry.name, entry.status || '');
+  const why = { agent: t('client.reach.asAgent'), member: t('client.reach.asMember') };
+  const section = (title, note, body) => `<section class="resource-section reach-section" aria-label="${esc(title)}"><div class="section-heading"><div class="section-label"><div><h2>${esc(title)}</h2>${note ? `<p>${esc(note)}</p>` : ''}</div></div></div>${body}</section>`;
+  return [...reach.sources.map(source => section(t('client.reach.of', { name: source.name }), why[source.relation], source.items === null ? `<div class="access-empty"><p>${esc(t('client.reach.unreadable'))}</p></div>` : `<div class="agent-list">${source.items.map(item).join('')}</div>`)),
+    ...(reach.shown.length ? [section(t('client.reach.shared'), '', `<div class="agent-list">${reach.shown.map(item).join('')}</div>`)] : [])].join('');
+}
+function secretRow(entry, { others = false } = {}) {
+  if (others) return `<article class="secret-row" aria-label="${esc(entry.name)}" data-secret="${esc(entry.id)}"><div class="secret-field"><span class="secret-field-label">${esc(t('client.common.name'))}</span><div class="agent-name secret-title"><h3>${esc(entry.name)}</h3><button class="icon-button" data-action="copy-name" data-name="${esc(entry.name)}" aria-label="${esc(t('client.secret.copyName'))}" title="${esc(t('client.secret.copyName'))}">${icon('copy')}</button></div></div>
+    <div class="secret-field"><span class="secret-field-label">${esc(t('client.secret.value'))}</span><section class="secret-value-panel" aria-label="${esc(t('client.secret.value'))}"></section></div>
+    <footer class="secret-footer"><p class="secret-meta">${secretMeta(entry)}</p></footer></article>`;
+  return `<article class="secret-row" aria-label="${esc(entry.name)}" data-secret="${esc(entry.id)}"><div class="secret-field"><span class="secret-field-label">${esc(t('client.common.name'))}</span><div class="agent-name secret-title"><h3>${esc(entry.name)}</h3><button class="icon-button" data-action="copy-name" data-name="${esc(entry.name)}" aria-label="${esc(t('client.secret.copyName'))}" title="${esc(t('client.secret.copyName'))}">${icon('copy')}</button><button class="icon-button" data-action="edit-secret" data-name="${esc(entry.name)}" aria-label="${esc(t('client.common.editName'))}" title="${esc(t('client.common.editName'))}">${icon('edit')}</button></div></div>
     <div class="secret-field"><span class="secret-field-label">${esc(t('client.secret.value'))}</span><section class="secret-value-panel" aria-label="${esc(t('client.secret.value'))}"></section></div>
     <footer class="secret-footer"><p class="secret-meta">${secretMeta(entry)}</p><div class="secret-actions"><button class="text-button danger" data-action="drop-secret" data-name="${esc(entry.name)}">${esc(t('client.common.delete'))}</button></div></footer></article>`;
 }
@@ -844,7 +883,7 @@ function render() {
     return;
   }
   if (page === 'environments') {
-    shell(`<header class="page-heading page-heading-actions"><h1>${esc(t('client.environment.title'))}</h1><button class="button secondary" data-action="create-environment">${icon('plus')} ${esc(t('client.environment.create'))}</button></header>${environmentsSection()}`);
+    shell(`<header class="page-heading page-heading-actions"><h1>${esc(t('client.environment.title'))}</h1><button class="button secondary" data-action="create-environment">${icon('plus')} ${esc(t('client.environment.create'))}</button></header>${environmentsSection()}${reachHtml()}`);
     return;
   }
   if (page === 'principals') {
@@ -869,7 +908,7 @@ function render() {
     shell(`<header class="page-heading page-heading-actions"><h1>${esc(t('client.service.title'))}</h1><button class="button secondary" data-action="add-service">${icon('plus')} ${esc(t('client.service.add'))}</button></header>
       <section class="resource-section" aria-label="${esc(t('client.service.title'))}">
         ${rows.length ? `<div class="agent-list">${rows.map(row => row.html).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.connection.empty'))}</p></div>`}</section>
-      ${appsSection()}`);
+      ${appsSection()}${reachHtml()}`);
     app.querySelector('#oauth-apps').addEventListener('toggle', event => { appsOpen = event.currentTarget.open; });
     return;
   }
@@ -881,9 +920,10 @@ function render() {
     shell(`<header class="page-heading page-heading-actions"><h1>${esc(t('client.secret.title'))}</h1>
       <button class="button secondary" data-action="add-secret">${icon('plus')} ${esc(t('client.common.add'))}</button></header>
       <section class="resource-section" aria-label="${esc(t('client.secret.title'))}">
-        ${kept.length ? `<div class="agent-list">${kept.map(secretRow).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.secret.empty'))}</p></div>`}</section>`);
+        ${kept.length ? `<div class="agent-list">${kept.map(entry => secretRow(entry)).join('')}</div>` : `<div class="access-empty"><p>${esc(t('client.secret.empty'))}</p></div>`}</section>${reachHtml()}`);
     if (own) void receiveFromFoundation();
-    app.querySelectorAll('.secret-row').forEach(row => bindSecretValue(kept.find(item => item.name === row.getAttribute('aria-label')), row));
+    const reachable = [...kept, ...reachedSecrets()];
+    app.querySelectorAll('.secret-row').forEach(row => bindSecretValue(reachable.find(item => item.id === row.dataset.secret), row));
     if (focusedRow && focusedAction && !focused.isConnected) {
       const row = [...app.querySelectorAll('.secret-row')].find(item => item.getAttribute('aria-label') === focusedRow);
       [...(row?.querySelectorAll('button') || [])].find(button => (button.getAttribute('aria-label') || button.dataset.action) === focusedAction)?.focus({ preventScroll: true });
@@ -904,6 +944,10 @@ function updateObjectSelection() {
   if (drop) { drop.disabled = chosen.length === 0; drop.textContent = chosen.length ? t('client.objects.deleteSelected', { count: chosen.length }) : t('client.common.delete'); }
 }
 function updateObjects() {
+  // What is reached though another holds it sits below the principal's own files.
+  let reached = app.querySelector('#object-reach');
+  if (!reached) { reached = document.createElement('div'); reached.id = 'object-reach'; app.querySelector('main').append(reached); }
+  const html = reachHtml(); if (reached.innerHTML !== html) reached.innerHTML = html;
   const usage = state.space?.usage, description = app.querySelector('#object-usage');
   description.textContent = usage ? t('client.objects.usage', { used: kiloBytes(usage.bytes), limit: kiloBytes(usage.bytes_max), count: usage.count, maximum: usage.count_max }) : '';
   description.hidden = !usage;

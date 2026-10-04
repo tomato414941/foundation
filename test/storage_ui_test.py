@@ -155,6 +155,26 @@ with tempfile.TemporaryDirectory(prefix='foundation-storage-ui-') as key_dir, sy
     expect(github.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
     assert [row['name'] for row in api('GET', '/v1/principals/me/resources?kind=secret')['resources']] == ['github/gh-token', 'release/2026-09-23']
 
+    # Switched to the agent, the pages show what it holds - nothing - and what it may use as the owner's agent.
+    page.goto(args.base + '/principals', wait_until='networkidle')
+    page.locator('.access-row').filter(has_text='laptop のAI').get_by_role('button', name='詳細', exact=True).click()
+    page.get_by_role('dialog').get_by_role('button', name='切り替え', exact=True).click()
+    page.wait_for_url(args.base + '/services')
+    page.set_viewport_size({'width': 1280, 'height': 1000})
+    page.goto(args.base + '/secrets', wait_until='networkidle')
+    expect(page.get_by_text('laptop のAI を表示中', exact=True)).to_be_visible()
+    reached = page.locator('.reach-section')
+    expect(reached).to_have_count(1)
+    expect(reached.get_by_text('エージェントとして', exact=True)).to_be_visible()
+    expect(reached.get_by_role('heading', name='github/gh-token', exact=True)).to_be_visible()
+    expect(reached.get_by_role('heading', name='release/2026-09-23', exact=True)).to_be_visible()
+    review(page)
+    page.screenshot(path=str(shots / 'reach-1280.png'), full_page=True)
+    page.get_by_role('button', name='自分に戻る', exact=True).click()
+    expect(page.locator('.reach-section')).to_have_count(0)
+    github = page.get_by_role('article', name='github/gh-token', exact=True)
+    expect(github).to_be_visible()
+
     # An occupied name stays editable; saving a corrected name preserves the stored bytes.
     github.get_by_role('button', name='名前を編集', exact=True).click()
     name_input.fill('release/2026-09-23')
