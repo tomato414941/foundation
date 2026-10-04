@@ -1468,9 +1468,9 @@ const principalById = id => (detailed?.id === id ? detailed : undefined) || (sta
 function createEnvironment() {
   const owner = state.user.id;
   const pickerField = (id, label, placeholder) => `<div class="environment-picker" id="${id}-picker"><label for="${id}">${esc(label)}</label><div class="environment-picker-control">
-    <input id="${id}" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-list" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="255" placeholder="${esc(placeholder)}">
+    <input id="${id}" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-list" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" maxlength="255" placeholder="${esc(placeholder)}">
     <button type="button" class="environment-picker-toggle" tabindex="-1" aria-label="${esc(label)}"><span aria-hidden="true">⌄</span></button>
-    <div class="environment-picker-popup" hidden><div id="${id}-list" role="listbox" aria-label="${esc(label)}"></div><p class="image-catalog-status" role="status"></p><button class="text-button image-more" type="button" data-picker-more hidden>${esc(t('client.environment.moreImages'))}</button><button class="text-button image-more" type="button" data-picker-retry hidden>${esc(t('client.environment.retry'))}</button></div>
+    <div class="environment-picker-popup" tabindex="-1" hidden><div id="${id}-list" role="listbox" aria-label="${esc(label)}"></div><p class="image-catalog-status" role="status"></p><button class="text-button image-more" type="button" data-picker-more hidden>${esc(t('client.environment.moreImages'))}</button><button class="text-button image-more" type="button" data-picker-retry hidden>${esc(t('client.environment.retry'))}</button></div>
   </div></div>`;
   openDialog(`<h2 id="dialog-title">${esc(t('client.environment.createTitle'))}</h2><form class="environment-form">
     <label for="environment-name">${esc(t('client.common.optionalLabel', { label: t('client.common.name') }))}</label><input id="environment-name" name="name" maxlength="200" autocomplete="off">
@@ -1483,6 +1483,7 @@ function createEnvironment() {
   const formElement = dialog.querySelector('form'), submit = formElement.querySelector('[type="submit"]');
   let pending = false, imageRevision = 0;
   const pickers = [];
+  const touch = () => window.matchMedia('(pointer: coarse)').matches;
   // The field itself searches and holds the chosen value. Arrow keys explore; Enter chooses; Escape restores it.
   function picker(id, load, choose, emptyText) {
     const root = formElement.querySelector('#' + id + '-picker'), input = root.querySelector('input'), popup = root.querySelector('.environment-picker-popup');
@@ -1491,10 +1492,12 @@ function createEnvironment() {
     const cancel = () => { clearTimeout(debounce); controller?.abort(); loading = false; input.removeAttribute('aria-busy'); };
     const position = () => {
       if (popup.hidden) return;
-      const field = input.getBoundingClientRect(), bounds = dialog.getBoundingClientRect();
-      const below = bounds.bottom - field.bottom - 14, above = field.top - bounds.top - 14, upward = below < 240 && above > below;
+      const field = input.getBoundingClientRect(), bounds = dialog.getBoundingClientRect(), viewport = window.visualViewport;
+      // The keyboard can shrink and pan only the visual viewport, leaving the dialog's bounds unchanged.
+      const top = Math.max(bounds.top, viewport?.offsetTop || 0), bottom = Math.min(bounds.bottom, viewport ? viewport.offsetTop + viewport.height : window.innerHeight);
+      const below = bottom - field.bottom - 14, above = field.top - top - 14, upward = below < 240 && above > below;
       popup.classList.toggle('opens-up', upward);
-      popup.style.maxHeight = Math.max(110, Math.min(300, upward ? above : below)) + 'px';
+      popup.style.maxHeight = Math.max(0, Math.min(300, upward ? above : below)) + 'px';
     };
     const highlight = index => {
       active = index;
@@ -1530,7 +1533,8 @@ function createEnvironment() {
       popup.hidden = false; input.setAttribute('aria-expanded', 'true'); position();
       if (fetch) void search(input.value === selected?.label ? '' : input.value.trim());
     };
-    const accept = item => { cancel(); set(item); close(); returning = true; input.focus({ preventScroll: true }); returning = false; choose(item); };
+    const focusResults = () => { returning = true; (touch() ? popup : input).focus({ preventScroll: true }); returning = false; };
+    const accept = item => { cancel(); set(item); close(); if (touch()) input.blur(); else focusResults(); choose(item); };
     input.addEventListener('focus', () => { if (returning) return; if (popup.hidden) open(); input.select(); });
     input.addEventListener('click', () => { if (popup.hidden) { open(); input.select(); } });
     input.addEventListener('input', () => { cancel(); open(false); items = []; next = null; render(); status.textContent = t('client.common.loading'); debounce = setTimeout(() => { void search(input.value.trim()); }, 250); });
@@ -1544,18 +1548,18 @@ function createEnvironment() {
       if (event.key === 'Enter') {
         event.preventDefault();
         const item = active >= 0 ? items[active] : items.find(item => item.label === input.value);
-        if (!popup.hidden && item) accept(item); else { open(false); void search(input.value === selected?.label ? '' : input.value.trim()); }
+        if (!popup.hidden && item) accept(item); else { open(false); void search(input.value === selected?.label ? '' : input.value.trim()); focusResults(); }
       }
     });
     root.querySelector('.environment-picker-toggle').addEventListener('mousedown', event => event.preventDefault());
-    root.querySelector('.environment-picker-toggle').addEventListener('click', () => { if (popup.hidden) { input.focus(); if (popup.hidden) open(); } else close(); });
+    root.querySelector('.environment-picker-toggle').addEventListener('click', () => { if (popup.hidden) { open(); focusResults(); } else { close(); if (touch()) input.blur(); } });
     list.addEventListener('mousedown', event => event.preventDefault());
     list.addEventListener('click', event => { const option = event.target.closest('[data-option]'); if (option && !pending) accept(items[Number(option.dataset.option)]); });
     root.addEventListener('focusout', event => { if (!root.contains(event.relatedTarget)) close(); });
-    const searchPage = page => { returning = true; input.focus({ preventScroll: true }); returning = false; void search(query, page); };
+    const searchPage = page => { focusResults(); void search(query, page); };
     more.addEventListener('click', () => { if (next && !loading) searchPage(next); });
     retry.addEventListener('click', () => { searchPage(1); });
-    const control = { root, input, set, close, open, search, cancel, position, value: () => input.value === selected?.label ? selected : null,
+    const control = { root, input, set, close, open, search, cancel, position, focusResults, value: () => input.value === selected?.label ? selected : null,
       reset: () => { cancel(); set(null); items = []; next = null; retry.hidden = true; status.textContent = ''; render(); close(); } };
     pickers.push(control); return control;
   }
@@ -1584,13 +1588,17 @@ function createEnvironment() {
     if (revision !== imageRevision || !formElement.isConnected) return;
     version.input.disabled = false;
     if (data?.default_tag) version.set(versionItem(data.default_tag));
-    else { version.open(false); version.input.focus({ preventScroll: true }); }
+    else { version.open(false); version.focusResults(); }
     submit.disabled = false;
   }, t('client.environment.noImages'));
   image.set(defaultImage);
   const reposition = () => pickers.forEach(control => control.position());
   dialog.addEventListener('scroll', reposition); window.addEventListener('resize', reposition);
-  dialog.addEventListener('close', () => { pickers.forEach(control => control.cancel()); dialog.removeEventListener('scroll', reposition); window.removeEventListener('resize', reposition); }, { once: true });
+  window.visualViewport?.addEventListener('resize', reposition); window.visualViewport?.addEventListener('scroll', reposition);
+  dialog.addEventListener('close', () => {
+    pickers.forEach(control => control.cancel()); dialog.removeEventListener('scroll', reposition); window.removeEventListener('resize', reposition);
+    window.visualViewport?.removeEventListener('resize', reposition); window.visualViewport?.removeEventListener('scroll', reposition);
+  }, { once: true });
   bindForm(async form => {
     if (pending) return;
     const chosen = image.value(), chosenVersion = version.value();
