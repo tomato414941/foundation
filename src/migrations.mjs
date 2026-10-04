@@ -3,7 +3,7 @@ import { checkDefinition } from './service-definition.mjs';
 import { ensureAgent } from './keys.mjs';
 import { newContentKey, sealContent, seal } from '../cli/envelope.mjs';
 
-export const SCHEMA_VERSION = 50;
+export const SCHEMA_VERSION = 51;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -27,6 +27,7 @@ export const STEPS = {
   48: connectionReferences,
   49: emailEntries,
   50: environmentImages,
+  51: members,
 };
 
 // A stop is kept until the runner confirms it. Rebuilding widens the status check without changing resource IDs.
@@ -458,6 +459,13 @@ function emailEntries({ db }) {
 }
 // What a machine was made from is chosen by whoever opens it, and kept with it.
 function environmentImages({ db }) { db.exec('ALTER TABLE environments ADD COLUMN image TEXT'); }
+// Those who stand as a group are its members, the word the lines and the requests for them now use.
+function members({ db }) {
+  db.exec(`
+    UPDATE relations SET relation='member' WHERE relation='steward' AND object_type='principal';
+    UPDATE requests SET detail=json_set(detail, '$.relation', 'member') WHERE json_extract(detail, '$.relation')='steward';
+    UPDATE requests SET result=json_set(result, '$.relation', 'member') WHERE json_extract(result, '$.relation')='steward';`);
+}
 const REFERENCES = `
   CREATE TABLE connection_references (
     connection_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE, secret_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,

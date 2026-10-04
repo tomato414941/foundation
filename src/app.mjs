@@ -674,20 +674,20 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const made = store.transaction(() => {
           const made = principals.create(subject.id, { name: input.name === undefined ? (alias ?? principalName()) : nameValue(input.name), alias });
           if (input.agent === true) principals.relate(made.id, 'agent', 'principal', subject.id);
-          // Made as a group (steward: true): its maker stands as it, until others are made stewards too. A principal made
+          // Made as a group (member: true): its maker stands as it, until others are made members too. A principal made
           // for someone else to come in as (an app's user, given a key later) is nobody's to stand as.
-          if (input.steward === true) principals.relate(subject.id, 'steward', 'principal', made.id);
+          if (input.member === true) principals.relate(subject.id, 'member', 'principal', made.id);
           return made;
         });
         auditLog.write(subject.id, 'principal.created', 'principal', made.id, { alias: alias ?? null, agent: input.agent === true });
-        return send(201, { principal: { ...made, alias: alias ?? null, keys: principals.keys(made.id), acts_for: principals.actsFor(made.id), owners: principals.ownersOf(made.id), stewards: principals.stewardsOf(made.id) } });
+        return send(201, { principal: { ...made, alias: alias ?? null, keys: principals.keys(made.id), acts_for: principals.actsFor(made.id), owners: principals.ownersOf(made.id), members: principals.membersOf(made.id) } });
       }
       if (route?.group === 'principals') {
         // Two names stand for ids: me, the caller, and agent, the principal this server acts as.
         const named = route.params.principalId;
         const id = named === 'me' ? subject.id : named === 'agent' ? keys.agentId : named, part = at === 'principal' ? null : at;
         const target = principals.at(id);
-        // The lines a principal is at an end of: for whoever may read it - itself, its stewards, its owner. One who
+        // The lines a principal is at an end of: for whoever may read it - itself, its members, its owner. One who
         // acts for it uses what it holds, and is not told whom it is joined to.
         if (part === 'principalRelations' && method === 'GET') {
           permit('read', 'principal', id);
@@ -748,7 +748,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           auditLog.write(subject.id, 'key.published', 'principal', id, {});
           return send(200, { key: keys.view(id, { own: true }) });
         }
-        // A principal's entries: listed by whoever reads it, added and removed by whoever manages it (itself, its stewards, its owner).
+        // A principal's entries: listed by whoever reads it, added and removed by whoever manages it (itself, its members, its owner).
         // Adding is proving: a passkey answers options, an address is reached by a link, a key is issued and shown once.
         if (part === 'principalCredentials' && method === 'GET') {
           permit('read', 'principal', id);
@@ -833,7 +833,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
             permit('read', 'principal', id);
             // Who bears what it uses beyond the free part: itself, one who took that on, its owner's - or nobody.
             const paying = payments.payerOf(id), payer = paying ? { id: paying, name: principals.get(paying)?.name ?? '' } : null;
-            return send(200, { principal: { ...target, keys: principals.keys(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id), stewards: principals.stewardsOf(id), payer } });
+            return send(200, { principal: { ...target, keys: principals.keys(id), acts_for: principals.actsFor(id), owners: principals.ownersOf(id), members: principals.membersOf(id), payer } });
           }
           if (method === 'PATCH') { permit('rename', 'principal', id); const input = await inputBody(); return send(200, { principal: principals.rename(id, nameValue(input.name)) }); }
           // Leaving: a principal takes itself away, its open requests with it. What it acted for stays where it was.
@@ -886,11 +886,11 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
             return send(200, { ...done, principal: principals.get(done.into) });
           }
         }
-        // Whom to seal a secret of this principal's for: itself, those who stand for it (a group's stewards), and
+        // Whom to seal a secret of this principal's for: itself, those who stand for it (a group's members), and
         // Foundation when it acts for it.
         if (part === 'principalRecipients' && method === 'GET') {
           permit('write', 'secret', undefined, id);
-          const ids = [id, ...principals.stewardsOf(id), ...(authorization.can(keys.agentId, 'inject', 'principal', { id }) ? [keys.agentId] : [])];
+          const ids = [id, ...principals.membersOf(id), ...(authorization.can(keys.agentId, 'inject', 'principal', { id }) ? [keys.agentId] : [])];
           return send(200, { recipients: ids.map(one => ({ principal_id: one, public_key: keys.publicKeyOf(one) })).filter(item => item.public_key).map(item => ({ ...item, public_key: item.public_key.toString('base64url') })) });
         }
         // Paying for more than the free part: a payment method set on Stripe's page, begun here and completed coming back.

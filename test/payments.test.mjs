@@ -109,7 +109,7 @@ test('支払っていない人たちの計算時間は、全体でも上限を�
 
 test('持っている相手が使った分は持ち主の枠に数えられ、相手を増やしても無料枠は増えず、負担は引き受ける側だけが引ける', async t => {
   const fake = fakeStripe(), f = await fixture(t, { stripe: fake.stripe }), month = new Date().toISOString().slice(0, 7);
-  const agent = await f.issueKey('box'), group = (await f.request('/v1/principals', { method: 'POST', data: { name: 'team', steward: true } })).json.principal;
+  const agent = await f.issueKey('box'), group = (await f.request('/v1/principals', { method: 'POST', data: { name: 'team', member: true } })).json.principal;
   assert.equal((await f.request('/v1/principals/me/payment', { token: agent.token, anonymous: true })).json.payment.payer, USER_A, 'an owned principal is paid for by its owner');
   assert.equal(f.app.payments.payerOf(group.id), USER_A);
   f.app.store.db.prepare('INSERT INTO compute_usage (principal_id,month,seconds) VALUES (?,?,?)').run(agent.id, month, 20_000);
@@ -122,7 +122,7 @@ test('持っている相手が使った分は持ち主の枠に数えられ、�
   // One of its own (made by nobody here), or its costs would only roll up to this owner again.
   const sponsor = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'sponsor' } });
   assert.equal((await f.request('/v1/principals/' + sponsor.json.principal.id + '/relations', { method: 'POST', data: { relation: 'payer', object_type: 'principal', object_id: group.id } })).status, 403, 'not put on someone');
-  // A sponsor acting as itself: it may give lines on the group only where it may relate there, so the group's steward lends it that first.
+  // A sponsor acting as itself: it may give lines on the group only where it may relate there, so the group's member lends it that first.
   f.app.principals.relate(sponsor.json.principal.id, 'relate_grant', 'principal', group.id);
   f.app.principals.relate(sponsor.json.principal.id, 'payment_grant', 'principal', group.id);
   const unbound = await f.request('/v1/principals/' + sponsor.json.principal.id + '/relations', { method: 'POST', token: sponsor.json.token, anonymous: true, data: { relation: 'payer', object_type: 'principal', object_id: group.id } });

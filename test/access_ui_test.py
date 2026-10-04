@@ -95,12 +95,12 @@ with sync_playwright() as p:
     for width in [1280, 1024, 900, 801, 390, 320]:
         page.set_viewport_size({'width': width, 'height': 1000})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-        expect(row.get_by_text('代理をまかせている', exact=True)).to_be_visible()
+        expect(row.get_by_text('エージェント', exact=True)).to_be_visible()
         if width in [1280, 390]:
             page.screenshot(path=str(shots / f'access-{width}.png'), full_page=True)
     revoke_access(page, 'laptop のアシスタント').get_by_role('button', name='許可を取り消す', exact=True).click()
-    expect(row.get_by_text('代理をまかせている', exact=True)).to_have_count(0)
-    expect(row.get_by_text('自分のもの', exact=True)).to_be_visible()
+    expect(row.get_by_text('エージェント', exact=True)).to_have_count(0)
+    expect(row.get_by_text('サブプリンシパル', exact=True)).to_be_visible()
     own = caller.get('/v1/principals/me', headers={'authorization': 'Bearer ' + second_token})
     assert own.status == 200 and own.json()['principal']['id'] == actor['principal']['id']
     assert own.json()['principal']['acts_for'] == []

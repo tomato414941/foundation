@@ -56,7 +56,7 @@ with sync_playwright() as p:
     expect(dialog.locator('.key-list li')).to_have_count(1)
     dialog.get_by_role('button', name='閉じる', exact=True).last.click()
     row = page.get_by_role('article').filter(has=page.get_by_role('heading', name='laptop', exact=True))
-    expect(row.get_by_text('自分のもの', exact=True)).to_be_visible()
+    expect(row.get_by_text('サブプリンシパル', exact=True)).to_be_visible()
     # Made, it reaches nothing of the owner's.
     agents = context.request.get(args.base + '/v1/principals/me/relations?relation=agent&direction=to').json()['relations']
     assert all(item['principal']['name'] != 'laptop' for item in agents)
@@ -77,12 +77,12 @@ with sync_playwright() as p:
     dialog.get_by_role('button', name='代理人にする', exact=True).click()
     expect(dialog.get_by_text('許可の詳細', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='閉じる', exact=True).last.click()
-    expect(row.get_by_text('代理をまかせている', exact=True)).to_be_visible()
+    expect(row.get_by_text('エージェント', exact=True)).to_be_visible()
     assert p.request.new_context().get(args.base + '/v1/principals/me', headers={'authorization': 'Bearer ' + key}).json()['principal']['acts_for'] == [context.request.get(args.base + '/v1/principals/me').json()['principal']['id']]
     revoke_access(page, 'laptop').get_by_role('button', name='許可を取り消す', exact=True).click()
     expect(dialog).not_to_be_visible()
-    expect(row.get_by_text('代理をまかせている', exact=True)).to_have_count(0)
-    expect(row.get_by_text('自分のもの', exact=True)).to_be_visible()
+    expect(row.get_by_text('エージェント', exact=True)).to_have_count(0)
+    expect(row.get_by_text('サブプリンシパル', exact=True)).to_be_visible()
     assert not errors, errors
     browser.close()
     print('相手の追加: 作っただけでは何も届かず、詳細から代理人にすると線が引かれ、取り消せることを確認しました。')

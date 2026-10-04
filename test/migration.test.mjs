@@ -624,3 +624,14 @@ test('47版に、接続が参照するシークレットの記録の表が加わ
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   assert.ok(next.db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='connection_references'").get());
 });
+
+test('50版でグループとして立つ人の線は、メンバーの線になる', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-51-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
+  store.db.exec(`INSERT INTO principals (id,name,created_at) VALUES ('person','person',1),('group','group',1);
+    INSERT INTO relations (subject_id,relation,object_type,object_id,created_at) VALUES ('person','steward','principal','group',1);
+    PRAGMA user_version=50`); store.close();
+  const next = new Store(path, KEY); t.after(() => next.close());
+  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
+  assert.deepEqual(next.db.prepare("SELECT relation FROM relations WHERE subject_id='person' AND object_id='group'").all().map(row => row.relation), ['member']);
+});

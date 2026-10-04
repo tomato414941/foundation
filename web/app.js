@@ -1368,17 +1368,18 @@ function disconnect(connection) {
 function connectedPrincipals() {
   const found = new Map();
   for (const line of state.lines?.relations || []) {
-    if (!line.principal) continue;
+    if (!line.principal || line.relation === 'payer') continue;
     if (!found.has(line.principal.id)) found.set(line.principal.id, { id: line.principal.id, name: line.principal.name, lines: [] });
     found.get(line.principal.id).lines.push(line);
   }
   return [...found.values()];
 }
+// What the other is to this principal, said of the other: the one it owns is its subprincipal, the one that owns it
+// its owner, and so on. Who pays is told where paying is told, not here.
 const relationLabel = line => ({
-  'owner:from': t('client.principals.relation.ownerFrom'), 'owner:to': t('client.principals.relation.ownerTo'),
-  'agent:from': t('client.principals.relation.agentFrom'), 'agent:to': t('client.principals.relation.agentTo'),
-  'steward:from': t('client.principals.relation.stewardFrom'), 'steward:to': t('client.principals.relation.stewardTo'),
-  'payer:from': t('client.principals.relation.payerFrom'), 'payer:to': t('client.principals.relation.payerTo'),
+  'owner:from': t('client.principals.relation.subprincipal'), 'owner:to': t('client.principals.relation.owner'),
+  'agent:from': t('client.principals.relation.delegator'), 'agent:to': t('client.principals.relation.agent'),
+  'member:from': t('client.principals.relation.group'), 'member:to': t('client.principals.relation.member'),
 })[line.relation + ':' + line.direction] ?? t('client.principals.relation.grant');
 function createPrincipal() {
   openDialog(`<h2 id="dialog-title">${esc(t('client.principals.createTitle'))}</h2><form><label for="agent-name">${esc(t('client.common.name'))}</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.principals.create'))}</button></form>`);
@@ -1405,7 +1406,7 @@ function environmentsSection() {
 }
 async function principalDetails(id) {
   // Asked afresh each time: what is loaded for the page waits while a dialog is open.
-  const lines = (await api('/v1/principals/me/relations?limit=200&principal=' + encodeURIComponent(id))).relations;
+  const lines = (await api('/v1/principals/me/relations?limit=200&principal=' + encodeURIComponent(id))).relations.filter(line => line.relation !== 'payer');
   const owned = lines.some(line => line.relation === 'owner' && line.direction === 'from');
   const item = owned ? (await api(`/v1/principals/${id}`)).principal : lines[0]?.principal || principalById(id);
   if (!item) return;
