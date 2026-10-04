@@ -98,9 +98,15 @@ with sync_playwright() as p:
         # 選択画面を開いてもキーボードは出さず、キャンセルすると元の設定とフォームに戻る。
         image_choice.tap()
         expect(page.get_by_role('dialog', name='イメージ', exact=True)).to_be_visible()
+        expect(dialog.get_by_role('heading', name='イメージ', exact=True)).to_be_in_viewport()
+        expect(dialog.get_by_role('option', name='標準イメージ', exact=True)).to_have_attribute('aria-selected', 'true')
+        page.screenshot(path=str(shots / f'image-initial-{width}.png'))
         assert page.evaluate('document.activeElement.tagName !== "INPUT"')
         image = dialog.get_by_role('combobox', name='イメージ', exact=True)
         image.fill('cancelled search')
+        # 検索欄から画面の見出しへタップしても、候補を選ぶ画面で操作を続ける。
+        dialog.get_by_role('heading', name='イメージ', exact=True).tap()
+        expect(page.get_by_role('dialog', name='イメージ', exact=True)).to_be_visible()
         dialog.get_by_role('button', name='キャンセル', exact=True).tap()
         expect(dialog.get_by_role('heading', name='エンバイロメントを作成', exact=True)).to_be_visible()
         expect(dialog.get_by_label('名前', exact=False)).to_have_value(name)
@@ -126,6 +132,9 @@ with sync_playwright() as p:
 
         version_choice.tap()
         expect(page.get_by_role('dialog', name='バージョン・種類', exact=True)).to_be_visible()
+        expect(dialog.get_by_role('heading', name='バージョン・種類', exact=True)).to_be_in_viewport()
+        expect(dialog.get_by_role('option', name='既定（latest）', exact=True)).to_have_attribute('aria-selected', 'true')
+        page.screenshot(path=str(shots / f'version-initial-{width}.png'))
         assert page.evaluate('document.activeElement.tagName !== "INPUT"')
         version.tap()
         version.fill('3.12')

@@ -266,6 +266,7 @@ legend { padding: 0; margin-top: 0; }
 .environment-picker-popup [role=option] { padding: 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .environment-picker-popup [role=option]:hover, .environment-picker-popup [aria-selected=true] { background: var(--selected); }
 .image-result-title { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.image-current { margin-left: auto; }
 .image-result-title strong { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
 .image-official { color: var(--muted); font-size: 11px; border: 1px solid var(--line-strong); padding: 1px 5px; border-radius: 4px; }
 .image-description { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
@@ -278,16 +279,22 @@ legend { padding: 0; margin-top: 0; }
 @media (max-width: 600px) {
   .environment-picker-summary { display: block; }
   .environment-picker-panel, .environment-picker-mobile .environment-picker-summary { display: none; }
-  /* Search gets the top row; the list gets the remaining space above floating browser controls. */
-  .environment-picker-mobile .environment-picker-panel { position: fixed; z-index: 10; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto minmax(0, 1fr); gap: 12px; padding: 12px 16px max(80px, env(safe-area-inset-bottom)); overflow: hidden; background: var(--surface); }
+  .environment-picker-mobile .environment-picker-panel { position: fixed; z-index: 10; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto minmax(0, 1fr); gap: 12px; padding: 12px 16px max(16px, env(safe-area-inset-bottom)); overflow: hidden; background: var(--surface); }
   .environment-picker-mobile .environment-picker-heading { display: contents; }
   .environment-picker-mobile .environment-picker-heading label { display: none; }
-  .environment-picker-mobile .environment-picker-heading h2 { display: block; position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
+  .environment-picker-mobile .environment-picker-heading h2 { display: block; grid-area: 1 / 1; align-self: center; margin: 0; padding: 0; font-size: 18px; }
   .environment-picker-mobile .environment-picker-cancel { display: inline-flex; grid-area: 1 / 2; }
   .environment-picker-mobile .environment-picker-control { display: contents; }
-  .environment-picker-mobile input { grid-area: 1 / 1; padding-right: 12px; }
+  .environment-picker-mobile input { grid-area: 2 / 1 / 3 / 3; padding-right: 12px; }
   .environment-picker-mobile .environment-picker-toggle { display: none; }
-  .environment-picker-mobile .environment-picker-popup { position: static; grid-area: 2 / 1 / 3 / 3; min-height: 0; box-shadow: none; }
+  .environment-picker-mobile .environment-picker-popup { position: static; grid-area: 3 / 1 / 4 / 3; min-height: 0; border: 0; border-radius: 0; box-shadow: none; }
+  .environment-picker-mobile .environment-picker-popup [role=option] { min-height: 48px; padding: 14px 12px; }
+  .environment-picker-mobile .image-result-title strong { font-size: 15px; }
+  /* A short viewport uses a single search bar so a keyboard still leaves room to choose. */
+  .environment-picker-mobile .environment-picker-compact { grid-template-rows: auto minmax(0, 1fr); padding-bottom: max(80px, env(safe-area-inset-bottom)); }
+  .environment-picker-mobile .environment-picker-compact h2 { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); }
+  .environment-picker-mobile .environment-picker-compact input { grid-area: 1 / 1; }
+  .environment-picker-mobile .environment-picker-compact .environment-picker-popup { grid-area: 2 / 1 / 3 / 3; }
 }
 
 dialog { width: min(520px, calc(100% - 32px)); max-height: calc(100dvh - 40px); border: 1px solid var(--line); border-radius: 12px; padding: 30px; box-shadow: 0 20px 80px #000a; color: var(--ink); background: var(--surface); }

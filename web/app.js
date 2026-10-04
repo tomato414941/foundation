@@ -1512,7 +1512,7 @@ function createEnvironment() {
     const leaveScreen = () => {
       muted.forEach(element => { element.inert = false; }); muted = [];
       if (dialog.getAttribute('aria-labelledby') === id + '-title') dialog.setAttribute('aria-labelledby', 'dialog-title');
-      root.classList.remove('environment-picker-mobile'); root.style.minHeight = ''; panel.removeAttribute('style');
+      root.classList.remove('environment-picker-mobile'); root.style.minHeight = ''; panel.removeAttribute('style'); panel.classList.remove('environment-picker-compact');
     };
     const cancel = () => { clearTimeout(debounce); controller?.abort(); loading = false; input.removeAttribute('aria-busy'); };
     const position = () => {
@@ -1528,7 +1528,9 @@ function createEnvironment() {
           }
           dialog.setAttribute('aria-labelledby', id + '-title');
         }
-        Object.assign(panel.style, { top: (viewport?.offsetTop || 0) + 'px', left: (viewport?.offsetLeft || 0) + 'px', width: (viewport?.width || window.innerWidth) + 'px', height: (viewport?.height || window.innerHeight) + 'px' });
+        const height = viewport?.height || window.innerHeight;
+        Object.assign(panel.style, { top: (viewport?.offsetTop || 0) + 'px', left: (viewport?.offsetLeft || 0) + 'px', width: (viewport?.width || window.innerWidth) + 'px', height: height + 'px' });
+        panel.classList.toggle('environment-picker-compact', height < 400);
         root.classList.add('environment-picker-mobile'); popup.style.maxHeight = ''; popup.classList.remove('opens-up');
         return;
       }
@@ -1547,7 +1549,7 @@ function createEnvironment() {
       else input.removeAttribute('aria-activedescendant');
     };
     const render = () => {
-      list.innerHTML = items.map((item, index) => `<div role="option" id="${id}-option-${index}" data-option="${index}" aria-selected="false" aria-label="${esc(item.title || item.label)}"><span class="image-result-title"><strong>${esc(item.title || item.label)}</strong>${item.official ? `<span class="image-official">${esc(t('client.environment.officialImage'))}</span>` : ''}</span>${item.description ? `<span class="image-description">${esc(item.description)}</span>` : ''}</div>`).join('');
+      list.innerHTML = items.map((item, index) => `<div role="option" id="${id}-option-${index}" data-option="${index}" aria-selected="${item.id === selected?.id}" aria-label="${esc(item.title || item.label)}"><span class="image-result-title"><strong>${esc(item.title || item.label)}</strong>${item.official ? `<span class="image-official">${esc(t('client.environment.officialImage'))}</span>` : ''}${item.id === selected?.id ? '<span class="image-current" aria-hidden="true">✓</span>' : ''}</span>${item.description ? `<span class="image-description">${esc(item.description)}</span>` : ''}</div>`).join('');
       active = -1; input.removeAttribute('aria-activedescendant'); more.hidden = !next; position();
     };
     const set = item => { selected = item; input.value = item?.label || ''; valueLabel.textContent = item?.label || input.placeholder; };
@@ -1605,7 +1607,7 @@ function createEnvironment() {
     root.querySelector('.environment-picker-toggle').addEventListener('click', () => { if (popup.hidden) { open(); focusResults(); } else { close(); if (touch()) input.blur(); } });
     list.addEventListener('mousedown', event => event.preventDefault());
     list.addEventListener('click', event => { const option = event.target.closest('[data-option]'); if (option && !pending) accept(items[Number(option.dataset.option)]); });
-    root.addEventListener('focusout', event => { if (!root.contains(event.relatedTarget)) close(); });
+    root.addEventListener('focusout', event => { if (!compact() && !root.contains(event.relatedTarget)) close(); });
     const searchPage = page => { focusResults(); void search(query, page); };
     more.addEventListener('click', () => { if (next && !loading) searchPage(next); });
     retry.addEventListener('click', () => { searchPage(1); });
