@@ -805,7 +805,7 @@ function render() {
       <section class="resource-section" aria-labelledby="language-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('globe')}</span><h2 id="language-title">${esc(t('language.label'))}</h2></div>${languagePicker(t, i18n.language)}</div></section>
       <section class="resource-section" aria-labelledby="passkeys-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="passkeys-title">${esc(t('client.passkey.title'))}</h2><p>${esc(t('client.passkey.description'))}</p></div></div>${passkeysWork() ? `<button class="button secondary" data-action="add-passkey">${icon('plus')} ${esc(t('client.passkey.add'))}</button>` : ''}</div>
         ${passkeys().length ? `<div class="agent-list">${passkeys().map(passkeyRow).join('')}</div>` : ''}</section>
-      ${state.payment?.available ? `<section class="resource-section" aria-labelledby="payment-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('card')}</span><div><h2 id="payment-title">${esc(t('client.payment.title'))}</h2><p>${state.payment.paying ? t('client.payment.registeredNote') : t('client.payment.addMethodNote')}</p><p>${esc(payerText(state.principal.payer))}</p></div></div><button class="button secondary" data-action="set-payment">${state.payment.paying ? t('client.payment.changeMethod') : t('client.payment.addMethod')}</button></div></section>` : ''}
+      ${state.payment?.available ? `<section class="resource-section" aria-labelledby="payment-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('card')}</span><div><h2 id="payment-title">${esc(t('client.payment.title'))}</h2><p>${state.payment.paying ? t('client.payment.registeredNote') : t('client.payment.addMethodNote')}</p><p>${esc(t('client.principals.payerTitle'))}: ${esc(payerText(state.principal.payer))}</p></div></div><button class="button secondary" data-action="set-payment">${state.payment.paying ? t('client.payment.changeMethod') : t('client.payment.addMethod')}</button></div></section>` : ''}
       <section class="resource-section" aria-labelledby="export-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('download')}</span><div><h2 id="export-title">${esc(t('client.account.downloadData'))}</h2><p>${esc(t('client.account.exportDescription'))}</p></div></div><a class="button secondary" href="/v1/principals/me/export" download>${icon('download')} ${esc(t('client.common.download'))}</a></div></section>
       <section class="resource-section" aria-labelledby="handover-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('arrow')}</span><div><h2 id="handover-title">${esc(t('client.handover.title'))}</h2><p>${esc(t('client.handover.description'))}</p></div></div><button class="button secondary" data-action="hand-over">${esc(t('client.handover.action'))}</button></div></section>
       <section class="resource-section" aria-labelledby="merge-title"><div class="section-heading"><div class="section-label"><span class="service-icon neutral">${icon('key')}</span><div><h2 id="merge-title">${esc(t('client.merge.title'))}</h2></div></div>${passkeysWork() ? `<button class="button secondary" data-action="merge">${esc(t('client.merge.action'))}</button>` : ''}</div></section>
@@ -1412,23 +1412,31 @@ async function principalDetails(id) {
   if (!item) return;
   detailed = { id, name: item.name };
   const agent = lines.some(line => line.relation === 'agent' && line.direction === 'to');
-  // A line of ownership is not taken off, and one who acts for this principal is taken off whole, with what was handed to it.
-  const removable = line => line.relation !== 'owner' && !(line.relation === 'agent' && line.direction === 'to');
-  const lineRow = line => `<li><div><p>${esc(relationLabel(line))}</p></div>${removable(line) ? `<button class="text-button danger" data-action="remove-line" data-id="${esc(id)}" data-relation="${esc(line.relation)}" data-direction="${esc(line.direction)}">${esc(t('client.principals.removeLine'))}</button>` : ''}</li>`;
-  const keys = item.keys || [];
-  const payer = !owned ? '' : `<section class="principal-keys"><div class="section-heading"><h3>${esc(t('client.principals.payerTitle'))}</h3></div><p>${esc(payerText(item.payer))}</p></section>`;
-  openDialog(`<div class="principal-heading"><h2 id="dialog-title">${esc(item.name)}</h2>${owned ? `<button class="icon-button" data-action="rename-principal" data-id="${esc(id)}" aria-label="${esc(t('client.common.editName'))}" title="${esc(t('client.common.editName'))}">${icon('edit')}</button>` : ''}</div>
-    <p><code>${esc(id)}</code></p>
-    <section class="principal-keys"><div class="section-heading"><h3>${esc(t('client.principals.relations'))}</h3></div>
-      ${lines.length ? `<ul class="connection-list">${lines.map(lineRow).join('')}</ul>` : ''}
-      ${agent ? `<p>${t('client.access.grantedSummary')}</p>${accessDetails()}<button class="button secondary danger" data-action="revoke-access" data-id="${esc(id)}">${esc(t('client.principals.revokeAccess'))}</button>` : owned ? `<p>${accessSummary()}</p><p class="permission-note">${esc(t('client.access.durationIncludingFuture'))}</p><button class="button secondary" data-action="make-agent" data-id="${esc(id)}">${esc(t('client.access.makeAgent'))}</button>` : ''}</section>
-    ${owned ? `<section class="principal-keys"><div class="section-heading"><h3>${esc(t('client.access.key'))}</h3><button class="text-button" data-action="issue-key" data-id="${esc(id)}">${esc(t('client.access.issueKey'))}</button></div>
-      ${keys.length ? `<ul class="connection-list key-list">${keys.map(key => `<li><div><code>${esc(key.id.slice(0, 8))}</code><p>${key.environment_id ? t('client.access.environmentKey') : esc(t('client.principals.keyIssuedAt', { date: formatDate(key.created_at, i18n.language) }))}</p></div><button class="text-button danger" data-action="revoke-key" data-id="${esc(id)}" data-key="${esc(key.id)}">${esc(t('client.access.revokeKey'))}</button></li>`).join('')}</ul>` : `<p class="muted">${esc(t('client.access.noKeys'))}</p>`}</section>
-      ${payer}
-      <div class="principal-delete"><button class="text-button danger" data-action="remove-principal" data-id="${esc(id)}">${esc(t('client.common.delete'))}</button></div>` : ''}`);
+  // One fact to a row: what it is called on the left, what it is in the middle, what can be done about it on the right.
+  const row = (label, value, action = '') => `<div class="detail-row"><dt>${label}</dt><dd>${value}</dd><div class="detail-action">${action}</div></div>`;
+  const button = (action, text, extra = '') => `<button class="text-button${extra.includes('danger') ? ' danger' : ''}" data-action="${action}" data-id="${esc(id)}"${extra.replace('danger', '')}>${esc(text)}</button>`;
+  // A line of ownership is not taken off, and one who acts for this principal is taken off as an agent, below.
+  const others = lines.filter(line => line.relation !== 'owner' && !(line.relation === 'agent' && line.direction === 'to'));
+  const keys = item.keys || [], me = state.principal.name;
+  const rows = [
+    row(esc(t('client.common.name')), esc(item.name), owned ? button('rename-principal', t('client.common.change')) : ''),
+    row(esc(t('client.principals.id')), `<code>${esc(id)}</code>`, button('copy-principal-id', t('client.common.copy'))),
+    agent ? row(esc(t('client.principals.relation.agent')), `${esc(t('client.principals.agentCan', { name: me }))}${accessDetails()}`, button('revoke-access', t('client.principals.removeLine'), 'danger'))
+      : owned ? row(esc(t('client.principals.relation.agent')), esc(t('client.principals.agentWould', { name: me })), button('make-agent', t('client.principals.makeAgent'))) : '',
+    ...others.map(line => row(esc(t('client.principals.relations')), esc(relationLabel(line)), button('remove-line', t('client.principals.removeLine'), `danger data-relation="${esc(line.relation)}" data-direction="${esc(line.direction)}"`))),
+    ...(owned ? [
+      ...keys.map((key, at) => row(at ? '' : esc(t('client.access.key')), `<span class="key-list-item"><code>${esc(key.id.slice(0, 8))}</code> <span class="muted">${key.environment_id ? t('client.access.environmentKey') : esc(t('client.principals.keyIssuedAt', { date: formatDate(key.created_at, i18n.language) }))}</span></span>`, button('revoke-key', t('client.access.revokeKey'), `danger data-key="${esc(key.id)}"`))),
+      row(keys.length ? '' : esc(t('client.access.key')), keys.length ? '' : `<span class="muted">${esc(t('client.access.noKeys'))}</span>`, button('issue-key', t('client.access.issueKey'))),
+      row(esc(t('client.principals.payerTitle')), esc(payerText(item.payer))),
+    ] : []),
+  ].join('');
+  openDialog(`<div class="principal-heading"><h2 id="dialog-title">${esc(item.name)}</h2></div>
+    <div class="relation-badges">${lines.map(line => `<span class="relation-badge">${esc(relationLabel(line))}</span>`).join('')}</div>
+    <dl class="detail-rows">${rows}</dl>
+    ${owned ? `<div class="principal-delete">${button('remove-principal', t('client.common.delete'), 'danger')}</div>` : ''}`);
 }
 // Who bears a principal's use, said from where the reader stands.
-const payerText = payer => !payer ? t('client.principals.payerNone') : payer.id === state.user.id ? t('client.principals.payerSelf') : t('client.principals.payerOther', { name: payer.name });
+const payerText = payer => !payer ? t('client.principals.payerNone') : payer.id === state.user.id ? state.principal.name : payer.name;
 function renamePrincipal(item) {
   openDialog(`<h2 id="dialog-title">${esc(t('client.common.changeName'))}</h2><form><label for="agent-name">${esc(t('client.common.name'))}</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off" value="${esc(item.name)}"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.save'))}</button></form>`);
   bindForm(async (form) => { await api(`/v1/principals/${item.id}`, { method: 'PATCH', data: { name: form.get('name') } }); await refresh(); await principalDetails(item.id); });
@@ -1909,6 +1917,7 @@ document.addEventListener('click', async (event) => {
     }
     if (action === 'edit-secret') editSecret(secrets().find(item => item.name === target.dataset.name), target);
     if (action === 'create-principal') createPrincipal();
+    if (action === 'copy-principal-id') { try { await navigator.clipboard.writeText(id); toast(t('client.common.copied')); } catch { toast(t('client.errors.copyFailed')); } }
     if (action === 'more-principals') { target.disabled = true; const next = await api('/v1/principals/me/relations?limit=50&after=' + encodeURIComponent(state.lines.next)); state.lines = { relations: [...state.lines.relations, ...next.relations], next: next.next }; render(); }
     if (action === 'remove-line') {
       target.disabled = true;

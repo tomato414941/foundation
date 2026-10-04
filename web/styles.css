@@ -427,3 +427,12 @@ textarea[data-grow] { field-sizing: content; max-height: 45vh; overflow-y: auto;
 .list-filter input { width: 100%; max-width: 320px; }
 .list-more { padding: 12px 20px; border-top: 1px solid var(--line); }
 .principal-keys > .button { margin-top: 12px; }
+
+.detail-rows { margin: 16px 0 0; }
+.detail-row { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 10px 0; border-top: 1px solid var(--line); }
+.detail-row dt { color: var(--muted); font-size: 14px; }
+.detail-row dd { margin: 0; overflow-wrap: anywhere; }
+.detail-row dd code { font-size: 13px; }
+.detail-action { justify-self: end; white-space: nowrap; }
+dialog .relation-badges { margin-top: 8px; }
+@media (max-width: 480px) { .detail-row { grid-template-columns: minmax(0, 1fr) auto; } .detail-row dt { grid-column: 1 / -1; } }

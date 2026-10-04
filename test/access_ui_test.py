@@ -65,8 +65,8 @@ with sync_playwright() as p:
     expect(row).to_be_visible()
     row.get_by_role('button', name='詳細', exact=True).click()
     dialog = page.get_by_role('dialog')
-    expect(dialog.get_by_role('heading', name='アクセスキー', exact=True)).to_be_visible()
-    dialog.get_by_role('button', name='名前を編集', exact=True).click()
+    expect(dialog.get_by_text('アクセスキー', exact=True)).to_be_visible()
+    dialog.get_by_role('button', name='変更', exact=True).click()
     dialog.get_by_label('名前', exact=True).fill('laptop のアシスタント')
     dialog.get_by_role('button', name='保存', exact=True).click()
     expect(dialog.get_by_role('heading', name='laptop のアシスタント', exact=True)).to_be_visible()
@@ -74,14 +74,14 @@ with sync_playwright() as p:
     expect(dialog.get_by_label('アクセスキー', exact=True)).to_be_visible()
     second_token = dialog.get_by_label('アクセスキー', exact=True).input_value()
     dialog.get_by_role('button', name='完了', exact=True).click()
-    expect(dialog.locator('.key-list li')).to_have_count(2)
+    expect(dialog.locator('.key-list-item')).to_have_count(2)
     me = caller.get('/v1/principals/me', headers={'authorization': 'Bearer ' + token}).json()
     owner = me['principal']['acts_for'][0]
     original_key = actor['credential']['id'][:8]
-    dialog.locator('.key-list li').filter(has_text=original_key).get_by_role('button', name='失効', exact=True).click()
+    dialog.locator('.detail-row').filter(has_text=original_key).get_by_role('button', name='失効', exact=True).click()
     expect(dialog.get_by_text('このキーは使えなくなります。他のキーとアクセス許可は残ります。', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='失効させる', exact=True).click()
-    expect(dialog.locator('.key-list li')).to_have_count(1)
+    expect(dialog.locator('.key-list-item')).to_have_count(1)
     assert caller.get('/v1/principals/me', headers={'authorization': 'Bearer ' + token}).status == 401
     assert caller.get('/v1/principals/' + owner + '/resources?kind=connection', headers={'authorization': 'Bearer ' + second_token}).status == 200
     for width in [1280, 390, 320]:
@@ -98,7 +98,7 @@ with sync_playwright() as p:
         expect(row.get_by_text('エージェント', exact=True)).to_be_visible()
         if width in [1280, 390]:
             page.screenshot(path=str(shots / f'access-{width}.png'), full_page=True)
-    revoke_access(page, 'laptop のアシスタント').get_by_role('button', name='許可を取り消す', exact=True).click()
+    revoke_access(page, 'laptop のアシスタント').get_by_role('button', name='外す', exact=True).click()
     expect(row.get_by_text('エージェント', exact=True)).to_have_count(0)
     expect(row.get_by_text('サブプリンシパル', exact=True)).to_be_visible()
     own = caller.get('/v1/principals/me', headers={'authorization': 'Bearer ' + second_token})
@@ -106,8 +106,8 @@ with sync_playwright() as p:
     assert own.json()['principal']['acts_for'] == []
     assert caller.get('/v1/principals/' + owner + '/resources?kind=connection', headers={'authorization': 'Bearer ' + second_token}).status == 403
     row.get_by_role('button', name='詳細', exact=True).click()
-    expect(dialog.get_by_role('button', name='代理人にする', exact=True)).to_be_visible()
-    expect(dialog.locator('.key-list li')).to_have_count(1)
+    expect(dialog.get_by_role('button', name='エージェントにする', exact=True)).to_be_visible()
+    expect(dialog.locator('.key-list-item')).to_have_count(1)
     assert not errors, errors
     caller.dispose()
     context.close()
