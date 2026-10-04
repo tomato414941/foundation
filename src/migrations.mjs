@@ -3,7 +3,7 @@ import { checkDefinition } from './service-definition.mjs';
 import { ensureAgent } from './keys.mjs';
 import { newContentKey, sealContent, seal } from '../cli/envelope.mjs';
 
-export const SCHEMA_VERSION = 51;
+export const SCHEMA_VERSION = 52;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -28,6 +28,7 @@ export const STEPS = {
   49: emailEntries,
   50: environmentImages,
   51: members,
+  52: keptFunctions,
 };
 
 // A stop is kept until the runner confirms it. Rebuilding widens the status check without changing resource IDs.
@@ -459,6 +460,25 @@ function emailEntries({ db }) {
 }
 // What a machine was made from is chosen by whoever opens it, and kept with it.
 function environmentImages({ db }) { db.exec('ALTER TABLE environments ADD COLUMN image TEXT'); }
+// A function is one more kind of thing a owner holds. The table of things is rebuilt to admit the kind; every row
+// keeps its id, so what refers to it still does.
+function keptFunctions({ db }) {
+  db.exec(`
+    CREATE TABLE resources_next (
+      id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('secret','connection','object','app','service','environment','function')), name TEXT NOT NULL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    INSERT INTO resources_next SELECT id, owner_id, kind, name, created_at, updated_at FROM resources;
+    DROP TABLE resources; ALTER TABLE resources_next RENAME TO resources;
+    CREATE INDEX resources_owner ON resources(owner_id, kind, name);
+    CREATE UNIQUE INDEX resources_secret_name ON resources(owner_id, name) WHERE kind='secret';
+    CREATE UNIQUE INDEX resources_object_name ON resources(owner_id, name) WHERE kind='object';
+    CREATE UNIQUE INDEX resources_app_name ON resources(owner_id, name) WHERE kind='app';
+    CREATE UNIQUE INDEX resources_service_name ON resources(owner_id, name) WHERE kind='service';
+    CREATE UNIQUE INDEX resources_function_name ON resources(owner_id, name) WHERE kind='function';
+    CREATE TABLE functions (resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE, definition TEXT NOT NULL);`);
+}
+keptFunctions.rebuilds = true;
 // Those who stand as a group are its members, the word the lines and the requests for them now use.
 function members({ db }) {
   db.exec(`
@@ -560,7 +580,7 @@ export const SCHEMA = `
   CREATE INDEX requests_to ON requests(to_id, created_at);
   -- What a owner holds: one row each, and a row in the table of its kind.
   CREATE TABLE resources (
-    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('secret','connection','object','app','service','environment')), name TEXT NOT NULL,
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('secret','connection','object','app','service','environment','function')), name TEXT NOT NULL,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   );
   CREATE INDEX resources_owner ON resources(owner_id, kind, name);
@@ -568,6 +588,7 @@ export const SCHEMA = `
   CREATE UNIQUE INDEX resources_object_name ON resources(owner_id, name) WHERE kind='object';
   CREATE UNIQUE INDEX resources_app_name ON resources(owner_id, name) WHERE kind='app';
   CREATE UNIQUE INDEX resources_service_name ON resources(owner_id, name) WHERE kind='service';
+  CREATE UNIQUE INDEX resources_function_name ON resources(owner_id, name) WHERE kind='function';
   -- Private bytes the owner keeps, for no service in particular: sealed by the client with the secret's own key.
   CREATE TABLE secrets (
     resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
@@ -590,6 +611,8 @@ export const SCHEMA = `
   );
   -- A service a owner described, for one Foundation's catalog does not know.
   CREATE TABLE services (resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE, definition TEXT NOT NULL);
+  -- An operation a owner decided, kept under a name: what it sends, with which of the owner's things, and the arguments it takes.
+  CREATE TABLE functions (resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE, definition TEXT NOT NULL);
   -- A machine lent to a owner: what it is made from, how long it lives, who it acts as inside (if anyone), and where it runs.
   CREATE TABLE environments (
     resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,

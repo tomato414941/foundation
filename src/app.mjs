@@ -34,6 +34,7 @@ import { Resources, KINDS } from './resources.mjs';
 import { respond } from './mcp.mjs';
 import { FETCH_BODY_MAX } from './fetch.mjs';
 import { FUNCTIONS, Functions } from './functions.mjs';
+import { KeptFunctions } from './kept-functions.mjs';
 import { matchRoute, openapi, validateBody } from './api.mjs';
 import { serveDocs } from './api-docs.mjs';
 import { Authorization, reaches } from './authorization.mjs';
@@ -200,6 +201,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   const environments = new Environments({ store, resources, principals, payments, runner, limits: compute });
   const environmentImages = new EnvironmentImages(imageFetcher);
   const functions = new Functions({ secrets, inputs, outbound });
+  const keptFunctions = new KeptFunctions(store, resources, inputs);
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
   const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, connections, apps, resources, keys, authorization }, row, origin, { interval: requestInterval, ...options });
   const requestActions = new RequestActions({ store, requests, secrets, connections, services, apps, principals, authorization, auditLog,
@@ -1033,6 +1035,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         : row.kind === 'secret' ? secrets.view(secrets.get(row.id))
         : row.kind === 'app' ? apps.view(apps.get(row.id), { owner: subject.id === row.owner_id })
         : row.kind === 'service' ? services.view(services.row(row.id), { owner: subject.id === row.owner_id })
+        : row.kind === 'function' ? keptFunctions.view(keptFunctions.row(row.id))
         : row.kind === 'environment' ? environments.view(environments.get(row.id)) : objects.view(objects.get(row.id));
       const resourceKind = required => {
         const kind = url.searchParams.get('kind') ?? undefined;
@@ -1045,7 +1048,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         for (const one of kinds) permit('list', one);
         if (name !== undefined) {
           const found = (kinds.includes('secret') && secrets.find(ownerId, name)) || (kinds.includes('object') && objects.enabled && objects.find(ownerId, name))
-            || (kinds.includes('service') && services.find(ownerId, name)) || (kinds.includes('app') && apps.find(ownerId, name));
+            || (kinds.includes('service') && services.find(ownerId, name)) || (kinds.includes('app') && apps.find(ownerId, name))
+            || (kinds.includes('function') && keptFunctions.find(ownerId, name));
           if (!found) fail(404, 'not_found', '見つかりません。');
           return send(200, { resource: shown(found) });
         }
@@ -1058,6 +1062,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         if (kinds.includes('object')) { if (kind === 'object') objects.check(); if (objects.enabled) { limit('objects', 60); rows.push(...objects.list(ownerId, prefix ?? '')); } }
         if (kinds.includes('app')) rows.push(...apps.list(ownerId), ...apps.lent(ownerId));
         if (kinds.includes('service')) rows.push(...services.list(ownerId), ...services.lent(ownerId));
+        if (kinds.includes('function')) rows.push(...keptFunctions.list(ownerId));
         if (kinds.includes('environment')) rows.push(...environments.list(ownerId));
         // Apps are listed with those Foundation offers, which anyone may connect through and nobody holds.
         return send(200, { resources: [...rows.map(shown), ...(kind === 'app' ? apps.offeredAll() : [])] });
@@ -1077,6 +1082,15 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           services.get(input.service, ownerId);
           const saved = apps.put(ownerId, { ...input, name });
           auditLog.write(subject.id, existing ? 'app.changed' : 'app.created', 'resource', saved.id, { service: saved.service });
+          return send(200, { resource: shown(saved) });
+        }
+        // A function is kept as what it does: the request it sends, with which of the owner's things, and its arguments.
+        if (kind === 'function') {
+          const existing = keptFunctions.find(ownerId, name);
+          permit('write', 'function', existing?.id);
+          limit('functions', 30);
+          const saved = keptFunctions.put(ownerId, name, await inputBody());
+          auditLog.write(subject.id, existing ? 'function.changed' : 'function.created', 'resource', saved.id, {});
           return send(200, { resource: shown(saved) });
         }
         // A service is described as its definition; it holds nothing secret.
@@ -1129,7 +1143,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           const moved = held.kind === 'secret' ? secrets.transfer(secrets.get(held.id), to, input.envelope)
             : held.kind === 'connection' ? connections.transfer(connections.get(held.id), to)
             : held.kind === 'app' ? apps.transfer(apps.get(held.id), to)
-            : held.kind === 'service' ? services.transfer(services.row(held.id), to) : objects.transfer(objects.get(held.id), to);
+            : held.kind === 'service' ? services.transfer(services.row(held.id), to)
+            : held.kind === 'function' ? keptFunctions.transfer(keptFunctions.row(held.id), to) : objects.transfer(objects.get(held.id), to);
           auditLog.write(subject.id, 'resource.transferred', 'resource', held.id, { from: held.owner_id, to });
           return send(200, { resource: shown(resources.get(held.id)) });
         }
@@ -1161,6 +1176,30 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
             apps.remove(app);
             auditLog.write(subject.id, 'app.removed', 'resource', app.id, { service: app.service, connections_stopped: dependents.length });
             return send(200, { ok: true, connections_stopped: dependents.length });
+          }
+        }
+        // A function a owner keeps: what it does is replaced whole, its name changed, and it is removed.
+        if (held.kind === 'function') {
+          const row = keptFunctions.row(held.id);
+          if (part) fail(405, 'method_not_allowed', 'この操作は利用できません。');
+          if (method === 'PUT') {
+            permit('write', 'function', row.id, row.owner_id);
+            const saved = keptFunctions.write(row, await inputBody());
+            auditLog.write(subject.id, 'function.changed', 'resource', row.id, {});
+            return send(200, { resource: shown(saved) });
+          }
+          if (method === 'PATCH') {
+            const input = await inputBody();
+            if (Object.keys(input).some(key => key !== 'name') || input.name === undefined) fail(400, 'invalid_fields', '変更する項目を確認してください。');
+            permit('rename', 'function', row.id, row.owner_id);
+            return send(200, { resource: shown(keptFunctions.rename(row, input.name)) });
+          }
+          if (method === 'DELETE') {
+            permit('remove', 'function', row.id, row.owner_id);
+            await inputBody();
+            keptFunctions.remove(row);
+            auditLog.write(subject.id, 'function.removed', 'resource', row.id, {});
+            return send(200, { ok: true });
           }
         }
         // A service a owner described: its definition is read, replaced and renamed; it is removed once nothing
@@ -1307,7 +1346,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const kept = secrets.list(ownerId).map(row => ({ ...secrets.view(row), content: secrets.content(row).toString('base64url'), encoding: 'base64url', envelopes: keys.envelopesOf(row.id) }));
         const value = { exported_at: new Date().toISOString(), owner: emails.of(subject.id)[0] ?? null, origin, secrets: kept,
           connections: connections.list(ownerId).map(row => ({ ...connections.view(row, { owner: true }), ...connections.sealed(row), encoding: 'base64url' })),
-          services: services.list(ownerId).map(row => ({ id: row.id, name: row.name, definition: JSON.parse(row.definition) })), principals: principals.owned(ownerId) };
+          services: services.list(ownerId).map(row => ({ id: row.id, name: row.name, definition: JSON.parse(row.definition) })),
+          functions: keptFunctions.list(ownerId).map(row => keptFunctions.view(row)), principals: principals.owned(ownerId) };
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
           'content-disposition': `attachment; filename="foundation-${new Date().toISOString().slice(0, 10)}.json"` });
         return res.end(JSON.stringify(value, null, 2));

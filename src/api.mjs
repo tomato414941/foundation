@@ -146,9 +146,15 @@ export const schemas = {
     generation: integer, expires_at: nullable(time), can_reconnect: boolean, can_revoke: boolean, available: boolean }),
   App: resource('app', { service: ref('ServiceSummary'), foundation: boolean, client_id: string, settings: map(string), connections: integer }),
   Service: resource('service', { definition: object(), service: ref('ServiceDescription'), dependents: integer }),
+  KeptFunction: resource('function', { description: string, parameters: map(object({ description: string, required: boolean })), request: object(), query: map(array({})) }),
+  FunctionDefinition: { ...object({ description: { type: 'string', maxLength: 500 },
+    parameters: { ...map(object({ description: { type: 'string', maxLength: 300 }, required: boolean })), description: 'The arguments a caller gives, by name: lower-case letters, digits and underscores.' },
+    request: { ...object(), description: 'The HTTPS request it sends, as FetchInput without save. A binding part may also be { "parameter": name }, where an argument goes.' },
+    query: { ...map(array({})), description: 'Query parameters added to the URL: each a list of strings and { "parameter": name } parts.' } }, ['request']), additionalProperties: false,
+    description: 'One decided operation. Whoever calls it gives only its arguments; the destination, the method and the connections and secrets it uses (the owner\'s own) are fixed here.' },
   Environment: resource('environment', { image: nullable(string), size: string, lifetime, identity: nullable(principalId), status: { ...choice(['starting', 'ready', 'busy', 'stopping', 'stopped']), description: 'stopping closes access immediately; stop confirmation and failed attempts are retried durably before stopped.' },
     started_at: nullable(iso), last_active_at: nullable(iso), expires_at: nullable(iso) }),
-  Resource: { oneOf: ['Secret', 'Object', 'Connection', 'App', 'Service', 'Environment'].map(ref) },
+  Resource: { oneOf: ['Secret', 'Object', 'Connection', 'App', 'Service', 'Environment', 'KeptFunction'].map(ref) },
   PatchResource: { ...object({ name: resourceName, identity: { ...nullable(principalId), description: 'For an environment: the principal it runs as, or null to take it away.' }, auth_schemes: object({ oauth: ref('OAuthDefinition') }), client_id: string, client_secret: string }), description: 'Apps also accept their service-specific top-level client fields, as declared by app_fields.' },
   DeleteResource: object({ revoke: boolean, confirm: boolean }),
   Connect: { ...object({ ...connect.properties, request_id: requestId }), description: 'With request_id the stored request determines service, scheme, app and scopes. Otherwise service is required. oauth and role need a browser session and return where to go next. token connects at once with the given fields; with connection_id it replaces that connection\'s values. Use a connection detail at POST /v1/requests to ask a person to connect.' },
@@ -286,17 +292,17 @@ export const routes = [
   { name: 'command', group: 'resources', path: '/v1/resources/{resourceId}/commands/{commandId}', methods: { get: op('getCommand', 'Read command status and output', one('Command')) } },
   { name: 'resources', path: '/v1/principals/{principalId}/resources', methods: {
     get: op('listResources', 'List a principal’s resources or find one by literal name', { anyOf: [many('resources', 'Resource'), one('Resource')] }, {
-      parameters: [query('kind', choice(KINDS)), query('name', string, 'Exact name lookup for secret, object, service or app; returns resource (singular).'), query('prefix', string), query('service', string, 'Filter connections by service id.')],
+      parameters: [query('kind', choice(KINDS)), query('name', string, 'Exact name lookup for secret, object, service, app or function; returns resource (singular).'), query('prefix', string), query('service', string, 'Filter connections by service id.')],
       description: 'Connection metadata contains no renewable state or token. Apps may include the built-in Foundation app. Without name the result is resources (an array).' }),
-    put: op('putResource', 'Create or replace a resource by kind and name', one('Resource'), { parameters: [query('kind', choice(['secret', 'object', 'app', 'service']), undefined, true), query('name', resourceName, undefined, true), header('If-Match', 'Secret revision from ETag; mismatch returns 412 secret_changed.'), header('If-None-Match', 'Use * to create a service only when its name is unused; otherwise 412 name_taken.')],
+    put: op('putResource', 'Create or replace a resource by kind and name', one('Resource'), { parameters: [query('kind', choice(['secret', 'object', 'app', 'service', 'function']), undefined, true), query('name', resourceName, undefined, true), header('If-Match', 'Secret revision from ETag; mismatch returns 412 secret_changed.'), header('If-None-Match', 'Use * to create a service only when its name is unused; otherwise 412 name_taken.')],
       description: 'kind determines the body: object stores raw bytes (including when Content-Type is application/json); secret, app and service parse JSON. A secret is placed sealed (SecretInput), 1 byte–1 MiB; objects allow up to 25 MiB and preserve Content-Type. Managed connections are created through /v1/principals/{principalId}/connections, not here.',
-      requestBody: { required: true, content: { ...rawContent, 'application/json': { schema: { anyOf: [ref('SecretInput'), ref('ServiceDefinition'), ref('AppInput')], description: 'SecretInput for kind=secret; ServiceDefinition for kind=service; AppInput for kind=app.' } } } },
+      requestBody: { required: true, content: { ...rawContent, 'application/json': { schema: { anyOf: [ref('SecretInput'), ref('ServiceDefinition'), ref('AppInput'), ref('FunctionDefinition')], description: 'SecretInput for kind=secret; ServiceDefinition for kind=service; AppInput for kind=app; FunctionDefinition for kind=function.' } } } },
       responses: { 200: { ...response(one('Resource')), headers: etag }, default: response('Error', 'Failure') },
     }),
   } },
   { name: 'resource', group: 'resources', path: '/v1/resources/{resourceId}', methods: {
     get: op('getResource', 'Read resource metadata', one('Resource')),
-    put: op('replaceService', 'Replace a service definition', one('Resource'), { input: 'ServiceDefinition', 'x-input-error': 'invalid_definition' }),
+    put: op('replaceDefinition', 'Replace a service definition or what a function does', one('Resource'), { input: { anyOf: [ref('ServiceDefinition'), ref('FunctionDefinition')] }, 'x-input-error': 'invalid_definition' }),
     patch: op('patchResource', 'Rename a resource, update an app or service, or set an environment’s identity', one('Resource'), { input: 'PatchResource', description: 'For secret/object/connection, supply name. For an environment, supply identity to attach or detach the principal it runs as. For an app, top-level client fields may also be changed. For a service, name renames the resource and auth_schemes adds connection methods; only those two fields are accepted.' }),
     delete: op('removeResource', 'Remove a resource, disconnect a connection or close an environment', object({ ok: { const: true }, service_revoked: nullable(boolean), connections_stopped: integer }, ['ok']), { input: 'DeleteResource', description: 'For an environment: returns success only after the runner confirms removal. If it cannot yet confirm, returns 503 environment_stopping and retains the environment with access revoked; stopping and removal retry automatically, including after restart. For connections, revoke (boolean) is required: true also attempts service-side revocation. service_revoked is true/false when attempted, null otherwise. For an app in use, confirm:true is required; its connections stop working. Other kinds accept {}. Environments are closed before removal.' }),
   } },
@@ -354,7 +360,7 @@ export function validateSchema(schema, value) {
 }
 export function validateBody(route, value, variant) {
   // Raw secret/object uploads bypass JSON reading even when their media type is JSON.
-  const selected = route?.name === 'resources' ? (variant === 'service' ? 'ServiceDefinition' : variant === 'app' ? 'AppInput' : null)
+  const selected = route?.name === 'resources' ? (variant === 'service' ? 'ServiceDefinition' : variant === 'app' ? 'AppInput' : variant === 'function' ? 'FunctionDefinition' : null)
     : route?.operation?.requestBody?.content?.['application/json']?.schema;
   if (!selected) return;
   const checked = validateSchema(selected, value);

@@ -8,6 +8,8 @@ import { Store } from '../src/store.mjs';
 import { Vault, digest } from '../src/crypto.mjs';
 import { Principals } from '../src/principals.mjs';
 import { SCHEMA_VERSION, STEPS } from '../src/migrations.mjs';
+// A database from before functions were a kind of thing has neither their table nor the index of their names.
+const before52 = store => store.db.exec('DROP TABLE IF EXISTS functions; DROP INDEX IF EXISTS resources_function_name');
 import { OAuth2Client, inject } from '../src/schemes/oauth.mjs';
 import { Authorization } from '../src/authorization.mjs';
 import { Environments } from '../src/environments.mjs';
@@ -29,6 +31,7 @@ async function storedDefinitions(t, definitions) {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-reference-migration-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY), m = modules(store);
+  before52(store);
   const secret = m.secrets.putAs(USER_A, { name: 'token#work', content: Buffer.from([0, 255, 10, 42]) });
   // Back to how a secret was kept before 43: sealed by the server under its name.
   store.db.prepare('UPDATE secrets SET content=? WHERE resource_id=?').run(new Vault(KEY).sealBytes(Buffer.from([0, 255, 10, 42]), `secret:${USER_A}:${secret.id}`), secret.id);
@@ -212,6 +215,7 @@ test('30版のデータベースを、関係も渡した権限も一つの関係
   db.close();
 
   const store = new Store(path, KEY);
+  before52(store);
   t.after(() => store.close());
   assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   const lines = store.db.prepare('SELECT * FROM relations ORDER BY relation').all().map(row => ({ ...row }));
@@ -331,6 +335,7 @@ test('もう誰も動かしていない形のデータベースは、移行せ�
 test('36版のセッションでサインインしていたアドレスは、その人の確かめたアドレスとして残り、古いセッションは終わる', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-37-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
+  before52(store);
   const { principals } = modules(store);
   principals.ensure(USER_A); principals.ensure(USER_B);
   store.db.exec(`ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE connection_references; DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation Agent'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE emails; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
@@ -355,6 +360,7 @@ test('36版のセッションでサインインしていたアドレスは、そ
 test('37版のアドレスは、持ち主との結びつきだけを残して移る', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-38-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
+  before52(store);
   modules(store).principals.ensure(USER_A);
   store.db.exec(`ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE connection_references; DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation Agent'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE emails; CREATE TABLE emails (address TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, verified_at INTEGER NOT NULL);
     CREATE INDEX emails_principal ON emails(principal_id);`);
@@ -368,6 +374,7 @@ test('37版のアドレスは、持ち主との結びつきだけを残して移
 test('39版のパスキーの表はWebAuthnの資格情報の表になり、それで証明したセッションは続く', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-40-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
+  before52(store);
   modules(store).principals.ensure(USER_A);
   store.db.exec(`ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at); DROP INDEX resources_owner; ALTER TABLE resources RENAME COLUMN owner_id TO holder_id; CREATE INDEX resources_holder ON resources(holder_id, kind, name); DROP TABLE connection_references; DROP TABLE envelopes; DROP TABLE key_wraps; DROP TABLE principal_keys; DELETE FROM principals WHERE name='Foundation Agent'; DELETE FROM metadata WHERE name LIKE 'agent_%'; DROP TABLE meter_events; DROP TABLE payment_accounts; DROP TABLE webauthn_credentials; DROP TABLE challenges; DROP TABLE oauth_flows; DROP TABLE sessions;
     CREATE TABLE passkeys (id TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE, public_key BLOB NOT NULL,
@@ -393,6 +400,7 @@ test('39版のパスキーの表はWebAuthnの資格情報の表になり、そ�
 test('41版の代わりに動く線は agent に、一つの操作の線はその操作の関係になり、持ち主へ引いた操作の線は消える', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-42-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
+  before52(store);
   const { principals } = modules(store);
   principals.ensure(USER_A); principals.ensure(USER_B);
   const line = store.db.prepare('INSERT INTO relations (subject_id,relation,object_type,object_id,created_at) VALUES (?,?,?,?,?)');
@@ -414,6 +422,7 @@ test('41版の代わりに動く線は agent に、一つの操作の線はそ�
 test('40版のエンバイロメントは ID・コマンド・鍵・使用量を保って停止再試行可能な43版へ移る', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-43-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY), m = modules(store);
+  before52(store);
   m.principals.ensure(USER_A);
   store.db.exec(`DROP TABLE environments;
     CREATE TABLE environments (
@@ -452,6 +461,7 @@ test('40版のエンバイロメントは ID・コマンド・鍵・使用量を
 test('本番41版の支払い登録と送信済み・未送信イベントは、43版の停止移行で変わらない', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-payment-stop-migration-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY), m = modules(store);
+  before52(store);
   m.principals.ensure(USER_A);
   store.db.exec(`DROP TABLE environments;
     CREATE TABLE environments (
@@ -484,6 +494,7 @@ test('本番41版の支払い登録と送信済み・未送信イベントは、
 test('mainの42版DBは認可と課金を保って43版へ移り、停止の読み取りと再試行が動く', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-main42-stop-migration-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY), m = modules(store), now = Date.now();
+  before52(store);
   m.principals.ensure(USER_A); m.principals.ensure(USER_B);
   // All other tables have main's v42 shape. Only environments gained columns/a status in v43.
   store.db.exec(`DROP TABLE environments;
@@ -537,6 +548,7 @@ test('mainの42版DBは認可と課金を保って43版へ移り、停止の読�
 test('43版のシークレットはそれぞれの鍵で封じ直され、開いていたFoundationの封筒だけが残り、Foundationは持ち主の代わりに動く線を得る', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-43-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY), vault = new Vault(KEY);
+  before52(store);
   const { principals, resources } = modules(store);
   principals.ensure(USER_A); principals.ensure(USER_B);
   // Two secrets of the owner's and one of another's, sealed as the server did before 44; the other keeps none.
@@ -564,6 +576,7 @@ test('43版のシークレットはそれぞれの鍵で封じ直され、開い
 test('44版の持ち物の列は owner_id になり、持ち物も線も封筒もそのまま残る', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-45-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
+  before52(store);
   const { principals, resources, secrets } = modules(store);
   principals.ensure(USER_A); principals.ensure(USER_B);
   const kept = secrets.putAs(USER_A, { name: 'mine', content: Buffer.from('v') });
@@ -585,6 +598,7 @@ test('44版の持ち物の列は owner_id になり、持ち物も線も封筒�
 test('45版の確認値の表は、まとめる手続きの券も入る形になり、待っている確認値は残る', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-46-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
+  before52(store);
   store.db.exec("DROP TABLE connection_references; ALTER TABLE webauthn_credentials DROP COLUMN user_handle; DROP TABLE challenges; CREATE TABLE challenges (id TEXT PRIMARY KEY, purpose TEXT NOT NULL CHECK(purpose IN ('email','webauthn')), subject TEXT NOT NULL, handle TEXT, data TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL); CREATE INDEX challenges_subject ON challenges(purpose, subject, created_at);");
   store.db.prepare('INSERT INTO challenges VALUES (?,?,?,?,?,?,?)').run('c1', 'email', 'owner@example.test', null, '{}', 1, 9999999999999);
   modules(store).principals.ensure(USER_A);
@@ -601,6 +615,7 @@ test('45版の確認値の表は、まとめる手続きの券も入る形にな
 test('46版の接続の状態は、接続ごとの鍵で封じ直され、Foundation宛の封筒を持ち、開いて同じ中身になる', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-47-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY), vault = new Vault(KEY);
+  before52(store);
   const { principals, resources } = modules(store);
   principals.ensure(USER_A);
   resources.insert('c1', USER_A, 'connection', 'GitHub');
@@ -619,6 +634,7 @@ test('46版の接続の状態は、接続ごとの鍵で封じ直され、Founda
 test('47版に、接続が参照するシークレットの記録の表が加わる', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-48-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
+  before52(store);
   store.db.exec('DROP TABLE connection_references; DROP INDEX emails_id; ALTER TABLE emails DROP COLUMN id; ALTER TABLE emails DROP COLUMN created_at; ALTER TABLE environments DROP COLUMN image; PRAGMA user_version=47'); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
@@ -628,10 +644,31 @@ test('47版に、接続が参照するシークレットの記録の表が加わ
 test('50版でグループとして立つ人の線は、メンバーの線になる', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-51-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
+  before52(store);
   store.db.exec(`INSERT INTO principals (id,name,created_at) VALUES ('person','person',1),('group','group',1);
     INSERT INTO relations (subject_id,relation,object_type,object_id,created_at) VALUES ('person','steward','principal','group',1);
     PRAGMA user_version=50`); store.close();
   const next = new Store(path, KEY); t.after(() => next.close());
   assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
   assert.deepEqual(next.db.prepare("SELECT relation FROM relations WHERE subject_id='person' AND object_id='group'").all().map(row => row.relation), ['member']);
+});
+
+test('51版の持ち物の表は、ファンクションという種類も受け入れ、持ち物も線もそのまま残る', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'foundation-migration-52-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'state.sqlite'), store = new Store(path, KEY);
+  store.db.exec(`PRAGMA foreign_keys=OFF; DROP TABLE functions; DROP INDEX resources_function_name;
+    CREATE TABLE resources_old (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('secret','connection','object','app','service','environment')), name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    INSERT INTO principals (id,name,created_at) VALUES ('owner','owner',1);
+    INSERT INTO resources_old VALUES ('thing','owner','service','described','2026-01-01','2026-01-01');
+    DROP TABLE resources; ALTER TABLE resources_old RENAME TO resources;
+    INSERT INTO services (resource_id,definition) VALUES ('thing','{}');
+    INSERT INTO relations (subject_id,relation,object_type,object_id,created_at) VALUES ('owner','viewer','resource','thing',1);
+    PRAGMA user_version=51`); store.close();
+  const next = new Store(path, KEY); t.after(() => next.close());
+  assert.equal(next.db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
+  assert.deepEqual({ ...next.db.prepare("SELECT owner_id,kind,name FROM resources WHERE id='thing'").get() }, { owner_id: 'owner', kind: 'service', name: 'described' });
+  assert.equal(next.db.prepare("SELECT count(*) AS n FROM services WHERE resource_id='thing'").get().n, 1);
+  next.db.prepare("INSERT INTO resources VALUES ('fn','owner','function','ping','2026-01-01','2026-01-01')").run();
+  next.db.prepare("INSERT INTO functions (resource_id,definition) VALUES ('fn','{}')").run();
+  assert.deepEqual(next.db.prepare('PRAGMA foreign_key_check').all(), []);
 });

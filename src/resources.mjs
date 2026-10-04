@@ -9,7 +9,8 @@ import { fail } from './errors.mjs';
 //   app         an OAuth app, the name a service knows Foundation by (apps.mjs)
 //   service     a service the owner described, for one the catalog does not know (services.mjs)
 //   environment a machine lent to the owner, with a shell, files and the network (environments.mjs)
-export const KINDS = ['secret', 'connection', 'object', 'app', 'service', 'environment'];
+//   function    an operation the owner decided, called by name with arguments (kept-functions.mjs)
+export const KINDS = ['secret', 'connection', 'object', 'app', 'service', 'environment', 'function'];
 const COMMON = 'id,owner_id,kind,name,created_at,updated_at';
 const now = () => new Date().toISOString();
 

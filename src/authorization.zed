@@ -194,6 +194,32 @@ definition service {
   permission transfer = owner->decide + transfer_grant
 }
 
+// An operation the owner decided. Calling it is its own line, narrower than using what it uses: an invoker gives
+// the arguments it takes and nothing else. What it does is changed by whoever may use the owner's things.
+definition function {
+  relation owner: principal
+  relation viewer: principal
+  relation editor: principal
+  relation invoker: principal
+  relation list_grant: principal
+  relation read_grant: principal
+  relation write_grant: principal
+  relation remove_grant: principal
+  relation rename_grant: principal
+  relation share_grant: principal
+  relation transfer_grant: principal
+  relation invoke_grant: principal
+
+  permission list = owner->use + list_grant
+  permission read = owner->use + viewer + editor + invoker + read_grant
+  permission write = owner->use + write_grant
+  permission remove = owner->use + remove_grant
+  permission rename = owner->decide + rename_grant
+  permission share = owner->decide + share_grant
+  permission transfer = owner->decide + transfer_grant
+  permission invoke = owner->use + invoker + editor + invoke_grant
+}
+
 // A lent machine: opened and used by whoever uses the owner's things and by editors, watched by viewers too. It is
 // not passed on: it ends with the one it was lent to.
 definition environment {
