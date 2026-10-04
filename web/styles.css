@@ -460,3 +460,6 @@ dialog .relation-badges { margin-top: 8px; }
 .detail-row dd > :first-child { margin-top: 0; }
 
 .credential-choices { display: grid; gap: 8px; margin-top: 16px; }
+
+.viewing-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding: 10px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel, transparent); }
+.principal-switch { margin-top: 20px; }

@@ -9,6 +9,13 @@ Object.defineProperty(t, 'locale', { get: () => i18n.language });
 // The owner's own key: unwrapped by a passkey (its PRF output) and held only in this page, which seals what it
 // keeps and opens what was sealed for it. Nothing of it is written anywhere.
 let own = null, keyUnavailable = false;
+// Whose things the pages show: one's own, or those of a principal one stands as, chosen on the Principals page and
+// kept for this tab. The session stays one's own; only the principal the paths name changes.
+let viewing = null; try { viewing = sessionStorage.getItem('fdn_viewing'); } catch {}
+const held = () => '/v1/principals/' + (viewing ? encodeURIComponent(viewing) : 'me');
+const view = id => { viewing = id || null; try { if (viewing) sessionStorage.setItem('fdn_viewing', viewing); else sessionStorage.removeItem('fdn_viewing'); } catch {} };
+// The pages that show what a principal holds follow the one chosen; who one is, and whom one is on a line with, do not.
+const followsView = () => ['home', 'services', 'secrets', 'objects', 'environments'].includes(page);
 const PRF_INPUT = new TextEncoder().encode('foundation-key');
 const b64 = sealing.toBase64url, unb64 = sealing.fromBase64url;
 
@@ -512,7 +519,7 @@ async function showSignin({ email = '', message = '' } = {}) {
 window.addEventListener('focus', () => { if (document.querySelector('#email-sent')) void refresh().catch(() => {}); });
 // The owner's objects: every page of the listing, and how much of the space they use.
 async function loadSpace(signal) {
-  const [listing, usage] = await Promise.all([api('/v1/principals/me/resources?kind=object', { signal }), api('/v1/principals/me/usage', { signal })]);
+  const [listing, usage] = await Promise.all([api(held() + '/resources?kind=object', { signal }), api(held() + '/usage', { signal })]);
   const objects = listing.resources.map(item => ({ ...item, key: item.name, updated_at: Date.parse(item.updated_at) }));
   return { available: true, objects, usage: usage.objects };
 }
@@ -544,10 +551,10 @@ const SOURCES = {
   me: signal => api('/v1/principals/me', { signal }),
   credentials: signal => api('/v1/principals/me/credentials', { signal }).then(result => result.credentials),
   payment: signal => api('/v1/principals/me/payment', { signal }).then(result => result.payment),
-  secrets: signal => api('/v1/principals/me/resources?kind=secret', { signal }).then(result => result.resources),
-  connections: signal => api('/v1/principals/me/resources?kind=connection', { signal }).then(result => result.resources),
-  apps: signal => api('/v1/principals/me/resources?kind=app', { signal }).then(result => result.resources),
-  services: signal => api('/v1/principals/me/resources?kind=service', { signal }).then(result => result.resources),
+  secrets: signal => api(held() + '/resources?kind=secret', { signal }).then(result => result.resources),
+  connections: signal => api(held() + '/resources?kind=connection', { signal }).then(result => result.resources),
+  apps: signal => api(held() + '/resources?kind=app', { signal }).then(result => result.resources),
+  services: signal => api(held() + '/resources?kind=service', { signal }).then(result => result.resources),
   catalog: signal => api('/v1/services', { signal }).then(result => result.services),
   // What this principal owns: the lines of ownership it drew, with who is at their other end.
   principals: signal => api('/v1/principals/me/relations?relation=owner&direction=from&limit=200', { signal }).then(result => result.relations.map(line => line.principal)),
@@ -555,8 +562,8 @@ const SOURCES = {
   lines: signal => api('/v1/principals/me/relations?limit=50', { signal }),
   agentLines: signal => api('/v1/principals/me/relations?relation=agent&direction=to&limit=200', { signal }).then(result => result.relations),
   functions: signal => api('/v1/functions', { signal }).then(result => result.functions),
-  environments: signal => api('/v1/principals/me/resources?kind=environment', { signal }).then(result => result.resources.filter(item => item.status !== 'stopped')),
-  compute: signal => api('/v1/principals/me/compute', { signal }).then(result => result.compute),
+  environments: signal => api(held() + '/resources?kind=environment', { signal }).then(result => result.resources.filter(item => item.status !== 'stopped')),
+  compute: signal => api(held() + '/compute', { signal }).then(result => result.compute),
   // The principal the server acts as, whose envelopes it can open.
   foundation: signal => api('/v1/principals/agent', { signal }).then(result => ({ principal_id: result.principal.id })),
 };
@@ -573,9 +580,15 @@ const NEEDS = {
 async function workspace(signal) {
   // A request's page shows whatever the request is about, so it asks for all of it.
   const keys = ['me', 'credentials', ...(requestId ? Object.keys(SOURCES).filter(key => key !== 'me' && key !== 'credentials') : NEEDS[page] || [])];
+  // The principal whose things are shown: read first, and let go of when it can no longer be read.
+  let shown = null;
+  if (viewing) {
+    try { const { principal } = await api('/v1/principals/' + encodeURIComponent(viewing), { signal }); shown = { id: principal.id, name: principal.name }; }
+    catch (error) { if (signal?.aborted) throw error; view(null); }
+  }
   const got = Object.fromEntries(await Promise.all(keys.map(async key => [key, await SOURCES[key](signal)])));
   const { me, agentLines, ...rest } = got;
-  const result = { ...rest, user: { id: me.principal.id, email: got.credentials.find(item => item.kind === 'email')?.name ?? null }, principal: me.principal };
+  const result = { ...rest, user: { id: me.principal.id, email: got.credentials.find(item => item.kind === 'email')?.name ?? null }, principal: me.principal, viewing: shown };
   if (agentLines) result.agents = agentLines.map(line => ({ id: line.principal.id, name: line.principal.name, approved_at: line.created_at }));
   return result;
 }
@@ -770,7 +783,8 @@ function render() {
     document.title = pageTitle(pagePath, t);
     app.querySelector('[data-action="signout"]').disabled = false;
     app.querySelector('main').removeAttribute('aria-busy');
-    app.querySelector('main').innerHTML = inner;
+    const banner = state?.viewing && followsView() ? `<div class="viewing-banner" role="status"><span>${esc(t('client.principals.viewing', { name: state.viewing.name }))}</span><button class="text-button" data-action="view-self">${esc(t('client.principals.viewSelf'))}</button></div>` : '';
+    app.querySelector('main').innerHTML = banner + inner;
   };
   if (page === 'objects') {
     if (!app.querySelector('#space-upload')) {
@@ -939,7 +953,7 @@ function bindObjects() {
         });
         if (!go) return;
       }
-      const response = await fetch('/v1/principals/me/resources?' + new URLSearchParams({ kind: 'object', name: key }), { method: 'PUT', credentials: 'same-origin',
+      const response = await fetch(held() + '/resources?' + new URLSearchParams({ kind: 'object', name: key }), { method: 'PUT', credentials: 'same-origin',
         headers: { 'X-Foundation-Locale': i18n.language, 'content-type': file.type || 'application/octet-stream' }, body: file });
       const result = await response.json();
       if (response.status === 401) await showSignin();
@@ -1181,7 +1195,7 @@ function addApp(serviceId, then) {
   bindForm(async (form) => {
     const service = accepting.find(item => item.id === form.get('service')), name = String(form.get('name') || '');
     const values = Object.fromEntries(service.auth_schemes.oauth.app_fields.map(({ name }) => [name, String(form.get(name) || '')]));
-    await api('/v1/principals/me/resources?kind=app&name=' + encodeURIComponent(name), { method: 'PUT', data: { service: service.id, ...values } });
+    await api(held() + '/resources?kind=app&name=' + encodeURIComponent(name), { method: 'PUT', data: { service: service.id, ...values } });
     closeDialog(); await refresh(); toast(t('client.common.addedName', { name: name }));
     then?.(service.id);
   });
@@ -1278,7 +1292,7 @@ function connect(serviceId, connectionId, appId, shown = 'oauth') {
     ${connectChoices(service, connectionId, appId)}<p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.connections.goToService', { name: service.name }))} ${icon('arrow')}</button></form>${connectionId ? '' : otherWays(service, shown)}`);
   bindForm(async (form) => {
     const scopes = String(form.get('scopes') || '').split(/\s+/).filter(Boolean), app = String(form.get('app') || '');
-    const result = await api('/v1/principals/me/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'oauth', ...(connectionId ? { connection_id: connectionId } : {}),
+    const result = await api(held() + '/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'oauth', ...(connectionId ? { connection_id: connectionId } : {}),
       ...(scopes.length ? { scopes } : {}), ...(app && app !== 'foundation' ? { app } : {}) } });
     location.assign(result.url);
   });
@@ -1301,7 +1315,7 @@ const instructions = scheme => scheme.instructions ? `<p class="permission-note"
 async function connectByPaste(service, way, { connectionId, requestId } = {}) {
   const scheme = service.auth_schemes[way], replacing = connectionId ? connected().find(item => item.id === connectionId) : null, name = esc(service.name);
   // A role's link is made for this connection; what is pasted finishes that flow.
-  const started = way === 'role' ? await api('/v1/principals/me/connections', { method: 'POST', data: requestId ? { request_id: requestId } : { service: service.id, auth_scheme: 'role', ...(connectionId ? { connection_id: connectionId } : {}) } }) : null;
+  const started = way === 'role' ? await api(held() + '/connections', { method: 'POST', data: requestId ? { request_id: requestId } : { service: service.id, auth_scheme: 'role', ...(connectionId ? { connection_id: connectionId } : {}) } }) : null;
   const words = way === 'role'
     ? { title: esc(t('client.connections.createRole', { name: service.name })), link: t('client.connections.openService', { name: service.name }), paste: t('client.connection.pasteCreatedValue'), submit: esc(t('client.connection.connect')) + ' ' + icon('arrow') }
     : { title: replacing ? esc(t('client.connections.replaceValueTitle', { name: replacing.label })) : esc(t('client.connections.tokenTitle', { name: service.name })), lead: esc(t('client.connections.tokenLead', { name: service.name })), link: t('client.connections.createToken', { name: service.name }), submit: replacing ? t('client.common.replaceValue') : t('client.connection.connect') };
@@ -1311,8 +1325,8 @@ async function connectByPaste(service, way, { connectionId, requestId } = {}) {
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${words.submit}</button></form>${replacing || requestId ? '' : otherWays(service, way)}`);
   bindForm(async (form) => {
     const fields = pastedValues(scheme, form), label = String(form.get('name') || '').trim();
-    if (started) await api('/v1/principals/me/connections', { method: 'PUT', data: { state: started.state, fields } });
-    else await api('/v1/principals/me/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'token', fields, ...(replacing ? { connection_id: replacing.id } : label ? { name: label } : {}) } });
+    if (started) await api(held() + '/connections', { method: 'PUT', data: { state: started.state, fields } });
+    else await api(held() + '/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'token', fields, ...(replacing ? { connection_id: replacing.id } : label ? { name: label } : {}) } });
     closeDialog(); await refresh(); toast(replacing && !started ? t('client.connection.valueReplaced') : t('client.connections.connectedName', { name: service.name }));
   });
 }
@@ -1327,7 +1341,7 @@ function defineService({ name = '', created } = {}) {
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.add'))}</button></form>`);
   bindForm(async (form) => {
     const name = String(form.get('name') || '').trim();
-    const result = await api('/v1/principals/me/resources?kind=service&name=' + encodeURIComponent(name), {
+    const result = await api(held() + '/resources?kind=service&name=' + encodeURIComponent(name), {
       method: 'PUT', headers: { 'if-none-match': '*' }, data: { name },
     });
     const service = rememberService(result.resource);
@@ -1568,6 +1582,7 @@ async function principalDetails(id) {
   openDialog(`<div class="principal-heading"><h2 id="dialog-title">${esc(item.name)}</h2></div>
     <div class="relation-badges">${self ? `<span class="relation-badge">${esc(t('client.principals.self'))}</span>` : ''}${lines.map(line => `<span class="relation-badge">${esc(relationLabel(line))}</span>`).join('')}</div>
     <dl class="detail-rows">${rows}</dl>
+    ${owned && !self ? `<div class="principal-switch"><button class="button secondary" data-action="view-principal" data-id="${esc(id)}">${esc(t('client.principals.switch'))}</button></div>` : ''}
     ${owned && !self ? `<div class="principal-delete">${button('remove-principal', t('client.common.delete'), 'danger')}</div>` : ''}`);
 }
 // Who bears a principal's use, said from where the reader stands.
@@ -1599,7 +1614,7 @@ function renameMe() {
 async function handOver() {
   // Everything that can be handed over, asked for when the dialog opens: the page it opens from shows none of it.
   let objects = [];
-  try { objects = (await api('/v1/principals/me/resources?kind=object')).resources; } catch {}
+  try { objects = (await api(held() + '/resources?kind=object')).resources; } catch {}
   for (const key of ['secrets', 'connections', 'apps', 'services', 'principals']) state[key] = await SOURCES[key]();
   const groups = [[t('client.handover.secrets'), secrets()], [t('client.handover.connections'), connected().map(item => ({ ...item, name: item.label || item.service.name }))], [t('client.handover.objects'), objects],
     [t('client.handover.apps'), (state.apps || []).filter(item => !item.foundation && item.owner_id === state.user.id)], [t('client.handover.services'), (state.services || []).filter(item => item.owner_id === state.user.id)],
@@ -1763,6 +1778,16 @@ async function handEnvelope(row) {
 // One confirmation, for removing something a key kept. Nothing here can be undone, and nothing reaches the service.
 // The name and the way it reaches a command, changed without the value ever being handed back.
 // Something the owner has in hand, put there without an agent asking for it first.
+// Whom a secret placed here is sealed for. In another principal's place, what this principal places is sealed for
+// itself too, so that it can open there what it put there.
+async function recipientsHere() {
+  const { recipients } = await api(held() + '/recipients');
+  if (viewing && !recipients.some(item => item.principal_id === state.user.id)) {
+    const { key } = await api('/v1/principals/me/key');
+    if (key.public_key) recipients.push({ principal_id: state.user.id, public_key: key.public_key });
+  }
+  return recipients;
+}
 function addSecret() {
   openDialog(`<h2 id="dialog-title">${esc(t('client.secret.add'))}</h2>
     <form><label for="new-name">${esc(t('client.common.name'))}</label><input id="new-name" name="name" required maxlength="200" placeholder="${esc(t('client.secret.namePlaceholder'))}" autocomplete="off" spellcheck="false">
@@ -1770,9 +1795,9 @@ function addSecret() {
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.common.add'))}</button></form>`);
   bindForm(async (form) => {
     const name = form.get('name');
-    const { recipients } = await api('/v1/principals/me/recipients');
+    const recipients = await recipientsHere();
     if (!recipients.length) throw new Error(t('client.secret.passkeyRequired'));
-    await api('/v1/principals/me/resources?' + new URLSearchParams({ kind: 'secret', name }), { method: 'PUT', data: await sealFor(new TextEncoder().encode(String(form.get('value'))), recipients) });
+    await api(held() + '/resources?' + new URLSearchParams({ kind: 'secret', name }), { method: 'PUT', data: await sealFor(new TextEncoder().encode(String(form.get('value'))), recipients) });
     closeDialog(); await refresh(); toast(t('client.common.addedName', { name: name }));
   });
 }
@@ -1931,7 +1956,7 @@ function bindSecretValue(entry, row) {
         if (!etag) throw new Error(t('client.secret.restartEdit'));
         const bytes = binary ? new Uint8Array(await file.arrayBuffer()) : content;
         // Sealed anew, for everyone who had it and everyone it is for now.
-        const named = (await api('/v1/principals/me/recipients')).recipients;
+        const named = await recipientsHere();
         const sealed = await sealFor(bytes, [...recipients, ...named.filter(item => !recipients.some(one => one.principal_id === item.principal_id))]);
         const response = await fetch(path, { method: 'PUT', credentials: 'same-origin', cache: 'no-store',
           headers: { 'X-Foundation-Locale': i18n.language, 'content-type': 'application/json', 'if-match': etag }, body: JSON.stringify(sealed) });
@@ -2058,6 +2083,8 @@ document.addEventListener('click', async (event) => {
       catch { toast(t('client.errors.copyFailed')); }
     }
     if (action === 'edit-secret') editSecret(secrets().find(item => item.name === target.dataset.name), target);
+    if (action === 'view-principal') { view(id); closeDialog(); navigate(new URL('/services', location.origin)); await refresh(); }
+    if (action === 'view-self') { view(null); await refresh(); }
     if (action === 'create-principal') createPrincipal();
     if (action === 'copy-principal-id') { try { await navigator.clipboard.writeText(id); toast(t('client.common.copied')); } catch { toast(t('client.errors.copyFailed')); } }
     if (action === 'more-principals') { target.disabled = true; const next = await api('/v1/principals/me/relations?limit=50&after=' + encodeURIComponent(state.lines.next)); state.lines = { relations: [...state.lines.relations, ...next.relations], next: next.next }; render(); }
@@ -2121,17 +2148,17 @@ const resultMessages = { connected: t('client.connection.connected'), denied: t(
   retry: t('client.connection.ongoingAccessFailed'), changed: t('client.connection.stateChanged'), failed: t('client.connection.failedRetry') };
 if (resultCode === 'review') {
   try {
-    const review = await api('/v1/principals/me/connections/confirmation?state=' + encodeURIComponent(confirmationState));
+    const review = await api(held() + '/connections/confirmation?state=' + encodeURIComponent(confirmationState));
     const values = items => items.length ? items.join('\n') : t('client.common.none');
     openDialog(`<h2 id="dialog-title">${esc(t('client.connection.reviewChanges'))}</h2><p>${esc(review.connection.service.name)} · ${esc(review.connection.label)}</p>
       <dl class="approval-facts">${presentedChanges(review).map(change => `<div><dt>${esc(change.label)}</dt><dd><p>${esc(t('client.connections.beforeValues', { values: values(change.before) })).replace(/\n/g, '<br>')}</p><p>${esc(t('client.connections.afterValues', { values: values(change.after) })).replace(/\n/g, '<br>')}</p></dd></div>`).join('')}</dl>
       <p class="permission-note">${esc(t('client.connection.updatePermissionWarning'))}</p>
       <form><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" class="button secondary" data-action="cancel-connection-review">${esc(t('client.common.cancel'))}</button><button type="submit" class="button primary">${esc(t('client.connection.confirmUpdate'))}</button></div></form>`);
     document.querySelector('[data-action="cancel-connection-review"]').addEventListener('click', async () => {
-      try { await api('/v1/principals/me/connections/confirmation', { method: 'DELETE', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); }
+      try { await api(held() + '/connections/confirmation', { method: 'DELETE', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); }
       catch (error) { toast(error.message); }
     });
-    bindForm(async () => { await api('/v1/principals/me/connections/confirmation', { method: 'POST', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); await refresh(); toast(t('client.connection.updated')); });
+    bindForm(async () => { await api(held() + '/connections/confirmation', { method: 'POST', data: { state: confirmationState } }); history.replaceState(null, '', pagePath); closeDialog(); await refresh(); toast(t('client.connection.updated')); });
   } catch (error) { toast(error.message); }
 } else if (resultCode) toast(resultMessages[resultCode] || t('client.connection.checkAndRetry'));
 initializing = false;

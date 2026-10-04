@@ -111,6 +111,25 @@ with sync_playwright() as p:
     box.locator('form button[type=submit]').click()
     expect(box.locator('.detail-row').filter(has_text='クレデンシャル')).to_contain_text('パスキー')
     review(fresh)
+    # Switching shows what the subprincipal holds: a secret placed there is opened there, and is not one's own.
+    box.get_by_role('button', name='切り替え', exact=True).click()
+    fresh.wait_for_url(base + '/services')
+    expect(fresh.get_by_text('分けた置き場所 を表示中', exact=True)).to_be_visible()
+    open_menu(fresh)
+    fresh.get_by_role('navigation').get_by_role('link', name='シークレット', exact=True).click()
+    expect(fresh.get_by_text('分けた置き場所 を表示中', exact=True)).to_be_visible()
+    fresh.get_by_role('button', name='追加', exact=True).click()
+    box.get_by_label('名前', exact=True).fill('分けた鍵')
+    box.get_by_label('値', exact=True).fill('only-there')
+    box.locator('form button[type=submit]').click()
+    expect(fresh.get_by_role('heading', name='分けた鍵', exact=True)).to_be_visible()
+    review(fresh)
+    fresh.screenshot(path=str(shots / 'switched.png'), full_page=True)
+    held = newcomer.request.get(base + '/v1/principals/me/resources?kind=secret').json()['resources']
+    assert [item['name'] for item in held] == [], held
+    fresh.get_by_role('button', name='自分に戻る', exact=True).click()
+    expect(fresh.get_by_text('分けた置き場所 を表示中', exact=True)).to_have_count(0)
+    expect(fresh.get_by_role('heading', name='分けた鍵', exact=True)).to_have_count(0)
     assert not errors, errors
     browser.close()
     print('パスキー: アカウントでの追加・パスキーだけでのサインイン・削除によるセッションの終了・パスキーだけで始めることと、スマートフォンの表示を確認しました。')
