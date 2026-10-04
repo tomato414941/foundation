@@ -36,11 +36,12 @@ test('Name prefix filtering uses literal, case-sensitive text rather than wildca
 test('A storage request preserves comma and punctuation names in its completion result', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
   const names = ['one, two', '{{value}}', '__proto__'];
-  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { to: USER_A, authorization_details: [{ type: 'secret', fields: names.map(name => ({ name, label: name })) }], binding_message: '値の保存' } });
+  const keeping = name => ({ method: 'PUT', path: '/v1/principals/me/resources?kind=secret&name=' + encodeURIComponent(name), inputs: [{ at: '', label: name, kind: 'sealed' }] });
+  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { to: USER_A, operations: names.map(keeping), binding_message: '値の保存' } });
   assert.equal(asked.status, 201, asked.text);
-  const complete = await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { entries: names.map(name => ({ name, content: 'value-' + name })) } });
+  const complete = await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { values: names.map(name => ({ '': 'value-' + name })) } });
   assert.equal(complete.status, 200, complete.text);
   const done = await f.request('/v1/requests/' + asked.json.request.id, { token });
-  assert.deepEqual(done.json.request.result.names, names);
+  assert.deepEqual(done.json.request.results.map(result => result.body.resource.name), names);
   for (const name of names) assert.equal((await f.read('secret', name)).text, 'value-' + name);
 });

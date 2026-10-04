@@ -28,10 +28,12 @@ export class FakeOpenRouter extends OpenRouterClient {
 export async function openrouterFixture(t, options = {}) {
   const openrouter = options.openrouter || new FakeOpenRouter(), google = new FakeGoogle();
   const f = await fixture(t, { google, services: [entry('openrouter', { oauth: openrouterOauth(openrouter) }), entry('google', { oauth: googleOauth(google) })], ...options });
+  // Begun by the owner, or by answering a request for it.
   async function start(extra = {}) {
-    const result = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'openrouter', ...extra } });
+    const result = extra.request_id ? await f.request('/v1/requests/' + extra.request_id + '/grant', { method: 'POST', data: {} })
+      : await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'openrouter', ...extra } });
     if (result.status !== 200) throw new Error(result.text);
-    return new URL(result.json.url);
+    return new URL(extra.request_id ? result.json.continue.url : result.json.url);
   }
   async function callback(url, code = 'personal', options = {}) {
     const target = new URL(url.searchParams.get('callback_url'));

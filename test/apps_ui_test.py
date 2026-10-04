@@ -119,13 +119,14 @@ with sync_playwright() as p:
       const key = { ...made, ...await (await fetch('/v1/principals/' + made.principal.id + '/credentials', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind: 'key'})})).json() };
       const owner = key.principal.acts_for[0];
       const asked = await (await fetch('/v1/requests', {method: 'POST', headers: {'content-type': 'application/json', authorization: 'Bearer ' + key.token},
-        body: JSON.stringify({to: owner, authorization_details: [{type: 'app', service: 'cloudflare', name: 'メール用'}], binding_message: 'メールの転送を設定できるアプリを使います。',
+        body: JSON.stringify({to: owner, operations: [{method: 'PUT', path: '/v1/principals/me/resources?kind=app&name=' + encodeURIComponent('メール用'), body: {service: 'cloudflare'},
+          inputs: [{at: '/client_id', label: 'クライアントID'}, {at: '/client_secret', label: 'クライアントシークレット', kind: 'hidden'}]}], binding_message: 'メールの転送を設定できるアプリを使います。',
           steps: ['CloudflareのOAuth clientsでアプリを作ります。']})})).json();
       return {path: '/requests/' + asked.request.id, id: asked.request.id, token: key.token, owner};
     }""")
     page.goto(args.base + request['path'], wait_until='networkidle')
-    expect(page.get_by_role('heading', name='CloudflareのOAuthアプリを登録', exact=True)).to_be_visible()
-    expect(page.get_by_label('名前', exact=True)).to_have_value('メール用')
+    expect(page.get_by_role('heading', name='OAuthアプリを保存する', exact=True)).to_be_visible()
+    expect(page.locator('.approval-facts')).to_contain_text('メール用')
     page.get_by_label('クライアントID', exact=True).fill('mail-app-id')
     page.get_by_label('クライアントシークレット', exact=True).fill('mail-app-secret')
     for width in [1280, 390]:
@@ -133,11 +134,11 @@ with sync_playwright() as p:
         review(page)
         if shots:
             page.screenshot(path=str(shots / f'app-request-{width}.png'), full_page=True)
-    page.get_by_role('button', name='登録する', exact=True).click()
-    expect(page.get_by_role('heading', name='OAuthアプリを登録しました', exact=True)).to_be_visible()
+    page.get_by_role('button', name='許可して実行する', exact=True).click()
+    expect(page.get_by_role('heading', name='依頼に応えました', exact=True)).to_be_visible()
     result = page.evaluate("""async (request) => (await (await fetch('/v1/requests/' + request.id,
       {headers: {authorization: 'Bearer ' + request.token}})).json()).request""", request)
-    assert result['status'] == 'granted' and result['result']['app_id'], result
+    assert result['status'] == 'granted' and result['results'][0]['body']['resource']['id'], result
     assert 'mail-app-secret' not in json.dumps(result)
     assert not errors, errors
     browser.close()

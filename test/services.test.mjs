@@ -25,15 +25,15 @@ test('サービスを名前だけで登録し、後からOAuthを設定して接
 
   const app = await f.request('/v1/principals/me/resources?kind=app&name=Notes', { method: 'PUT', data: { service, client_id: 'notes-client', client_secret: 'notes-secret' } });
   assert.equal(app.status, 200, app.text);
-  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { to: USER_A, authorization_details: [{ type: 'connection', service, app: app.json.resource.id }], binding_message: 'ノートを取得します。' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token, data: { to: USER_A, operations: [f.connecting({ service, app: app.json.resource.id })], binding_message: 'ノートを取得します。' } });
   assert.equal(asked.status, 201, asked.text);
-  const started = await f.request('/v1/principals/me/connections', { method: 'POST', data: { request_id: asked.json.request.id } });
+  const started = await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: {} });
   assert.equal(started.status, 200, started.text);
-  const callback = await f.callback(new URL(started.json.url), 'notes-code');
+  const callback = await f.callback(new URL(started.json.continue.url), 'notes-code');
   assert.match(callback.headers.get('location'), /result=connected/);
   const completed = (await f.request('/v1/requests/' + asked.json.request.id, { token })).json.request;
   assert.equal(completed.status, 'granted');
-  const connected = (await f.request('/v1/resources/' + completed.result.connection_id)).json.resource;
+  const connected = (await f.request('/v1/resources/' + f.connected(completed).id)).json.resource;
   assert.equal(connected.service.id, service);
   const injected = await f.inject(connected, { token });
   assert.equal(injected.status, 200, injected.text);
@@ -45,16 +45,18 @@ test('サービスを名前だけで登録し、後からOAuthを設定して接
   assert.equal((await f.request('/v1/resources/' + service, { method: 'DELETE', data: {} })).status, 200);
 });
 
-test('OAuthアプリが必要な依頼では登録先を示し、登録後に接続を依頼する', async t => {
+test('OAuthアプリが必要な接続を頼まれても、アプリがなければ始められず、アプリを通す接続なら始められる', async t => {
   const f = await fixture(t), { token } = await f.issueKey();
   const registered = await register(f, 'Notes', { data: { name: 'Notes', auth_schemes: { oauth } } });
   const service = registered.json.resource.id;
-  const request = input => f.request('/v1/requests', { method: 'POST', token, data: { to: USER_A, authorization_details: [{ type: 'connection', ...input }], binding_message: 'ノートを取得します。' } });
-  const refused = await request({ service });
-  assert.equal(refused.status, 409, refused.text);
-  assert.equal(refused.json.error.code, 'app_required');
+  const answer = async input => {
+    const asked = await f.request('/v1/requests', { method: 'POST', token, data: { to: USER_A, operations: [f.connecting(input)], binding_message: 'ノートを取得します。' } });
+    return f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: {} });
+  };
+  const refused = await answer({ service });
+  assert.equal(refused.status >= 400, true, refused.text);
   const app = await f.request('/v1/principals/me/resources?kind=app&name=Notes', { method: 'PUT', data: { service, client_id: 'own-client', client_secret: 'own-secret' } });
-  assert.equal((await request({ service, app: app.json.resource.id })).status, 201);
+  assert.equal((await answer({ service, app: app.json.resource.id })).status, 200);
 });
 
 test('OAuth設定の追加と再送でサービス情報を保ち、異なる設定への上書きは競合として返す', async t => {

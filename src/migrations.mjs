@@ -3,7 +3,7 @@ import { checkDefinition } from './service-definition.mjs';
 import { ensureAgent } from './keys.mjs';
 import { newContentKey, sealContent, seal } from '../cli/envelope.mjs';
 
-export const SCHEMA_VERSION = 52;
+export const SCHEMA_VERSION = 53;
 // The schema as it is, and the steps from every version a running Foundation may still be on. A version nobody
 // runs any more has no step: a database older than the oldest step is refused, not migrated.
 export const STEPS = {
@@ -29,6 +29,7 @@ export const STEPS = {
   50: environmentImages,
   51: members,
   52: keptFunctions,
+  53: requestedCalls,
 };
 
 // A stop is kept until the runner confirms it. Rebuilding widens the status check without changing resource IDs.
@@ -486,6 +487,18 @@ function members({ db }) {
     UPDATE requests SET detail=json_set(detail, '$.relation', 'member') WHERE json_extract(detail, '$.relation')='steward';
     UPDATE requests SET result=json_set(result, '$.relation', 'member') WHERE json_extract(result, '$.relation')='steward';`);
 }
+// A request asks for calls of the API. What was asked before in another shape lives an hour at most and is asked again.
+function requestedCalls({ db }) { db.exec('DROP TABLE requests;' + REQUESTS); }
+// What one principal asks of another: the calls (operations), and what each answered once made (results, null until then).
+const REQUESTS = `
+  CREATE TABLE requests (
+    id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT, operations TEXT NOT NULL, results TEXT NOT NULL,
+    requester_name TEXT NOT NULL DEFAULT '', binding_message TEXT NOT NULL, steps TEXT NOT NULL, user_code TEXT, attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, reason TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','granted','denied','cancelled')),
+    created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX requests_from ON requests(from_id, created_at);
+  CREATE INDEX requests_to ON requests(to_id, created_at);`;
 const REFERENCES = `
   CREATE TABLE connection_references (
     connection_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE, secret_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
@@ -569,15 +582,7 @@ export const SCHEMA = `
   ${WEBAUTHN_CREDENTIALS}
   ${PAYMENT}
   CREATE TABLE oauth_flows (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at INTEGER NOT NULL);
-  CREATE TABLE requests (
-    id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT,
-    type TEXT NOT NULL CHECK(type IN ('relation','secret','connection','app')), detail TEXT NOT NULL,
-    requester_name TEXT NOT NULL DEFAULT '', binding_message TEXT NOT NULL, steps TEXT NOT NULL, user_code TEXT, attempts INTEGER NOT NULL DEFAULT 0, progress TEXT, result TEXT, reason TEXT,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','granted','denied','cancelled')),
-    created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
-  );
-  CREATE INDEX requests_from ON requests(from_id, created_at);
-  CREATE INDEX requests_to ON requests(to_id, created_at);
+${REQUESTS}
   -- What a owner holds: one row each, and a row in the table of its kind.
   CREATE TABLE resources (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('secret','connection','object','app','service','environment','function')), name TEXT NOT NULL,

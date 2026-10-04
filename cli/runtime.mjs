@@ -337,7 +337,10 @@ async function main() {
   if (action === 'join') {
     const me = await send('/v1/principals/me', undefined, { method: 'GET', accept: data => data.error?.code === 'not_approved' });
     if (me.principal?.acts_for?.length) { console.log('Already approved on ' + url.origin + '.'); return; }
-    const answer = await send('/v1/requests', { authorization_details: [{ type: 'relation', relation: 'agent' }] });
+    // The one call it may ask for: a line from itself, agent, onto whoever answers (me, to them).
+    // One someone already owns asks them; one nobody knows asks whoever opens the page it shows.
+    const self = me.principal?.id ?? (await send('/v1/session', undefined, { method: 'GET' })).current?.principal_id, owner = me.principal?.owners?.[0];
+    const answer = await send('/v1/requests', { ...(owner ? { to: owner } : {}), operations: [{ method: 'POST', path: '/v1/principals/' + encodeURIComponent(self) + '/relations', body: { relation: 'agent', object_type: 'principal', object_id: 'me' } }] });
     console.log(JSON.stringify(answer, null, 2));
     return;
   }

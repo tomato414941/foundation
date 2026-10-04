@@ -71,7 +71,8 @@ with sync_playwright() as p:
     key = call('/v1/principals/' + user['id'] + '/credentials', product, 'POST', {'kind': 'key'})['token']
     # What the user keeps is injected by Foundation's principal, which the user makes their agent.
     call('/v1/principals/agent/relations', key, 'POST', {'relation': 'agent', 'object_type': 'principal', 'object_id': call('/v1/principals/me', key)['principal']['id']})
-    asked = call('/v1/requests', key, 'POST', {'authorization_details': [{'type': 'secret', 'fields': {'name': 'npm-token', 'label': 'npm のアクセストークン', 'site': 'https://www.npmjs.com/'}}],
+    asked = call('/v1/requests', key, 'POST', {'operations': [{'method': 'PUT', 'path': '/v1/principals/me/resources?kind=secret&name=npm-api-token',
+                                                                'inputs': [{'at': '', 'label': 'npm のアクセストークン', 'kind': 'sealed', 'site': 'https://www.npmjs.com/'}]}],
                                              'binding_message': 'パッケージの公開に使います。', 'steps': ['npmjs.com でアクセストークンを作ります。', '表示されたトークンをここに貼ります。']})['request']
     link = call('/v1/principals/' + user['id'] + '/links', product, 'POST', {'request_id': asked['id']})['url']
 
@@ -81,29 +82,28 @@ with sync_playwright() as p:
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.goto(link, wait_until='networkidle')
-    expect(page.get_by_role('heading', name='npm のアクセストークンを登録する', exact=True)).to_be_visible()
+    expect(page.get_by_role('heading', name='シークレットを保存する', exact=True)).to_be_visible()
     assert '#' not in page.url, 'the link is taken out of the address bar once spent'
     expect(page.get_by_role('button', name='サインアウト')).to_have_count(0)
     expect(page.get_by_text('パッケージの公開に使います。', exact=True)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'link-request.png'), full_page=True)
-    page.get_by_label('保存名', exact=True).fill('npm-api-token')
     page.get_by_label('npm のアクセストークン', exact=True).fill(SECRET)
-    page.get_by_role('button', name='登録する').click()
-    expect(page.get_by_role('heading', name='登録しました', exact=True)).to_be_visible()
+    page.get_by_role('button', name='許可して実行する').click()
+    expect(page.get_by_role('heading', name='依頼に応えました', exact=True)).to_be_visible()
     expect(page.get_by_role('main').get_by_role('link')).to_have_text(['ai-simplicityに戻る'])
     returned = page.get_by_role('link', name='ai-simplicityに戻る').get_attribute('href')
     assert returned == 'https://simplicity.example.test/foundation?foundation_request=' + asked['id'] + '&foundation_status=granted', returned
     review(page)
     page.screenshot(path=str(shots / 'link-done.png'), full_page=True)
-    assert call('/v1/requests/' + asked['id'], key)['request']['result']['names'] == ['npm-api-token']
+    assert call('/v1/requests/' + asked['id'], key)['request']['results'][0]['body']['resource']['name'] == 'npm-api-token'
     delivered = call('/v1/principals/me/injections', key, 'POST', {'names': [{'name': 'npm-api-token', 'as': 'NPM_TOKEN'}]})
     assert delivered['injection']['environment']['NPM_TOKEN'] == SECRET
 
     # The same link opened again reaches nothing.
     again = browser.new_context(locale='ja-JP').new_page()
     again.goto(link, wait_until='networkidle')
-    expect(again.get_by_role('heading', name='npm のアクセストークンを登録する', exact=True)).to_have_count(0)
+    expect(again.get_by_role('heading', name='シークレットを保存する', exact=True)).to_have_count(0)
     expect(again.get_by_role('button', name='サインアウト')).to_have_count(0)
     assert again.get_by_role('link', name='ai-simplicityに戻る').get_attribute('href') == 'https://simplicity.example.test/foundation/again?foundation_request=' + asked['id']
     review(again)

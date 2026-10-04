@@ -287,7 +287,7 @@ test('Anyone becomes a principal with no connection, is issued a key once, and r
   assert.equal(me.status, 200); assert.deepEqual(me.json.principal.acts_for, []); assert.equal(me.json.token, undefined, 'never handed out a second time');
   assert.deepEqual((await f.request('/v1/principals/me/resources?kind=secret', { token: made.json.token, anonymous: true })).json.resources, [], 'its own resources, empty');
   assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=secret', { token: made.json.token, anonymous: true })).status, 401, 'and nobody else\'s');
-  const unknown = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: 'fdn_' + 'z'.repeat(43), data: { authorization_details: [{ type: 'relation', relation: 'agent' }] } });
+  const unknown = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: 'fdn_' + 'z'.repeat(43), data: { operations: [f.takingOn(made.json.principal.id)] } });
   assert.equal(unknown.status, 401, 'a key nobody issued is just unknown');
 });
 

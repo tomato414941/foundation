@@ -17,9 +17,10 @@ async function googleFixture(t, google = new FakeGoogle()) {
   const f = await fixture(t, { google, services: [entry('google', { oauth: googleOauth(google) })] });
   async function connect(code = 'personal', input = {}) {
     const ids = new Set((await connections()).map(item => item.id));
-    const result = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', ...(input.request_id ? {} : { scopes: [CLOUD] }), ...input } });
+    const result = input.request_id ? await f.request('/v1/requests/' + input.request_id + '/grant', { method: 'POST', data: {} })
+      : await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'google', scopes: [CLOUD], ...input } });
     assert.equal(result.status, 200, result.text);
-    const done = await f.callback(new URL(result.json.url), code);
+    const done = await f.callback(new URL(input.request_id ? result.json.continue.url : result.json.url), code);
     assert.match(done.headers.get('location'), /result=connected/, done.headers.get('location'));
     return (await connections()).find(item => input.connection_id ? item.id === input.connection_id : !ids.has(item.id));
   }
@@ -57,12 +58,12 @@ test('Googleの同意を、頼まれた権限と本人確認の権限、state・
 
 test('AIが頼んだ権限で接続の依頼を完了し、確認結果と短期トークンを分けて渡す', async t => {
   const f = await googleFixture(t), agent = await f.issueKey();
-  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { to: USER_A, authorization_details: [{ type: 'connection', service: 'google', scopes: [READONLY, SEND] }], binding_message: 'メールを読み、返信を送ります。' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { to: USER_A, operations: [f.connecting({ service: 'google', scopes: [READONLY, SEND] })], binding_message: 'メールを読み、返信を送ります。' } });
   assert.equal(asked.status, 201, asked.text);
-  assert.deepEqual(asked.json.request.authorization_details[0].scopes, [READONLY, SEND]);
+  assert.deepEqual(asked.json.request.operations[0].body.scopes, [READONLY, SEND]);
   const a = await f.connect('personal', { request_id: asked.json.request.id });
   const done = await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token });
-  assert.equal(done.json.request.status, 'granted'); assert.equal(done.json.request.result.connection_id, a.id);
+  assert.equal(done.json.request.status, 'granted'); assert.equal(f.connected(done.json.request).id, a.id);
   const [listed] = (await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: agent.token })).json.resources;
   assert.equal(listed.label, 'personal@example.test');
   assert.deepEqual(listed.facts.scopes, with_(READONLY, SEND));

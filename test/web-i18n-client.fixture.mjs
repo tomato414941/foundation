@@ -48,10 +48,12 @@ function change(locale) {
 }
 const heading = () => document.querySelector('main h1')?.textContent;
 const overview = { principal: { id: 'owner', name: 'Keeper Sirius' } };
-const request = { id, to: 'owner', requester_name: 'Test', authorization_details: [{ type: 'relation', relation: 'agent' }], status: 'pending', expires_at: Date.now() + 60_000 };
+// A request for one call: the asker's line, agent, onto the one asked (me).
+const call = { method: 'POST', path: '/v1/principals/asker/relations', operation_id: 'addRelation', summary: 'Draw a line', body: { relation: 'agent', object_type: 'principal', object_id: 'me' } };
+const request = { id, to: 'owner', requester_name: 'Test', operations: [call], results: [null], names: {}, status: 'pending', expires_at: Date.now() + 60_000 };
 if (mode === 'transfer') {
-  request.authorization_details[0].relation = 'transfer_grant';
-  request.object = { id: 'resource', name: '利用者の名前' };
+  call.body = { relation: 'transfer_grant', object_type: 'resource', object_id: '0f317383-998f-4bd1-bca7-f76d23d99c97' };
+  request.names = { '0f317383-998f-4bd1-bca7-f76d23d99c97': { type: 'resource', kind: 'secret', name: '利用者の名前' } };
 }
 let signedIn = accountMode || ['boot', 'deny', 'transfer', 'editing'].includes(mode), release, bootWaited = false;
 const calls = [], copied = [];
@@ -225,7 +227,7 @@ if (mode === 'boot') {
     change('en'); await until(() => document.documentElement.lang === 'en');
     assert.equal(document.querySelector('.access-scope').textContent, 'Transfer ownership to another principal');
     assert.ok(document.querySelector('.approval-facts').textContent.includes('利用者の名前'));
-    assert.equal(request.authorization_details[0].relation, 'transfer_grant');
+    assert.equal(request.operations[0].body.relation, 'transfer_grant');
   } else if (mode === 'deny') {
     const button = document.querySelector('[data-action="deny-request"]');
     button.click(); assert.ok(button.disabled);

@@ -157,7 +157,7 @@ test('支払い方法のないプリンシパルには負担者がおらず、�
   // Another that came by itself and asks to be someone's agent: approving takes it in, so that person pays for it.
   const asking = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'asking' } });
   assert.throws(() => f.app.environments.within(asking.json.principal.id), { code: 'payer_required' });
-  const asked = await f.request('/v1/requests', { token: asking.json.token, anonymous: true, method: 'POST', data: { authorization_details: [{ type: 'relation', relation: 'agent' }] } });
+  const asked = await f.request('/v1/requests', { token: asking.json.token, anonymous: true, method: 'POST', data: { operations: [f.takingOn(asking.json.principal.id)] } });
   assert.equal(asked.status, 201, asked.text);
   assert.equal((await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { user_code: asked.json.request.user_code } })).status, 200);
   assert.equal(f.app.payments.payerOf(asking.json.principal.id), USER_A, 'the approver owns it now, and pays for it');

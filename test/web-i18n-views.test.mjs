@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createI18n } from '../web/i18n.js';
 import { brand, languagePicker, loading, pageTitle, pages, pendingView, workspaceView } from '../web/workspace-view.js';
-import { detailOf, knownRequestKind, requestResultView } from '../web/request-view.js';
+import { requestResultView } from '../web/request-view.js';
 import { localizeService } from '../web/service-i18n.js';
 import * as shared from '../web/locales/shared.js';
 import * as services from '../web/locales/services.js';
@@ -10,7 +10,6 @@ import { DEFINITIONS } from '../src/catalog.mjs';
 import { appFieldsOf } from '../src/apps.mjs';
 
 const ja = createI18n('ja').t, en = createI18n('en').t;
-const request = (type, status, more = {}) => ({ authorization_details: [{ type }], status, ...more });
 const japanese = /[\u3040-\u30ff\u3400-\u9fff]/u;
 
 function serviceView(definition) {
@@ -72,34 +71,23 @@ test('shared HTML escapes translated text at every HTML sink', () => {
   }
 });
 
-test('request results retain completion, authorization kind, and route semantics in both locales', () => {
-  for (const [type, granted, denied, href] of [
-    ['relation', 'Permission granted', 'Permission declined', '/principals'],
-    ['connection', 'Connected', 'Connection declined', '/services'],
-    ['secret', 'Saved', 'Not saved', '/secrets'],
-    ['app', 'OAuth app registered', 'Not registered', '/services'],
-  ]) {
-    const done = requestResultView(request(type, 'granted'), '', en);
-    assert.equal(done.title, granted); assert.equal(done.href, href); assert.equal(done.completed, true);
-    assert.equal(done.description, 'You can close this window.');
-    const refused = requestResultView(request(type, 'denied'), '', en);
-    assert.equal(refused.title, denied); assert.equal(refused.href, href); assert.equal(refused.completed, false);
-    for (const status of ['granted', 'denied', 'cancelled', 'pending']) {
-      const source = request(type, status), japanese = requestResultView(source, '', ja), english = requestResultView(source, '', en);
-      assert.equal(english.href, japanese.href); assert.equal(english.completed, japanese.completed);
-    }
+test('request results say what became of the request in both locales, and a request that took someone on says so', () => {
+  const calls = [{ method: 'DELETE', path: '/v1/principals/me/credentials/x', operation_id: 'removeCredential', summary: '' }];
+  const taking = [{ method: 'POST', path: '/v1/principals/a/relations', operation_id: 'addRelation', summary: '', body: { relation: 'agent', object_type: 'principal', object_id: 'me' } }];
+  const of = (operations, status, extra = {}) => ({ operations, status, ...extra });
+  const done = requestResultView(of(calls, 'granted'), '', en);
+  assert.deepEqual(done, { href: '/', label: 'Home', title: 'Request done', description: 'You can close this window.', completed: true });
+  assert.equal(requestResultView(of(calls, 'denied'), '', en).title, 'Request declined');
+  assert.equal(requestResultView(of(calls, 'granted')).title, '依頼に応えました');
+  const access = requestResultView(of(taking, 'granted'), '', en);
+  assert.equal(access.title, 'Access granted'); assert.equal(access.href, '/principals');
+  assert.equal(requestResultView(of(taking, 'denied'), '', en).title, 'Access declined');
+  for (const status of ['granted', 'denied', 'cancelled', 'pending']) {
+    const japanese = requestResultView(of(calls, status), '', ja), english = requestResultView(of(calls, status), '', en);
+    assert.equal(english.href, japanese.href); assert.equal(english.completed, japanese.completed);
   }
-  const agent = request('relation', 'granted', { authorization_details: [{ type: 'relation', relation: 'agent' }] });
-  assert.equal(requestResultView(agent, '', en).title, 'Access granted');
-  agent.status = 'denied'; assert.equal(requestResultView(agent, '', en).title, 'Access declined');
-  assert.equal(requestResultView(request('connection', 'granted')).title, '接続しました');
-  assert.equal(requestResultView(request('connection', 'cancelled', { reason: 'access_revoked' }), '', en).description, 'Access for the requester has been revoked.');
-  assert.equal(requestResultView(request('connection', 'cancelled', { reason: 'requester_revoked' }), '', en).description, 'The requester has been removed.');
-  for (const type of ['__proto__', 'constructor', 'toString', 'unknown']) {
-    assert.equal(knownRequestKind(type), false);
-    assert.deepEqual(requestResultView(request(type, 'granted'), '', en), { href: '/', label: 'Home', title: 'Request unavailable', description: 'Open the request link again.', completed: false });
-  }
-  assert.deepEqual(detailOf(null), {});
+  assert.equal(requestResultView(of(calls, 'cancelled', { reason: 'access_revoked' }), '', en).description, 'Access for the requester has been revoked.');
+  assert.equal(requestResultView(of(calls, 'cancelled', { reason: 'requester_revoked' }), '', en).description, 'The requester has been removed.');
   assert.equal(requestResultView(null, 'A custom failure', en).description, 'A custom failure');
 });
 

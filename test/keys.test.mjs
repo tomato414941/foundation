@@ -115,14 +115,19 @@ test('保管の依頼は宛先を示し、読み返す依頼では頼んだ側�
   const file = JSON.parse(await readFile(keyPath, 'utf8'));
   assert.match(file.key.private_key, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(JSON.parse(first.out).key.public_key, b64(publicKeyOf(Buffer.from(file.key.private_key, 'base64url'))));
-  // Approved to act for the owner first, as a machine is; then it asks them to keep two values, one to read back.
-  const approval = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: machine.json.token, data: { authorization_details: [{ type: 'relation', relation: 'agent' }] } });
+  // Approved to act for the owner first, as a machine is; then it asks them to keep two values, and to let it read the
+  // first back: a line to it, and the first one's key sealed for it by Foundation, both by what keeping it answered.
+  const self = machine.json.principal.id;
+  const approval = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: machine.json.token, data: { operations: [f.takingOn(self)] } });
   assert.equal((await f.request('/v1/requests/' + approval.json.request.id + '/grant', { method: 'POST', data: { user_code: approval.json.request.user_code } })).status, 200);
-  const asked = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: machine.json.token, data: { authorization_details: [{ type: 'secret', fields: [{ name: 'app/id', label: 'ID', readable: true }, { name: 'app/secret', label: 'Secret' }] }], binding_message: '設定に使います。', to: USER_A } });
+  const keeping = (name, label) => ({ method: 'PUT', path: '/v1/principals/me/resources?kind=secret&name=' + encodeURIComponent(name), inputs: [{ at: '', label, kind: 'sealed' }] });
+  const asked = await f.request('/v1/requests', { method: 'POST', anonymous: true, token: machine.json.token, data: { operations: [keeping('app/id', 'ID'), keeping('app/secret', 'Secret'),
+    { method: 'POST', path: '/v1/principals/' + self + '/relations', body: { relation: 'viewer', object_type: 'resource', object_id: '{$0/resource/id}' } },
+    { method: 'POST', path: '/v1/resources/{$0/resource/id}/envelopes/' + self, body: {} }], binding_message: '設定に使います。', to: USER_A } });
   assert.equal(asked.status, 201, asked.text);
   const shown = (await f.request('/v1/requests/' + asked.json.request.id)).json.request;
-  assert.deepEqual(shown.recipients.map(one => one.principal_id), [USER_A, f.app.keys.agentId, machine.json.principal.id]);
-  const granted = await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { entries: [{ name: 'app/id', content: 'id-123' }, { name: 'app/secret', content: 'very-secret' }] } });
+  assert.deepEqual(shown.recipients.map(one => one.principal_id), [USER_A, f.app.keys.agentId]);
+  const granted = await f.request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { values: [{ '': 'id-123' }, { '': 'very-secret' }] } });
   assert.equal(granted.status, 200, granted.text);
   const read = await cli(['read', 'app/id']);
   assert.equal(read.code, 0, read.err);

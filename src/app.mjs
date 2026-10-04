@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { Readable, Writable } from 'node:stream';
 import { createRequire } from 'node:module';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -18,8 +19,8 @@ import { Requests } from './requests.mjs';
 import { Settings } from './settings.mjs';
 import { AuditLog } from './audit-log.mjs';
 import { scopeList, requestedScopes } from './scopes.mjs';
-import { appReference, requestDetails } from './request-input.mjs';
-import { Apps, FOUNDATION_APP, takesApps } from './apps.mjs';
+import { requestCalls, fill, resolve } from './request-calls.mjs';
+import { Apps, FOUNDATION_APP, takesApps, appReference } from './apps.mjs';
 import { Connections } from './connections.mjs';
 import { Secrets, SECRET_MAX, SECRET_COUNT_MAX, SECRET_TOTAL_MAX } from './secrets.mjs';
 import { Keys, bytes as keyBytes } from './keys.mjs';
@@ -139,6 +140,26 @@ async function raw(req, max) {
   }
   return Buffer.concat(chunks);
 }
+// What answering a request may carry: what the one answering supplies for each call, sealed secrets among it.
+const GRANT_MAX = 8 * 2 * SECRET_MAX + 64 * 1024;
+// What a call made for a request answered, kept for the one who asked: its JSON, up to this much.
+const ANSWER_MAX = 1024 * 1024;
+// A call made within another: its body read from what is given, its answer kept rather than sent.
+class Answer extends Writable {
+  constructor() { super(); this.statusCode = 200; this.headers = {}; this.chunks = []; this.headersSent = false; }
+  setHeader(name, value) { this.headers[name.toLowerCase()] = value; }
+  appendHeader(name, value) { this.headers[name.toLowerCase()] = [].concat(this.headers[name.toLowerCase()] ?? [], value); }
+  getHeader(name) { return this.headers[name.toLowerCase()]; }
+  removeHeader(name) { delete this.headers[name.toLowerCase()]; }
+  writeHead(status, headers = {}) { this.statusCode = status; for (const [name, value] of Object.entries(headers)) this.setHeader(name, value); this.headersSent = true; return this; }
+  _write(chunk, encoding, done) { this.headersSent = true; this.chunks.push(Buffer.from(chunk, encoding)); done(); }
+  json() {
+    const bytes = Buffer.concat(this.chunks);
+    if (!String(this.headers['content-type'] ?? '').startsWith('application/json') || bytes.length > ANSWER_MAX) return null;
+    try { return JSON.parse(bytes.toString('utf8')); } catch { return null; }
+  }
+}
+
 function purposeValue(value = '') {
   if (typeof value !== 'string' || value.length > 240 || /[\x00-\x1f]/.test(value)) fail(400, 'invalid_purpose', '目的は240文字以内で入力してください。');
   return value.trim();
@@ -203,8 +224,11 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   const functions = new Functions({ secrets, inputs, outbound });
   const keptFunctions = new KeptFunctions(store, resources, inputs);
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
-  const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, connections, apps, resources, keys, authorization }, row, origin, { interval: requestInterval, ...options });
-  const requestActions = new RequestActions({ store, requests, secrets, connections, services, apps, principals, authorization, auditLog,
+  // Whom a secret kept by a principal is sealed for: itself, its members, and Foundation's principal where it acts for it.
+  const recipientsOf = id => [id, ...principals.membersOf(id), ...(authorization.can(keys.agentId, 'inject', 'principal', { id }) ? [keys.agentId] : [])]
+    .map(one => ({ principal_id: one, public_key: keys.publicKeyOf(one) })).filter(item => item.public_key).map(item => ({ ...item, public_key: item.public_key.toString('base64url') }));
+  const viewRequest = (row, origin, options) => requestView({ requests, principals, settings, resources, recipientsOf }, row, origin, { interval: requestInterval, ...options });
+  const requestActions = new RequestActions({ store, requests, connections, principals, auditLog,
     changed: row => { if (row.to_id) void settings.notify(row.to_id, 'request.' + row.status, { request: viewRequest(row, external?.origin || '') }, { ...outbound, ownHosts: ownHosts() }); } });
   const merge = new Merge({ store, db: store.db, resources, secrets, connections, apps, services, objects, environments, principals, webauthn, keys, requests, challenges, auditLog });
   const limits = new Map(), disconnects = new Set();
@@ -244,7 +268,10 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
     return commit(result);
   }
   const notApproved = () => fail(401, 'not_approved', 'このキーはまだ誰の代わりにも動けないか、失効しています。foundation join（POST /v1/requests で relation agent を依頼）で承認を依頼し、承認後にお試しください。');
-  const handle = async (req, res) => {
+  // acting: a call a request asked for, made by the one answering it - who they are (subject, session) and which call
+  // of which request (request: { id, index }). Who they are was settled when they answered; the call is handled as if
+  // they had sent it, by the same rules as every other.
+  const handle = async (req, res, acting = null) => {
     const locale = resolveLocale({ cookie: req.headers.cookie, acceptLanguage: req.headers['accept-language'] });
     const t = createI18n(locale).t;
     // JSON messages change only when the Web client explicitly opts in. Cookies and
@@ -329,10 +356,10 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           flowService = flow.service;
           // The same app that asked for consent exchanges the code: Foundation's, or one someone holds.
           const active = apps.scheme(flow.service, flow.app);
-          if (flow.requestId) {
-            destination = '/requests/' + flow.requestId;
-            requests.forTo(flow.requestId, owner, true);
-            progressRequestId = flow.requestId;
+          if (flow.request) {
+            destination = '/requests/' + flow.request.id;
+            requests.forTo(flow.request.id, owner, true);
+            progressRequestId = flow.request.id;
           }
           if (url.searchParams.has('error')) fail(400, 'authorization_denied', '接続先での認証は許可されませんでした。');
           const code = url.searchParams.get('code');
@@ -342,24 +369,24 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
             previous = connections.forService(owner, flow.previous.id);
             if (previous.generation !== flow.previous.generation || previous.status === 'disconnecting') fail(409, 'connection_changed', '接続の状態が変わりました。');
           }
-          if (flow.requestId) requests.forTo(flow.requestId, owner, true);
+          if (flow.request) requests.forTo(flow.request.id, owner, true);
           const previousContext = connections.context(previous);
           const completion = await verifyConnection(req, session,
             () => active.authorization.complete({ code, verifier: flow.verifier, redirectUri: flow.redirectUri }, previousContext),
             result => {
               const changes = previous ? active.authorization.changes?.(result, previousContext) : undefined;
               if (changes?.length) {
-                if (flow.requestId) requests.forTo(flow.requestId, owner, true);
+                if (flow.request) requests.forTo(flow.request.id, owner, true);
                 const current = connections.reconnection(owner, flow.service, 'oauth', previous.id);
                 if (current.generation !== previous.generation) fail(409, 'connection_changed', '接続の状態が変わりました。');
                 connections.nextState(result);
                 const { credentials: produced, ...kept } = result;
-                const state = flows.begin(session.id, { kind: 'confirmation', service: flow.service, scheme: 'oauth', requestId: flow.requestId,
+                const state = flows.begin(session.id, { kind: 'confirmation', service: flow.service, scheme: 'oauth', request: flow.request,
                   requestedBy: flow.requestedBy, previous: flow.previous, result: kept, changes, scopes: flow.scopes ?? null, app: flow.app ?? null });
-                if (flow.requestId) requests.record(flow.requestId, 'connect_review', { service: flow.service });
+                if (flow.request) requests.record(flow.request.id, 'connect_review', { service: flow.service });
                 return { confirmation: state };
               }
-              requestActions.connect(flow.requestId, owner, flow.service, 'oauth', result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, app: flow.app ?? null });
+              requestActions.connect(flow.request, owner, flow.service, 'oauth', result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, app: flow.app ?? null });
             });
           if (completion?.confirmation) return redirect(location('review') + '&state=' + completion.confirmation);
           return redirect(location('connected'));
@@ -378,7 +405,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       if (!browser && !token) fail(401, 'invalid_token', 'Bearer形式のキーを指定してください。');
       // Proving an entry needs no connection and no signin: becoming a principal by one, or signing in by one, carries
       // nothing to protect. Each of those asks a browser's origin itself where it matters.
-      const anonymous = browser ? !sessions.get(cookieToken(req)) : !token;
+      const anonymous = acting ? false : browser ? !sessions.get(cookieToken(req)) : !token;
       const becoming = at === 'principals' && ['POST', 'PUT'].includes(method) && anonymous;
       const proving = at === 'session' && ['POST', 'PUT'].includes(method);
       if (browser && !['GET', 'HEAD'].includes(method) && !becoming && !proving) requireOrigin(req, origin);
@@ -511,7 +538,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // Who is asking, and what they came in by (via). A token is an access key; a browser is the person who logged in,
       // or the one a request link handed to a single request.
       let subject, session = null;
-      const known = browser ? undefined : principals.authenticateKey(token);
+      const known = acting || browser ? undefined : principals.authenticateKey(token);
       // Anyone may become a principal by proving an entry that is nobody's: a passkey made for it, or a key issued here
       // and shown once (an address reached does the same, at the session). It reaches nothing of anyone else's until
       // someone draws it a line; what it may do never comes from the making.
@@ -553,9 +580,10 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
       // A bearer token is an access key, or a session a program was given for proving itself by WebAuthn.
-      const tokenSession = !browser && !known ? sessions.get(token) : undefined;
-      if (!browser && !known && !tokenSession) notApproved();
-      if (tokenSession) subject = { id: tokenSession.principal_id, via: { kind: 'session', id: tokenSession.id } };
+      const tokenSession = !acting && !browser && !known ? sessions.get(token) : undefined;
+      if (!acting && !browser && !known && !tokenSession) notApproved();
+      if (acting) ({ subject, session } = acting);
+      else if (tokenSession) subject = { id: tokenSession.principal_id, via: { kind: 'session', id: tokenSession.id } };
       else if (!browser) subject = { id: known.principal.id, via: { kind: 'key', id: known.key.id, ...(known.key.environment ? { environment: known.key.environment } : {}) } };
       else {
         const linked = requestRoute?.requestId ? principals.authenticateLink(readCookie(req, 'fdn_link'), requestRoute.requestId) : undefined;
@@ -598,18 +626,16 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         if (!id && method === 'POST') {
           const input = await body(req);
           rateLimit('request-create:' + clientAddress(req), 12, 600_000);
-          const { type, detail } = requestDetails(input.authorization_details);
-          // Whom it asks: the one named; for a relation onto something, whoever holds it; for a relation onto nothing,
-          // nobody yet - whoever answers; otherwise the owner this principal acts as.
-          const ownerOf = () => detail.object_type === 'principal' ? detail.object_id : resources.at(detail.object_id).owner_id;
-          const toId = input.to !== undefined ? principalId(input.to)
-            : type === 'relation' ? (detail.object_type === undefined ? null : ownerOf()) : ownerId;
+          const operations = requestCalls(input.operations);
+          // Whom it asks: the one named; else whoever stands as the asker itself - a person answering, on the page they are
+          // sent to, for the account an app keeps for them. Someone nobody has taken on yet asks nobody: whoever opens the
+          // page it hands over answers, which is all it may ask - naming a person would let anyone put a request in front
+          // of them.
+          const known = principals.relationsOf(subject.id).length > 0;
+          if (input.to !== undefined && !known) fail(403, 'unknown_requester', 'まだ誰にも承認されていないので、相手を指定した依頼は出せません。相手を指定せずに依頼し、その画面を渡してください。');
+          const toId = input.to !== undefined ? principalId(input.to) : known ? subject.id : null;
           if (toId !== null && !principals.get(toId)) fail(404, 'not_found', '相手が見つかりません。');
-          // Someone nobody has taken on yet may only ask whoever opens the page it hands over; naming a person would let
-          // anyone put a request in front of them. Once it is on a line with someone, it is known, and may name.
-          if (input.to !== undefined && !principals.relationsOf(subject.id).length) fail(403, 'unknown_requester', 'まだ誰にも承認されていないので、相手を指定した依頼は出せません。相手を指定せずに依頼し、その画面を渡してください。');
-          if (type !== 'relation') permit('list', type === 'secret' ? 'secret' : 'connection', undefined, toId);
-          const row = requestActions.ask(subject.id, { type, detail, toId, bindingMessage: purposeValue(input.binding_message), steps: input.steps ?? [], validMinutes: input.valid_minutes ?? 30 });
+          const row = requestActions.ask(subject.id, { operations, toId, bindingMessage: purposeValue(input.binding_message), steps: input.steps ?? [], validMinutes: input.valid_minutes ?? 30 });
           return send(201, { request: viewRequest(row, origin, { code: true }) });
         }
         if (!id && method === 'GET') {
@@ -627,37 +653,43 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
             const key = subject.id + ':' + row.id, last = polled.get(key), now = Date.now();
             polled.set(key, now);
             if (row.status === 'pending' && last !== undefined && now - last < requestInterval * 1000 - 500) fail(429, 'slow_down', `${requestInterval}秒以上あけて確認してください。`);
-            return send(200, { request: viewRequest(row, origin, { events: true, code: row.status === 'pending' }) });
+            return send(200, { request: viewRequest(row, origin, { events: true, code: row.status === 'pending', asked: row.to_id === subject.id }) });
           }
           limit('request-poll', 30);
           requests.forTo(id, subject.id);
           permit('read', 'request', id, row.to_id ?? subject.id);
           requests.record(row.id, 'page_viewed');
-          return send(200, { request: viewRequest(row, origin) });
+          return send(200, { request: viewRequest(row, origin, { asked: true }) });
         }
         if (!action && method === 'DELETE') {
           await body(req);
           permit('cancel', 'request', id, row.from_id);
           return send(200, { request: viewRequest(requestActions.cancel(subject.id, id), origin) });
         }
+        // Answering: the calls asked for are made, in order, as the one answering would make them, with what they
+        // supply; each is handled by the same rules as if they had sent it. A call that goes on elsewhere (a service's
+        // consent) answers when it comes back; one that fails stops here, and answering again goes on from it.
         if (action === 'grant' && method === 'POST') {
-          const pending = requests.forTo(id, subject.id, true);
+          let row = requests.forTo(id, subject.id, true);
           permit('grant', 'request', id, row.to_id ?? subject.id);
-          progressRequestId = pending.id;
-          if (pending.type === 'secret') {
-            const input = await inputBody(SECRET_MAX * requests.detail(pending).fields.length);
-            return send(200, { stored: true, ...requestActions.save(id, subject.id, input.entries) });
+          progressRequestId = row.id;
+          const input = await inputBody(GRANT_MAX);
+          if (row.user_code) row = requests.verifyCode(id, subject.id, input.user_code);
+          // Everything the one answering must supply is there before any call is made; what earlier calls answered is
+          // put in as each is made.
+          const calls = requests.operations(row), values = Array.isArray(input.values) ? input.values : [];
+          const bodies = calls.map((call, at) => requests.results(row)[at] === null ? fill(call, values[at] ?? {}) : null);
+          for (let next = requests.next(row); next !== -1; next = requests.next(row)) {
+            const call = resolve({ ...calls[next], body: bodies[next] }, requests.results(row));
+            const made = await perform(req, call, { subject, session, request: { id, index: next } });
+            if (made.status >= 400) {
+              requests.record(id, 'call_failed', { code: made.body?.error?.code, message: made.body?.error?.message });
+              return send(made.status, made.body ?? { error: { code: 'call_failed', message: '依頼された操作を完了できませんでした。' } });
+            }
+            if (made.continues) return send(200, { request: viewRequest(requests.get(id), origin, { asked: true }), continue: made.body });
+            row = requestActions.answer(id, subject.id, next, { status: made.status, body: made.body });
           }
-          if (pending.type === 'relation') {
-            const input = await inputBody();
-            return send(200, { request: viewRequest(requestActions.grantRelation(id, subject.id, input.user_code), origin) });
-          }
-          if (pending.type === 'app') {
-            if (!session) fail(401, 'signin_required', 'サインインしてください。');
-            const input = await inputBody();
-            return send(200, { registered: true, ...requestActions.registerApp(id, subject.id, input) });
-          }
-          fail(409, 'wrong_kind', 'この依頼は、サービスとの接続を済ませると許可されます。');
+          return send(200, { request: viewRequest(row, origin, { asked: true }) });
         }
         if (action === 'deny' && method === 'POST') {
           requests.forTo(id, subject.id, true);
@@ -668,7 +700,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         }
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
-      if (subject.via.kind === 'link') fail(401, 'signin_required', 'サインインしてください。');
+      if (subject.via.kind === 'link' && !acting) fail(401, 'signin_required', 'サインインしてください。');
       if ((at === 'environmentImages' || at === 'environmentImageTags') && method === 'GET') {
         limit('image-search', 60);
         const query = url.searchParams.get('query') ?? '', page = url.searchParams.get('page') ?? '1';
@@ -720,6 +752,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         if (part === 'principalRelations' && (method === 'POST' || method === 'DELETE')) {
           const input = await inputBody(), subjectId = id;
           if (typeof input.relation !== 'string' || !['principal', 'resource'].includes(input.object_type) || typeof input.object_id !== 'string') fail(400, 'invalid_relation', '関係の指定を確認してください。');
+          // A principal the line is onto may be named me: the caller, as in a path.
+          if (input.object_type === 'principal' && input.object_id === 'me') input.object_id = subject.id;
           const object = input.object_type === 'principal' ? { id: principals.at(input.object_id).id } : resources.at(input.object_id);
           if (!reaches(input.relation, input.object_type === 'principal' ? 'principal' : object.kind)) fail(400, 'invalid_relation', '関係の種類を確認してください。');
           if (method === 'POST') {
@@ -874,7 +908,6 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           const input = await inputBody();
           if (typeof input.request_id !== 'string') fail(400, 'invalid_request', 'リンクにする依頼を指定してください。');
           const row = requests.forTo(input.request_id, id, true);
-          if (row.type !== 'secret') fail(409, 'link_unsupported', '接続の依頼はまだリンクで引き渡せません。');
           const made = principals.issueLink(id, row.id, LINK_TTL);
           auditLog.write(subject.id, 'link.issued', 'principal', id, { request: row.id });
           return send(201, { link: { id: made.id, request_id: made.request_id, expires_at: made.expires_at }, url: origin + '/requests/' + row.id + '#link=' + made.token, expires_at: made.expires_at });
@@ -901,8 +934,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         // Foundation when it acts for it.
         if (part === 'principalRecipients' && method === 'GET') {
           permit('write', 'secret', undefined, id);
-          const ids = [id, ...principals.membersOf(id), ...(authorization.can(keys.agentId, 'inject', 'principal', { id }) ? [keys.agentId] : [])];
-          return send(200, { recipients: ids.map(one => ({ principal_id: one, public_key: keys.publicKeyOf(one) })).filter(item => item.public_key).map(item => ({ ...item, public_key: item.public_key.toString('base64url') })) });
+          return send(200, { recipients: recipientsOf(id) });
         }
         // Paying for more than the free part: a payment method set on Stripe's page, begun here and completed coming back.
         if (part === 'principalPayment') {
@@ -1383,14 +1415,14 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const state = method === 'GET' ? url.searchParams.get('state') : (await inputBody()).state;
         const flow = flows.peek(session.id, state);
         if (!flow || flow.kind !== 'confirmation') fail(400, 'invalid_state', '接続をやり直してください。');
-        progressRequestId = flow.requestId || null;
+        progressRequestId = flow.request?.id ?? null;
         if (method === 'DELETE') { flows.drop(session.id, state); return send(200, { ok: true }); }
         const previous = connections.reconnection(ownerId, flow.service, flow.scheme, flow.previous.id);
         if (previous.generation !== flow.previous.generation) fail(409, 'connection_changed', '接続の状態が変わりました。');
-        if (flow.requestId) requests.forTo(flow.requestId, ownerId, true);
+        if (flow.request) requests.forTo(flow.request.id, ownerId, true);
         if (method === 'GET') return send(200, { connection: connections.view(previous, { owner: true }), changes: flow.changes });
         still();
-        const saved = requestActions.connect(flow.requestId, ownerId, flow.service, flow.scheme, flow.result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, app: flow.app ?? null });
+        const saved = requestActions.connect(flow.request, ownerId, flow.service, flow.scheme, flow.result, { requestedBy: flow.requestedBy, previous, scopes: flow.scopes ?? null, app: flow.app ?? null });
         flows.drop(session.id, state);
         return send(200, { connection: connections.view(saved, { owner: true }) });
       }
@@ -1398,21 +1430,16 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         permit('connect', 'connection');
         const input = await inputBody();
         limit('connect', 10);
-        const request = input.request_id === undefined ? null : requests.forTo(input.request_id, ownerId, true);
-        progressRequestId = request?.id || null;
-        const asked = request ? requests.detail(request) : null;
-        if (request && request.type !== 'connection') fail(409, 'approval_only', 'この依頼は接続の依頼ではありません。');
-        // The service, the scheme, the scopes and the app are the request's when there is one: what the owner saw is
-        // what happens.
-        const { ref, definition } = services.get(asked ? asked.service : input.service, ownerId);
-        const schemeId = asked ? asked.auth_scheme : input.auth_scheme ?? Object.keys(definition.auth_schemes)[0];
-        if (request && input.service !== undefined && input.service !== ref) fail(400, 'scope_mismatch', '依頼されたサービスで接続してください。');
+        // Made for a request, the connection answers that request's call once it is made.
+        const request = acting?.request ?? null, asker = request ? principals.get(requests.get(request.id).from_id) : null;
+        progressRequestId = request?.id ?? null;
+        const { ref, definition } = services.get(input.service, ownerId);
+        const schemeId = input.auth_scheme ?? Object.keys(definition.auth_schemes)[0];
         const scheme = services.scheme(ref, schemeId);
         if (request) requests.record(request.id, 'connect_started', { service: ref });
         // Who asked for it, as they were called then. One started from the page was asked by no one.
-        const requestedBy = request ? principals.get(request.from_id)?.name ?? '' : subject.id === ownerId ? '' : self.name;
-        const target = asked ? asked.connection_id : input.connection_id;
-        if (request && input.connection_id !== undefined && input.connection_id !== target) fail(409, 'connection_changed', '依頼された接続を選んでください。');
+        const requestedBy = request ? asker?.name ?? '' : subject.id === ownerId ? '' : self.name;
+        const target = input.connection_id;
         const previous = target === undefined ? undefined : connections.reconnection(ownerId, ref, schemeId, target);
         // A token is pasted here by whoever may connect; there is no other site to go to and come back from. Pasting
         // one for an existing connection replaces its value.
@@ -1421,31 +1448,33 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 80 || /[\x00-\x1f\x7f]/.test(input.name))) fail(400, 'invalid_name', '名前は80文字までで指定してください。');
           const result = await scheme.authorization.complete({ fields: input.fields, resolve: connections.resolver(ownerId) });
           still();
-          const saved = requestActions.connect(request?.id, ownerId, ref, 'token', result, { requestedBy, previous, name: input.name?.trim() });
+          const saved = requestActions.connect(null, ownerId, ref, 'token', result, { requestedBy, previous, name: input.name?.trim() });
           return send(previous ? 200 : 201, { connection: connections.view(saved, { owner: true }) });
         }
         if (!session) fail(401, 'signin_required', 'サインインしてください。');
         const previousState = previous ? connections.state(previous) : null;
-        const scopes = requestedScopes(scheme, asked ? asked.scopes ?? [] : scopeList(input.scopes), previousState);
+        const scopes = requestedScopes(scheme, scopeList(input.scopes), previousState);
         // Reconnecting keeps the app the connection was made through unless another is named.
-        const named = asked ? asked.app : appReference(input.app);
+        const named = appReference(input.app);
         if (named !== undefined && !takesApps(scheme)) fail(400, 'app_unsupported', 'この接続方法はアプリを通しません。');
         const appId = takesApps(scheme) ? named ?? previous?.app_id ?? FOUNDATION_APP : null;
         if (appId && appId !== FOUNDATION_APP) permit('use', 'app', appId, apps.at(appId).owner_id);
         const active = schemeId === 'oauth' ? apps.scheme(ref, appId) : scheme;
         still();
-        const flow = { service: ref, requestedBy, requestId: request?.id, previous: previous ? { id: previous.id, generation: previous.generation } : null, scopes, app: appId };
+        const flow = { service: ref, requestedBy, request, previous: previous ? { id: previous.id, generation: previous.generation } : null, scopes, app: appId };
         // A role is made by the owner in the service's own console, then named here; what Foundation must remember
         // meanwhile (the external ID it chose) travels in the flow, and the flow lasts until the answer is right.
         if (schemeId === 'role') {
           const started = await active.authorization.begin({ origin }, connections.context(previous));
           still();
           const state = flows.begin(session.id, { ...flow, kind: 'role', memo: started.memo ?? null });
+          if (acting) acting.continued = true;
           return send(200, { url: started.url, state });
         }
         const verifier = randomBytes(32).toString('base64url');
         const redirectUri = origin + '/oauth/callback';
         const state = flows.begin(session.id, { ...flow, verifier, redirectUri });
+        if (acting) acting.continued = true;
         return send(200, { url: await active.authorization.begin({ state, verifier, redirectUri, scopes }, connections.context(previous)) });
       }
       if (at === 'connections' && method === 'PUT') {
@@ -1458,11 +1487,11 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         const scheme = services.scheme(flow.service, 'role');
         const previous = flow.previous ? connections.forService(ownerId, flow.previous.id) : undefined;
         if (previous && previous.generation !== flow.previous.generation) fail(409, 'connection_changed', '接続の状態が変わりました。');
-        if (flow.requestId) { requests.forTo(flow.requestId, ownerId, true); progressRequestId = flow.requestId; }
+        if (flow.request) { requests.forTo(flow.request.id, ownerId, true); progressRequestId = flow.request.id; }
         const fields = input.fields && typeof input.fields === 'object' && !Array.isArray(input.fields) ? input.fields : {};
         const saved = await verifyConnection(req, session,
           () => scheme.authorization.complete({ fields, memo: flow.memo }, connections.context(previous)),
-          result => requestActions.connect(flow.requestId, ownerId, flow.service, 'role', result, { requestedBy: flow.requestedBy, previous }));
+          result => requestActions.connect(flow.request, ownerId, flow.service, 'role', result, { requestedBy: flow.requestedBy, previous }));
         flows.drop(session.id, input.state);
         return send(200, { connection: connections.view(saved, { owner: true }) });
       }
@@ -1510,6 +1539,18 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       else res.end();
     }
   };
+  // A call a request asked for, made now by the one answering it: handled as if they had sent it from where they are.
+  // It continues elsewhere when it began a service's consent for the request (acting.continued).
+  async function perform(req, call, acting) {
+    const payload = call.method === 'GET' ? Buffer.alloc(0) : Buffer.from(JSON.stringify(call.body ?? {}));
+    const inner = Object.assign(Readable.from(payload.length ? [payload] : []), { method: call.method, url: call.path, socket: req.socket,
+      headers: { ...req.headers, 'content-type': 'application/json', 'content-length': String(payload.length) } });
+    delete inner.headers['transfer-encoding'];
+    const answer = new Answer(), finished = new Promise(resolve => answer.on('finish', resolve));
+    await handle(inner, answer, acting);
+    if (!answer.writableFinished) await finished;
+    return { status: answer.statusCode, body: answer.json(), continues: Boolean(acting.continued) };
+  }
   // Whatever a request's handling lets escape is answered and logged here, never left waiting.
   const server = createServer((req, res) => {
     handle(req, res).catch(error => {

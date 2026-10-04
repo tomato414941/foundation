@@ -56,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix='foundation-google-ui-') as private_dir,
     page.get_by_role('button', name='許可する', exact=True).click()
     expect(page.get_by_role('heading', name='アクセスを許可しました', exact=True)).to_be_visible()
 
-    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0], 'authorization_details': [{'type': 'connection', 'service': 'google', 'scopes': ['https://www.googleapis.com/auth/cloud-platform']}], 'binding_message': 'Google Cloudの設定を確認します。リソースの作成や変更はしません。'}))['request']
+    request = cli('api', 'POST', '/v1/requests', '--json', json.dumps({'to': cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0], 'operations': [{'method': 'POST', 'path': '/v1/principals/me/connections', 'body': {'service': 'google', 'scopes': ['https://www.googleapis.com/auth/cloud-platform']}}], 'binding_message': 'Google Cloudの設定を確認します。リソースの作成や変更はしません。'}))['request']
     page.goto(request['verification_uri'], wait_until='networkidle')
     expect(page.get_by_role('heading', name='Googleに接続', exact=True)).to_be_visible()
     expect(page.locator('.approval-facts')).to_contain_text('https://www.googleapis.com/auth/cloud-platform')
@@ -80,13 +80,13 @@ with tempfile.TemporaryDirectory(prefix='foundation-google-ui-') as private_dir,
         route.fulfill(status=302, headers={'location': redirect + '?' + urlencode(query)}, body='')
 
     page.route('https://accounts.google.com/o/oauth2/v2/auth?*', consent)
-    page.get_by_role('button', name='Googleの画面へ', exact=True).click()
+    page.get_by_role('button', name='許可して実行する', exact=True).click()
     expect(page.get_by_text('接続をキャンセルしました。', exact=True)).to_be_visible()
     authorization['deny'] = False
-    page.get_by_role('button', name='Googleの画面へ', exact=True).click()
-    expect(page.get_by_role('heading', name='接続しました', exact=True)).to_be_visible()
+    page.get_by_role('button', name='許可して実行する', exact=True).click()
+    expect(page.get_by_role('heading', name='依頼に応えました', exact=True)).to_be_visible()
     review(page)
-    connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['result']['connection_id']
+    connection = cli('api', 'GET', '/v1/requests/' + request['id'])['request']['results'][0]['body']['connection']['id']
     facts = next(row for row in cli('api', 'GET', '/v1/principals/' + cli('api', 'GET', '/v1/principals/me')['principal']['acts_for'][0] + '/resources?kind=connection')['resources'] if row['id'] == connection)['facts']
     assert facts['missing_scopes'] == []
     handed = subprocess.run(['node', 'cli/runtime.mjs', 'exec', '--inputs', json.dumps([{'id': connection}]), '--', 'node', '-e',

@@ -22,9 +22,10 @@ async function ebayFixture(t, ebay = new FakeEbay()) {
   const f = await fixture(t, { services: [entry('ebay', { oauth: ebayOauth(ebay) })] });
   const connections = async () => (await f.request('/v1/principals/me/resources?kind=connection')).json.resources;
   async function start(input = {}) {
-    const result = await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'ebay', ...(input.request_id ? {} : { scopes: ASKED }), ...input } });
+    const result = input.request_id ? await f.request('/v1/requests/' + input.request_id + '/grant', { method: 'POST', data: {} })
+      : await f.request('/v1/principals/me/connections', { method: 'POST', data: { service: 'ebay', scopes: ASKED, ...input } });
     assert.equal(result.status, 200, result.text);
-    return new URL(result.json.url);
+    return new URL(input.request_id ? result.json.continue.url : result.json.url);
   }
   // eBay resolves the RuName to this registered callback before returning the query.
   const callback = (url, code = 'personal', options = {}, extra = {}) => f.request('/oauth/callback?' + new URLSearchParams({ state: url.searchParams.get('state'), code, ...extra }), options);
@@ -79,11 +80,11 @@ test('RuNameとstateで同意を開始し、同じセッションで一度だけ
 
 test('依頼を完了し、確認済みのアカウント情報とAPI用トークンを分けて渡す', async t => {
   const f = await ebayFixture(t), agent = await f.issueKey();
-  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { to: USER_A, authorization_details: [{ type: 'connection', service: 'ebay', scopes: ASKED }], binding_message: '出品情報を管理します。' } });
+  const asked = await f.request('/v1/requests', { method: 'POST', token: agent.token, data: { to: USER_A, operations: [f.connecting({ service: 'ebay', scopes: ASKED })], binding_message: '出品情報を管理します。' } });
   assert.equal(asked.status, 201);
   const a = await f.connect('personal', { request_id: asked.json.request.id });
   const done = (await f.request('/v1/requests/' + asked.json.request.id, { token: agent.token })).json.request;
-  assert.equal(done.status, 'granted'); assert.equal(done.result.connection_id, a.id);
+  assert.equal(done.status, 'granted'); assert.equal(f.connected(done).id, a.id);
   const catalog = await f.request('/v1/principals/' + USER_A + '/resources?kind=connection', { token: agent.token });
   assert.equal(catalog.json.resources[0].label, 'personal-seller');
   assert.deepEqual(catalog.json.resources[0].facts.scopes, GRANTED);

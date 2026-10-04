@@ -152,10 +152,12 @@ export async function fixture(t, options = {}) {
       try { existing = path.match(/^\/v1\/resources\/([^/?]+)\/content/) ? app.resources.get(RegExp.$1) : app.secrets.find(owner ?? await subjectOf({ token, anonymous }), new URL(path, base).searchParams.get('name')); } catch {}
       data = await sealed(raw, { token, anonymous, as: owner }, undefined, existing ? app.keys.recipientKeys(existing.id) : []); raw = undefined;
     }
-    // Answering a store request: each entry sealed for whom the request says.
-    if (method === 'POST' && data?.entries && /^\/v1\/requests\/[^/]+\/grant/.test(path)) {
+    // Answering a request: a sealed input given as its plain text is sealed for whom the request says, as the page does.
+    if (method === 'POST' && Array.isArray(data?.values) && /^\/v1\/requests\/[^/]+\/grant/.test(path)) {
       const shown = await request(path.replace(/\/grant.*$/, ''), { method: 'GET', token, anonymous, headers });
-      data = { ...data, entries: await Promise.all(data.entries.map(async entry => typeof entry.content === 'string' && entry.envelopes === undefined ? { ...entry, ...await sealed(entry.content, { token, anonymous, headers }, shown.json?.request?.recipients ?? []) } : entry)) };
+      const calls = shown.json?.request?.operations ?? [];
+      data = { ...data, values: await Promise.all(data.values.map(async (given, at) => Object.fromEntries(await Promise.all(Object.entries(given ?? {}).map(async ([pointer, value]) =>
+        [pointer, calls[at]?.inputs?.find(one => one.at === pointer)?.kind === 'sealed' && typeof value === 'string' ? await sealed(value, { token, anonymous, headers }, shown.json?.request?.recipients ?? []) : value]))))) };
     }
     const body = raw !== undefined ? raw : data !== undefined ? JSON.stringify(data) : undefined;
     const response = await fetch(base + path, { method, redirect: 'manual', headers: { ...(!anonymous && cookie ? { cookie } : {}), ...(method !== 'GET' ? { origin: options.publicOrigin || base } : {}), ...(body !== undefined ? { 'content-type': raw !== undefined ? type : 'application/json' } : {}), ...(token ? { authorization: 'Bearer ' + token } : {}), ...headers }, ...(body !== undefined ? { body } : {}) });
@@ -252,9 +254,15 @@ export async function fixture(t, options = {}) {
     await keyOf({ token: made.json.token, anonymous: true });
     return { id: made.json.principal.id, token: made.json.token };
   }
+  // Asking someone to connect a service is asking for the call that connects it, as they would make it.
+  const connecting = body => ({ method: 'POST', path: '/v1/principals/me/connections', body });
+  // What a request's calls answered, by the call: the connection a connecting call made.
+  const connected = row => row.results?.[0]?.body?.connection ?? null;
+  // The one call a principal nobody knows yet may ask for: to act for whoever answers.
+  const takingOn = id => ({ method: 'POST', path: '/v1/principals/' + id + '/relations', body: { relation: 'agent', object_type: 'principal', object_id: 'me' } });
   async function approveKey(name = 'laptop') {
     const made = await become(name);
-    const asked = await request('/v1/requests', { method: 'POST', anonymous: true, token: made.token, data: { authorization_details: [{ type: 'relation', relation: 'agent' }] } });
+    const asked = await request('/v1/requests', { method: 'POST', anonymous: true, token: made.token, data: { operations: [takingOn(made.id)] } });
     assert.equal(asked.status, 201, asked.text);
     const done = await request('/v1/requests/' + asked.json.request.id + '/grant', { method: 'POST', data: { user_code: asked.json.request.user_code } });
     assert.equal(done.status, 200, done.text);
@@ -287,5 +295,5 @@ export async function fixture(t, options = {}) {
     app.connections.saveState(connection, { ...state, expires_at, private_state: { ...state.private_state, expires_at } });
   }
   if (options.signin !== false) await signin();
-  return { app, mailer, known, bind, visible, google, base, request, lookup, read, keep, drop, become, signin, start, callback, connection, inject, connectionFacts, issueKey, approveKey, expire, close, allowFoundation, handEnvelope, keyOf, sealed, cookie: () => cookie };
+  return { app, mailer, known, bind, visible, google, base, request, lookup, read, keep, drop, become, signin, start, callback, connection, inject, connectionFacts, issueKey, approveKey, takingOn, connecting, connected, expire, close, allowFoundation, handEnvelope, keyOf, sealed, cookie: () => cookie };
 }
