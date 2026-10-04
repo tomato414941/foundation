@@ -2,6 +2,7 @@ import argparse
 import base64
 import hashlib
 import json
+import re
 from pathlib import Path
 from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright, expect
@@ -39,9 +40,14 @@ with sync_playwright() as p:
     page.get_by_role('button', name='サインイン', exact=True).click()
     page.wait_for_url(args.base + '/principals')
 
+    # A name left empty is drawn for it, as for any principal that gives none.
     page.get_by_role('button', name='作成', exact=True).click()
     dialog = page.get_by_role('dialog')
-    expect(dialog.get_by_role('heading', name='サブプリンシパルを作成', exact=True)).to_be_visible()
+    dialog.get_by_role('button', name='作成', exact=True).click()
+    expect(dialog.locator('.detail-row').filter(has_text='名前')).to_contain_text(re.compile(r"[A-Z][A-Za-z' ]+ [A-Z][A-Za-z' ]+"))
+    dialog.get_by_role('button', name='閉じる', exact=True).last.click()
+    page.get_by_role('button', name='作成', exact=True).click()
+    expect(dialog.get_by_role('heading', name='新しいプリンシパル', exact=True)).to_be_visible()
     review(page)
     page.screenshot(path=str(shots / 'add-principal.png'), full_page=True)
     dialog.get_by_label('名前', exact=True).fill('laptop')

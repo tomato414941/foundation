@@ -1392,9 +1392,11 @@ const toOther = line => {
   })[line.relation + ':' + line.direction] ?? t('client.principals.other.grant', { name });
 };
 function createPrincipal() {
-  openDialog(`<h2 id="dialog-title">${esc(t('client.principals.createTitle'))}</h2><form><label for="agent-name">${esc(t('client.common.name'))}</label><input id="agent-name" name="name" required maxlength="80" autocomplete="off"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.principals.create'))}</button></form>`);
+  openDialog(`<h2 id="dialog-title">${esc(t('client.principals.createTitle'))}</h2><form><label for="agent-name">${esc(t('client.common.name'))}</label><input id="agent-name" name="name" maxlength="80" autocomplete="off"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.principals.create'))}</button></form>`);
   bindForm(async (form) => {
-    const { principal } = await api('/v1/principals', { method: 'POST', data: { name: form.get('name') } });
+    // A name left empty is drawn by the server, as for any principal that gives none.
+    const name = String(form.get('name')).trim();
+    const { principal } = await api('/v1/principals', { method: 'POST', data: name ? { name } : {} });
     await refresh(); if (!state) return;
     await principalDetails(principal.id);
   });
