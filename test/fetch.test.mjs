@@ -282,3 +282,50 @@ test('差し込み先とすべての参照を送信前に検証し、不正な�
   assert.equal(received.length, 0);
   assert.equal(f.google.calls.length, calls);
 });
+
+test('ファンクションを呼ぶと、持ち主が決めたリクエストが、持ち主のシークレットと呼び手の引数で送られ、使った値は答えから除かれる', async t => {
+  const { f, key, received } = await setup(t);
+  const made = await f.request('/v1/principals/me/resources?kind=function&name=notes/add', { method: 'PUT', data: {
+    parameters: { title: { required: true }, tag: {} }, query: { tag: [{ parameter: 'tag' }], source: ['foundation'] },
+    request: { url: 'https://api.example.test/notes', method: 'POST', ...authorization('api/token', 'Bearer '), json: { title: '' },
+      bindings: [...authorization('api/token', 'Bearer ').bindings, { target: '/json/title', parts: ['[note] ', { parameter: 'title' }] }] } } });
+  assert.equal(made.status, 200, made.text);
+  const path = '/v1/resources/' + made.json.resource.id + '/invocations';
+  const called = await f.request(path, { method: 'POST', token: key.token, data: { arguments: { title: 'hello', tag: 'a b' } } });
+  assert.equal(called.status, 200, called.text);
+  const sent = received.at(-1);
+  assert.equal(sent.method, 'POST'); assert.equal(sent.path, '/notes?tag=a+b&source=foundation');
+  assert.equal(sent.headers.authorization, 'Bearer ' + TOKEN);
+  assert.deepEqual(JSON.parse(sent.body), { title: '[note] hello' });
+  assert.doesNotMatch(called.text, new RegExp(TOKEN), 'what it used is not handed back');
+  // Only what it declares is taken, and what it requires must be given.
+  assert.equal((await f.request(path, { method: 'POST', data: { arguments: { tag: 'x' } } })).json.error.code, 'invalid_arguments');
+  assert.equal((await f.request(path, { method: 'POST', data: { arguments: { title: 'x', url: 'https://evil.example.test/' } } })).json.error.code, 'invalid_arguments');
+  assert.equal((await f.request(path, { method: 'POST', data: { arguments: { title: { name: 'api/token' } } } })).json.error.code, 'invalid_arguments', 'an argument is text, never a reference');
+  // An argument put in a header cannot add a header of its own.
+  const headed = await f.request('/v1/principals/me/resources?kind=function&name=headed', { method: 'PUT', data: { parameters: { trace: {} },
+    request: { url: 'https://api.example.test/h', headers: { 'x-trace': '' }, bindings: [{ target: '/headers/x-trace', parts: [{ parameter: 'trace' }] }] } } });
+  const before = received.length;
+  const injected = await f.request('/v1/resources/' + headed.json.resource.id + '/invocations', { method: 'POST', data: { arguments: { trace: 'a\r\nx-evil: 1' } } });
+  assert.equal(injected.status, 400, injected.text);
+  assert.equal(received.length, before, 'nothing went out');
+});
+
+test('呼べるだけの相手は、そのファンクションを呼べるが、それが使うシークレットにも、ほかの送り先にも届かない', async t => {
+  const { f, received } = await setup(t);
+  const made = await f.request('/v1/principals/me/resources?kind=function&name=ping', { method: 'PUT', data: {
+    parameters: { note: {} }, request: { url: 'https://api.example.test/ping', method: 'POST', ...authorization('api/token', 'Bearer '), json: { note: '' },
+      bindings: [...authorization('api/token', 'Bearer ').bindings, { target: '/json/note', parts: [{ parameter: 'note' }] }] } } });
+  const caller = await f.request('/v1/principals', { method: 'POST', data: { name: 'caller', key: true } });
+  const as = { token: caller.json.token, anonymous: true }, path = '/v1/resources/' + made.json.resource.id + '/invocations';
+  assert.equal((await f.request(path, { ...as, method: 'POST', data: { arguments: {} } })).status, 403, 'nothing before a line is drawn');
+  assert.equal((await f.request('/v1/principals/' + caller.json.principal.id + '/relations', { method: 'POST', data: { relation: 'invoker', object_type: 'resource', object_id: made.json.resource.id } })).status, 201);
+  const called = await f.request(path, { ...as, method: 'POST', data: { arguments: { note: 'hi' } } });
+  assert.equal(called.status, 200, called.text);
+  assert.equal(received.at(-1).headers.authorization, 'Bearer ' + TOKEN);
+  assert.doesNotMatch(called.text, new RegExp(TOKEN));
+  // The line reaches the function and nothing it uses.
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/resources?kind=secret', as)).status, 403);
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/functions/http.request', { ...as, method: 'POST', data: { url: 'https://api.example.test/', ...authorization() } })).status, 403);
+  assert.equal((await f.request('/v1/principals/' + USER_A + '/injections', { ...as, method: 'POST', data: { names: [{ name: 'api/token', as: 'T' }] } })).status, 403);
+});

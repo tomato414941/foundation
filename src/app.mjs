@@ -1133,7 +1133,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         return send(200, { resource: shown(saved) });
       }
       if (route?.group === 'resources') {
-        const held = resources.at(route.params.resourceId), part = at === 'content' ? '/content' : at === 'objectLink' ? '/link' : at === 'envelopes' ? '/envelopes' : at === 'transferResource' ? '/transfer' : null;
+        const held = resources.at(route.params.resourceId), part = at === 'content' ? '/content' : at === 'objectLink' ? '/link' : at === 'envelopes' ? '/envelopes' : at === 'transferResource' ? '/transfer' : at === 'invocations' ? '/invocations' : null;
         const connection = held.kind === 'connection' ? connections.get(held.id) : null, secret = held.kind === 'secret' ? secrets.get(held.id) : null;
         // Given to another owner: by whoever may transfer it, to any principal. A lent machine is not given.
         if (part === '/transfer' && method === 'POST') {
@@ -1178,9 +1178,19 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
             return send(200, { ok: true, connections_stopped: dependents.length });
           }
         }
-        // A function a owner keeps: what it does is replaced whole, its name changed, and it is removed.
+        // A function a owner keeps: what it does is replaced whole, its name changed, and it is removed. Called, it
+        // sends what was decided, with the owner's things and the caller's arguments; the caller needs only to be let to
+        // call it, and reaches nothing of what it uses.
         if (held.kind === 'function') {
           const row = keptFunctions.row(held.id);
+          if (at === 'invocations' && method === 'POST') {
+            permit('invoke', 'function', row.id, row.owner_id);
+            const input = await inputBody(FETCH_BODY_MAX * 2);
+            limit('fetch', 30);
+            const result = await functions.request({ ownerId: row.owner_id, still }, keptFunctions.call(row, input.arguments), [url.hostname, ...(external ? [external.hostname] : [])]);
+            auditLog.write(subject.id, 'function', 'resource', row.id, { status: result.response?.status ?? null });
+            return send(200, result);
+          }
           if (part) fail(405, 'method_not_allowed', 'この操作は利用できません。');
           if (method === 'PUT') {
             permit('write', 'function', row.id, row.owner_id);

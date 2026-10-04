@@ -82,5 +82,22 @@ export class KeptFunctions {
     return this.row(this.resources.transfer(row, ownerId).id);
   }
   remove(row) { this.resources.remove(row); }
+  // The request one call sends: what was decided, with the caller's arguments where it says they go. An argument is
+  // text, put in as it is; what was not given and was not required is empty.
+  call(row, given = {}) {
+    const { parameters, request, query } = JSON.parse(row.definition);
+    if (!given || typeof given !== 'object' || Array.isArray(given)) fail(400, 'invalid_arguments', '引数は名前と文字列の組で指定してください。');
+    for (const [name, value] of Object.entries(given)) {
+      if (!Object.hasOwn(parameters, name)) fail(400, 'invalid_arguments', `引数 ${name} はこのファンクションにありません。`);
+      if (typeof value !== 'string' || value.length > 100_000) fail(400, 'invalid_arguments', `引数 ${name} は文字列で指定してください。`);
+    }
+    for (const [name, spec] of Object.entries(parameters)) if (spec.required && !Object.hasOwn(given, name)) fail(400, 'invalid_arguments', `引数 ${name} を指定してください。`);
+    const text = part => typeof part === 'string' ? part : isParameter(part) ? given[part.parameter] ?? '' : part;
+    // Arguments beside one another become one text, so that none of them is taken for a reference.
+    const joined = parts => parts.reduce((out, part) => { const value = text(part); if (typeof value === 'string' && typeof out.at(-1) === 'string') out[out.length - 1] += value; else out.push(value); return out; }, []);
+    const url = new URL(request.url);
+    for (const [name, parts] of Object.entries(query)) url.searchParams.append(name, parts.map(text).join(''));
+    return { ...request, url: url.href, bindings: (request.bindings ?? []).map(binding => ({ ...binding, parts: joined(binding.parts) })) };
+  }
   view(row) { return { ...this.resources.view(row), ...JSON.parse(row.definition) }; }
 }
