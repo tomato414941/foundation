@@ -1,6 +1,9 @@
 // Web presentation only. Domain errors and the public API keep their original messages.
 // Full sentences and named interpolation preserve validation details without changing error codes.
 export const ja = {
+  "server.error.imageSearch": "イメージの検索条件を確認してください。",
+  "server.error.imageCatalog": "Docker Hubに接続できません。しばらく待ってからお試しください。",
+  "server.error.imageMissing": "イメージが見つかりません。",
   "server.error.transfer.notOwned": "この相手には持ち主がいません。",
   "server.error.transfer.environmentUnsupported": "エンバイロメントは渡せません。",
   "server.error.transfer.alreadyOwned": "すでにその相手のものです。",
@@ -354,6 +357,9 @@ export const ja = {
 };
 
 export const en = {
+  "server.error.imageSearch": "Check the image search criteria.",
+  "server.error.imageCatalog": "Cannot reach Docker Hub. Please try again shortly.",
+  "server.error.imageMissing": "Image not found.",
   "server.error.transfer.notOwned": "This principal has no owner.",
   "server.error.transfer.environmentUnsupported": "Environments cannot be transferred.",
   "server.error.transfer.alreadyOwned": "This already belongs to that principal.",

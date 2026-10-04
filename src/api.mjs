@@ -208,6 +208,12 @@ export const routes = [
     delete: op('signout', 'End this browser session, or the email sign-in being waited for', object({ ok: { const: true } }, ['ok']), { security: [] }),
   } },
   { name: 'catalog', path: '/v1/services', methods: { get: op('listCatalog', 'List built-in services and connection methods', many('services', 'ServiceDescription'), { security: [] }) } },
+  { name: 'environmentImages', path: '/v1/environment-images', methods: { get: op('searchEnvironmentImages', 'Search public Docker Hub images', object({ images: array(object({ name: string, description: string, official: boolean }, ['name', 'description', 'official'])), next: nullable(integer) }, ['images', 'next']), {
+    parameters: [query('query', string, 'Image search, up to 200 characters.'), query('page', integer, 'Page number, starting at 1.')],
+  }) } },
+  { name: 'environmentImageTags', path: '/v1/environment-images/tags', methods: { get: op('listEnvironmentImageTags', 'List Linux amd64 tags of a public Docker Hub image', object({ tags: array(object({ name: string }, ['name'])), next: nullable(integer) }, ['tags', 'next']), {
+    parameters: [query('repository', string, 'Docker Hub repository, such as python or a namespace/name.', true), query('query', string, 'Filter tag names.'), query('page', integer, 'Page number, starting at 1.')],
+  }) } },
   { name: 'return', path: '/v1/requests/{requestId}/return', methods: { get: op('getRequestReturn', 'Read the return destination for a request', result('back', object({ name: string, return_url: string, refresh_url: string }, ['name', 'return_url', 'refresh_url'])), { security: [] }) } },
   { name: 'exchangeLink', path: '/v1/links/exchange', methods: { post: okay('exchangeLink', 'Exchange a one-use request link for a request-scoped cookie', { input: object({ link: string, request_id: requestId }, ['link', 'request_id']), security: [], 'x-input-error': 'invalid_link' }) } },
   { name: 'paymentEvents', path: '/v1/payment/events', methods: { post: op('paymentEvents', 'Receive Stripe events', object({ received: { const: true } }, ['received']), { input: object(), security: [], 'x-input-error': 'invalid_signature',

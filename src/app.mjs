@@ -29,6 +29,7 @@ import { Inputs } from './inputs.mjs';
 import { Services } from './services.mjs';
 import { Objects, OBJECT_MAX } from './objects.mjs';
 import { Environments } from './environments.mjs';
+import { EnvironmentImages } from './environment-images.mjs';
 import { Resources, KINDS } from './resources.mjs';
 import { respond } from './mcp.mjs';
 import { FETCH_BODY_MAX } from './fetch.mjs';
@@ -146,7 +147,7 @@ function principalId(value) {
   return value;
 }
 
-export function createApp({ database = ':memory:', encryptionKey, mailer, services: catalog, serviceFetcher, space: spaceBackend = null, publicOrigin, challengeSecret, stripe = new Stripe(), trustedProxies = [], outbound = {}, runner = null, compute = {}, requestInterval = INTERVAL }) {
+export function createApp({ database = ':memory:', encryptionKey, mailer, services: catalog, serviceFetcher, space: spaceBackend = null, publicOrigin, challengeSecret, stripe = new Stripe(), trustedProxies = [], outbound = {}, runner = null, compute = {}, imageFetcher, requestInterval = INTERVAL }) {
   if (!mailer || !Array.isArray(catalog)) throw new Error('A mailer and services are required');
   let external;
   if (publicOrigin) {
@@ -197,6 +198,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
   const objects = new Objects(spaceBackend, resources, store, payments);
   const requests = new Requests(store), settings = new Settings(store, principals), auditLog = new AuditLog(store);
   const environments = new Environments({ store, resources, principals, payments, runner, limits: compute });
+  const environmentImages = new EnvironmentImages(imageFetcher);
   const functions = new Functions({ secrets, inputs, outbound });
   const ownHosts = () => [...(external ? [external.hostname] : []), '127.0.0.1', 'localhost'];
   const viewRequest = (row, origin, options) => requestView({ requests, services, principals, settings, connections, apps, resources, keys, authorization }, row, origin, { interval: requestInterval, ...options });
@@ -665,6 +667,12 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         fail(405, 'method_not_allowed', 'この操作は利用できません。');
       }
       if (subject.via.kind === 'link') fail(401, 'signin_required', 'サインインしてください。');
+      if ((at === 'environmentImages' || at === 'environmentImageTags') && method === 'GET') {
+        limit('image-search', 60);
+        const query = url.searchParams.get('query') ?? '', page = url.searchParams.get('page') ?? '1';
+        return send(200, await (at === 'environmentImages' ? environmentImages.search(query, page)
+          : environmentImages.tags(url.searchParams.get('repository'), query, page)));
+      }
       // Principals: oneself, and those one owns.
       // Making a principal. One that is to act for its maker, and to carry a key, can be asked for in the same
       // breath; that is what making oneself a key is.

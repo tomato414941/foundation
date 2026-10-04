@@ -3,7 +3,7 @@ import base64
 import hashlib
 import json
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse, parse_qs
 from playwright.sync_api import sync_playwright, expect
 
 parser = argparse.ArgumentParser()
@@ -37,6 +37,28 @@ with sync_playwright() as p:
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
+    catalog_attempts = {'search': 0, 'tags': 0}
+    delayed_searches = []
+    def catalog(route):
+        query = parse_qs(urlparse(route.request.url).query)
+        needle = query.get('query', [''])[0]
+        number = query.get('page', ['1'])[0]
+        is_tags = urlparse(route.request.url).path.endswith('/tags')
+        kind = 'tags' if is_tags else 'search'
+        catalog_attempts[kind] += 1
+        if catalog_attempts[kind] == 1:
+            route.fulfill(status=503, json={'error': {'code': 'image_catalog_unavailable', 'message': 'Docker Hubに接続できません。しばらく待ってからお試しください。'}})
+        elif is_tags:
+            if needle == 'none':
+                route.fulfill(json={'tags': [], 'next': None})
+            else:
+                tags = ['3.12-slim'] if number == '2' else ['3.12.7-slim'] if needle == '3.12' else ['3.13-slim']
+                route.fulfill(json={'tags': [{'name': name} for name in tags], 'next': None if number == '2' else 2})
+        elif needle == 'slow':
+            delayed_searches.append(route)
+        else:
+            route.fulfill(json={'images': [{'name': 'python', 'description': 'Python programming language.', 'official': True}, {'name': 'example/python', 'description': 'Python tools.', 'official': False}], 'next': None})
+    page.route('**/v1/environment-images**', catalog)
     page.goto(asked['verification_uri'], wait_until='networkidle')
     page.get_by_label('メールアドレス', exact=True).fill('owner@example.test')
     page.get_by_role('button', name='サインインメールを送信', exact=True).click()
@@ -69,10 +91,43 @@ with sync_playwright() as p:
         page.screenshot(path=str(shots / f'environment-create-{width}.png'), full_page=True)
     dialog.get_by_label('名前', exact=False).fill('ビルド')
     dialog.get_by_label('自動停止', exact=True).select_option('30')
-    dialog.get_by_text('詳細設定', exact=True).click()
     expect(dialog.get_by_label('イメージ', exact=True)).to_have_value('default')
-    dialog.get_by_label('イメージ', exact=True).select_option('custom')
-    dialog.get_by_label('コンテナイメージ名', exact=True).fill('python:3.12-slim')
+    dialog.get_by_label('イメージ', exact=True).select_option('hub')
+    dialog.get_by_label('Docker Hubを検索', exact=True).fill('python')
+    dialog.get_by_label('Docker Hubを検索', exact=True).press('Enter')
+    expect(dialog.get_by_role('status')).to_have_text('Docker Hubに接続できません。しばらく待ってからお試しください。')
+    dialog.get_by_role('button', name='検索', exact=True).click()
+    expect(dialog.get_by_role('button', name='python', exact=True)).to_be_visible()
+    expect(dialog.get_by_text('公式', exact=True)).to_be_visible()
+    for width in [1280, 390, 320]:
+        page.set_viewport_size({'width': width, 'height': 1000})
+        review(page)
+        page.screenshot(path=str(shots / f'environment-image-search-{width}.png'), full_page=True)
+
+    # 前の検索が遅れて届いても、今入力した名前の候補を選択する。
+    dialog.get_by_label('Docker Hubを検索', exact=True).fill('slow')
+    dialog.get_by_label('Docker Hubを検索', exact=True).press('Enter')
+    page.wait_for_timeout(100)
+    assert len(delayed_searches) == 1
+    dialog.get_by_label('Docker Hubを検索', exact=True).fill('python')
+    dialog.get_by_label('Docker Hubを検索', exact=True).press('Enter')
+    expect(dialog.get_by_role('button', name='python', exact=True)).to_be_visible()
+    delayed_searches[0].fulfill(json={'images': [{'name': 'old-result', 'description': 'Old search', 'official': False}], 'next': None})
+    dialog.get_by_role('button', name='python', exact=True).click()
+    expect(dialog.get_by_role('button', name='再試行', exact=True)).to_be_visible()
+    dialog.get_by_role('button', name='再試行', exact=True).click()
+    expect(dialog.get_by_label('タグ', exact=True)).to_be_enabled()
+    dialog.get_by_label('タグを絞り込む', exact=True).fill('none')
+    dialog.get_by_label('タグを絞り込む', exact=True).press('Enter')
+    expect(dialog.get_by_role('status')).to_have_text('対応するタグが見つかりません。')
+    dialog.get_by_label('タグを絞り込む', exact=True).fill('3.12')
+    dialog.get_by_label('タグを絞り込む', exact=True).press('Enter')
+    expect(dialog.get_by_label('タグ', exact=True)).to_be_enabled()
+    dialog.get_by_role('button', name='タグをさらに表示', exact=True).click()
+    expect(dialog.get_by_label('タグ', exact=True)).to_be_enabled()
+    dialog.get_by_label('タグ', exact=True).select_option('3.12-slim')
+    expect(dialog.get_by_role('link', name='Docker Hub ↗', exact=True)).to_have_attribute('href', 'https://hub.docker.com/_/python')
+    dialog.get_by_text('詳細設定', exact=True).click()
     dialog.get_by_label('サイズ', exact=True).select_option('medium')
     dialog.get_by_label('Foundationへのアクセス', exact=True).select_option(owner)
     for width in [1280, 390, 320]:
@@ -92,8 +147,8 @@ with sync_playwright() as p:
     pending[0].fulfill(status=503, content_type='application/json', body=json.dumps({'error': {'code': 'runner_unavailable', 'message': '現在作成できません。もう一度お試しください。'}}))
     expect(dialog.get_by_role('alert')).to_have_text('現在作成できません。もう一度お試しください。')
     expect(dialog.get_by_label('名前', exact=False)).to_have_value('ビルド')
-    expect(dialog.get_by_label('イメージ', exact=True)).to_have_value('custom')
-    expect(dialog.get_by_label('コンテナイメージ名', exact=True)).to_have_value('python:3.12-slim')
+    expect(dialog.get_by_label('イメージ', exact=True)).to_have_value('hub')
+    expect(dialog.get_by_label('タグ', exact=True)).to_have_value('3.12-slim')
     expect(dialog.get_by_label('自動停止', exact=True)).to_have_value('30')
     expect(dialog.get_by_role('button', name='作成', exact=True)).to_be_enabled()
     page.unroute(endpoint)
@@ -150,10 +205,14 @@ with sync_playwright() as p:
     dialog.get_by_text('Options', exact=True).click()
     expect(dialog.get_by_label('Image', exact=True)).to_have_value('default')
     expect(dialog.get_by_label('Foundation access', exact=True)).to_have_value('')
+    dialog.get_by_label('Image', exact=True).select_option('custom')
+    dialog.get_by_label('Container image name', exact=True).fill('ghcr.io/example/tools:stable')
     page.screenshot(path=str(shots / 'environment-create-en.png'), full_page=True)
     dialog.get_by_role('button', name='Create', exact=True).click()
     expect(page.get_by_text('Environment created.', exact=True)).to_be_visible()
     expect(page.locator('.access-row').filter(has_text='エンバイロメント')).to_be_visible()
+    named = next(item for item in call('GET', '/v1/principals/' + owner + '/resources?kind=environment', token=token)['resources'] if item['name'] == 'エンバイロメント')
+    assert named['image'] == 'ghcr.io/example/tools:stable'
     assert not errors, errors
     context.close()
     browser.close()

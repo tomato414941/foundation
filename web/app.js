@@ -1411,28 +1411,109 @@ function createEnvironment() {
   const owner = state.user.id;
   openDialog(`<h2 id="dialog-title">${esc(t('client.environment.createTitle'))}</h2><form class="environment-form">
     <label for="environment-name">${esc(t('client.common.optionalLabel', { label: t('client.common.name') }))}</label><input id="environment-name" name="name" maxlength="200" autocomplete="off">
+    <label for="environment-image-choice">${esc(t('client.environment.image'))}</label><select id="environment-image-choice" name="image_choice"><option value="default">${esc(t('client.environment.defaultImage'))}</option><option value="hub">${esc(t('client.environment.dockerHub'))}</option><option value="custom">${esc(t('client.environment.customImage'))}</option></select>
+    <div id="environment-custom-image" hidden><label for="environment-image">${esc(t('client.environment.imageName'))}</label><input id="environment-image" name="image" required disabled maxlength="255" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+    <div class="image-catalog" id="environment-hub" hidden>
+      <div id="environment-image-search-panel"><label for="environment-image-search">${esc(t('client.environment.searchImages'))}</label><div class="image-search-field"><input id="environment-image-search" type="search" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false" disabled><button class="button secondary" id="environment-search-button" type="button" disabled>${esc(t('client.common.search'))}</button></div>
+        <div class="image-results" id="environment-image-results"></div><button class="text-button image-more" id="environment-more-images" type="button" hidden disabled>${esc(t('client.environment.moreImages'))}</button></div>
+      <div id="environment-image-tags-panel" hidden><div class="image-selected"><strong id="environment-selected-image"></strong><button class="text-button" id="environment-change-image" type="button" disabled>${esc(t('client.common.change'))}</button><a id="environment-image-link" target="_blank" rel="noopener noreferrer">Docker Hub ↗</a></div>
+        <label for="environment-tag-search">${esc(t('client.environment.filterTags'))}</label><input id="environment-tag-search" type="search" maxlength="128" autocomplete="off" autocapitalize="off" spellcheck="false" disabled>
+        <label for="environment-tag">${esc(t('client.environment.tag'))}</label><select id="environment-tag" name="tag" disabled><option value="">${esc(t('client.environment.chooseTag'))}</option></select>
+        <button class="text-button image-more" id="environment-more-tags" type="button" hidden disabled>${esc(t('client.environment.moreTags'))}</button></div>
+      <p class="image-catalog-status" role="status" id="environment-image-status"></p><button class="text-button image-more" id="environment-retry-tags" type="button" hidden disabled>${esc(t('client.environment.retry'))}</button>
+    </div>
     <label for="environment-lifetime">${esc(t('client.environment.autoStop'))}</label><select id="environment-lifetime" name="minutes">${[15, 30, 60].map(minutes => `<option value="${minutes}"${minutes === 60 ? ' selected' : ''}>${esc(t('client.environment.afterMinutes', { count: minutes }))}</option>`).join('')}</select>
     <details class="environment-options"><summary>${esc(t('client.environment.options'))}</summary>
-      <label for="environment-image-choice">${esc(t('client.environment.image'))}</label><select id="environment-image-choice" name="image_choice"><option value="default">${esc(t('client.environment.defaultImage'))}</option><option value="custom">${esc(t('client.environment.customImage'))}</option></select>
-      <div id="environment-custom-image" hidden><label for="environment-image">${esc(t('client.environment.imageName'))}</label><input id="environment-image" name="image" required disabled maxlength="255" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
       <label for="environment-size">${esc(t('client.environment.size'))}</label><select id="environment-size" name="size"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select>
       <label for="environment-identity">${esc(t('client.environment.permissions'))}</label><select id="environment-identity" name="identity"><option value="">${esc(t('client.environment.noAccess'))}</option><option value="${esc(owner)}">${esc(t('client.environment.ownAccess'))}</option></select>
     </details><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.environment.create'))}</button></form>`);
   const formElement = dialog.querySelector('form'), submit = formElement.querySelector('[type="submit"]');
   const imageChoice = formElement.querySelector('#environment-image-choice'), customImage = formElement.querySelector('#environment-custom-image');
+  const hub = formElement.querySelector('#environment-hub'), searchPanel = hub.querySelector('#environment-image-search-panel'), tagsPanel = hub.querySelector('#environment-image-tags-panel');
+  const searchInput = hub.querySelector('#environment-image-search'), searchButton = hub.querySelector('#environment-search-button'), results = hub.querySelector('#environment-image-results');
+  const tagSearch = hub.querySelector('#environment-tag-search'), tagSelect = hub.querySelector('#environment-tag'), status = hub.querySelector('#environment-image-status');
+  const moreImages = hub.querySelector('#environment-more-images'), moreTags = hub.querySelector('#environment-more-tags');
+  const retryTags = hub.querySelector('#environment-retry-tags');
+  let pending = false, repository = null, images = [], tags = [], imagePage = null, tagPage = null, lookup, debounce;
+  const cancelLookup = () => { clearTimeout(debounce); lookup?.abort(); };
+  dialog.addEventListener('close', cancelLookup, { once: true });
+  const tagOptions = () => { tagSelect.innerHTML = `<option value="">${esc(t('client.environment.chooseTag'))}</option>` + tags.map(tag => `<option value="${esc(tag.name)}">${esc(tag.name)}</option>`).join(''); };
+  async function searchImages(page = 1) {
+    cancelLookup();
+    const query = searchInput.value.trim();
+    if (!query) { images = []; results.innerHTML = ''; moreImages.hidden = true; status.textContent = ''; return; }
+    const controller = lookup = new AbortController();
+    searchButton.disabled = true; moreImages.disabled = true; status.textContent = t('client.common.loading');
+    if (page === 1) { images = []; results.innerHTML = ''; moreImages.hidden = true; }
+    try {
+      const data = await api('/v1/environment-images?' + new URLSearchParams({ query, page }), { signal: controller.signal });
+      if (controller.signal.aborted || !formElement.isConnected) return;
+      images.push(...data.images); imagePage = data.next;
+      results.innerHTML = images.map((item, index) => `<button type="button" class="image-result" data-image-index="${index}" aria-label="${esc(item.name)}"><span class="image-result-title"><strong>${esc(item.name)}</strong>${item.official ? `<span class="image-official">${esc(t('client.environment.officialImage'))}</span>` : ''}</span>${item.description ? `<span class="image-description">${esc(item.description)}</span>` : ''}</button>`).join('');
+      moreImages.hidden = !imagePage; status.textContent = images.length ? '' : t('client.environment.noImages');
+    } catch (error) { if (!controller.signal.aborted && formElement.isConnected) status.textContent = error.message; }
+    finally { if (!controller.signal.aborted) { searchButton.disabled = false; moreImages.disabled = false; } }
+  }
+  async function loadTags(page = 1) {
+    cancelLookup();
+    const controller = lookup = new AbortController(), chosen = tagSelect.value;
+    tagSelect.disabled = true; moreTags.disabled = true; retryTags.hidden = true; status.textContent = t('client.common.loading');
+    if (page === 1) { tags = []; tagOptions(); moreTags.hidden = true; }
+    try {
+      const data = await api('/v1/environment-images/tags?' + new URLSearchParams({ repository: repository.name, query: tagSearch.value.trim(), page }), { signal: controller.signal });
+      if (controller.signal.aborted || !formElement.isConnected) return;
+      tags.push(...data.tags.filter(tag => !tags.some(item => item.name === tag.name))); tagPage = data.next;
+      tagOptions(); if (page > 1) tagSelect.value = chosen;
+      moreTags.hidden = !tagPage; status.textContent = tags.length ? '' : t('client.environment.noTags');
+    } catch (error) { if (!controller.signal.aborted && formElement.isConnected) { status.textContent = error.message; retryTags.hidden = false; } }
+    finally { if (!controller.signal.aborted) { tagSelect.disabled = false; moreTags.disabled = false; } }
+  }
+  searchButton.addEventListener('click', () => { void searchImages(); });
+  searchInput.addEventListener('input', () => {
+    cancelLookup(); images = []; results.innerHTML = ''; moreImages.hidden = true; status.textContent = ''; searchButton.disabled = false;
+    debounce = setTimeout(() => { void searchImages(); }, 350);
+  });
+  searchInput.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); void searchImages(); } });
+  moreImages.addEventListener('click', () => { void searchImages(imagePage); });
+  moreTags.addEventListener('click', () => { void loadTags(tagPage); });
+  retryTags.addEventListener('click', () => { void loadTags(); });
+  tagSearch.addEventListener('input', () => {
+    cancelLookup(); tags = []; tagOptions(); tagSelect.disabled = true; moreTags.hidden = true;
+    debounce = setTimeout(() => { void loadTags(); }, 350);
+  });
+  tagSearch.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); void loadTags(); } });
+  results.addEventListener('click', event => {
+    const button = event.target.closest('[data-image-index]'); if (!button || pending) return;
+    repository = images[Number(button.dataset.imageIndex)];
+    searchPanel.hidden = true; tagsPanel.hidden = false; tagSearch.value = ''; tagSelect.required = true;
+    hub.querySelector('#environment-selected-image').textContent = repository.name;
+    hub.querySelector('#environment-image-link').href = 'https://hub.docker.com/' + (repository.name.includes('/') ? 'r/' + repository.name : '_/' + repository.name);
+    tagSearch.focus(); void loadTags();
+  });
+  hub.querySelector('#environment-change-image').addEventListener('click', () => {
+    cancelLookup(); repository = null; tagsPanel.hidden = true; searchPanel.hidden = false; tagSelect.required = false; retryTags.hidden = true;
+    status.textContent = ''; searchButton.disabled = false; moreImages.disabled = false; searchInput.focus();
+  });
   imageChoice.addEventListener('change', () => {
+    cancelLookup(); status.textContent = ''; retryTags.hidden = true;
     const custom = imageChoice.value === 'custom';
     customImage.hidden = !custom; customImage.querySelector('input').disabled = !custom;
+    hub.hidden = imageChoice.value !== 'hub';
+    hub.querySelectorAll('input, select, button').forEach(field => { field.disabled = hub.hidden; });
+    tagSelect.required = !hub.hidden && Boolean(repository);
+    if (!hub.hidden && repository && !tags.length) void loadTags();
   });
-  let pending = false;
   bindForm(async form => {
     if (pending) return;
-    const fields = [...formElement.querySelectorAll('input:enabled, select:enabled')];
+    const fromHub = form.get('image_choice') === 'hub';
+    if (fromHub && (!repository || !form.get('tag'))) throw new Error(t('client.environment.chooseImageAndTag'));
+    cancelLookup();
+    const fields = [...formElement.querySelectorAll('input:enabled, select:enabled, button:enabled')];
     pending = true; submit.textContent = t('client.environment.creating'); fields.forEach(field => { field.disabled = true; });
-    const name = String(form.get('name')).trim(), image = String(form.get('image') || '').trim(), seconds = Number(form.get('minutes')) * 60;
+    const name = String(form.get('name')).trim(), image = fromHub ? repository.name + ':' + form.get('tag') : String(form.get('image') || '').trim(), seconds = Number(form.get('minutes')) * 60;
     try {
       await api('/v1/principals/' + owner + '/environments', { method: 'POST', data: {
-        ...(name ? { name } : {}), ...(form.get('image_choice') === 'custom' ? { image } : {}), size: form.get('size'), identity: form.get('identity') || null,
+        ...(name ? { name } : {}), ...(form.get('image_choice') !== 'default' ? { image } : {}), size: form.get('size'), identity: form.get('identity') || null,
         lifetime: { end: 'idle', idle_seconds: seconds, max_seconds: seconds },
       } });
       if (formElement.isConnected) closeDialog();
