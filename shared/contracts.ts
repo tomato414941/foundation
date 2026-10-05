@@ -32,12 +32,18 @@ export const Ok = z.object({ ok: z.literal(true) });
 
 const Field = z.object({ name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/), label: z.string(), secret: z.boolean().optional(), required: z.boolean().optional(), placeholder: z.string().optional(), note: z.string().optional(), pattern: z.string().optional() });
 const OutputMap = z.record(z.string().regex(/^[A-Z_][A-Z0-9_]*$/), z.string());
-const Scopes = z.object({ values: z.array(z.object({ id: z.string(), name: z.string(), description: z.string().optional() })).optional(), default: z.array(z.string()).optional(), separator: z.string().optional() }).passthrough();
+const Scopes = z.object({ values: z.array(z.object({ id: z.string(), name: z.string(), description: z.string().optional() })).optional(), default: z.array(z.string()).default([]), separator: z.string().default(' '), docs: z.url().optional() });
+const UrlTemplate = z.string().min(1).max(4096);
+const PointerList = z.union([z.string(), z.array(z.string()).min(1)]);
 export const OAuthDefinition = z.object({
-  authorizeUrl: z.url(), tokenUrl: z.url(), userUrl: z.url().optional(), revokeUrl: z.url().optional(),
+  authorizeUrl: UrlTemplate, tokenUrl: UrlTemplate,
+  identity: z.object({ url: UrlTemplate.optional(), from: z.enum(['token','app']).optional(), method: z.enum(['GET','POST']).default('GET'), id: PointerList.default('/id'), name: PointerList.default('/name'), headers: z.record(z.string(),z.string()).default({}) }).optional(),
+  revoke: z.object({ url: UrlTemplate, style: z.enum(['rfc7009','bearer','github','delete']).default('rfc7009'), auth: z.enum(['body','basic','none']).optional() }).optional(),
   clientAuth: z.enum(['body', 'basic', 'none']).default('body'), pkce: z.boolean().default(true),
+  tokenFormat: z.enum(['form','json']).default('form'), okPointer: z.string().optional(),
   authorizeParams: z.record(z.string(), z.string()).default({}), tokenParams: z.record(z.string(), z.string()).default({}),
-  accountId: z.string().default('/id'), accountName: z.string().default('/name'), scopes: Scopes.optional(),
+  defaults: z.record(z.string(),z.string()).default({}),
+  scopes: Scopes.default({ default: [], separator: ' ' }),
   fields: z.array(Field).default([]), outputs: OutputMap.default({ ACCESS_TOKEN: '/accessToken' }),
   adapter: z.enum(['google', 'github', 'ebay', 'openrouter', 'cloudflare', 'slack']).optional(),
   keep: z.array(z.string()).default([]), hint: z.string().optional(),

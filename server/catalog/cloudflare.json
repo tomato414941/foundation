@@ -1,0 +1,46 @@
+{
+  "id": "cloudflare",
+  "name": "Cloudflare",
+  "api": "https://api.cloudflare.com/client/v4",
+  "docs": "https://developers.cloudflare.com/api/",
+  "auth": {
+    "oauth": {
+      "authorizeUrl": "https://dash.cloudflare.com/oauth2/auth",
+      "tokenUrl": "https://dash.cloudflare.com/oauth2/token",
+      "identity": {
+        "url": "https://api.cloudflare.com/client/v4/user",
+        "id": "/result/id",
+        "name": "/result/email"
+      },
+      "scopes": {
+        "default": [
+          "offline_access",
+          "user-details.read"
+        ],
+        "docs": "https://developers.cloudflare.com/fundamentals/oauth/"
+      },
+      "revoke": {
+        "url": "https://dash.cloudflare.com/oauth2/revoke"
+      },
+      "outputs": {
+        "CLOUDFLARE_API_TOKEN": "/accessToken",
+        "CLOUDFLARE_OAUTH_EXPIRES_AT": "/expiresAt"
+      },
+      "adapter": "cloudflare",
+      "hint": "Use CLOUDFLARE_API_TOKEN as a Bearer token with Cloudflare v4 APIs. Scopes are the dot-delimited Cloudflare IDs, such as dns.write or email-routing-rule.write. facts.observed_accounts is a dated /accounts snapshot, not the full consent policy; null means unknown. List /accounts when using the token and choose the target explicitly. Domain registrations and renewals incur charges."
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "APIトークン",
+          "secret": true
+        }
+      ],
+      "console": "https://dash.cloudflare.com/profile/api-tokens",
+      "outputs": {
+        "CLOUDFLARE_API_TOKEN": "/token"
+      }
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "id": "microsoft",
+  "name": "Microsoft 365",
+  "api": "https://graph.microsoft.com/v1.0",
+  "docs": "https://learn.microsoft.com/graph/api/overview",
+  "console": "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
+  "auth": {
+    "oauth": {
+      "authorizeUrl": "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize",
+      "tokenUrl": "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+      "clientAuth": "body",
+      "pkce": true,
+      "tokenFormat": "form",
+      "authorizeParams": {},
+      "tokenParams": {},
+      "defaults": {
+        "tenant": "common"
+      },
+      "fields": [
+        {
+          "name": "tenant",
+          "label": "テナント（任意）",
+          "note": "組織のアカウントだけに限るときに、テナントIDを入れます。空なら個人と組織の両方のアカウントで使えます。",
+          "pattern": "^[A-Za-z0-9.-]{1,100}$"
+        }
+      ],
+      "outputs": {
+        "MICROSOFT_ACCESS_TOKEN": "/accessToken",
+        "MICROSOFT_TOKEN_EXPIRES_AT": "/expiresAt"
+      },
+      "identity": {
+        "url": "https://graph.microsoft.com/v1.0/me",
+        "id": "/id",
+        "name": [
+          "/mail",
+          "/userPrincipalName",
+          "/displayName"
+        ]
+      },
+      "hint": "Scopes are Microsoft Graph permissions such as Mail.Read, Files.ReadWrite or Calendars.ReadWrite.",
+      "scopes": {
+        "default": [
+          "offline_access",
+          "User.Read"
+        ],
+        "separator": " ",
+        "docs": "https://learn.microsoft.com/graph/permissions-reference"
+      }
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "id": "digitalocean",
+  "name": "DigitalOcean",
+  "api": "https://api.digitalocean.com/v2",
+  "docs": "https://docs.digitalocean.com/reference/api/",
+  "console": "https://cloud.digitalocean.com/account/api/applications",
+  "auth": {
+    "oauth": {
+      "authorizeUrl": "https://cloud.digitalocean.com/v1/oauth/authorize",
+      "tokenUrl": "https://cloud.digitalocean.com/v1/oauth/token",
+      "clientAuth": "body",
+      "pkce": true,
+      "tokenFormat": "form",
+      "authorizeParams": {},
+      "tokenParams": {},
+      "defaults": {},
+      "fields": [],
+      "outputs": {
+        "DIGITALOCEAN_ACCESS_TOKEN": "/accessToken",
+        "DIGITALOCEAN_TOKEN_EXPIRES_AT": "/expiresAt"
+      },
+      "identity": {
+        "from": "token",
+        "id": "/info/uuid",
+        "name": [
+          "/info/email",
+          "/info/name"
+        ]
+      },
+      "scopes": {
+        "default": [
+          "read"
+        ],
+        "separator": " ",
+        "docs": "https://docs.digitalocean.com/reference/api/oauth/"
+      }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Personal access token",
+          "secret": true
+        }
+      ],
+      "console": "https://cloud.digitalocean.com/account/api/tokens",
+      "outputs": {
+        "DIGITALOCEAN_TOKEN": "/token"
+      }
+    }
+  }
+}

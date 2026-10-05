@@ -51,7 +51,8 @@ export class Authorization {
       return Boolean(await this.db.one('SELECT 1 FROM relations WHERE principal_id=$1 AND relation=$2 AND subject_id=ANY($3::uuid[])', [principalId, 'owner', ids], connection));
     }
     if (await this.stands(actor.id, principalId, connection)) return true;
-    return ['read', 'use', 'execute'].includes(action) && await this.uses(actor.id, principalId, connection);
+    if (['read', 'use', 'execute'].includes(action) && await this.uses(actor.id, principalId, connection)) return true;
+    return Boolean(await this.db.one('SELECT 1 FROM principal_grants WHERE target_id=$1 AND principal_id=ANY($2::uuid[]) AND $3=ANY(actions)', [principalId, await this.standsAs(actor.id, connection), action], connection));
   }
   async resource(actor: Actor, resource: ResourceIdentity, action: ActionName, connection: Queryable = this.db.pool): Promise<boolean> {
     await this.active(actor, connection);
@@ -64,7 +65,7 @@ export class Authorization {
   async canCreate(actor: Actor, ownerId: string, kind: ResourceKindName, connection: Queryable = this.db.pool): Promise<boolean> {
     await this.active(actor, connection);
     if (actor.requestId) return false;
-    return await this.stands(actor.id, ownerId, connection) || agentActions[kind].includes('create') && await this.uses(actor.id, ownerId, connection);
+    return await this.principal(actor, ownerId, 'create', connection) || agentActions[kind].includes('create') && await this.uses(actor.id, ownerId, connection);
   }
   async requirePrincipal(actor: Actor, principalId: string, action: ActionName, connection: Queryable = this.db.pool) {
     if (!await this.principal(actor, principalId, action, connection)) fail(403, 'forbidden', 'You do not have permission to perform this action.');
@@ -94,6 +95,8 @@ export class Authorization {
     const standing = await this.standsAs(actor.id);
     const owns = Boolean(await this.db.one("SELECT 1 FROM relations WHERE subject_id=ANY($1::uuid[]) AND principal_id=$2 AND relation='owner'", [standing, id]));
     if (standing.includes(id)) return Action.options.filter(action => owns || !['delete', 'transfer'].includes(action));
-    return await this.uses(actor.id, id) ? ['read', 'use', 'execute'] : [];
+    const actions: ActionName[] = await this.uses(actor.id, id) ? ['read', 'use', 'execute'] : [];
+    const grants = await this.db.all<{actions: ActionName[]}>('SELECT actions FROM principal_grants WHERE target_id=$1 AND principal_id=ANY($2::uuid[])', [id, standing]);
+    return [...new Set([...actions, ...grants.flatMap(grant => grant.actions).filter(action => !['delete', 'transfer'].includes(action))])];
   }
 }

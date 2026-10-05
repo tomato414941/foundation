@@ -1,0 +1,55 @@
+{
+  "id": "x",
+  "name": "X",
+  "api": "https://api.x.com/2",
+  "docs": "https://docs.x.com/x-api/introduction",
+  "console": "https://developer.x.com/en/portal/dashboard",
+  "auth": {
+    "oauth": {
+      "authorizeUrl": "https://x.com/i/oauth2/authorize",
+      "tokenUrl": "https://api.x.com/2/oauth2/token",
+      "clientAuth": "basic",
+      "pkce": true,
+      "tokenFormat": "form",
+      "authorizeParams": {},
+      "tokenParams": {},
+      "defaults": {},
+      "fields": [],
+      "outputs": {
+        "X_ACCESS_TOKEN": "/accessToken",
+        "X_TOKEN_EXPIRES_AT": "/expiresAt"
+      },
+      "identity": {
+        "url": "https://api.x.com/2/users/me",
+        "id": "/data/id",
+        "name": "/data/username"
+      },
+      "revoke": {
+        "url": "https://api.x.com/2/oauth2/revoke",
+        "style": "rfc7009"
+      },
+      "scopes": {
+        "default": [
+          "tweet.read",
+          "users.read",
+          "offline.access"
+        ],
+        "separator": " ",
+        "docs": "https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code"
+      }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Bearer Token",
+          "secret": true
+        }
+      ],
+      "hint": "An app-only Bearer Token from the developer portal: send \"Authorization: Bearer <X_BEARER_TOKEN>\". It reads public data only; it cannot post or act as a user.",
+      "outputs": {
+        "X_BEARER_TOKEN": "/token"
+      }
+    }
+  }
+}

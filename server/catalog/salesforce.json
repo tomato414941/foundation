@@ -1,0 +1,52 @@
+{
+  "id": "salesforce",
+  "name": "Salesforce",
+  "docs": "https://developer.salesforce.com/docs/apis",
+  "auth": {
+    "oauth": {
+      "authorizeUrl": "https://login.salesforce.com/services/oauth2/authorize",
+      "tokenUrl": "https://login.salesforce.com/services/oauth2/token",
+      "clientAuth": "body",
+      "pkce": true,
+      "tokenFormat": "form",
+      "authorizeParams": {},
+      "tokenParams": {},
+      "defaults": {},
+      "fields": [],
+      "outputs": {
+        "SALESFORCE_ACCESS_TOKEN": "/accessToken",
+        "SALESFORCE_INSTANCE_URL": "/instance_url",
+        "SALESFORCE_TOKEN_EXPIRES_AT": "/expiresAt"
+      },
+      "identity": {
+        "url": "{+id}",
+        "id": [
+          "/organization_id",
+          "/user_id"
+        ],
+        "name": [
+          "/username",
+          "/email"
+        ]
+      },
+      "revoke": {
+        "url": "https://login.salesforce.com/services/oauth2/revoke",
+        "style": "rfc7009",
+        "auth": "none"
+      },
+      "keep": [
+        "instance_url",
+        "id"
+      ],
+      "hint": "SALESFORCE_INSTANCE_URL is the org's API base URL (<SALESFORCE_INSTANCE_URL>/services/data/...).",
+      "scopes": {
+        "default": [
+          "refresh_token",
+          "id"
+        ],
+        "separator": " ",
+        "docs": "https://help.salesforce.com/s/articleView?id=xcloud.remoteaccess_oauth_tokens_scopes.htm"
+      }
+    }
+  }
+}

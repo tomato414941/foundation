@@ -1,0 +1,53 @@
+{
+  "id": "heroku",
+  "name": "Heroku",
+  "api": "https://api.heroku.com",
+  "docs": "https://devcenter.heroku.com/articles/platform-api-reference",
+  "console": "https://dashboard.heroku.com/account/applications",
+  "auth": {
+    "oauth": {
+      "authorizeUrl": "https://id.heroku.com/oauth/authorize",
+      "tokenUrl": "https://id.heroku.com/oauth/token",
+      "clientAuth": "body",
+      "pkce": true,
+      "tokenFormat": "form",
+      "authorizeParams": {},
+      "tokenParams": {},
+      "defaults": {},
+      "fields": [],
+      "outputs": {
+        "HEROKU_ACCESS_TOKEN": "/accessToken",
+        "HEROKU_TOKEN_EXPIRES_AT": "/expiresAt"
+      },
+      "identity": {
+        "url": "https://api.heroku.com/account",
+        "headers": {
+          "accept": "application/vnd.heroku+json; version=3"
+        },
+        "id": "/id",
+        "name": "/email"
+      },
+      "hint": "Send \"Accept: application/vnd.heroku+json; version=3\" with every request.",
+      "scopes": {
+        "default": [
+          "identity"
+        ],
+        "separator": " ",
+        "docs": "https://devcenter.heroku.com/articles/oauth#scopes"
+      }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "API key",
+          "secret": true
+        }
+      ],
+      "console": "https://dashboard.heroku.com/account",
+      "outputs": {
+        "HEROKU_API_KEY": "/token"
+      }
+    }
+  }
+}

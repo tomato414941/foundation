@@ -1,0 +1,25 @@
+{
+  "id": "sakura-vps",
+  "name": "さくらのVPS",
+  "api": "https://secure.sakura.ad.jp/vps/api/v7",
+  "docs": "https://manual.sakura.ad.jp/vps/api/api-doc/index.html",
+  "console": "https://secure.sakura.ad.jp/vps/",
+  "auth": {
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "APIキー",
+          "secret": true,
+          "note": "さくらのVPSのAPIキーを入力してください。さくらのクラウドのAPIキーとは異なります。"
+        }
+      ],
+      "console": "https://secure.sakura.ad.jp/vps/",
+      "instructions": "VPSコントロールパネルの「APIキー管理」で、対象サーバーと必要な操作に限定したロールを作成し、そのロールのAPIキーを発行してください。",
+      "hint": "Send SAKURA_VPS_API_TOKEN as \"Authorization: Bearer <token>\" to the Sakura VPS API. This is not the Sakura Cloud API. Replace or revoke the key in the VPS control panel.",
+      "outputs": {
+        "SAKURA_VPS_API_TOKEN": "/token"
+      }
+    }
+  }
+}

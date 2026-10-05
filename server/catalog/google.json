@@ -1,0 +1,42 @@
+{
+  "id": "google",
+  "name": "Google",
+  "api": "https://www.googleapis.com",
+  "docs": "https://developers.google.com/apis-explorer",
+  "console": "https://console.cloud.google.com/apis/connections",
+  "auth": {
+    "oauth": {
+      "authorizeUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+      "tokenUrl": "https://oauth2.googleapis.com/token",
+      "identity": {
+        "url": "https://openidconnect.googleapis.com/v1/userinfo",
+        "id": "/sub",
+        "name": "/email"
+      },
+      "authorizeParams": {
+        "access_type": "offline",
+        "prompt": "consent",
+        "include_granted_scopes": "true"
+      },
+      "scopes": {
+        "default": [
+          "openid",
+          "https://www.googleapis.com/auth/userinfo.email"
+        ],
+        "docs": "https://developers.google.com/identity/protocols/oauth2/scopes"
+      },
+      "revoke": {
+        "url": "https://oauth2.googleapis.com/revoke",
+        "auth": "none"
+      },
+      "outputs": {
+        "GOOGLE_OAUTH_ACCESS_TOKEN": "/accessToken",
+        "CLOUDSDK_AUTH_ACCESS_TOKEN": "/accessToken",
+        "GOOGLE_ACCOUNT_EMAIL": "/accountName",
+        "GOOGLE_OAUTH_EXPIRES_AT": "/expiresAt"
+      },
+      "adapter": "google",
+      "hint": "Scopes are full Google scope URLs, such as https://www.googleapis.com/auth/gmail.readonly or https://www.googleapis.com/auth/cloud-platform. GOOGLE_OAUTH_ACCESS_TOKEN is a Bearer token for Google APIs; the same token is CLOUDSDK_AUTH_ACCESS_TOKEN for gcloud. Choose a Google Cloud --project explicitly."
+    }
+  }
+}

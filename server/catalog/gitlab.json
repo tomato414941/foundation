@@ -1,0 +1,56 @@
+{
+  "id": "gitlab",
+  "name": "GitLab",
+  "api": "https://gitlab.com/api/v4",
+  "docs": "https://docs.gitlab.com/api/rest/",
+  "console": "https://gitlab.com/-/user_settings/applications",
+  "auth": {
+    "oauth": {
+      "authorizeUrl": "https://gitlab.com/oauth/authorize",
+      "tokenUrl": "https://gitlab.com/oauth/token",
+      "clientAuth": "body",
+      "pkce": true,
+      "tokenFormat": "form",
+      "authorizeParams": {},
+      "tokenParams": {},
+      "defaults": {},
+      "fields": [],
+      "outputs": {
+        "GITLAB_ACCESS_TOKEN": "/accessToken",
+        "GITLAB_TOKEN_EXPIRES_AT": "/expiresAt"
+      },
+      "identity": {
+        "url": "https://gitlab.com/api/v4/user",
+        "id": "/id",
+        "name": [
+          "/username",
+          "/email"
+        ]
+      },
+      "revoke": {
+        "url": "https://gitlab.com/oauth/revoke",
+        "style": "rfc7009"
+      },
+      "scopes": {
+        "default": [
+          "read_user"
+        ],
+        "separator": " ",
+        "docs": "https://docs.gitlab.com/integration/oauth_provider/#view-all-authorized-applications"
+      }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Personal access token",
+          "secret": true
+        }
+      ],
+      "console": "https://gitlab.com/-/user_settings/personal_access_tokens",
+      "outputs": {
+        "GITLAB_TOKEN": "/token"
+      }
+    }
+  }
+}

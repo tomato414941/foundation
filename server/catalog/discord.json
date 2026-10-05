@@ -1,0 +1,57 @@
+{
+  "id": "discord",
+  "name": "Discord",
+  "api": "https://discord.com/api/v10",
+  "docs": "https://discord.com/developers/docs/reference",
+  "console": "https://discord.com/developers/applications",
+  "auth": {
+    "oauth": {
+      "authorizeUrl": "https://discord.com/oauth2/authorize",
+      "tokenUrl": "https://discord.com/api/oauth2/token",
+      "clientAuth": "basic",
+      "pkce": true,
+      "tokenFormat": "form",
+      "authorizeParams": {},
+      "tokenParams": {},
+      "defaults": {},
+      "fields": [],
+      "outputs": {
+        "DISCORD_ACCESS_TOKEN": "/accessToken",
+        "DISCORD_TOKEN_EXPIRES_AT": "/expiresAt"
+      },
+      "identity": {
+        "url": "https://discord.com/api/users/@me",
+        "id": "/id",
+        "name": [
+          "/username",
+          "/global_name"
+        ]
+      },
+      "revoke": {
+        "url": "https://discord.com/api/oauth2/token/revoke",
+        "style": "rfc7009"
+      },
+      "scopes": {
+        "default": [
+          "identify"
+        ],
+        "separator": " ",
+        "docs": "https://discord.com/developers/docs/topics/oauth2#shared-resources-oauth2-scopes"
+      }
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Bot token",
+          "secret": true
+        }
+      ],
+      "console": "https://discord.com/developers/applications",
+      "hint": "Send it as \"Authorization: Bot <DISCORD_BOT_TOKEN>\".",
+      "outputs": {
+        "DISCORD_BOT_TOKEN": "/token"
+      }
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "logo": "github",
+  "api": "https://api.github.com",
+  "docs": "https://docs.github.com/rest",
+  "console": "https://github.com/settings/developers",
+  "auth": {
+    "oauth": {
+      "authorizeUrl": "https://github.com/login/oauth/authorize",
+      "tokenUrl": "https://github.com/login/oauth/access_token",
+      "tokenFormat": "json",
+      "identity": {
+        "url": "https://api.github.com/user",
+        "id": "/id",
+        "name": "/login",
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        }
+      },
+      "revoke": {
+        "url": "https://api.github.com/applications/{clientId}/grant",
+        "style": "github"
+      },
+      "outputs": {
+        "GH_TOKEN": "/accessToken",
+        "GITHUB_TOKEN": "/accessToken"
+      },
+      "adapter": "github",
+      "hint": "gh and most tools read GH_TOKEN directly. For git push/pull, run gh auth setup-git inside the exec, then use git. Scopes are GitHub OAuth scopes such as repo, workflow, read:org or gist."
+    },
+    "token": {
+      "fields": [
+        {
+          "name": "token",
+          "label": "Personal access token",
+          "secret": true
+        }
+      ],
+      "console": "https://github.com/settings/tokens",
+      "outputs": {
+        "GH_TOKEN": "/token",
+        "GITHUB_TOKEN": "/token"
+      }
+    }
+  }
+}

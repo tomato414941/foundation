@@ -18,6 +18,12 @@ CREATE TABLE IF NOT EXISTS relations (
   CHECK (subject_id <> principal_id)
 );
 CREATE INDEX IF NOT EXISTS relations_target ON relations(principal_id, relation);
+CREATE TABLE IF NOT EXISTS principal_grants (
+  target_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  actions text[] NOT NULL,
+  PRIMARY KEY(target_id,principal_id)
+);
 CREATE TABLE IF NOT EXISTS credentials (
   id uuid PRIMARY KEY,
   principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,

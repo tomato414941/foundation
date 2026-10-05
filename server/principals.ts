@@ -4,7 +4,7 @@ import { iso } from './database.js';
 import type { Authorization, Actor } from './authorization.js';
 import type { Audit } from './audit.js';
 import { Name, Principal, PublicKey } from '../shared/contracts.js';
-import type { PublicEncryptionKey } from '../shared/contracts.js';
+import type { PublicEncryptionKey, ActionName } from '../shared/contracts.js';
 import { fail, required } from './errors.js';
 
 export interface PrincipalRow { id: string; name: string; public_key: PublicEncryptionKey | null; created_at: Date }
@@ -20,7 +20,7 @@ export class Principals {
   async accessible(actor: Actor) {
     const standing = await this.authorization.standsAs(actor.id);
     const rows = await this.db.all<PrincipalRow>(`SELECT DISTINCT p.* FROM principals p LEFT JOIN relations r ON r.principal_id=p.id
-      WHERE p.id=ANY($1::uuid[]) OR (r.subject_id=ANY($1::uuid[]) AND r.relation='agent') ORDER BY p.created_at,p.id`, [standing]);
+      WHERE p.id=ANY($1::uuid[]) OR (r.subject_id=ANY($1::uuid[]) AND r.relation='agent') OR EXISTS(SELECT 1 FROM principal_grants g WHERE g.target_id=p.id AND g.principal_id=ANY($1::uuid[]) AND 'read'=ANY(g.actions)) ORDER BY p.created_at,p.id`, [standing]);
     return Promise.all(rows.map(row => this.view(actor, row)));
   }
   async rename(actor: Actor, id: string, name: string) {
@@ -87,8 +87,23 @@ export class Principals {
     await this.db.transaction(async connection => {
       await connection.query("DELETE FROM relations WHERE subject_id=$1 AND principal_id=$2 AND relation<>'owner'", [subjectId, principalId]);
       await connection.query('DELETE FROM grants WHERE principal_id=$1 AND resource_id IN (SELECT id FROM resources WHERE owner_id=$2)', [subjectId, principalId]);
+      await connection.query('DELETE FROM principal_grants WHERE principal_id=$1 AND target_id=$2', [subjectId, principalId]);
       await connection.query("UPDATE approval_requests SET state='cancelled',finished_at=now() WHERE from_id=$1 AND to_id=$2 AND state='pending'", [subjectId, principalId]);
       await this.audit.record(principalId, actor.id, 'principal.revoke', subjectId, {}, connection);
     });
+  }
+  async grants(actor: Actor, id: string) {
+    await this.authorization.requirePrincipal(actor, id, 'share');
+    return (await this.db.all<{principal_id:string;name:string;actions:ActionName[]}>('SELECT g.*,p.name FROM principal_grants g JOIN principals p ON p.id=g.principal_id WHERE target_id=$1 ORDER BY p.name', [id])).map(row => ({principalId:row.principal_id,principalName:row.name,actions:row.actions}));
+  }
+  async grant(actor: Actor, id: string, principalId: string, actions: ActionName[]) {
+    await this.authorization.requirePrincipal(actor, id, 'share');
+    await this.get(principalId);
+    for (const action of actions) {
+      if (['delete','transfer'].includes(action)) fail(400, 'owner_action', 'Only an owner can transfer or delete a principal.');
+      await this.authorization.requirePrincipal(actor, id, action);
+    }
+    await this.db.pool.query('INSERT INTO principal_grants(target_id,principal_id,actions) VALUES($1,$2,$3) ON CONFLICT(target_id,principal_id) DO UPDATE SET actions=EXCLUDED.actions', [id,principalId,[...new Set(actions)]]);
+    await this.audit.record(id, actor.id, 'principal.share', principalId, {actions});
   }
 }

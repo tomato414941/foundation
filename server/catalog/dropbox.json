@@ -1,0 +1,48 @@
+{
+  "id": "dropbox",
+  "name": "Dropbox",
+  "logo": "dropbox",
+  "api": "https://api.dropboxapi.com/2",
+  "docs": "https://www.dropbox.com/developers/documentation/http/documentation",
+  "console": "https://www.dropbox.com/developers/apps",
+  "auth": {
+    "oauth": {
+      "authorizeUrl": "https://www.dropbox.com/oauth2/authorize",
+      "tokenUrl": "https://api.dropboxapi.com/oauth2/token",
+      "clientAuth": "basic",
+      "pkce": true,
+      "tokenFormat": "form",
+      "authorizeParams": {
+        "token_access_type": "offline"
+      },
+      "tokenParams": {},
+      "defaults": {},
+      "fields": [],
+      "outputs": {
+        "DROPBOX_ACCESS_TOKEN": "/accessToken",
+        "DROPBOX_TOKEN_EXPIRES_AT": "/expiresAt"
+      },
+      "identity": {
+        "url": "https://api.dropboxapi.com/2/users/get_current_account",
+        "method": "POST",
+        "json": null,
+        "id": "/account_id",
+        "name": [
+          "/email",
+          "/name/display_name"
+        ]
+      },
+      "revoke": {
+        "url": "https://api.dropboxapi.com/2/auth/token/revoke",
+        "style": "bearer"
+      },
+      "scopes": {
+        "default": [
+          "account_info.read"
+        ],
+        "separator": " ",
+        "docs": "https://developers.dropbox.com/oauth-guide"
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "id": "ebay",
+  "name": "eBay",
+  "api": "https://api.ebay.com",
+  "docs": "https://developer.ebay.com/develop/apis",
+  "console": "https://developer.ebay.com/my/keys",
+  "auth": {
+    "oauth": {
+      "authorizeUrl": "https://auth.ebay.com/oauth2/authorize",
+      "tokenUrl": "https://api.ebay.com/identity/v1/oauth2/token",
+      "pkce": false,
+      "clientAuth": "basic",
+      "scopes": {
+        "default": [
+          "https://api.ebay.com/oauth/api_scope"
+        ],
+        "docs": "https://developer.ebay.com/api-docs/static/oauth-scopes.html"
+      },
+      "fields": [
+        {
+          "name": "ruName",
+          "label": "RuName",
+          "required": true
+        }
+      ],
+      "revoke": {
+        "url": "https://api.ebay.com/identity/v1/oauth2/token/revoke",
+        "auth": "basic"
+      },
+      "outputs": {
+        "EBAY_ACCESS_TOKEN": "/accessToken",
+        "EBAY_ACCOUNT_ID": "/account",
+        "EBAY_USERNAME": "/accountName",
+        "EBAY_OAUTH_EXPIRES_AT": "/expiresAt"
+      },
+      "adapter": "ebay",
+      "hint": "Use EBAY_ACCESS_TOKEN as a Bearer token with production eBay APIs. Scopes are full eBay scope URLs, such as https://api.ebay.com/oauth/api_scope/sell.inventory; only scopes enabled for the application can be granted. Taxonomy APIs may require a separate application token."
+    }
+  }
+}
