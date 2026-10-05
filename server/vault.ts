@@ -21,6 +21,12 @@ export class Vault {
     return JSON.parse(decode(result.plaintext)) as T;
   }
   static async initialize(db: Database, config: Configuration): Promise<Vault> {
+    return db.transaction(async connection=>{
+      await connection.query('SELECT pg_advisory_xact_lock(736023741)');
+      return Vault.create(db,config);
+    });
+  }
+  private static async create(db: Database, config: Configuration): Promise<Vault> {
     let key = config.key;
     if (!key) {
       const kms = new KMSClient({ region: config.AWS_REGION });

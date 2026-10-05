@@ -59,7 +59,7 @@ export class Resources {
     ) SELECT p.id,p.name,p.public_key FROM principals p JOIN recipients r ON p.id=r.id WHERE p.public_key IS NOT NULL`, [ownerId]);
     return rows.map(row => ({ id: row.id, name: row.name, publicKey: row.public_key }));
   }
-  private async validateSecret(ownerId: string, id: string, sealed: SealedContent, allowUse: boolean) {
+  async validateSecret(ownerId: string, id: string, sealed: SealedContent, allowUse: boolean) {
     if (sealed.aad !== base64url(encode('resource:' + id))) fail(400, 'invalid_envelope', 'Encrypt the content for this resource.');
     const recipients = await this.recipients(ownerId);
     if (!recipients.length) fail(409, 'encryption_key_required', 'Add a passkey with encryption support before saving secrets.');
@@ -83,11 +83,18 @@ export class Resources {
     await this.authorization.requireResource(actor, row, 'reveal');
     return { sealed: Sealed.parse(row.sealed), context: 'resource:' + row.id };
   }
-  async updateSecret(actor: Actor, row: ResourceRow, sealed: SealedContent, bytes: number) {
+  async updateSecret(actor: Actor, row: ResourceRow, sealed: SealedContent, bytes: number, use?:boolean) {
     await this.authorization.requireResource(actor, row, 'update');
-    const allowUse = await this.authorization.resource({ id: this.identity.id }, row, 'use');
+    const allowUse = use ?? await this.authorization.resource({ id: this.identity.id }, row, 'use');
     await this.validateSecret(row.owner_id, row.id, sealed, allowUse);
-    const updated = await this.update(row, { sealed, data: { bytes, recipients: sealed.recipients.map(recipient => recipient.header.kid) } });
+    const updated = await this.db.transaction(async connection=>{
+      const updated=await this.update(row, { sealed, data: { bytes, recipients: sealed.recipients.map(recipient => recipient.header.kid) } },connection);
+      if(use!==undefined) {
+        if(use)await connection.query("INSERT INTO grants(resource_id,principal_id,actions) VALUES($1,$2,ARRAY['use']) ON CONFLICT(resource_id,principal_id) DO UPDATE SET actions=ARRAY['use']",[row.id,this.identity.id]);
+        else await connection.query('DELETE FROM grants WHERE resource_id=$1 AND principal_id=$2',[row.id,this.identity.id]);
+      }
+      return updated;
+    });
     await this.audit.record(row.owner_id, actor.id, 'secret.update', row.id);
     return updated;
   }

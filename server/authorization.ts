@@ -3,7 +3,7 @@ import type { ActionName, ResourceKindName } from '../shared/contracts.js';
 import { Action } from '../shared/contracts.js';
 import { fail } from './errors.js';
 
-export interface Actor { id: string; credentialId?: string; sessionId?: string; requestId?: string }
+export interface Actor { id: string; credentialId?: string; sessionId?: string; requestId?: string; approvalId?:string; approvalIndex?:number }
 export interface ResourceIdentity { id: string; owner_id: string; kind: ResourceKindName }
 const resourceActions: Record<ResourceKindName, ActionName[]> = {
   secret: ['read', 'update', 'delete', 'share', 'transfer', 'reveal', 'use'],

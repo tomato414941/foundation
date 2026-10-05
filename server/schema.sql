@@ -71,6 +71,19 @@ CREATE TABLE IF NOT EXISTS resources (
   UNIQUE (owner_id,kind,name)
 );
 CREATE INDEX IF NOT EXISTS resources_owner ON resources(owner_id,kind,created_at,id);
+CREATE TABLE IF NOT EXISTS object_blobs (
+  id uuid PRIMARY KEY,
+  resource_id uuid REFERENCES resources(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS environment_jobs (
+  resource_id uuid PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+  machine_id text,
+  lease_until timestamptz,
+  lease_token uuid,
+  attempts integer NOT NULL DEFAULT 0,
+  retry_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS grants (
   resource_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
   principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
@@ -95,6 +108,7 @@ CREATE TABLE IF NOT EXISTS runs (
   result jsonb,
   error text,
   lease_until timestamptz,
+  lease_token uuid,
   created_at timestamptz NOT NULL DEFAULT now(),
   started_at timestamptz,
   finished_at timestamptz
@@ -106,14 +120,16 @@ CREATE TABLE IF NOT EXISTS approval_requests (
   from_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
   to_id uuid REFERENCES principals(id) ON DELETE CASCADE,
   message text NOT NULL,
-  operations jsonb NOT NULL,
+  operations text NOT NULL,
   results jsonb NOT NULL,
   state text NOT NULL CHECK(state IN ('pending','running','approved','declined','cancelled','expired')),
   code_hash text,
   attempts integer NOT NULL DEFAULT 0,
   expires_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
-  finished_at timestamptz
+  finished_at timestamptz,
+  private_input text,
+  continue_url text
 );
 CREATE INDEX IF NOT EXISTS requests_recipient ON approval_requests(to_id,state,created_at);
 CREATE TABLE IF NOT EXISTS request_links (
@@ -143,6 +159,7 @@ CREATE TABLE IF NOT EXISTS payment_accounts (
 );
 CREATE TABLE IF NOT EXISTS billing_events (
   id uuid PRIMARY KEY,
+  reference text NOT NULL UNIQUE,
   payer_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
   principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
   meter text NOT NULL CHECK(meter IN ('compute','storage')),

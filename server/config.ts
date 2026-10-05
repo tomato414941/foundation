@@ -14,6 +14,7 @@ const Environment = z.object({
   RESEND_API_KEY: z.string().default(''), FOUNDATION_MAIL_FROM: z.string().default(''),
   STRIPE_SECRET_KEY: z.string().default(''), STRIPE_WEBHOOK_SECRET: z.string().default(''),
   STRIPE_COMPUTE_PRICE: z.string().default(''), STRIPE_STORAGE_PRICE: z.string().default(''),
+  STRIPE_COMPUTE_METER: z.string().default('foundation_compute_seconds'), STRIPE_STORAGE_METER: z.string().default('foundation_storage_byte_hours'),
   FOUNDATION_BUCKET: z.string().default(''),
   FLY_API_TOKEN: z.string().default(''), FLY_APP: z.string().default(''), FLY_IMAGE: z.string().default(''), FLY_REGION: z.string().default('nrt'),
   FOUNDATION_OAUTH_APPS: z.string().default('{}'),

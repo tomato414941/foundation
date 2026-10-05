@@ -6,6 +6,7 @@ import type { Resources, ResourceRow } from './resources.js';
 import type { Actor } from './authorization.js';
 import type { Catalog } from './catalog.js';
 import type { Configuration } from './config.js';
+import type { Queryable } from './database.js';
 import { Vault, token, digest } from './vault.js';
 import { OAuth } from './oauth.js';
 import type { OAuthApp, OAuthToken, OAuthSpec } from './oauth.js';
@@ -34,6 +35,9 @@ export class AwsRoles implements RoleProvider {
 }
 export class Services {
   resolve?: (actor:Actor,source:SourceReference)=>Promise<string>;
+  checkApproval?: (actor:Actor,connection?:Queryable)=>Promise<void>;
+  completed?: (actor:Actor,result:JsonValue)=>Promise<void>;
+  cancelled?: (actor:Actor)=>Promise<void>;
   constructor(readonly resources:Resources,readonly catalog:Catalog,readonly vault:Vault,readonly oauth:OAuth,readonly config:Configuration,readonly roles:RoleProvider=new AwsRoles()) {}
   private async allowed(actor:Actor,ownerId:string,input:ConnectInput) {
     if(input.connectionId) {
@@ -79,6 +83,7 @@ export class Services {
     return this.resources.db.transaction(async connection=>this.resources.insert(ownerId,'app',input.name,{serviceId:input.serviceId,clientId:input.clientId,fields},{id,privateData:await this.vault.encrypt({clientSecret:input.clientSecret},'resource:'+id),references:this.catalog.definitions.has(input.serviceId)?[]:[input.serviceId]},connection));
   }
   async begin(actor:Actor,ownerId:string,input:ConnectInput,browser:string):Promise<ConnectionResult> {
+    if(actor.approvalId)input={...input,returnTo:'/requests/'+actor.approvalId};
     const previous=await this.allowed(actor,ownerId,input),service=await this.catalog.get(actor,input.serviceId);
     if(!service.auth[input.scheme]) fail(400,'scheme_unavailable','Choose an available connection method.');
     if(!input.returnTo.startsWith('/')||input.returnTo.startsWith('//')||/[\\\u0000-\u001f]/.test(input.returnTo)) fail(400,'invalid_return','Choose a page within Foundation.');
@@ -104,6 +109,7 @@ export class Services {
     if(!row) fail(400,'invalid_state','Start the connection again.');
     const value=await this.vault.decrypt<Consent>(row.data.sealed,'consent:'+id);
     await this.resources.authorization.active(value.actor);
+    await this.checkApproval?.(value.actor);
     const previous=await this.allowed(value.actor,value.ownerId,value.input);
     if(previous && previous.version!==value.connectionVersion) fail(409,'changed','This connection changed. Start again.');
     if(value.input.appId!=='foundation'&&value.input.scheme==='oauth') {
@@ -124,13 +130,26 @@ export class Services {
       await this.resources.db.pool.query("INSERT INTO challenges(id,kind,principal_id,browser_hash,data,expires_at) VALUES($1,'service-review',$2,$3,$4,now()+interval '15 minutes')",[id,consent.actor.id,digest(browser),JSON.stringify({sealed:await this.vault.encrypt(consent,'consent:'+id)})]);
       return {kind:'review',id,before:{account:String(previous.data.account),scopes:previous.data.scopes ?? []},after:{account:result.accountName,scopes:result.scopes},returnTo:consent.input.returnTo};
     }
-    return this.store(consent.actor,consent.ownerId,consent.input,{service:consent.service,app:consent.app,oauth:result},previous);
+    const connected=await this.store(consent.actor,consent.ownerId,consent.input,{service:consent.service,app:consent.app,oauth:result},previous);
+    await this.completed?.(consent.actor,connected as unknown as JsonValue);return connected;
   }
   async review(actor:Actor,id:string,browser:string,accept:boolean) {
     const consent=await this.consent(id,browser,'service-review');
     if(actor.id!==consent.actor.id) fail(403,'forbidden','Use the account that started this connection.');
-    if(!accept) return {kind:'cancelled' as const,returnTo:consent.input.returnTo};
-    return this.store(actor,consent.ownerId,consent.input,{service:consent.service,app:consent.app,oauth:required(consent.result)},consent.input.connectionId?await this.resources.get(consent.input.connectionId):null);
+    if(!accept) {await this.cancelled?.(consent.actor);return {kind:'cancelled' as const,returnTo:consent.input.returnTo};}
+    const connected=await this.store(consent.actor,consent.ownerId,consent.input,{service:consent.service,app:consent.app,oauth:required(consent.result)},consent.input.connectionId?await this.resources.get(consent.input.connectionId):null);
+    await this.completed?.(consent.actor,connected as unknown as JsonValue);return connected;
+  }
+  async cancel(id:string,browser:string) {
+    const consent=await this.consent(id,browser);await this.cancelled?.(consent.actor);return consent.input.returnTo;
+  }
+  async pendingReview(actor:Actor,id:string,browser:string) {
+    const row=await this.resources.db.one<{data:{sealed:string}}>("SELECT data FROM challenges WHERE id=$1 AND kind='service-review' AND browser_hash=$2 AND expires_at>now()",[id,digest(browser)]);
+    if(!row)fail(400,'invalid_state','Start the connection again.');
+    const consent=await this.vault.decrypt<Consent>(row.data.sealed,'consent:'+id);
+    if(actor.id!==consent.actor.id)fail(403,'forbidden','Use the account that started this connection.');
+    const previous=await this.resources.get(required(consent.input.connectionId));
+    return {id,before:{account:String(previous.data.account),scopes:previous.data.scopes??[]},after:{account:consent.result!.accountName,scopes:consent.result!.scopes}};
   }
   async completeRole(actor:Actor,id:string,browser:string,arn:string,region:string) {
     const consent=await this.consent(id,browser);
@@ -139,7 +158,8 @@ export class Services {
     z.string().regex(/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/).parse(region);
     const role={arn,region,externalId:required(consent.externalId)};
     await this.roles.obtain(arn,role.externalId,region);
-    return this.store(actor,consent.ownerId,consent.input,{service:consent.service,app:consent.app,role},consent.input.connectionId?await this.resources.get(consent.input.connectionId):null);
+    const connected=await this.store(consent.actor,consent.ownerId,consent.input,{service:consent.service,app:consent.app,role},consent.input.connectionId?await this.resources.get(consent.input.connectionId):null);
+    await this.completed?.(consent.actor,connected as unknown as JsonValue);return connected;
   }
   private async store(actor:Actor,ownerId:string,input:ConnectInput,state:ConnectionState,previous:ResourceRow|null):Promise<ConnectionResult> {
     await this.allowed(actor,ownerId,input);
@@ -149,6 +169,7 @@ export class Services {
     const id=previous?.id ?? randomUUID(),privateData=await this.vault.encrypt(state,'resource:'+id);
     const references=[...(this.catalog.definitions.has(input.serviceId)?[]:[input.serviceId]),...(data.appId?[data.appId]:[])];
     const row=await this.resources.db.transaction(async connection=>{
+      await this.checkApproval?.(actor,connection);
       const row=previous?await this.resources.update(previous,{name:input.name ?? previous.name,data,privateData},connection):await this.resources.insert(ownerId,'connection',input.name ?? state.service.name+' · '+account,data,{id,privateData},connection);
       await this.resources.references(id,references,connection);
       await this.resources.audit.record(ownerId,actor.id,'connection.connect',id,{serviceId:input.serviceId},connection);

@@ -42,12 +42,12 @@ export class Authentication {
     return { actor: { id: principalId, sessionId: id, ...(credentialId ? { credentialId } : {}), ...(requestId ? { requestId } : {}) }, token: raw, expiresAt: iso(expires), returnTo: '/' };
   }
   async signout(actor: Actor | null) { if (actor?.sessionId) await this.db.pool.query('DELETE FROM sessions WHERE id=$1', [actor.sessionId]); }
-  async issueKey(principalId: string, name: string, expiresAt: string | null = null, environmentId: string | null = null, connection: Queryable = this.db.pool) {
+  async issueKey(principalId: string, name: string, expiresAt: string | null = null, environmentId: string | null = null, connection: Queryable = this.db.pool, encryptionKey?:PublicEncryptionKey) {
     const raw = 'fk_' + token(), id = randomUUID();
     const count = await this.db.one<{ count: string }>('SELECT count(*) FROM credentials WHERE principal_id=$1', [principalId], connection);
     if (Number(count?.count) >= 100) fail(409, 'credential_limit', 'Remove an unused credential before adding another.');
-    const result = await this.db.one<CredentialRow>(`INSERT INTO credentials(id,principal_id,kind,name,identifier,expires_at,environment_id)
-      VALUES($1,$2,'key',$3,$4,$5,$6) RETURNING *`, [id, principalId, name, digest(raw), expiresAt, environmentId], connection);
+    const result = await this.db.one<CredentialRow>(`INSERT INTO credentials(id,principal_id,kind,name,identifier,expires_at,environment_id,data)
+      VALUES($1,$2,'key',$3,$4,$5,$6,$7) RETURNING *`, [id, principalId, name, digest(raw), expiresAt, environmentId,JSON.stringify(encryptionKey?{publicKey:PublicKey.parse(encryptionKey)}:{})], connection);
     return { credential: this.credentialView(required(result)), token: raw };
   }
   async enroll(name: string, key: PublicEncryptionKey) {
@@ -75,15 +75,16 @@ export class Authentication {
       await this.audit.record(principalId, actor.id, 'credential.remove', id, {}, connection);
     });
   }
-  async beginEmail(address: string, browser: string, returnTo = '/', locale: 'ja'|'en' = 'ja', actor?: Actor, principalId?: string) {
+  async beginEmail(address: string, browser: string, returnTo = '/', locale: 'ja'|'en' = 'ja', actor?: Actor, principalId?: string, mergeTo?:string) {
     if (!this.mailer.enabled) fail(503, 'email_unavailable', 'Email sign-in is not configured.');
     const email = z.email().max(254).parse(address).trim().toLowerCase();
     if (principalId) { if (!actor) fail(401, 'unauthenticated', 'Sign in to add an email address.'); await this.authorization.requirePrincipal(actor, principalId, 'credentials'); }
+    if(mergeTo&&(!actor||actor.id!==mergeTo||actor.requestId))fail(403,'forbidden','Sign in to the account you want to keep.');
     const browserHash = digest(browser);
     const recent = await this.db.one<{ created_at: Date }>("SELECT created_at FROM challenges WHERE kind='email' AND data->>'email'=$1 AND created_at>now()-interval '1 minute' ORDER BY created_at DESC LIMIT 1", [email]);
     if (recent) fail(429, 'wait_before_retry', 'Wait a minute before sending another email.');
     const id = randomUUID(), secret = token(), expires = new Date(Date.now() + 15 * 60_000), path = this.returnTo(returnTo);
-    await this.db.pool.query("INSERT INTO challenges(id,kind,browser_hash,principal_id,data,expires_at) VALUES($1,'email',$2,$3,$4,$5)", [id, browserHash, principalId ?? null, JSON.stringify({ email, tokenHash: digest(secret), returnTo: path }), expires]);
+    await this.db.pool.query("INSERT INTO challenges(id,kind,browser_hash,principal_id,data,expires_at) VALUES($1,'email',$2,$3,$4,$5)", [id, browserHash, principalId ?? null, JSON.stringify({ email, tokenHash: digest(secret), returnTo: path,...(mergeTo?{mergeTo}:{}) }), expires]);
     const link = new URL('/signin/email', this.config.origin); link.hash = new URLSearchParams({ challenge: id, token: secret }).toString();
     try { await this.mailer.send(email, link.href, locale); }
     catch { await this.db.pool.query('DELETE FROM challenges WHERE id=$1', [id]); fail(502, 'email_failed', 'The email could not be sent. Try again.'); }
@@ -93,13 +94,20 @@ export class Authentication {
     const row = await this.db.one<ChallengeRow>("SELECT * FROM challenges WHERE kind='email' AND browser_hash=$1 AND expires_at>now() ORDER BY created_at DESC LIMIT 1", [digest(browser)]);
     return row ? { email: String(row.data.email), expiresAt: iso(row.expires_at) } : null;
   }
-  async verifyEmail(id: string, secret: string): Promise<SigninResult | { attached: true; returnTo: string }> {
+  async verifyEmail(id: string, secret: string): Promise<SigninResult | { attached: true; returnTo: string } | {mergeProof:string;returnTo:string}> {
     const attempted = await this.db.one<ChallengeRow>("UPDATE challenges SET attempts=attempts+1 WHERE id=$1 AND kind='email' AND expires_at>now() AND attempts<5 RETURNING *", [id]);
     if (!attempted || attempted.data.tokenHash !== digest(secret)) fail(400, 'invalid_link', 'This link is invalid or has expired.');
     return this.db.transaction(async connection => {
       const challenge = required(await this.db.one<ChallengeRow>('DELETE FROM challenges WHERE id=$1 RETURNING *', [id], connection), 'This link has already been used.');
       const email = String(challenge.data.email);
       let credential = await this.db.one<CredentialRow>("SELECT * FROM credentials WHERE kind='email' AND identifier=$1", [email], connection);
+      if(typeof challenge.data.mergeTo==='string') {
+        if(!credential)fail(400,'account_not_found','This email address is not registered.');
+        if(credential.principal_id===challenge.data.mergeTo)fail(400,'same_account','This address already belongs to the account you are keeping.');
+        const proof=randomUUID();
+        await connection.query("INSERT INTO challenges(id,kind,principal_id,data,expires_at) VALUES($1,'merge',$2,$3,now()+interval '10 minutes')",[proof,challenge.data.mergeTo,JSON.stringify({from:credential.principal_id,credentialId:credential.id})]);
+        return {mergeProof:proof,returnTo:'/account?merge='+proof};
+      }
       if (challenge.principal_id) {
         if (credential && credential.principal_id !== challenge.principal_id) fail(409, 'email_in_use', 'This address belongs to another principal. Merge the accounts to use it here.');
         if (!credential) await connection.query("INSERT INTO credentials(id,principal_id,kind,name,identifier) VALUES($1,$2,'email',$3,$3)", [randomUUID(), challenge.principal_id, email]);
@@ -161,7 +169,8 @@ export class Authentication {
       try { verification = await verifyAuthenticationResponse({ response, expectedChallenge: String(row.data.challenge), expectedOrigin: this.config.origin, expectedRPID: this.rpId, requireUserVerification: true, credential: { id: credential.identifier, publicKey: new Uint8Array(Buffer.from(credential.data.publicKey, 'base64url')), counter: credential.data.counter, transports: credential.data.transports } }); }
       catch { fail(400, 'invalid_passkey', 'The passkey could not be verified.'); }
       if (!verification.verified) fail(400, 'invalid_passkey', 'The passkey could not be verified.');
-      await this.db.pool.query('UPDATE credentials SET data=$2,last_used_at=now() WHERE id=$1', [credential.id, JSON.stringify({ ...credential.data, counter: verification.authenticationInfo.newCounter })]);
+      const changed=await this.db.pool.query("UPDATE credentials SET data=$2,last_used_at=now() WHERE id=$1 AND (data->>'counter')::bigint=$3", [credential.id, JSON.stringify({ ...credential.data, counter: verification.authenticationInfo.newCounter }),credential.data.counter]);
+      if(!changed.rowCount)fail(409,'passkey_changed','Another passkey operation completed. Try again.');
       principalId = credential.principal_id; credentialId = credential.id; wrappedKey = credential.private_wrap;
       await this.audit.record(principalId, principalId, 'session.signin', credentialId);
     }

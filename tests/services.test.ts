@@ -56,7 +56,7 @@ test('シークレットをHTTPヘッダーに渡し、返された秘密値を�
   await assert.rejects(()=>f.inputs.text(owner.actor,{kind:'secret',id}),{code:'forbidden'});
 });
 
-test('関数だけを共有した相手が固定した処理を実行し、所有者の接続情報を取得しない',async t=>{
+test('共有された関数の実行を許可し、所有者の接続情報の取得を拒否する',async t=>{
   const f=await setup();t.after(()=>f.close());const owner=await f.person(),caller=await f.person('Caller');
   const connection=await f.services.begin(owner.actor,owner.actor.id,ConnectionInput.parse({serviceId:'github',scheme:'token',fields:{token:'function-private-token'}}),'browser');
   assert.equal(connection.kind,'connected');if(connection.kind!=='connected')return;

@@ -104,7 +104,7 @@ export const NewResource = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('function'), name: Name, definition: FunctionDefinition }).strict(),
 ]);
 export type NewResourceInput = z.infer<typeof NewResource>;
-export const UpdateResource = z.object({ version: z.number().int().positive(), name: Name.optional(), sealed: Sealed.optional(), bytes: z.number().int().nonnegative().optional(), definition: z.union([ServiceDefinition, FunctionDefinition]).optional(), clientId: z.string().optional(), clientSecret: z.string().optional(), fields: z.record(z.string(), z.string()).optional() }).strict();
+export const UpdateResource = z.object({ version: z.number().int().positive(), name: Name.optional(), sealed: Sealed.optional(), bytes: z.number().int().nonnegative().max(1_000_000).optional(), allowUse:z.boolean().optional(), definition: z.union([ServiceDefinition, FunctionDefinition]).optional(), clientId: z.string().optional(), clientSecret: z.string().optional(), fields: z.record(z.string(), z.string()).optional() }).strict();
 
 export const RunState = z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled']);
 export const Command = z.object({ command: z.array(z.string().max(8192)).min(1).max(100), stdin: z.string().max(1_000_000).optional(), timeoutSeconds: z.number().int().min(1).max(3600).default(60), inputs: z.array(Input).max(32).default([]) }).strict();
@@ -119,7 +119,7 @@ export type RunView = z.infer<typeof Run>;
 export const Operation = z.object({ method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']), path: z.string().startsWith('/api/').max(2048), body: Json.optional(), inputs: z.array(z.object({ pointer: z.string(), label: z.string().min(1).max(100), secret: z.boolean().default(false), multiline: z.boolean().default(false), site: z.url().optional() })).max(16).default([]) }).strict();
 export type RequestedOperation = z.infer<typeof Operation>;
 export const RequestInput = z.object({ to: Id.optional(), message: z.string().max(1000).default(''), operations: z.array(Operation).min(1).max(8), expiresInMinutes: z.number().int().min(1).max(1440).default(30) }).strict();
-export const ApprovalRequest = z.object({ id: Id, from: Principal.pick({ id: true, name: true }), to: Principal.pick({ id: true, name: true }).nullable(), message: z.string(), operations: z.array(Operation), state: z.enum(['pending', 'running', 'approved', 'declined', 'cancelled', 'expired']), results: z.array(Json.nullable()), createdAt: Time, expiresAt: Time, url: z.url(), code: z.string().optional() });
+export const ApprovalRequest = z.object({ id: Id, from: Principal.pick({ id: true, name: true }), to: Principal.pick({ id: true, name: true }).nullable(), message: z.string(), operations: z.array(Operation), state: z.enum(['pending', 'running', 'approved', 'declined', 'cancelled', 'expired']), results: z.array(Json.nullable()), createdAt: Time, expiresAt: Time, url: z.url(), code: z.string().optional(), continueUrl:z.url().nullable(), canRespond:z.boolean() });
 export type ApprovalView = z.infer<typeof ApprovalRequest>;
 export const Payment = z.object({ available: z.boolean(), active: z.boolean(), payer: Principal.pick({ id: true, name: true }).nullable() });
 export const Usage = z.object({ storageBytes: z.number().nonnegative(), storageLimit: z.number().positive(), computeSeconds: z.number().nonnegative(), computeLimit: z.number().positive(), month: z.string() });

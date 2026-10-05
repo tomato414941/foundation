@@ -6,6 +6,7 @@ import type { InjectionInput, SourceReference, JsonValue } from '../shared/contr
 import { atPointer, textValue } from '../shared/values.js';
 import { decode, encode } from '../shared/encryption.js';
 import { fail } from './errors.js';
+import { PublicKey } from '../shared/contracts.js';
 
 export interface ProcessInputs { environment:Record<string,string>;files:Record<string,string>;sensitive:string[] }
 export class Inputs {
@@ -45,9 +46,11 @@ export class Inputs {
   }
   async deliver(actor:Actor,inputs:InjectionInput[]) {
     const principal=await this.resources.principals.get(actor.id);
-    if(!principal.public_key) fail(409,'encryption_key_required','Register an encryption key to receive process inputs.');
+    const credential=actor.credentialId?await this.resources.db.one<{data:{publicKey?:unknown}}>("SELECT data FROM credentials WHERE id=$1 AND principal_id=$2 AND kind='key'",[actor.credentialId,actor.id]):null;
+    const publicKey=credential?.data.publicKey?PublicKey.parse(credential.data.publicKey):principal.public_key;
+    if(!publicKey) fail(409,'encryption_key_required','Register an encryption key to receive process inputs.');
     const result=await this.process(actor,inputs),id=randomUUID(),context='injection:'+id;
-    const sealed=await this.resources.identity.seal(encode(JSON.stringify({environment:result.environment,files:result.files})),[{id:actor.id,publicKey:principal.public_key}],context);
+    const sealed=await this.resources.identity.seal(encode(JSON.stringify({environment:result.environment,files:result.files})),[{id:actor.id,publicKey}],context);
     await this.resources.audit.record(actor.id,actor.id,'inputs.deliver',null,{resources:inputs.map(input=>input.source.id)});
     return {id,context,sealed};
   }
