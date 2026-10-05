@@ -10,6 +10,7 @@ import { EnvironmentInput, EnvironmentResource } from '../shared/contracts.js';
 import type { EnvironmentOptions } from '../shared/contracts.js';
 import { fail, failure, required } from './errors.js';
 import { newEncryptionKey } from '../shared/encryption.js';
+import { redact } from '../shared/values.js';
 
 export class Environments {
   constructor(readonly resources:Resources,readonly authentication:Authentication,readonly billing:Billing,readonly runner:Runner,readonly vault:Vault,readonly config:Configuration) {}
@@ -54,7 +55,14 @@ export class Environments {
     const state=required(await this.resources.db.one<{machine_id:string|null}>('SELECT machine_id FROM environment_jobs WHERE resource_id=$1',[id]));
     if(!state.machine_id)fail(409,'environment_unavailable','Wait for the environment to start.');
     const heartbeat=setInterval(()=>{void this.resources.db.pool.query("UPDATE resources SET data=jsonb_set(data,'{lastActiveAt}',to_jsonb($2::text)) WHERE id=$1 AND data->>'state'='running'",[id,new Date().toISOString()]).catch(()=>{});},10_000);heartbeat.unref();
-    try {return await this.runner.execute(state.machine_id,{...job,timeoutSeconds:Math.min(job.timeoutSeconds,remaining)},signal);}
+    try {
+      const result=await this.runner.execute(state.machine_id,{...job,timeoutSeconds:Math.min(job.timeoutSeconds,remaining)},signal);
+      const privateData=await this.vault.decrypt<{environment:Record<string,string>}>(required(row.private_data),'resource:'+id);
+      const token=privateData.environment.FOUNDATION_TOKEN,key=privateData.environment.FOUNDATION_PRIVATE_KEY;
+      const sensitive=[token,key].filter((value):value is string=>Boolean(value));
+      if(key){const decoded=Buffer.from(key,'base64url').toString('utf8');sensitive.push(decoded,String((JSON.parse(decoded) as {d:string}).d));}
+      return {...result,stdout:redact(result.stdout,sensitive),stderr:redact(result.stderr,sensitive)};
+    }
     catch(error) {if(signal.aborted)await this.requestStop(id);throw error;}
     finally {clearInterval(heartbeat);await this.resources.db.pool.query("UPDATE resources SET data=jsonb_set(data,'{lastActiveAt}',to_jsonb($2::text)) WHERE id=$1",[id,new Date().toISOString()]);}
   }

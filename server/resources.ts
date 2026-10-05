@@ -35,7 +35,8 @@ export class Resources {
     return result;
   }
   async view(actor: Actor, row: ResourceRow, permissions?: ActionName[]): Promise<ResourceView> {
-    return Resource.parse({ id: row.id, ownerId: row.owner_id, kind: row.kind, name: row.name, data: row.data, version: row.version, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at), permissions: permissions ?? await this.authorization.resourceActions(actor, row) });
+    const data=row.kind==='secret'?{...row.data,allowUse:await this.authorization.resource({id:this.identity.id},row,'use')}:row.data;
+    return Resource.parse({ id: row.id, ownerId: row.owner_id, kind: row.kind, name: row.name, data, version: row.version, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at), permissions: permissions ?? await this.authorization.resourceActions(actor, row) });
   }
   async list(actor: Actor, ownerId: string, input: { kind?: ResourceKindName; query?: string; limit?: number; after?: string } = {}) {
     await this.authorization.requirePrincipal(actor, ownerId, 'read');

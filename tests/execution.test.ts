@@ -16,7 +16,9 @@ test('実行環境を起動し、一時的な認証情報を停止時に失効�
   const row=await c.environments.create(owner.actor,owner.actor.id,EnvironmentInput.parse({identityId:owner.actor.id,lifetime:{maxSeconds:120,idleSeconds:60}}));
   assert.equal(row.data.state,'starting');await c.environments.tick();assert.equal((await c.resources.get(row.id)).data.state,'running');
   const environment=runner.machines.get(row.id)!.environment;assert.equal((await c.authentication.authenticate(environment.FOUNDATION_TOKEN))?.id,owner.actor.id);
+  runner.result={exitCode:0,stdout:environment.FOUNDATION_TOKEN+' '+environment.FOUNDATION_PRIVATE_KEY,stderr:'',timedOut:false,truncated:false};
   const run=await c.runs.create(owner.actor,owner.actor.id,RunInput.parse({kind:'command',environmentId:row.id,command:['node','--version']}));await c.runs.tick();assert.equal((await c.runs.get(owner.actor,run.id)).state,'succeeded');
+  assert.equal((await c.runs.get(owner.actor,run.id)).result&&((await c.runs.get(owner.actor,run.id)).result as {stdout:string}).stdout,'[redacted] [redacted]');
   await c.environments.stop(owner.actor,await c.resources.get(row.id));assert.equal(await c.authentication.authenticate(environment.FOUNDATION_TOKEN),null);
   await c.environments.tick();assert.equal((await c.resources.get(row.id)).data.state,'stopped');assert.equal(runner.machines.size,0);
   const usage=await c.billing.usage(owner.actor.id);assert.ok(usage.computeSeconds>=1);await c.billing.report();await c.billing.report();assert.equal(payments.events.length,1);
