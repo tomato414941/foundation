@@ -134,6 +134,72 @@ test('ファイルを更新し、同時編集と保存容量の超過を拒否�
   assert.equal(storage.files.size, 0);
 });
 
+test('支払い登録不要の利用枠を複数プリンシパルで共有し、保存容量と計算時間と同時起動数を制限する', async (t) => {
+  const f = await fixture();
+  t.after(f.close);
+  const c = await createContext(
+    {
+      ...f.config,
+      FOUNDATION_BILLING_MODE: 'included',
+      FOUNDATION_INCLUDED_STORAGE_BYTES: 5,
+      FOUNDATION_INCLUDED_COMPUTE_SECONDS: 180,
+      FOUNDATION_INCLUDED_ENVIRONMENTS: 2,
+    },
+    { db: f.db, storage: new MemoryObjects(), runner: new MemoryRunner() },
+  );
+  const owners = [await f.person('First'), await f.person('Second')];
+  assert.equal((await c.billing.payment(owners[0]!.actor, owners[0]!.actor.id)).required, false);
+  const files = await Promise.allSettled(
+    owners.map(({ actor }) => c.objects.upload(actor, actor.id, 'note.txt', Buffer.from('abc'), 'text/plain')),
+  );
+  assert.equal(files.filter((result) => result.status === 'fulfilled').length, 1);
+  const rejected = files.find((result) => result.status === 'rejected');
+  assert.ok(rejected?.status === 'rejected');
+  assert.equal(rejected.reason.code, 'storage_capacity');
+  for (const [index, result] of files.entries()) {
+    if (result.status === 'fulfilled') {
+      assert.equal(Buffer.from(await c.objects.content(owners[index]!.actor, result.value)).toString(), 'abc');
+      await c.objects.remove(owners[index]!.actor, result.value);
+    }
+  }
+  await c.objects.upload(owners[1]!.actor, owners[1]!.actor.id, 'all.txt', Buffer.from('abcde'), 'text/plain');
+  const start = (index: number, seconds: number) => {
+    const actor = owners[index]!.actor;
+    return c.environments.create(
+      actor,
+      actor.id,
+      EnvironmentInput.parse({ lifetime: { maxSeconds: seconds, idleSeconds: 60 } }),
+    );
+  };
+  const first = await start(0, 120);
+  await assert.rejects(start(1, 120), { code: 'compute_capacity' });
+  const second = await start(1, 60);
+  await assert.rejects(start(0, 60), { code: 'environment_capacity' });
+  while (await c.environments.tick()) {}
+  await c.environments.stop(owners[0]!.actor, await c.resources.get(first.id));
+  await c.environments.stop(owners[1]!.actor, await c.resources.get(second.id));
+  while (await c.environments.tick()) {}
+  assert.equal((await start(1, 120)).data.state, 'starting');
+});
+
+test('支払い登録が必要な環境では、支払いの準備が整ってからファイル保存を許可する', async (t) => {
+  const f = await fixture();
+  t.after(f.close);
+  const owner = await f.person(),
+    storage = new MemoryObjects(),
+    unconfigured = await createContext(f.config, { db: f.db, storage });
+  assert.equal((await unconfigured.billing.payment(owner.actor, owner.actor.id)).required, true);
+  await assert.rejects(
+    unconfigured.objects.upload(owner.actor, owner.actor.id, 'note.txt', Buffer.from('abc'), 'text/plain'),
+    { code: 'payments_unavailable' },
+  );
+  const configured = await createContext(f.config, { db: f.db, storage, payments: new MemoryPayments() });
+  await assert.rejects(
+    configured.objects.upload(owner.actor, owner.actor.id, 'note.txt', Buffer.from('abc'), 'text/plain'),
+    { code: 'payment_required' },
+  );
+});
+
 test('ワーカーが実行を一度だけ取得し、再起動で中断した処理を終了として記録する', async (t) => {
   const f = await fixture(),
     c = await createContext(f.config, {

@@ -294,7 +294,7 @@ export class Services {
         app,
         id,
         consent.verifier,
-        this.config.origin + '/api/connections/callback',
+        this.config.origin + '/oauth/callback',
         scopes,
       ),
     };
@@ -337,7 +337,7 @@ export class Services {
       consent.app,
       code,
       consent.verifier,
-      this.config.origin + '/api/connections/callback',
+      this.config.origin + '/oauth/callback',
       scopes,
       old?.oauth,
     );

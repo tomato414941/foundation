@@ -294,7 +294,7 @@ export default function ResourceForm() {
     >
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
       {unavailable && <Alert severity="info">{t('featureUnavailable')}</Alert>}
-      {data.payment && !data.payment.active && (
+      {data.payment?.required && !data.payment.active && (
         <Alert
           severity="info"
           action={
@@ -523,7 +523,7 @@ export default function ResourceForm() {
                           label={t('callbackUrl')}
                           value={
                             typeof window !== 'undefined'
-                              ? window.location.origin + '/api/connections/callback'
+                              ? window.location.origin + '/oauth/callback'
                               : ''
                           }
                           slotProps={{ input: { readOnly: true } }}

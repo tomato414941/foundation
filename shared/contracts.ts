@@ -461,6 +461,7 @@ export const ApprovalRequest = z.object({
 export type ApprovalView = z.infer<typeof ApprovalRequest>;
 export const Payment = z.object({
   available: z.boolean(),
+  required: z.boolean(),
   active: z.boolean(),
   payer: Principal.pick({ id: true, name: true }).nullable(),
 });

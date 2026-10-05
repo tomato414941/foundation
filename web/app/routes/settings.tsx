@@ -221,7 +221,9 @@ export default function SettingsPage() {
       {data.payment && data.usage && (
         <>
           <Panel title={t('billing')}>
-            <Detail label={t('status')}>{t(data.payment.active ? 'active' : 'inactive')}</Detail>
+            <Detail label={t('status')}>
+              {t(data.payment.required ? (data.payment.active ? 'active' : 'inactive') : 'paymentNotRequired')}
+            </Detail>
             <Detail label={t('payer')}>{data.payment.payer?.name ?? '—'}</Detail>
             {data.payment.available ? (
               <Form method="post">
@@ -235,7 +237,9 @@ export default function SettingsPage() {
                 </Button>
               </Form>
             ) : (
-              <Alert severity="info">{t('featureUnavailable')}</Alert>
+              <Alert severity="info">
+                {t(data.payment.required ? 'featureUnavailable' : 'paymentIncluded')}
+              </Alert>
             )}
           </Panel>
           <Panel title={t('usage') + ' — ' + data.usage.month}>

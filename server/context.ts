@@ -53,7 +53,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     services = new Services(resources, catalog, vault, oauth, config, deps.roles),
     inputs = new Inputs(resources, services),
     http = new HttpExecution(resources, inputs, transport, config.origin);
-  const billing = new Billing(db, authorization, audit, deps.payments ?? new StripePayments(config)),
+  const billing = new Billing(db, authorization, audit, deps.payments ?? new StripePayments(config), config),
     objects = new Objects(resources, billing, deps.storage ?? new S3Objects(config)),
     environments = new Environments(
       resources,

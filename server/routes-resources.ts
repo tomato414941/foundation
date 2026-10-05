@@ -324,7 +324,7 @@ export async function routesResources(app: ApiApp, context: Context) {
     (request) => services.begin(actor(request), request.params.id, request.body, request.browser),
   );
   app.get(
-    '/api/connections/callback',
+    '/oauth/callback',
     {
       schema: {
         querystring: z

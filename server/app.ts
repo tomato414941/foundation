@@ -156,7 +156,7 @@ export async function buildApp(context: Context) {
     });
   };
   app.addHook('onRequest', async (request, reply) => {
-    if (!request.url.startsWith('/api/')) return;
+    if (!request.url.startsWith('/api/') && request.url.split('?')[0] !== '/oauth/callback') return;
     reply.header('cache-control', 'no-store');
     const bearer = request.headers.authorization;
     if (bearer && !/^Bearer [A-Za-z0-9_-]+$/.test(bearer))
@@ -190,7 +190,7 @@ export async function buildApp(context: Context) {
         !path.startsWith(ownRequest + '/') &&
         !/^\/api\/requests\/[^/]+\/redeem$/.test(path) &&
         !/^\/api\/connections\/[^/]+\/(review|role)$/.test(path) &&
-        path !== '/api/connections/callback'
+        path !== '/oauth/callback'
       )
         fail(403, 'forbidden', 'This link can open only its own request.');
     }

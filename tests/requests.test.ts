@@ -234,7 +234,7 @@ test('OAuthの完了後に依頼を再開し、取り消された依頼の接続
   const first = await ask('Allowed connection'),
     state = new URL(first.continueUrl).searchParams.get('state');
   const callback = await app.inject({
-    url: '/api/connections/callback?state=' + state + '&code=authorization-code',
+    url: '/oauth/callback?state=' + state + '&code=authorization-code',
     headers,
   });
   assert.equal(callback.statusCode, 302, callback.body);
@@ -244,7 +244,7 @@ test('OAuthの完了後に依頼を再開し、取り消された依頼の接続
   await context.requests.decline(owner.actor, second.id);
   await app.inject({
     url:
-      '/api/connections/callback?state=' +
+      '/oauth/callback?state=' +
       new URL(second.continueUrl).searchParams.get('state') +
       '&code=authorization-code',
     headers,

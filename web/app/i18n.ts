@@ -183,6 +183,8 @@ const words: Record<string, [string, string]> = {
     '利用を始めるには、支払い方法を登録してください。',
     'Add a payment method to start using this feature.',
   ],
+  paymentNotRequired: ['支払い登録不要', 'No payment registration required'],
+  paymentIncluded: ['利用枠の範囲内で利用できます。', 'You can use the service within the available limits.'],
   featureUnavailable: ['この機能は現在利用できません。', 'This feature is currently unavailable.'],
   command: ['コマンド', 'Command'],
   commandHelp: [
@@ -349,6 +351,9 @@ const words: Record<string, [string, string]> = {
   ],
   'errors.payment_required': ['支払い方法を登録してください。', 'Add a payment method to continue.'],
   'errors.quota_exceeded': ['使用量の上限に達しました。', 'The usage limit has been reached.'],
+  'errors.storage_capacity': ['保存できる容量の上限に達しました。', 'The available storage capacity has been reached.'],
+  'errors.compute_capacity': ['今月の計算時間の上限に達しました。', 'The available monthly compute capacity has been reached.'],
+  'errors.environment_capacity': ['実行環境がすべて使用中です。しばらくしてからお試しください。', 'All available environments are in use. Try again later.'],
   'errors.invalid_challenge': [
     'リンクの期限が切れているか、すでに使用されています。やり直してください。',
     'This link expired or was already used. Start again.',

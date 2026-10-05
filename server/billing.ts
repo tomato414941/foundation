@@ -36,7 +36,8 @@ export class StripePayments implements PaymentProvider {
   readonly enabled: boolean;
   constructor(readonly config: Configuration) {
     this.enabled = Boolean(
-      config.STRIPE_SECRET_KEY &&
+      config.FOUNDATION_BILLING_MODE === 'required' &&
+        config.STRIPE_SECRET_KEY &&
         config.STRIPE_COMPUTE_PRICE &&
         config.STRIPE_STORAGE_PRICE &&
         config.STRIPE_WEBHOOK_SECRET,
@@ -145,6 +146,7 @@ export class Billing {
     readonly authorization: Authorization,
     readonly audit: Audit,
     readonly provider: PaymentProvider,
+    readonly config: Configuration,
   ) {}
   async payer(principalId: string, connection: Queryable = this.db.pool) {
     const chain = await this.db.all<{ id: string; depth: number }>(
@@ -171,14 +173,16 @@ export class Billing {
     );
     return {
       available: this.provider.enabled,
+      required: this.config.FOUNDATION_BILLING_MODE === 'required',
       active: ['active', 'trialing'].includes(account?.status ?? ''),
       payer: principal,
     };
   }
   async requirePayment(principalId: string, connection: Queryable = this.db.pool) {
+    const id = await this.payer(principalId, connection);
+    if (this.config.FOUNDATION_BILLING_MODE === 'included') return id;
     if (!this.provider.enabled) fail(503, 'payments_unavailable', 'Payments are not configured.');
-    const id = await this.payer(principalId, connection),
-      account = await this.db.one<{ status: string }>(
+    const account = await this.db.one<{ status: string }>(
         'SELECT status FROM payment_accounts WHERE principal_id=$1',
         [id],
         connection,
@@ -212,6 +216,10 @@ export class Billing {
     };
   }
   async reserve(principalId: string, kind: 'storage' | 'compute', amount: number, connection: Queryable) {
+    if (this.config.FOUNDATION_BILLING_MODE === 'included') {
+      await connection.query('SELECT pg_advisory_xact_lock(736023746)');
+      await this.reserveIncluded(kind, amount, connection);
+    }
     await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
     await this.requirePayment(principalId, connection);
     const usage = await this.usage(principalId, connection);
@@ -225,6 +233,36 @@ export class Billing {
       );
       if (usage.computeSeconds + Number(reserved?.seconds ?? 0) + amount > usage.computeLimit)
         fail(409, 'compute_limit', 'Increase the monthly compute limit or shorten the environment lifetime.');
+    }
+  }
+  private async reserveIncluded(kind: 'storage' | 'compute', amount: number, connection: Queryable) {
+    if (kind === 'storage' && amount > 0) {
+      const total = await this.db.one<{ bytes: string }>(
+        `SELECT coalesce(sum(CASE kind WHEN 'object' THEN (data->>'size')::bigint WHEN 'secret' THEN (data->>'bytes')::bigint ELSE 0 END),0) bytes FROM resources`,
+        [],
+        connection,
+      );
+      if (Number(total?.bytes ?? 0) + amount > this.config.FOUNDATION_INCLUDED_STORAGE_BYTES)
+        fail(409, 'storage_capacity', 'The available storage capacity has been reached.');
+    }
+    if (kind === 'compute') {
+      const active = await this.db.one<{ count: string; seconds: string }>(
+        `SELECT count(*) count,coalesce(sum((data->'lifetime'->>'maxSeconds')::bigint * CASE data->>'size' WHEN 'large' THEN 4 WHEN 'medium' THEN 2 ELSE 1 END),0) seconds FROM resources WHERE kind='environment' AND data->>'state' IN ('starting','running','stopping')`,
+        [],
+        connection,
+      );
+      if (Number(active?.count ?? 0) >= this.config.FOUNDATION_INCLUDED_ENVIRONMENTS)
+        fail(409, 'environment_capacity', 'All available environments are currently in use.');
+      const used = await this.db.one<{ seconds: string }>(
+        "SELECT coalesce(sum(amount),0) seconds FROM billing_events WHERE meter='compute' AND created_at>=date_trunc('month',now())",
+        [],
+        connection,
+      );
+      if (
+        Number(used?.seconds ?? 0) + Number(active?.seconds ?? 0) + amount >
+        this.config.FOUNDATION_INCLUDED_COMPUTE_SECONDS
+      )
+        fail(409, 'compute_capacity', 'The available monthly compute capacity has been reached.');
     }
   }
   async limits(actor: Actor, id: string, storageBytes: number, computeSeconds: number) {
