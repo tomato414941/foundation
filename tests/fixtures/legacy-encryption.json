@@ -1,0 +1,36 @@
+{
+  "principalId": "89113225-8ac3-48d6-9780-4e6e1ab13d36",
+  "resourceId": "6c2a3bc2-f1cd-4fd8-8588-792a93354fa3",
+  "plaintext": "Existing encrypted content / 保存済みの秘密",
+  "publicKey": {
+    "kty": "OKP",
+    "crv": "X25519",
+    "x": "_hdIkeJIvPyTSnIX0ZT1OrECyTKd20yw15AwPwg15wE"
+  },
+  "privateKey": {
+    "kty": "OKP",
+    "crv": "X25519",
+    "x": "_hdIkeJIvPyTSnIX0ZT1OrECyTKd20yw15AwPwg15wE",
+    "d": "2ElkTjj5iBUTU2fSJ32J8G6FTSlpZ16aBpA2eTrRDkE"
+  },
+  "prf": "h7NF8tddEjTQIuGc5YSkLhnqCvo5o5AwfGtO-Zr4jPs",
+  "wrappedKey": "x25519:pzUxM8puwGdoed8tECbjM-YmhhRJ9p0oaohbNxu6vvi0JHVOVH-bjgFDJh_J0eag-VdT5VcGMVAGqx15",
+  "sealed": {
+    "format": "foundation-x25519-v1",
+    "aad": "cmVzb3VyY2U6NmMyYTNiYzItZjFjZC00ZmQ4LTg1ODgtNzkyYTkzMzU0ZmEz",
+    "ciphertext": "vc9_bpTp1V_x_d4pGMErasaNVmZ9dZuuVwc3q_BYXS9Is2QJv18Z8aIzwj1QKfmUO9mLf61kGeL02xplU1rgB2XU4kc9NytKYn-hU_xE",
+    "recipients": [
+      {
+        "encrypted_key": "FM-n-EZDleARuBr8w_Q0A4MvviaEKLx6qu9OzR3niHIMLvU_Ce642otlENEEWxc8utoyIqUvO_UA2g-COh7MtEPGsTAV87CHmJRid-DQy4uF8EMzYh01isPD3GY",
+        "header": {
+          "kid": "89113225-8ac3-48d6-9780-4e6e1ab13d36",
+          "publicKey": {
+            "kty": "OKP",
+            "crv": "X25519",
+            "x": "_hdIkeJIvPyTSnIX0ZT1OrECyTKd20yw15AwPwg15wE"
+          }
+        }
+      }
+    ]
+  }
+}

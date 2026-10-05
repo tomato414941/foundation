@@ -10,6 +10,7 @@ import {
 import type { JWK } from 'jose';
 import { PublicKey, Sealed } from './contracts.js';
 import type { PublicEncryptionKey, SealedContent } from './contracts.js';
+import { openLegacy, unwrapLegacy } from './legacy-encryption.js';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -61,6 +62,7 @@ export async function open(
     throw new Error('The encrypted content belongs to a different item.');
   const recipient = sealed.recipients.find((value) => value.header.kid === id);
   if (!recipient) throw new Error('This principal cannot decrypt the content.');
+  if ('format' in sealed) return openLegacy(sealed, privateKey, id);
   const key = privateKey instanceof CryptoKey ? privateKey : await importJWK(privateKey, agreement);
   const result = await generalDecrypt({ ...sealed, recipients: [recipient] }, key, {
     keyManagementAlgorithms: [agreement],
@@ -88,7 +90,8 @@ export async function wrap(privateKey: JWK, prf: Uint8Array, principalId: string
     .setProtectedHeader({ alg: 'dir', enc: encryption, sub: principalId })
     .encrypt(await wrappingKey(prf));
 }
-export async function unwrap(value: string, prf: Uint8Array, principalId: string): Promise<JWK> {
+export async function unwrap(value: string, prf: Uint8Array, principalId: string, publicKey?: PublicEncryptionKey | null): Promise<JWK> {
+  if (value.startsWith('x25519:')) return unwrapLegacy(value.slice(7), prf, publicKey);
   const result = await compactDecrypt(value, await wrappingKey(prf), {
     keyManagementAlgorithms: ['dir'],
     contentEncryptionAlgorithms: [encryption],

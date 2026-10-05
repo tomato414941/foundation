@@ -127,6 +127,42 @@ class BrowserTests(unittest.TestCase):
         resource_id = path.rsplit("/", 1)[1]
         self.assertEqual(reader.request.get(f"{ORIGIN}/api/resources/{resource_id}/secret").status, 403)
 
+    def test_既存のパスキーで暗号化データを開いて編集し再ログイン後も復号する(self):
+        page, principal = self.passkey_account("Existing account")
+        prf = page.evaluate("""async () => {
+            const credential = await navigator.credentials.get({publicKey: {
+                challenge: crypto.getRandomValues(new Uint8Array(32)),
+                rpId: location.hostname, userVerification: 'required',
+                extensions: {prf: {eval: {first: new TextEncoder().encode('foundation-key')}}}
+            }});
+            const result = credential.getClientExtensionResults().prf.results.first;
+            return btoa(String.fromCharCode(...new Uint8Array(result)))
+                .replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+        }""")
+        response = page.request.post(ORIGIN + "/__test/existing-encryption", data={"principalId": principal["id"], "prf": prf})
+        self.assertTrue(response.ok, response.text())
+        saved = response.json()
+        page.get_by_role("button", name="ログアウト", exact=True).click()
+        page.wait_for_url("**/signin")
+        page.get_by_role("button", name="パスキーでログイン", exact=True).click()
+        page.wait_for_url("**/p/**")
+        path = f"{ORIGIN}/p/{principal['id']}/secrets/{saved['id']}"
+        page.goto(path)
+        page.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value(saved["plaintext"])
+        page.get_by_role("link", name="編集", exact=True).click()
+        page.get_by_role("textbox", name="値", exact=True).fill("Edited existing secret")
+        page.get_by_role("button", name="保存", exact=True).click()
+        expect(page.get_by_role("heading", name="Existing secret", exact=True)).to_be_visible()
+        page.get_by_role("button", name="ログアウト", exact=True).click()
+        page.wait_for_url("**/signin")
+        page.get_by_role("button", name="パスキーでログイン", exact=True).click()
+        page.wait_for_url("**/p/**")
+        page.goto(path)
+        page.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("Edited existing secret")
+        page.screenshot(path=str(ARTIFACTS / "existing-encryption-ja.png"), full_page=True)
+
     def test_メンバー追加と所有者変更でシークレットを引き継ぐ(self):
         owner, principal = self.passkey_account("Project owner")
         member, recipient = self.passkey_account("Project member")

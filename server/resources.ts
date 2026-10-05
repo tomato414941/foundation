@@ -174,6 +174,7 @@ export class Resources {
     allowUse: boolean,
     connection: Queryable = this.db.pool,
   ) {
+    if ('format' in sealed) fail(400, 'invalid_envelope', 'Use JWE to save encrypted content.');
     if (sealed.aad !== base64url(encode('resource:' + id)))
       fail(400, 'invalid_envelope', 'Encrypt the content for this resource.');
     const recipients = await this.recipients(ownerId, connection);

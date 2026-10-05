@@ -491,7 +491,10 @@ export class Authentication {
           const current = await this.principals.get(principalId, connection);
           if (
             current.public_key &&
-            (current.public_key.x !== input.publicKey.x || current.public_key.y !== input.publicKey.y)
+            (current.public_key.kty !== input.publicKey.kty ||
+              current.public_key.x !== input.publicKey.x ||
+              (current.public_key.kty === 'EC' &&
+                (input.publicKey.kty !== 'EC' || current.public_key.y !== input.publicKey.y)))
           )
             fail(409, 'key_exists', 'The encryption key cannot be replaced.');
           if (!current.public_key)

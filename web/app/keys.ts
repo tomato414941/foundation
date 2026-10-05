@@ -9,11 +9,12 @@ import type { JWK } from 'jose';
 import type { PrincipalView, PublicEncryptionKey, SealedContent } from '../../shared/contracts';
 import { encode, hold, newEncryptionKey, open, seal, unwrap, wrap } from '../../shared/encryption';
 import { api, ApiFailure, session } from './api';
-import { KeySharingItem, listOf } from '../../shared/contracts';
+import { KeySharingItem, PublicKey, listOf } from '../../shared/contracts';
 
 const unlocked = new Map<string, JWK>();
 const held = new Map<string, CryptoKey>();
 const seed = encode('Foundation passkey encryption v1');
+const legacySeed = encode('foundation-key');
 type Verified = {
   principalId: string;
   credentialId: string;
@@ -63,9 +64,10 @@ export async function clearKeys() {
   held.clear();
   await stored('readwrite', (store) => store.clear()).catch(() => {});
 }
-function prf(credential: AuthenticationResponseJSON | RegistrationResponseJSON): Uint8Array | null {
-  const output = credential.clientExtensionResults as { prf?: { results?: { first?: ArrayBuffer } } };
-  return output.prf?.results?.first ? new Uint8Array(output.prf.results.first) : null;
+function prf(credential: AuthenticationResponseJSON | RegistrationResponseJSON, slot: 'first' | 'second' = 'first'): Uint8Array | null {
+  const output = credential.clientExtensionResults as { prf?: { results?: { first?: ArrayBuffer; second?: ArrayBuffer } } };
+  const value = output.prf?.results?.[slot];
+  return value ? new Uint8Array(value) : null;
 }
 function verificationCredential(credential: AuthenticationResponseJSON | RegistrationResponseJSON) {
   const { prf: _prf, ...extensions } = credential.clientExtensionResults as Record<string, unknown>;
@@ -78,11 +80,11 @@ async function assertion(principalId?: string, credentialId?: string) {
   );
   const options = {
     ...data.options,
-    extensions: { ...data.options.extensions, prf: { eval: { first: seed } } },
+    extensions: { ...data.options.extensions, prf: { eval: { first: seed, second: legacySeed } } },
     ...(credentialId ? { allowCredentials: [{ id: credentialId, type: 'public-key' as const }] } : {}),
   };
   const credential = await startAuthentication({ optionsJSON: options });
-  return { challengeId: data.challengeId, credential, secret: prf(credential) };
+  return { challengeId: data.challengeId, credential, secret: prf(credential), legacySecret: prf(credential, 'second') };
 }
 export async function authenticate(principalId?: string, credentialId?: string, wrapping?: JWK) {
   const proof = await assertion(principalId, credentialId);
@@ -92,15 +94,26 @@ export async function authenticate(principalId?: string, credentialId?: string, 
   });
   if (proof.secret) {
     if (result.wrappedKey) {
-      const key = await unwrap(result.wrappedKey, proof.secret, result.principalId).catch(() => {
+      const legacy = result.wrappedKey.startsWith('x25519:');
+      const secret = legacy ? proof.legacySecret : proof.secret;
+      if (!secret) throw new ApiFailure('key_unavailable');
+      const key = await unwrap(result.wrappedKey, secret, result.principalId, result.publicKey).catch(() => {
         throw new ApiFailure('key_unavailable');
       });
       await keep(result.principalId, key);
+      if (legacy) {
+        const wrappedKey = await wrap(key, proof.secret, result.principalId);
+        await api(`/principals/${result.principalId}/credentials/${result.credentialId}/wrap`, {
+          method: 'PUT', body: { wrappedKey },
+        });
+      }
     } else if (!result.publicKey || wrapping) {
       const pair = wrapping
         ? {
             privateKey: wrapping,
-            publicKey: { kty: 'EC' as const, crv: 'P-256' as const, x: wrapping.x!, y: wrapping.y! },
+            publicKey: PublicKey.parse(wrapping.kty === 'OKP'
+              ? { kty: 'OKP', crv: 'X25519', x: wrapping.x }
+              : { kty: 'EC', crv: 'P-256', x: wrapping.x, y: wrapping.y }),
           }
         : await newEncryptionKey();
       const wrappedKey = await wrap(pair.privateKey, proof.secret, result.principalId);
@@ -195,15 +208,16 @@ export async function sealSecret(
 }
 export async function mergeWithPasskey() {
   const proof = await assertion();
-  const result = await api<{ id: string; fromId: string; wrappedKey: string | null }>(
+  const result = await api<{ id: string; fromId: string; wrappedKey: string | null; publicKey: PublicEncryptionKey | null }>(
     '/account/merge/passkey',
     {
       method: 'POST',
       body: { challengeId: proof.challengeId, credential: verificationCredential(proof.credential) },
     },
   );
-  if (result.wrappedKey && proof.secret)
-    await keep(result.fromId, await unwrap(result.wrappedKey, proof.secret, result.fromId));
+  const secret = result.wrappedKey?.startsWith('x25519:') ? proof.legacySecret : proof.secret;
+  if (result.wrappedKey && secret)
+    await keep(result.fromId, await unwrap(result.wrappedKey, secret, result.fromId, result.publicKey));
   return result;
 }
 

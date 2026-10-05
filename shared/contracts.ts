@@ -39,7 +39,7 @@ export const ResourceKind = z.enum([
   'function',
 ]);
 export type ResourceKindName = z.infer<typeof ResourceKind>;
-export const PublicKey = z
+const EcKey = z
   .object({
     kty: z.literal('EC'),
     crv: z.literal('P-256'),
@@ -47,8 +47,10 @@ export const PublicKey = z
     y: z.string().min(40).max(50),
   })
   .strict();
+export const X25519Key = z.object({ kty: z.literal('OKP'), crv: z.literal('X25519'), x: z.string().length(43) }).strict();
+export const PublicKey = z.union([EcKey, X25519Key]);
 export type PublicEncryptionKey = z.infer<typeof PublicKey>;
-export const Sealed = z
+export const JweSealed = z
   .object({
     protected: z.string().max(2048),
     iv: z.string().max(64),
@@ -66,6 +68,17 @@ export const Sealed = z
       .max(100),
   })
   .strict();
+export const LegacySealed = z.object({
+  format: z.literal('foundation-x25519-v1'),
+  aad: z.string().max(2048),
+  ciphertext: z.string().max(2_000_000),
+  recipients: z.array(z.object({
+    encrypted_key: z.string().max(2048),
+    header: z.object({ kid: Id, publicKey: X25519Key }).strict(),
+  }).strict()).min(1).max(100),
+}).strict();
+export const Sealed = z.union([JweSealed, LegacySealed]);
+export type LegacySealedContent = z.infer<typeof LegacySealed>;
 export type SealedContent = z.infer<typeof Sealed>;
 export const Recipient = z.object({ id: Id, name: Name, publicKey: PublicKey });
 
