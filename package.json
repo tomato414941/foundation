@@ -8,16 +8,17 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "tsx watch --env-file-if-exists=.env server/main.ts",
+    "dev": "node --env-file-if-exists=.env scripts/dev.mjs",
     "dev:web": "react-router dev",
     "start": "node --env-file-if-exists=.env dist/server/main.js",
     "build": "npm run build:server && npm run build:web && npm run build:cli",
     "build:server": "tsc -p tsconfig.server.json && node scripts/copy-assets.mjs",
     "build:web": "react-router build",
-    "build:cli": "esbuild cli/src/main.ts --bundle --platform=node --format=esm --target=node24 --outfile=cli/dist/cli.mjs",
+    "build:cli": "node scripts/build-cli.mjs",
     "check": "react-router typegen && tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
-    "test": "node --import tsx --test --test-timeout=60000 tests/*.test.ts",
-    "test:ui": "python3 tests/browser.py"
+    "test": "npm run build:cli && node --import tsx --test --test-timeout=60000 tests/*.test.ts",
+    "test:ui": "python3 tests/browser.py",
+    "dev:server": "tsx watch --env-file-if-exists=.env server/main.ts"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "3.1146.0",
@@ -39,8 +40,7 @@
     "pg": "8.23.1",
     "safe-regex2": "5.1.1",
     "stripe": "23.0.0",
-    "zod": "4.6.5",
-    "isbot": "^5"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@emotion/cache": "11.14.0",

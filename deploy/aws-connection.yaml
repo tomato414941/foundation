@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: "Lets one Foundation act in this AWS account through a role, without any long-lived key. Foundation's own role may assume it, and only with the external ID this stack was made with. Delete the stack to take the permission back."
 Parameters:
-  FoundationRoleArn:
+  PrincipalArn:
     Type: String
     Description: The role Foundation itself runs as. Only this principal may assume the role made here.
     AllowedPattern: '^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$'
@@ -13,8 +13,8 @@ Parameters:
     NoEcho: true
   Policies:
     Type: CommaDelimitedList
-    Description: "What Foundation may do here: the ARNs of the IAM policies to attach, separated by commas. AWS managed ones (arn:aws:iam::aws:policy/ReadOnlyAccess, .../AmazonS3FullAccess, ...) or your own. Up to 10."
-    Default: arn:aws:iam::aws:policy/AdministratorAccess
+    Description: 'What Foundation may do here: the ARNs of the IAM policies to attach, separated by commas. AWS managed ones (arn:aws:iam::aws:policy/ReadOnlyAccess, .../AmazonS3FullAccess, ...) or your own. Up to 10.'
+    Default: arn:aws:iam::aws:policy/ReadOnlyAccess
 Resources:
   FoundationRole:
     Type: AWS::IAM::Role
@@ -25,7 +25,7 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal: { AWS: !Ref FoundationRoleArn }
+            Principal: { AWS: !Ref PrincipalArn }
             Action: sts:AssumeRole
             Condition:
               StringEquals: { 'sts:ExternalId': !Ref ExternalId }

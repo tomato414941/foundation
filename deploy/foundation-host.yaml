@@ -1,8 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-# The running host (stack foundation-host) was created from an earlier version of this template and then changed by hand:
-# Caddy was installed and 80/443 opened; Tailscale was dropped. This template describes the host as it now is, for the
-# next time one is created. Applying it to the running stack would replace the instance, and its database with it.
-Description: "A host for Foundation - one small Arm instance in its own network, a KMS key that wraps the data key, a private bucket for backups, and an instance role limited to those (and to the file space, when given). Caddy terminates TLS for the public host and hands requests to the service on localhost; only 80 and 443 are open. Administered through SSM, never SSH keys. The key and the backups outlive the stack."
+Description: Foundation application and PostgreSQL on an Arm EC2 host with HTTPS, SSM access, KMS encryption and daily database backups.
 Parameters:
   AmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
@@ -10,12 +7,17 @@ Parameters:
     Description: Amazon Linux 2023 (arm64), resolved to the current image at stack creation.
   InstanceType:
     Type: String
-    Default: t4g.micro
-    AllowedValues: [t4g.nano, t4g.micro, t4g.small]
+    Default: t4g.small
+    AllowedValues: [t4g.small, t4g.medium, t4g.large]
   Repository:
     Type: String
     Default: https://github.com/tomato414941/foundation.git
     Description: Where the Foundation code is cloned from.
+  Revision:
+    Type: String
+    Default: main
+    AllowedPattern: '^[A-Za-z0-9._/-]+$'
+    Description: Git branch or tag to build.
   ObjectsBucket:
     Type: String
     Default: ''
@@ -77,9 +79,7 @@ Resources:
   SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Foundation host - no inbound traffic. Tailscale and SSM connect outward.
-      # The description above is what the running group was created with; changing it would replace the group.
-      # What is true now: only 80 and 443 are open, for Caddy. SSM connects outward; nothing else listens.
+      GroupDescription: Foundation HTTPS and HTTP certificate validation.
       VpcId: !Ref Vpc
       SecurityGroupIngress:
         - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
@@ -114,11 +114,22 @@ Resources:
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault: { SSEAlgorithm: aws:kms, KMSMasterKeyID: !GetAtt DataKey.Arn }
-      PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true }
+      PublicAccessBlockConfiguration:
+        {
+          BlockPublicAcls: true,
+          BlockPublicPolicy: true,
+          IgnorePublicAcls: true,
+          RestrictPublicBuckets: true,
+        }
       VersioningConfiguration: { Status: Enabled }
       LifecycleConfiguration:
         Rules:
-          - { Id: expire-old-backups, Status: Enabled, ExpirationInDays: 30, NoncurrentVersionExpiration: { NoncurrentDays: 30 } }
+          - {
+              Id: expire-old-backups,
+              Status: Enabled,
+              ExpirationInDays: 30,
+              NoncurrentVersionExpiration: { NoncurrentDays: 30 },
+            }
   InstanceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -173,10 +184,10 @@ Resources:
       SubnetId: !Ref Subnet
       SecurityGroupIds: [!Ref SecurityGroup]
       IamInstanceProfile: !Ref InstanceProfile
-      MetadataOptions: { HttpTokens: required, HttpEndpoint: enabled }
+      MetadataOptions: { HttpTokens: required, HttpEndpoint: enabled, HttpPutResponseHopLimit: 2 }
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
-          Ebs: { VolumeSize: 20, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true }
+          Ebs: { VolumeSize: 30, VolumeType: gp3, Encrypted: true, DeleteOnTermination: false }
       Tags: [{ Key: Name, Value: foundation }]
       UserData:
         Fn::Base64: !Sub |
@@ -184,32 +195,63 @@ Resources:
           set -euo pipefail
           exec > >(tee /var/log/foundation-bootstrap.log) 2>&1
           dnf -y update
-          dnf -y install git sqlite tar dnf-automatic
+          dnf -y install git docker openssl dnf-automatic
+          systemctl enable --now docker
           sed -i 's/^upgrade_type.*/upgrade_type = security/; s/^apply_updates.*/apply_updates = yes/' /etc/dnf/automatic.conf
           systemctl enable --now dnf-automatic.timer
-          curl -fsSL https://rpm.nodesource.com/setup_24.x | bash -
-          dnf -y install nodejs
-          # Caddy: TLS for the public host, handed to the service on localhost. Installed from the official binary.
-          curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=arm64" -o /usr/local/bin/caddy && chmod 755 /usr/local/bin/caddy
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -fSL https://github.com/docker/compose/releases/download/v5.1.0/docker-compose-linux-aarch64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+          curl -fSL https://github.com/docker/buildx/releases/download/v0.37.2/buildx-v0.37.2.linux-arm64 -o /usr/local/lib/docker/cli-plugins/docker-buildx
+          chmod 755 /usr/local/lib/docker/cli-plugins/*
+          mkdir -p /opt/foundation
+          git clone --depth 1 --branch '${Revision}' '${Repository}' /opt/foundation/app
+          cd /opt/foundation/app
+          umask 077
+          cat > .env <<'ENV'
+          FOUNDATION_ORIGIN=https://${PublicHost}
+          FOUNDATION_KMS_KEY=${DataKey.Arn}
+          FOUNDATION_AWS_PRINCIPAL_ARN=${InstanceRole.Arn}
+          AWS_REGION=${AWS::Region}
+          FOUNDATION_BUCKET=${ObjectsBucket}
+          ENV
+          echo "FOUNDATION_DATABASE_PASSWORD=$(openssl rand -hex 32)" >> .env
+          docker compose --project-name foundation build
+          cat > /etc/systemd/system/foundation.service <<'UNIT'
+          [Unit]
+          Description=Foundation application and PostgreSQL
+          Requires=docker.service
+          After=docker.service network-online.target
+          Wants=network-online.target
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          WorkingDirectory=/opt/foundation/app
+          ExecStart=/usr/bin/docker compose --project-name foundation up -d --wait --wait-timeout 120
+          ExecStop=/usr/bin/docker compose --project-name foundation stop
+          TimeoutStartSec=180
+          TimeoutStopSec=120
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          curl -fsSL 'https://caddyserver.com/api/download?os=linux&arch=arm64' -o /usr/local/bin/caddy
+          chmod 755 /usr/local/bin/caddy
           useradd --system --home /var/lib/caddy --shell /sbin/nologin caddy || true
-          mkdir -p /etc/caddy /var/lib/caddy && chown caddy:caddy /var/lib/caddy
+          mkdir -p /etc/caddy /var/lib/caddy
+          chown caddy:caddy /var/lib/caddy
           cat > /etc/caddy/Caddyfile <<CADDY
           {
-          	email ${AcmeEmail}
+            email ${AcmeEmail}
           }
-
           ${PublicHost} {
-          	encode zstd gzip
-          	reverse_proxy 127.0.0.1:3417
+            encode zstd gzip
+            reverse_proxy 127.0.0.1:3417
           }
           CADDY
-          if [ -n "${ClientHost}" ]; then
+          if [ -n '${ClientHost}' ]; then
             cat >> /etc/caddy/Caddyfile <<CLIENT
-
           ${ClientHost} {
-            encode zstd gzip
             handle /logo.svg {
-              root * /opt/foundation/app/web
+              root * /opt/foundation/app/web/public
               file_server
             }
             handle {
@@ -218,76 +260,38 @@ Resources:
           }
           CLIENT
           fi
+          chmod 644 /etc/caddy/Caddyfile
           cat > /etc/systemd/system/caddy.service <<'UNIT'
           [Unit]
           Description=Caddy
-          After=network-online.target
+          After=network-online.target foundation.service
           Wants=network-online.target
           [Service]
           User=caddy
           Group=caddy
-          ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
+          ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
           AmbientCapabilities=CAP_NET_BIND_SERVICE
           Restart=always
-          [Install]
-          WantedBy=multi-user.target
-          UNIT
-          useradd --system --home /opt/foundation --shell /sbin/nologin foundation || true
-          mkdir -p /opt/foundation /var/lib/foundation /etc/foundation
-          git clone --depth 1 ${Repository} /opt/foundation/app
-          (cd /opt/foundation/app && npm ci --omit=dev)
-          cat > /etc/foundation/env <<'ENV'
-          FOUNDATION_DATA_DIR=/var/lib/foundation
-          FOUNDATION_PORT=3417
-          FOUNDATION_BIND=127.0.0.1
-          ENV
-          echo "FOUNDATION_KMS_KEY_ID=${DataKey.Arn}" >> /etc/foundation/env
-          echo "FOUNDATION_AWS_REGION=${AWS::Region}" >> /etc/foundation/env
-          echo "FOUNDATION_BACKUP_BUCKET=${BackupBucket}" >> /etc/foundation/env
-          echo "FOUNDATION_AWS_ROLE_ARN=${InstanceRole.Arn}" >> /etc/foundation/env
-          echo "FOUNDATION_AWS_TEMPLATE_BUCKET=${BackupBucket}" >> /etc/foundation/env
-          echo "FOUNDATION_PUBLIC_ORIGIN=https://${PublicHost}" >> /etc/foundation/env
-          echo "FOUNDATION_TRUSTED_PROXIES=127.0.0.1" >> /etc/foundation/env
-          if [ -n "${ObjectsBucket}" ]; then echo "FOUNDATION_OBJECTS_BUCKET=${ObjectsBucket}" >> /etc/foundation/env; fi
-          chown -R foundation:foundation /opt/foundation /var/lib/foundation /etc/foundation
-          chmod 700 /var/lib/foundation && chmod 600 /etc/foundation/env
-          cat > /etc/systemd/system/foundation.service <<'UNIT'
-          [Unit]
-          Description=Foundation
-          After=network-online.target
-          Wants=network-online.target
-          [Service]
-          User=foundation
-          Group=foundation
-          WorkingDirectory=/opt/foundation/app
-          EnvironmentFile=/etc/foundation/env
-          ExecStart=/usr/bin/node src/server.mjs
-          Restart=always
-          RestartSec=3
-          LimitCORE=0
-          NoNewPrivileges=true
-          PrivateTmp=true
-          ProtectSystem=strict
-          ProtectHome=true
-          ReadWritePaths=/var/lib/foundation
           [Install]
           WantedBy=multi-user.target
           UNIT
           cat > /usr/local/bin/foundation-backup <<'SCRIPT'
           #!/bin/bash
           set -euo pipefail
-          . /etc/foundation/env
-          tmp=$(mktemp) && sqlite3 /var/lib/foundation/state.sqlite ".backup $tmp"
-          aws s3 cp "$tmp" "s3://$FOUNDATION_BACKUP_BUCKET/state-$(date -u +%Y%m%dT%H%M%SZ).sqlite" --only-show-errors
-          rm -f "$tmp"
-          # The host's configuration too, so a rebuilt host can be given the same settings. The bucket is private and
-          # encrypted with the same KMS key that seals the database.
-          aws s3 cp /etc/foundation/env "s3://$FOUNDATION_BACKUP_BUCKET/host-env" --only-show-errors
+          umask 077
+          cd /opt/foundation/app
+          backup=$(mktemp)
+          trap 'rm -f "$backup"' EXIT
+          docker compose --project-name foundation exec -T postgres pg_dump -U foundation -d foundation --format=custom > "$backup"
+          aws s3 cp "$backup" 's3://${BackupBucket}/database-'"$(date -u +%Y%m%dT%H%M%SZ)"'.dump' --only-show-errors
+          aws s3 cp .env 's3://${BackupBucket}/host-env' --only-show-errors
           SCRIPT
           chmod 755 /usr/local/bin/foundation-backup
           cat > /etc/systemd/system/foundation-backup.service <<'UNIT'
           [Unit]
-          Description=Foundation database backup to S3
+          Description=Foundation PostgreSQL backup to S3
+          Requires=foundation.service
+          After=foundation.service
           [Service]
           Type=oneshot
           ExecStart=/usr/local/bin/foundation-backup
@@ -303,8 +307,7 @@ Resources:
           WantedBy=timers.target
           UNIT
           systemctl daemon-reload
-          systemctl enable --now caddy foundation foundation-backup.timer
-          echo "bootstrap complete"
+          systemctl enable --now foundation caddy foundation-backup.timer
   Address:
     Type: AWS::EC2::EIP
     Properties:

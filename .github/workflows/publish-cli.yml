@@ -18,7 +18,20 @@ jobs:
   publish:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (startsWith(github.event.release.tag_name, 'cli-v') && !github.event.release.prerelease)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: foundation
+          POSTGRES_PASSWORD: foundation-ci-only
+          POSTGRES_DB: foundation_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U foundation -d foundation_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://foundation:foundation-ci-only@127.0.0.1:5432/foundation_test
     permissions:
       contents: write
       id-token: write
@@ -40,15 +53,19 @@ jobs:
           git merge-base --is-ancestor HEAD origin/main
           node .github/scripts/cli-release.mjs plan
       - name: Install test dependencies
-        if: github.event_name == 'workflow_dispatch' || steps.release.outputs.publish == 'true'
-        run: npm ci --ignore-scripts --no-audit --no-fund
+        run: npm ci --include=dev --no-audit --no-fund
       - name: Check and test
-        if: github.event_name == 'workflow_dispatch' || steps.release.outputs.publish == 'true'
         run: |
           npm run check
           npm test
+          npm run build
+      - name: Test browser workflows
+        run: |
+          python3 -m venv "$RUNNER_TEMP/foundation-ui"
+          "$RUNNER_TEMP/foundation-ui/bin/pip" install playwright==1.58.0
+          "$RUNNER_TEMP/foundation-ui/bin/python" -m playwright install --with-deps chromium webkit
+          "$RUNNER_TEMP/foundation-ui/bin/python" tests/browser.py
       - name: Pack and check the distributable
-        if: github.event_name == 'workflow_dispatch' || steps.release.outputs.publish == 'true'
         id: package
         run: |
           node --input-type=module <<'NODE'

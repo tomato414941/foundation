@@ -14,6 +14,8 @@
     "rootDir": ".",
     "outDir": "dist",
     "sourceMap": true,
-    "types": ["node"]
+    "types": ["node"],
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
   }
 }

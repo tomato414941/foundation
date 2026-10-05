@@ -1,0 +1,16 @@
+.git
+node_modules
+.foundation
+.env
+.env.*
+dist
+.react-router
+cli/dist
+test-results
+playwright-report
+__pycache__
+*.key
+*.pem
+*.p12
+*.sqlite*
+*.log

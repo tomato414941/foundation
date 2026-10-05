@@ -1,36 +1,361 @@
 import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { Link as RouterLink, Form, useNavigation, useRevalidator } from 'react-router';
-import { Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Divider, IconButton, Link, Paper, Stack, TextField, Tooltip, Typography } from '@mui/material';
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  Divider,
+  IconButton,
+  Link,
+  Paper,
+  Stack,
+  TextField,
+  Tooltip,
+  Typography,
+} from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { useTranslation } from 'react-i18next';
 import { errorCode } from './api';
 
-export function Page({ title, children, actions, narrow = false }: { title: string; children: ReactNode; actions?: ReactNode; narrow?: boolean }) {
-  return <Stack spacing={3} sx={{ maxWidth: narrow ? 720 : 1120, width: '100%', mx: 'auto' }}><Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: 'space-between', alignItems: { sm: 'center' } }}><Typography variant="h4" component="h1" sx={{ overflowWrap: 'anywhere' }}>{title}</Typography>{actions && <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>{actions}</Stack>}</Stack>{children}</Stack>;
+export function Page({
+  title,
+  children,
+  actions,
+  narrow = false,
+}: {
+  title: string;
+  children: ReactNode;
+  actions?: ReactNode;
+  narrow?: boolean;
+}) {
+  return (
+    <Stack spacing={3} sx={{ maxWidth: narrow ? 720 : 1120, width: '100%', mx: 'auto' }}>
+      <Stack
+        direction={{ xs: 'column', sm: 'row' }}
+        spacing={2}
+        sx={{ justifyContent: 'space-between', alignItems: { sm: 'center' } }}
+      >
+        <Typography variant="h4" component="h1" sx={{ overflowWrap: 'anywhere' }}>
+          {title}
+        </Typography>
+        {actions && (
+          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
+            {actions}
+          </Stack>
+        )}
+      </Stack>
+      {children}
+    </Stack>
+  );
 }
-export function Panel({ title, children }: { title?: string; children: ReactNode }) { return <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}><Stack spacing={2}>{title && <Typography variant="h6" component="h2" sx={{ overflowWrap: 'anywhere' }}>{title}</Typography>}{children}</Stack></Paper>; }
-export function ErrorNotice({ error }: { error?: string | null }) { const { t } = useTranslation(); return error ? <Alert severity="error" role="alert">{t('errors.' + error, { defaultValue: t('failure') })}</Alert> : null; }
-export function Busy() { const { t } = useTranslation(); return <Box sx={{ display: 'flex', p: 6, justifyContent: 'center' }}><CircularProgress aria-label={t('loading')} /></Box>; }
-export function Empty({ search = false }: { search?: boolean }) { const { t } = useTranslation(); return <Paper variant="outlined" sx={{ p: 5, textAlign: 'center' }}><Typography color="text.secondary">{t(search ? 'noResults' : 'empty')}</Typography></Paper>; }
-export function State({ value }: { value: string }) { const { t } = useTranslation(); return <Chip size="small" label={t('state.' + value, { defaultValue: value })} color={['ready', 'succeeded', 'approved', 'running'].includes(value) ? 'success' : ['failed', 'reconnect'].includes(value) ? 'warning' : 'default'} variant="outlined" />; }
-export function DateText({ value }: { value: string | null }) { const { i18n } = useTranslation(); return <>{value ? new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—'}</>; }
-export function Bytes({ value }: { value: number }) { const { i18n } = useTranslation(); const power = value < 1024 ? 0 : Math.min(3, Math.floor(Math.log(value) / Math.log(1024))); return <>{new Intl.NumberFormat(i18n.language, { maximumFractionDigits: power ? 1 : 0 }).format(value / 1024 ** power)} {['B', 'KB', 'MB', 'GB'][power]}</>; }
-export function Detail({ label, children }: { label: string; children: ReactNode }) { return <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '160px minmax(0,1fr)' }, gap: 1 }}><Typography component="dt" color="text.secondary">{label}</Typography><Box component="dd" sx={{ m: 0, overflowWrap: 'anywhere' }}>{children}</Box></Box>; }
-export function JsonView({ value }: { value: unknown }) { return <Box component="pre" sx={{ m: 0, p: 2, bgcolor: 'action.hover', borderRadius: 1, overflow: 'auto', maxHeight: 480, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 13 }}>{JSON.stringify(value, null, 2)}</Box>; }
-export function JsonField({ name, label, value = {}, rows = 6, helperText }: { name: string; label: string; value?: unknown; rows?: number; helperText?: string }) { const { t } = useTranslation(); return <TextField name={name} label={label} defaultValue={JSON.stringify(value, null, 2)} multiline minRows={rows} fullWidth helperText={helperText ?? t('jsonHelp')} slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: 13 } }, htmlInput: { spellCheck: false } }} />; }
-export function Copy({ value }: { value: string }) { const { t } = useTranslation(); const [copied, setCopied] = useState(false); const task = useTask(); useEffect(() => { if (copied) { const timer = setTimeout(() => setCopied(false), 2000); return () => clearTimeout(timer); } }, [copied]); return <><Tooltip title={t(copied ? 'copied' : 'copy')}><IconButton size="small" aria-label={t(copied ? 'copied' : 'copy')} onClick={() => task.run(async () => { await navigator.clipboard.writeText(value); setCopied(true); })}><ContentCopyIcon fontSize="small" /></IconButton></Tooltip><ErrorNotice error={task.error} /></>; }
-export function SaveBar({ back, label = 'save', busy = false }: { back: string; label?: string; busy?: boolean }) { const { t } = useTranslation(); const navigation = useNavigation(); return <Stack direction="row" spacing={2}><Button variant="contained" type="submit" loading={busy || navigation.state === 'submitting'}>{t(label)}</Button><Button component={RouterLink} to={back}>{t('cancel')}</Button></Stack>; }
-export function Confirm({ label, name, body, children, danger = true }: { label: string; name: string; body?: string; children?: ReactNode; danger?: boolean }) {
-  const { t } = useTranslation(); const [open, setOpen] = useState(false); const navigation = useNavigation();
-  useEffect(() => { if (navigation.state === 'loading') setOpen(false); }, [navigation.state]);
-  return <><Button color={danger ? 'error' : 'primary'} onClick={() => setOpen(true)}>{label}</Button><Dialog open={open} onClose={() => setOpen(false)} maxWidth="xs" fullWidth><Form method="post"><DialogTitle>{danger ? t('deleteTitle', { name }) : label}</DialogTitle><DialogContent><Stack spacing={2}><DialogContentText>{body ?? t('deleteBody')}</DialogContentText>{children}</Stack></DialogContent><DialogActions><Button onClick={() => setOpen(false)}>{t('cancel')}</Button><Button type="submit" variant="contained" color={danger ? 'error' : 'primary'} loading={navigation.state === 'submitting'}>{label}</Button></DialogActions></Form></Dialog></>;
+export function Panel({ title, children }: { title?: string; children: ReactNode }) {
+  return (
+    <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
+      <Stack spacing={2}>
+        {title && (
+          <Typography variant="h6" component="h2" sx={{ overflowWrap: 'anywhere' }}>
+            {title}
+          </Typography>
+        )}
+        {children}
+      </Stack>
+    </Paper>
+  );
+}
+export function ErrorNotice({ error }: { error?: string | null }) {
+  const { t } = useTranslation();
+  return error ? (
+    <Alert severity="error" role="alert">
+      {t('errors.' + error, { defaultValue: t('failure') })}
+    </Alert>
+  ) : null;
+}
+export function Busy() {
+  const { t } = useTranslation();
+  return (
+    <Box sx={{ display: 'flex', p: 6, justifyContent: 'center' }}>
+      <CircularProgress aria-label={t('loading')} />
+    </Box>
+  );
+}
+export function Empty({ search = false }: { search?: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <Paper variant="outlined" sx={{ p: 5, textAlign: 'center' }}>
+      <Typography color="text.secondary">{t(search ? 'noResults' : 'empty')}</Typography>
+    </Paper>
+  );
+}
+export function State({ value }: { value: string }) {
+  const { t } = useTranslation();
+  return (
+    <Chip
+      size="small"
+      label={t('state.' + value, { defaultValue: value })}
+      color={
+        ['ready', 'succeeded', 'approved', 'running'].includes(value)
+          ? 'success'
+          : ['failed', 'reconnect'].includes(value)
+            ? 'warning'
+            : 'default'
+      }
+      variant="outlined"
+    />
+  );
+}
+export function DateText({ value }: { value: string | null }) {
+  const { i18n } = useTranslation();
+  return (
+    <>
+      {value
+        ? new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'short' }).format(
+            new Date(value),
+          )
+        : '—'}
+    </>
+  );
+}
+export function Bytes({ value }: { value: number }) {
+  const { i18n } = useTranslation();
+  const power = value < 1024 ? 0 : Math.min(3, Math.floor(Math.log(value) / Math.log(1024)));
+  return (
+    <>
+      {new Intl.NumberFormat(i18n.language, { maximumFractionDigits: power ? 1 : 0 }).format(
+        value / 1024 ** power,
+      )}{' '}
+      {['B', 'KB', 'MB', 'GB'][power]}
+    </>
+  );
+}
+export function Detail({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '160px minmax(0,1fr)' }, gap: 1 }}>
+      <Typography component="dt" color="text.secondary">
+        {label}
+      </Typography>
+      <Box component="dd" sx={{ m: 0, overflowWrap: 'anywhere' }}>
+        {children}
+      </Box>
+    </Box>
+  );
+}
+export function JsonView({ value }: { value: unknown }) {
+  return (
+    <Box
+      component="pre"
+      sx={{
+        m: 0,
+        p: 2,
+        bgcolor: 'action.hover',
+        borderRadius: 1,
+        overflow: 'auto',
+        maxHeight: 480,
+        whiteSpace: 'pre-wrap',
+        overflowWrap: 'anywhere',
+        fontSize: 13,
+      }}
+    >
+      {JSON.stringify(value, null, 2)}
+    </Box>
+  );
+}
+export function JsonField({
+  name,
+  label,
+  value = {},
+  rows = 6,
+  helperText,
+}: {
+  name: string;
+  label: string;
+  value?: unknown;
+  rows?: number;
+  helperText?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <TextField
+      name={name}
+      label={label}
+      defaultValue={JSON.stringify(value, null, 2)}
+      multiline
+      minRows={rows}
+      fullWidth
+      helperText={helperText ?? t('jsonHelp')}
+      slotProps={{
+        input: { sx: { fontFamily: 'monospace', fontSize: 13 } },
+        htmlInput: { spellCheck: false },
+      }}
+    />
+  );
+}
+export function Copy({ value }: { value: string }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const task = useTask();
+  useEffect(() => {
+    if (copied) {
+      const timer = setTimeout(() => setCopied(false), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [copied]);
+  return (
+    <>
+      <Tooltip title={t(copied ? 'copied' : 'copy')}>
+        <IconButton
+          size="small"
+          aria-label={t(copied ? 'copied' : 'copy')}
+          onClick={() =>
+            task.run(async () => {
+              await navigator.clipboard.writeText(value);
+              setCopied(true);
+            })
+          }
+        >
+          <ContentCopyIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      <ErrorNotice error={task.error} />
+    </>
+  );
+}
+export function SaveBar({
+  back,
+  label = 'save',
+  busy = false,
+}: {
+  back: string;
+  label?: string;
+  busy?: boolean;
+}) {
+  const { t } = useTranslation();
+  const navigation = useNavigation();
+  return (
+    <Stack direction="row" spacing={2}>
+      <Button variant="contained" type="submit" loading={busy || navigation.state === 'submitting'}>
+        {t(label)}
+      </Button>
+      <Button component={RouterLink} to={back}>
+        {t('cancel')}
+      </Button>
+    </Stack>
+  );
+}
+export function Confirm({
+  label,
+  name,
+  body,
+  children,
+  danger = true,
+}: {
+  label: string;
+  name: string;
+  body?: string;
+  children?: ReactNode;
+  danger?: boolean;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const navigation = useNavigation();
+  useEffect(() => {
+    if (navigation.state === 'loading') setOpen(false);
+  }, [navigation.state]);
+  return (
+    <>
+      <Button color={danger ? 'error' : 'primary'} onClick={() => setOpen(true)}>
+        {label}
+      </Button>
+      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="xs" fullWidth>
+        <Form method="post">
+          <DialogTitle>{danger ? t('deleteTitle', { name }) : label}</DialogTitle>
+          <DialogContent>
+            <Stack spacing={2}>
+              <DialogContentText>{body ?? t('deleteBody')}</DialogContentText>
+              {children}
+            </Stack>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setOpen(false)}>{t('cancel')}</Button>
+            <Button
+              type="submit"
+              variant="contained"
+              color={danger ? 'error' : 'primary'}
+              loading={navigation.state === 'submitting'}
+            >
+              {label}
+            </Button>
+          </DialogActions>
+        </Form>
+      </Dialog>
+    </>
+  );
 }
 export function useTask() {
-  const [error, setError] = useState<string | null>(null); const [busy, setBusy] = useState(false);
-  return { error, busy, clear: () => setError(null), run: async <T,>(operation: () => Promise<T>): Promise<T | undefined> => { setBusy(true); setError(null); try { return await operation(); } catch (error) { setError(errorCode(error)); return undefined; } finally { setBusy(false); } } };
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  return {
+    error,
+    busy,
+    clear: () => setError(null),
+    run: async <T,>(operation: () => Promise<T>): Promise<T | undefined> => {
+      setBusy(true);
+      setError(null);
+      try {
+        return await operation();
+      } catch (error) {
+        setError(errorCode(error));
+        return undefined;
+      } finally {
+        setBusy(false);
+      }
+    },
+  };
 }
-export function usePolling(active: boolean, milliseconds = 2500) { const revalidator = useRevalidator(); useEffect(() => { if (!active) return; const timer = setInterval(() => { if (document.visibilityState === 'visible' && revalidator.state === 'idle') void revalidator.revalidate(); }, milliseconds); return () => clearInterval(timer); }, [active, milliseconds, revalidator]); }
-export function Paging({ next, search }: { next: string | null; search: URLSearchParams }) { const { t } = useTranslation(); const more = new URLSearchParams(search); if (next) more.set('after', next); const first = new URLSearchParams(search); first.delete('after'); return next || search.has('after') ? <Stack component="nav" aria-label={t('pagination')} direction="row" spacing={2}>{search.has('after') && <Button component={RouterLink} to={'?' + first}>{t('firstPage')}</Button>}{next && <Button component={RouterLink} to={'?' + more}>{t('more')}</Button>}</Stack> : null; }
-export function ExternalLink({ href, children }: { href: string; children: ReactNode }) { return <Link href={href} target="_blank" rel="noopener noreferrer">{children}</Link>; }
+export function usePolling(active: boolean, milliseconds = 2500) {
+  const revalidator = useRevalidator();
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible' && revalidator.state === 'idle')
+        void revalidator.revalidate();
+    }, milliseconds);
+    return () => clearInterval(timer);
+  }, [active, milliseconds, revalidator]);
+}
+export function Paging({ next, search }: { next: string | null; search: URLSearchParams }) {
+  const { t } = useTranslation();
+  const more = new URLSearchParams(search);
+  if (next) more.set('after', next);
+  const first = new URLSearchParams(search);
+  first.delete('after');
+  return next || search.has('after') ? (
+    <Stack component="nav" aria-label={t('pagination')} direction="row" spacing={2}>
+      {search.has('after') && (
+        <Button component={RouterLink} to={'?' + first}>
+          {t('firstPage')}
+        </Button>
+      )}
+      {next && (
+        <Button component={RouterLink} to={'?' + more}>
+          {t('more')}
+        </Button>
+      )}
+    </Stack>
+  ) : null;
+}
+export function ExternalLink({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <Link href={href} target="_blank" rel="noopener noreferrer">
+      {children}
+    </Link>
+  );
+}
 export { Divider };

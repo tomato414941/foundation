@@ -1,5 +1,11 @@
 {
-  "include": ["web/app/**/*", "shared/**/*", ".react-router/types/**/*", "vite.config.ts", "react-router.config.ts"],
+  "include": [
+    "web/app/**/*",
+    "shared/**/*",
+    ".react-router/types/**/*",
+    "vite.config.ts",
+    "react-router.config.ts"
+  ],
   "compilerOptions": {
     "target": "ES2023",
     "lib": ["DOM", "DOM.Iterable", "ES2023"],
@@ -14,6 +20,8 @@
     "skipLibCheck": true,
     "noEmit": true,
     "rootDirs": [".", "./.react-router/types"],
-    "types": ["vite/client", "node"]
+    "types": ["vite/client", "node"],
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
   }
 }

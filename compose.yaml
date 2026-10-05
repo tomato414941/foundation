@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: foundation
+      POSTGRES_DB: foundation
+      POSTGRES_PASSWORD: ${FOUNDATION_DATABASE_PASSWORD:?Set FOUNDATION_DATABASE_PASSWORD}
+    volumes:
+      - database:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U foundation -d foundation']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  foundation:
+    build: .
+    image: ${FOUNDATION_IMAGE:-foundation:local}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 90s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: ${FOUNDATION_ENV_FILE:-.env}
+        required: false
+    environment:
+      DATABASE_URL: postgres://foundation:${FOUNDATION_DATABASE_PASSWORD:?Set FOUNDATION_DATABASE_PASSWORD}@postgres:5432/foundation
+      FOUNDATION_ORIGIN: ${FOUNDATION_ORIGIN:-http://localhost:3417}
+      FOUNDATION_PROXY_ADDRESSES: '${FOUNDATION_PROXY_ADDRESSES:-loopback,172.16.0.0/12}'
+      FOUNDATION_HOST: 0.0.0.0
+      FOUNDATION_PORT: '3417'
+      FOUNDATION_DATA: /var/lib/foundation
+    volumes:
+      - keys:/var/lib/foundation
+    ports:
+      - '127.0.0.1:${FOUNDATION_PORT:-3417}:3417'
+volumes:
+  database:
+  keys:

@@ -213,6 +213,30 @@ class BrowserTests(unittest.TestCase):
         projects = receiver.request.get(ORIGIN + "/api/principals").json()["items"]
         self.assertIn("Approved project", [item["name"] for item in projects])
 
+    def test_通常のログインがある端末で依頼専用リンクを開いて依頼を承認する(self):
+        sender, _ = self.passkey_account("Link requester")
+        owner, principal = self.passkey_account("Link approver")
+        viewer, _ = self.passkey_account("Existing session")
+        sender.goto(ORIGIN + "/requests/new")
+        sender.get_by_role("textbox", name="依頼先のプリンシパルID").fill(principal["id"])
+        sender.get_by_role("textbox", name="操作（JSON）", exact=True).fill(json.dumps([{"method": "POST", "path": "/api/principals", "body": {"name": "Link project", "ownerId": "$approver"}}]))
+        sender.get_by_role("button", name="作成", exact=True).click()
+        sender.wait_for_url("**/requests/*")
+        expect(sender.get_by_text("確認待ち", exact=True)).to_be_visible()
+        owner.goto(sender.url)
+        owner.get_by_role("button", name="確認用リンクを作成", exact=True).click()
+        link_field = owner.get_by_role("textbox", name="URL", exact=True)
+        expect(link_field).to_be_visible()
+        viewer.goto(link_field.input_value())
+        expect(viewer.get_by_role("button", name="承認", exact=True)).to_be_visible()
+        current = viewer.request.get(ORIGIN + "/api/session").json()
+        self.assertEqual(current["principal"]["id"], principal["id"])
+        self.assertEqual(current["requestId"], sender.url.rsplit("/", 1)[1])
+        viewer.get_by_role("button", name="承認", exact=True).click()
+        expect(viewer.get_by_text("承認済み", exact=True)).to_be_visible()
+        projects = owner.request.get(ORIGIN + "/api/principals").json()["items"]
+        self.assertIn("Link project", [item["name"] for item in projects])
+
     def test_モバイルでメール認証して英語表示へ切り替えフォームを操作する(self):
         page = self.page(webkit=True, mobile=True)
         address = "mobile-" + uuid.uuid4().hex[:8] + "@example.com"
@@ -228,7 +252,7 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="Open navigation", exact=True).click()
         page.get_by_role("link", name="Environments", exact=True).click()
         page.get_by_role("link", name="Create", exact=True).click()
-        expect(page.get_by_role("heading", name="Create Environments", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="Create environment", exact=True)).to_be_visible()
         page.get_by_role("textbox", name="Name", exact=True).fill("Mobile worker")
         self.select(page, "Size", "Medium — 2 CPU / 1 GB")
         self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
@@ -246,15 +270,20 @@ if __name__ == "__main__":
         server_output = log.open("w")
         server = subprocess.Popen(["node", "--import", "tsx", "tests/browser-server.ts"], stdout=server_output, stderr=server_output)
         for attempt in range(100):
+            if server.poll() is not None:
+                server_output.close()
+                raise RuntimeError(log.read_text())
             try:
-                urllib.request.urlopen(ORIGIN + "/health", timeout=1)
-                break
+                with urllib.request.urlopen(ORIGIN + "/__test/ready", timeout=1) as response:
+                    if json.load(response)["pid"] == server.pid:
+                        break
             except Exception:
-                if server.poll() is not None:
-                    raise RuntimeError(log.read_text())
-                time.sleep(0.1)
+                pass
+            time.sleep(0.1)
         else:
             server.terminate()
+            server.wait(timeout=20)
+            server_output.close()
             raise RuntimeError("Browser test server did not start")
     try:
         unittest.main(verbosity=2)

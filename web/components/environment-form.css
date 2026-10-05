@@ -1,3 +1,0 @@
-.foundation-ui { font-family: var(--sans); }
-.foundation-ui .environment-fields { display: grid; gap: 12px; }
-.foundation-ui .environment-error { color: var(--danger); margin-top: 16px; overflow-wrap: anywhere; }
