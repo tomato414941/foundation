@@ -20,6 +20,7 @@ import { routesResources } from './routes-resources.js';
 import { routesRequests } from './routes-requests.js';
 import { routesAccounts } from './routes-accounts.js';
 import { routesMcp } from './mcp.js';
+import { web } from './web.js';
 
 declare module 'fastify' {
   interface FastifyRequest {actor:Actor|null;browser:string}
@@ -59,7 +60,7 @@ export async function buildApp(context:Context) {
     },
   };
   const secure=new URL(config.origin).protocol==='https:',cookieOptions={httpOnly:true,secure,sameSite:'lax' as const,path:'/'};
-  const signIn=(reply:FastifyReply,result:SigninResult)=>{reply.setCookie('foundation_session',result.token,{...cookieOptions,expires:new Date(result.expiresAt)});};
+  const signIn=(reply:FastifyReply,result:SigninResult)=>{reply.clearCookie('foundation_request',cookieOptions);reply.setCookie('foundation_session',result.token,{...cookieOptions,expires:new Date(result.expiresAt)});};
   app.addHook('onRequest',async(request,reply)=>{
     if(!request.url.startsWith('/api/'))return;
     reply.header('cache-control','no-store');
@@ -71,8 +72,13 @@ export async function buildApp(context:Context) {
     }
     const internal=bearer?internalActors.get(bearer.slice(7)):undefined;
     if(internal&&!request.routeOptions.config.approval)fail(403,'operation_unavailable','This operation cannot be requested for approval.');
-    request.actor=internal??await authentication.authenticate(bearer?.slice(7)??request.cookies.foundation_session)??(!bearer?await authentication.authenticate(request.cookies.foundation_request):null);
+    request.actor=internal??(!bearer?await authentication.authenticate(request.cookies.foundation_request):null)??await authentication.authenticate(bearer?.slice(7)??request.cookies.foundation_session);
     if(bearer&&!request.actor)fail(401,'unauthenticated','The API key has expired or was revoked.');
+    if(request.actor?.requestId) {
+      const path=request.url.split('?')[0]!;
+      const ownRequest='/api/requests/'+request.actor.requestId;
+      if(path!=='/api/session'&&!path.startsWith('/api/auth/')&&path!==ownRequest&&!path.startsWith(ownRequest+'/')&&!/^\/api\/requests\/[^/]+\/redeem$/.test(path)&&!/^\/api\/connections\/[^/]+\/(review|role)$/.test(path)&&path!=='/api/connections/callback')fail(403,'forbidden','This link can open only its own request.');
+    }
     request.browser=request.cookies.foundation_browser??token();
     if(!request.cookies.foundation_browser)reply.setCookie('foundation_browser',request.browser,{...cookieOptions,maxAge:365*86400});
   });
@@ -88,7 +94,7 @@ export async function buildApp(context:Context) {
   app.get('/api/openapi.json',{schema:{hide:true}},()=>app.swagger());
   app.get('/api/session',{schema:{response:{200:S.Session}}},async request=>({principal:request.actor?await principals.view(request.actor,await principals.get(request.actor.id)):null,credentialId:request.actor?.credentialId??null,requestId:request.actor?.requestId??null,principals:request.actor&&!request.actor.requestId?await principals.accessible(request.actor):[],server:{id:identity.id,name:'Foundation',publicKey:identity.publicKey},features:{email:context.mailer.enabled,environments:context.environments.runner.enabled,objects:context.objects.store.enabled,payments:context.billing.provider.enabled}}));
   app.post('/api/auth/enroll',{config:{rateLimit:{max:20,timeWindow:'1 hour'}},schema:{body:z.object({name:C.Name,publicKey:C.PublicKey}).strict(),response:{201:z.object({principal:z.object({id:C.Id,name:C.Name}),credential:C.Credential,token:z.string()})},security:[]}},async(request,reply)=>reply.code(201).send(await authentication.enroll(request.body.name,request.body.publicKey)));
-  app.post('/api/auth/signout',{schema:{body:z.object({}).strict(),response:{200:C.Ok}}},async(request,reply)=>{await authentication.signout(request.actor);reply.clearCookie('foundation_session',cookieOptions);return {ok:true as const};});
+  app.post('/api/auth/signout',{schema:{body:z.object({}).strict(),response:{200:C.Ok}}},async(request,reply)=>{await authentication.signout(request.actor);await authentication.signout(await authentication.authenticate(request.cookies.foundation_session));reply.clearCookie('foundation_session',cookieOptions);reply.clearCookie('foundation_request',cookieOptions);return {ok:true as const};});
   app.post('/api/auth/email',{config:{rateLimit:{max:10,timeWindow:'1 hour'}},schema:{body:S.EmailStart,response:{200:z.object({email:z.email(),expiresAt:C.Time,resendAt:C.Time})},security:[]}},request=>authentication.beginEmail(request.body.email,request.browser,request.body.returnTo,request.body.locale,request.actor??undefined,request.body.principalId));
   app.get('/api/auth/email',{schema:{response:{200:z.object({email:z.email(),expiresAt:C.Time}).nullable()},security:[]}},request=>authentication.pendingEmail(request.browser));
   app.post('/api/auth/email/verify',{config:{rateLimit:{max:30,timeWindow:'1 hour'}},schema:{body:z.object({challengeId:C.Id,token:z.string().max(200)}).strict(),response:{200:z.object({returnTo:z.string(),attached:z.boolean(),mergeProof:C.Id.optional()})},security:[]}},async(request,reply)=>{
@@ -122,6 +128,7 @@ export async function buildApp(context:Context) {
   await routesRequests(app,context,cookieOptions);
   await routesAccounts(app,context);
   await routesMcp(app);
+  await web(app);
   return app;
 }
 export type ApiApp=Awaited<ReturnType<typeof buildApp>>;

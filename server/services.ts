@@ -135,7 +135,7 @@ export class Services {
   }
   async review(actor:Actor,id:string,browser:string,accept:boolean) {
     const consent=await this.consent(id,browser,'service-review');
-    if(actor.id!==consent.actor.id) fail(403,'forbidden','Use the account that started this connection.');
+    if(actor.id!==consent.actor.id||actor.requestId&&actor.requestId!==consent.actor.approvalId) fail(403,'forbidden','Use the account that started this connection.');
     if(!accept) {await this.cancelled?.(consent.actor);return {kind:'cancelled' as const,returnTo:consent.input.returnTo};}
     const connected=await this.store(consent.actor,consent.ownerId,consent.input,{service:consent.service,app:consent.app,oauth:required(consent.result)},consent.input.connectionId?await this.resources.get(consent.input.connectionId):null);
     await this.completed?.(consent.actor,connected as unknown as JsonValue);return connected;
@@ -147,13 +147,13 @@ export class Services {
     const row=await this.resources.db.one<{data:{sealed:string}}>("SELECT data FROM challenges WHERE id=$1 AND kind='service-review' AND browser_hash=$2 AND expires_at>now()",[id,digest(browser)]);
     if(!row)fail(400,'invalid_state','Start the connection again.');
     const consent=await this.vault.decrypt<Consent>(row.data.sealed,'consent:'+id);
-    if(actor.id!==consent.actor.id)fail(403,'forbidden','Use the account that started this connection.');
+    if(actor.id!==consent.actor.id||actor.requestId&&actor.requestId!==consent.actor.approvalId)fail(403,'forbidden','Use the account that started this connection.');
     const previous=await this.resources.get(required(consent.input.connectionId));
     return {id,before:{account:String(previous.data.account),scopes:previous.data.scopes??[]},after:{account:consent.result!.accountName,scopes:consent.result!.scopes}};
   }
   async completeRole(actor:Actor,id:string,browser:string,arn:string,region:string) {
     const consent=await this.consent(id,browser);
-    if(actor.id!==consent.actor.id||consent.input.scheme!=='role') fail(403,'forbidden','Use the account that started this connection.');
+    if(actor.id!==consent.actor.id||actor.requestId&&actor.requestId!==consent.actor.approvalId||consent.input.scheme!=='role') fail(403,'forbidden','Use the account that started this connection.');
     z.string().regex(/^arn:aws:iam::\d{12}:role\/[A-Za-z0-9+=,.@_/-]{1,512}$/).parse(arn);
     z.string().regex(/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/).parse(region);
     const role={arn,region,externalId:required(consent.externalId)};

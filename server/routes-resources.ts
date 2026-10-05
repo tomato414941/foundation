@@ -29,10 +29,12 @@ export async function routesResources(app:ApiApp,context:Context) {
     const who=actor(request),body=request.body;let row=await resources.get(request.params.id);
     await authorization.requireResource(who,row,'update');
     if(body.version!==row.version)fail(409,'changed','This item changed. Reload it before saving.');
+    const fields=['version','name',...(row.kind==='secret'?['sealed','bytes','allowUse']:row.kind==='function'||row.kind==='service'?['definition']:row.kind==='app'?['clientId','clientSecret','fields']:[])];
+    if(Object.keys(body).some(field=>!fields.includes(field)))fail(400,'invalid_input','Choose fields that can be edited for this item.');
     if(body.name&&body.name!==row.name&&!await authorization.stands(who.id,row.owner_id))await authorization.requireResource(who,row,'share');
     if(body.sealed||body.allowUse!==undefined) {
       if(row.kind!=='secret'||!body.sealed||body.bytes===undefined)fail(400,'invalid_secret','Provide the encrypted content and its size.');
-      row=await resources.updateSecret(who,row,body.sealed,body.bytes,body.allowUse);
+      row=await resources.updateSecret(who,row,body.sealed,body.bytes,body.allowUse,body.name);
     }
     if(body.definition) {
       if(row.kind==='function') {
@@ -48,7 +50,7 @@ export async function routesResources(app:ApiApp,context:Context) {
       if(row.kind!=='app')fail(400,'wrong_kind','This item is not an OAuth application.');
       const old=await context.vault.decrypt<{clientSecret?:string}>(required(row.private_data),'resource:'+row.id);
       row=await resources.db.transaction(async connection=>{
-        const updated=await resources.update(row,{data:{...row.data,...(body.clientId!==undefined?{clientId:body.clientId}:{}),...(body.fields?{fields:body.fields}:{})},privateData:await context.vault.encrypt({...old,...(body.clientSecret!==undefined?{clientSecret:body.clientSecret}:{})},'resource:'+row.id)},connection);
+        const updated=await resources.update(row,{...(body.name?{name:body.name}:{}),data:{...row.data,...(body.clientId!==undefined?{clientId:body.clientId}:{}),...(body.fields?{fields:body.fields}:{})},privateData:await context.vault.encrypt({...old,...(body.clientSecret!==undefined?{clientSecret:body.clientSecret}:{})},'resource:'+row.id)},connection);
         await connection.query("UPDATE resources SET data=jsonb_set(data,'{state}','\"reconnect\"'),version=version+1 WHERE kind='connection' AND data->>'appId'=$1",[row.id]);return updated;
       });
     }
@@ -64,6 +66,7 @@ export async function routesResources(app:ApiApp,context:Context) {
     return {ok:true as const};
   });
   app.get('/api/resources/:id/secret',{schema:{params:C.IdParams,response:{200:z.object({sealed:C.Sealed,context:z.string()})}}},request=>resources.secretContent(actor(request),request.params.id));
+  app.get('/api/resources/:id/recipients',{schema:{params:C.IdParams,response:{200:C.listOf(C.Recipient)}}},async request=>{const row=await resources.get(request.params.id);await authorization.requireResource(actor(request),row,'update');return {items:await resources.recipients(row.owner_id),next:null};});
   app.get('/api/resources/:id/grants',{schema:{params:C.IdParams,response:{200:C.listOf(C.Grant)}}},async request=>({items:await resources.grants(actor(request),await resources.get(request.params.id)),next:null}));
   app.put('/api/resources/:id/grants/:principalId',{config:{approval:true},schema:{params:z.object({id:C.Id,principalId:C.Id}),body:z.object({actions:z.array(C.Action).min(1)}).strict(),response:{200:C.Ok}}},async request=>{await resources.grant(actor(request),await resources.get(request.params.id),request.params.principalId,request.body.actions);return {ok:true as const};});
   app.delete('/api/resources/:id/grants/:principalId',{config:{approval:true},schema:{params:z.object({id:C.Id,principalId:C.Id}),response:{200:C.Ok}}},async request=>{await resources.revoke(actor(request),await resources.get(request.params.id),request.params.principalId);return {ok:true as const};});

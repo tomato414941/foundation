@@ -47,6 +47,7 @@ export class Authorization {
   async principal(actor: Actor, principalId: string, action: ActionName, connection: Queryable = this.db.pool): Promise<boolean> {
     await this.active(actor, connection);
     if (actor.requestId) return false;
+    if (action === 'delete' && actor.id === principalId) return true;
     if (action === 'delete' || action === 'transfer') {
       const ids = await this.standsAs(actor.id, connection);
       return Boolean(await this.db.one('SELECT 1 FROM relations WHERE principal_id=$1 AND relation=$2 AND subject_id=ANY($3::uuid[])', [principalId, 'owner', ids], connection));
@@ -95,7 +96,7 @@ export class Authorization {
     if (actor.requestId) return [];
     const standing = await this.standsAs(actor.id);
     const owns = Boolean(await this.db.one("SELECT 1 FROM relations WHERE subject_id=ANY($1::uuid[]) AND principal_id=$2 AND relation='owner'", [standing, id]));
-    if (standing.includes(id)) return Action.options.filter(action => owns || !['delete', 'transfer'].includes(action));
+    if (standing.includes(id)) return Action.options.filter(action => owns || action === 'delete' && actor.id === id || !['delete', 'transfer'].includes(action));
     const actions: ActionName[] = await this.uses(actor.id, id) ? ['read', 'use', 'execute'] : [];
     const grants = await this.db.all<{actions: ActionName[]}>('SELECT actions FROM principal_grants WHERE target_id=$1 AND principal_id=ANY($2::uuid[])', [id, standing]);
     return [...new Set([...actions, ...grants.flatMap(grant => grant.actions).filter(action => !['delete', 'transfer'].includes(action))])];

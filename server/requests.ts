@@ -9,7 +9,7 @@ import type { Integrations } from './integrations.js';
 import type { Audit } from './audit.js';
 import { Vault,digest,token } from './vault.js';
 import { ApprovalRequest,Operation } from '../shared/contracts.js';
-import type { RequestedOperation,RequestInput,ApprovalView,JsonValue } from '../shared/contracts.js';
+import type { RequestedOperation,RequestInput,ApprovalView,JsonValue,Settings } from '../shared/contracts.js';
 import { setPointer,atPointer } from '../shared/values.js';
 import { fail,failure,required,DomainError } from './errors.js';
 
@@ -28,11 +28,14 @@ export class Requests {
     await this.authorization.active(actor);
     if(actor.requestId)return actor.requestId===row.id&&actor.id===row.to_id;
     if(row.to_id)return this.authorization.stands(actor.id,row.to_id);
-    return Boolean(row.code_hash)||this.authorization.stands(actor.id,row.from_id);
+    return Boolean(row.code_hash)&&actor.id!==row.from_id;
   }
   private async view(actor:Actor|null,row:RequestRow,code?:string):Promise<ApprovalView> {
     const from=await this.principals.get(row.from_id),to=row.to_id?await this.principals.get(row.to_id):null;
-    return ApprovalRequest.parse({id:row.id,from:{id:from.id,name:from.name},to:to?{id:to.id,name:to.name}:null,message:row.message,operations:await this.vault.decrypt<RequestedOperation[]>(row.operations,'request-operations:'+row.id),results:row.results,state:row.state,createdAt:iso(row.created_at),expiresAt:iso(row.expires_at),url:this.origin+'/requests/'+row.id,...(code?{code}:{}),continueUrl:row.continue_url,canRespond:await this.canRespond(actor,row)});
+    const settings=await this.db.one<{settings:z.infer<typeof Settings>}>('SELECT settings FROM integration_settings WHERE principal_id=$1',[from.id]);
+    const returnUrl=settings?.settings.returnUrl?new URL(settings.settings.returnUrl):null;
+    if(returnUrl){returnUrl.searchParams.set('requestId',row.id);returnUrl.searchParams.set('state',row.state);}
+    return ApprovalRequest.parse({id:row.id,from:{id:from.id,name:from.name},to:to?{id:to.id,name:to.name}:null,message:row.message,operations:await this.vault.decrypt<RequestedOperation[]>(row.operations,'request-operations:'+row.id),results:row.results,state:row.state,createdAt:iso(row.created_at),expiresAt:iso(row.expires_at),url:this.origin+'/requests/'+row.id,...(code?{code}:{}),continueUrl:row.continue_url,returnUrl:returnUrl?.href??null,refreshUrl:settings?.settings.refreshUrl??null,canRespond:await this.canRespond(actor,row)});
   }
   async get(actor:Actor|null,id:string) {
     const row=await this.row(id);
@@ -48,7 +51,7 @@ export class Requests {
   }
   private bootstrap(actorId:string,operations:RequestedOperation[]) {
     const body=operations[0]?.body;
-    return operations.length===1&&operations[0]?.method==='POST'&&operations[0].path==='/api/relations'&&Boolean(body&&typeof body==='object'&&!Array.isArray(body)&&body.subjectId===actorId&&body.relation==='agent'&&body.principalId==='$approver'&&Object.keys(body).length===3)&&operations[0].inputs.length===0;
+    return operations.length===1&&operations[0]?.method==='POST'&&operations[0].path==='/api/relations'&&Boolean(body&&typeof body==='object'&&!Array.isArray(body)&&(body.subjectId===actorId||body.subjectId==='$requester')&&body.relation==='agent'&&body.principalId==='$approver'&&Object.keys(body).length===3)&&operations[0].inputs.length===0;
   }
   async create(actor:Actor,input:z.infer<typeof RequestInput>) {
     if(actor.requestId)fail(403,'forbidden','Sign in to create a new request.');

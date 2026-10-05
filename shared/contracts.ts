@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+if (typeof window !== 'undefined') z.config({ jitless: true });
+
 export const Id = z.uuid();
 export const Name = z.string().trim().min(1).max(200).regex(/^[^\u0000-\u001f\u007f]+$/u);
 export const Time = z.iso.datetime();
@@ -119,7 +121,7 @@ export type RunView = z.infer<typeof Run>;
 export const Operation = z.object({ method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']), path: z.string().startsWith('/api/').max(2048), body: Json.optional(), inputs: z.array(z.object({ pointer: z.string(), label: z.string().min(1).max(100), secret: z.boolean().default(false), multiline: z.boolean().default(false), site: z.url().optional() })).max(16).default([]) }).strict();
 export type RequestedOperation = z.infer<typeof Operation>;
 export const RequestInput = z.object({ to: Id.optional(), message: z.string().max(1000).default(''), operations: z.array(Operation).min(1).max(8), expiresInMinutes: z.number().int().min(1).max(1440).default(30) }).strict();
-export const ApprovalRequest = z.object({ id: Id, from: Principal.pick({ id: true, name: true }), to: Principal.pick({ id: true, name: true }).nullable(), message: z.string(), operations: z.array(Operation), state: z.enum(['pending', 'running', 'approved', 'declined', 'cancelled', 'expired']), results: z.array(Json.nullable()), createdAt: Time, expiresAt: Time, url: z.url(), code: z.string().optional(), continueUrl:z.url().nullable(), canRespond:z.boolean() });
+export const ApprovalRequest = z.object({ id: Id, from: Principal.pick({ id: true, name: true }), to: Principal.pick({ id: true, name: true }).nullable(), message: z.string(), operations: z.array(Operation), state: z.enum(['pending', 'running', 'approved', 'declined', 'cancelled', 'expired']), results: z.array(Json.nullable()), createdAt: Time, expiresAt: Time, url: z.url(), code: z.string().optional(), continueUrl:z.url().nullable(), returnUrl:z.url().nullable(), refreshUrl:z.url().nullable(), canRespond:z.boolean() });
 export type ApprovalView = z.infer<typeof ApprovalRequest>;
 export const Payment = z.object({ available: z.boolean(), active: z.boolean(), payer: Principal.pick({ id: true, name: true }).nullable() });
 export const Usage = z.object({ storageBytes: z.number().nonnegative(), storageLimit: z.number().positive(), computeSeconds: z.number().nonnegative(), computeLimit: z.number().positive(), month: z.string() });

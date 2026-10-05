@@ -4,6 +4,19 @@ import { randomUUID } from 'node:crypto';
 import { fixture } from './support.js';
 import { seal, open, encode, decode, wrap, unwrap } from '../shared/encryption.js';
 
+test('シークレットを新しい所有者へ移し、宛先の鍵と権限を更新する', async t => {
+  const f=await fixture();t.after(f.close);
+  const owner=await f.person('Before'),next=await f.person('After'),id=randomUUID();
+  const original=await seal(encode('transfer-value'),[{id:owner.actor.id,publicKey:owner.keys.publicKey}],'resource:'+id);
+  const row=await f.resources.createSecret(owner.actor,owner.actor.id,{kind:'secret',id,name:'Transferred secret',sealed:original,bytes:14,allowUse:false});
+  const sealed=await seal(encode('transfer-value'),[{id:next.actor.id,publicKey:next.keys.publicKey}],'resource:'+id);
+  await f.resources.transfer(owner.actor,row,next.actor.id,sealed);
+  const transferred=await f.resources.get(id),content=await f.resources.secretContent(next.actor,id);
+  assert.equal(transferred.owner_id,next.actor.id);assert.deepEqual(transferred.data.recipients,[next.actor.id]);
+  assert.equal(decode(await open(content.sealed,next.keys.privateKey,next.actor.id,content.context)),'transfer-value');
+  await assert.rejects(()=>f.resources.secretContent(owner.actor,id),{code:'forbidden'});
+});
+
 test('機械が自分の鍵で登録し、自分のプリンシパルとして認証する', async t => {
   const f = await fixture(); t.after(f.close);
   const owner = await f.person('Machine');

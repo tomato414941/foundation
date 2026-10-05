@@ -83,12 +83,12 @@ export class Resources {
     await this.authorization.requireResource(actor, row, 'reveal');
     return { sealed: Sealed.parse(row.sealed), context: 'resource:' + row.id };
   }
-  async updateSecret(actor: Actor, row: ResourceRow, sealed: SealedContent, bytes: number, use?:boolean) {
+  async updateSecret(actor: Actor, row: ResourceRow, sealed: SealedContent, bytes: number, use?:boolean, name?:string) {
     await this.authorization.requireResource(actor, row, 'update');
     const allowUse = use ?? await this.authorization.resource({ id: this.identity.id }, row, 'use');
     await this.validateSecret(row.owner_id, row.id, sealed, allowUse);
     const updated = await this.db.transaction(async connection=>{
-      const updated=await this.update(row, { sealed, data: { bytes, recipients: sealed.recipients.map(recipient => recipient.header.kid) } },connection);
+      const updated=await this.update(row, { sealed, ...(name?{name:Name.parse(name)}:{}), data: { bytes, recipients: sealed.recipients.map(recipient => recipient.header.kid) } },connection);
       if(use!==undefined) {
         if(use)await connection.query("INSERT INTO grants(resource_id,principal_id,actions) VALUES($1,$2,ARRAY['use']) ON CONFLICT(resource_id,principal_id) DO UPDATE SET actions=ARRAY['use']",[row.id,this.identity.id]);
         else await connection.query('DELETE FROM grants WHERE resource_id=$1 AND principal_id=$2',[row.id,this.identity.id]);
@@ -131,7 +131,8 @@ export class Resources {
       await this.validateSecret(to, row.id, sealed, await this.authorization.resource({ id: this.identity.id }, row, 'use'));
     }
     await this.db.transaction(async connection => {
-      const result = await connection.query('UPDATE resources SET owner_id=$3,sealed=$4,version=version+1,updated_at=now() WHERE id=$1 AND version=$2', [row.id, row.version, to, JSON.stringify(sealed ?? row.sealed)]);
+      const data=sealed&&row.kind==='secret'?{...row.data,recipients:sealed.recipients.map(recipient=>recipient.header.kid)}:row.data;
+      const result = await connection.query('UPDATE resources SET owner_id=$3,sealed=$4,data=$5,version=version+1,updated_at=now() WHERE id=$1 AND version=$2', [row.id, row.version, to, JSON.stringify(sealed ?? row.sealed),JSON.stringify(data)]);
       if (!result.rowCount) fail(409, 'changed', 'This item changed. Reload it before transferring.');
       await connection.query('DELETE FROM grants WHERE resource_id=$1 AND principal_id<>$2', [row.id, this.identity.id]);
       await this.audit.record(to, actor.id, 'resource.receive', row.id, { from: row.owner_id }, connection);
