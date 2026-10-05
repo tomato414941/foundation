@@ -29,6 +29,7 @@ export class Runs {
       if(input.kind==='command'&&resource.data.state!=='running')fail(409,'environment_unavailable','Wait for the environment to start.');
     }
     const id=randomUUID();
+    const runActor:Actor={id:actor.id,...(actor.credentialId?{credentialId:actor.credentialId}:{}),...(actor.sessionId?{sessionId:actor.sessionId}:{})};
     const row=await this.resources.db.transaction(async connection=>{
       await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE',[ownerId]);
       const active=await this.resources.db.one<{count:string}>("SELECT count(*) FROM runs WHERE owner_id=$1 AND state IN ('queued','running')",[ownerId],connection);
@@ -38,7 +39,7 @@ export class Runs {
         const busy=await this.resources.db.one("SELECT 1 FROM runs WHERE resource_id=$1 AND state IN ('queued','running')",[resourceId],connection);
         if(busy)fail(409,'environment_busy','Wait for the current command to finish.');
       }
-      const row=required(await this.resources.db.one<RunRow>("INSERT INTO runs(id,owner_id,actor_id,resource_id,kind,state,private_input) VALUES($1,$2,$3,$4,$5,'queued',$6) RETURNING *",[id,ownerId,actor.id,resourceId,input.kind,await this.vault.encrypt({actor,input},'run:'+id)],connection));
+      const row=required(await this.resources.db.one<RunRow>("INSERT INTO runs(id,owner_id,actor_id,resource_id,kind,state,private_input) VALUES($1,$2,$3,$4,$5,'queued',$6) RETURNING *",[id,ownerId,actor.id,resourceId,input.kind,await this.vault.encrypt({actor:runActor,input},'run:'+id)],connection));
       await this.resources.audit.record(ownerId,actor.id,'run.create',id,{kind:input.kind},connection);return row;
     });
     return this.view(row);

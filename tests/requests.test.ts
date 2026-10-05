@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
+import { encode } from '../shared/encryption.js';
 
 test('確認コードで端末を引き受け、承認者の権限で利用を委任する',async t=>{
   const f=await fixture(),context=await createContext(f.config,{db:f.db,mailer:f.mailer}),app=await buildApp(context);t.after(async()=>{await app.close();await f.close();});
@@ -38,4 +39,20 @@ test('依頼専用リンクでその依頼を承認し、通常のAPI操作を�
   const direct=await app.inject({method:'PATCH',url:'/api/principals/'+owner.actor.id,headers,payload:{name:'Unrelated change'}});assert.equal(direct.statusCode,403,direct.body);
   const answer=await app.inject({method:'POST',url:'/api/requests/'+asked.json().id+'/approve',headers,payload:{}});assert.equal(answer.statusCode,200,answer.body);assert.equal(answer.json().state,'approved');
   const repeated=await app.inject({method:'POST',url:'/api/requests/'+asked.json().id+'/redeem',payload:{token:secret}});assert.equal(repeated.statusCode,400,repeated.body);
+});
+
+test('OAuthの完了後に依頼を再開し、取り消された依頼の接続を拒否する',async t=>{
+  const f=await fixture();f.config.oauthApps.google={clientId:'test-client',clientSecret:'test-secret'};
+  const context=await createContext(f.config,{db:f.db,mailer:f.mailer,transport:{async send(input){return {status:200,headers:{},body:encode(JSON.stringify(input.url.includes('/token')?{access_token:'oauth-token',refresh_token:'refresh-token',expires_in:3600,token_type:'Bearer'}:{sub:'account',email:'owner@example.com',email_verified:true}))};}}}),app=await buildApp(context);t.after(async()=>{await app.close();await f.close();});
+  const owner=await f.person('Owner'),sender=await f.person('Sender'),headers={authorization:'Bearer '+owner.token,cookie:'foundation_browser=approval-browser'};
+  async function ask(name:string) {
+    const request=await app.inject({method:'POST',url:'/api/requests',headers:{authorization:'Bearer '+sender.token},payload:{to:owner.actor.id,operations:[{method:'POST',path:'/api/principals/'+owner.actor.id+'/connections',body:{serviceId:'google',scheme:'oauth',name}},{method:'PATCH',path:'/api/principals/'+owner.actor.id,body:{name:'Connected owner'}}]}});assert.equal(request.statusCode,201,request.body);
+    const approval=await app.inject({method:'POST',url:'/api/requests/'+request.json().id+'/approve',headers,payload:{}});assert.equal(approval.statusCode,200,approval.body);assert.equal(approval.json().state,'running');return approval.json();
+  }
+  const first=await ask('Allowed connection'),state=new URL(first.continueUrl).searchParams.get('state');
+  const callback=await app.inject({url:'/api/connections/callback?state='+state+'&code=authorization-code',headers});assert.equal(callback.statusCode,302,callback.body);
+  assert.equal((await context.requests.get(owner.actor,first.id)).state,'approved');assert.equal((await context.principals.get(owner.actor.id)).name,'Connected owner');
+  const second=await ask('Cancelled connection');await context.requests.decline(owner.actor,second.id);
+  await app.inject({url:'/api/connections/callback?state='+new URL(second.continueUrl).searchParams.get('state')+'&code=authorization-code',headers});
+  assert.equal((await context.resources.list(owner.actor,owner.actor.id,{kind:'connection'})).items.length,1);
 });

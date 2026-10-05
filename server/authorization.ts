@@ -28,7 +28,8 @@ export class Authorization {
   async active(actor: Actor, connection: Queryable = this.db.pool) {
     const exists = await this.db.one<{ active: boolean }>(`SELECT EXISTS(SELECT 1 FROM principals WHERE id=$1)
       AND ($2::uuid IS NULL OR EXISTS(SELECT 1 FROM credentials c LEFT JOIN resources e ON e.id=c.environment_id WHERE c.id=$2 AND c.principal_id=$1 AND (c.expires_at IS NULL OR c.expires_at>now()) AND (c.environment_id IS NULL OR e.data->>'state'='running')))
-      AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM sessions WHERE id=$3 AND principal_id=$1 AND expires_at>now())) AS active`, [actor.id, actor.credentialId ?? null, actor.sessionId ?? null], connection);
+      AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM sessions WHERE id=$3 AND principal_id=$1 AND expires_at>now()))
+      AND ($4::uuid IS NULL OR EXISTS(SELECT 1 FROM approval_requests WHERE id=$4 AND state='running' AND expires_at>now())) AS active`, [actor.id, actor.credentialId ?? null, actor.sessionId ?? null,actor.approvalId??null], connection);
     if (!exists?.active) fail(401, 'unauthenticated', 'Sign in again to continue.');
   }
   async standsAs(actorId: string, connection: Queryable = this.db.pool): Promise<string[]> {
