@@ -6,6 +6,9 @@ node_modules/
 __pycache__/
 test-results/
 playwright-report/
+.react-router/
+dist/
+cli/dist/
 *.key
 *.pem
 *.p12
