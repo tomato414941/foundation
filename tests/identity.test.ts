@@ -4,6 +4,34 @@ import { randomUUID } from 'node:crypto';
 import { fixture } from './support.js';
 import { seal, open, encode, decode, wrap, unwrap } from '../shared/encryption.js';
 
+test('メンバー追加と所有者変更で配下のシークレットを再暗号化し、新しい相手が開けるようにする', async t => {
+  const f = await fixture(); t.after(f.close);
+  const owner = await f.person('Owner'), member = await f.person('Member'), next = await f.person('New owner');
+  const project = await f.principals.create('Project', null, owner.actor.id);
+  const child = await f.principals.create('Nested project', null, project.id);
+  const id = randomUUID(), content = encode('shared project secret');
+  const sealed = await seal(content, [{ id: owner.actor.id, publicKey: owner.keys.publicKey }], 'resource:' + id);
+  await f.resources.createSecret(owner.actor, child.id, { kind: 'secret', id, name: 'Project secret', sealed, bytes: content.length, allowUse: false });
+  await assert.rejects(f.principals.relate(owner.actor, member.actor.id, 'member', project.id), { code: 'rekey_required' });
+  assert.equal(await f.authorization.stands(member.actor.id, project.id), false);
+  const plan = await f.principals.keySharing.plan(owner.actor, project.id, member.actor.id, 'member');
+  const updates = { [id]: { version: plan.items[0]!.version, sealed: await seal(content, plan.items[0]!.recipients, 'resource:' + id) } };
+  await f.principals.relate(owner.actor, member.actor.id, 'member', project.id, updates);
+  const shared = await f.resources.secretContent(member.actor, id);
+  assert.equal(decode(await open(shared.sealed, member.keys.privateKey, member.actor.id, shared.context)), decode(content));
+  const transfer = await f.principals.keySharing.plan(owner.actor, project.id, next.actor.id, 'owner');
+  const transferred = { [id]: { version: transfer.items[0]!.version, sealed: await seal(content, transfer.items[0]!.recipients, 'resource:' + id) } };
+  await f.resources.rename(owner.actor, await f.resources.get(id), 'Renamed secret');
+  await assert.rejects(f.principals.transfer(owner.actor, project.id, next.actor.id, transferred), { code: 'changed' });
+  assert.equal(await f.authorization.stands(owner.actor.id, project.id), true);
+  transferred[id]!.version = (await f.resources.get(id)).version;
+  await f.principals.transfer(owner.actor, project.id, next.actor.id, transferred);
+  const result = await f.resources.secretContent(next.actor, id);
+  assert.equal(decode(await open(result.sealed, next.keys.privateKey, next.actor.id, result.context)), decode(content));
+  assert.equal(decode(await open(result.sealed, member.keys.privateKey, member.actor.id, result.context)), decode(content));
+  await assert.rejects(f.resources.secretContent(owner.actor, id), { code: 'forbidden' });
+});
+
 test('シークレットを新しい所有者へ移し、宛先の鍵と権限を更新する', async t => {
   const f=await fixture();t.after(f.close);
   const owner=await f.person('Before'),next=await f.person('After'),id=randomUUID();

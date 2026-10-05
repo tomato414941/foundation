@@ -6,17 +6,20 @@ import type { Audit } from './audit.js';
 import { Name, Principal, PublicKey } from '../shared/contracts.js';
 import type { PublicEncryptionKey, ActionName } from '../shared/contracts.js';
 import { fail, required } from './errors.js';
+import { KeySharing, type KeyUpdates } from './key-sharing.js';
+import { ResourceKind } from '../shared/contracts.js';
 
 export interface PrincipalRow { id: string; name: string; public_key: PublicEncryptionKey | null; created_at: Date }
 export class Principals {
   constructor(readonly db: Database, readonly authorization: Authorization, readonly audit: Audit, readonly serverId: string) {}
+  get keySharing() { return new KeySharing(this.db, this.authorization, this.serverId); }
   async get(id: string, connection: Queryable = this.db.pool): Promise<PrincipalRow> { return required(await this.db.one<PrincipalRow>('SELECT * FROM principals WHERE id=$1', [id], connection)); }
   async create(name: string, publicKey: PublicEncryptionKey | null = null, ownerId?: string, connection: Queryable = this.db.pool, id: string = randomUUID()): Promise<PrincipalRow> {
     await connection.query('INSERT INTO principals(id,name,public_key) VALUES($1,$2,$3)', [id, Name.parse(name), publicKey ? JSON.stringify(PublicKey.parse(publicKey)) : null]);
     if (ownerId) await connection.query('INSERT INTO relations(id,subject_id,principal_id,relation) VALUES($1,$2,$3,$4)', [randomUUID(), ownerId, id, 'owner']);
     return this.get(id, connection);
   }
-  async view(actor: Actor, row: PrincipalRow) { return Principal.parse({ id: row.id, name: row.name, publicKey: row.public_key, createdAt: iso(row.created_at), permissions: await this.authorization.principalActions(actor, row.id) }); }
+  async view(actor: Actor, row: PrincipalRow) { return Principal.parse({ id: row.id, name: row.name, publicKey: row.public_key, createdAt: iso(row.created_at), permissions: await this.authorization.principalActions(actor, row.id), createKinds: (await Promise.all(ResourceKind.options.map(async kind => await this.authorization.canCreate(actor, row.id, kind) ? kind : null))).filter(kind => kind !== null) }); }
   async accessible(actor: Actor) {
     const standing = await this.authorization.standsAs(actor.id);
     const rows = await this.db.all<PrincipalRow>(`SELECT DISTINCT p.* FROM principals p LEFT JOIN relations r ON r.principal_id=p.id
@@ -40,7 +43,7 @@ export class Principals {
       await this.audit.record(id, actor.id, 'principal.publishKey', id, {}, connection);
     });
   }
-  async relate(actor: Actor, subjectId: string, relation: 'agent' | 'member' | 'payer', principalId: string) {
+  async relate(actor: Actor, subjectId: string, relation: 'agent' | 'member' | 'payer', principalId: string, secrets: KeyUpdates = {}) {
     if (subjectId === principalId) fail(400, 'invalid_relation', 'Choose a different principal.');
     await this.get(subjectId); await this.get(principalId);
     await this.authorization.requirePrincipal(actor, relation === 'payer' ? subjectId : principalId, 'share');
@@ -54,6 +57,7 @@ export class Principals {
         if (cycle) fail(409, 'relation_cycle', 'This payment relationship would create a cycle.');
         await connection.query("DELETE FROM relations WHERE principal_id=$1 AND relation='payer'", [principalId]);
       }
+      if (relation === 'member') await this.keySharing.apply(actor, principalId, subjectId, 'member', secrets, connection);
       await connection.query('INSERT INTO relations(id,subject_id,principal_id,relation) VALUES($1,$2,$3,$4) ON CONFLICT(subject_id,principal_id,relation) DO NOTHING', [randomUUID(), subjectId, principalId, relation]);
       await this.audit.record(principalId, actor.id, 'relation.add', subjectId, { relation }, connection);
     });
@@ -70,12 +74,13 @@ export class Principals {
     const selected = rows.slice(0, limit);
     return { items: selected.map(row => ({ id: row.id, subjectId: row.subject_id, principalId: row.principal_id, relation: row.relation, subjectName: row.subject_name, principalName: row.principal_name, createdAt: iso(row.created_at) })), next: rows.length > limit ? selected.at(-1)!.id : null };
   }
-  async transfer(actor: Actor, id: string, to: string) {
+  async transfer(actor: Actor, id: string, to: string, secrets: KeyUpdates = {}) {
     await this.authorization.requirePrincipal(actor, id, 'transfer');
     await this.get(to);
     await this.db.transaction(async connection => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
       if (await this.authorization.stands(id, to, connection)) fail(409, 'relation_cycle', 'This transfer would create an ownership cycle.');
+      await this.keySharing.apply(actor, id, to, 'owner', secrets, connection);
       await connection.query("DELETE FROM relations WHERE principal_id=$1 AND relation='owner'", [id]);
       await connection.query("INSERT INTO relations(id,subject_id,principal_id,relation) VALUES($1,$2,$3,'owner')", [randomUUID(), to, id]);
       await this.audit.record(id, actor.id, 'principal.transfer', to, {}, connection);

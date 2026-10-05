@@ -3,7 +3,8 @@ import type { AuthenticationResponseJSON, PublicKeyCredentialCreationOptionsJSON
 import type { JWK } from 'jose';
 import type { PrincipalView, PublicEncryptionKey, SealedContent } from '../../shared/contracts';
 import { encode, hold, newEncryptionKey, open, seal, unwrap, wrap } from '../../shared/encryption';
-import { api, ApiFailure } from './api';
+import { api, ApiFailure, session } from './api';
+import { KeySharingItem, listOf } from '../../shared/contracts';
 
 const unlocked = new Map<string, JWK>();
 const held = new Map<string, CryptoKey>();
@@ -69,4 +70,22 @@ export async function mergeWithPasskey() {
   const result = await api<{ id: string; fromId: string; wrappedKey: string | null }>('/account/merge/passkey', { method: 'POST', body: { challengeId: proof.challengeId, credential: verificationCredential(proof.credential) } });
   if (result.wrappedKey && proof.secret) await keep(result.fromId, await unwrap(result.wrappedKey, proof.secret, result.fromId));
   return result;
+}
+
+export async function rekeySharing(path: string) {
+  const plan = await api(path, {}, listOf(KeySharingItem));
+  const updates: Record<string, { version: number; sealed: SealedContent }> = {};
+  if (!plan.items.length) return updates;
+  const principal = (await session()).principal;
+  if (!principal) throw new ApiFailure('unauthenticated');
+  let key = await getKey(principal.id);
+  if (!key) { await authenticate(principal.id); key = await getKey(principal.id); }
+  if (!key) throw new ApiFailure('key_locked');
+  for (const item of plan.items) {
+    let content: Uint8Array;
+    try { content = await open(item.sealed, key, principal.id, 'resource:' + item.id); }
+    catch { throw new ApiFailure('key_unavailable'); }
+    updates[item.id] = { version: item.version, sealed: await seal(content, item.recipients, 'resource:' + item.id) };
+  }
+  return updates;
 }

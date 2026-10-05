@@ -127,6 +127,32 @@ class BrowserTests(unittest.TestCase):
         resource_id = path.rsplit("/", 1)[1]
         self.assertEqual(reader.request.get(f"{ORIGIN}/api/resources/{resource_id}/secret").status, 403)
 
+    def test_メンバー追加と所有者変更でシークレットを引き継ぐ(self):
+        owner, principal = self.passkey_account("Project owner")
+        member, recipient = self.passkey_account("Project member")
+        successor, new_owner = self.passkey_account("Project successor")
+        owner.goto(f"{ORIGIN}/p/{principal['id']}/principals/new")
+        owner.get_by_role("textbox", name="名前", exact=True).fill("Shared project")
+        owner.get_by_role("button", name="作成", exact=True).click()
+        expect(owner.get_by_role("heading", name="Shared project", exact=True)).to_be_visible()
+        project = {"id": owner.url.rsplit("/", 1)[1]}
+        secret_path = self.secret(owner, project, "Team secret", "team-secret-value")
+        owner.goto(f"{ORIGIN}/p/{project['id']}/principals")
+        owner.get_by_role("textbox", name="相手のプリンシパルID").fill(recipient["id"])
+        self.select(owner, "関係", "メンバー")
+        owner.get_by_role("button", name="追加", exact=True).click()
+        expect(owner.get_by_text("Project member → メンバー → Shared project", exact=True)).to_be_visible()
+        member.goto(secret_path)
+        member.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(member.get_by_role("textbox", name="値", exact=True)).to_have_value("team-secret-value")
+        owner.goto(f"{ORIGIN}/p/{project['id']}/settings/general")
+        owner.get_by_role("textbox", name="新しい所有者のプリンシパルID").fill(new_owner["id"])
+        owner.get_by_role("button", name="所有者を変更", exact=True).click()
+        owner.wait_for_url(f"**/p/{principal['id']}")
+        successor.goto(secret_path)
+        successor.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(successor.get_by_role("textbox", name="値", exact=True)).to_have_value("team-secret-value")
+
     def test_サービス接続とプリンシパルを作成して委任する(self):
         page, principal = self.passkey_account()
         page.goto(f"{ORIGIN}/p/{principal['id']}/services/new")

@@ -7,11 +7,11 @@ import type { PrincipalView } from '../../../shared/contracts';
 import { api, ApiFailure, signedIn } from '../api';
 export async function clientLoader({ request, params }: Route.ClientLoaderArgs) {
   const session = await signedIn(request);
-  let principal: Pick<PrincipalView, 'id' | 'name' | 'permissions' | 'publicKey'>;
+  let principal: Pick<PrincipalView, 'id' | 'name' | 'permissions' | 'publicKey' | 'createKinds'>;
   try { principal = await api('/principals/' + params.owner, { signal: request.signal }, Principal); }
   catch (error) {
     if (!(error instanceof ApiFailure) || error.status !== 403) throw error;
-    principal = { ...await api<Pick<PrincipalView, 'id' | 'name' | 'publicKey'>>('/identities/' + params.owner, { signal: request.signal }), permissions: [] };
+    principal = { ...await api<Pick<PrincipalView, 'id' | 'name' | 'publicKey'>>('/identities/' + params.owner, { signal: request.signal }), permissions: [], createKinds: [] };
   }
   return { session, principal };
 }

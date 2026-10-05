@@ -23,7 +23,7 @@ export const Sealed = z.object({
 export type SealedContent = z.infer<typeof Sealed>;
 export const Recipient = z.object({ id: Id, name: Name, publicKey: PublicKey });
 
-export const Principal = z.object({ id: Id, name: Name, createdAt: Time, permissions: z.array(Action), publicKey: PublicKey.nullable() });
+export const Principal = z.object({ id: Id, name: Name, createdAt: Time, permissions: z.array(Action), createKinds: z.array(ResourceKind), publicKey: PublicKey.nullable() });
 export type PrincipalView = z.infer<typeof Principal>;
 export const Credential = z.object({ id: Id, kind: z.enum(['passkey', 'email', 'key']), name: z.string(), createdAt: Time, lastUsedAt: Time.nullable(), expiresAt: Time.nullable() });
 export const RelationInput = z.object({ subjectId: Id, relation: z.enum(['agent', 'member', 'payer']), principalId: Id }).strict();
@@ -133,3 +133,7 @@ export const listOf = <T extends z.ZodType>(schema: T) => z.object({ items: z.ar
 export const IdParams = z.object({ id: Id });
 export const OwnerParams = z.object({ owner: Id });
 export const PageQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(100), after: z.string().optional() });
+
+export const KeyUpdate = z.object({ version: z.number().int().positive(), sealed: Sealed });
+export const KeyUpdates = z.record(Id, KeyUpdate);
+export const KeySharingItem = z.object({ id: Id, name: Name, version: z.number().int().positive(), sealed: Sealed, recipients: z.array(Recipient) });

@@ -43,6 +43,7 @@ const errors: Array<[string[], string, string]> = [
   [['account_not_found'], 'このメールアドレスのアカウントが見つかりません。', 'No account was found for this email address.'],
   [['operation_unavailable'], 'この操作は依頼から実行できません。', 'This operation cannot be performed through an approval request.'],
 ];
+errors.push([['rekey_required'], 'シークレットの共有先が変わりました。再読み込みして、もう一度お試しください。', 'Secret recipients changed. Reload the page and try again.']);
 for (const [codes, ja, en] of errors) for (const code of codes) words['errors.' + code] = [ja, en];
 const resources = Object.fromEntries(['ja', 'en'].map((language, index) => [language, { translation: Object.fromEntries(Object.entries(words).map(([key, value]) => [key, value[index]])) }]));
 void i18n.use(initReactI18next).init({ resources, lng: 'ja', fallbackLng: 'en', keySeparator: false, interpolation: { escapeValue: false }, returnNull: false });

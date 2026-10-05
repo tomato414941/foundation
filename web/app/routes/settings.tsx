@@ -6,6 +6,7 @@ import { AuditEntry, Credential, Payment, Principal, Settings, Usage, listOf } f
 import { actionResult, api, formText } from '../api';
 import { Bytes, Confirm, Copy, DateText, Detail, ErrorNotice, JsonView, Page, Paging, Panel } from '../components';
 import { useWorkspace } from './workspace';
+import { rekeySharing } from '../keys';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   if (!['general', 'credentials', 'billing', 'integrations', 'audit'].includes(params.tab)) throw new Response('Not found', { status: 404 });
   const prefix = '/principals/' + params.owner;
@@ -22,7 +23,7 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
   const form = await request.formData(); const prefix = '/principals/' + params.owner; const intent = formText(form, 'intent');
   if (intent === 'rename') await api(prefix, { method: 'PATCH', body: { name: formText(form, 'name') } });
   else if (intent === 'delete') { await api(prefix, { method: 'DELETE' }); return redirect('/'); }
-  else if (intent === 'transfer') { await api(prefix + '/transfer', { method: 'POST', body: { to: formText(form, 'to') } }); return redirect('/'); }
+  else if (intent === 'transfer') { const to = formText(form, 'to'); const secrets = await rekeySharing(prefix + '/transfer-recipients?' + new URLSearchParams({ to })); await api(prefix + '/transfer', { method: 'POST', body: { to, secrets } }); return redirect('/'); }
   else if (intent === 'credential') await api(prefix + '/credentials/' + formText(form, 'credentialId'), { method: 'DELETE' });
   else if (intent === 'limits') await api(prefix + '/limits', { method: 'PUT', body: { storageBytes: Math.round(Number(formText(form, 'storage')) * 1_000_000), computeSeconds: Math.round(Number(formText(form, 'compute')) * 60) } });
   else if (intent === 'checkout' || intent === 'portal') return redirect((await api<{ url: string }>(prefix + '/payment/' + intent, { method: 'POST', body: {} })).url);
