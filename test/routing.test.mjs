@@ -38,7 +38,7 @@ test('未サインインのAIへOpenAPIで接続先・認証要件・入力形�
   assert.match(page.headers.get('content-type'), /^application\/json/);
   assert.deepEqual(page.json.servers, [{ url: f.base }]);
   assert.match(page.json.paths['/v1/principals'].post.description, /verification_uri and user_code/);
-  assert.deepEqual(page.json.paths['/v1/principals/{principalId}/connections'].put.security, [{ session: [] }]);
+  assert.deepEqual(page.json.paths['/v1/principals/{principalId}/connections/{state}'].post.security, [{ session: [] }]);
   assert.equal(page.json.paths['/v1/principals/{principalId}/injections'].post.requestBody.content['application/json'].schema.$ref, '#/components/schemas/Inject');
 });
 
@@ -96,7 +96,7 @@ test('サインインを終えると開こうとしていた認証情報また�
   for (const [at, path] of ['/secrets', '/services', '/objects?prefix=reports%2F', '/objects?prefix=%E8%B3%87%E6%96%99+%23%3F%2F', '/principals#apps'].entries()) {
     const email = 'return-' + at + '@example.test';
     const token = f.app.challenges.issue('email', email, { ttl: 900_000 });
-    const result = await f.request('/v1/session', { method: 'PUT', data: { kind: 'email', email, token, return_to: path } });
+    const result = await f.request('/v1/session', { method: 'POST', data: { kind: 'email', email, token, return_to: path } });
     assert.equal(result.status, 200, result.text);
     assert.equal(result.json.return_to, path);
   }

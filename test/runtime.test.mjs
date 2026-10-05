@@ -454,7 +454,7 @@ test('渡された封筒のあるシークレットは、Foundation が開けな
   assert.equal((await f.request('/v1/principals/' + machine.id + '/relations', { method: 'POST', data: { relation: 'viewer', object_type: 'resource', object_id: kept.id } })).status, 201);
   const mine = await f.request('/v1/resources/' + kept.id + '/content');
   const contentKey = open(Buffer.from(mine.json.envelope, 'base64url'), (await f.keyOf({})).privateKey);
-  const theirs = (await f.request('/v1/principals/' + machine.id + '/key')).json.key.public_key;
+  const theirs = (await f.request('/v1/principals/' + machine.id + '/encryption-key')).json.key.public_key;
   const handed = await f.request('/v1/resources/' + kept.id + '/envelopes/' + machine.id, { method: 'PUT', data: { wrapped: seal(contentKey, Buffer.from(theirs, 'base64url')).toString('base64url') } });
   assert.equal(handed.status, 200, handed.text);
   const run = await execute(['exec', 'TOKEN=handed/token', '--', process.execPath, '-e', 'process.stdout.write(process.env.TOKEN)'], env);

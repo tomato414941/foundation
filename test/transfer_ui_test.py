@@ -53,7 +53,7 @@ with sync_playwright() as p:
     headers = {'authorization': 'Bearer ' + made['token']}
     private = x25519.X25519PrivateKey.generate()
     public = private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    assert other.put(args.base + '/v1/principals/me/key', data=json.dumps({'public_key': b64url(public)}), headers={**headers, 'content-type': 'application/json'}).ok
+    assert other.put(args.base + '/v1/principals/me/encryption-key', data=json.dumps({'public_key': b64url(public)}), headers={**headers, 'content-type': 'application/json'}).ok
     assert other.post(args.base + '/v1/principals/agent/relations', data=json.dumps({'relation': 'agent', 'object_type': 'principal', 'object_id': made['principal']['id']}), headers={**headers, 'content-type': 'application/json'}).ok
 
     page.reload(wait_until='networkidle')

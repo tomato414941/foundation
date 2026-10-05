@@ -65,11 +65,11 @@ test('JSON errors opt in only through an exact supported Web locale header', asy
   assert.equal(translated.json.error.message, 'Sign in to continue.');
   const japanese = await f.request(path, { headers: { ...options.headers, 'x-foundation-locale': 'ja' } });
   assert.deepEqual(japanese.json, baseline.json);
-  const schema = await f.request('/v1/session', { method: 'POST', data: { kind: 'email', address: 123 }, headers: { 'x-foundation-locale': 'en' } });
+  const schema = await f.request('/v1/session/challenges', { method: 'POST', data: { kind: 'email', address: 123 }, headers: { 'x-foundation-locale': 'en' } });
   assert.equal(schema.status, 400);
   assert.equal(schema.json.error.code, 'invalid_email');
   assert.equal(schema.json.error.message, 'Check the information you entered.');
-  const semantic = await f.request('/v1/session', { method: 'POST', data: { kind: 'email', address: 'invalid' }, headers: { 'x-foundation-locale': 'en' } });
+  const semantic = await f.request('/v1/session/challenges', { method: 'POST', data: { kind: 'email', address: 'invalid' }, headers: { 'x-foundation-locale': 'en' } });
   assert.equal(semantic.json.error.message, 'Check your email address.');
 });
 

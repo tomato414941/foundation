@@ -88,11 +88,11 @@ globalThis.fetch = async (url, options = {}) => {
   else if (url === '/v1/services') data = { services: [] };
   else if (url === '/v1/principals/me/payment') data = { payment: { available: false, paying: false, payer: 'owner' } };
   else if (url === '/v1/session' && options.method === 'GET') data = { available: true, pending: null };
-  else if (url === '/v1/session' && options.method === 'POST' && JSON.parse(options.body).kind === 'webauthn') data = { options: { challenge: 'AAAAAAAA', allowCredentials: [] } };
-  else if (url === '/v1/principals' && options.method === 'POST' && JSON.parse(options.body).kind === 'webauthn') data = { options: { challenge: 'AAAAAAAA', user: { id: 'b3duZXI', name: 'Keeper Sirius', displayName: 'Keeper Sirius' } } };
-  else if (url === '/v1/session' && options.method !== 'DELETE' && JSON.parse(options.body).kind === 'email') { status = 400; data = { error: { code: 'invalid_input', message: 'Sample error' } }; }
+  else if (url === '/v1/session/challenges' && JSON.parse(options.body).kind === 'webauthn') data = { options: { challenge: 'AAAAAAAA', allowCredentials: [] } };
+  else if (url === '/v1/principals/challenges') data = { options: { challenge: 'AAAAAAAA', user: { id: 'b3duZXI', name: 'Keeper Sirius', displayName: 'Keeper Sirius' } } };
+  else if ((url === '/v1/session' || url === '/v1/session/challenges') && options.method !== 'DELETE' && JSON.parse(options.body).kind === 'email') { status = 400; data = { error: { code: 'invalid_input', message: 'Sample error' } }; }
   else if (url === '/v1/principals' || url === '/v1/session') { signedIn = true; data = { return_to: '/', backed_up: mode !== 'passkey-local' }; }
-  else if (url === '/v1/principals/me/key') data = { key: {} };
+  else if (url === '/v1/principals/me/encryption-key') data = { key: {} };
   else if (url === '/v1/requests/' + id) data = { request };
   else if (url.endsWith('/deny')) { await new Promise(resolve => { release = resolve; }); request.status = 'denied'; data = {}; }
   else if (url.startsWith('/v1/principals/me/resources?')) data = { resources: [] };
@@ -279,7 +279,7 @@ if (mode === 'boot') {
     await until(() => document.documentElement.lang === 'en' && heading() === 'Foundation');
     change('ja'); await until(() => document.documentElement.lang === 'ja');
     if (mode !== 'passkey-signin') {
-      const created = calls.filter(call => call.url === '/v1/principals' && call.options.method === 'PUT');
+      const created = calls.filter(call => call.url === '/v1/principals' && call.options.method === 'POST');
       assert.equal(created.length, 1, 'locale changes never regenerate a stored identity');
       assert.equal(JSON.parse(created[0].options.body).principal_name, 'Keeper Sirius');
     }

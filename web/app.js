@@ -267,7 +267,7 @@ async function api(path, { method = 'GET', data, signal, headers = {} } = {}) {
   signal?.throwIfAborted();
   if (!response.ok) {
     const error = new Error(result.error?.message || t('client.errors.requestFailed')); error.status = response.status; error.code = result.error?.code; error.details = result.error;
-    if (response.status === 401 && !linked && path !== '/v1/session' && path !== '/v1/principals') await showSignin();
+    if (response.status === 401 && !linked && !path.startsWith('/v1/session') && path !== '/v1/principals' && path !== '/v1/principals/challenges') await showSignin();
     throw error;
   }
   return result;
@@ -291,7 +291,7 @@ function showSigninConfirmation() {
     button.disabled = true;
     form.querySelector('.form-error').textContent = '';
     try {
-      const result = await api('/v1/session', { method: 'PUT', data: { kind: 'email', email, token, return_to: signinReturn } });
+      const result = await api('/v1/session', { method: 'POST', data: { kind: 'email', email, token, return_to: signinReturn } });
       if (result.attached) { form.replaceWith(Object.assign(document.createElement('p'), { className: 'signin-help', textContent: t('client.email.attached') })); return; }
       location.replace(result.return_to);
     } catch (error) {
@@ -317,10 +317,10 @@ async function makePasskey(options) {
 async function unlockWith(credentialId, yielded) {
   own = null; keyUnavailable = false;
   if (!yielded) { keyUnavailable = true; return; }
-  const { key } = await api('/v1/principals/me/key');
+  const { key } = await api('/v1/principals/me/encryption-key');
   if (!key.public_key) {
     const made = await sealing.generateKey();
-    await api('/v1/principals/me/key', { method: 'PUT', data: { public_key: b64(made.publicKey), wraps: { [credentialId]: b64(await sealing.wrap(made.privateKey, yielded)) } } });
+    await api('/v1/principals/me/encryption-key', { method: 'PUT', data: { public_key: b64(made.publicKey), wraps: { [credentialId]: b64(await sealing.wrap(made.privateKey, yielded)) } } });
     own = made; return;
   }
   const wrapped = key.wraps?.[credentialId];
@@ -409,28 +409,28 @@ async function createPasskey(name, id = state.user.id) {
   // A passkey made for another principal carries no key of this one's.
   const mine = id === state.user.id, path = '/v1/principals/' + encodeURIComponent(id) + '/credentials';
   if (mine) try { await needRawKey(); } catch (error) { if (!passkeyDeclined(error)) throw error; }
-  const { options } = await api(path, { method: 'POST', data: { kind: 'webauthn' } });
+  const { options } = await api(path + '/challenges', { method: 'POST', data: { kind: 'webauthn' } });
   const { credential, yielded } = await makePasskey(options);
   const wrap = mine && own && !sealing.isHeld(own.privateKey) && yielded ? { wrap: b64(await sealing.wrap(own.privateKey, yielded)) } : {};
-  return api(path, { method: 'PUT', data: { kind: 'webauthn', name, credential, ...wrap } });
+  return api(path, { method: 'POST', data: { kind: 'webauthn', name, credential, ...wrap } });
 }
 // Starting with a passkey alone: the passkey made here makes the principal, signed in at once.
 // Starting with a passkey alone: one press makes the passkey, and with it the principal, signed in at once. Nothing
 // is asked: the name Foundation drew for the passkey's label becomes the principal's, to be changed on the account page.
 async function startWithPasskey() {
   let made;
-  const { options } = await api('/v1/principals', { method: 'POST', data: { kind: 'webauthn' } });
+  const { options } = await api('/v1/principals/challenges', { method: 'POST', data: { kind: 'webauthn' } });
   const { credential, yielded } = await makePasskey(options);
   // The principal's key, made with its first passkey and wrapped for it.
   const key = yielded ? await sealing.generateKey() : null;
-  made = await api('/v1/principals', { method: 'PUT', data: { kind: 'webauthn', principal_name: options.user.name, name: deviceName(), credential, ...(key ? { wrap: b64(await sealing.wrap(key.privateKey, yielded)), public_key: b64(key.publicKey) } : {}), return_to: returnTo() } });
+  made = await api('/v1/principals', { method: 'POST', data: { kind: 'webauthn', principal_name: options.user.name, name: deviceName(), credential, ...(key ? { wrap: b64(await sealing.wrap(key.privateKey, yielded)), public_key: b64(key.publicKey) } : {}), return_to: returnTo() } });
   own = key; keyUnavailable = !key;
   if (made.backed_up) { await arrive(made.return_to); return; }
   openDialog(`<h2 id="dialog-title">${esc(t('client.passkey.created'))}</h2><p>${esc(t('client.passkey.deviceOnly'))}</p><button class="button primary full" type="button" id="start-continue">${esc(t('client.common.continue'))}</button>`);
   dialog.querySelector('#start-continue').addEventListener('click', () => { closeDialog(); void arrive(made.return_to); });
 }
 async function answerPasskey() {
-  const { options } = await api('/v1/session', { method: 'POST', data: { kind: 'webauthn' } });
+  const { options } = await api('/v1/session/challenges', { method: 'POST', data: { kind: 'webauthn' } });
   const given = await navigator.credentials.get({ publicKey: { ...options, challenge: bytes(options.challenge), allowCredentials: described(options.allowCredentials), extensions: { prf: { eval: { first: PRF_INPUT } } } } });
   return { yielded: yieldedBy(given), credential: { id: given.id, rawId: text64(given.rawId), type: given.type, clientExtensionResults: {},
     response: { clientDataJSON: text64(given.response.clientDataJSON), authenticatorData: text64(given.response.authenticatorData), signature: text64(given.response.signature),
@@ -488,7 +488,7 @@ async function showSignin({ email = '', message = '' } = {}) {
     setBusy(true); document.querySelector('#passkey-error').textContent = '';
     try {
       const { credential, yielded } = await answerPasskey();
-      const signed = await api('/v1/session', { method: 'PUT', data: { kind: 'webauthn', credential, return_to: returnTo() } });
+      const signed = await api('/v1/session', { method: 'POST', data: { kind: 'webauthn', credential, return_to: returnTo() } });
       await unlockWith(credential.id, yielded);
       await arrive(signed.return_to);
     } catch (error) {
@@ -510,7 +510,7 @@ async function showSignin({ email = '', message = '' } = {}) {
     if (busy || !config.available || (pending && Date.now() < pending.resend_at)) return;
     setBusy(true); form.querySelector('.form-error').textContent = '';
     try {
-      await api('/v1/session', { method: 'POST', data: { kind: 'email', address: pending?.email || form.elements.email.value.trim(), return_to: returnTo() } });
+      await api('/v1/session/challenges', { method: 'POST', data: { kind: 'email', address: pending?.email || form.elements.email.value.trim(), return_to: returnTo() } });
       await showSignin();
     } catch (error) {
       if (!form.isConnected) return;
@@ -1409,7 +1409,7 @@ async function connectByPaste(service, way, { connectionId, started: begun } = {
     <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${words.submit}</button></form>${replacing || begun ? '' : otherWays(service, way)}`);
   bindForm(async (form) => {
     const fields = pastedValues(scheme, form), label = String(form.get('name') || '').trim();
-    if (started) await api(held() + '/connections', { method: 'PUT', data: { state: started.state, fields } });
+    if (started) await api(held() + '/connections/' + encodeURIComponent(started.state), { method: 'POST', data: { fields } });
     else await api(held() + '/connections', { method: 'POST', data: { service: service.id, auth_scheme: 'token', fields, ...(replacing ? { connection_id: replacing.id } : label ? { name: label } : {}) } });
     closeDialog(); await refresh(); toast(replacing && !started ? t('client.connection.valueReplaced') : t('client.connections.connectedName', { name: service.name }));
   });
@@ -1587,7 +1587,7 @@ function renamePrincipal(item) {
 function addEmail(id) {
   openDialog(`<h2 id="dialog-title">${esc(t('client.account.addEmail'))}</h2><form><label for="new-email">${esc(t('client.signin.emailAddress'))}</label><input id="new-email" name="address" type="email" required maxlength="254" autocomplete="email"><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.account.sendConfirmation'))}</button></form>`);
   bindForm(async (form) => {
-    await api('/v1/principals/' + encodeURIComponent(id || state.user.id) + '/credentials', { method: 'POST', data: { kind: 'email', address: form.get('address').trim() } });
+    await api('/v1/principals/' + encodeURIComponent(id || state.user.id) + '/credentials/challenges', { method: 'POST', data: { kind: 'email', address: form.get('address').trim() } });
     if (id) await principalDetails(id); else closeDialog();
     toast(t('client.account.emailLinkSent'));
   });
@@ -1617,7 +1617,7 @@ async function handOver() {
   bindForm(async (form) => {
     const to = String(form.get('to') || '').trim(), chosen = form.getAll('item').map(String);
     if (!chosen.length) throw new Error(t('client.handover.chooseSomething'));
-    const { key } = await api('/v1/principals/' + encodeURIComponent(to) + '/key');
+    const { key } = await api('/v1/principals/' + encodeURIComponent(to) + '/encryption-key');
     const failures = [];
     for (const [title, items] of groups) for (const item of items) {
       if (!chosen.includes(item.kind + ':' + item.id)) continue;
@@ -1648,14 +1648,14 @@ function mergeAccount() {
       <p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.merge.confirmWithPasskey'))}</button></form>`);
     bindForm(async (form) => {
       const otherId = String(form.get('other') || '').trim();
-      const { options } = await api('/v1/principals/me/merge', { method: 'POST', data: { principal_id: otherId } });
+      const { options } = await api('/v1/principals/me/merges/challenges', { method: 'POST', data: { principal_id: otherId } });
       let given;
       try { given = await navigator.credentials.get({ publicKey: { ...options, challenge: bytes(options.challenge), allowCredentials: described(options.allowCredentials), extensions: { prf: { eval: { first: PRF_INPUT } } } } }); }
       catch (error) { if (passkeyDeclined(error)) return; throw error; }
       const yielded = yieldedBy(given);
       const credential = { id: given.id, rawId: text64(given.rawId), type: given.type, clientExtensionResults: {},
         response: { clientDataJSON: text64(given.response.clientDataJSON), authenticatorData: text64(given.response.authenticatorData), signature: text64(given.response.signature), ...(given.response.userHandle ? { userHandle: text64(given.response.userHandle) } : {}) } };
-      const begun = await api('/v1/principals/me/merge', { method: 'PUT', data: { credential, principal_id: otherId } });
+      const begun = await api('/v1/principals/me/merges', { method: 'POST', data: { credential, principal_id: otherId } });
       const name = begun.other.name || begun.other.id;
       openDialog(`<h2 id="dialog-title">${esc(t('client.merge.title'))}</h2><form><p>${esc(t(into === 'this' ? 'client.merge.confirmThis' : 'client.merge.confirmOther', { name }))}</p><p class="form-error" role="alert"></p><button class="button primary full" type="submit">${esc(t('client.merge.action'))}</button></form>`);
       bindForm(async () => {
@@ -1665,14 +1665,14 @@ function mergeAccount() {
           if (own) { try { await needRawKey(); } catch (error) { if (!passkeyDeclined(error)) throw error; } }
           // This account's key: open here, or published, or made now with what the passkey yielded.
           let mine = own, made = null;
-          if (!mine) { const { key } = await api('/v1/principals/me/key'); if (key.public_key) mine = { publicKey: unb64(key.public_key) }; else if (yielded) { made = await sealing.generateKey(); mine = made; } }
+          if (!mine) { const { key } = await api('/v1/principals/me/encryption-key'); if (key.public_key) mine = { publicKey: unb64(key.public_key) }; else if (yielded) { made = await sealing.generateKey(); mine = made; } }
           if (begun.wrap && yielded && mine && begun.key.public_key) {
             const theirs = { privateKey: await sealing.unwrap(unb64(begun.wrap), yielded), publicKey: unb64(begun.key.public_key) };
             for (const item of begun.secrets) { if (item.envelope) envelopes[item.id] = b64(await sealing.seal(await sealing.open(unb64(item.envelope), theirs.privateKey, theirs.publicKey), mine.publicKey)); }
           }
           const whole = made || (own && !sealing.isHeld(own.privateKey) ? own : null);
           const wrap = yielded && whole ? b64(await sealing.wrap(whole.privateKey, yielded)) : undefined;
-          await api('/v1/principals/me/merge/' + encodeURIComponent(begun.ticket), { method: 'PUT', data: { into, envelopes, ...(wrap ? { wrap } : {}), ...(made ? { public_key: b64(made.publicKey) } : {}) } });
+          await api('/v1/principals/me/merges/' + encodeURIComponent(begun.ticket), { method: 'POST', data: { into, envelopes, ...(wrap ? { wrap } : {}), ...(made ? { public_key: b64(made.publicKey) } : {}) } });
           if (made) { own = made; keyUnavailable = false; }
           closeDialog(); await refresh();
           return;
@@ -1683,7 +1683,7 @@ function mergeAccount() {
             try { const kept = await api('/v1/resources/' + item.id + '/content'); if (kept.envelope) envelopes[item.id] = b64(await sealing.seal(await openKey(kept), unb64(begun.key.public_key))); } catch {}
           }
         }
-        await api('/v1/principals/me/merge/' + encodeURIComponent(begun.ticket), { method: 'PUT', data: { into, envelopes } });
+        await api('/v1/principals/me/merges/' + encodeURIComponent(begun.ticket), { method: 'POST', data: { into, envelopes } });
         own = null;
         location.replace('/');
       });
@@ -1762,7 +1762,7 @@ async function receiveFromFoundation() {
 async function recipientsHere() {
   const { recipients } = await api(held() + '/recipients');
   if (viewing && !recipients.some(item => item.principal_id === state.user.id)) {
-    const { key } = await api('/v1/principals/me/key');
+    const { key } = await api('/v1/principals/me/encryption-key');
     if (key.public_key) recipients.push({ principal_id: state.user.id, public_key: key.public_key });
   }
   return recipients;
@@ -1982,7 +1982,7 @@ document.addEventListener('click', async (event) => {
   try {
     if (action === 'close-dialog') closeDialog();
     if (action === 'add-passkey') addPasskey(id);
-    if (action === 'set-payment') { target.disabled = true; location.assign((await api('/v1/principals/me/payment', { method: 'POST', data: {} })).url); }
+    if (action === 'set-payment') { target.disabled = true; location.assign((await api('/v1/principals/me/payment/sessions', { method: 'POST', data: {} })).url); }
     if (action === 'remove-passkey') {
       const item = passkeys().find(entry => entry.id === id);
       if (item) confirmRemoval(t('client.common.deleteNameTitle', { name: item.name }), t('client.passkey.deleteWarning'), () => api('/v1/principals/me/credentials/' + encodeURIComponent(item.id), { method: 'DELETE', data: {} }));

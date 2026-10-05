@@ -276,7 +276,7 @@ with sync_playwright() as p:
     # フォルダを開く途中にサインインしても、同じ場所へ戻る。
     signin_email = 'folder-return@example.test'
     page.get_by_label('メールアドレス', exact=True).fill(signin_email)
-    with page.expect_request(lambda request: request.method == 'POST' and request.url.endswith('/v1/session')) as sent:
+    with page.expect_request(lambda request: request.method == 'POST' and request.url.endswith('/v1/session/challenges')) as sent:
         page.get_by_role('button', name='サインインメールを送信', exact=True).click()
     assert sent.value.post_data_json['return_to'] == '/objects?prefix=reports%2F'
     expect(page.get_by_role('heading', name='メールを確認', exact=True)).to_be_visible()

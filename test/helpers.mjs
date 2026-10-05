@@ -116,7 +116,7 @@ export async function fixture(t, options = {}) {
     if (!id) return null;
     if (!privateKeys.has(id)) privateKeys.set(id, generateKey());
     if (!published.has(id)) {
-      const response = await request('/v1/principals/me/key', { ...options, method: 'PUT', data: { public_key: b64(privateKeys.get(id).publicKey) }, raw: undefined });
+      const response = await request('/v1/principals/me/encryption-key', { ...options, method: 'PUT', data: { public_key: b64(privateKeys.get(id).publicKey) }, raw: undefined });
       if (response.status !== 200 && response.json?.error?.code !== 'key_exists') return null;
       published.add(id);
     }
@@ -191,7 +191,7 @@ export async function fixture(t, options = {}) {
     // The other tests need a verified identity, not a real email delivery or its resend cooldown.
     known(email);
     const token = app.challenges.issue('email', email, { ttl: 900_000 });
-    const response = await request('/v1/session', { method: 'PUT', data: { kind: 'email', email, token } });
+    const response = await request('/v1/session', { method: 'POST', data: { kind: 'email', email, token } });
     assert.equal(response.status, 200, response.text);
     assert.equal(response.json.return_to, '/');
     cookie = response.headers.getSetCookie().find(value => value.startsWith('fdn_session=')).split(';')[0];

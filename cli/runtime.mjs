@@ -251,9 +251,9 @@ async function main() {
   let key = publicSpec ? null : await readKey(keyPath, { missingOk: action === 'init' }), token = key?.token ?? null;
   // The credential proves this machine for an hour at a time: the challenge is answered for the server actually reached.
   async function prove() {
-    const begin = await fetch(url.origin + '/v1/session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'webauthn' }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
+    const begin = await fetch(url.origin + '/v1/session/challenges', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'webauthn' }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
     const { options } = await begin.json();
-    const response = await fetch(url.origin + '/v1/session', { method: 'PUT', headers: { 'content-type': 'application/json' },
+    const response = await fetch(url.origin + '/v1/session', { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ kind: 'webauthn', credential: answer(options, key.credential, url.origin), session: 'token' }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
     const proven = await response.json();
     if (!response.ok || typeof proven.token !== 'string') throw new Error('Foundation did not accept this machine\'s credential (' + response.status + ', ' + (proven.error?.code || 'unknown') + ').');
@@ -271,9 +271,9 @@ async function main() {
   async function upgrade(label) {
     const me = await send('/v1/principals/me', undefined, { method: 'GET' });
     if ((await send('/v1/session', undefined, { method: 'GET' })).current?.via.environment) return;
-    const { options } = await send('/v1/principals/' + encodeURIComponent(me.principal.id) + '/credentials', { kind: 'webauthn' });
+    const { options } = await send('/v1/principals/' + encodeURIComponent(me.principal.id) + '/credentials/challenges', { kind: 'webauthn' });
     const made = createCredential(options, url.origin);
-    await send('/v1/principals/' + encodeURIComponent(me.principal.id) + '/credentials', { kind: 'webauthn', name: label, credential: made.response }, { method: 'PUT' });
+    await send('/v1/principals/' + encodeURIComponent(me.principal.id) + '/credentials', { kind: 'webauthn', name: label, credential: made.response });
     await writeKey(keyPath, JSON.stringify({ webauthn_credential: made.credential }), !process.env.FOUNDATION_RUNTIME_KEY_FILE);
     key = { credential: made.credential };
   }
@@ -282,7 +282,7 @@ async function main() {
   async function publishKey() {
     if (key.own) return;
     const made = generateKey();
-    const published = await send('/v1/principals/me/key', { public_key: made.publicKey.toString('base64url') }, { method: 'PUT', accept: data => data.error?.code === 'key_exists' });
+    const published = await send('/v1/principals/me/encryption-key', { public_key: made.publicKey.toString('base64url') }, { method: 'PUT', accept: data => data.error?.code === 'key_exists' });
     if (published.error) return;
     key.own = { private_key: made.privateKey.toString('base64url') };
     await writeKey(keyPath, JSON.stringify({ webauthn_credential: key.credential, key: key.own }), !process.env.FOUNDATION_RUNTIME_KEY_FILE);
@@ -315,12 +315,12 @@ async function main() {
       // No key, or one this server does not know: a WebAuthn credential made here, proven by nobody, makes this machine a
       // principal there, of nobody's - the same call a browser's passkey makes.
       key = null; me = null;
-      const post = (method, payload) => fetch(url.origin + '/v1/principals', { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), redirect: 'error', signal: AbortSignal.timeout(30_000) });
-      const begun = await post('POST', { kind: 'webauthn', name: wanted });
+      const post = (path, payload) => fetch(url.origin + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), redirect: 'error', signal: AbortSignal.timeout(30_000) });
+      const begun = await post('/v1/principals/challenges', { kind: 'webauthn', name: wanted });
       const { options, error } = await begun.json();
       if (!begun.ok) throw new Error('Foundation did not begin a credential (' + begun.status + ', ' + (error?.code || 'unknown') + ').');
       const made = createCredential(options, url.origin);
-      const done = await post('PUT', { kind: 'webauthn', name: wanted, principal_name: wanted, credential: made.response, session: 'token' });
+      const done = await post('/v1/principals', { kind: 'webauthn', name: wanted, principal_name: wanted, credential: made.response, session: 'token' });
       const became = await done.json();
       if (!done.ok || typeof became.token !== 'string') throw new Error('Foundation did not accept this machine\'s credential (' + done.status + ', ' + (became.error?.code || 'unknown') + ').');
       key = { credential: made.credential }; token = became.token;

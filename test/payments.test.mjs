@@ -7,7 +7,7 @@ test('支払い方法を登録すると、Stripeの顧客と契約ができて�
   const fake = fakeStripe(), f = await fixture(t, { stripe: fake.stripe, payers: false });
   assert.deepEqual((await f.request('/v1/principals/me/payment')).json.payment, { available: true, paying: false, payer: null }, 'nobody pays for one that has registered nothing');
   assert.equal(f.app.environments.usage(USER_A).limit_seconds, 36_000, 'the free part, before paying');
-  const started = await f.request('/v1/principals/me/payment', { method: 'POST', data: {} });
+  const started = await f.request('/v1/principals/me/payment/sessions', { method: 'POST', data: {} });
   assert.equal(started.status, 200, started.text);
   assert.equal(started.json.url, 'https://checkout.stripe.com/c/pay/cs_test_1');
   const page = fake.calls.find(call => call.path === '/v1/checkout/sessions');
@@ -24,7 +24,7 @@ test('支払い方法を登録すると、Stripeの顧客と契約ができて�
 test('ほかの顧客のものや終わっていない支払い方法の登録は受け付けない', async t => {
   for (const options of [{ otherCustomer: true }, { sessionStatus: 'open' }]) {
     const fake = fakeStripe(options), f = await fixture(t, { stripe: fake.stripe, payers: false });
-    await f.request('/v1/principals/me/payment', { method: 'POST', data: {} });
+    await f.request('/v1/principals/me/payment/sessions', { method: 'POST', data: {} });
     const refused = await f.request('/v1/principals/me/payment', { method: 'PUT', data: { session_id: 'cs_test_1' } });
     assert.equal(refused.status, 400, JSON.stringify(options));
     assert.equal((await f.request('/v1/principals/me/payment')).json.payment.paying, false);
@@ -37,14 +37,14 @@ test('Stripeの用意がなければ支払い方法は登録できず、誰も�
   const alone = await f.request('/v1/principals', { method: 'POST', anonymous: true, data: { kind: 'key', name: 'alone' } });
   assert.equal(f.app.payments.payerOf(alone.json.principal.id), alone.json.principal.id);
   f.app.environments.within(alone.json.principal.id);
-  assert.equal((await f.request('/v1/principals/me/payment', { method: 'POST', data: {} })).status, 503);
+  assert.equal((await f.request('/v1/principals/me/payment/sessions', { method: 'POST', data: {} })).status, 503);
   f.app.store.db.prepare('INSERT INTO compute_usage (principal_id,month,seconds) VALUES (?,?,?)').run(USER_A, new Date().toISOString().slice(0, 7), 36_000);
   assert.throws(() => f.app.environments.within(USER_A), { status: 402, code: 'payment_required' });
 });
 
 test('支払う人が使った計算時間と保存量を記録し、Stripeへは1件につき一度だけ送る', async t => {
   const fake = fakeStripe(), f = await fixture(t, { stripe: fake.stripe, payers: false });
-  await f.request('/v1/principals/me/payment', { method: 'POST', data: {} });
+  await f.request('/v1/principals/me/payment/sessions', { method: 'POST', data: {} });
   await f.request('/v1/principals/me/payment', { method: 'PUT', data: { session_id: 'cs_test_1' } });
   const at = Date.now();
   f.app.payments.computed(USER_A, 120, at);
@@ -68,7 +68,7 @@ test('支払っていない人の使った分は記録しない', async t => {
 async function paying(f) {
   // Through Stripe's page, as one who had registered nothing before.
   f.app.store.db.prepare('DELETE FROM payment_accounts WHERE principal_id=?').run(USER_A);
-  await f.request('/v1/principals/me/payment', { method: 'POST', data: {} });
+  await f.request('/v1/principals/me/payment/sessions', { method: 'POST', data: {} });
   await f.request('/v1/principals/me/payment', { method: 'PUT', data: { session_id: 'cs_test_1' } });
 }
 const signed = (body, secret = 'whsec_test', at = Math.floor(Date.now() / 1000)) => ({ 't': at, 'v1': createHmac('sha256', secret).update(`${at}.${body}`).digest('hex') });
@@ -150,7 +150,7 @@ test('支払い方法のないプリンシパルには負担者がおらず、�
   assert.equal(made.status, 201, made.text);
   assert.equal(f.app.payments.payerOf(made.json.principal.id), null);
   // Registering a payment method makes it its own payer, and what it made is paid for by it.
-  await f.request('/v1/principals/me/payment', { ...as, method: 'POST', data: {} });
+  await f.request('/v1/principals/me/payment/sessions', { ...as, method: 'POST', data: {} });
   assert.equal((await f.request('/v1/principals/me/payment', { ...as, method: 'PUT', data: { session_id: 'cs_test_1' } })).json.payment.payer, alone.json.principal.id);
   f.app.environments.within(alone.json.principal.id);
   assert.equal(f.app.payments.payerOf(made.json.principal.id), alone.json.principal.id);

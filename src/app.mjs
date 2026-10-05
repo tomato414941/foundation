@@ -409,8 +409,8 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // Proving an entry needs no connection and no signin: becoming a principal by one, or signing in by one, carries
       // nothing to protect. Each of those asks a browser's origin itself where it matters.
       const anonymous = acting ? false : browser ? !sessions.get(cookieToken(req)) : !token;
-      const becoming = at === 'principals' && ['POST', 'PUT'].includes(method) && anonymous;
-      const proving = at === 'session' && ['POST', 'PUT'].includes(method);
+      const becoming = ['principals', 'principalChallenges'].includes(at) && method === 'POST' && anonymous;
+      const proving = ['session', 'sessionChallenges'].includes(at) && method === 'POST';
       if (browser && !['GET', 'HEAD'].includes(method) && !becoming && !proving) requireOrigin(req, origin);
       if (!browser && req.headers.origin && req.headers.origin !== origin) fail(403, 'origin_denied', '外部サイトからは利用できません。');
       // Signing in by email: a single-use link is sent to the address, and opening it proves receiving there. The
@@ -471,7 +471,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       // browser gets its session as a cookie, a program as an hour's token. By email: a single-use link is sent to the
       // address, and opening it proves receiving there; the browser that asked keeps only a handle, to show what it is
       // waiting for, and the link works in any browser.
-      if (at === 'session' && method === 'POST') {
+      if (at === 'sessionChallenges' && method === 'POST') {
         const input = await body(req);
         if (input?.kind === 'email') {
         requireOrigin(req, origin);
@@ -494,7 +494,7 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         rateLimit('webauthn-options:' + clientAddress(req), 60, 600_000);
         return send(200, { options: await webauthn.authentication({ origin }) });
       }
-      if (at === 'session' && method === 'PUT') {
+      if (at === 'session' && method === 'POST') {
         const input = await body(req), asToken = input?.session === 'token';
         if (input?.kind === 'email') return await redeemEmailLink(input);
         rateLimit('signin:' + clientAddress(req), 30, 600_000);
@@ -548,13 +548,14 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
       if (becoming) {
         const input = await body(req);
         if (!['webauthn', 'key'].includes(input?.kind)) fail(400, 'invalid_kind', '入口の種類を確認してください。');
-        if (method === 'POST' && input.kind === 'webauthn') {
+        if (at === 'principalChallenges') {
+          if (input.kind !== 'webauthn') fail(400, 'invalid_kind', '入口の種類を確認してください。');
           rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
           // The passkey's label where it is kept: the name given, or one drawn here (names.mjs), which the client then
           // gives the principal it makes, so the device and Foundation call it the same thing.
           return send(200, { options: await webauthn.registration(randomUUID(), { origin, userName: input.name === undefined ? principalName() : nameValue(input.name), creating: true }) });
         }
-        if (method === 'PUT' && input.kind === 'webauthn') {
+        if (input.kind === 'webauthn') {
           rateLimit('principal-create:' + clientAddress(req), 12, 600_000);
           const asToken = input.session === 'token', name = input.principal_name === undefined ? principalName() : nameValue(input.principal_name);
           if (!asToken) requireOrigin(req, origin);
@@ -809,18 +810,11 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           permit('read', 'principal', id);
           return send(200, { credentials: credentialsOf(id) });
         }
-        if (part === 'principalCredentials' && method === 'POST') {
+        // Adding an entry begins by asking for what proves it: options a passkey answers, or a link sent to an address.
+        if (part === 'principalCredentialChallenges' && method === 'POST') {
           permit('add-credential', 'principal', id);
           const input = await inputBody();
           if (input.kind === 'webauthn') return send(200, { options: await webauthn.registration(id, { origin, userName: emails.of(id)[0] || principals.get(id)?.name || id }) });
-          if (input.kind === 'key') {
-            const made = store.transaction(() => {
-              if (input.replaces !== undefined && !principals.revokeKey(id, input.replaces)) fail(404, 'not_found', '置き換えるキーが見つかりません。');
-              return principals.issueKey(id);
-            });
-            auditLog.write(subject.id, 'credential.added', 'principal', id, { kind: 'key', credential: made.id, replaced: input.replaces ?? null });
-            return send(201, { credential: { kind: 'key', id: made.id, name: null, created_at: whenIso(made.created_at), last_used_at: null }, token: made.token });
-          }
           if (input.kind === 'email') {
             // The link works in any browser and signs nobody in; the page it opens says whose the address becomes.
             const email = signinEmail(input.address);
@@ -840,9 +834,17 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           }
           fail(400, 'invalid_kind', '入口の種類を確認してください。');
         }
-        if (part === 'principalCredentials' && method === 'PUT') {
+        if (part === 'principalCredentials' && method === 'POST') {
           permit('add-credential', 'principal', id);
           const input = await inputBody();
+          if (input.kind === 'key') {
+            const made = store.transaction(() => {
+              if (input.replaces !== undefined && !principals.revokeKey(id, input.replaces)) fail(404, 'not_found', '置き換えるキーが見つかりません。');
+              return principals.issueKey(id);
+            });
+            auditLog.write(subject.id, 'credential.added', 'principal', id, { kind: 'key', credential: made.id, replaced: input.replaces ?? null });
+            return send(201, { credential: { kind: 'key', id: made.id, name: null, created_at: whenIso(made.created_at), last_used_at: null }, token: made.token });
+          }
           if (input.kind !== 'webauthn') fail(400, 'invalid_kind', '入口の種類を確認してください。');
           const made = await webauthn.register(input.credential, { origin, name: input.name, principalId: id });
           if (input.wrap !== undefined) keys.keepWrap(made.credential.id, input.wrap);
@@ -915,19 +917,19 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           auditLog.write(subject.id, 'link.issued', 'principal', id, { request: row.id });
           return send(201, { link: { id: made.id, request_id: made.request_id, expires_at: made.expires_at }, url: origin + '/requests/' + row.id + '#link=' + made.token, expires_at: made.expires_at });
         }
-        // Another account made one with this: its passkey answers for it, this session for this one. Begun by POST,
-        // proven by PUT, which names the merge by a ticket; completed at the ticket.
-        if (part === 'merge' || part === 'mergeComplete') {
+        // Another account made one with this: its passkey answers for it, this session for this one. Options are asked
+        // for first; proving the other makes the merge, named by a ticket; it is completed at the ticket.
+        if (['mergeChallenges', 'merges', 'mergeComplete'].includes(part) && method === 'POST') {
           permit('add-credential', 'principal', id);
-          if (part === 'merge' && method === 'POST') {
+          if (part === 'mergeChallenges') {
             const input = await inputBody();
             return send(200, { options: await merge.options(id, principalId(input.principal_id), { origin }) });
           }
-          if (part === 'merge' && method === 'PUT') {
+          if (part === 'merges') {
             const input = await inputBody();
             return send(200, await merge.begin(id, input.credential, { origin, expected: input.principal_id === undefined ? undefined : principalId(input.principal_id) }));
           }
-          if (part === 'mergeComplete' && method === 'PUT') {
+          if (part === 'mergeComplete') {
             const input = await inputBody(SECRET_MAX);
             const done = merge.complete(id, { ...input, ticket: route.params.ticket });
             return send(200, { ...done, principal: principals.get(done.into) });
@@ -940,13 +942,14 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
           return send(200, { recipients: recipientsOf(id) });
         }
         // Paying for more than the free part: a payment method set on Stripe's page, begun here and completed coming back.
+        if (part === 'principalPaymentSessions' && method === 'POST') {
+          permit('payment', 'principal', id);
+          await inputBody();
+          return send(200, { url: await payments.setup(id, { origin, email: emails.of(id)[0] }) });
+        }
         if (part === 'principalPayment') {
           permit('payment', 'principal', id);
           if (method === 'GET') return send(200, { payment: payments.view(id) });
-          if (method === 'POST') {
-            await inputBody();
-            return send(200, { url: await payments.setup(id, { origin, email: emails.of(id)[0] }) });
-          }
           if (method === 'PUT') {
             const input = await inputBody();
             const view = await payments.complete(id, input.session_id);
@@ -1480,9 +1483,9 @@ export function createApp({ database = ':memory:', encryptionKey, mailer, servic
         if (acting) acting.continued = true;
         return send(200, { url: await active.authorization.begin({ state, verifier, redirectUri, scopes }, connections.context(previous)) });
       }
-      if (at === 'connections' && method === 'PUT') {
+      if (at === 'connectionComplete' && method === 'POST') {
         permit('connect', 'connection');
-        const input = await inputBody();
+        const input = { ...await inputBody(), state: route.params.state };
         if (!session) fail(401, 'signin_required', 'サインインしてください。');
         limit('connect', 10);
         const flow = flows.peek(session.id, input.state);
