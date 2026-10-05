@@ -67,10 +67,10 @@ CREATE TABLE IF NOT EXISTS resources (
   private_data text,
   version integer NOT NULL DEFAULT 1,
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (owner_id,kind,name)
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS resources_owner ON resources(owner_id,kind,created_at,id);
+CREATE UNIQUE INDEX IF NOT EXISTS resources_name ON resources(owner_id,kind,name) WHERE kind <> 'connection';
 CREATE TABLE IF NOT EXISTS object_blobs (
   id uuid PRIMARY KEY,
   resource_id uuid REFERENCES resources(id) ON DELETE SET NULL,

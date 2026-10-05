@@ -110,6 +110,36 @@ test('接続したサービスの値を委任先へ暗号化して渡し、委�
   );
 });
 
+test('同じ表示名で複数サービスへ接続し、それぞれの認証情報を使い分ける', async (t) => {
+  const f = await setup();
+  t.after(() => f.close());
+  const owner = await f.person();
+  const connections = [];
+  for (const serviceId of ['github', 'cloudflare']) {
+    const result = await f.services.begin(
+      owner.actor,
+      owner.actor.id,
+      ConnectionInput.parse({
+        serviceId,
+        scheme: 'token',
+        name: 'My account',
+        fields: { token: serviceId + '-private-token' },
+      }),
+      'browser',
+    );
+    assert.equal(result.kind, 'connected');
+    if (result.kind !== 'connected') return;
+    connections.push(await f.resources.get(result.resource.id));
+  }
+  assert.notEqual(connections[0]!.id, connections[1]!.id);
+  assert.equal((await f.resources.list(owner.actor, owner.actor.id, { kind: 'connection' })).items.length, 2);
+  assert.equal((await f.services.outputs(owner.actor, connections[0]!)).GH_TOKEN, 'github-private-token');
+  assert.equal(
+    (await f.services.outputs(owner.actor, connections[1]!)).CLOUDFLARE_API_TOKEN,
+    'cloudflare-private-token',
+  );
+});
+
 test('シークレットをHTTPヘッダーに渡し、返された秘密値を伏せて実行結果を返す', async (t) => {
   const f = await setup();
   t.after(() => f.close());
