@@ -75,10 +75,10 @@ test('JWEで保護した暗号鍵を保存し、不正な更新があっても�
     url: `/api/principals/${owner.actor.id}/credentials/${credentialId}/wrap`,
     headers: { authorization: 'Bearer ' + owner.token },
   };
-  assert.equal((await app.inject({ ...request, payload: { wrappedKey } })).statusCode, 200);
+  assert.equal((await app.inject({ ...request, payload: { wrappedKey, publicKey: owner.keys.publicKey } })).statusCode, 200);
   const parts = wrappedKey.split('.');
   parts[0] = Buffer.from(JSON.stringify({ alg: 'dir', enc: 'A128GCM', sub: owner.actor.id })).toString('base64url');
-  const malformed = await app.inject({ ...request, payload: { wrappedKey: parts.join('.') } });
+  const malformed = await app.inject({ ...request, payload: { wrappedKey: parts.join('.'), publicKey: owner.keys.publicKey } });
   assert.equal(malformed.statusCode, 400);
   const stored = await f.db.one<{ private_wrap: string }>('SELECT private_wrap FROM credentials WHERE id=$1', [credentialId]);
   assert.deepEqual(await unwrap(stored!.private_wrap, prf, owner.actor.id), owner.keys.privateKey);

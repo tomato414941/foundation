@@ -5,6 +5,7 @@ import { buildApp } from '../server/app.js';
 import { Worker } from '../server/worker.js';
 import { createCipheriv, hkdfSync, randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { encode, seal } from '../shared/encryption.js';
 
 const fixtureData = await fixture();
 const origin = 'http://localhost:3458';
@@ -49,6 +50,9 @@ app.post<{ Body: { principalId: string; prf: string } }>('/__test/existing-encry
   const content = Buffer.concat([cipher.update(Buffer.from(sample.privateKey.d, 'base64url')), cipher.final()]);
   const wrapped = Buffer.concat([iv, cipher.getAuthTag(), content]).toString('base64url');
   const id = randomUUID();
+  const jweId = randomUUID();
+  const recipients = [{ id: principalId, publicKey: sample.publicKey }, { id: context.identity.id, publicKey: context.identity.publicKey }];
+  const jwe = await seal(encode('Current-format secret'), recipients, 'resource:' + jweId);
   const sealed = {
     ...sample.sealed,
     aad: Buffer.from('resource:' + id).toString('base64url'),
@@ -62,8 +66,12 @@ app.post<{ Body: { principalId: string; prf: string } }>('/__test/existing-encry
     await client.query("INSERT INTO resources(id,owner_id,kind,name,data,sealed) VALUES($1,$2,'secret','Existing secret',$3,$4)", [
       id, principalId, JSON.stringify({ bytes: Buffer.byteLength(sample.plaintext), recipients: [principalId] }), JSON.stringify(sealed),
     ]);
+    await client.query("INSERT INTO resources(id,owner_id,kind,name,data,sealed) VALUES($1,$2,'secret','Current-format secret',$3,$4)", [
+      jweId, principalId, JSON.stringify({ bytes: 21, recipients: recipients.map(recipient => recipient.id) }), JSON.stringify(jwe),
+    ]);
+    await client.query("INSERT INTO grants(resource_id,principal_id,actions) VALUES($1,$2,ARRAY['use'])", [jweId, context.identity.id]);
   });
-  return { id, plaintext: sample.plaintext };
+  return { id, jweId, plaintext: sample.plaintext };
 });
 const worker = new Worker(context, (error) => app.log.error(error));
 try {

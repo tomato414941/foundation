@@ -209,6 +209,9 @@ export class Accounts {
         )
           name = name.slice(0, 150) + ' · ' + row.id;
         const sealed = envelopes.get(row.id) ?? row.sealed;
+        if (row.kind === 'secret' && sealed)
+          await c.resources.validateSecret(to.id, row.id, sealed,
+            await c.authorization.resource({ id: c.identity.id }, row, 'use', connection), connection);
         const data =
           sealed && row.kind === 'secret'
             ? { ...row.data, recipients: sealed.recipients.map((value) => value.header.kid) }
