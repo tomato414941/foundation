@@ -208,6 +208,7 @@ class BrowserTests(unittest.TestCase):
     def test_サービス接続とプリンシパルを作成して委任する(self):
         page, principal = self.passkey_account()
         page.goto(f"{ORIGIN}/p/{principal['id']}/services/new")
+        self.select(page, "サービス", "AWS")
         self.select(page, "サービス", "GitHub")
         page.get_by_role("textbox", name="名前", exact=True).fill("GitHub test")
         page.get_by_label("Personal access token").fill("test-provider-token")
