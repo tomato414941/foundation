@@ -31,6 +31,7 @@ class BrowserTests(unittest.TestCase):
     def setUp(self):
         self.contexts = []
         self.errors = []
+        self.authenticators = {}
 
     def tearDown(self):
         for context in self.contexts:
@@ -54,11 +55,12 @@ class BrowserTests(unittest.TestCase):
         page = self.page()
         cdp = page.context.new_cdp_session(page)
         cdp.send("WebAuthn.enable")
-        cdp.send("WebAuthn.addVirtualAuthenticator", {"options": {
+        authenticator = cdp.send("WebAuthn.addVirtualAuthenticator", {"options": {
             "protocol": "ctap2", "ctap2Version": "ctap2_1", "transport": "internal",
             "hasResidentKey": True, "hasUserVerification": True, "isUserVerified": True,
             "automaticPresenceSimulation": True, "hasPrf": True,
         }})
+        self.authenticators[page] = (cdp, authenticator["authenticatorId"])
         page.goto(ORIGIN + "/signin")
         page.wait_for_load_state("networkidle")
         page.get_by_role("button", name="アカウントを作成", exact=True).click()
@@ -129,6 +131,8 @@ class BrowserTests(unittest.TestCase):
 
     def test_既存のパスキーで暗号化データを開いて編集し再ログイン後も復号する(self):
         page, principal = self.passkey_account("Existing account")
+        cdp, authenticator_id = self.authenticators[page]
+        original_credential = cdp.send("WebAuthn.getCredentials", {"authenticatorId": authenticator_id})["credentials"][0]["credentialId"]
         prf = page.evaluate("""async () => {
             const credential = await navigator.credentials.get({publicKey: {
                 challenge: crypto.getRandomValues(new Uint8Array(32)),
@@ -154,6 +158,18 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("textbox", name="値", exact=True).fill("Edited existing secret")
         page.get_by_role("button", name="保存", exact=True).click()
         expect(page.get_by_role("heading", name="Existing secret", exact=True)).to_be_visible()
+        page.goto(ORIGIN + "/account")
+        page.wait_for_load_state("networkidle")
+        unlock = page.get_by_role("button", name="パスキーでロック解除", exact=True)
+        with page.expect_response(lambda response: response.url.endswith("/auth/passkeys/verify")):
+            unlock.click()
+        expect(unlock).to_be_enabled()
+        cdp.send("WebAuthn.removeCredential", {"authenticatorId": authenticator_id, "credentialId": original_credential})
+        page.get_by_role("link", name="パスキーを追加", exact=True).click()
+        page.get_by_role("textbox", name="名前", exact=True).fill("Additional passkey")
+        page.get_by_role("button", name="追加", exact=True).click()
+        page.wait_for_url("**/settings/credentials")
+        expect(page.get_by_text("Additional passkey", exact=True)).to_be_visible()
         page.get_by_role("button", name="ログアウト", exact=True).click()
         page.wait_for_url("**/signin")
         page.get_by_role("button", name="パスキーでログイン", exact=True).click()

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
-import { newEncryptionKey, seal, encode } from '../shared/encryption.js';
+import { newEncryptionKey, seal, encode, unwrap, wrap } from '../shared/encryption.js';
 
 test('HTTP APIで登録し、シークレットを保存して同じ権限で一覧を取得する', async (t) => {
   const f = await fixture(),
@@ -53,6 +53,35 @@ test('HTTP APIで登録し、シークレットを保存して同じ権限で一
     payload: { version: 7, name: 'Concurrent edit' },
   });
   assert.equal(changed.statusCode, 409);
+});
+
+test('JWEで保護した暗号鍵を保存し、不正な更新があっても復号できる鍵を保持する', async (t) => {
+  const f = await fixture(),
+    context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
+    app = await buildApp(context);
+  t.after(async () => {
+    await app.close();
+    await f.close();
+  });
+  const owner = await f.person(), credentialId = randomUUID();
+  await f.db.pool.query(
+    "INSERT INTO credentials(id,principal_id,kind,name,identifier) VALUES($1,$2,'passkey','Passkey',$3)",
+    [credentialId, owner.actor.id, randomUUID()],
+  );
+  const prf = crypto.getRandomValues(new Uint8Array(32));
+  const wrappedKey = await wrap(owner.keys.privateKey, prf, owner.actor.id);
+  const request = {
+    method: 'PUT' as const,
+    url: `/api/principals/${owner.actor.id}/credentials/${credentialId}/wrap`,
+    headers: { authorization: 'Bearer ' + owner.token },
+  };
+  assert.equal((await app.inject({ ...request, payload: { wrappedKey } })).statusCode, 200);
+  const parts = wrappedKey.split('.');
+  parts[0] = Buffer.from(JSON.stringify({ alg: 'dir', enc: 'A128GCM', sub: owner.actor.id })).toString('base64url');
+  const malformed = await app.inject({ ...request, payload: { wrappedKey: parts.join('.') } });
+  assert.equal(malformed.statusCode, 400);
+  const stored = await f.db.one<{ private_wrap: string }>('SELECT private_wrap FROM credentials WHERE id=$1', [credentialId]);
+  assert.deepEqual(await unwrap(stored!.private_wrap, prf, owner.actor.id), owner.keys.privateKey);
 });
 
 test('MCPで初期化し、認証したプリンシパルとして共通APIを呼び出す', async (t) => {

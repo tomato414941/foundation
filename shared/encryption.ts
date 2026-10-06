@@ -8,8 +8,8 @@ import {
   exportJWK,
 } from 'jose';
 import type { JWK } from 'jose';
-import { PublicKey, Sealed } from './contracts.js';
-import type { PublicEncryptionKey, SealedContent } from './contracts.js';
+import { P256Key, Sealed, WrappedKey } from './contracts.js';
+import type { P256PublicKey, PublicEncryptionKey, SealedContent, WrappedEncryptionKey } from './contracts.js';
 import { openLegacy, unwrapLegacy } from './legacy-encryption.js';
 
 const encoder = new TextEncoder();
@@ -29,10 +29,10 @@ export function unbase64url(text: string): Uint8Array {
     character.charCodeAt(0),
   );
 }
-export async function newEncryptionKey(): Promise<{ publicKey: PublicEncryptionKey; privateKey: JWK }> {
+export async function newEncryptionKey(): Promise<{ publicKey: P256PublicKey; privateKey: JWK }> {
   const pair = await generateKeyPair(agreement, { crv: 'P-256', extractable: true });
   return {
-    publicKey: PublicKey.parse(await exportJWK(pair.publicKey)),
+    publicKey: P256Key.parse(await exportJWK(pair.publicKey)),
     privateKey: await exportJWK(pair.privateKey),
   };
 }
@@ -85,10 +85,10 @@ async function wrappingKey(prf: Uint8Array): Promise<Uint8Array> {
     ),
   );
 }
-export async function wrap(privateKey: JWK, prf: Uint8Array, principalId: string): Promise<string> {
-  return new CompactEncrypt(encode(JSON.stringify(privateKey)))
+export async function wrap(privateKey: JWK, prf: Uint8Array, principalId: string): Promise<WrappedEncryptionKey> {
+  return WrappedKey.parse(await new CompactEncrypt(encode(JSON.stringify(privateKey)))
     .setProtectedHeader({ alg: 'dir', enc: encryption, sub: principalId })
-    .encrypt(await wrappingKey(prf));
+    .encrypt(await wrappingKey(prf)));
 }
 export async function unwrap(value: string, prf: Uint8Array, principalId: string, publicKey?: PublicEncryptionKey | null): Promise<JWK> {
   if (value.startsWith('x25519:')) return unwrapLegacy(value.slice(7), prf, publicKey);

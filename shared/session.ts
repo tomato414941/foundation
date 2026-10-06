@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Principal, Id, Name, Locale, PublicKey, Sealed } from './contracts.js';
+import { Principal, Id, Name, Locale, PublicKey, P256Key, WrappedKey, Sealed } from './contracts.js';
 
 export const Features = z.object({
   email: z.boolean(),
@@ -36,8 +36,8 @@ export const PasskeyVerify = z
   .object({
     challengeId: Id,
     credential: z.json(),
-    publicKey: PublicKey.optional(),
-    wrappedKey: z.string().max(16384).optional(),
+    publicKey: P256Key.optional(),
+    wrappedKey: WrappedKey.optional(),
   })
   .strict();
 export const Injection = z.object({ id: Id, context: z.string(), sealed: Sealed });
