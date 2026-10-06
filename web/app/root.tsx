@@ -60,11 +60,13 @@ import { clearKeys } from './keys';
 import { Busy, ErrorNotice, Page, useTask } from './components';
 
 const theme = createTheme({
+  palette: { mode: 'dark' },
   typography: { fontFamily: 'Roboto, "Noto Sans JP", "Helvetica Neue", Arial, sans-serif' },
 });
 export const meta: Route.MetaFunction = () => [
   { title: 'Foundation' },
   { name: 'description', content: 'Manage service connections and secrets.' },
+  { name: 'theme-color', content: '#121212' },
 ];
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   return session(request);
@@ -90,7 +92,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <body>
         <CacheProvider value={cache}>
           <ThemeProvider theme={theme}>
-            <CssBaseline />
+            <CssBaseline enableColorScheme />
             {children}
           </ThemeProvider>
         </CacheProvider>
