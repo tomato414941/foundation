@@ -10,13 +10,10 @@ import type { PrincipalView, PublicEncryptionKey, SealedContent } from '../../sh
 import { encode, hold, newEncryptionKey, open, seal, unwrap, wrap } from '../../shared/encryption';
 import { api, ApiFailure, session } from './api';
 import { KeySharingItem, PublicKey, listOf } from '../../shared/contracts';
-import { KeyMigrationPlan } from '../../shared/key-migration';
-import type { KeyMigrationInput } from '../../shared/key-migration';
 
 const unlocked = new Map<string, JWK>();
 const held = new Map<string, CryptoKey>();
 const seed = encode('Foundation passkey encryption v1');
-const legacySeed = encode('foundation-key');
 type Verified = {
   principalId: string;
   credentialId: string;
@@ -80,50 +77,41 @@ export async function clearKeys() {
   held.clear();
   await stored('readwrite', (store) => store.clear()).catch(() => {});
 }
-function prf(credential: AuthenticationResponseJSON | RegistrationResponseJSON, slot: 'first' | 'second' = 'first'): Uint8Array | null {
-  const output = credential.clientExtensionResults as { prf?: { results?: { first?: ArrayBuffer; second?: ArrayBuffer } } };
-  const value = output.prf?.results?.[slot];
+function prf(credential: AuthenticationResponseJSON | RegistrationResponseJSON): Uint8Array | null {
+  const output = credential.clientExtensionResults as { prf?: { results?: { first?: ArrayBuffer } } };
+  const value = output.prf?.results?.first;
   return value ? new Uint8Array(value) : null;
 }
 function verificationCredential(credential: AuthenticationResponseJSON | RegistrationResponseJSON) {
   const { prf: _prf, ...extensions } = credential.clientExtensionResults as Record<string, unknown>;
   return { ...credential, clientExtensionResults: extensions };
 }
-async function assertion(principalId?: string, credentialId?: string, includeLegacy = true) {
+async function assertion(principalId?: string, credentialId?: string) {
   const data = await api<{ challengeId: string; options: PublicKeyCredentialRequestOptionsJSON }>(
     '/auth/passkeys/options',
     { method: 'POST', body: { intent: 'authenticate', ...(principalId ? { principalId } : {}) } },
   );
   const options = {
     ...data.options,
-    extensions: { ...data.options.extensions, prf: { eval: { first: seed, ...(includeLegacy ? { second: legacySeed } : {}) } } },
+    extensions: { ...data.options.extensions, prf: { eval: { first: seed } } },
     ...(credentialId ? { allowCredentials: [{ id: credentialId, type: 'public-key' as const }] } : {}),
   };
   const credential = await startAuthentication({ optionsJSON: options });
-  return { challengeId: data.challengeId, credential, secret: prf(credential), legacySecret: prf(credential, 'second') };
+  return { challengeId: data.challengeId, credential, secret: prf(credential) };
 }
-export async function authenticate(principalId?: string, credentialId?: string, wrapping?: JWK, includeLegacy = true) {
-  const proof = await assertion(principalId, credentialId, includeLegacy);
+export async function authenticate(principalId?: string, credentialId?: string, wrapping?: JWK) {
+  const proof = await assertion(principalId, credentialId);
   const result = await api<Verified>('/auth/passkeys/verify', {
     method: 'POST',
     body: { challengeId: proof.challengeId, credential: verificationCredential(proof.credential) },
   });
   if (proof.secret) {
     if (result.wrappedKey) {
-      const legacy = result.wrappedKey.startsWith('x25519:');
-      const secret = legacy ? proof.legacySecret : proof.secret;
-      if (!secret) throw new ApiFailure('key_unavailable');
-      const key = await unwrap(result.wrappedKey, secret, result.principalId, result.publicKey).catch(() => {
+      const key = await unwrap(result.wrappedKey, proof.secret, result.principalId).catch(() => {
         throw new ApiFailure('key_unavailable');
       });
       if (!matchesPublicKey(key, result.publicKey)) throw new ApiFailure('encryption_key_changed');
       await keep(result.principalId, key);
-      if (legacy) {
-        const wrappedKey = await wrap(key, proof.secret, result.principalId);
-        await api(`/principals/${result.principalId}/credentials/${result.credentialId}/wrap`, {
-          method: 'PUT', body: { wrappedKey, publicKey: result.publicKey },
-        });
-      }
     } else if (!result.publicKey || wrapping) {
       if (wrapping && result.publicKey && !matchesPublicKey(wrapping, result.publicKey))
         throw new ApiFailure('encryption_key_changed');
@@ -190,7 +178,7 @@ export async function registerPasskey(name: string, principal?: Pick<PrincipalVi
   });
   if (pair) await keep(result.principalId, pair.privateKey);
   else if ((credential.clientExtensionResults as { prf?: { enabled?: boolean } }).prf?.enabled)
-    return authenticate(result.principalId, credential.id, existing, false);
+    return authenticate(result.principalId, credential.id, existing);
   return { ...result, encrypted: !!(await getKey(result.principalId)) };
 }
 export async function decryptSecret(id: string, principalId: string) {
@@ -205,63 +193,6 @@ export async function decryptSecret(id: string, principalId: string) {
   }
 }
 
-export async function migrateEncryptionKey(
-  principalId: string,
-  progress: (step: { name?: string; index: number; total: number; phase: 'passkey' | 'secrets' | 'saving' }) => void,
-) {
-  const pair = await newEncryptionKey();
-  const path = `/principals/${principalId}/key-migration`;
-  const plan = await api(path + '/options', { method: 'POST', body: { publicKey: pair.publicKey } }, KeyMigrationPlan);
-  const credentials: KeyMigrationInput['credentials'] = [];
-  let oldKey: JWK | undefined;
-  const probe = await seal(encode('Foundation encryption key verification'), [{ id: principalId, publicKey: pair.publicKey }], 'key:' + principalId);
-  for (const [index, item] of plan.credentials.entries()) {
-    progress({ phase: 'passkey', name: item.name, index: index + 1, total: plan.credentials.length });
-    const options = item.options as unknown as PublicKeyCredentialRequestOptionsJSON;
-    const credential = await startAuthentication({ optionsJSON: {
-      ...options, extensions: { ...options.extensions, prf: { eval: { first: seed, second: legacySeed } } },
-    } });
-    const secret = prf(credential), legacySecret = prf(credential, 'second');
-    try {
-      const previousSecret = item.wrappedKey.startsWith('x25519:') ? legacySecret : secret;
-      if (!secret || !previousSecret) throw new ApiFailure('key_unsupported');
-      const previous = await unwrap(item.wrappedKey, previousSecret, principalId, plan.publicKey)
-        .catch(() => { throw new ApiFailure('key_unavailable'); });
-      if (!matchesPublicKey(previous, plan.publicKey) || (oldKey && oldKey.d !== previous.d))
-        throw new ApiFailure('key_unavailable');
-      oldKey = previous;
-      const wrappedKey = await wrap(pair.privateKey, secret, principalId);
-      await open(probe, await unwrap(wrappedKey, secret, principalId, pair.publicKey), principalId, 'key:' + principalId);
-      credentials.push({ id: item.id, credential: JSON.parse(JSON.stringify(verificationCredential(credential))), wrappedKey });
-    } finally {
-      secret?.fill(0);
-      legacySecret?.fill(0);
-    }
-  }
-  if (!oldKey) throw new ApiFailure('key_unavailable');
-  const items: KeyMigrationInput['items'] = [];
-  for (const [index, item] of plan.items.entries()) {
-    progress({ phase: 'secrets', index: index + 1, total: plan.items.length });
-    const context = 'resource:' + item.id;
-    const content = await open(item.sealed, oldKey, principalId, context)
-      .catch(() => { throw new ApiFailure('key_unavailable'); });
-    try {
-      const sealed = await seal(content, item.recipients.map(recipient => recipient.id === principalId
-        ? { ...recipient, publicKey: pair.publicKey } : recipient), context);
-      const verified = await open(sealed, pair.privateKey, principalId, context);
-      try {
-        if (content.length !== verified.length || !content.every((value, offset) => value === verified[offset]))
-          throw new ApiFailure('key_unavailable');
-      } finally { verified.fill(0); }
-      if ('format' in sealed) throw new ApiFailure('invalid_envelope');
-      items.push({ id: item.id, version: item.version, sealed });
-    } finally { content.fill(0); }
-  }
-  progress({ phase: 'saving', index: 0, total: plan.items.length });
-  await api(path, { method: 'POST', body: { challengeId: plan.challengeId, credentials, items } });
-  await keep(principalId, pair.privateKey);
-  return { secrets: items.length, passkeys: credentials.length };
-}
 export async function sealSecret(
   id: string,
   owner: string,
@@ -294,9 +225,8 @@ export async function mergeWithPasskey() {
       body: { challengeId: proof.challengeId, credential: verificationCredential(proof.credential) },
     },
   );
-  const secret = result.wrappedKey?.startsWith('x25519:') ? proof.legacySecret : proof.secret;
-  if (result.wrappedKey && secret)
-    await keep(result.fromId, await unwrap(result.wrappedKey, secret, result.fromId, result.publicKey));
+  if (result.wrappedKey && proof.secret)
+    await keep(result.fromId, await unwrap(result.wrappedKey, proof.secret, result.fromId));
   return result;
 }
 

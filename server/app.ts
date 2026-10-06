@@ -16,7 +16,6 @@ import { fail, failure } from './errors.js';
 import { token } from './vault.js';
 import * as C from '../shared/contracts.js';
 import * as S from '../shared/session.js';
-import { KeyMigrationStart, KeyMigrationPlan, KeyMigrationCommit } from '../shared/key-migration.js';
 import { routesResources } from './routes-resources.js';
 import { routesRequests } from './routes-requests.js';
 import { routesAccounts } from './routes-accounts.js';
@@ -442,18 +441,6 @@ export async function buildApp(context: Context) {
       next: null,
     }),
   );
-  app.post('/api/principals/:id/key-migration/options', {
-    config: { rateLimit: { max: 20, timeWindow: '1 hour' } },
-    schema: { params: C.IdParams, body: KeyMigrationStart, response: { 200: KeyMigrationPlan } },
-  }, request => context.keyMigration.start(actor(request), request.params.id, request.browser, request.body.publicKey));
-  app.post('/api/principals/:id/key-migration', {
-    bodyLimit: 32 * 1024 * 1024,
-    config: { rateLimit: { max: 20, timeWindow: '1 hour' } },
-    schema: { params: C.IdParams, body: KeyMigrationCommit, response: { 200: C.Ok } },
-  }, async request => {
-    await context.keyMigration.commit(actor(request), request.params.id, request.browser, request.body);
-    return { ok: true as const };
-  });
   app.post(
     '/api/principals/:id/credentials',
     {

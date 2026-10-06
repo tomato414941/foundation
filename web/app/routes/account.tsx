@@ -6,7 +6,7 @@ import { Form, Link, useActionData, useLoaderData, useNavigate, useRevalidator }
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/account';
 import { actionResult, api, formText, signedIn } from '../api';
-import { authenticate, getKey, mergeWithPasskey, migrateEncryptionKey } from '../keys';
+import { authenticate, getKey, mergeWithPasskey } from '../keys';
 import { Copy, Detail, ErrorNotice, Page, Panel, useTask } from '../components';
 import i18n from '../i18n';
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
@@ -32,8 +32,6 @@ export default function Account() {
   const navigate = useNavigate();
   const revalidator = useRevalidator();
   const [unlocked, setUnlocked] = useState(false);
-  const [migrationProgress, setMigrationProgress] = useState<string | null>(null);
-  const [migrated, setMigrated] = useState(false);
   useEffect(() => {
     void getKey(principal.id, principal.publicKey).then((key) => setUnlocked(!!key));
   }, [principal.id, principal.publicKey]);
@@ -75,25 +73,6 @@ export default function Account() {
           </Button>
         </div>
       </Panel>
-      {(principal.publicKey?.crv === 'X25519' || migrated) && (
-        <Panel title={t('migrationTitle')}>
-          {migrated ? <Notice tone="success">{t('migrationComplete')}</Notice> : <>
-            <p className="leading-relaxed text-muted-foreground">{t('migrationHelp')}</p>
-            {migrationProgress && <p role="status">{migrationProgress}</p>}
-            <Button loading={task.busy} onClick={() => task.run(async () => {
-              try {
-                await migrateEncryptionKey(principal.id, step => setMigrationProgress(t(
-                  step.phase === 'passkey' ? 'migrationPasskey' : step.phase === 'secrets' ? 'migrationSecrets' : 'migrationSaving',
-                  { name: step.name, index: step.index, count: step.total },
-                )));
-                setMigrated(true);
-                setUnlocked(true);
-                await revalidator.revalidate();
-              } finally { setMigrationProgress(null); }
-            })}>{t('migrationStart')}</Button>
-          </>}
-        </Panel>
-      )}
       <Panel title={t('merge')}>
         <p className="leading-relaxed text-muted-foreground">{t('mergeHelp')}</p>
         <Button

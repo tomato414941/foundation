@@ -26,7 +26,6 @@ import { Environments } from './environments.js';
 import { Runs } from './runs.js';
 import { Integrations } from './integrations.js';
 import { Requests } from './requests.js';
-import { KeyMigration } from './key-migration.js';
 
 export interface Dependencies {
   db?: Database;
@@ -90,7 +89,6 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     principals,
     mailer,
     authentication,
-    keyMigration: new KeyMigration(resources, authentication),
     resources,
     catalog,
     transport,
