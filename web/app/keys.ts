@@ -73,21 +73,21 @@ function verificationCredential(credential: AuthenticationResponseJSON | Registr
   const { prf: _prf, ...extensions } = credential.clientExtensionResults as Record<string, unknown>;
   return { ...credential, clientExtensionResults: extensions };
 }
-async function assertion(principalId?: string, credentialId?: string) {
+async function assertion(principalId?: string, credentialId?: string, includeLegacy = true) {
   const data = await api<{ challengeId: string; options: PublicKeyCredentialRequestOptionsJSON }>(
     '/auth/passkeys/options',
     { method: 'POST', body: { intent: 'authenticate', ...(principalId ? { principalId } : {}) } },
   );
   const options = {
     ...data.options,
-    extensions: { ...data.options.extensions, prf: { eval: { first: seed, second: legacySeed } } },
+    extensions: { ...data.options.extensions, prf: { eval: { first: seed, ...(includeLegacy ? { second: legacySeed } : {}) } } },
     ...(credentialId ? { allowCredentials: [{ id: credentialId, type: 'public-key' as const }] } : {}),
   };
   const credential = await startAuthentication({ optionsJSON: options });
   return { challengeId: data.challengeId, credential, secret: prf(credential), legacySecret: prf(credential, 'second') };
 }
-export async function authenticate(principalId?: string, credentialId?: string, wrapping?: JWK) {
-  const proof = await assertion(principalId, credentialId);
+export async function authenticate(principalId?: string, credentialId?: string, wrapping?: JWK, includeLegacy = true) {
+  const proof = await assertion(principalId, credentialId, includeLegacy);
   const result = await api<Verified>('/auth/passkeys/verify', {
     method: 'POST',
     body: { challengeId: proof.challengeId, credential: verificationCredential(proof.credential) },
@@ -165,12 +165,12 @@ export async function registerPasskey(name: string, principal?: Pick<PrincipalVi
     body: {
       challengeId: data.challengeId,
       credential: verificationCredential(credential),
-      ...(pair ? { publicKey: pair.publicKey, wrappedKey } : {}),
+      ...(pair ? { wrappedKey, ...(!principal?.publicKey ? { publicKey: pair.publicKey } : {}) } : {}),
     },
   });
   if (pair) await keep(result.principalId, pair.privateKey);
   else if ((credential.clientExtensionResults as { prf?: { enabled?: boolean } }).prf?.enabled)
-    return authenticate(result.principalId, credential.id, existing);
+    return authenticate(result.principalId, credential.id, existing, false);
   return { ...result, encrypted: !!(await getKey(result.principalId)) };
 }
 export async function decryptSecret(id: string, principalId: string) {

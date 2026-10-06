@@ -241,7 +241,7 @@ export async function buildApp(context: Context) {
     {
       config: { rateLimit: { max: 20, timeWindow: '1 hour' } },
       schema: {
-        body: z.object({ name: C.Name, publicKey: C.PublicKey }).strict(),
+        body: z.object({ name: C.Name, publicKey: C.P256Key }).strict(),
         response: {
           201: z.object({
             principal: z.object({ id: C.Id, name: C.Name }),
@@ -418,7 +418,7 @@ export async function buildApp(context: Context) {
       schema: {
         params: C.IdParams,
         body: z
-          .object({ publicKey: C.PublicKey, wraps: z.record(C.Id, z.string().max(16384)).default({}) })
+          .object({ publicKey: C.P256Key, wraps: z.record(C.Id, C.WrappedKey).default({}) })
           .strict(),
         response: { 200: C.Ok },
       },
@@ -473,7 +473,7 @@ export async function buildApp(context: Context) {
     {
       schema: {
         params: z.object({ id: C.Id, credentialId: C.Id }),
-        body: z.object({ wrappedKey: z.string().min(1).max(16384) }).strict(),
+        body: z.object({ wrappedKey: C.WrappedKey }).strict(),
         response: { 200: C.Ok },
       },
     },

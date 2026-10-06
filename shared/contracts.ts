@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { decodeProtectedHeader } from 'jose';
 
 if (typeof window !== 'undefined') z.config({ jitless: true });
 
@@ -40,7 +41,7 @@ export const ResourceKind = z.enum([
   'function',
 ]);
 export type ResourceKindName = z.infer<typeof ResourceKind>;
-const EcKey = z
+export const P256Key = z
   .object({
     kty: z.literal('EC'),
     crv: z.literal('P-256'),
@@ -49,8 +50,21 @@ const EcKey = z
   })
   .strict();
 export const X25519Key = z.object({ kty: z.literal('OKP'), crv: z.literal('X25519'), x: z.string().length(43) }).strict();
-export const PublicKey = z.union([EcKey, X25519Key]);
+export const PublicKey = z.union([P256Key, X25519Key]);
+export type P256PublicKey = z.infer<typeof P256Key>;
 export type PublicEncryptionKey = z.infer<typeof PublicKey>;
+const WrappedKeyHeader = z.object({ alg: z.literal('dir'), enc: z.literal('A256GCM'), sub: Id }).strict();
+export const WrappedKey = z.string().max(16384)
+  .regex(/^[A-Za-z0-9_-]+\.\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{22}$/)
+  .refine(value => {
+    try {
+      return WrappedKeyHeader.safeParse(decodeProtectedHeader(value)).success;
+    } catch {
+      return false;
+    }
+  }, 'Use an A256GCM JWE for the wrapped encryption key.')
+  .brand<'WrappedEncryptionKey'>();
+export type WrappedEncryptionKey = z.infer<typeof WrappedKey>;
 export const JweSealed = z
   .object({
     protected: z.string().max(2048),
