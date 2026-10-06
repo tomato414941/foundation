@@ -4,38 +4,44 @@
   "api": "https://api.box.com/2.0",
   "docs": "https://developer.box.com/reference/",
   "console": "https://app.box.com/developers/console",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://account.box.com/api/oauth2/authorize",
-      "tokenUrl": "https://api.box.com/oauth2/token",
-      "clientAuth": "body",
-      "pkce": true,
-      "tokenFormat": "form",
-      "authorizeParams": {},
-      "tokenParams": {},
-      "defaults": {},
-      "fields": [],
-      "outputs": {
-        "BOX_ACCESS_TOKEN": "/accessToken",
-        "BOX_TOKEN_EXPIRES_AT": "/expiresAt"
+      "name": "Box · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://account.box.com/api/oauth2/authorize",
+        "tokenUrl": "https://api.box.com/oauth2/token",
+        "clientAuth": "body",
+        "pkce": true,
+        "tokenFormat": "form",
+        "authorizeParams": {},
+        "tokenParams": {},
+        "defaults": {},
+        "fields": [],
+        "outputs": {
+          "BOX_ACCESS_TOKEN": "/accessToken",
+          "BOX_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "identity": {
+          "url": "https://api.box.com/2.0/users/me",
+          "id": "/id",
+          "name": [
+            "/login",
+            "/name"
+          ]
+        },
+        "revoke": {
+          "url": "https://api.box.com/oauth2/revoke",
+          "style": "rfc7009"
+        },
+        "scopes": {
+          "default": [],
+          "separator": " ",
+          "docs": "https://developer.box.com/guides/api-calls/permissions-and-errors/scopes/"
+        }
       },
-      "identity": {
-        "url": "https://api.box.com/2.0/users/me",
-        "id": "/id",
-        "name": [
-          "/login",
-          "/name"
-        ]
-      },
-      "revoke": {
-        "url": "https://api.box.com/oauth2/revoke",
-        "style": "rfc7009"
-      },
-      "scopes": {
-        "default": [],
-        "separator": " ",
-        "docs": "https://developer.box.com/guides/api-calls/permissions-and-errors/scopes/"
-      }
+      "docs": "https://developer.box.com/reference/",
+      "console": "https://app.box.com/developers/console"
     }
   }
 }

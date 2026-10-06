@@ -23,6 +23,8 @@ export interface OAuthToken {
   scopes: string[];
   account: string;
   accountName: string;
+  accountVerified?: boolean;
+  scopesStatus?: 'unknown' | 'requested' | 'reported';
   extra: Record<string, string>;
   facts: Record<string, unknown>;
 }
@@ -108,6 +110,7 @@ export class OAuth {
     data: Record<string, unknown>,
     scopes: string[],
     previous?: OAuthToken,
+    refreshing = false,
   ): OAuthToken {
     const accessToken = spec.adapter === 'openrouter' ? data.key : data.access_token;
     if (
@@ -142,9 +145,22 @@ export class OAuth {
       ...(refreshToken ? { refreshToken: String(refreshToken) } : {}),
       expiresAt,
       scopes:
-        data.scope !== undefined ? strings(data.scope, spec.scopes.separator) : (previous?.scopes ?? scopes),
+        data.scope !== undefined
+          ? strings(data.scope, spec.scopes.separator)
+          : refreshing
+            ? (previous?.scopes ?? scopes)
+            : scopes,
+      scopesStatus:
+        data.scope !== undefined
+          ? 'reported'
+          : refreshing
+            ? (previous?.scopesStatus ?? 'unknown')
+            : scopes.length
+              ? 'requested'
+              : 'unknown',
       account: previous?.account ?? '',
       accountName: previous?.accountName ?? '',
+      accountVerified: previous?.accountVerified ?? false,
       extra,
       facts: {},
     };
@@ -193,7 +209,7 @@ export class OAuth {
         { grant_type: 'refresh_token', refresh_token: previous.refreshToken },
         true,
       );
-      current = this.token(spec, data, previous.scopes, previous);
+      current = this.token(spec, data, previous.scopes, previous, true);
     }
     if (spec.identity?.url || spec.adapter === 'ebay' || spec.adapter === 'openrouter')
       current = await this.inspect(spec, app, current);
@@ -234,6 +250,8 @@ export class OAuth {
         account: data.sub,
         accountName: typeof data.username === 'string' ? data.username : data.sub,
         scopes: strings(data.scope),
+        scopesStatus: 'reported',
+        accountVerified: true,
         expiresAt: Math.min(current.expiresAt ?? Infinity, data.exp * 1000),
       };
     }
@@ -268,8 +286,10 @@ export class OAuth {
       if (response.status === 401 || response.status === 403)
         fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
       if (response.status >= 400) fail(502, 'invalid_response', 'The service account could not be verified.');
-      if (spec.adapter === 'github' && response.headers['x-oauth-scopes'] !== undefined)
+      if (spec.adapter === 'github' && response.headers['x-oauth-scopes'] !== undefined) {
         current.scopes = strings(response.headers['x-oauth-scopes'].replaceAll(',', ' '));
+        current.scopesStatus = 'reported';
+      }
       if (spec.adapter === 'google' && data.email_verified !== true)
         fail(502, 'invalid_response', 'The service account could not be verified.');
     } else if (spec.identity?.from === 'app') data = app.fields;
@@ -295,6 +315,7 @@ export class OAuth {
       ...current,
       account,
       accountName: spec.identity ? first(spec.identity.name) || account : account,
+      accountVerified: Boolean(spec.identity?.url || (spec.identity?.from === 'token' && tokenResponse)),
     };
   }
   async revoke(spec: OAuthSpec, app: OAuthApp, current: OAuthToken) {

@@ -12,8 +12,8 @@ import {
 } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
-import { CatalogEntry, Resource, Payment, Usage, listOf } from '../../shared/contracts';
-import type { ResourceView } from '../../shared/contracts';
+import { CatalogEntry, CatalogMethod, Resource, Payment, Usage, listOf } from '../../shared/contracts';
+import type { CatalogConnectionMethod, ResourceView } from '../../shared/contracts';
 import { encode } from '../../shared/encryption';
 import { actionResult, api, ApiFailure, formText, jsonField, session, upload } from './api';
 import { decryptSecret, sealSecret } from './keys';
@@ -31,22 +31,41 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
   const kind = resourceKind(params.section);
   const query = new URL(request.url).searchParams;
   const id = params.id ?? query.get('connection');
-  const [resource, catalog, apps, sessionData, payment, usage] = await Promise.all([
-    id ? api('/resources/' + id, { signal: request.signal }, Resource) : null,
-    ['connection', 'app'].includes(kind)
-      ? api('/catalog', { signal: request.signal }, listOf(CatalogEntry))
-      : null,
-    kind === 'connection'
-      ? api(`/principals/${params.owner}/resources?kind=app`, { signal: request.signal }, listOf(Resource))
-      : null,
-    session(request),
-    ['object', 'environment'].includes(kind)
-      ? api(`/principals/${params.owner}/payment`, { signal: request.signal }, Payment)
-      : null,
-    kind === 'environment'
-      ? api(`/principals/${params.owner}/usage`, { signal: request.signal }, Usage)
-      : null,
-  ]);
+  const ownedItems = async (resourceKind: string) => {
+    try {
+      return await api(
+        `/principals/${params.owner}/resources?kind=${resourceKind}&limit=200`,
+        { signal: request.signal },
+        listOf(Resource),
+      );
+    } catch (error) {
+      if (error instanceof ApiFailure && error.status === 403) return { items: [], next: null };
+      throw error;
+    }
+  };
+  const [resource, catalog, apps, sessionData, payment, usage, methods, connections, pinnedMethod, shared] =
+    await Promise.all([
+      id ? api('/resources/' + id, { signal: request.signal }, Resource) : null,
+      ['connection', 'app'].includes(kind)
+        ? api('/catalog', { signal: request.signal }, listOf(CatalogEntry))
+        : null,
+      kind === 'connection' ? ownedItems('app') : null,
+      session(request),
+      ['object', 'environment'].includes(kind)
+        ? api(`/principals/${params.owner}/payment`, { signal: request.signal }, Payment)
+        : null,
+      kind === 'environment'
+        ? api(`/principals/${params.owner}/usage`, { signal: request.signal }, Usage)
+        : null,
+      ['connection', 'app'].includes(kind)
+        ? api('/connection-methods', { signal: request.signal }, listOf(CatalogMethod))
+        : null,
+      kind === 'connection' && !id ? ownedItems('connection') : null,
+      kind === 'connection' && id
+        ? api(`/connections/${id}/method`, { signal: request.signal }, CatalogMethod)
+        : null,
+      kind === 'connection' ? api('/resources/shared', { signal: request.signal }, listOf(Resource)) : null,
+    ]);
   if (resource && (resource.ownerId !== params.owner || resource.kind !== kind))
     throw new Response('Not found', { status: 404 });
   let content = '',
@@ -70,11 +89,27 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     payment,
     usage,
     catalog: catalog?.items ?? [],
-    apps: apps?.items ?? [],
+    apps: [
+      ...new Map(
+        [...(apps?.items ?? []), ...(shared?.items ?? [])]
+          .filter((item) => item.kind === 'app')
+          .map((item) => [item.id, item]),
+      ).values(),
+    ],
+    methods: methods?.items ?? [],
+    connections: [
+      ...new Map(
+        [...(connections?.items ?? []), ...(shared?.items ?? [])]
+          .filter((item) => item.kind === 'connection' && item.permissions.includes('use'))
+          .map((item) => [item.id, item]),
+      ).values(),
+    ],
+    pinnedMethod,
     content,
     binary,
     locked,
     serviceId: query.get('service'),
+    methodId: query.get('method'),
   };
 }
 function connectRedirect(result: ConnectionResult) {
@@ -106,8 +141,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
           .map(([key, value]) => [key.slice(6), String(value)]),
       );
       const input = {
-        serviceId: formText(form, 'serviceId'),
-        scheme: formText(form, 'scheme'),
+        methodId: formText(form, 'methodId'),
         name: name || undefined,
         appId: formText(form, 'appId') || 'foundation',
         fields,
@@ -175,11 +209,12 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
         parameters: jsonField(form, 'parameters', []),
         save: jsonField(form, 'save', {}),
       };
-    else if (kind === 'service') body.definition = jsonField(form, 'definition', {});
+    else if (kind === 'service' || kind === 'method')
+      body.definition = { ...jsonField<Record<string, unknown>>(form, 'definition', {}), name };
     else if (kind === 'app')
       body = {
         ...body,
-        serviceId: formText(form, 'serviceId'),
+        methodId: formText(form, 'methodId'),
         clientId: formText(form, 'clientId'),
         ...(formText(form, 'clientSecret') ? { clientSecret: formText(form, 'clientSecret') } : {}),
         fields: Object.fromEntries(
@@ -190,7 +225,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       };
     if (existing) {
       delete body.kind;
-      delete body.serviceId;
+      delete body.methodId;
       body.version = version;
     }
     const result = await api(
@@ -246,32 +281,52 @@ export default function ResourceForm() {
   const existing = data.resource;
   const back = existing
     ? resourcePath(existing)
-    : `/p/${principal.id}/${Object.entries({ connection: 'services', secret: 'secrets', object: 'objects', environment: 'environments', function: 'functions', service: 'definitions', app: 'apps' }).find(([key]) => key === data.kind)?.[1]}`;
+    : `/p/${principal.id}/${Object.entries({ connection: 'services', secret: 'secrets', object: 'objects', environment: 'environments', function: 'functions', service: 'definitions', method: 'methods', app: 'apps' }).find(([key]) => key === data.kind)?.[1]}`;
+  const eligibleMethods = data.methods.filter((item) => data.kind !== 'app' || item.kind === 'oauth');
+  const preferred = (methods: CatalogConnectionMethod[]) =>
+    methods.find((item) => item.kind === 'oauth' && item.availability === 'ready') ??
+    methods.find((item) => item.kind === 'token') ??
+    methods[0];
   const [serviceId, setServiceId] = useState(
-    existing && (existing.kind === 'connection' || existing.kind === 'app')
-      ? existing.data.serviceId
-      : (data.serviceId ?? data.catalog[0]?.id ?? ''),
+    existing?.kind === 'connection'
+      ? (existing.data.services[0]?.id ?? '')
+      : existing?.kind === 'app'
+        ? (data.catalog.find((item) =>
+            Object.values(item.methods).some((method) => method.id === existing.data.methodId),
+          )?.id ?? '')
+        : (data.serviceId ?? (data.methodId ? '' : (data.catalog[0]?.id ?? ''))),
   );
   const service = data.catalog.find((item) => item.id === serviceId);
-  const schemes = service ? (Object.keys(service.auth) as Array<'oauth' | 'token' | 'role'>) : [];
-  const [scheme, setScheme] = useState<'oauth' | 'token' | 'role'>(
-    existing?.kind === 'connection'
-      ? existing.data.scheme
-      : schemes.includes('oauth') && service?.available.includes('oauth')
-        ? 'oauth'
-        : schemes.includes('token')
-          ? 'token'
-          : (schemes[0] ?? 'oauth'),
+  const offered = (entry: typeof service) =>
+    entry
+      ? eligibleMethods.filter((item) => Object.values(entry.methods).some((method) => method.id === item.id))
+      : eligibleMethods;
+  const methods = offered(service);
+  const [methodId, setMethodId] = useState(
+    existing && (existing.kind === 'connection' || existing.kind === 'app')
+      ? existing.data.methodId
+      : (data.methodId ?? preferred(methods)?.id ?? ''),
   );
+  const method = data.pinnedMethod ?? eligibleMethods.find((item) => item.id === methodId);
   const [fileName, setFileName] = useState('');
   const fields =
-    data.kind === 'app'
-      ? (service?.auth.oauth?.fields ?? [])
-      : scheme === 'token'
-        ? (service?.auth.token?.fields ?? [])
-        : scheme === 'oauth'
-          ? (service?.auth.oauth?.fields ?? [])
-          : [];
+    method &&
+    ((data.kind === 'app' && method.kind === 'oauth') ||
+      (data.kind === 'connection' && method.kind === 'token'))
+      ? method.config.fields
+      : [];
+  const labelService = methodId.startsWith('sakura:') ? 'sakura-vps' : methodId.split(':')[0];
+  const matchingApps = data.apps.filter(
+    (item) => item.kind === 'app' && item.data.methodId === methodId && item.permissions.includes('use'),
+  );
+  const existingConnections = data.connections.filter(
+    (item) => item.kind === 'connection' && item.data.methodId === methodId,
+  );
+  const methodUnavailable =
+    data.kind === 'connection' &&
+    (!method ||
+      method.availability === 'unavailable' ||
+      (method.kind === 'oauth' && method.availability === 'app-required' && !matchingApps.length));
   const role = result && 'kind' in result && result.kind === 'role' ? result : null;
   const spec = existing?.kind === 'function' ? existing.data : undefined;
   const unavailable =
@@ -345,7 +400,13 @@ export default function ResourceForm() {
                     ],
                   }}
                 />
-                <TextField name="arn" label={t('roleArn')} required fullWidth />
+                <TextField
+                  name="arn"
+                  label={t('roleArn')}
+                  defaultValue={existing?.kind === 'connection' ? (existing.data.accountId ?? '') : ''}
+                  required
+                  fullWidth
+                />
                 <TextField name="region" label={t('region')} defaultValue="ap-northeast-1" required />
               </Panel>
             ) : (
@@ -421,149 +482,165 @@ export default function ResourceForm() {
                   <Panel>
                     <TextField
                       select
-                      name="serviceId"
                       label={t('service')}
                       value={serviceId}
                       disabled={!!existing}
                       onChange={(event) => {
                         setServiceId(event.target.value);
                         const next = data.catalog.find((item) => item.id === event.target.value);
-                        setScheme(
-                          next?.available.includes('oauth')
-                            ? 'oauth'
-                            : next?.auth.token
-                              ? 'token'
-                              : next?.auth.role
-                                ? 'role'
-                                : 'oauth',
-                        );
+                        setMethodId(preferred(offered(next))?.id ?? '');
                       }}
+                      slotProps={{ select: { displayEmpty: true }, inputLabel: { shrink: true } }}
                     >
+                      <MenuItem value="">{t('allMethods')}</MenuItem>
                       {data.catalog
-                        .filter((item) => data.kind !== 'app' || item.auth.oauth)
+                        .filter(
+                          (item) =>
+                            data.kind !== 'app' ||
+                            Object.values(item.methods).some((method) => method.kind === 'oauth'),
+                        )
                         .map((item) => (
                           <MenuItem key={item.id} value={item.id}>
                             {item.name}
                           </MenuItem>
                         ))}
                     </TextField>
-                    {existing && <input type="hidden" name="serviceId" value={serviceId} />}
-                    {data.kind === 'connection' && (
-                      <>
-                        <TextField
-                          select
-                          name="scheme"
-                          label={t('method')}
-                          value={scheme}
-                          onChange={(event) => setScheme(event.target.value as typeof scheme)}
-                        >
-                          {schemes.map((value) => (
-                            <MenuItem value={value} key={value}>
-                              {t(value)}
+                    <TextField
+                      select
+                      name="methodId"
+                      label={t('method')}
+                      value={methodId}
+                      disabled={!!existing}
+                      onChange={(event) => setMethodId(event.target.value)}
+                    >
+                      {(existing && method ? [method] : methods).map((item) => (
+                        <MenuItem value={item.id} key={item.id}>
+                          {item.name}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                    {existing && <input type="hidden" name="methodId" value={methodId} />}
+                    {!existing && !!existingConnections.length && (
+                      <Alert severity="info">
+                        <Typography variant="body2">{t('existingConnections')}</Typography>
+                        {existingConnections.map((item) => (
+                          <Button key={item.id} component={Link} to={resourcePath(item)}>
+                            {item.name}
+                          </Button>
+                        ))}
+                      </Alert>
+                    )}
+                    {methodUnavailable && (
+                      <Alert severity="info">
+                        {t(method?.availability === 'app-required' ? 'appRequired' : 'methodUnavailable')}
+                      </Alert>
+                    )}
+                    <Stack spacing={3} key={methodId}>
+                      {data.kind === 'connection' && method?.kind === 'oauth' && (
+                        <>
+                          <TextField
+                            select
+                            name="appId"
+                            label={t('app')}
+                            defaultValue={
+                              existing?.kind === 'connection'
+                                ? (existing.data.appId ?? 'foundation')
+                                : method.availability === 'ready'
+                                  ? 'foundation'
+                                  : (matchingApps[0]?.id ?? 'foundation')
+                            }
+                          >
+                            <MenuItem value="foundation" disabled={method.availability !== 'ready'}>
+                              {t('foundationApp')}
                             </MenuItem>
-                          ))}
-                        </TextField>
-                        {scheme === 'oauth' && (
-                          <>
-                            <TextField
-                              select
-                              name="appId"
-                              label={t('app')}
-                              defaultValue={
-                                existing?.kind === 'connection'
-                                  ? (existing.data.appId ?? 'foundation')
-                                  : 'foundation'
-                              }
-                            >
-                              <MenuItem value="foundation" disabled={!service?.available.includes('oauth')}>
-                                {t('foundationApp')}
+                            {matchingApps.map((item) => (
+                              <MenuItem key={item.id} value={item.id}>
+                                {item.name}
                               </MenuItem>
-                              {data.apps
-                                .filter((item) => item.kind === 'app' && item.data.serviceId === serviceId)
-                                .map((item) => (
-                                  <MenuItem key={item.id} value={item.id}>
-                                    {item.name}
-                                  </MenuItem>
-                                ))}
-                            </TextField>
-                            <TextField
-                              key={serviceId}
-                              name="scopes"
-                              label={t('scopes')}
-                              defaultValue={
-                                existing?.kind === 'connection'
-                                  ? existing.data.scopes.join(' ')
-                                  : (service?.auth.oauth?.scopes.default.join(' ') ?? '')
-                              }
-                              helperText={t('scopesHelp')}
-                            />
-                            {service?.auth.oauth?.scopes.docs && (
-                              <ExternalLink href={service.auth.oauth.scopes.docs}>{t('docs')}</ExternalLink>
-                            )}
-                          </>
-                        )}
-                      </>
-                    )}
-                    {data.kind === 'app' && (
-                      <>
+                            ))}
+                          </TextField>
+                          <TextField
+                            name="scopes"
+                            label={t('scopes')}
+                            defaultValue={
+                              existing?.kind === 'connection'
+                                ? existing.data.scopes.join(' ')
+                                : method.config.scopes.default.join(' ')
+                            }
+                            helperText={t('scopesHelp')}
+                          />
+                          {method.config.scopes.docs && (
+                            <ExternalLink href={method.config.scopes.docs}>{t('docs')}</ExternalLink>
+                          )}
+                        </>
+                      )}
+                      {data.kind === 'app' && (
+                        <>
+                          <TextField
+                            name="clientId"
+                            required
+                            label={t('clientId')}
+                            defaultValue={existing?.kind === 'app' ? existing.data.clientId : ''}
+                          />
+                          <TextField
+                            name="clientSecret"
+                            type="password"
+                            autoComplete="new-password"
+                            label={t('clientSecret')}
+                            helperText={existing ? t('unchangedSecret') : undefined}
+                          />
+                          <TextField
+                            label={t('callbackUrl')}
+                            value={
+                              typeof window !== 'undefined' ? window.location.origin + '/oauth/callback' : ''
+                            }
+                            slotProps={{ input: { readOnly: true } }}
+                          />
+                        </>
+                      )}
+                      {fields.map((field) => (
                         <TextField
-                          name="clientId"
-                          required
-                          label={t('clientId')}
-                          defaultValue={existing?.kind === 'app' ? existing.data.clientId : ''}
-                        />
-                        <TextField
-                          name="clientSecret"
-                          type="password"
-                          autoComplete="new-password"
-                          label={t('clientSecret')}
-                          helperText={existing ? t('unchangedSecret') : undefined}
-                        />
-                        <TextField
-                          label={t('callbackUrl')}
-                          value={
-                            typeof window !== 'undefined'
-                              ? window.location.origin + '/oauth/callback'
-                              : ''
+                          key={field.name}
+                          name={'field.' + field.name}
+                          label={
+                            i18n.language === 'ja'
+                              ? (serviceLabels[`${labelService}.${method?.kind}.${field.name}.label`] ??
+                                field.label)
+                              : field.label
                           }
-                          slotProps={{ input: { readOnly: true } }}
+                          type={field.secret ? 'password' : 'text'}
+                          required={field.required ?? true}
+                          defaultValue={
+                            existing?.kind === 'app'
+                              ? (existing.data.fields[field.name] ?? '')
+                              : data.kind === 'app' && method?.kind === 'oauth'
+                                ? (method.config.defaults[field.name] ?? '')
+                                : ''
+                          }
+                          placeholder={field.placeholder}
+                          autoComplete="off"
+                          helperText={
+                            i18n.language === 'ja'
+                              ? (serviceLabels[`${labelService}.${method?.kind}.${field.name}.note`] ??
+                                field.note)
+                              : field.note
+                          }
                         />
-                      </>
-                    )}
-                    {fields.map((field) => (
-                      <TextField
-                        key={serviceId + '.' + scheme + '.' + field.name}
-                        name={'field.' + field.name}
-                        label={
-                          i18n.language === 'ja'
-                            ? (serviceLabels[
-                                `${serviceId}.${data.kind === 'app' ? 'oauth' : scheme}.${field.name}.label`
-                              ] ?? field.label)
-                            : field.label
-                        }
-                        type={field.secret ? 'password' : 'text'}
-                        required={field.required ?? scheme === 'token'}
-                        defaultValue={
-                          existing?.kind === 'app' ? (existing.data.fields[field.name] ?? '') : ''
-                        }
-                        placeholder={field.placeholder}
-                        autoComplete="off"
-                        helperText={
-                          i18n.language === 'ja'
-                            ? (serviceLabels[
-                                `${serviceId}.${data.kind === 'app' ? 'oauth' : scheme}.${field.name}.note`
-                              ] ?? field.note)
-                            : field.note
-                        }
-                      />
-                    ))}
-                    {(scheme === 'token' ? service?.auth.token?.console : service?.console) && (
-                      <ExternalLink
-                        href={(scheme === 'token' ? service?.auth.token?.console : service?.console)!}
-                      >
-                        {t('serviceConsole')}
-                      </ExternalLink>
-                    )}
+                      ))}
+                      {(method?.kind === 'token'
+                        ? (method.config.console ?? method.console)
+                        : method?.console) && (
+                        <ExternalLink
+                          href={
+                            (method?.kind === 'token'
+                              ? (method.config.console ?? method.console)
+                              : method?.console)!
+                          }
+                        >
+                          {t('serviceConsole')}
+                        </ExternalLink>
+                      )}
+                    </Stack>
                   </Panel>
                 )}
                 {data.kind === 'environment' && (
@@ -640,29 +717,31 @@ export default function ResourceForm() {
                     <JsonField name="save" label={t('saveOutputs')} value={spec?.save ?? {}} />
                   </>
                 )}
-                {data.kind === 'service' && (
+                {(data.kind === 'service' || data.kind === 'method') && (
                   <JsonField
                     name="definition"
                     label={t('definition')}
                     rows={15}
                     value={
-                      existing?.kind === 'service'
+                      existing?.kind === 'service' || existing?.kind === 'method'
                         ? existing.data
-                        : {
-                            name: '',
-                            auth: {
-                              token: {
+                        : data.kind === 'method'
+                          ? {
+                              kind: 'token',
+                              config: {
                                 fields: [{ name: 'token', label: 'API key', secret: true, required: true }],
                                 outputs: { API_KEY: '/token' },
                               },
-                            },
-                          }
+                            }
+                          : {
+                              methods: {},
+                            }
                     }
                   />
                 )}
               </>
             )}
-            {!unavailable && (
+            {!unavailable && !methodUnavailable && (
               <SaveBar
                 back={back}
                 label={

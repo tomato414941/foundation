@@ -4,52 +4,64 @@
   "api": "https://slack.com/api",
   "docs": "https://api.slack.com/methods",
   "console": "https://api.slack.com/apps",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://slack.com/oauth/v2/authorize",
-      "tokenUrl": "https://slack.com/api/oauth.v2.access",
-      "clientAuth": "body",
-      "pkce": false,
-      "tokenFormat": "form",
-      "authorizeParams": {},
-      "tokenParams": {},
-      "defaults": {},
-      "fields": [],
-      "outputs": {
-        "SLACK_BOT_TOKEN": "/accessToken",
-        "SLACK_TEAM_ID": "/account",
-        "SLACK_TOKEN_EXPIRES_AT": "/expiresAt"
+      "name": "Slack · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://slack.com/oauth/v2/authorize",
+        "tokenUrl": "https://slack.com/api/oauth.v2.access",
+        "clientAuth": "body",
+        "pkce": false,
+        "tokenFormat": "form",
+        "authorizeParams": {},
+        "tokenParams": {},
+        "defaults": {},
+        "fields": [],
+        "outputs": {
+          "SLACK_BOT_TOKEN": "/accessToken",
+          "SLACK_TEAM_ID": "/account",
+          "SLACK_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "identity": {
+          "url": "https://slack.com/api/auth.test",
+          "method": "POST",
+          "id": "/team_id",
+          "name": "/team"
+        },
+        "revoke": {
+          "url": "https://slack.com/api/auth.revoke",
+          "style": "bearer"
+        },
+        "hint": "The access token is a bot token for the Slack Web API (https://slack.com/api/<method>). SLACK_TEAM_ID is the workspace ID.",
+        "okPointer": "/ok",
+        "scopes": {
+          "default": [],
+          "separator": ",",
+          "docs": "https://api.slack.com/scopes"
+        }
       },
-      "identity": {
-        "url": "https://slack.com/api/auth.test",
-        "method": "POST",
-        "id": "/team_id",
-        "name": "/team"
-      },
-      "revoke": {
-        "url": "https://slack.com/api/auth.revoke",
-        "style": "bearer"
-      },
-      "hint": "The access token is a bot token for the Slack Web API (https://slack.com/api/<method>). SLACK_TEAM_ID is the workspace ID.",
-      "okPointer": "/ok",
-      "scopes": {
-        "default": [],
-        "separator": ",",
-        "docs": "https://api.slack.com/scopes"
-      }
+      "docs": "https://api.slack.com/methods",
+      "console": "https://api.slack.com/apps"
     },
     "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "Bot User OAuth Token",
-          "secret": true
+      "name": "Slack · API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "Bot User OAuth Token",
+            "secret": true
+          }
+        ],
+        "console": "https://api.slack.com/apps",
+        "outputs": {
+          "SLACK_BOT_TOKEN": "/token"
         }
-      ],
-      "console": "https://api.slack.com/apps",
-      "outputs": {
-        "SLACK_BOT_TOKEN": "/token"
-      }
+      },
+      "docs": "https://api.slack.com/methods",
+      "console": "https://api.slack.com/apps"
     }
   }
 }

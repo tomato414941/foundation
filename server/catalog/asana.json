@@ -4,51 +4,63 @@
   "api": "https://app.asana.com/api/1.0",
   "docs": "https://developers.asana.com/reference/rest-api-reference",
   "console": "https://app.asana.com/0/my-apps",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://app.asana.com/-/oauth_authorize",
-      "tokenUrl": "https://app.asana.com/-/oauth_token",
-      "clientAuth": "body",
-      "pkce": true,
-      "tokenFormat": "form",
-      "authorizeParams": {},
-      "tokenParams": {},
-      "defaults": {},
-      "fields": [],
-      "outputs": {
-        "ASANA_ACCESS_TOKEN": "/accessToken",
-        "ASANA_TOKEN_EXPIRES_AT": "/expiresAt"
+      "name": "Asana · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://app.asana.com/-/oauth_authorize",
+        "tokenUrl": "https://app.asana.com/-/oauth_token",
+        "clientAuth": "body",
+        "pkce": true,
+        "tokenFormat": "form",
+        "authorizeParams": {},
+        "tokenParams": {},
+        "defaults": {},
+        "fields": [],
+        "outputs": {
+          "ASANA_ACCESS_TOKEN": "/accessToken",
+          "ASANA_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "identity": {
+          "url": "https://app.asana.com/api/1.0/users/me",
+          "id": "/data/gid",
+          "name": [
+            "/data/email",
+            "/data/name"
+          ]
+        },
+        "revoke": {
+          "url": "https://app.asana.com/-/oauth_revoke",
+          "style": "rfc7009"
+        },
+        "scopes": {
+          "default": [],
+          "separator": " ",
+          "docs": "https://developers.asana.com/docs/oauth-scopes"
+        }
       },
-      "identity": {
-        "url": "https://app.asana.com/api/1.0/users/me",
-        "id": "/data/gid",
-        "name": [
-          "/data/email",
-          "/data/name"
-        ]
-      },
-      "revoke": {
-        "url": "https://app.asana.com/-/oauth_revoke",
-        "style": "rfc7009"
-      },
-      "scopes": {
-        "default": [],
-        "separator": " ",
-        "docs": "https://developers.asana.com/docs/oauth-scopes"
-      }
+      "docs": "https://developers.asana.com/reference/rest-api-reference",
+      "console": "https://app.asana.com/0/my-apps"
     },
     "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "Personal access token",
-          "secret": true
+      "name": "Asana · API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "Personal access token",
+            "secret": true
+          }
+        ],
+        "console": "https://app.asana.com/0/my-apps",
+        "outputs": {
+          "ASANA_TOKEN": "/token"
         }
-      ],
-      "console": "https://app.asana.com/0/my-apps",
-      "outputs": {
-        "ASANA_TOKEN": "/token"
-      }
+      },
+      "docs": "https://developers.asana.com/reference/rest-api-reference",
+      "console": "https://app.asana.com/0/my-apps"
     }
   }
 }

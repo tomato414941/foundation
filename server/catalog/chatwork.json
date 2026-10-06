@@ -4,51 +4,63 @@
   "api": "https://api.chatwork.com/v2",
   "docs": "https://developer.chatwork.com/reference",
   "console": "https://www.chatwork.com/service/packages/chatwork/subpackages/oauth/client_list.php",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://www.chatwork.com/packages/oauth2/login.php",
-      "tokenUrl": "https://oauth.chatwork.com/token",
-      "clientAuth": "basic",
-      "pkce": true,
-      "tokenFormat": "form",
-      "authorizeParams": {},
-      "tokenParams": {},
-      "defaults": {},
-      "fields": [],
-      "outputs": {
-        "CHATWORK_ACCESS_TOKEN": "/accessToken",
-        "CHATWORK_TOKEN_EXPIRES_AT": "/expiresAt"
+      "name": "Chatwork · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://www.chatwork.com/packages/oauth2/login.php",
+        "tokenUrl": "https://oauth.chatwork.com/token",
+        "clientAuth": "basic",
+        "pkce": true,
+        "tokenFormat": "form",
+        "authorizeParams": {},
+        "tokenParams": {},
+        "defaults": {},
+        "fields": [],
+        "outputs": {
+          "CHATWORK_ACCESS_TOKEN": "/accessToken",
+          "CHATWORK_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "identity": {
+          "url": "https://api.chatwork.com/v2/me",
+          "id": "/account_id",
+          "name": [
+            "/name",
+            "/chatwork_id"
+          ]
+        },
+        "scopes": {
+          "default": [
+            "users.profile.me:read",
+            "offline_access"
+          ],
+          "separator": " ",
+          "docs": "https://developer.chatwork.com/docs/oauth"
+        }
       },
-      "identity": {
-        "url": "https://api.chatwork.com/v2/me",
-        "id": "/account_id",
-        "name": [
-          "/name",
-          "/chatwork_id"
-        ]
-      },
-      "scopes": {
-        "default": [
-          "users.profile.me:read",
-          "offline_access"
-        ],
-        "separator": " ",
-        "docs": "https://developer.chatwork.com/docs/oauth"
-      }
+      "docs": "https://developer.chatwork.com/reference",
+      "console": "https://www.chatwork.com/service/packages/chatwork/subpackages/oauth/client_list.php"
     },
     "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "APIトークン",
-          "secret": true
+      "name": "Chatwork · API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "APIトークン",
+            "secret": true
+          }
+        ],
+        "console": "https://www.chatwork.com/service/packages/chatwork/subpackages/api/token.php",
+        "hint": "Send the token in the \"X-ChatWorkToken\" header.",
+        "outputs": {
+          "CHATWORK_API_TOKEN": "/token"
         }
-      ],
-      "console": "https://www.chatwork.com/service/packages/chatwork/subpackages/api/token.php",
-      "hint": "Send the token in the \"X-ChatWorkToken\" header.",
-      "outputs": {
-        "CHATWORK_API_TOKEN": "/token"
-      }
+      },
+      "docs": "https://developer.chatwork.com/reference",
+      "console": "https://www.chatwork.com/service/packages/chatwork/subpackages/oauth/client_list.php"
     }
   }
 }

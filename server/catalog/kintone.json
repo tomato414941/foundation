@@ -2,56 +2,66 @@
   "id": "kintone",
   "name": "kintone",
   "docs": "https://cybozu.dev/ja/kintone/docs/rest-api/",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://{domain}/oauth2/authorization",
-      "tokenUrl": "https://{domain}/oauth2/token",
-      "clientAuth": "body",
-      "pkce": true,
-      "tokenFormat": "form",
-      "authorizeParams": {},
-      "tokenParams": {},
-      "defaults": {},
-      "fields": [
-        {
-          "name": "domain",
-          "label": "kintoneのドメイン",
-          "required": true,
-          "placeholder": "example.cybozu.com",
-          "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.(cybozu\\.com|kintone\\.com|cybozu\\.cn)$"
+      "name": "kintone · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://{domain}/oauth2/authorization",
+        "tokenUrl": "https://{domain}/oauth2/token",
+        "clientAuth": "body",
+        "pkce": true,
+        "tokenFormat": "form",
+        "authorizeParams": {},
+        "tokenParams": {},
+        "defaults": {},
+        "fields": [
+          {
+            "name": "domain",
+            "label": "kintoneのドメイン",
+            "required": true,
+            "placeholder": "example.cybozu.com",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.(cybozu\\.com|kintone\\.com|cybozu\\.cn)$"
+          }
+        ],
+        "outputs": {
+          "KINTONE_ACCESS_TOKEN": "/accessToken",
+          "KINTONE_DOMAIN": "/domain",
+          "KINTONE_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "hint": "KINTONE_DOMAIN is the kintone domain (https://<KINTONE_DOMAIN>/k/v1/...).",
+        "scopes": {
+          "default": [],
+          "separator": " ",
+          "docs": "https://cybozu.dev/ja/common/docs/oauth-client/"
         }
-      ],
-      "outputs": {
-        "KINTONE_ACCESS_TOKEN": "/accessToken",
-        "KINTONE_DOMAIN": "/domain",
-        "KINTONE_TOKEN_EXPIRES_AT": "/expiresAt"
       },
-      "hint": "KINTONE_DOMAIN is the kintone domain (https://<KINTONE_DOMAIN>/k/v1/...).",
-      "scopes": {
-        "default": [],
-        "separator": " ",
-        "docs": "https://cybozu.dev/ja/common/docs/oauth-client/"
-      }
+      "docs": "https://cybozu.dev/ja/kintone/docs/rest-api/"
     },
     "token": {
-      "fields": [
-        {
-          "name": "domain",
-          "label": "kintoneのドメイン",
-          "placeholder": "example.cybozu.com",
-          "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.(cybozu\\.com|kintone\\.com|cybozu\\.cn)$"
-        },
-        {
-          "name": "token",
-          "label": "APIトークン",
-          "secret": true
+      "name": "kintone · API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "domain",
+            "label": "kintoneのドメイン",
+            "placeholder": "example.cybozu.com",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.(cybozu\\.com|kintone\\.com|cybozu\\.cn)$"
+          },
+          {
+            "name": "token",
+            "label": "APIトークン",
+            "secret": true
+          }
+        ],
+        "hint": "Send the token in the \"X-Cybozu-API-Token\" header to https://<KINTONE_DOMAIN>/k/v1/...",
+        "outputs": {
+          "KINTONE_DOMAIN": "/domain",
+          "KINTONE_API_TOKEN": "/token"
         }
-      ],
-      "hint": "Send the token in the \"X-Cybozu-API-Token\" header to https://<KINTONE_DOMAIN>/k/v1/...",
-      "outputs": {
-        "KINTONE_DOMAIN": "/domain",
-        "KINTONE_API_TOKEN": "/token"
-      }
+      },
+      "docs": "https://cybozu.dev/ja/kintone/docs/rest-api/"
     }
   }
 }

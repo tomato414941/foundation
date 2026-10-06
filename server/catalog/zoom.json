@@ -4,36 +4,42 @@
   "api": "https://api.zoom.us/v2",
   "docs": "https://developers.zoom.us/docs/api/",
   "console": "https://marketplace.zoom.us/",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://zoom.us/oauth/authorize",
-      "tokenUrl": "https://zoom.us/oauth/token",
-      "clientAuth": "basic",
-      "pkce": true,
-      "tokenFormat": "form",
-      "authorizeParams": {},
-      "tokenParams": {},
-      "defaults": {},
-      "fields": [],
-      "outputs": {
-        "ZOOM_ACCESS_TOKEN": "/accessToken",
-        "ZOOM_TOKEN_EXPIRES_AT": "/expiresAt"
+      "name": "Zoom · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://zoom.us/oauth/authorize",
+        "tokenUrl": "https://zoom.us/oauth/token",
+        "clientAuth": "basic",
+        "pkce": true,
+        "tokenFormat": "form",
+        "authorizeParams": {},
+        "tokenParams": {},
+        "defaults": {},
+        "fields": [],
+        "outputs": {
+          "ZOOM_ACCESS_TOKEN": "/accessToken",
+          "ZOOM_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "identity": {
+          "url": "https://api.zoom.us/v2/users/me",
+          "id": "/id",
+          "optional": true,
+          "name": "/email"
+        },
+        "revoke": {
+          "url": "https://zoom.us/oauth/revoke",
+          "style": "rfc7009"
+        },
+        "scopes": {
+          "default": [],
+          "separator": " ",
+          "docs": "https://developers.zoom.us/docs/integrations/oauth-scopes-overview/"
+        }
       },
-      "identity": {
-        "url": "https://api.zoom.us/v2/users/me",
-        "id": "/id",
-        "optional": true,
-        "name": "/email"
-      },
-      "revoke": {
-        "url": "https://zoom.us/oauth/revoke",
-        "style": "rfc7009"
-      },
-      "scopes": {
-        "default": [],
-        "separator": " ",
-        "docs": "https://developers.zoom.us/docs/integrations/oauth-scopes-overview/"
-      }
+      "docs": "https://developers.zoom.us/docs/api/",
+      "console": "https://marketplace.zoom.us/"
     }
   }
 }

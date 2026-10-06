@@ -29,6 +29,7 @@ export interface ResourceRow extends ResourceIdentity {
   updated_at: Date;
 }
 export class Resources {
+  connectionServices?: (actor: Actor, methodId: string) => Promise<Array<{ id: string; name: string }>>;
   constructor(
     readonly db: Database,
     readonly authorization: Authorization,
@@ -111,7 +112,14 @@ export class Resources {
     const data =
       row.kind === 'secret'
         ? { ...row.data, allowUse: await this.authorization.resource({ id: this.identity.id }, row, 'use') }
-        : row.data;
+        : row.kind === 'service' || row.kind === 'method'
+          ? { ...row.data, name: row.name }
+          : row.kind === 'connection'
+            ? {
+                ...row.data,
+                services: (await this.connectionServices?.(actor, String(row.data.methodId))) ?? [],
+              }
+            : row.data;
     return Resource.parse({
       id: row.id,
       ownerId: row.owner_id,

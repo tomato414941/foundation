@@ -4,6 +4,82 @@ import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { encode } from '../shared/encryption.js';
+import { ConnectionInput } from '../shared/contracts.js';
+
+test('依頼された鍵の更新を確認待ちにし、承認後に同じ接続で依頼を完了する', async (t) => {
+  const f = await fixture(),
+    context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
+    app = await buildApp(context);
+  t.after(async () => {
+    await app.close();
+    await f.close();
+  });
+  const owner = await f.person('Owner'),
+    sender = await f.person('Sender');
+  const connected = await context.services.begin(
+    owner.actor,
+    owner.actor.id,
+    ConnectionInput.parse({
+      methodId: 'github:token',
+      fields: { token: 'before-key' },
+    }),
+    'initial-browser',
+  );
+  assert.equal(connected.kind, 'connected');
+  if (connected.kind !== 'connected') return;
+  const asked = await app.inject({
+    method: 'POST',
+    url: '/api/requests',
+    headers: { authorization: 'Bearer ' + sender.token },
+    payload: {
+      to: owner.actor.id,
+      operations: [
+        {
+          method: 'POST',
+          path: '/api/principals/' + owner.actor.id + '/connections',
+          body: { methodId: 'github:token', connectionId: connected.resource.id, fields: { token: '' } },
+          inputs: [{ pointer: '/fields/token', label: 'Replacement key', secret: true }],
+        },
+      ],
+    },
+  });
+  assert.equal(asked.statusCode, 201, asked.body);
+  const answer = await app.inject({
+    method: 'POST',
+    url: '/api/requests/' + asked.json().id + '/approve',
+    headers: { authorization: 'Bearer ' + owner.token },
+    payload: { values: [{ '/fields/token': 'after-key' }] },
+  });
+  assert.equal(answer.statusCode, 200, answer.body);
+  assert.equal(answer.json().state, 'running');
+  const reviewId = new URL(answer.json().continueUrl).pathname.split('/').at(-1)!;
+  const browserCookie = answer.cookies.find((cookie) => cookie.name === 'foundation_browser')!;
+  const headers = {
+    authorization: 'Bearer ' + owner.token,
+    cookie: browserCookie.name + '=' + browserCookie.value,
+  };
+  const review = await app.inject({ url: '/api/connections/' + reviewId + '/review', headers });
+  assert.equal(review.statusCode, 200, review.body);
+  assert.equal(
+    (await context.services.outputs(owner.actor, await context.resources.get(connected.resource.id)))
+      .GH_TOKEN,
+    'before-key',
+  );
+  const accepted = await app.inject({
+    method: 'POST',
+    url: '/api/connections/' + reviewId + '/review',
+    headers,
+    payload: { accept: true },
+  });
+  assert.equal(accepted.statusCode, 200, accepted.body);
+  assert.equal(accepted.json().resource.id, connected.resource.id);
+  assert.equal((await context.requests.get(sender.actor, asked.json().id)).state, 'approved');
+  assert.equal(
+    (await context.services.outputs(owner.actor, await context.resources.get(connected.resource.id)))
+      .GH_TOKEN,
+    'after-key',
+  );
+});
 
 test('確認コードで端末を引き受け、承認者の権限で利用を委任する', async (t) => {
   const f = await fixture(),

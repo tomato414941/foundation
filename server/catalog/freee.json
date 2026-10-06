@@ -4,38 +4,44 @@
   "api": "https://api.freee.co.jp",
   "docs": "https://developer.freee.co.jp/reference",
   "console": "https://app.secure.freee.co.jp/developers/applications",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://accounts.secure.freee.co.jp/public_api/authorize",
-      "tokenUrl": "https://accounts.secure.freee.co.jp/public_api/token",
-      "clientAuth": "body",
-      "pkce": true,
-      "tokenFormat": "form",
-      "authorizeParams": {},
-      "tokenParams": {},
-      "defaults": {},
-      "fields": [],
-      "outputs": {
-        "FREEE_ACCESS_TOKEN": "/accessToken",
-        "FREEE_TOKEN_EXPIRES_AT": "/expiresAt"
+      "name": "freee · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://accounts.secure.freee.co.jp/public_api/authorize",
+        "tokenUrl": "https://accounts.secure.freee.co.jp/public_api/token",
+        "clientAuth": "body",
+        "pkce": true,
+        "tokenFormat": "form",
+        "authorizeParams": {},
+        "tokenParams": {},
+        "defaults": {},
+        "fields": [],
+        "outputs": {
+          "FREEE_ACCESS_TOKEN": "/accessToken",
+          "FREEE_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "identity": {
+          "url": "https://api.freee.co.jp/api/1/users/me",
+          "id": "/user/id",
+          "name": [
+            "/user/email",
+            "/user/display_name"
+          ]
+        },
+        "revoke": {
+          "url": "https://accounts.secure.freee.co.jp/public_api/revoke",
+          "style": "rfc7009"
+        },
+        "scopes": {
+          "default": [],
+          "separator": " ",
+          "docs": "https://developer.freee.co.jp/startguide/basic/oauth"
+        }
       },
-      "identity": {
-        "url": "https://api.freee.co.jp/api/1/users/me",
-        "id": "/user/id",
-        "name": [
-          "/user/email",
-          "/user/display_name"
-        ]
-      },
-      "revoke": {
-        "url": "https://accounts.secure.freee.co.jp/public_api/revoke",
-        "style": "rfc7009"
-      },
-      "scopes": {
-        "default": [],
-        "separator": " ",
-        "docs": "https://developer.freee.co.jp/startguide/basic/oauth"
-      }
+      "docs": "https://developer.freee.co.jp/reference",
+      "console": "https://app.secure.freee.co.jp/developers/applications"
     }
   }
 }

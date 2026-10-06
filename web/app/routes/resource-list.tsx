@@ -71,9 +71,12 @@ export default function ResourceList() {
       <ResourceTable items={data.items} search={!!search.get('query')} />
       <Paging next={data.next} search={search} />
       {section === 'services' && (
-        <Stack direction="row" spacing={2}>
+        <Stack direction="row" spacing={2} useFlexGap sx={{ flexWrap: 'wrap' }}>
           <Button component={Link} to={'/p/' + principal.id + '/definitions'}>
             {t('definitions')}
+          </Button>
+          <Button component={Link} to={'/p/' + principal.id + '/methods'}>
+            {t('methods')}
           </Button>
           <Button component={Link} to={'/p/' + principal.id + '/apps'}>
             {t('apps')}

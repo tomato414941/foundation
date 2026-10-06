@@ -23,6 +23,7 @@ import {
 } from '../components';
 import { resourceKind } from '../navigation';
 import { useWorkspace } from './workspace';
+import { ConnectionFacts } from '../connection-facts';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   const resource = await api('/resources/' + params.id, { signal: request.signal }, Resource);
   if (resource.ownerId !== params.owner || resource.kind !== resourceKind(params.section))
@@ -134,6 +135,9 @@ export default function ResourceDetail() {
         <Panel title={t('outputs')}>
           {item.data.state !== 'ready' && <Alert severity="warning">{t('state.' + item.data.state)}</Alert>}
           <JsonView value={item.data.outputs} />
+          <Typography variant="body2" color="text.secondary">
+            {t('connectionUseHelp')}
+          </Typography>
           {can('update') && (
             <Button component={Link} to={`../new?connection=${item.id}`} relative="path" variant="outlined">
               {t('reconnect')}
@@ -220,20 +224,26 @@ export default function ResourceDetail() {
           )}
         </Panel>
       )}
-      {(item.kind === 'service' || item.kind === 'app') && (
+      {(item.kind === 'service' || item.kind === 'app' || item.kind === 'method') && (
         <Panel>
           <JsonView value={item.data} />
+          {item.kind === 'method' && can('use') && (
+            <Button component={Link} to={`/p/${item.ownerId}/services/new?method=${item.id}`}>
+              {t('connect')}
+            </Button>
+          )}
         </Panel>
       )}
       {can('delete') && (
         <Stack direction="row">
           <Confirm label={t(item.kind === 'connection' ? 'disconnect' : 'delete')} name={item.name}>
-            {item.kind === 'connection' && (
+            {item.kind === 'connection' && item.data.methodKind === 'oauth' && (
               <FormControlLabel
                 control={<Checkbox name="revoke" defaultChecked />}
                 label={t('revokeProvider')}
               />
             )}
+            {item.kind === 'connection' && <Typography variant="body2">{t('disconnectHelp')}</Typography>}
           </Confirm>
         </Stack>
       )}
@@ -261,9 +271,11 @@ function BoxDetails({ item }: { item: Awaited<ReturnType<typeof clientLoader>> }
       )}
       {item.kind === 'connection' && (
         <>
-          <Detail label={t('service')}>{item.data.serviceId}</Detail>
-          <Detail label={t('accountName')}>{item.data.account}</Detail>
-          <Detail label={t('scopes')}>{item.data.scopes.join(', ') || '—'}</Detail>
+          <Detail label={t('service')}>
+            {item.data.services.map((service) => service.name).join(', ') || '—'}
+          </Detail>
+          <Detail label={t('method')}>{item.data.methodName}</Detail>
+          <ConnectionFacts value={item.data} />
         </>
       )}
       {item.kind === 'secret' && (

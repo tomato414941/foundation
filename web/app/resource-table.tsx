@@ -52,9 +52,15 @@ export function ResourceTable({
                     {item.name}
                   </Link>
                   {item.kind === 'connection' && (
-                    <Typography variant="body2" color="text.secondary">
-                      {item.data.account}
-                    </Typography>
+                    <>
+                      <Typography variant="body2" color="text.secondary">
+                        {item.data.methodName}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {item.data.account || t('accountUnverified')}
+                        {item.data.account && !item.data.accountVerified && ' · ' + t('accountUnverified')}
+                      </Typography>
+                    </>
                   )}
                   <Stack direction="row" sx={{ display: { sm: 'none' } }}>
                     {'state' in item.data && <State value={item.data.state} />}

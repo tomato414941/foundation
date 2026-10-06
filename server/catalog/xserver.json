@@ -4,22 +4,28 @@
   "api": "https://api.xserver.ne.jp/v1",
   "docs": "https://developer.xserver.ne.jp/",
   "console": "https://secure.xserver.ne.jp/xapanel/login/xvps/",
-  "auth": {
+  "methods": {
     "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "APIキー",
-          "secret": true,
-          "note": "xs_で始まるAPIキーを入力してください。"
+      "name": "XServer · API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "APIキー",
+            "secret": true,
+            "note": "xs_で始まるAPIキーを入力してください。"
+          }
+        ],
+        "console": "https://secure.xserver.ne.jp/xapanel/login/xvps/",
+        "instructions": "XServerアカウントの「APIキー管理」で、利用するサービス・操作対象・必要な権限を選んでAPIキーを発行してください。有効期限やIP制限も設定できます。",
+        "hint": "Send XSERVER_API_KEY as \"Authorization: Bearer <token>\" to the XServer API. The key determines the services, targets and operations available. The official XServer CLI also reads XSERVER_API_KEY. Replace expired keys or revoke them in the XServer account panel.",
+        "outputs": {
+          "XSERVER_API_KEY": "/token"
         }
-      ],
-      "console": "https://secure.xserver.ne.jp/xapanel/login/xvps/",
-      "instructions": "XServerアカウントの「APIキー管理」で、利用するサービス・操作対象・必要な権限を選んでAPIキーを発行してください。有効期限やIP制限も設定できます。",
-      "hint": "Send XSERVER_API_KEY as \"Authorization: Bearer <token>\" to the XServer API. The key determines the services, targets and operations available. The official XServer CLI also reads XSERVER_API_KEY. Replace expired keys or revoke them in the XServer account panel.",
-      "outputs": {
-        "XSERVER_API_KEY": "/token"
-      }
+      },
+      "docs": "https://developer.xserver.ne.jp/",
+      "console": "https://secure.xserver.ne.jp/xapanel/login/xvps/"
     }
   }
 }

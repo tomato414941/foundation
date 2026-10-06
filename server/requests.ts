@@ -314,8 +314,8 @@ export class Requests {
           result &&
           typeof result === 'object' &&
           !Array.isArray(result) &&
-          result.kind === 'authorize' &&
-          typeof result.url === 'string'
+          ((result.kind === 'authorize' && typeof result.url === 'string') ||
+            (result.kind === 'review' && typeof result.id === 'string'))
         ) {
           const results = [...row.results];
           results[index] = { pending: true };
@@ -324,7 +324,7 @@ export class Requests {
             [
               id,
               JSON.stringify(results),
-              result.url,
+              result.kind === 'review' ? this.origin + '/services/review/' + result.id : result.url,
               await this.vault.encrypt({ ...context, index }, 'request-input:' + id),
             ],
           );

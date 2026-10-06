@@ -129,6 +129,29 @@ const words: Record<string, [string, string]> = {
   ],
   service: ['サービス', 'Service'],
   method: ['接続方法', 'Connection method'],
+  methods: ['接続方法', 'Connection methods'],
+  allMethods: ['すべての接続方法', 'All connection methods'],
+  existingConnections: [
+    'この接続方法で登録済みの接続を利用できます。',
+    'You can use an existing connection with this method.',
+  ],
+  methodUnavailable: [
+    'この接続方法は現在利用できません。',
+    'This connection method is currently unavailable.',
+  ],
+  appRequired: [
+    'この接続方法用のOAuthアプリを登録してください。',
+    'Register an OAuth app for this connection method.',
+  ],
+  accountUnverified: ['接続先の名義は未確認', 'Account identity not verified'],
+  scopesUnknown: ['外部サービスの権限は未確認', 'External permissions not verified'],
+  scopesEmpty: ['スコープの記載なし', 'No scopes listed'],
+  'scopes.requested': ['要求したスコープ（付与の確認は未完了）', 'Requested scopes (grant not verified)'],
+  'scopes.reported': ['外部サービスが返したスコープ', 'Scopes reported by the service'],
+  reviewConnectionHelp: [
+    '承認後は、この接続を共有している相手も新しい認証情報を利用できます。接続先と権限が意図したものか、未確認の項目も含めて確認してください。別の接続先を使う場合は、新しい接続を作成してください。',
+    'After approval, people with access to this connection can use the new credentials. Check the account and permissions, including any unverified details. Create a new connection for a different account or target.',
+  ],
   oauth: ['OAuth', 'OAuth'],
   token: ['APIキー・トークン', 'API key or token'],
   role: ['IAMロール', 'IAM role'],
@@ -142,7 +165,16 @@ const words: Record<string, [string, string]> = {
   serviceConsole: ['サービスの管理画面を開く', 'Open service console'],
   docs: ['ドキュメント', 'Documentation'],
   accountName: ['接続先', 'Connected account'],
+  externalAccountId: ['外部のアカウント・ロールID', 'External account or role ID'],
   outputs: ['利用できる値', 'Available values'],
+  connectionUseHelp: [
+    'この接続の「利用」を共有した相手は、認証情報を受け取れます。特定の操作だけを許可する場合は、その接続を使う関数の「実行」を共有してください。',
+    'People with use permission for this connection can receive its credentials. To allow only a specific operation, share execute permission for a function that uses it.',
+  ],
+  disconnectHelp: [
+    'Foundationからの削除や共有解除だけでは、渡した認証情報は失効しません。必要に応じて外部サービス側でもキーやアクセス権を取り消してください。',
+    'Removing a connection or its sharing permissions in Foundation does not invalidate credentials already delivered. Revoke keys or access at the external service when needed.',
+  ],
   clientId: ['クライアントID', 'Client ID'],
   clientSecret: ['クライアントシークレット', 'Client secret'],
   unchangedSecret: ['変更する場合のみ入力', 'Enter only to replace'],
@@ -351,9 +383,18 @@ const words: Record<string, [string, string]> = {
   ],
   'errors.payment_required': ['支払い方法を登録してください。', 'Add a payment method to continue.'],
   'errors.quota_exceeded': ['使用量の上限に達しました。', 'The usage limit has been reached.'],
-  'errors.storage_capacity': ['保存できる容量の上限に達しました。', 'The available storage capacity has been reached.'],
-  'errors.compute_capacity': ['今月の計算時間の上限に達しました。', 'The available monthly compute capacity has been reached.'],
-  'errors.environment_capacity': ['実行環境がすべて使用中です。しばらくしてからお試しください。', 'All available environments are in use. Try again later.'],
+  'errors.storage_capacity': [
+    '保存できる容量の上限に達しました。',
+    'The available storage capacity has been reached.',
+  ],
+  'errors.compute_capacity': [
+    '今月の計算時間の上限に達しました。',
+    'The available monthly compute capacity has been reached.',
+  ],
+  'errors.environment_capacity': [
+    '実行環境がすべて使用中です。しばらくしてからお試しください。',
+    'All available environments are in use. Try again later.',
+  ],
   'errors.invalid_challenge': [
     'リンクの期限が切れているか、すでに使用されています。やり直してください。',
     'This link expired or was already used. Start again.',
@@ -399,6 +440,7 @@ Object.assign(words, {
   'singular.environment': ['実行環境', 'environment'],
   'singular.function': ['関数', 'function'],
   'singular.service': ['サービス定義', 'service definition'],
+  'singular.method': ['接続方法', 'connection method'],
   'singular.app': ['OAuthアプリ', 'OAuth app'],
   environmentBudgetHelp: [
     '起動時に最長稼働時間分の上限枠を確保します。Mediumは2倍、Largeは4倍の実行時間を使用します。',
@@ -490,9 +532,21 @@ const errors: Array<[string[], string, string]> = [
     'Register and select an OAuth app for this service.',
   ],
   [
-    ['wrong_app', 'wrong_connection', 'scheme_required', 'scheme_unavailable'],
+    [
+      'wrong_app',
+      'wrong_connection',
+      'scheme_required',
+      'scheme_unavailable',
+      'method_required',
+      'wrong_method',
+    ],
     'サービス、接続方法、OAuthアプリの組み合わせを確認してください。',
     'Check the selected service, connection method, and OAuth app.',
+  ],
+  [
+    ['connection_target_changed'],
+    '接続先の名義や対象を変更する場合は、新しい接続を作成してください。',
+    'Create a new connection when changing the account or target.',
   ],
   [
     ['role_unavailable', 'payments_unavailable', 'environments_unavailable', 'storage_unavailable'],

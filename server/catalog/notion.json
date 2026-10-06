@@ -4,48 +4,60 @@
   "api": "https://api.notion.com/v1",
   "docs": "https://developers.notion.com/reference/intro",
   "console": "https://www.notion.so/profile/integrations",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://api.notion.com/v1/oauth/authorize",
-      "tokenUrl": "https://api.notion.com/v1/oauth/token",
-      "clientAuth": "basic",
-      "pkce": true,
-      "tokenFormat": "json",
-      "authorizeParams": {
-        "owner": "user"
+      "name": "Notion · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://api.notion.com/v1/oauth/authorize",
+        "tokenUrl": "https://api.notion.com/v1/oauth/token",
+        "clientAuth": "basic",
+        "pkce": true,
+        "tokenFormat": "json",
+        "authorizeParams": {
+          "owner": "user"
+        },
+        "tokenParams": {},
+        "defaults": {},
+        "fields": [],
+        "outputs": {
+          "NOTION_ACCESS_TOKEN": "/accessToken",
+          "NOTION_WORKSPACE_ID": "/account",
+          "NOTION_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "identity": {
+          "from": "token",
+          "id": "/workspace_id",
+          "name": "/workspace_name"
+        },
+        "hint": "NOTION_WORKSPACE_ID is the workspace ID. Every request also needs a \"Notion-Version\" header (for example 2022-06-28).",
+        "scopes": {
+          "default": [],
+          "separator": " "
+        }
       },
-      "tokenParams": {},
-      "defaults": {},
-      "fields": [],
-      "outputs": {
-        "NOTION_ACCESS_TOKEN": "/accessToken",
-        "NOTION_WORKSPACE_ID": "/account",
-        "NOTION_TOKEN_EXPIRES_AT": "/expiresAt"
-      },
-      "identity": {
-        "from": "token",
-        "id": "/workspace_id",
-        "name": "/workspace_name"
-      },
-      "hint": "NOTION_WORKSPACE_ID is the workspace ID. Every request also needs a \"Notion-Version\" header (for example 2022-06-28).",
-      "scopes": {
-        "default": [],
-        "separator": " "
-      }
+      "docs": "https://developers.notion.com/reference/intro",
+      "console": "https://www.notion.so/profile/integrations"
     },
     "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "内部インテグレーションのシークレット",
-          "secret": true
+      "name": "Notion · API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "内部インテグレーションのシークレット",
+            "secret": true
+          }
+        ],
+        "console": "https://www.notion.so/profile/integrations",
+        "hint": "Only pages shared with the integration in Notion can be read. Every request also needs a \"Notion-Version\" header.",
+        "outputs": {
+          "NOTION_TOKEN": "/token"
         }
-      ],
-      "console": "https://www.notion.so/profile/integrations",
-      "hint": "Only pages shared with the integration in Notion can be read. Every request also needs a \"Notion-Version\" header.",
-      "outputs": {
-        "NOTION_TOKEN": "/token"
-      }
+      },
+      "docs": "https://developers.notion.com/reference/intro",
+      "console": "https://www.notion.so/profile/integrations"
     }
   }
 }

@@ -4,16 +4,17 @@ import { z } from 'zod';
 import safeRegex from 'safe-regex2';
 import type { Resources, ResourceRow } from './resources.js';
 import type { Actor } from './authorization.js';
-import type { Catalog } from './catalog.js';
+import { Catalog, legacyMethod } from './catalog.js';
 import type { Configuration } from './config.js';
 import type { Queryable } from './database.js';
 import { Vault, token, digest } from './vault.js';
 import { OAuth } from './oauth.js';
 import type { OAuthApp, OAuthToken, OAuthSpec } from './oauth.js';
-import { ServiceDefinition } from '../shared/contracts.js';
+import { AuthKind, ConnectionInput, LegacyServiceDefinition, MethodDefinition } from '../shared/contracts.js';
 import type {
   ConnectInput,
-  ServiceDescription,
+  MethodDescription,
+  LegacyServiceDescription,
   SourceReference,
   NewResourceInput,
   JsonValue,
@@ -22,24 +23,36 @@ import { atPointer, textValue } from '../shared/values.js';
 import { DomainError, fail, required } from './errors.js';
 
 interface ConnectionState {
-  service: ServiceDescription;
+  formatVersion: 2;
+  methodId: string;
+  method: MethodDescription;
   app: OAuthApp;
   oauth?: OAuthToken;
   fields?: Record<string, string>;
   role?: { arn: string; externalId: string; region: string };
   appVersion?: number;
 }
+type LegacyConnectionState = Omit<ConnectionState, 'formatVersion' | 'methodId' | 'method'> & {
+  service: LegacyServiceDescription;
+};
+type SelectedInput = ConnectInput & { methodId: string };
 interface Consent {
+  formatVersion: 2;
   actor: Actor;
   ownerId: string;
-  input: ConnectInput;
-  service: ServiceDescription;
+  input: SelectedInput;
+  method: MethodDescription;
   app: OAuthApp;
   verifier: string;
   connectionVersion?: number;
   result?: OAuthToken;
+  tokenFields?: Record<string, string>;
   externalId?: string;
 }
+type LegacyConsent = Omit<Consent, 'formatVersion' | 'input' | 'method'> & {
+  input: ConnectInput;
+  service: LegacyServiceDescription;
+};
 export type ConnectionResult =
   | { kind: 'connected'; resource: Awaited<ReturnType<Resources['view']>>; returnTo: string }
   | { kind: 'authorize'; url: string }
@@ -117,16 +130,114 @@ export class Services {
     readonly config: Configuration,
     readonly roles: RoleProvider = new AwsRoles(),
   ) {}
-  private async allowed(actor: Actor, ownerId: string, input: ConnectInput) {
+  private selectedInput(input: ConnectInput, methodId: string): SelectedInput {
+    const { serviceId: _serviceId, scheme: _scheme, ...rest } = input;
+    return { ...ConnectionInput.parse({ ...rest, methodId }), methodId };
+  }
+  private async readState(row: ResourceRow): Promise<ConnectionState> {
+    const value = await this.vault.decrypt<ConnectionState | LegacyConnectionState>(
+      required(row.private_data),
+      'resource:' + row.id,
+    );
+    if ('method' in value) {
+      if (value.formatVersion !== 2 || value.methodId !== row.data.methodId)
+        fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
+      return { ...value, method: MethodDefinition.parse(value.method) };
+    }
+    const kind = AuthKind.parse(row.data.scheme),
+      methodId = await this.catalog.legacyMethodId(String(row.data.serviceId), kind),
+      { service, ...state } = value;
+    return {
+      ...state,
+      formatVersion: 2,
+      methodId,
+      method: legacyMethod(LegacyServiceDefinition.parse(service), kind),
+    };
+  }
+  private async readConsent(value: Consent | LegacyConsent): Promise<Consent> {
+    if ('method' in value) return value;
+    const kind = AuthKind.parse(value.input.scheme),
+      methodId = await this.catalog.legacyMethodId(required(value.input.serviceId), kind),
+      { service, input, ...consent } = value;
+    return {
+      ...consent,
+      formatVersion: 2,
+      input: this.selectedInput(input, methodId),
+      method: legacyMethod(LegacyServiceDefinition.parse(service), kind),
+    };
+  }
+  private data(state: ConnectionState, account: string, appId: string | null, status = 'ready') {
+    return {
+      methodId: state.methodId,
+      methodName: state.method.name,
+      methodKind: state.method.kind,
+      account,
+      accountId: state.role?.arn ?? (state.oauth?.accountVerified ? state.oauth.account : null),
+      accountVerified: state.role ? true : (state.oauth?.accountVerified ?? false),
+      scopes: state.oauth?.scopes ?? [],
+      scopesStatus: state.oauth?.scopesStatus ?? 'unknown',
+      outputs:
+        state.method.kind === 'role'
+          ? ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION']
+          : Object.keys(state.method.config.outputs),
+      state: status,
+      appId,
+    };
+  }
+  private references(methodId: string, appId: string | null) {
+    return [...(this.catalog.methods.has(methodId) ? [] : [methodId]), ...(appId ? [appId] : [])];
+  }
+  async initialize() {
+    await this.resources.db.transaction(async (connection) => {
+      await connection.query('SELECT pg_advisory_xact_lock(736023747)');
+      const rows = await this.resources.db.all<ResourceRow>(
+        "SELECT * FROM resources WHERE kind='connection' AND NOT(data ? 'methodId') FOR UPDATE",
+        [],
+        connection,
+      );
+      for (const row of rows) {
+        const state = await this.readState(row),
+          appId = typeof row.data.appId === 'string' ? row.data.appId : null,
+          data = this.data(
+            state,
+            String(row.data.account ?? state.method.name),
+            appId,
+            String(row.data.state),
+          );
+        await connection.query('UPDATE resources SET data=$2,private_data=$3 WHERE id=$1', [
+          row.id,
+          JSON.stringify(data),
+          await this.vault.encrypt(state, 'resource:' + row.id),
+        ]);
+        await this.resources.references(row.id, this.references(state.methodId, appId), connection);
+      }
+      const pending = await this.resources.db.all<{ id: string; data: { sealed: string } }>(
+        "SELECT id,data FROM challenges WHERE kind IN ('service','service-review') AND expires_at>now() FOR UPDATE",
+        [],
+        connection,
+      );
+      for (const row of pending) {
+        const value = await this.vault.decrypt<Consent | LegacyConsent>(row.data.sealed, 'consent:' + row.id);
+        if ('method' in value) continue;
+        const consent = await this.readConsent(value);
+        await connection.query('UPDATE challenges SET data=$2 WHERE id=$1', [
+          row.id,
+          JSON.stringify({ sealed: await this.vault.encrypt(consent, 'consent:' + row.id) }),
+        ]);
+      }
+    });
+  }
+  async definition(actor: Actor, row: ResourceRow) {
+    if (row.kind !== 'connection') fail(400, 'wrong_kind', 'Choose a connection.');
+    await this.resources.authorization.requireResource(actor, row, 'update');
+    const state = await this.readState(row);
+    return this.catalog.methodView(state.methodId, state.method);
+  }
+  private async allowed(actor: Actor, ownerId: string, input: SelectedInput) {
     if (input.connectionId) {
       const row = await this.resources.get(input.connectionId);
-      if (
-        row.kind !== 'connection' ||
-        row.owner_id !== ownerId ||
-        row.data.serviceId !== input.serviceId ||
-        row.data.scheme !== input.scheme
-      )
-        fail(400, 'wrong_connection', 'Choose a connection for this service.');
+      if (row.kind !== 'connection' || row.owner_id !== ownerId || row.data.methodId !== input.methodId)
+        fail(400, 'wrong_connection', 'Use the same connection method, or create a new connection.');
       await this.resources.authorization.requireResource(actor, row, 'update');
       return row;
     }
@@ -158,9 +269,9 @@ export class Services {
       fail(400, 'invalid_field', 'Remove unrecognized service fields.');
     return values;
   }
-  private async app(actor: Actor, id: string, serviceId: string, spec: OAuthSpec): Promise<OAuthApp> {
+  private async app(actor: Actor, id: string, methodId: string, spec: OAuthSpec): Promise<OAuthApp> {
     if (id === 'foundation') {
-      const app = this.config.oauthApps[serviceId];
+      const app = this.catalog.foundationApp(methodId);
       if (!app && spec.adapter !== 'openrouter')
         fail(409, 'app_required', 'Add an OAuth application to connect this service.');
       return {
@@ -170,8 +281,8 @@ export class Services {
       };
     }
     const row = await this.resources.get(id);
-    if (row.kind !== 'app' || row.data.serviceId !== serviceId)
-      fail(400, 'wrong_app', 'Choose an application for this service.');
+    if (row.kind !== 'app' || row.data.methodId !== methodId)
+      fail(400, 'wrong_app', 'Choose an application for this connection method.');
     await this.resources.authorization.requireResource(actor, row, 'use');
     const privateData = await this.vault.decrypt<{ clientSecret?: string }>(
       required(row.private_data),
@@ -187,34 +298,43 @@ export class Services {
   async createDefinition(
     actor: Actor,
     ownerId: string,
-    input: Extract<NewResourceInput, { kind: 'app' | 'service' }>,
+    input: Extract<NewResourceInput, { kind: 'app' | 'service' | 'method' }>,
   ) {
     if (!(await this.resources.authorization.canCreate(actor, ownerId, input.kind)))
       fail(403, 'forbidden', 'You cannot create this item for this principal.');
     if (input.kind === 'service') {
-      if (!Object.keys(input.definition.auth).length)
-        fail(400, 'scheme_required', 'Add at least one connection method.');
+      return this.catalog.createService(actor, ownerId, input.name, input.definition);
+    }
+    if (input.kind === 'method') {
       return this.resources.insert(
         ownerId,
-        'service',
+        'method',
         input.name,
-        ServiceDefinition.parse(input.definition) as unknown as Record<string, JsonValue>,
+        MethodDefinition.parse({ ...input.definition, name: input.name }) as unknown as Record<
+          string,
+          JsonValue
+        >,
       );
     }
-    const service = await this.catalog.get(actor, input.serviceId);
-    if (!service.auth.oauth) fail(400, 'oauth_unavailable', 'This service does not use OAuth applications.');
-    const fields = this.fields(service.auth.oauth.fields, input.fields, service.auth.oauth.defaults),
+    const selected = await this.catalog.select(actor, {
+      ...input,
+      ...(input.methodId ? {} : { scheme: 'oauth' }),
+    });
+    if (selected.definition.kind !== 'oauth')
+      fail(400, 'oauth_unavailable', 'This connection method does not use OAuth applications.');
+    const spec = selected.definition.config,
+      fields = this.fields(spec.fields, input.fields, spec.defaults),
       id = randomUUID();
     return this.resources.db.transaction(async (connection) =>
       this.resources.insert(
         ownerId,
         'app',
         input.name,
-        { serviceId: input.serviceId, clientId: input.clientId, fields },
+        { methodId: selected.id, clientId: input.clientId, fields },
         {
           id,
           privateData: await this.vault.encrypt({ clientSecret: input.clientSecret }, 'resource:' + id),
-          references: this.catalog.definitions.has(input.serviceId) ? [] : [input.serviceId],
+          references: this.references(selected.id, null),
         },
         connection,
       ),
@@ -223,48 +343,92 @@ export class Services {
   async begin(
     actor: Actor,
     ownerId: string,
-    input: ConnectInput,
+    request: ConnectInput,
     browser: string,
   ): Promise<ConnectionResult> {
+    let selected;
+    if (request.connectionId) {
+      const row = await this.resources.get(request.connectionId);
+      if (row.kind !== 'connection') fail(400, 'wrong_connection', 'Choose a connection.');
+      await this.resources.authorization.requireResource(actor, row, 'update');
+      const state = await this.readState(row);
+      const requestedId =
+        request.methodId ??
+        (await this.catalog.legacyMethodId(required(request.serviceId), required(request.scheme)));
+      if (requestedId !== state.methodId)
+        fail(400, 'wrong_connection', 'Use the same connection method, or create a new connection.');
+      selected = { id: state.methodId, definition: state.method };
+    } else selected = await this.catalog.select(actor, request);
+    let input = this.selectedInput(request, selected.id);
     if (actor.approvalId) input = { ...input, returnTo: '/requests/' + actor.approvalId };
     const previous = await this.allowed(actor, ownerId, input),
-      service = await this.catalog.get(actor, input.serviceId);
-    if (!service.auth[input.scheme])
-      fail(400, 'scheme_unavailable', 'Choose an available connection method.');
+      old = previous ? await this.readState(previous) : null,
+      method = old?.method ?? selected.definition;
     if (
       !input.returnTo.startsWith('/') ||
       input.returnTo.startsWith('//') ||
       /[\\\u0000-\u001f]/.test(input.returnTo)
     )
       fail(400, 'invalid_return', 'Choose a page within Foundation.');
-    if (input.scheme === 'token') {
+    if (method.kind === 'token') {
       const fields: Record<string, string> = {};
       for (const [key, value] of Object.entries(input.fields))
         fields[key] = typeof value === 'string' ? value : await required(this.resolve)(actor, value);
-      const data = this.fields(service.auth.token!.fields, fields);
+      const data = this.fields(method.config.fields, fields),
+        app = { clientId: '', fields: {} };
+      if (previous) {
+        return this.requestReview(
+          {
+            formatVersion: 2,
+            actor,
+            ownerId,
+            input,
+            method,
+            app,
+            verifier: token(),
+            connectionVersion: previous.version,
+            tokenFields: data,
+          },
+          previous,
+          randomUUID(),
+          browser,
+        );
+      }
       return this.store(
         actor,
         ownerId,
         input,
-        { service, app: { clientId: '', fields: {} }, fields: data },
+        { formatVersion: 2, methodId: selected.id, method, app, fields: data },
         previous,
       );
     }
     const id = randomUUID(),
       app =
-        input.scheme === 'oauth'
-          ? await this.app(actor, input.appId, input.serviceId, service.auth.oauth!)
+        method.kind === 'oauth'
+          ? await this.app(actor, input.appId, selected.id, method.config)
           : { clientId: '', fields: {} };
+    if (
+      old &&
+      method.kind === 'oauth' &&
+      JSON.stringify(Object.entries(old.app.fields).sort()) !==
+        JSON.stringify(Object.entries(app.fields).sort())
+    )
+      fail(
+        409,
+        'connection_target_changed',
+        'Create a new connection when changing the service account or target.',
+      );
     const consent: Consent = {
+      formatVersion: 2,
       actor,
       ownerId,
       input,
-      service,
+      method,
       app,
       verifier: token(),
       ...(previous ? { connectionVersion: previous.version } : {}),
     };
-    if (input.scheme === 'role') {
+    if (method.kind === 'role') {
       if (!this.config.FOUNDATION_AWS_PRINCIPAL_ARN)
         fail(503, 'role_unavailable', 'AWS role connections are not configured.');
       consent.externalId = token();
@@ -278,14 +442,14 @@ export class Services {
         JSON.stringify({ sealed: await this.vault.encrypt(consent, 'consent:' + id) }),
       ],
     );
-    if (input.scheme === 'role')
+    if (method.kind === 'role')
       return {
         kind: 'role',
         id,
         externalId: consent.externalId!,
         principalArn: this.config.FOUNDATION_AWS_PRINCIPAL_ARN,
       };
-    const spec = service.auth.oauth!,
+    const spec = method.config,
       scopes = [...new Set([...spec.scopes.default, ...(input.scopes ?? [])])];
     return {
       kind: 'authorize',
@@ -299,24 +463,61 @@ export class Services {
       ),
     };
   }
+  private reviewValues(consent: Consent, previous: ResourceRow) {
+    return {
+      before: {
+        account: String(previous.data.account),
+        accountId: previous.data.accountId ?? null,
+        accountVerified: Boolean(previous.data.accountVerified),
+        scopes: previous.data.scopes ?? [],
+        scopesStatus: previous.data.scopesStatus ?? 'unknown',
+      },
+      after: {
+        account: consent.result?.accountName ?? String(previous.data.account),
+        accountId: consent.result?.accountVerified ? consent.result.account : null,
+        accountVerified: consent.result?.accountVerified ?? false,
+        scopes: consent.result?.scopes ?? [],
+        scopesStatus: consent.result?.scopesStatus ?? 'unknown',
+      },
+    };
+  }
+  private async requestReview(
+    consent: Consent,
+    previous: ResourceRow,
+    id: string,
+    browser: string,
+  ): Promise<ConnectionResult> {
+    await this.resources.db.pool.query(
+      "INSERT INTO challenges(id,kind,principal_id,browser_hash,data,expires_at) VALUES($1,'service-review',$2,$3,$4,now()+interval '15 minutes')",
+      [
+        id,
+        consent.actor.id,
+        digest(browser),
+        JSON.stringify({ sealed: await this.vault.encrypt(consent, 'consent:' + id) }),
+      ],
+    );
+    return { kind: 'review', id, ...this.reviewValues(consent, previous), returnTo: consent.input.returnTo };
+  }
   private async consent(id: string, browser: string, kind = 'service'): Promise<Consent> {
     const row = await this.resources.db.one<{ data: { sealed: string } }>(
       'DELETE FROM challenges WHERE id=$1 AND kind=$2 AND browser_hash=$3 AND expires_at>now() RETURNING data',
       [id, kind, digest(browser)],
     );
     if (!row) fail(400, 'invalid_state', 'Start the connection again.');
-    const value = await this.vault.decrypt<Consent>(row.data.sealed, 'consent:' + id);
+    const value = await this.readConsent(
+      await this.vault.decrypt<Consent | LegacyConsent>(row.data.sealed, 'consent:' + id),
+    );
     await this.resources.authorization.active(value.actor);
     await this.checkApproval?.(value.actor);
     const previous = await this.allowed(value.actor, value.ownerId, value.input);
     if (previous && previous.version !== value.connectionVersion)
       fail(409, 'changed', 'This connection changed. Start again.');
-    if (value.input.appId !== 'foundation' && value.input.scheme === 'oauth') {
+    if (value.input.appId !== 'foundation' && value.method.kind === 'oauth') {
       const current = await this.app(
         value.actor,
         value.input.appId,
-        value.input.serviceId,
-        value.service.auth.oauth!,
+        value.input.methodId,
+        value.method.config,
       );
       if (current.version !== value.app.version)
         fail(409, 'changed', 'The OAuth application changed. Start again.');
@@ -325,12 +526,10 @@ export class Services {
   }
   async callback(id: string, code: string, browser: string): Promise<ConnectionResult> {
     const consent = await this.consent(id, browser);
-    if (consent.input.scheme !== 'oauth') fail(400, 'invalid_state', 'Start the connection again.');
+    if (consent.method.kind !== 'oauth') fail(400, 'invalid_state', 'Start the connection again.');
     const previous = consent.input.connectionId ? await this.resources.get(consent.input.connectionId) : null;
-    const old = previous
-      ? await this.vault.decrypt<ConnectionState>(required(previous.private_data), 'resource:' + previous.id)
-      : undefined;
-    const spec = consent.service.auth.oauth!,
+    const old = previous ? await this.readState(previous) : undefined;
+    const spec = consent.method.config,
       scopes = [...new Set([...spec.scopes.default, ...(consent.input.scopes ?? [])])];
     const result = await this.oauth.exchange(
       spec,
@@ -343,32 +542,28 @@ export class Services {
     );
     if (
       previous &&
-      (JSON.stringify([...result.scopes].sort()) !== JSON.stringify([...(old?.oauth?.scopes ?? [])].sort()) ||
+      (!result.accountVerified ||
+        !previous.data.accountVerified ||
+        JSON.stringify([...result.scopes].sort()) !==
+          JSON.stringify([...((previous.data.scopes as string[]) ?? [])].sort()) ||
+        result.scopesStatus !== previous.data.scopesStatus ||
+        old?.app.clientId !== consent.app.clientId ||
         previous.data.appId !== (consent.input.appId === 'foundation' ? null : consent.input.appId))
     ) {
       consent.result = result;
-      await this.resources.db.pool.query(
-        "INSERT INTO challenges(id,kind,principal_id,browser_hash,data,expires_at) VALUES($1,'service-review',$2,$3,$4,now()+interval '15 minutes')",
-        [
-          id,
-          consent.actor.id,
-          digest(browser),
-          JSON.stringify({ sealed: await this.vault.encrypt(consent, 'consent:' + id) }),
-        ],
-      );
-      return {
-        kind: 'review',
-        id,
-        before: { account: String(previous.data.account), scopes: previous.data.scopes ?? [] },
-        after: { account: result.accountName, scopes: result.scopes },
-        returnTo: consent.input.returnTo,
-      };
+      return this.requestReview(consent, previous, id, browser);
     }
     const connected = await this.store(
       consent.actor,
       consent.ownerId,
       consent.input,
-      { service: consent.service, app: consent.app, oauth: result },
+      {
+        formatVersion: 2,
+        methodId: consent.input.methodId,
+        method: consent.method,
+        app: consent.app,
+        oauth: result,
+      },
       previous,
     );
     await this.completed?.(consent.actor, connected as unknown as JsonValue);
@@ -386,7 +581,15 @@ export class Services {
       consent.actor,
       consent.ownerId,
       consent.input,
-      { service: consent.service, app: consent.app, oauth: required(consent.result) },
+      {
+        formatVersion: 2,
+        methodId: consent.input.methodId,
+        method: consent.method,
+        app: consent.app,
+        ...(consent.method.kind === 'token'
+          ? { fields: required(consent.tokenFields) }
+          : { oauth: required(consent.result) }),
+      },
       consent.input.connectionId ? await this.resources.get(consent.input.connectionId) : null,
     );
     await this.completed?.(consent.actor, connected as unknown as JsonValue);
@@ -403,14 +606,19 @@ export class Services {
       [id, digest(browser)],
     );
     if (!row) fail(400, 'invalid_state', 'Start the connection again.');
-    const consent = await this.vault.decrypt<Consent>(row.data.sealed, 'consent:' + id);
+    const consent = await this.readConsent(
+      await this.vault.decrypt<Consent | LegacyConsent>(row.data.sealed, 'consent:' + id),
+    );
     if (actor.id !== consent.actor.id || (actor.requestId && actor.requestId !== consent.actor.approvalId))
       fail(403, 'forbidden', 'Use the account that started this connection.');
-    const previous = await this.resources.get(required(consent.input.connectionId));
+    await this.resources.authorization.active(consent.actor);
+    await this.checkApproval?.(consent.actor);
+    const previous = required(await this.allowed(consent.actor, consent.ownerId, consent.input));
+    if (previous.version !== consent.connectionVersion)
+      fail(409, 'changed', 'This connection changed. Start again.');
     return {
       id,
-      before: { account: String(previous.data.account), scopes: previous.data.scopes ?? [] },
-      after: { account: consent.result!.accountName, scopes: consent.result!.scopes },
+      ...this.reviewValues(consent, previous),
     };
   }
   async completeRole(actor: Actor, id: string, browser: string, arn: string, region: string) {
@@ -418,7 +626,7 @@ export class Services {
     if (
       actor.id !== consent.actor.id ||
       (actor.requestId && actor.requestId !== consent.actor.approvalId) ||
-      consent.input.scheme !== 'role'
+      consent.method.kind !== 'role'
     )
       fail(403, 'forbidden', 'Use the account that started this connection.');
     z.string()
@@ -428,13 +636,23 @@ export class Services {
       .regex(/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/)
       .parse(region);
     const role = { arn, region, externalId: required(consent.externalId) };
+    const previous = consent.input.connectionId ? await this.resources.get(consent.input.connectionId) : null;
+    if (previous) {
+      const state = await this.readState(previous);
+      if (state.role?.arn !== arn || state.role.region !== region)
+        fail(
+          409,
+          'connection_target_changed',
+          'Create a new connection when changing the service account or target.',
+        );
+    }
     await this.roles.obtain(arn, role.externalId, region);
     const connected = await this.store(
       consent.actor,
       consent.ownerId,
       consent.input,
-      { service: consent.service, app: consent.app, role },
-      consent.input.connectionId ? await this.resources.get(consent.input.connectionId) : null,
+      { formatVersion: 2, methodId: consent.input.methodId, method: consent.method, app: consent.app, role },
+      previous,
     );
     await this.completed?.(consent.actor, connected as unknown as JsonValue);
     return connected;
@@ -442,33 +660,20 @@ export class Services {
   private async store(
     actor: Actor,
     ownerId: string,
-    input: ConnectInput,
+    input: SelectedInput,
     state: ConnectionState,
     previous: ResourceRow | null,
   ): Promise<ConnectionResult> {
     await this.allowed(actor, ownerId, input);
-    const outputs = state.oauth
-      ? Object.keys(state.service.auth.oauth!.outputs)
-      : state.role
-        ? ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION']
-        : Object.keys(state.service.auth.token!.outputs);
-    const account =
-      state.oauth?.accountName ?? state.role?.arn.split(':')[4] ?? input.name ?? state.service.name;
-    const data = {
-      serviceId: input.serviceId,
-      scheme: input.scheme,
+    const account = state.oauth?.accountName ?? state.role?.arn.split(':')[4] ?? '';
+    const data = this.data(
+      state,
       account,
-      scopes: state.oauth?.scopes ?? [],
-      outputs,
-      state: 'ready',
-      appId: input.scheme === 'oauth' && input.appId !== 'foundation' ? input.appId : null,
-    };
+      state.method.kind === 'oauth' && input.appId !== 'foundation' ? input.appId : null,
+    );
     const id = previous?.id ?? randomUUID(),
       privateData = await this.vault.encrypt(state, 'resource:' + id);
-    const references = [
-      ...(this.catalog.definitions.has(input.serviceId) ? [] : [input.serviceId]),
-      ...(data.appId ? [data.appId] : []),
-    ];
+    const references = this.references(state.methodId, data.appId);
     const row = await this.resources.db.transaction(async (connection) => {
       await this.checkApproval?.(actor, connection);
       const row = previous
@@ -480,7 +685,11 @@ export class Services {
         : await this.resources.insert(
             ownerId,
             'connection',
-            input.name ?? state.service.name + ' · ' + account,
+            input.name ??
+              (state.method.name + (!account || account === state.method.name ? '' : ' · ' + account)).slice(
+                0,
+                200,
+              ),
             data,
             { id, privateData },
             connection,
@@ -491,7 +700,7 @@ export class Services {
         actor.id,
         'connection.connect',
         id,
-        { serviceId: input.serviceId },
+        { methodId: input.methodId },
         connection,
       );
       return row;
@@ -504,7 +713,7 @@ export class Services {
     if (row.data.state !== 'ready')
       fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
     try {
-      return await this.resources.db.transaction(async (connection) => {
+      const outputs = await this.resources.db.transaction(async (connection) => {
         const locked = required(
           await this.resources.db.one<ResourceRow>(
             'SELECT * FROM resources WHERE id=$1 FOR UPDATE',
@@ -515,34 +724,46 @@ export class Services {
         await this.resources.authorization.requireResource(actor, locked, 'use', connection);
         if (locked.data.state !== 'ready')
           fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
-        const state = await this.vault.decrypt<ConnectionState>(
-          required(locked.private_data),
-          'resource:' + locked.id,
-        );
-        if (state.role) return this.roles.obtain(state.role.arn, state.role.externalId, state.role.region);
-        if (state.fields)
+        const state = await this.readState(locked);
+        if (state.method.kind === 'role' && state.role)
+          return this.roles.obtain(state.role.arn, state.role.externalId, state.role.region);
+        if (state.method.kind === 'token' && state.fields)
           return Object.fromEntries(
-            Object.entries(state.service.auth.token!.outputs).map(([name, pointer]) => [
+            Object.entries(state.method.config.outputs).map(([name, pointer]) => [
               name,
               textValue(atPointer(state.fields, pointer)),
             ]),
           );
-        if (!state.oauth) fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
-        state.oauth = await this.oauth.refresh(state.service.auth.oauth!, state.app, state.oauth);
+        if (state.method.kind !== 'oauth' || !state.oauth)
+          fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
+        state.oauth = await this.oauth.refresh(state.method.config, state.app, state.oauth);
+        const approvedScopes = new Set(locked.data.scopes as string[]);
+        const broadened = state.oauth.scopes.some((scope) => !approvedScopes.has(scope));
         await this.resources.update(
           locked,
           {
             privateData: await this.vault.encrypt(state, 'resource:' + locked.id),
-            data: { ...locked.data, scopes: state.oauth.scopes },
+            data: {
+              ...locked.data,
+              scopes: broadened ? (locked.data.scopes ?? []) : state.oauth.scopes,
+              scopesStatus: state.oauth.scopesStatus ?? 'unknown',
+              accountVerified: state.oauth.accountVerified ?? false,
+              accountId: state.oauth.accountVerified ? state.oauth.account : null,
+              ...(broadened ? { state: 'reconnect' } : {}),
+            },
           },
           connection,
         );
-        return this.oauth.outputs(state.service.auth.oauth!, state.app, state.oauth);
+        if (broadened) return null;
+        return this.oauth.outputs(state.method.config, state.app, state.oauth);
       });
+      if (outputs === null)
+        fail(409, 'reconnect_required', 'Reconnect to review the changed service permissions.');
+      return outputs;
     } catch (error) {
       if (error instanceof DomainError && ['reconnect_required', 'account_changed'].includes(error.code))
         await this.resources.db.pool.query(
-          "UPDATE resources SET data=jsonb_set(data,'{state}','\"reconnect\"'),version=version+1 WHERE id=$1",
+          "UPDATE resources SET data=jsonb_set(data,'{state}','\"reconnect\"'),version=version+1 WHERE id=$1 AND data->>'state'<>'reconnect'",
           [row.id],
         );
       throw error;
@@ -551,11 +772,9 @@ export class Services {
   async remove(actor: Actor, row: ResourceRow, revoke = true) {
     await this.resources.authorization.requireResource(actor, row, 'delete');
     if (revoke && row.kind === 'connection') {
-      const state = await this.vault.decrypt<ConnectionState>(
-        required(row.private_data),
-        'resource:' + row.id,
-      );
-      if (state.oauth) await this.oauth.revoke(state.service.auth.oauth!, state.app, state.oauth);
+      const state = await this.readState(row);
+      if (state.method.kind === 'oauth' && state.oauth)
+        await this.oauth.revoke(state.method.config, state.app, state.oauth);
     }
     await this.resources.delete(actor, row);
   }

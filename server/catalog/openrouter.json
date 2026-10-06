@@ -5,30 +5,42 @@
   "api": "https://openrouter.ai/api/v1",
   "docs": "https://openrouter.ai/docs",
   "console": "https://openrouter.ai/keys",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://openrouter.ai/auth",
-      "tokenUrl": "https://openrouter.ai/api/v1/auth/keys",
-      "clientAuth": "none",
-      "tokenFormat": "json",
-      "outputs": {
-        "OPENROUTER_API_KEY": "/accessToken"
+      "name": "OpenRouter · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://openrouter.ai/auth",
+        "tokenUrl": "https://openrouter.ai/api/v1/auth/keys",
+        "clientAuth": "none",
+        "tokenFormat": "json",
+        "outputs": {
+          "OPENROUTER_API_KEY": "/accessToken"
+        },
+        "adapter": "openrouter",
+        "hint": "OpenRouter makes an API key for Foundation. Inspect facts.key_info, including is_management_key and is_provisioning_key (null means unknown), before use. Model calls can incur charges."
       },
-      "adapter": "openrouter",
-      "hint": "OpenRouter makes an API key for Foundation. Inspect facts.key_info, including is_management_key and is_provisioning_key (null means unknown), before use. Model calls can incur charges."
+      "docs": "https://openrouter.ai/docs",
+      "console": "https://openrouter.ai/keys"
     },
     "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "APIキー",
-          "secret": true
+      "name": "OpenRouter · API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "APIキー",
+            "secret": true
+          }
+        ],
+        "console": "https://openrouter.ai/settings/keys",
+        "outputs": {
+          "OPENROUTER_API_KEY": "/token"
         }
-      ],
-      "console": "https://openrouter.ai/settings/keys",
-      "outputs": {
-        "OPENROUTER_API_KEY": "/token"
-      }
+      },
+      "docs": "https://openrouter.ai/docs",
+      "console": "https://openrouter.ai/keys"
     }
   }
 }

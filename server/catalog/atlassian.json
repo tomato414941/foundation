@@ -4,67 +4,79 @@
   "api": "https://api.atlassian.com",
   "docs": "https://developer.atlassian.com/cloud/",
   "console": "https://developer.atlassian.com/console/myapps/",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://auth.atlassian.com/authorize",
-      "tokenUrl": "https://auth.atlassian.com/oauth/token",
-      "clientAuth": "body",
-      "pkce": true,
-      "tokenFormat": "json",
-      "authorizeParams": {
-        "audience": "api.atlassian.com",
-        "prompt": "consent"
+      "name": "Atlassian · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://auth.atlassian.com/authorize",
+        "tokenUrl": "https://auth.atlassian.com/oauth/token",
+        "clientAuth": "body",
+        "pkce": true,
+        "tokenFormat": "json",
+        "authorizeParams": {
+          "audience": "api.atlassian.com",
+          "prompt": "consent"
+        },
+        "tokenParams": {},
+        "defaults": {},
+        "fields": [],
+        "outputs": {
+          "ATLASSIAN_ACCESS_TOKEN": "/accessToken",
+          "ATLASSIAN_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "identity": {
+          "url": "https://api.atlassian.com/me",
+          "id": "/account_id",
+          "name": [
+            "/email",
+            "/name"
+          ]
+        },
+        "hint": "Find the site (cloud ID) with GET https://api.atlassian.com/oauth/token/accessible-resources, then call https://api.atlassian.com/ex/jira/<cloudid>/... or /ex/confluence/<cloudid>/...",
+        "scopes": {
+          "default": [
+            "offline_access",
+            "read:me"
+          ],
+          "separator": " ",
+          "docs": "https://developer.atlassian.com/cloud/jira/platform/scopes-for-oauth-2-3LO-and-forge-apps/"
+        }
       },
-      "tokenParams": {},
-      "defaults": {},
-      "fields": [],
-      "outputs": {
-        "ATLASSIAN_ACCESS_TOKEN": "/accessToken",
-        "ATLASSIAN_TOKEN_EXPIRES_AT": "/expiresAt"
-      },
-      "identity": {
-        "url": "https://api.atlassian.com/me",
-        "id": "/account_id",
-        "name": [
-          "/email",
-          "/name"
-        ]
-      },
-      "hint": "Find the site (cloud ID) with GET https://api.atlassian.com/oauth/token/accessible-resources, then call https://api.atlassian.com/ex/jira/<cloudid>/... or /ex/confluence/<cloudid>/...",
-      "scopes": {
-        "default": [
-          "offline_access",
-          "read:me"
-        ],
-        "separator": " ",
-        "docs": "https://developer.atlassian.com/cloud/jira/platform/scopes-for-oauth-2-3LO-and-forge-apps/"
-      }
+      "docs": "https://developer.atlassian.com/cloud/",
+      "console": "https://developer.atlassian.com/console/myapps/"
     },
     "token": {
-      "fields": [
-        {
-          "name": "site",
-          "label": "サイト",
-          "placeholder": "example.atlassian.net",
-          "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.atlassian\\.net$"
-        },
-        {
-          "name": "email",
-          "label": "Atlassianアカウントのメールアドレス"
-        },
-        {
-          "name": "token",
-          "label": "APIトークン",
-          "secret": true
+      "name": "Atlassian · API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "site",
+            "label": "サイト",
+            "placeholder": "example.atlassian.net",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}\\.atlassian\\.net$"
+          },
+          {
+            "name": "email",
+            "label": "Atlassianアカウントのメールアドレス"
+          },
+          {
+            "name": "token",
+            "label": "APIトークン",
+            "secret": true
+          }
+        ],
+        "console": "https://id.atlassian.com/manage-profile/security/api-tokens",
+        "hint": "Use HTTP Basic auth with ATLASSIAN_EMAIL as the user and ATLASSIAN_API_TOKEN as the password against https://<ATLASSIAN_SITE>/rest/api/3/... (Jira) or /wiki/rest/api/... (Confluence).",
+        "outputs": {
+          "ATLASSIAN_SITE": "/site",
+          "ATLASSIAN_EMAIL": "/email",
+          "ATLASSIAN_API_TOKEN": "/token"
         }
-      ],
-      "console": "https://id.atlassian.com/manage-profile/security/api-tokens",
-      "hint": "Use HTTP Basic auth with ATLASSIAN_EMAIL as the user and ATLASSIAN_API_TOKEN as the password against https://<ATLASSIAN_SITE>/rest/api/3/... (Jira) or /wiki/rest/api/... (Confluence).",
-      "outputs": {
-        "ATLASSIAN_SITE": "/site",
-        "ATLASSIAN_EMAIL": "/email",
-        "ATLASSIAN_API_TOKEN": "/token"
-      }
+      },
+      "docs": "https://developer.atlassian.com/cloud/",
+      "console": "https://developer.atlassian.com/console/myapps/"
     }
   }
 }

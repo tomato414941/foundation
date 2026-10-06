@@ -21,6 +21,16 @@ export class Database {
     await this.transaction(async (client) => {
       await client.query('SELECT pg_advisory_xact_lock(736023741)');
       await client.query(schema);
+      const applied = await client.query(
+        "SELECT 1 FROM schema_migrations WHERE name='connection-method-resources'",
+      );
+      if (!applied.rowCount) {
+        await client.query('ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_kind_check');
+        await client.query(
+          "ALTER TABLE resources ADD CONSTRAINT resources_kind_check CHECK (kind IN ('secret','connection','service','method','app','object','environment','function'))",
+        );
+        await client.query("INSERT INTO schema_migrations(name) VALUES('connection-method-resources')");
+      }
     });
   }
   async all<T extends QueryResultRow>(

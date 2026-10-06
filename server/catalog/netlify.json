@@ -4,46 +4,58 @@
   "api": "https://api.netlify.com/api/v1",
   "docs": "https://docs.netlify.com/api/get-started/",
   "console": "https://app.netlify.com/user/applications",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://app.netlify.com/authorize",
-      "tokenUrl": "https://api.netlify.com/oauth/token",
-      "clientAuth": "body",
-      "pkce": true,
-      "tokenFormat": "form",
-      "authorizeParams": {},
-      "tokenParams": {},
-      "defaults": {},
-      "fields": [],
-      "outputs": {
-        "NETLIFY_ACCESS_TOKEN": "/accessToken",
-        "NETLIFY_TOKEN_EXPIRES_AT": "/expiresAt"
+      "name": "Netlify · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://app.netlify.com/authorize",
+        "tokenUrl": "https://api.netlify.com/oauth/token",
+        "clientAuth": "body",
+        "pkce": true,
+        "tokenFormat": "form",
+        "authorizeParams": {},
+        "tokenParams": {},
+        "defaults": {},
+        "fields": [],
+        "outputs": {
+          "NETLIFY_ACCESS_TOKEN": "/accessToken",
+          "NETLIFY_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "identity": {
+          "url": "https://api.netlify.com/api/v1/user",
+          "id": "/id",
+          "name": [
+            "/email",
+            "/full_name"
+          ]
+        },
+        "scopes": {
+          "default": [],
+          "separator": " "
+        }
       },
-      "identity": {
-        "url": "https://api.netlify.com/api/v1/user",
-        "id": "/id",
-        "name": [
-          "/email",
-          "/full_name"
-        ]
-      },
-      "scopes": {
-        "default": [],
-        "separator": " "
-      }
+      "docs": "https://docs.netlify.com/api/get-started/",
+      "console": "https://app.netlify.com/user/applications"
     },
     "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "Personal access token",
-          "secret": true
+      "name": "Netlify · API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "Personal access token",
+            "secret": true
+          }
+        ],
+        "console": "https://app.netlify.com/user/applications",
+        "outputs": {
+          "NETLIFY_AUTH_TOKEN": "/token"
         }
-      ],
-      "console": "https://app.netlify.com/user/applications",
-      "outputs": {
-        "NETLIFY_AUTH_TOKEN": "/token"
-      }
+      },
+      "docs": "https://docs.netlify.com/api/get-started/",
+      "console": "https://app.netlify.com/user/applications"
     }
   }
 }

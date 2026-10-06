@@ -3,52 +3,62 @@
   "name": "Bitbucket",
   "api": "https://api.bitbucket.org/2.0",
   "docs": "https://developer.atlassian.com/cloud/bitbucket/rest/",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://bitbucket.org/site/oauth2/authorize",
-      "tokenUrl": "https://bitbucket.org/site/oauth2/access_token",
-      "clientAuth": "basic",
-      "pkce": true,
-      "tokenFormat": "form",
-      "authorizeParams": {},
-      "tokenParams": {},
-      "defaults": {},
-      "fields": [],
-      "outputs": {
-        "BITBUCKET_ACCESS_TOKEN": "/accessToken",
-        "BITBUCKET_TOKEN_EXPIRES_AT": "/expiresAt"
+      "name": "Bitbucket · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://bitbucket.org/site/oauth2/authorize",
+        "tokenUrl": "https://bitbucket.org/site/oauth2/access_token",
+        "clientAuth": "basic",
+        "pkce": true,
+        "tokenFormat": "form",
+        "authorizeParams": {},
+        "tokenParams": {},
+        "defaults": {},
+        "fields": [],
+        "outputs": {
+          "BITBUCKET_ACCESS_TOKEN": "/accessToken",
+          "BITBUCKET_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "identity": {
+          "url": "https://api.bitbucket.org/2.0/user",
+          "id": "/uuid",
+          "name": [
+            "/username",
+            "/display_name"
+          ]
+        },
+        "scopes": {
+          "default": [],
+          "separator": " "
+        }
       },
-      "identity": {
-        "url": "https://api.bitbucket.org/2.0/user",
-        "id": "/uuid",
-        "name": [
-          "/username",
-          "/display_name"
-        ]
-      },
-      "scopes": {
-        "default": [],
-        "separator": " "
-      }
+      "docs": "https://developer.atlassian.com/cloud/bitbucket/rest/"
     },
     "token": {
-      "fields": [
-        {
-          "name": "email",
-          "label": "Atlassianアカウントのメールアドレス"
-        },
-        {
-          "name": "token",
-          "label": "APIトークン",
-          "secret": true
+      "name": "Bitbucket · API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "email",
+            "label": "Atlassianアカウントのメールアドレス"
+          },
+          {
+            "name": "token",
+            "label": "APIトークン",
+            "secret": true
+          }
+        ],
+        "console": "https://id.atlassian.com/manage-profile/security/api-tokens",
+        "hint": "Use HTTP Basic auth with BITBUCKET_EMAIL as the user and BITBUCKET_API_TOKEN as the password against https://api.bitbucket.org/2.0/... The token must be made with Bitbucket scopes.",
+        "outputs": {
+          "BITBUCKET_EMAIL": "/email",
+          "BITBUCKET_API_TOKEN": "/token"
         }
-      ],
-      "console": "https://id.atlassian.com/manage-profile/security/api-tokens",
-      "hint": "Use HTTP Basic auth with BITBUCKET_EMAIL as the user and BITBUCKET_API_TOKEN as the password against https://api.bitbucket.org/2.0/... The token must be made with Bitbucket scopes.",
-      "outputs": {
-        "BITBUCKET_EMAIL": "/email",
-        "BITBUCKET_API_TOKEN": "/token"
-      }
+      },
+      "docs": "https://developer.atlassian.com/cloud/bitbucket/rest/"
     }
   }
 }

@@ -4,46 +4,58 @@
   "api": "https://api.airtable.com/v0",
   "docs": "https://airtable.com/developers/web/api/introduction",
   "console": "https://airtable.com/create/oauth",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://airtable.com/oauth2/v1/authorize",
-      "tokenUrl": "https://airtable.com/oauth2/v1/token",
-      "clientAuth": "basic",
-      "pkce": true,
-      "tokenFormat": "form",
-      "authorizeParams": {},
-      "tokenParams": {},
-      "defaults": {},
-      "fields": [],
-      "outputs": {
-        "AIRTABLE_ACCESS_TOKEN": "/accessToken",
-        "AIRTABLE_TOKEN_EXPIRES_AT": "/expiresAt"
+      "name": "Airtable · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://airtable.com/oauth2/v1/authorize",
+        "tokenUrl": "https://airtable.com/oauth2/v1/token",
+        "clientAuth": "basic",
+        "pkce": true,
+        "tokenFormat": "form",
+        "authorizeParams": {},
+        "tokenParams": {},
+        "defaults": {},
+        "fields": [],
+        "outputs": {
+          "AIRTABLE_ACCESS_TOKEN": "/accessToken",
+          "AIRTABLE_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "identity": {
+          "url": "https://api.airtable.com/v0/meta/whoami",
+          "id": "/id",
+          "name": "/email"
+        },
+        "scopes": {
+          "default": [
+            "user.email:read"
+          ],
+          "separator": " ",
+          "docs": "https://airtable.com/developers/web/api/scopes"
+        }
       },
-      "identity": {
-        "url": "https://api.airtable.com/v0/meta/whoami",
-        "id": "/id",
-        "name": "/email"
-      },
-      "scopes": {
-        "default": [
-          "user.email:read"
-        ],
-        "separator": " ",
-        "docs": "https://airtable.com/developers/web/api/scopes"
-      }
+      "docs": "https://airtable.com/developers/web/api/introduction",
+      "console": "https://airtable.com/create/oauth"
     },
     "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "Personal access token",
-          "secret": true
+      "name": "Airtable · API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "Personal access token",
+            "secret": true
+          }
+        ],
+        "console": "https://airtable.com/create/tokens",
+        "outputs": {
+          "AIRTABLE_TOKEN": "/token"
         }
-      ],
-      "console": "https://airtable.com/create/tokens",
-      "outputs": {
-        "AIRTABLE_TOKEN": "/token"
-      }
+      },
+      "docs": "https://airtable.com/developers/web/api/introduction",
+      "console": "https://airtable.com/create/oauth"
     }
   }
 }

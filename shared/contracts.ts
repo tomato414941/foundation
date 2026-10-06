@@ -33,6 +33,7 @@ export const ResourceKind = z.enum([
   'secret',
   'connection',
   'service',
+  'method',
   'app',
   'object',
   'environment',
@@ -179,7 +180,36 @@ export const TokenDefinition = z.object({
   instructions: z.string().optional(),
   hint: z.string().optional(),
 });
-export const ServiceDefinition = z
+export const AuthKind = z.enum(['oauth', 'token', 'role']);
+export type AuthKindName = z.infer<typeof AuthKind>;
+export const RoleDefinition = z.object({ kind: z.literal('aws'), hint: z.string().optional() });
+const methodMetadata = {
+  name: Name,
+  docs: z.url().optional(),
+  console: z.url().optional(),
+};
+const OAuthMethod = z
+  .object({ ...methodMetadata, kind: z.literal('oauth'), config: OAuthDefinition })
+  .strict();
+const TokenMethod = z
+  .object({ ...methodMetadata, kind: z.literal('token'), config: TokenDefinition })
+  .strict();
+const RoleMethod = z.object({ ...methodMetadata, kind: z.literal('role'), config: RoleDefinition }).strict();
+export const MethodDefinition = z.discriminatedUnion('kind', [OAuthMethod, TokenMethod, RoleMethod]);
+export type MethodDescription = z.infer<typeof MethodDefinition>;
+const methodCatalogMetadata = {
+  id: z.string().min(1),
+  builtin: z.boolean(),
+  availability: z.enum(['ready', 'app-required', 'unavailable']),
+};
+export const CatalogMethod = z.discriminatedUnion('kind', [
+  OAuthMethod.extend(methodCatalogMetadata),
+  TokenMethod.extend(methodCatalogMetadata),
+  RoleMethod.extend(methodCatalogMetadata),
+]);
+export type CatalogConnectionMethod = z.infer<typeof CatalogMethod>;
+export const MethodKey = z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/);
+export const ServiceMetadata = z
   .object({
     name: Name,
     logo: z
@@ -189,20 +219,31 @@ export const ServiceDefinition = z
     api: z.url().optional(),
     docs: z.url().optional(),
     console: z.url().optional(),
-    auth: z
-      .object({
-        oauth: OAuthDefinition.optional(),
-        token: TokenDefinition.optional(),
-        role: z.object({ kind: z.literal('aws'), hint: z.string().optional() }).optional(),
-      })
-      .strict(),
   })
   .strict();
+export const LegacyServiceDefinition = ServiceMetadata.extend({
+  auth: z
+    .object({
+      oauth: OAuthDefinition.optional(),
+      token: TokenDefinition.optional(),
+      role: RoleDefinition.optional(),
+    })
+    .strict(),
+}).strict();
+export type LegacyServiceDescription = z.infer<typeof LegacyServiceDefinition>;
+export const ServiceDefinition = ServiceMetadata.extend({
+  methods: z.record(MethodKey, z.string().min(1)),
+}).strict();
+export const InlineServiceDefinition = ServiceMetadata.extend({
+  methods: z.record(MethodKey, z.union([z.string().min(1), MethodDefinition])),
+}).strict();
+export const ServiceInputDefinition = z.union([InlineServiceDefinition, LegacyServiceDefinition]);
+export type ServiceDefinitionInput = z.infer<typeof ServiceInputDefinition>;
 export type ServiceDescription = z.infer<typeof ServiceDefinition>;
-export const CatalogEntry = ServiceDefinition.extend({
+export const CatalogEntry = ServiceMetadata.extend({
   id: z.string(),
   builtin: z.boolean(),
-  available: z.array(z.enum(['oauth', 'token', 'role'])),
+  methods: z.record(MethodKey, CatalogMethod),
 });
 export type CatalogService = z.infer<typeof CatalogEntry>;
 
@@ -295,10 +336,15 @@ export const ConnectionResource = z.object({
   ...resourceBase,
   kind: z.literal('connection'),
   data: z.object({
-    serviceId: z.string(),
-    scheme: z.enum(['oauth', 'token', 'role']),
+    methodId: z.string(),
+    methodName: z.string(),
+    methodKind: AuthKind,
+    services: z.array(z.object({ id: z.string(), name: Name })).default([]),
     account: z.string(),
+    accountId: z.string().nullable().default(null),
+    accountVerified: z.boolean().default(false),
     scopes: z.array(z.string()),
+    scopesStatus: z.enum(['unknown', 'requested', 'reported']).default('unknown'),
     outputs: z.array(z.string()),
     state: z.enum(['ready', 'reconnect', 'review', 'disconnecting']),
     appId: Id.nullable(),
@@ -309,10 +355,15 @@ export const ServiceResource = z.object({
   kind: z.literal('service'),
   data: ServiceDefinition,
 });
+export const MethodResource = z.object({
+  ...resourceBase,
+  kind: z.literal('method'),
+  data: MethodDefinition,
+});
 export const AppResource = z.object({
   ...resourceBase,
   kind: z.literal('app'),
-  data: z.object({ serviceId: z.string(), clientId: z.string(), fields: z.record(z.string(), z.string()) }),
+  data: z.object({ methodId: z.string(), clientId: z.string(), fields: z.record(z.string(), z.string()) }),
 });
 export const ObjectResource = z.object({
   ...resourceBase,
@@ -339,6 +390,7 @@ export const Resource = z.discriminatedUnion('kind', [
   SecretResource,
   ConnectionResource,
   ServiceResource,
+  MethodResource,
   AppResource,
   ObjectResource,
   EnvironmentResource,
@@ -360,12 +412,14 @@ export const NewResource = z.discriminatedUnion('kind', [
       allowUse: z.boolean().default(false),
     })
     .strict(),
-  z.object({ kind: z.literal('service'), name: Name, definition: ServiceDefinition }).strict(),
+  z.object({ kind: z.literal('service'), name: Name, definition: ServiceInputDefinition }).strict(),
+  z.object({ kind: z.literal('method'), name: Name, definition: MethodDefinition }).strict(),
   z
     .object({
       kind: z.literal('app'),
       name: Name,
-      serviceId: z.string(),
+      methodId: z.string().min(1).optional(),
+      serviceId: z.string().min(1).optional(),
       clientId: z.string().min(1),
       clientSecret: z.string().optional(),
       fields: z.record(z.string(), z.string()).default({}),
@@ -382,7 +436,7 @@ export const UpdateResource = z
     sealed: Sealed.optional(),
     bytes: z.number().int().nonnegative().max(1_000_000).optional(),
     allowUse: z.boolean().optional(),
-    definition: z.union([ServiceDefinition, FunctionDefinition]).optional(),
+    definition: z.union([ServiceInputDefinition, MethodDefinition, FunctionDefinition]).optional(),
     clientId: z.string().optional(),
     clientSecret: z.string().optional(),
     fields: z.record(z.string(), z.string()).optional(),
@@ -495,8 +549,9 @@ export const AuditEntry = z.object({
 });
 export const ConnectionInput = z
   .object({
-    serviceId: z.string().min(1),
-    scheme: z.enum(['oauth', 'token', 'role']),
+    methodId: z.string().min(1).optional(),
+    serviceId: z.string().min(1).optional(),
+    scheme: AuthKind.optional(),
     name: Name.optional(),
     connectionId: Id.optional(),
     appId: z.union([Id, z.literal('foundation')]).default('foundation'),
@@ -504,7 +559,11 @@ export const ConnectionInput = z
     fields: z.record(z.string(), z.union([z.string(), Source])).default({}),
     returnTo: z.string().startsWith('/').default('/services'),
   })
-  .strict();
+  .strict()
+  .refine((input) => Boolean(input.methodId || (input.serviceId && input.scheme)), {
+    message: 'Choose a connection method.',
+    path: ['methodId'],
+  });
 export type ConnectInput = z.infer<typeof ConnectionInput>;
 export const Settings = z
   .object({ returnUrl: z.url().optional(), refreshUrl: z.url().optional(), webhookUrl: z.url().optional() })

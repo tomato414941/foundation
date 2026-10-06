@@ -2,71 +2,81 @@
   "id": "zendesk",
   "name": "Zendesk",
   "docs": "https://developer.zendesk.com/api-reference/",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://{subdomain}.zendesk.com/oauth/authorizations/new",
-      "tokenUrl": "https://{subdomain}.zendesk.com/oauth/tokens",
-      "clientAuth": "body",
-      "pkce": true,
-      "tokenFormat": "form",
-      "authorizeParams": {},
-      "tokenParams": {},
-      "defaults": {},
-      "fields": [
-        {
-          "name": "subdomain",
-          "label": "サブドメイン",
-          "required": true,
-          "placeholder": "example（example.zendesk.com の場合）",
-          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
-        }
-      ],
-      "outputs": {
-        "ZENDESK_ACCESS_TOKEN": "/accessToken",
-        "ZENDESK_SUBDOMAIN": "/subdomain",
-        "ZENDESK_TOKEN_EXPIRES_AT": "/expiresAt"
-      },
-      "identity": {
-        "url": "https://{subdomain}.zendesk.com/api/v2/users/me.json",
-        "id": "/user/id",
-        "name": [
-          "/user/email",
-          "/user/name"
-        ]
-      },
-      "hint": "ZENDESK_SUBDOMAIN is the Zendesk subdomain (https://<ZENDESK_SUBDOMAIN>.zendesk.com/api/v2/...).",
-      "scopes": {
-        "default": [
-          "read"
+      "name": "Zendesk · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://{subdomain}.zendesk.com/oauth/authorizations/new",
+        "tokenUrl": "https://{subdomain}.zendesk.com/oauth/tokens",
+        "clientAuth": "body",
+        "pkce": true,
+        "tokenFormat": "form",
+        "authorizeParams": {},
+        "tokenParams": {},
+        "defaults": {},
+        "fields": [
+          {
+            "name": "subdomain",
+            "label": "サブドメイン",
+            "required": true,
+            "placeholder": "example（example.zendesk.com の場合）",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          }
         ],
-        "separator": " ",
-        "docs": "https://developer.zendesk.com/api-reference/ticketing/oauth/oauth_tokens/"
-      }
+        "outputs": {
+          "ZENDESK_ACCESS_TOKEN": "/accessToken",
+          "ZENDESK_SUBDOMAIN": "/subdomain",
+          "ZENDESK_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "identity": {
+          "url": "https://{subdomain}.zendesk.com/api/v2/users/me.json",
+          "id": "/user/id",
+          "name": [
+            "/user/email",
+            "/user/name"
+          ]
+        },
+        "hint": "ZENDESK_SUBDOMAIN is the Zendesk subdomain (https://<ZENDESK_SUBDOMAIN>.zendesk.com/api/v2/...).",
+        "scopes": {
+          "default": [
+            "read"
+          ],
+          "separator": " ",
+          "docs": "https://developer.zendesk.com/api-reference/ticketing/oauth/oauth_tokens/"
+        }
+      },
+      "docs": "https://developer.zendesk.com/api-reference/"
     },
     "token": {
-      "fields": [
-        {
-          "name": "subdomain",
-          "label": "サブドメイン",
-          "placeholder": "example（example.zendesk.com の場合）",
-          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
-        },
-        {
-          "name": "email",
-          "label": "Zendeskのメールアドレス"
-        },
-        {
-          "name": "token",
-          "label": "APIトークン",
-          "secret": true
+      "name": "Zendesk · API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "subdomain",
+            "label": "サブドメイン",
+            "placeholder": "example（example.zendesk.com の場合）",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          {
+            "name": "email",
+            "label": "Zendeskのメールアドレス"
+          },
+          {
+            "name": "token",
+            "label": "APIトークン",
+            "secret": true
+          }
+        ],
+        "hint": "Use HTTP Basic auth with \"<ZENDESK_EMAIL>/token\" as the user and ZENDESK_API_TOKEN as the password against https://<ZENDESK_SUBDOMAIN>.zendesk.com/api/v2/... The token is made in Admin Center under Apps and integrations > APIs.",
+        "outputs": {
+          "ZENDESK_SUBDOMAIN": "/subdomain",
+          "ZENDESK_EMAIL": "/email",
+          "ZENDESK_API_TOKEN": "/token"
         }
-      ],
-      "hint": "Use HTTP Basic auth with \"<ZENDESK_EMAIL>/token\" as the user and ZENDESK_API_TOKEN as the password against https://<ZENDESK_SUBDOMAIN>.zendesk.com/api/v2/... The token is made in Admin Center under Apps and integrations > APIs.",
-      "outputs": {
-        "ZENDESK_SUBDOMAIN": "/subdomain",
-        "ZENDESK_EMAIL": "/email",
-        "ZENDESK_API_TOKEN": "/token"
-      }
+      },
+      "docs": "https://developer.zendesk.com/api-reference/"
     }
   }
 }

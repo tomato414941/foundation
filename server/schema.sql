@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS challenges (
 CREATE TABLE IF NOT EXISTS resources (
   id uuid PRIMARY KEY,
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  kind text NOT NULL CHECK (kind IN ('secret','connection','service','app','object','environment','function')),
+  kind text NOT NULL CHECK (kind IN ('secret','connection','service','method','app','object','environment','function')),
   name text NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
   data jsonb NOT NULL,
   sealed jsonb,
@@ -72,6 +72,16 @@ CREATE TABLE IF NOT EXISTS resources (
 CREATE INDEX IF NOT EXISTS resources_owner ON resources(owner_id,kind,created_at,id);
 CREATE UNIQUE INDEX IF NOT EXISTS resources_name ON resources(owner_id,kind,name) WHERE kind <> 'connection';
 ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_owner_id_kind_name_key;
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  name text PRIMARY KEY,
+  applied_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS connection_method_aliases (
+  service_id uuid NOT NULL,
+  scheme text NOT NULL CHECK (scheme IN ('oauth','token','role')),
+  method_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+  PRIMARY KEY (service_id,scheme)
+);
 CREATE TABLE IF NOT EXISTS object_blobs (
   id uuid PRIMARY KEY,
   resource_id uuid REFERENCES resources(id) ON DELETE SET NULL,

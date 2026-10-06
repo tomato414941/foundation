@@ -208,6 +208,113 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="追加", exact=True).click()
         expect(page.get_by_text("Automation → 代理 → Browser account", exact=True)).to_be_visible()
 
+    def test_接続方法を選んで登録し共有分類から再利用して再認証を確認する(self):
+        page, principal = self.passkey_account("Connection owner")
+        root = f"{ORIGIN}/p/{principal['id']}"
+        methods = {
+            "personal": {"name": "Personal access", "kind": "token", "config": {
+                "fields": [{"name": "personalKey", "label": "Personal key", "secret": True}],
+                "outputs": {"PERSONAL_KEY": "/personalKey"},
+            }},
+            "project": {"name": "Project access", "kind": "token", "config": {
+                "fields": [{"name": "projectKey", "label": "Project key", "secret": True}],
+                "outputs": {"PROJECT_KEY": "/projectKey"},
+            }},
+        }
+        page.goto(root + "/definitions/new")
+        page.wait_for_load_state("networkidle")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Work APIs")
+        page.get_by_role("textbox", name="定義（JSON）", exact=True).fill(json.dumps({"methods": methods}))
+        page.get_by_role("button", name="作成", exact=True).click()
+        expect(page.get_by_role("heading", name="Work APIs", exact=True)).to_be_visible()
+        service = page.request.get(ORIGIN + "/api/resources/" + page.url.rsplit("/", 1)[1]).json()
+        page.goto(root + "/services/new")
+        page.wait_for_load_state("networkidle")
+        self.select(page, "サービス", "Work APIs")
+        self.select(page, "接続方法", "Personal access")
+        page.get_by_label("Personal key").fill("personal-fixture-key")
+        self.select(page, "接続方法", "Project access")
+        page.get_by_label("Project key").fill("project-fixture-key")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Primary account")
+        page.screenshot(path=str(ARTIFACTS / "connection-method-ja.png"), full_page=True, animations="disabled")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible()
+        expect(page.get_by_text("外部サービスの権限は未確認", exact=True)).to_be_visible()
+        expect(page.get_by_text("接続先の名義は未確認", exact=True)).to_be_visible()
+        expect(page.get_by_text("Project access", exact=True)).to_be_visible()
+        connection_path = page.url
+        connection_id = connection_path.rsplit("/", 1)[1]
+        page.goto(root + "/definitions/new")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Other workspace")
+        page.get_by_role("textbox", name="定義（JSON）", exact=True).fill(json.dumps({"methods": {"shared": service["data"]["methods"]["project"]}}))
+        page.get_by_role("button", name="作成", exact=True).click()
+        expect(page.get_by_role("heading", name="Other workspace", exact=True)).to_be_visible()
+        page.goto(root + "/services/new")
+        self.select(page, "サービス", "Other workspace")
+        expect(page.get_by_text("この接続方法で登録済みの接続を利用できます。", exact=True)).to_be_visible()
+        page.get_by_role("link", name="Primary account", exact=True).click()
+        expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible()
+        self.assertEqual(page.url, connection_path)
+        expect(page.get_by_text("Other workspace, Work APIs", exact=True)).to_be_visible()
+        page.get_by_role("link", name="再接続", exact=True).click()
+        expect(page.get_by_role("combobox", name="接続方法", exact=True)).to_be_disabled()
+        page.get_by_label("Project key").fill("rotated-fixture-key")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        expect(page.get_by_role("heading", name="接続の変更を確認", exact=True)).to_be_visible()
+        page.wait_for_load_state("networkidle")
+        page.screenshot(path=str(ARTIFACTS / "connection-review-ja.png"), full_page=True, animations="disabled")
+        self.select(page, "言語", "English")
+        page.set_viewport_size({"width": 390, "height": 844})
+        page.wait_for_load_state("networkidle")
+        expect(page.get_by_role("heading", name="Review connection changes", exact=True)).to_be_visible()
+        self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
+        page.screenshot(path=str(ARTIFACTS / "connection-review-mobile-en.png"), full_page=True, animations="disabled")
+        page.get_by_role("button", name="Accept changes", exact=True).click()
+        expect(page.get_by_role("heading", name="Connections", exact=True)).to_be_visible()
+        page.get_by_role("link", name="Primary account", exact=True).click()
+        expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible()
+        self.assertEqual(page.url, connection_path)
+        connection = page.request.get(ORIGIN + "/api/resources/" + connection_id).json()
+        self.assertEqual(connection["data"]["methodId"], service["data"]["methods"]["project"])
+        self.assertEqual(connection["version"], 2)
+        expect(page.get_by_text("External permissions not verified", exact=True)).to_be_visible()
+        page.wait_for_load_state("networkidle")
+        self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
+        page.screenshot(path=str(ARTIFACTS / "connection-mobile-en.png"), full_page=True, animations="disabled")
+
+    def test_独立した接続方法を登録しOAuthアプリを対応する方法に結び付ける(self):
+        page, principal = self.passkey_account("Method owner")
+        root = f"{ORIGIN}/p/{principal['id']}"
+        page.goto(root + "/methods/new")
+        page.wait_for_load_state("networkidle")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Workspace sign-in")
+        page.get_by_role("textbox", name="定義（JSON）", exact=True).fill(json.dumps({"kind": "oauth", "config": {
+            "authorizeUrl": "https://provider.example/authorize", "tokenUrl": "https://provider.example/token",
+            "fields": [{"name": "workspace", "label": "Workspace", "required": True}],
+        }}))
+        page.get_by_role("button", name="作成", exact=True).click()
+        expect(page.get_by_role("heading", name="Workspace sign-in", exact=True)).to_be_visible()
+        method_id = page.url.rsplit("/", 1)[1]
+        page.goto(root + "/apps/new")
+        page.wait_for_load_state("networkidle")
+        self.select(page, "サービス", "すべての接続方法")
+        self.select(page, "接続方法", "Workspace sign-in")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Workspace application")
+        page.get_by_label("クライアントID").fill("browser-client")
+        page.get_by_label("クライアントシークレット").fill("browser-client-secret")
+        page.get_by_label("Workspace", exact=False).fill("workspace-name")
+        page.get_by_role("button", name="作成", exact=True).click()
+        expect(page.get_by_role("heading", name="Workspace application", exact=True)).to_be_visible()
+        application = page.request.get(ORIGIN + "/api/resources/" + page.url.rsplit("/", 1)[1]).json()
+        self.assertEqual(application["data"]["methodId"], method_id)
+        self.assertEqual(application["data"]["fields"], {"workspace": "workspace-name"})
+        page.goto(root + "/services/new?method=" + method_id)
+        page.wait_for_load_state("networkidle")
+        expect(page.get_by_role("combobox", name="接続方法", exact=True)).to_have_text("Workspace sign-in")
+        expect(page.get_by_role("combobox", name="OAuthアプリ", exact=True)).to_have_text("Workspace application")
+        expect(page.get_by_role("button", name="接続する", exact=True)).to_be_enabled()
+        page.screenshot(path=str(ARTIFACTS / "connection-oauth-app-ja.png"), full_page=True, animations="disabled")
+
     def test_ファイルを保存して実行環境を起動しコマンドを実行して停止する(self):
         page, principal = self.passkey_account()
         response = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})

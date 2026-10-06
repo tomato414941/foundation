@@ -6,6 +6,7 @@ export const sections = {
   environments: 'environment',
   functions: 'function',
   definitions: 'service',
+  methods: 'method',
   apps: 'app',
 } as const;
 export type Section = keyof typeof sections;

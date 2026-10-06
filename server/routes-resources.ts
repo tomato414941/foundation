@@ -25,6 +25,21 @@ export async function routesResources(app: ApiApp, context: Context) {
     next: null,
   }));
   app.get(
+    '/api/connection-methods',
+    { schema: { response: { 200: C.listOf(C.CatalogMethod) } } },
+    async (request) => ({
+      items: await catalog.listMethods(actor(request)),
+      next: null,
+    }),
+  );
+  app.get(
+    '/api/connections/:id/method',
+    {
+      schema: { params: C.IdParams, response: { 200: C.CatalogMethod } },
+    },
+    async (request) => services.definition(actor(request), await resources.get(request.params.id)),
+  );
+  app.get(
     '/api/identities/:id',
     {
       schema: {
@@ -76,7 +91,7 @@ export async function routesResources(app: ApiApp, context: Context) {
       const row =
         body.kind === 'secret'
           ? await resources.createSecret(who, owner, body)
-          : body.kind === 'service' || body.kind === 'app'
+          : body.kind === 'service' || body.kind === 'app' || body.kind === 'method'
             ? await services.createDefinition(who, owner, body)
             : body.kind === 'environment'
               ? await environments.create(who, owner, body.options, body.name)
@@ -111,7 +126,7 @@ export async function routesResources(app: ApiApp, context: Context) {
         'name',
         ...(row.kind === 'secret'
           ? ['sealed', 'bytes', 'allowUse']
-          : row.kind === 'function' || row.kind === 'service'
+          : row.kind === 'function' || row.kind === 'service' || row.kind === 'method'
             ? ['definition']
             : row.kind === 'app'
               ? ['clientId', 'clientSecret', 'fields']
@@ -143,14 +158,49 @@ export async function routesResources(app: ApiApp, context: Context) {
             return updated;
           });
         } else if (row.kind === 'service') {
+          row = await resources.db.transaction(async (connection) => {
+            await connection.query('SELECT pg_advisory_xact_lock(736023747)');
+            const definition = await catalog.prepareDefinition(
+              who,
+              row.owner_id,
+              row.id,
+              C.ServiceInputDefinition.parse(body.definition),
+              connection,
+            );
+            const updated = await resources.update(
+              row,
+              {
+                data: definition,
+                ...(body.name ? { name: body.name } : {}),
+              },
+              connection,
+            );
+            await resources.references(
+              row.id,
+              Object.values(definition.methods).filter((id) => !catalog.methods.has(id)),
+              connection,
+            );
+            return updated;
+          });
+        } else if (row.kind === 'method') {
+          const definition = C.MethodDefinition.parse({ ...body.definition, name: body.name ?? row.name });
+          const previous = C.MethodDefinition.parse(row.data);
           const reference = await resources.db.one(
-            'SELECT 1 FROM resource_references WHERE referenced_id=$1 LIMIT 1',
+            "SELECT 1 FROM resource_references ref JOIN resources r ON r.id=ref.resource_id WHERE ref.referenced_id=$1 AND r.kind IN ('connection','app') LIMIT 1",
             [row.id],
           );
-          if (reference)
-            fail(409, 'in_use', 'Disconnect items using this service before changing its definition.');
+          if (
+            reference &&
+            (previous.kind !== definition.kind ||
+              JSON.stringify(previous.config) !== JSON.stringify(definition.config))
+          )
+            fail(
+              409,
+              'in_use',
+              'Create another connection method to change how existing connections authenticate.',
+            );
           row = await resources.update(row, {
-            data: C.ServiceDefinition.parse(body.definition) as unknown as Record<string, C.JsonValue>,
+            data: definition,
             ...(body.name ? { name: body.name } : {}),
           });
         } else fail(400, 'wrong_kind', 'This item does not have an editable definition.');

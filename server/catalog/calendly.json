@@ -4,50 +4,62 @@
   "api": "https://api.calendly.com",
   "docs": "https://developer.calendly.com/api-docs",
   "console": "https://developer.calendly.com/",
-  "auth": {
+  "methods": {
     "oauth": {
-      "authorizeUrl": "https://auth.calendly.com/oauth/authorize",
-      "tokenUrl": "https://auth.calendly.com/oauth/token",
-      "clientAuth": "body",
-      "pkce": true,
-      "tokenFormat": "form",
-      "authorizeParams": {},
-      "tokenParams": {},
-      "defaults": {},
-      "fields": [],
-      "outputs": {
-        "CALENDLY_ACCESS_TOKEN": "/accessToken",
-        "CALENDLY_TOKEN_EXPIRES_AT": "/expiresAt"
+      "name": "Calendly · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://auth.calendly.com/oauth/authorize",
+        "tokenUrl": "https://auth.calendly.com/oauth/token",
+        "clientAuth": "body",
+        "pkce": true,
+        "tokenFormat": "form",
+        "authorizeParams": {},
+        "tokenParams": {},
+        "defaults": {},
+        "fields": [],
+        "outputs": {
+          "CALENDLY_ACCESS_TOKEN": "/accessToken",
+          "CALENDLY_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "identity": {
+          "url": "https://api.calendly.com/users/me",
+          "id": "/resource/uri",
+          "name": [
+            "/resource/email",
+            "/resource/name"
+          ]
+        },
+        "revoke": {
+          "url": "https://auth.calendly.com/oauth/revoke",
+          "style": "rfc7009"
+        },
+        "scopes": {
+          "default": [],
+          "separator": " "
+        }
       },
-      "identity": {
-        "url": "https://api.calendly.com/users/me",
-        "id": "/resource/uri",
-        "name": [
-          "/resource/email",
-          "/resource/name"
-        ]
-      },
-      "revoke": {
-        "url": "https://auth.calendly.com/oauth/revoke",
-        "style": "rfc7009"
-      },
-      "scopes": {
-        "default": [],
-        "separator": " "
-      }
+      "docs": "https://developer.calendly.com/api-docs",
+      "console": "https://developer.calendly.com/"
     },
     "token": {
-      "fields": [
-        {
-          "name": "token",
-          "label": "Personal access token",
-          "secret": true
+      "name": "Calendly · API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "Personal access token",
+            "secret": true
+          }
+        ],
+        "console": "https://calendly.com/integrations/api_webhooks",
+        "outputs": {
+          "CALENDLY_TOKEN": "/token"
         }
-      ],
-      "console": "https://calendly.com/integrations/api_webhooks",
-      "outputs": {
-        "CALENDLY_TOKEN": "/token"
-      }
+      },
+      "docs": "https://developer.calendly.com/api-docs",
+      "console": "https://developer.calendly.com/"
     }
   }
 }

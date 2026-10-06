@@ -1,15 +1,18 @@
 import { Form, redirect, useActionData, useLoaderData } from 'react-router';
-import { Button, Stack } from '@mui/material';
+import { Alert, Button, Stack } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/service-review';
-import type { JsonValue } from '../../../shared/contracts';
 import { actionResult, api, formText, safeReturn, session } from '../api';
-import { ErrorNotice, JsonView, Page, Panel } from '../components';
+import { ErrorNotice, Page, Panel } from '../components';
+import { ConnectionFacts } from '../connection-facts';
+import type { ConnectionFactsValue } from '../connection-facts';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   const current = await session(request);
   if (!current.principal)
     throw redirect('/signin?returnTo=' + encodeURIComponent(new URL(request.url).pathname));
-  return api<{ before: JsonValue; after: JsonValue }>('/connections/' + params.id + '/review');
+  return api<{ before: ConnectionFactsValue; after: ConnectionFactsValue }>(
+    '/connections/' + params.id + '/review',
+  );
 }
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
   return actionResult(async () => {
@@ -28,11 +31,12 @@ export default function Review() {
   return (
     <Page title={t('reviewConnection')} narrow>
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
+      <Alert severity="warning">{t('reviewConnectionHelp')}</Alert>
       <Panel title={t('before')}>
-        <JsonView value={data.before} />
+        <ConnectionFacts value={data.before} />
       </Panel>
       <Panel title={t('after')}>
-        <JsonView value={data.after} />
+        <ConnectionFacts value={data.after} />
       </Panel>
       <Form method="post">
         <Stack direction="row" spacing={2}>
