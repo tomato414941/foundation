@@ -90,6 +90,47 @@ test('JWEで保護した暗号鍵を保存し、不正な更新があっても�
   assert.deepEqual(await unwrap(stored!.private_wrap, prf, owner.actor.id), owner.keys.privateKey);
 });
 
+test('キーにも暗号鍵の包みを置き、そのキーで入ったセッションが包みを受け取る', async (t) => {
+  const f = await fixture(),
+    context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
+    app = await buildApp(context);
+  t.after(async () => {
+    await app.close();
+    await f.close();
+  });
+  const owner = await f.person();
+  const headers = { authorization: 'Bearer ' + owner.token };
+  const issued = await app.inject({
+    method: 'POST',
+    url: `/api/principals/${owner.actor.id}/credentials`,
+    headers,
+    payload: { name: 'Laptop' },
+  });
+  assert.equal(issued.statusCode, 201);
+  const { credential, token } = issued.json();
+  const before = await app.inject({ url: '/api/session', headers: { authorization: 'Bearer ' + token } });
+  assert.equal(before.json().credentialId, credential.id);
+  assert.equal(before.json().wrappedKey, null);
+  const wrappedKey = await wrap(owner.keys.privateKey, encode(token), owner.actor.id);
+  const placed = await app.inject({
+    method: 'PUT',
+    url: `/api/principals/${owner.actor.id}/credentials/${credential.id}/wrap`,
+    headers,
+    payload: { wrappedKey, publicKey: owner.keys.publicKey },
+  });
+  assert.equal(placed.statusCode, 200);
+  const session = await app.inject({ url: '/api/session', headers: { authorization: 'Bearer ' + token } });
+  assert.equal(session.json().wrappedKey, wrappedKey);
+  assert.deepEqual(await unwrap(session.json().wrappedKey, encode(token), owner.actor.id), owner.keys.privateKey);
+  const missing = await app.inject({
+    method: 'PUT',
+    url: `/api/principals/${owner.actor.id}/credentials/${randomUUID()}/wrap`,
+    headers,
+    payload: { wrappedKey, publicKey: owner.keys.publicKey },
+  });
+  assert.equal(missing.statusCode, 404);
+});
+
 test('MCPで初期化し、認証したプリンシパルとして共通APIを呼び出す', async (t) => {
   const f = await fixture(),
     context = await createContext(f.config, { db: f.db, mailer: f.mailer }),

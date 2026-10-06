@@ -226,6 +226,7 @@ export async function buildApp(context: Context) {
       ? await principals.view(request.actor, await principals.get(request.actor.id))
       : null,
     credentialId: request.actor?.credentialId ?? null,
+    wrappedKey: await authentication.wrapOf(request.actor),
     requestId: request.actor?.requestId ?? null,
     principals: request.actor && !request.actor.requestId ? await principals.accessible(request.actor) : [],
     server: { id: identity.id, name: 'Foundation', publicKey: identity.publicKey },

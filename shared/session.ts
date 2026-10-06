@@ -10,6 +10,7 @@ export const Features = z.object({
 export const Session = z.object({
   principal: Principal.nullable(),
   credentialId: Id.nullable(),
+  wrappedKey: WrappedKey.nullable(),
   requestId: Id.nullable(),
   server: z.object({ id: Id, name: Name, publicKey: PublicKey }),
   features: Features,

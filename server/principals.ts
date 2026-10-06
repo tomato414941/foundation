@@ -94,7 +94,7 @@ export class Principals {
       ]);
       for (const [credentialId, wrap] of Object.entries(wraps))
         await connection.query(
-          "UPDATE credentials SET private_wrap=$3 WHERE id=$1 AND principal_id=$2 AND kind='passkey'",
+          'UPDATE credentials SET private_wrap=$3 WHERE id=$1 AND principal_id=$2',
           [credentialId, id, WrappedKey.parse(wrap)],
         );
       await this.audit.record(id, actor.id, 'principal.publishKey', id, {}, connection);

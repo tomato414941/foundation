@@ -595,10 +595,19 @@ export class Authentication {
         fail(409, 'encryption_key_changed', 'The encryption key changed. Unlock it again.');
       if (decodeProtectedHeader(value).sub !== principalId)
         fail(400, 'invalid_envelope', 'Wrap the key for this account.');
-      await connection.query(
-        "UPDATE credentials SET private_wrap=$3 WHERE id=$1 AND principal_id=$2 AND kind='passkey'",
+      const changed = await connection.query(
+        'UPDATE credentials SET private_wrap=$3 WHERE id=$1 AND principal_id=$2',
         [credentialId, principalId, WrappedKey.parse(value)],
       );
+      if (!changed.rowCount) fail(404, 'not_found', 'The credential was not found.');
     });
+  }
+  async wrapOf(actor: Actor | null): Promise<WrappedEncryptionKey | null> {
+    if (!actor?.credentialId) return null;
+    const row = await this.db.one<{ private_wrap: string | null }>(
+      'SELECT private_wrap FROM credentials WHERE id=$1 AND principal_id=$2',
+      [actor.credentialId, actor.id],
+    );
+    return row?.private_wrap ? WrappedKey.parse(row.private_wrap) : null;
   }
 }
