@@ -1,0 +1,61 @@
+{
+  "id": "render",
+  "name": "Render",
+  "api": "https://api.render.com/v1",
+  "docs": "https://render.com/docs/api",
+  "console": "https://dashboard.render.com/u/settings",
+  "methods": {
+    "oauth": {
+      "name": "Render MCP · OAuth",
+      "kind": "oauth",
+      "config": {
+        "authorizeUrl": "https://api.render.com/v1/oauth/authorize",
+        "tokenUrl": "https://api.render.com/v1/oauth/token",
+        "clientAuth": "none",
+        "pkce": true,
+        "tokenFormat": "form",
+        "authorizeParams": {
+          "resource": "https://mcp.render.com/mcp"
+        },
+        "tokenParams": {
+          "resource": "https://mcp.render.com/mcp"
+        },
+        "outputs": {
+          "RENDER_MCP_ACCESS_TOKEN": "/accessToken",
+          "RENDER_MCP_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "revoke": {
+          "url": "https://api.render.com/v1/oauth/token/revoke",
+          "style": "rfc7009"
+        },
+        "scopes": {
+          "default": [],
+          "separator": " ",
+          "docs": "https://render.com/docs/mcp-server"
+        },
+        "hint": "Requires an OAuth client registered with Render for this Foundation instance's callback URL. Use RENDER_MCP_ACCESS_TOKEN with https://mcp.render.com/mcp."
+      },
+      "docs": "https://render.com/docs/mcp-server"
+    },
+    "token": {
+      "name": "Render REST API · API key",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "API key",
+            "secret": true
+          }
+        ],
+        "console": "https://dashboard.render.com/u/settings",
+        "outputs": {
+          "RENDER_API_KEY": "/token"
+        },
+        "hint": "Send RENDER_API_KEY as a Bearer token to the Render REST API."
+      },
+      "docs": "https://render.com/docs/api",
+      "console": "https://dashboard.render.com/u/settings"
+    }
+  }
+}

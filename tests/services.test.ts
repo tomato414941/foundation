@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fixture } from './support.js';
 import { Catalog } from '../server/catalog.js';
 import { OAuth } from '../server/oauth.js';
@@ -391,4 +391,181 @@ test('同時に届いた利用要求に同じ更新済みトークンを渡す',
   );
   assert.deepEqual(values, ['token-2', 'token-2', 'token-2', 'token-2']);
   assert.equal(exchanges, 2);
+});
+
+test('Renderの登録済みOAuthアプリで認可し、更新したトークンをMCPへ渡して接続を解除する', async (t) => {
+  const f = await setup();
+  t.after(() => f.close());
+  const owner = await f.person();
+  const entry = (await f.catalog.list(owner.actor)).find((service) => service.id === 'render')!;
+  assert.equal(entry.methods.oauth!.availability, 'app-required');
+  await assert.rejects(
+    () =>
+      f.services.begin(
+        owner.actor,
+        owner.actor.id,
+        ConnectionInput.parse({ methodId: entry.methods.oauth!.id }),
+        'browser',
+      ),
+    { code: 'app_required' },
+  );
+  const app = await f.services.createDefinition(owner.actor, owner.actor.id, {
+    kind: 'app',
+    name: 'Registered Render application',
+    methodId: entry.methods.oauth!.id,
+    clientId: 'registered-foundation-client',
+    fields: {},
+  });
+  const started = await f.services.begin(
+    owner.actor,
+    owner.actor.id,
+    ConnectionInput.parse({ serviceId: 'render', scheme: 'oauth', appId: app.id }),
+    'browser',
+  );
+  assert.equal(started.kind, 'authorize');
+  if (started.kind !== 'authorize') return;
+  const authorize = new URL(started.url);
+  assert.equal(authorize.origin + authorize.pathname, 'https://api.render.com/v1/oauth/authorize');
+  assert.equal(authorize.searchParams.get('client_id'), 'registered-foundation-client');
+  assert.equal(authorize.searchParams.get('redirect_uri'), 'https://foundation.test/oauth/callback');
+  assert.equal(authorize.searchParams.get('resource'), 'https://mcp.render.com/mcp');
+  assert.equal(authorize.searchParams.get('code_challenge_method'), 'S256');
+  let exchanges = 0,
+    revoked = false;
+  f.transport.respond = (request) => {
+    if (request.url === 'https://api.render.com/v1/oauth/token') {
+      const form = new URLSearchParams(request.body);
+      assert.equal(request.method, 'POST');
+      assert.equal(request.headers?.['content-type'], 'application/x-www-form-urlencoded');
+      assert.equal(request.headers?.authorization, undefined);
+      assert.equal(form.get('client_id'), 'registered-foundation-client');
+      assert.equal(form.get('client_secret'), null);
+      assert.equal(form.get('resource'), 'https://mcp.render.com/mcp');
+      exchanges++;
+      if (exchanges === 1) {
+        assert.equal(form.get('grant_type'), 'authorization_code');
+        assert.equal(form.get('code'), 'render-authorization-code');
+        assert.equal(form.get('redirect_uri'), authorize.searchParams.get('redirect_uri'));
+        assert.equal(
+          createHash('sha256').update(form.get('code_verifier')!).digest('base64url'),
+          authorize.searchParams.get('code_challenge'),
+        );
+      } else {
+        assert.equal(form.get('grant_type'), 'refresh_token');
+        assert.equal(form.get('refresh_token'), 'render-refresh-1');
+      }
+      return {
+        status: 200,
+        headers: {},
+        body: encode(
+          JSON.stringify({
+            access_token: 'render-access-' + exchanges,
+            refresh_token: 'render-refresh-' + exchanges,
+            expires_in: exchanges === 1 ? 30 : 3600,
+            token_type: 'Bearer',
+          }),
+        ),
+      };
+    }
+    if (request.url === 'https://mcp.render.com/mcp') {
+      assert.equal(request.headers?.authorization, 'Bearer render-access-2');
+      assert.equal(JSON.parse(request.body!).method, 'initialize');
+      return {
+        status: 200,
+        headers: {},
+        body: encode(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} })),
+      };
+    }
+    if (request.url === 'https://api.render.com/v1/oauth/token/revoke') {
+      assert.equal(request.method, 'POST');
+      assert.equal(request.headers?.['content-type'], 'application/x-www-form-urlencoded');
+      assert.deepEqual(Object.fromEntries(new URLSearchParams(request.body)), {
+        token: 'render-refresh-2',
+        client_id: 'registered-foundation-client',
+      });
+      revoked = true;
+      return { status: 200, headers: {}, body: encode('') };
+    }
+    throw new Error('Unexpected Render request: ' + request.url);
+  };
+  const connected = await f.services.callback(
+    authorize.searchParams.get('state')!,
+    'render-authorization-code',
+    'browser',
+  );
+  assert.equal(connected.kind, 'connected');
+  if (connected.kind !== 'connected') return;
+  assert.equal(connected.resource.kind, 'connection');
+  if (connected.resource.kind !== 'connection') return;
+  assert.equal(connected.resource.data.accountVerified, false);
+  const result = await f.http.request(
+    owner.actor,
+    owner.actor.id,
+    HttpRequest.parse({
+      url: 'https://mcp.render.com/mcp',
+      method: 'POST',
+      headers: { authorization: '', accept: 'application/json, text/event-stream' },
+      json: {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-11-25',
+          capabilities: {},
+          clientInfo: { name: 'Foundation', version: '1' },
+        },
+      },
+      bindings: [
+        {
+          pointer: '/headers/authorization',
+          parts: ['Bearer ', {
+            kind: 'connection', id: connected.resource.id, output: 'RENDER_MCP_ACCESS_TOKEN',
+          }],
+        },
+      ],
+    }),
+  );
+  assert.equal((result as { status: number }).status, 200);
+  const outputs = await f.services.outputs(owner.actor, await f.resources.get(connected.resource.id));
+  assert.equal(outputs.RENDER_MCP_ACCESS_TOKEN, 'render-access-2');
+  assert.ok(Number(outputs.RENDER_MCP_TOKEN_EXPIRES_AT) > Date.now());
+  assert.equal(exchanges, 2);
+  await f.services.remove(owner.actor, await f.resources.get(connected.resource.id));
+  assert.equal(revoked, true);
+});
+
+test('RenderのAPIキーを接続し、REST APIの呼び出しに使う', async (t) => {
+  const f = await setup();
+  t.after(() => f.close());
+  const owner = await f.person();
+  const connected = await f.services.begin(
+    owner.actor,
+    owner.actor.id,
+    ConnectionInput.parse({ serviceId: 'render', scheme: 'token', fields: { token: 'render-api-key' } }),
+    'browser',
+  );
+  assert.equal(connected.kind, 'connected');
+  if (connected.kind !== 'connected') return;
+  f.transport.respond = (request) => {
+    assert.equal(request.url, 'https://api.render.com/v1/services');
+    assert.equal(request.headers?.authorization, 'Bearer render-api-key');
+    return { status: 200, headers: {}, body: encode('[]') };
+  };
+  const result = await f.http.request(
+    owner.actor,
+    owner.actor.id,
+    HttpRequest.parse({
+      url: 'https://api.render.com/v1/services',
+      headers: { authorization: '' },
+      bindings: [
+        {
+          pointer: '/headers/authorization',
+          parts: ['Bearer ', {
+            kind: 'connection', id: connected.resource.id, output: 'RENDER_API_KEY',
+          }],
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(result, { status: 200, headers: {}, body: '[]' });
 });

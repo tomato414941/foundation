@@ -330,7 +330,8 @@ export class OAuth {
     else if (auth === 'body') {
       values.client_id = app.clientId;
       if (app.clientSecret) values.client_secret = app.clientSecret;
-    }
+    } else if (auth === 'none' && spec.clientAuth === 'none' && app.clientId)
+      values.client_id = app.clientId;
     let method = 'POST',
       body: string | undefined;
     if (spec.revoke.style === 'github') {
