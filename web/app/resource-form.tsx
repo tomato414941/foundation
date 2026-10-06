@@ -450,6 +450,7 @@ export default function ResourceForm() {
                     {data.kind === 'connection' && (
                       <>
                         <SelectField
+                          key={serviceId}
                           name="scheme"
                           label={t('method')}
                           value={scheme}
@@ -464,6 +465,7 @@ export default function ResourceForm() {
                         {scheme === 'oauth' && (
                           <>
                             <SelectField
+                              key={serviceId}
                               name="appId"
                               label={t('app')}
                               defaultValue={
