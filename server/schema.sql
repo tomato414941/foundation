@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS resources (
 );
 CREATE INDEX IF NOT EXISTS resources_owner ON resources(owner_id,kind,created_at,id);
 CREATE UNIQUE INDEX IF NOT EXISTS resources_name ON resources(owner_id,kind,name) WHERE kind <> 'connection';
+ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_owner_id_kind_name_key;
 CREATE TABLE IF NOT EXISTS object_blobs (
   id uuid PRIMARY KEY,
   resource_id uuid REFERENCES resources(id) ON DELETE SET NULL,

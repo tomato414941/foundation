@@ -140,6 +140,43 @@ test('同じ表示名で複数サービスへ接続し、それぞれの認証�
   );
 });
 
+test('既存データベースを更新し、登録済み接続を保持したまま同名で接続を追加する', async (t) => {
+  const f = await setup();
+  t.after(() => f.close());
+  await f.db.pool.query(
+    'ALTER TABLE resources ADD CONSTRAINT resources_owner_id_kind_name_key UNIQUE (owner_id,kind,name)',
+  );
+  const owner = await f.person();
+  const connect = (serviceId: string) =>
+    f.services.begin(
+      owner.actor,
+      owner.actor.id,
+      ConnectionInput.parse({
+        serviceId,
+        scheme: 'token',
+        name: 'My account',
+        fields: { token: serviceId + '-private-token' },
+      }),
+      'browser',
+    );
+  const first = await connect('github');
+  assert.equal(first.kind, 'connected');
+  if (first.kind !== 'connected') return;
+  await f.db.initialize();
+  const second = await connect('cloudflare');
+  assert.equal(second.kind, 'connected');
+  if (second.kind !== 'connected') return;
+  assert.notEqual(first.resource.id, second.resource.id);
+  assert.equal(
+    (await f.services.outputs(owner.actor, await f.resources.get(first.resource.id))).GH_TOKEN,
+    'github-private-token',
+  );
+  assert.equal(
+    (await f.services.outputs(owner.actor, await f.resources.get(second.resource.id))).CLOUDFLARE_API_TOKEN,
+    'cloudflare-private-token',
+  );
+});
+
 test('シークレットをHTTPヘッダーに渡し、返された秘密値を伏せて実行結果を返す', async (t) => {
   const f = await setup();
   t.after(() => f.close());
