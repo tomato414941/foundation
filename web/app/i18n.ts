@@ -26,6 +26,7 @@ const words: Record<string, [string, string]> = {
   apiDocs: ['APIリファレンス', 'API reference'],
   language: ['言語', 'Language'],
   menu: ['メニューを開く', 'Open navigation'],
+  breadcrumb: ['現在の位置', 'Current location'],
   workspace: ['操作対象', 'Workspace'],
   signout: ['ログアウト', 'Sign out'],
   signin: ['ログイン', 'Sign in'],

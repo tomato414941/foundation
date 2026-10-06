@@ -1,5 +1,12 @@
 import { Outlet, useLoaderData, useLocation, Link as RouterLink, useOutletContext } from 'react-router';
-import { Breadcrumbs, Box, Link, Typography } from '@mui/material';
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '../components/ui/breadcrumb';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/workspace';
 import { Principal } from '../../../shared/contracts';
@@ -33,14 +40,23 @@ export default function Workspace() {
   const section = location.pathname.split('/')[3];
   return (
     <>
-      <Box sx={{ maxWidth: 1120, mx: 'auto', mb: 3 }}>
-        <Breadcrumbs>
-          <Link component={RouterLink} to={'/p/' + data.principal.id}>
-            {data.principal.name}
-          </Link>
-          {section && <Typography color="text.primary">{t(section)}</Typography>}
-        </Breadcrumbs>
-      </Box>
+      <Breadcrumb aria-label={t('breadcrumb')} className="mx-auto mb-6 max-w-6xl">
+        <BreadcrumbList className="text-xs">
+          <BreadcrumbItem>
+            <BreadcrumbLink asChild>
+              <RouterLink to={'/p/' + data.principal.id}>{data.principal.name}</RouterLink>
+            </BreadcrumbLink>
+          </BreadcrumbItem>
+          {section && (
+            <>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem>
+                <BreadcrumbPage role={undefined}>{t(section)}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </>
+          )}
+        </BreadcrumbList>
+      </Breadcrumb>
       <Outlet context={data} />
     </>
   );

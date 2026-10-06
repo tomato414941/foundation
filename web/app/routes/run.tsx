@@ -1,5 +1,5 @@
+import { Button } from '../components/ui/button';
 import { Form, useActionData, useLoaderData } from 'react-router';
-import { Button } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/run';
 import { Run } from '../../../shared/contracts';
@@ -10,7 +10,9 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
   return api('/runs/' + params.id, { signal: request.signal }, Run);
 }
 export async function clientAction({ params }: Route.ClientActionArgs) {
-  return actionResult(async () => api('/runs/' + params.id + '/cancel', { method: 'POST', body: {} }, Run));
+  return actionResult(async () =>
+    api('/runs/' + params.id + '/cancel', { method: 'POST', body: {} }, Run),
+  );
 }
 export default function RunPage() {
   const { t } = useTranslation();
@@ -23,7 +25,7 @@ export default function RunPage() {
       actions={
         ['queued', 'running'].includes(data.state) && (
           <Form method="post">
-            <Button type="submit" color="error">
+            <Button type="submit" variant="destructive">
               {t('cancel')}
             </Button>
           </Form>

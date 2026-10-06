@@ -1,5 +1,6 @@
+import { InputField } from '../form-fields';
+import { Notice } from '../components';
 import { Form, redirect, useLoaderData, useActionData } from 'react-router';
-import { Alert, Stack, TextField } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/resource-transfer';
 import { Recipient, Resource, listOf } from '../../../shared/contracts';
@@ -42,12 +43,12 @@ export default function Transfer() {
   return (
     <Page title={t('transfer') + ' — ' + item.name} narrow>
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
-      <Alert severity="info">{t('transferHelp')}</Alert>
+      <Notice tone={'info'}>{t('transferHelp')}</Notice>
       <Form method="post">
-        <Stack spacing={3}>
-          <TextField name="to" label={t('transferTo')} required fullWidth />
+        <div className="flex min-w-0 flex-col gap-6">
+          <InputField name="to" label={t('transferTo')} required />
           <SaveBar back={resourcePath(item)} label="transfer" />
-        </Stack>
+        </div>
       </Form>
     </Page>
   );

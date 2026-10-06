@@ -1,5 +1,5 @@
+import { InputField, TextareaField } from '../form-fields';
 import { Form, redirect, useActionData } from 'react-router';
-import { Stack, TextField } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/request-new';
 import { ApprovalRequest } from '../../../shared/contracts';
@@ -36,9 +36,9 @@ export default function RequestNew() {
     <Page title={t('newRequest')} narrow>
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
       <Form method="post">
-        <Stack spacing={3}>
-          <TextField name="to" label={t('requestTo')} />
-          <TextField name="message" label={t('message')} multiline minRows={3} />
+        <div className="flex min-w-0 flex-col gap-6">
+          <InputField name="to" label={t('requestTo')} />
+          <TextareaField name="message" label={t('message')} rows={3} />
           <JsonField
             name="operations"
             label={t('requestOperations')}
@@ -51,16 +51,17 @@ export default function RequestNew() {
             ]}
             rows={10}
           />
-          <TextField
+          <InputField
             name="expires"
             label={t('expires') + ' (' + t('minutes') + ')'}
             type="number"
             defaultValue={30}
             required
-            slotProps={{ htmlInput: { min: 1, max: 1440 } }}
+            min={1}
+            max={1440}
           />
           <SaveBar back="/requests" label="create" />
-        </Stack>
+        </div>
       </Form>
     </Page>
   );

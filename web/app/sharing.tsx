@@ -1,18 +1,8 @@
+import { Button } from './components/ui/button';
+import { InputField, CheckboxField } from './form-fields';
 import { useState } from 'react';
 import { Form, useActionData, useLoaderData } from 'react-router';
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
-import {
-  Button,
-  Checkbox,
-  FormControlLabel,
-  FormGroup,
-  List,
-  ListItem,
-  ListItemText,
-  Stack,
-  TextField,
-  Typography,
-} from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { Action, Grant, Principal, Resource, listOf } from '../../shared/contracts';
 import type { ActionName } from '../../shared/contracts';
@@ -77,70 +67,73 @@ export default function Sharing() {
     <Page title={t('share') + ' — ' + data.target.name} narrow>
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
       <Panel title={t('granted')}>
-        <List disablePadding>
+        <ul className="divide-y divide-border">
           {data.grants.map((grant) => (
-            <ListItem key={grant.principalId} disableGutters sx={{ flexWrap: 'wrap', gap: 1 }}>
-              <ListItemText
-                primary={grant.principalName ?? grant.principalId}
-                secondary={grant.actions.map((action) => t('permission.' + action)).join('、')}
-              />
+            <li
+              key={grant.principalId}
+              className="flex flex-wrap items-center gap-3 py-4 first:pt-0 last:pb-0"
+            >
+              <div className="min-w-0 flex-1 space-y-1">
+                <div className="font-medium wrap-anywhere">
+                  {grant.principalName ?? grant.principalId}
+                </div>
+                <div className="text-xs leading-relaxed text-muted-foreground wrap-anywhere">
+                  {grant.actions.map((action) => t('permission.' + action)).join('、')}
+                </div>
+              </div>
               <Button
                 onClick={() => {
                   setId(grant.principalId);
                   setActions(grant.actions);
                 }}
+                variant="ghost"
               >
                 {t('edit')}
               </Button>
               <Form method="post">
                 <input type="hidden" name="principalId" value={grant.principalId} />
-                <Button type="submit" name="intent" value="remove" color="error">
+                <Button type="submit" name="intent" value="remove" variant="destructive">
                   {t('removeAccess')}
                 </Button>
               </Form>
-            </ListItem>
+            </li>
           ))}
-        </List>
-        {!data.grants.length && <Typography color="text.secondary">{t('empty')}</Typography>}
+        </ul>
+        {!data.grants.length && <p className="leading-relaxed text-muted-foreground">{t('empty')}</p>}
       </Panel>
       <Form method="post">
-        <Stack spacing={3}>
-          <TextField
+        <div className="flex min-w-0 flex-col gap-6">
+          <InputField
             name="principalId"
             label={t('recipient')}
             value={id}
             onChange={(event) => setId(event.target.value)}
             required
-            fullWidth
           />
           <Panel title={t('permissions')}>
-            <FormGroup>
+            <div className="grid gap-3">
               {data.target.permissions
                 .filter((action) => 'kind' in data.target || !['delete', 'transfer'].includes(action))
                 .map((action) => (
-                  <FormControlLabel
+                  <CheckboxField
+                    name="actions"
+                    value={action}
+                    checked={actions.includes(action)}
                     key={action}
                     label={t('permission.' + action)}
-                    control={
-                      <Checkbox
-                        name="actions"
-                        value={action}
-                        checked={actions.includes(action)}
-                        onChange={(event) =>
-                          setActions(
-                            event.target.checked
-                              ? [...actions, action]
-                              : actions.filter((value) => value !== action),
-                          )
-                        }
-                      />
+                    onCheckedChange={(checked) =>
+                      setActions(
+                        checked === true
+                          ? [...actions, action]
+                          : actions.filter((value) => value !== action),
+                      )
                     }
                   />
                 ))}
-            </FormGroup>
+            </div>
           </Panel>
           <SaveBar back={back} label="grant" />
-        </Stack>
+        </div>
       </Form>
     </Page>
   );

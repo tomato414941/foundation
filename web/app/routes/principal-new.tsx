@@ -1,5 +1,5 @@
+import { InputField } from '../form-fields';
 import { Form, redirect, useActionData } from 'react-router';
-import { Stack, TextField, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/principal-new';
 import { Principal } from '../../../shared/contracts';
@@ -21,13 +21,13 @@ export default function PrincipalNew() {
   const result = useActionData<typeof clientAction>();
   return (
     <Page title={t('createPrincipal')} narrow>
-      <Typography color="text.secondary">{t('principalHelp')}</Typography>
+      <p className="leading-relaxed text-muted-foreground">{t('principalHelp')}</p>
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
       <Form method="post">
-        <Stack spacing={3}>
-          <TextField label={t('name')} name="name" required fullWidth autoFocus />
+        <div className="flex min-w-0 flex-col gap-6">
+          <InputField label={t('name')} name="name" required autoFocus />
           <SaveBar back=".." label="create" />
-        </Stack>
+        </div>
       </Form>
     </Page>
   );

@@ -1,5 +1,7 @@
+import { Button } from '../components/ui/button';
+import { SelectItem } from '../components/ui/select';
+import { InputField, SelectField } from '../form-fields';
 import { Form, Link, useActionData, useLoaderData, useSearchParams } from 'react-router';
-import { Button, List, ListItem, ListItemText, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/principals';
 import { Relation, listOf } from '../../../shared/contracts';
@@ -43,64 +45,62 @@ export default function Principals() {
       title={t('principals')}
       actions={
         principal.permissions.includes('create') && (
-          <Button component={Link} to="new" variant="contained">
-            {t('createPrincipal')}
+          <Button variant="default" asChild>
+            <Link to="new">{t('createPrincipal')}</Link>
           </Button>
         )
       }
     >
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
       <Panel title={t('connectedPrincipals')}>
-        <List disablePadding>
+        <ul className="divide-y divide-border">
           {data.items.map((item) => {
             const incoming = item.principalId === principal.id;
             const id = incoming ? item.subjectId : item.principalId;
             return (
-              <ListItem key={item.id} disableGutters sx={{ flexWrap: 'wrap', gap: 1 }}>
-                <ListItemText
-                  primary={<Link to={'/p/' + id}>{incoming ? item.subjectName : item.principalName}</Link>}
-                  secondary={`${item.subjectName} → ${t(item.relation)} → ${item.principalName}`}
-                />
+              <li key={item.id} className="flex flex-wrap items-center gap-3 py-4 first:pt-0 last:pb-0">
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="font-medium wrap-anywhere">
+                    {<Link to={'/p/' + id}>{incoming ? item.subjectName : item.principalName}</Link>}
+                  </div>
+                  <div className="text-xs leading-relaxed text-muted-foreground wrap-anywhere">{`${item.subjectName} → ${t(item.relation)} → ${item.principalName}`}</div>
+                </div>
                 <Copy value={id} />
                 {principal.permissions.includes('share') && item.relation !== 'owner' && (
                   <Form method="post">
                     <input type="hidden" name="subjectId" value={item.subjectId} />
                     <input type="hidden" name="principalId" value={item.principalId} />
                     <input type="hidden" name="relation" value={item.relation} />
-                    <Button type="submit" name="intent" value="remove" color="error">
+                    <Button type="submit" name="intent" value="remove" variant="destructive">
                       {t('removeAccess')}
                     </Button>
                   </Form>
                 )}
-              </ListItem>
+              </li>
             );
           })}
-        </List>
-        {!data.items.length && <Typography color="text.secondary">{t('empty')}</Typography>}
+        </ul>
+        {!data.items.length && <p className="leading-relaxed text-muted-foreground">{t('empty')}</p>}
         <Paging next={data.next} search={search} />
       </Panel>
       {principal.permissions.includes('share') && (
         <Panel title={t('add')}>
           <Form method="post">
-            <Stack spacing={3}>
-              <TextField name="subjectId" label={t('subject')} required fullWidth />
-              <TextField select name="relation" label={t('relation')} defaultValue="agent">
+            <div className="flex min-w-0 flex-col gap-6">
+              <InputField name="subjectId" label={t('subject')} required />
+              <SelectField name="relation" label={t('relation')} defaultValue="agent">
                 {['agent', 'member', 'payer'].map((value) => (
-                  <MenuItem key={value} value={value}>
+                  <SelectItem key={value} value={value}>
                     {t(value)}
-                  </MenuItem>
+                  </SelectItem>
                 ))}
-              </TextField>
-              <Typography variant="body2" color="text.secondary">
-                {t('relationHelp')}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {t('paymentHelp')}
-              </Typography>
-              <Button type="submit" variant="contained">
+              </SelectField>
+              <p className="leading-relaxed text-muted-foreground text-sm">{t('relationHelp')}</p>
+              <p className="leading-relaxed text-muted-foreground text-sm">{t('paymentHelp')}</p>
+              <Button type="submit" variant="default">
                 {t('add')}
               </Button>
-            </Stack>
+            </div>
           </Form>
         </Panel>
       )}

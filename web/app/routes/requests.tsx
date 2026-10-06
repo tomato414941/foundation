@@ -1,5 +1,5 @@
+import { Button } from '../components/ui/button';
 import { Link, useLoaderData, useSearchParams } from 'react-router';
-import { Button, List, ListItemButton, ListItemText, Paper } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/requests';
 import { ApprovalRequest, listOf } from '../../../shared/contracts';
@@ -25,29 +25,36 @@ export default function Requests() {
     <Page
       title={t('requests')}
       actions={
-        <Button component={Link} to="new" variant="contained">
-          {t('newRequest')}
+        <Button variant="default" asChild>
+          <Link to="new">{t('newRequest')}</Link>
         </Button>
       }
     >
       {data.items.length ? (
-        <Paper variant="outlined">
-          <List>
+        <div className="overflow-hidden rounded-xl border bg-card">
+          <ul className="divide-y divide-border">
             {data.items.map((item) => (
-              <ListItemButton key={item.id} component={Link} to={'/requests/' + item.id}>
-                <ListItemText
-                  primary={item.message || item.from.name}
-                  secondary={
-                    <>
-                      {item.from.name} → {item.to?.name ?? '—'} · <DateText value={item.createdAt} />
-                    </>
-                  }
-                />
-                <State value={item.state} />
-              </ListItemButton>
+              <li key={item.id}>
+                <Link
+                  to={'/requests/' + item.id}
+                  className="flex items-center gap-4 p-4 transition-colors hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="font-medium wrap-anywhere">{item.message || item.from.name}</div>
+                    <div className="text-xs leading-relaxed text-muted-foreground wrap-anywhere">
+                      {
+                        <>
+                          {item.from.name} → {item.to?.name ?? '—'} · <DateText value={item.createdAt} />
+                        </>
+                      }
+                    </div>
+                  </div>
+                  <State value={item.state} />
+                </Link>
+              </li>
             ))}
-          </List>
-        </Paper>
+          </ul>
+        </div>
       ) : (
         <Empty />
       )}

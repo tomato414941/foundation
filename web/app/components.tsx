@@ -1,29 +1,35 @@
 import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { Link as RouterLink, Form, useNavigation, useRevalidator } from 'react-router';
+import { Link, Form, useNavigation, useRevalidator } from 'react-router';
 import {
-  Alert,
-  Box,
-  Button,
-  Chip,
-  CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
-  Divider,
-  IconButton,
-  Link,
-  Paper,
-  Stack,
-  TextField,
-  Tooltip,
-  Typography,
-} from '@mui/material';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Copy as CopyIcon,
+  ExternalLink as ExternalLinkIcon,
+  Info,
+  LoaderCircle,
+  CircleCheck,
+  TriangleAlert,
+} from 'lucide-react';
+import { cn } from 'cn';
 import { useTranslation } from 'react-i18next';
 import { errorCode } from './api';
+import { Button } from './components/ui/button';
+import { Badge } from './components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from './components/ui/card';
+import { Alert, AlertDescription } from './components/ui/alert';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from './components/ui/dialog';
+import { Tooltip, TooltipContent, TooltipTrigger } from './components/ui/tooltip';
+import { TextareaField } from './form-fields';
 
 export function Page({
   title,
@@ -37,80 +43,105 @@ export function Page({
   narrow?: boolean;
 }) {
   return (
-    <Stack spacing={3} sx={{ maxWidth: narrow ? 720 : 1120, width: '100%', mx: 'auto' }}>
-      <Stack
-        direction={{ xs: 'column', sm: 'row' }}
-        spacing={2}
-        sx={{ justifyContent: 'space-between', alignItems: { sm: 'center' } }}
-      >
-        <Typography variant="h4" component="h1" sx={{ overflowWrap: 'anywhere' }}>
-          {title}
-        </Typography>
-        {actions && (
-          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-            {actions}
-          </Stack>
-        )}
-      </Stack>
+    <section className={cn('mx-auto flex w-full flex-col gap-6', narrow ? 'max-w-2xl' : 'max-w-6xl')}>
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+        <h1 className="min-w-0 text-2xl font-semibold tracking-tight wrap-anywhere">{title}</h1>
+        {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+      </div>
       {children}
-    </Stack>
+    </section>
   );
 }
+
 export function Panel({ title, children }: { title?: string; children: ReactNode }) {
   return (
-    <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
-      <Stack spacing={2}>
-        {title && (
-          <Typography variant="h6" component="h2" sx={{ overflowWrap: 'anywhere' }}>
-            {title}
-          </Typography>
-        )}
-        {children}
-      </Stack>
-    </Paper>
+    <Card className="gap-5 py-5 shadow-none sm:py-6">
+      {title && (
+        <CardHeader className="px-5 sm:px-6">
+          <CardTitle className="text-sm font-semibold wrap-anywhere">
+            <h2>{title}</h2>
+          </CardTitle>
+        </CardHeader>
+      )}
+      <CardContent className="flex min-w-0 flex-col gap-4 px-5 sm:px-6">{children}</CardContent>
+    </Card>
   );
 }
+
+export function Notice({
+  tone = 'info',
+  children,
+  action,
+}: {
+  tone?: 'info' | 'success' | 'warning' | 'error';
+  children: ReactNode;
+  action?: ReactNode;
+}) {
+  const Icon =
+    tone === 'success' ? CircleCheck : tone === 'warning' || tone === 'error' ? TriangleAlert : Info;
+  return (
+    <Alert
+      variant={tone === 'error' ? 'destructive' : 'default'}
+      className={cn(
+        'rounded-lg',
+        tone === 'success' && 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300',
+        tone === 'warning' && 'border-amber-500/20 bg-amber-500/5 text-amber-300',
+      )}
+    >
+      <Icon className="size-4" aria-hidden="true" />
+      <AlertDescription className="flex flex-wrap items-center justify-between gap-3 text-inherit">
+        <span className="min-w-0 leading-relaxed">{children}</span>
+        {action}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 export function ErrorNotice({ error }: { error?: string | null }) {
   const { t } = useTranslation();
   return error ? (
-    <Alert severity="error" role="alert">
-      {t('errors.' + error, { defaultValue: t('failure') })}
-    </Alert>
+    <Notice tone="error">{t('errors.' + error, { defaultValue: t('failure') })}</Notice>
   ) : null;
 }
+
 export function Busy() {
   const { t } = useTranslation();
   return (
-    <Box sx={{ display: 'flex', p: 6, justifyContent: 'center' }}>
-      <CircularProgress aria-label={t('loading')} />
-    </Box>
+    <div className="flex justify-center p-12" role="status">
+      <LoaderCircle className="size-5 animate-spin text-muted-foreground" aria-hidden="true" />
+      <span className="sr-only">{t('loading')}</span>
+    </div>
   );
 }
+
 export function Empty({ search = false }: { search?: boolean }) {
   const { t } = useTranslation();
   return (
-    <Paper variant="outlined" sx={{ p: 5, textAlign: 'center' }}>
-      <Typography color="text.secondary">{t(search ? 'noResults' : 'empty')}</Typography>
-    </Paper>
+    <div className="rounded-xl border border-dashed py-16 text-center text-muted-foreground">
+      {t(search ? 'noResults' : 'empty')}
+    </div>
   );
 }
+
 export function State({ value }: { value: string }) {
   const { t } = useTranslation();
   return (
-    <Chip
-      size="small"
-      label={t('state.' + value, { defaultValue: value })}
-      color={
-        ['ready', 'succeeded', 'approved', 'running'].includes(value)
-          ? 'success'
-          : ['failed', 'reconnect'].includes(value)
-            ? 'warning'
-            : 'default'
-      }
-      variant="outlined"
-    />
+    <Badge
+      variant="outline"
+      className={cn(
+        'gap-1.5 font-normal',
+        ['ready', 'succeeded', 'approved', 'running'].includes(value) &&
+          'border-emerald-500/20 bg-emerald-500/5 text-emerald-300',
+        ['failed', 'reconnect', 'reconnect_required'].includes(value) &&
+          'border-amber-500/20 bg-amber-500/5 text-amber-300',
+      )}
+    >
+      <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+      {t('state.' + value, { defaultValue: value })}
+    </Badge>
   );
 }
+
 export function DateText({ value }: { value: string | null }) {
   const { i18n } = useTranslation();
   return (
@@ -123,6 +154,7 @@ export function DateText({ value }: { value: string | null }) {
     </>
   );
 }
+
 export function Bytes({ value }: { value: number }) {
   const { i18n } = useTranslation();
   const power = value < 1024 ? 0 : Math.min(3, Math.floor(Math.log(value) / Math.log(1024)));
@@ -135,38 +167,24 @@ export function Bytes({ value }: { value: number }) {
     </>
   );
 }
+
 export function Detail({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '160px minmax(0,1fr)' }, gap: 1 }}>
-      <Typography component="dt" color="text.secondary">
-        {label}
-      </Typography>
-      <Box component="dd" sx={{ m: 0, overflowWrap: 'anywhere' }}>
-        {children}
-      </Box>
-    </Box>
+    <dl className="grid min-w-0 gap-1.5 sm:grid-cols-[160px_minmax(0,1fr)] sm:items-baseline sm:gap-4">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 leading-relaxed wrap-anywhere">{children}</dd>
+    </dl>
   );
 }
+
 export function JsonView({ value }: { value: unknown }) {
   return (
-    <Box
-      component="pre"
-      sx={{
-        m: 0,
-        p: 2,
-        bgcolor: 'action.hover',
-        borderRadius: 1,
-        overflow: 'auto',
-        maxHeight: 480,
-        whiteSpace: 'pre-wrap',
-        overflowWrap: 'anywhere',
-        fontSize: 13,
-      }}
-    >
+    <pre className="m-0 max-h-[480px] overflow-auto rounded-lg border bg-background/60 p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere">
       {JSON.stringify(value, null, 2)}
-    </Box>
+    </pre>
   );
 }
+
 export function JsonField({
   name,
   label,
@@ -182,21 +200,18 @@ export function JsonField({
 }) {
   const { t } = useTranslation();
   return (
-    <TextField
+    <TextareaField
       name={name}
       label={label}
       defaultValue={JSON.stringify(value, null, 2)}
-      multiline
-      minRows={rows}
-      fullWidth
-      helperText={helperText ?? t('jsonHelp')}
-      slotProps={{
-        input: { sx: { fontFamily: 'monospace', fontSize: 13 } },
-        htmlInput: { spellCheck: false },
-      }}
+      rows={rows}
+      hint={helperText ?? t('jsonHelp')}
+      spellCheck={false}
+      className="font-mono text-xs"
     />
   );
 }
+
 export function Copy({ value }: { value: string }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -209,24 +224,34 @@ export function Copy({ value }: { value: string }) {
   }, [copied]);
   return (
     <>
-      <Tooltip title={t(copied ? 'copied' : 'copy')}>
-        <IconButton
-          size="small"
-          aria-label={t(copied ? 'copied' : 'copy')}
-          onClick={() =>
-            task.run(async () => {
-              await navigator.clipboard.writeText(value);
-              setCopied(true);
-            })
-          }
-        >
-          <ContentCopyIcon fontSize="small" />
-        </IconButton>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="ml-1 align-middle text-muted-foreground"
+            aria-label={t(copied ? 'copied' : 'copy')}
+            onClick={() =>
+              task.run(async () => {
+                await navigator.clipboard.writeText(value);
+                setCopied(true);
+              })
+            }
+          >
+            {copied ? (
+              <Check className="size-3.5 text-emerald-400" />
+            ) : (
+              <CopyIcon className="size-3.5" />
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{t(copied ? 'copied' : 'copy')}</TooltipContent>
       </Tooltip>
       <ErrorNotice error={task.error} />
     </>
   );
 }
+
 export function SaveBar({
   back,
   label = 'save',
@@ -239,16 +264,17 @@ export function SaveBar({
   const { t } = useTranslation();
   const navigation = useNavigation();
   return (
-    <Stack direction="row" spacing={2}>
-      <Button variant="contained" type="submit" loading={busy || navigation.state === 'submitting'}>
+    <div className="flex flex-wrap items-center gap-2 pt-2">
+      <Button type="submit" loading={busy || navigation.state === 'submitting'}>
         {t(label)}
       </Button>
-      <Button component={RouterLink} to={back}>
-        {t('cancel')}
+      <Button asChild variant="ghost">
+        <Link to={back}>{t('cancel')}</Link>
       </Button>
-    </Stack>
+    </div>
   );
 }
+
 export function Confirm({
   label,
   name,
@@ -269,35 +295,40 @@ export function Confirm({
     if (navigation.state === 'loading') setOpen(false);
   }, [navigation.state]);
   return (
-    <>
-      <Button color={danger ? 'error' : 'primary'} onClick={() => setOpen(true)}>
-        {label}
-      </Button>
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="xs" fullWidth>
-        <Form method="post">
-          <DialogTitle>{danger ? t('deleteTitle', { name }) : label}</DialogTitle>
-          <DialogContent>
-            <Stack spacing={2}>
-              <DialogContentText>{body ?? t('deleteBody')}</DialogContentText>
-              {children}
-            </Stack>
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setOpen(false)}>{t('cancel')}</Button>
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button
+          variant="ghost"
+          className={danger ? 'text-destructive hover:text-destructive' : undefined}
+        >
+          {label}
+        </Button>
+      </DialogTrigger>
+      <DialogContent showCloseButton={false}>
+        <Form method="post" className="space-y-5">
+          <DialogHeader>
+            <DialogTitle>{danger ? t('deleteTitle', { name }) : label}</DialogTitle>
+            <DialogDescription>{body ?? t('deleteBody')}</DialogDescription>
+          </DialogHeader>
+          {children}
+          <DialogFooter>
+            <Button variant="outline" autoFocus onClick={() => setOpen(false)}>
+              {t('cancel')}
+            </Button>
             <Button
               type="submit"
-              variant="contained"
-              color={danger ? 'error' : 'primary'}
+              variant={danger ? 'destructive' : 'default'}
               loading={navigation.state === 'submitting'}
             >
               {label}
             </Button>
-          </DialogActions>
+          </DialogFooter>
         </Form>
-      </Dialog>
-    </>
+      </DialogContent>
+    </Dialog>
   );
 }
+
 export function useTask() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -319,6 +350,7 @@ export function useTask() {
     },
   };
 }
+
 export function usePolling(active: boolean, milliseconds = 2500) {
   const revalidator = useRevalidator();
   useEffect(() => {
@@ -330,6 +362,7 @@ export function usePolling(active: boolean, milliseconds = 2500) {
     return () => clearInterval(timer);
   }, [active, milliseconds, revalidator]);
 }
+
 export function Paging({ next, search }: { next: string | null; search: URLSearchParams }) {
   const { t } = useTranslation();
   const more = new URLSearchParams(search);
@@ -337,25 +370,37 @@ export function Paging({ next, search }: { next: string | null; search: URLSearc
   const first = new URLSearchParams(search);
   first.delete('after');
   return next || search.has('after') ? (
-    <Stack component="nav" aria-label={t('pagination')} direction="row" spacing={2}>
+    <nav aria-label={t('pagination')} className="flex items-center justify-end gap-2">
       {search.has('after') && (
-        <Button component={RouterLink} to={'?' + first}>
-          {t('firstPage')}
+        <Button asChild variant="outline">
+          <Link to={'?' + first}>
+            <ChevronLeft className="size-4" />
+            {t('firstPage')}
+          </Link>
         </Button>
       )}
       {next && (
-        <Button component={RouterLink} to={'?' + more}>
-          {t('more')}
+        <Button asChild variant="outline">
+          <Link to={'?' + more}>
+            {t('more')}
+            <ChevronRight className="size-4" />
+          </Link>
         </Button>
       )}
-    </Stack>
+    </nav>
   ) : null;
 }
+
 export function ExternalLink({ href, children }: { href: string; children: ReactNode }) {
   return (
-    <Link href={href} target="_blank" rel="noopener noreferrer">
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex w-fit items-center gap-1.5 text-sm underline-offset-4 hover:underline"
+    >
       {children}
-    </Link>
+      <ExternalLinkIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+    </a>
   );
 }
-export { Divider };

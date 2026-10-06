@@ -1,5 +1,5 @@
+import { Button } from '../components/ui/button';
 import { Form, redirect, useActionData, useLoaderData } from 'react-router';
-import { Button, Stack } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/service-review';
 import type { JsonValue } from '../../../shared/contracts';
@@ -9,12 +9,17 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
   const current = await session(request);
   if (!current.principal)
     throw redirect('/signin?returnTo=' + encodeURIComponent(new URL(request.url).pathname));
-  return api<{ before: JsonValue; after: JsonValue }>('/connections/' + params.id + '/review');
+  return api<{
+    before: JsonValue;
+    after: JsonValue;
+  }>('/connections/' + params.id + '/review');
 }
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
   return actionResult(async () => {
     const form = await request.formData();
-    const result = await api<{ returnTo?: string }>('/connections/' + params.id + '/review', {
+    const result = await api<{
+      returnTo?: string;
+    }>('/connections/' + params.id + '/review', {
       method: 'POST',
       body: { accept: formText(form, 'accept') === 'true' },
     });
@@ -35,14 +40,14 @@ export default function Review() {
         <JsonView value={data.after} />
       </Panel>
       <Form method="post">
-        <Stack direction="row" spacing={2}>
-          <Button type="submit" name="accept" value="true" variant="contained">
+        <div className="flex min-w-0 flex-wrap items-center gap-4">
+          <Button type="submit" name="accept" value="true" variant="default">
             {t('accept')}
           </Button>
-          <Button type="submit" name="accept" value="false">
+          <Button type="submit" name="accept" value="false" variant="ghost">
             {t('cancel')}
           </Button>
-        </Stack>
+        </div>
       </Form>
     </Page>
   );
