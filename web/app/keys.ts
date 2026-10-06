@@ -51,7 +51,7 @@ export async function getKey(id: string, publicKey?: PublicEncryptionKey | null)
     held.get(id) ??
     ((await stored('readonly', (store) => store.get(id)).catch(() => null)) as CryptoKey | null)
   );
-  if (key && publicKey && (key.algorithm.name === 'X25519' ? 'X25519' : (key.algorithm as EcKeyAlgorithm).namedCurve) !== publicKey.crv) {
+  if (key && (key.algorithm.name !== 'ECDH' || (key.algorithm as EcKeyAlgorithm).namedCurve !== (publicKey?.crv ?? 'P-256'))) {
     await forget(id);
     return null;
   }
@@ -64,7 +64,7 @@ async function forget(id: string) {
 }
 function matchesPublicKey(key: JWK, publicKey: PublicEncryptionKey | null) {
   return publicKey && key.kty === publicKey.kty && key.crv === publicKey.crv && key.x === publicKey.x &&
-    (publicKey.kty !== 'EC' || key.y === publicKey.y);
+    key.y === publicKey.y;
 }
 async function keep(id: string, key: JWK) {
   const cryptoKey = await hold(key);
@@ -118,9 +118,7 @@ export async function authenticate(principalId?: string, credentialId?: string, 
       const pair = wrapping
         ? {
             privateKey: wrapping,
-            publicKey: PublicKey.parse(wrapping.kty === 'OKP'
-              ? { kty: 'OKP', crv: 'X25519', x: wrapping.x }
-              : { kty: 'EC', crv: 'P-256', x: wrapping.x, y: wrapping.y }),
+            publicKey: PublicKey.parse({ kty: wrapping.kty, crv: wrapping.crv, x: wrapping.x, y: wrapping.y }),
           }
         : await newEncryptionKey();
       const wrappedKey = await wrap(pair.privateKey, proof.secret, result.principalId);

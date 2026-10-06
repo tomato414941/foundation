@@ -8,9 +8,8 @@ import {
   exportJWK,
 } from 'jose';
 import type { JWK } from 'jose';
-import { P256Key, Sealed, WrappedKey } from './contracts.js';
-import type { P256PublicKey, PublicEncryptionKey, SealedContent, WrappedEncryptionKey } from './contracts.js';
-import { openLegacy, unwrapLegacy } from './legacy-encryption.js';
+import { PublicKey, Sealed, WrappedKey } from './contracts.js';
+import type { PublicEncryptionKey, SealedContent, WrappedEncryptionKey } from './contracts.js';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -29,10 +28,10 @@ export function unbase64url(text: string): Uint8Array {
     character.charCodeAt(0),
   );
 }
-export async function newEncryptionKey(): Promise<{ publicKey: P256PublicKey; privateKey: JWK }> {
+export async function newEncryptionKey(): Promise<{ publicKey: PublicEncryptionKey; privateKey: JWK }> {
   const pair = await generateKeyPair(agreement, { crv: 'P-256', extractable: true });
   return {
-    publicKey: P256Key.parse(await exportJWK(pair.publicKey)),
+    publicKey: PublicKey.parse(await exportJWK(pair.publicKey)),
     privateKey: await exportJWK(pair.privateKey),
   };
 }
@@ -62,7 +61,6 @@ export async function open(
     throw new Error('The encrypted content belongs to a different item.');
   const recipient = sealed.recipients.find((value) => value.header.kid === id);
   if (!recipient) throw new Error('This principal cannot decrypt the content.');
-  if ('format' in sealed) return openLegacy(sealed, privateKey, id);
   const key = privateKey instanceof CryptoKey ? privateKey : await importJWK(privateKey, agreement);
   const result = await generalDecrypt({ ...sealed, recipients: [recipient] }, key, {
     keyManagementAlgorithms: [agreement],
@@ -90,8 +88,7 @@ export async function wrap(privateKey: JWK, prf: Uint8Array, principalId: string
     .setProtectedHeader({ alg: 'dir', enc: encryption, sub: principalId })
     .encrypt(await wrappingKey(prf)));
 }
-export async function unwrap(value: string, prf: Uint8Array, principalId: string, publicKey?: PublicEncryptionKey | null): Promise<JWK> {
-  if (value.startsWith('x25519:')) return unwrapLegacy(value.slice(7), prf, publicKey);
+export async function unwrap(value: string, prf: Uint8Array, principalId: string): Promise<JWK> {
   const result = await compactDecrypt(value, await wrappingKey(prf), {
     keyManagementAlgorithms: ['dir'],
     contentEncryptionAlgorithms: [encryption],

@@ -80,7 +80,6 @@ export class KeySharing {
       if (update.version !== item.version) fail(409, 'changed', 'A secret changed. Reload before sharing.');
       const addressed = new Set(update.sealed.recipients.map((recipient) => recipient.header.kid));
       if (
-        'format' in update.sealed ||
         update.sealed.aad !== base64url(encode('resource:' + item.id)) ||
         addressed.size !== item.recipients.length ||
         update.sealed.recipients.length !== addressed.size ||

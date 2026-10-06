@@ -5,14 +5,13 @@ import { fail } from './errors.js';
 
 export function samePublicKey(left: PublicEncryptionKey | null, right: PublicEncryptionKey | null) {
   return left?.kty === right?.kty && left?.crv === right?.crv && left?.x === right?.x &&
-    (left?.kty !== 'EC' || (right?.kty === 'EC' && left.y === right.y));
+    left?.y === right?.y;
 }
 
 export function validateRecipientKeys(
   sealed: SealedContent,
   recipients: Array<{ id: string; publicKey: PublicEncryptionKey }>,
 ) {
-  if ('format' in sealed) fail(400, 'invalid_envelope', 'Use JWE to save encrypted content.');
   let header;
   try { header = decodeProtectedHeader(sealed); }
   catch { fail(400, 'invalid_envelope', 'Use a valid encrypted envelope.'); }

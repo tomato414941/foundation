@@ -19,8 +19,8 @@ import type { Authorization, Actor } from './authorization.js';
 import type { Audit } from './audit.js';
 import type { Mailer } from './mail.js';
 import type { Configuration } from './config.js';
-import { Credential, P256Key, PublicKey, WrappedKey } from '../shared/contracts.js';
-import type { P256PublicKey, PublicEncryptionKey, WrappedEncryptionKey } from '../shared/contracts.js';
+import { Credential, PublicKey, WrappedKey } from '../shared/contracts.js';
+import type { PublicEncryptionKey, WrappedEncryptionKey } from '../shared/contracts.js';
 import { digest, token } from './vault.js';
 import { fail, required } from './errors.js';
 import { samePublicKey } from './encryption-validation.js';
@@ -171,8 +171,8 @@ export class Authentication {
     );
     return { credential: this.credentialView(required(result)), token: raw };
   }
-  async enroll(name: string, key: P256PublicKey) {
-    await importJWK(P256Key.parse(key), 'ECDH-ES+A256KW');
+  async enroll(name: string, key: PublicEncryptionKey) {
+    await importJWK(PublicKey.parse(key), 'ECDH-ES+A256KW');
     return this.db.transaction(async (connection) => {
       const principal = await this.principals.create(name, key, undefined, connection);
       const result = await this.issueKey(principal.id, name, null, null, connection);
@@ -439,7 +439,7 @@ export class Authentication {
   }
   async verifyPasskey(
     browser: string,
-    input: { challengeId: string; credential: unknown; publicKey?: P256PublicKey; existingPublicKey?: PublicEncryptionKey; wrappedKey?: WrappedEncryptionKey },
+    input: { challengeId: string; credential: unknown; publicKey?: PublicEncryptionKey; existingPublicKey?: PublicEncryptionKey; wrappedKey?: WrappedEncryptionKey },
     actor?: Actor,
   ): Promise<
     SigninResult & {
@@ -479,7 +479,7 @@ export class Authentication {
       principalId = String(row.data.principalId);
       credentialId = randomUUID();
       wrappedKey = input.wrappedKey ? WrappedKey.parse(input.wrappedKey) : null;
-      if (input.publicKey) await importJWK(P256Key.parse(input.publicKey), 'ECDH-ES+A256KW');
+      if (input.publicKey) await importJWK(PublicKey.parse(input.publicKey), 'ECDH-ES+A256KW');
       await this.db.transaction(async (connection) => {
         if (row.principal_id) {
           await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
@@ -501,10 +501,7 @@ export class Authentication {
           const current = await this.principals.get(principalId, connection);
           if (
             current.public_key &&
-            (current.public_key.kty !== input.publicKey.kty ||
-              current.public_key.x !== input.publicKey.x ||
-              (current.public_key.kty === 'EC' &&
-                (input.publicKey.kty !== 'EC' || current.public_key.y !== input.publicKey.y)))
+            !samePublicKey(current.public_key, input.publicKey)
           )
             fail(409, 'key_exists', 'The encryption key cannot be replaced.');
           if (!current.public_key)
