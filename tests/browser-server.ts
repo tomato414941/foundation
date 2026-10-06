@@ -3,9 +3,6 @@ import { MemoryObjects, MemoryPayments, MemoryRunner } from './fakes.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { Worker } from '../server/worker.js';
-import { createCipheriv, hkdfSync, randomBytes, randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { encode, seal } from '../shared/encryption.js';
 
 const fixtureData = await fixture();
 const origin = 'http://localhost:3458';
@@ -41,37 +38,6 @@ app.post<{ Body: { principalId: string } }>('/__test/payment', async (request) =
     [request.body.principalId, 'customer-' + request.body.principalId],
   );
   return { ok: true };
-});
-app.post<{ Body: { principalId: string; prf: string } }>('/__test/existing-encryption', async (request) => {
-  const sample = JSON.parse(await readFile(new URL('./fixtures/legacy-encryption.json', import.meta.url), 'utf8'));
-  const { principalId, prf } = request.body;
-  const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', hkdfSync('sha256', Buffer.from(prf, 'base64url'), '', 'foundation-key', 32), iv);
-  const content = Buffer.concat([cipher.update(Buffer.from(sample.privateKey.d, 'base64url')), cipher.final()]);
-  const wrapped = Buffer.concat([iv, cipher.getAuthTag(), content]).toString('base64url');
-  const id = randomUUID();
-  const jweId = randomUUID();
-  const recipients = [{ id: principalId, publicKey: sample.publicKey }, { id: context.identity.id, publicKey: context.identity.publicKey }];
-  const jwe = await seal(encode('Current-format secret'), recipients, 'resource:' + jweId);
-  const sealed = {
-    ...sample.sealed,
-    aad: Buffer.from('resource:' + id).toString('base64url'),
-    recipients: sample.sealed.recipients.map((recipient: { header: Record<string, unknown> }) => ({
-      ...recipient, header: { ...recipient.header, kid: principalId },
-    })),
-  };
-  await context.db.transaction(async client => {
-    await client.query('UPDATE principals SET public_key=$2 WHERE id=$1', [principalId, JSON.stringify(sample.publicKey)]);
-    await client.query("UPDATE credentials SET private_wrap=$2 WHERE principal_id=$1 AND kind='passkey'", [principalId, 'x25519:' + wrapped]);
-    await client.query("INSERT INTO resources(id,owner_id,kind,name,data,sealed) VALUES($1,$2,'secret','Existing secret',$3,$4)", [
-      id, principalId, JSON.stringify({ bytes: Buffer.byteLength(sample.plaintext), recipients: [principalId] }), JSON.stringify(sealed),
-    ]);
-    await client.query("INSERT INTO resources(id,owner_id,kind,name,data,sealed) VALUES($1,$2,'secret','Current-format secret',$3,$4)", [
-      jweId, principalId, JSON.stringify({ bytes: 21, recipients: recipients.map(recipient => recipient.id) }), JSON.stringify(jwe),
-    ]);
-    await client.query("INSERT INTO grants(resource_id,principal_id,actions) VALUES($1,$2,ARRAY['use'])", [jweId, context.identity.id]);
-  });
-  return { id, jweId, plaintext: sample.plaintext };
 });
 const worker = new Worker(context, (error) => app.log.error(error));
 try {

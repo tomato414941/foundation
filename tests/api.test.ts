@@ -80,6 +80,12 @@ test('JWEで保護した暗号鍵を保存し、不正な更新があっても�
   parts[0] = Buffer.from(JSON.stringify({ alg: 'dir', enc: 'A128GCM', sub: owner.actor.id })).toString('base64url');
   const malformed = await app.inject({ ...request, payload: { wrappedKey: parts.join('.'), publicKey: owner.keys.publicKey } });
   assert.equal(malformed.statusCode, 400);
+  const stale = await newEncryptionKey();
+  const changed = await app.inject({ ...request, payload: {
+    wrappedKey: await wrap(stale.privateKey, prf, owner.actor.id), publicKey: stale.publicKey,
+  } });
+  assert.equal(changed.statusCode, 409);
+  assert.equal(changed.json().error.code, 'encryption_key_changed');
   const stored = await f.db.one<{ private_wrap: string }>('SELECT private_wrap FROM credentials WHERE id=$1', [credentialId]);
   assert.deepEqual(await unwrap(stored!.private_wrap, prf, owner.actor.id), owner.keys.privateKey);
 });
