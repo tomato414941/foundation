@@ -267,6 +267,32 @@ test('名義を確認できない鍵の更新を承認して同じ接続へ反�
   );
 });
 
+test('先に承認した接続の認証情報を保持し、古い確認画面からの上書きを拒否する', async (t) => {
+  const f = await setup();
+  t.after(() => f.close());
+  const owner = await f.person();
+  const initial = await f.services.begin(owner.actor, owner.actor.id,
+    ConnectionInput.parse({ methodId: 'github:token', fields: { token: 'initial-key' } }), 'browser');
+  assert.equal(initial.kind, 'connected');
+  if (initial.kind !== 'connected') return;
+  const reviews = await Promise.all(['approved-key', 'other-key'].map(token => f.services.begin(
+    owner.actor, owner.actor.id,
+    ConnectionInput.parse({ methodId: 'github:token', connectionId: initial.resource.id, fields: { token } }),
+    'browser',
+  )));
+  for (const review of reviews) {
+    assert.equal(review.kind, 'review');
+    if (review.kind !== 'review') return;
+    await f.services.pendingReview(owner.actor, review.id, 'browser');
+  }
+  const [first, second] = reviews;
+  if (first?.kind !== 'review' || second?.kind !== 'review') return;
+  await f.services.review(owner.actor, first.id, 'browser', true);
+  await assert.rejects(f.services.review(owner.actor, second.id, 'browser', true), { code: 'changed' });
+  const saved = await f.resources.get(initial.resource.id);
+  assert.equal((await f.services.outputs(owner.actor, saved)).GH_TOKEN, 'approved-key');
+});
+
 test('要求したスコープと報告されたスコープを区別し、更新時の権限拡大を再接続の確認まで保留する', async (t) => {
   const f = await setup();
   t.after(() => f.close());

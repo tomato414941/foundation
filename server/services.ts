@@ -565,6 +565,7 @@ export class Services {
         oauth: result,
       },
       previous,
+      consent.connectionVersion,
     );
     await this.completed?.(consent.actor, connected as unknown as JsonValue);
     return connected;
@@ -591,6 +592,7 @@ export class Services {
           : { oauth: required(consent.result) }),
       },
       consent.input.connectionId ? await this.resources.get(consent.input.connectionId) : null,
+      consent.connectionVersion,
     );
     await this.completed?.(consent.actor, connected as unknown as JsonValue);
     return connected;
@@ -653,6 +655,7 @@ export class Services {
       consent.input,
       { formatVersion: 2, methodId: consent.input.methodId, method: consent.method, app: consent.app, role },
       previous,
+      consent.connectionVersion,
     );
     await this.completed?.(consent.actor, connected as unknown as JsonValue);
     return connected;
@@ -663,7 +666,10 @@ export class Services {
     input: SelectedInput,
     state: ConnectionState,
     previous: ResourceRow | null,
+    expectedVersion = previous?.version,
   ): Promise<ConnectionResult> {
+    if (previous && previous.version !== expectedVersion)
+      fail(409, 'changed', 'This connection changed. Start again.');
     await this.allowed(actor, ownerId, input);
     const account = state.oauth?.accountName ?? state.role?.arn.split(':')[4] ?? '';
     const data = this.data(
