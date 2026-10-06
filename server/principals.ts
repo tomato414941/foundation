@@ -3,8 +3,8 @@ import type { Database, Queryable } from './database.js';
 import { iso } from './database.js';
 import type { Authorization, Actor } from './authorization.js';
 import type { Audit } from './audit.js';
-import { Name, Principal, P256Key, WrappedKey } from '../shared/contracts.js';
-import type { PublicEncryptionKey, P256PublicKey, WrappedEncryptionKey, ActionName } from '../shared/contracts.js';
+import { Name, Principal, PublicKey, WrappedKey } from '../shared/contracts.js';
+import type { PublicEncryptionKey, WrappedEncryptionKey, ActionName } from '../shared/contracts.js';
 import { fail, required } from './errors.js';
 import { KeySharing, type KeyUpdates } from './key-sharing.js';
 import { ResourceKind } from '../shared/contracts.js';
@@ -32,7 +32,7 @@ export class Principals {
   }
   async create(
     name: string,
-    publicKey: P256PublicKey | null = null,
+    publicKey: PublicEncryptionKey | null = null,
     ownerId?: string,
     connection: Queryable = this.db.pool,
     id: string = randomUUID(),
@@ -40,7 +40,7 @@ export class Principals {
     await connection.query('INSERT INTO principals(id,name,public_key) VALUES($1,$2,$3)', [
       id,
       Name.parse(name),
-      publicKey ? JSON.stringify(P256Key.parse(publicKey)) : null,
+      publicKey ? JSON.stringify(PublicKey.parse(publicKey)) : null,
     ]);
     if (ownerId)
       await connection.query(
@@ -81,7 +81,7 @@ export class Principals {
     await this.audit.record(id, actor.id, 'principal.rename', id);
     return this.view(actor, await this.get(id));
   }
-  async publishKey(actor: Actor, id: string, key: P256PublicKey, wraps: Record<string, WrappedEncryptionKey> = {}) {
+  async publishKey(actor: Actor, id: string, key: PublicEncryptionKey, wraps: Record<string, WrappedEncryptionKey> = {}) {
     await this.authorization.requirePrincipal(actor, id, 'credentials');
     return this.db.transaction(async (connection) => {
       const row = required(
@@ -90,7 +90,7 @@ export class Principals {
       if (row.public_key) fail(409, 'key_exists', 'This principal already has an encryption key.');
       await connection.query('UPDATE principals SET public_key=$2 WHERE id=$1', [
         id,
-        JSON.stringify(P256Key.parse(key)),
+        JSON.stringify(PublicKey.parse(key)),
       ]);
       for (const [credentialId, wrap] of Object.entries(wraps))
         await connection.query(

@@ -1,0 +1,36 @@
+{
+  "principalId": "35eae321-1839-4649-b4dc-e28c48138686",
+  "resourceId": "6a55ada7-19d3-4f49-9f14-e9482cb0b120",
+  "publicKey": {
+    "kty": "EC",
+    "x": "jwzqOKiyjqHdjz7a5C1_cUG4KwIMjleYLNuAzt5M4ts",
+    "y": "YQXj9cuWUPIT6Ti9CM0-5UWu_WD7WLSkv0T3l-Zy6Lg",
+    "crv": "P-256"
+  },
+  "privateKey": {
+    "kty": "EC",
+    "x": "jwzqOKiyjqHdjz7a5C1_cUG4KwIMjleYLNuAzt5M4ts",
+    "y": "YQXj9cuWUPIT6Ti9CM0-5UWu_WD7WLSkv0T3l-Zy6Lg",
+    "crv": "P-256",
+    "d": "Ga5_E1SF8-HEF_apFMf6EhK9nhGwuGgYa3-Gql6pDb8"
+  },
+  "prf": "qTHGk84M3eJ_sQi5xplptwk1riso5S7g2YdZFjZD-U8",
+  "wrappedKey": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwic3ViIjoiMzVlYWUzMjEtMTgzOS00NjQ5LWI0ZGMtZTI4YzQ4MTM4Njg2In0..hZnDTaayUGn1l4l1.zucdiaFAsvWwbtsbX-UMXgLpuNUb7TEIdZeilUKgEU21Ypsv7XkEqAR7qjx_zU2_BCgij0YH9xY3FqJ-jX1iSXC1q8tqL9AsT8M7IavyuQgpf6k_ufISoGiXGgDMQONVcbKaEke6nfXXtiF24rFgKlKmmJ0HYJSdNYGhmcVWNVMVZY3_GaYhXS_LWsOJTaW1Wx6T-mHPSmyqjV0XZc5StWn-kGirBH-H0BV3IUpPuAk.7Zt6p7CgVppqNMt_0atp7Q",
+  "sealed": {
+    "ciphertext": "UbTQQ1pJUygWtONZJxBzunThCao7CdRIWrnrnAo79x7Uuw",
+    "iv": "IUSutwbaB479nVqK",
+    "tag": "mwa6r_3T8WCwOB7nZKqUbw",
+    "aad": "cmVzb3VyY2U6NmE1NWFkYTctMTlkMy00ZjQ5LTlmMTQtZTk0ODJjYjBiMTIw",
+    "protected": "eyJlbmMiOiJBMjU2R0NNIiwiZXBrIjp7IngiOiJJc21Ydy1nZzE1ZUVhN05ScGZvRFZVTUNDUWR5RjFxb2E5UFpHTWV5UDh3IiwiY3J2IjoiUC0yNTYiLCJrdHkiOiJFQyIsInkiOiJ1ZFViZXltRXRUR2JyVXMyWGtIY0U2ZE1Sc3liWnJwOThBRWJfaXgxdDFnIn19",
+    "recipients": [
+      {
+        "encrypted_key": "5K2ohfCgl5cVMefLHxUWWIUoJ9qZt9c8hD5gKbaUGAbW3X4eJcjQ6Q",
+        "header": {
+          "alg": "ECDH-ES+A256KW",
+          "kid": "35eae321-1839-4649-b4dc-e28c48138686"
+        }
+      }
+    ]
+  },
+  "plaintext": "Saved encryption sample\n日本語\u0000"
+}
