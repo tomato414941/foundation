@@ -140,6 +140,7 @@ const Scopes = z.object({
 const UrlTemplate = z.string().min(1).max(4096);
 const PointerList = z.union([z.string(), z.array(z.string()).min(1)]);
 export const OAuthDefinition = z.object({
+  issuer: z.url().optional(),
   authorizeUrl: UrlTemplate,
   tokenUrl: UrlTemplate,
   identity: z

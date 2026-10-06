@@ -453,7 +453,7 @@ export class Services {
       scopes = [...new Set([...spec.scopes.default, ...(input.scopes ?? [])])];
     return {
       kind: 'authorize',
-      url: this.oauth.authorize(
+      url: await this.oauth.authorize(
         spec,
         app,
         id,
@@ -524,7 +524,12 @@ export class Services {
     }
     return value;
   }
-  async callback(id: string, code: string, browser: string): Promise<ConnectionResult> {
+  async callback(
+    id: string,
+    code: string,
+    browser: string,
+    parameters?: URLSearchParams,
+  ): Promise<ConnectionResult> {
     const consent = await this.consent(id, browser);
     if (consent.method.kind !== 'oauth') fail(400, 'invalid_state', 'Start the connection again.');
     const previous = consent.input.connectionId ? await this.resources.get(consent.input.connectionId) : null;
@@ -539,6 +544,7 @@ export class Services {
       this.config.origin + '/oauth/callback',
       scopes,
       old?.oauth,
+      { parameters: parameters ?? new URLSearchParams({ code, state: id }), state: id },
     );
     if (
       previous &&

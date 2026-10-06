@@ -436,7 +436,7 @@ test('Renderの登録済みOAuthアプリで認可し、更新したトークン
     if (request.url === 'https://api.render.com/v1/oauth/token') {
       const form = new URLSearchParams(request.body);
       assert.equal(request.method, 'POST');
-      assert.equal(request.headers?.['content-type'], 'application/x-www-form-urlencoded');
+      assert.equal(request.headers?.['content-type']?.split(';')[0], 'application/x-www-form-urlencoded');
       assert.equal(request.headers?.authorization, undefined);
       assert.equal(form.get('client_id'), 'registered-foundation-client');
       assert.equal(form.get('client_secret'), null);
@@ -478,7 +478,7 @@ test('Renderの登録済みOAuthアプリで認可し、更新したトークン
     }
     if (request.url === 'https://api.render.com/v1/oauth/token/revoke') {
       assert.equal(request.method, 'POST');
-      assert.equal(request.headers?.['content-type'], 'application/x-www-form-urlencoded');
+      assert.equal(request.headers?.['content-type']?.split(';')[0], 'application/x-www-form-urlencoded');
       assert.deepEqual(Object.fromEntries(new URLSearchParams(request.body)), {
         token: 'render-refresh-2',
         client_id: 'registered-foundation-client',

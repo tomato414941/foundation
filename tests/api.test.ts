@@ -6,6 +6,63 @@ import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { newEncryptionKey, seal, encode, unwrap, wrap } from '../shared/encryption.js';
 
+test('HTTPのOAuth応答から発行者を確認し、許可したサービスとの接続を作成する', async (t) => {
+  const f = await fixture();
+  f.config.oauthApps.google = { clientId: 'client', clientSecret: 'secret' };
+  let requests = 0;
+  const context = await createContext(f.config, {
+      db: f.db,
+      mailer: f.mailer,
+      transport: {
+        async send(input) {
+          requests++;
+          return {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            body: encode(
+              JSON.stringify(
+                input.url.endsWith('/token')
+                  ? { access_token: 'google-access', token_type: 'Bearer', expires_in: 3600 }
+                  : { sub: 'account-1', email: 'person@example.com', email_verified: true },
+              ),
+            ),
+          };
+        },
+      },
+    }),
+    app = await buildApp(context);
+  t.after(async () => {
+    await app.close();
+    await f.close();
+  });
+  const owner = await f.person();
+  const headers = { authorization: 'Bearer ' + owner.token, cookie: 'foundation_browser=oauth-browser' };
+  for (const issuer of ['https://accounts.google.com', 'https://another.example']) {
+    const begin = await app.inject({
+      method: 'POST',
+      url: '/api/principals/' + owner.actor.id + '/connections',
+      headers,
+      payload: { serviceId: 'google', scheme: 'oauth', name: 'Google connection' },
+    });
+    assert.equal(begin.statusCode, 200, begin.body);
+    const parameters = new URLSearchParams({
+      state: new URL(begin.json().url).searchParams.get('state')!,
+      code: 'authorization-code',
+      iss: issuer,
+    });
+    const callback = await app.inject({ url: '/oauth/callback?' + parameters, headers });
+    assert.equal(callback.statusCode, 302, callback.body);
+    assert.equal(
+      callback.headers.location,
+      issuer === 'https://accounts.google.com' ? '/services' : '/services?error=invalid_state',
+    );
+  }
+  const connections = await context.resources.list(owner.actor, owner.actor.id, { kind: 'connection' });
+  assert.equal(connections.items.length, 1);
+  assert.equal(connections.items[0]!.data.account, 'person@example.com');
+  assert.equal(requests, 2);
+});
+
 test('HTTP APIで登録し、シークレットを保存して同じ権限で一覧を取得する', async (t) => {
   const f = await fixture(),
     context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
