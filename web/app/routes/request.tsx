@@ -1,6 +1,14 @@
+import { Button } from '../components/ui/button';
+import { InputField, TextareaField } from '../form-fields';
 import { useEffect, useState } from 'react';
-import { Form, Link, useActionData, useLoaderData, useRevalidator, useRouteLoaderData } from 'react-router';
-import { Button, Stack, TextField, Typography } from '@mui/material';
+import {
+  Form,
+  Link,
+  useActionData,
+  useLoaderData,
+  useRevalidator,
+  useRouteLoaderData,
+} from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/request';
 import type { clientLoader as rootLoader } from '../root';
@@ -81,8 +89,18 @@ export default function RequestPage() {
   }, [account.requestId, root?.requestId, revalidator]);
   const role = item.results.find(
     (value) =>
-      value && typeof value === 'object' && !Array.isArray(value) && value.kind === 'role' && value.pending,
-  ) as { id: string; principalArn: string; externalId: string } | undefined;
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      value.kind === 'role' &&
+      value.pending,
+  ) as
+    | {
+        id: string;
+        principalArn: string;
+        externalId: string;
+      }
+    | undefined;
   usePolling(pending, 5000);
   return (
     <Page title={t('requests')} narrow>
@@ -99,7 +117,7 @@ export default function RequestPage() {
         <Detail label={t('expires')}>
           <DateText value={item.expiresAt} />
         </Detail>
-        <Typography sx={{ whiteSpace: 'pre-wrap' }}>{item.message || t('noMessage')}</Typography>
+        <p className="leading-relaxed whitespace-pre-wrap">{item.message || t('noMessage')}</p>
         {item.code && (
           <Detail label={t('code')}>
             {item.code}
@@ -114,63 +132,72 @@ export default function RequestPage() {
         )}
       </Panel>
       <Form method="post">
-        <Stack spacing={3}>
+        <div className="flex min-w-0 flex-col gap-6">
           {item.operations.map((operation, index) => (
             <Panel key={index} title={`${index + 1}. ${operation.method} ${operation.path}`}>
               <JsonView value={operation.body ?? {}} />
               {operation.inputs.map((input, inputIndex) => (
-                <Stack key={input.pointer} spacing={1}>
-                  <TextField
-                    name={`input.${index}.${inputIndex}`}
-                    label={input.label}
-                    type={input.secret && !input.multiline ? 'password' : 'text'}
-                    multiline={input.multiline}
-                    minRows={input.multiline ? 3 : undefined}
-                    autoComplete="off"
-                    fullWidth
-                    disabled={!item.canRespond || !pending}
-                    required={item.canRespond && pending}
-                    helperText={input.pointer}
-                  />
+                <div key={input.pointer} className="flex min-w-0 flex-col gap-2">
+                  {input.multiline ? (
+                    <TextareaField
+                      name={`input.${index}.${inputIndex}`}
+                      label={input.label}
+                      autoComplete="off"
+                      disabled={!item.canRespond || !pending}
+                      required={item.canRespond && pending}
+                      hint={input.pointer}
+                      rows={3}
+                    />
+                  ) : (
+                    <InputField
+                      name={`input.${index}.${inputIndex}`}
+                      label={input.label}
+                      type={input.secret ? 'password' : 'text'}
+                      autoComplete="off"
+                      disabled={!item.canRespond || !pending}
+                      required={item.canRespond && pending}
+                      hint={input.pointer}
+                    />
+                  )}
                   {input.site && <ExternalLink href={input.site}>{t('serviceConsole')}</ExternalLink>}
-                </Stack>
+                </div>
               ))}
             </Panel>
           ))}
           {pending && item.canRespond && !item.to && (
-            <TextField name="code" label={t('code')} required helperText={t('codeHelp')} autoComplete="off" />
+            <InputField name="code" label={t('code')} required autoComplete="off" hint={t('codeHelp')} />
           )}
           {item.continueUrl && item.canRespond && (
-            <Button variant="contained" href={item.continueUrl}>
-              {t('finishConnection')}
+            <Button variant="default" asChild>
+              <a href={item.continueUrl}>{t('finishConnection')}</a>
             </Button>
           )}
           {pending && item.canRespond && !item.continueUrl && !role && (
-            <Stack direction="row" spacing={2}>
+            <div className="flex min-w-0 flex-wrap items-center gap-4">
               <Button
                 type="submit"
                 name="intent"
                 value="approve"
-                variant="contained"
                 disabled={item.state === 'running'}
+                variant="default"
               >
                 {t('approve')}
               </Button>
-              <Button type="submit" name="intent" value="decline" formNoValidate>
+              <Button type="submit" name="intent" value="decline" formNoValidate variant="ghost">
                 {t('decline')}
               </Button>
-            </Stack>
+            </div>
           )}
           {pending && requester && (
-            <Button type="submit" name="intent" value="cancel" color="error" formNoValidate>
+            <Button type="submit" name="intent" value="cancel" formNoValidate variant="destructive">
               {t('cancelRequest')}
             </Button>
           )}
-        </Stack>
+        </div>
       </Form>
       {pending && item.canRespond && role && (
         <Panel title={t('role')}>
-          <Typography>{t('roleHelp')}</Typography>
+          <p className="leading-relaxed">{t('roleHelp')}</p>
           <JsonView
             value={{
               Version: '2012-10-17',
@@ -185,24 +212,22 @@ export default function RequestPage() {
             }}
           />
           <Form method="post">
-            <Stack spacing={2}>
+            <div className="flex min-w-0 flex-col gap-4">
               <input type="hidden" name="roleId" value={role.id} />
-              <TextField name="arn" label={t('roleArn')} required fullWidth />
-              <TextField name="region" label={t('region')} defaultValue="ap-northeast-1" required />
-              <Button type="submit" name="intent" value="role" variant="contained">
+              <InputField name="arn" label={t('roleArn')} required />
+              <InputField name="region" label={t('region')} defaultValue="ap-northeast-1" required />
+              <Button type="submit" name="intent" value="role" variant="default">
                 {t('connect')}
               </Button>
-            </Stack>
+            </div>
           </Form>
         </Panel>
       )}
       {!account.principal && pending && (
-        <Button
-          component={Link}
-          to={'/signin?returnTo=' + encodeURIComponent('/requests/' + item.id)}
-          variant="contained"
-        >
-          {t('signinToApprove')}
+        <Button variant="default" asChild>
+          <Link to={'/signin?returnTo=' + encodeURIComponent('/requests/' + item.id)}>
+            {t('signinToApprove')}
+          </Link>
         </Button>
       )}
       {item.results.some((value) => value !== null) && (
@@ -211,34 +236,38 @@ export default function RequestPage() {
         </Panel>
       )}
       {!pending && item.returnUrl && (
-        <Button href={item.returnUrl} variant="contained">
-          {t('returnToService', { name: item.from.name })}
+        <Button variant="default" asChild>
+          <a href={item.returnUrl}>{t('returnToService', { name: item.from.name })}</a>
         </Button>
       )}
       {['expired', 'cancelled'].includes(item.state) && item.refreshUrl && (
-        <Button href={item.refreshUrl}>{t('retry')}</Button>
+        <Button variant="ghost" asChild>
+          <a href={item.refreshUrl}>{t('retry')}</a>
+        </Button>
       )}
       {pending && item.canRespond && !account.requestId && item.to && (
         <Panel>
-          <Typography variant="body2" color="text.secondary">
-            {t('requestLinkHelp')}
-          </Typography>
+          <p className="leading-relaxed text-muted-foreground text-sm">{t('requestLinkHelp')}</p>
           <Button
             loading={task.busy}
             onClick={() =>
               task.run(async () =>
                 setLink(
-                  (await api<{ url: string }>(`/requests/${item.id}/links`, { method: 'POST', body: {} }))
-                    .url,
+                  (
+                    await api<{
+                      url: string;
+                    }>(`/requests/${item.id}/links`, { method: 'POST', body: {} })
+                  ).url,
                 ),
               )
             }
+            variant="ghost"
           >
             {t('requestLink')}
           </Button>
           {link && (
             <>
-              <TextField label={t('url')} value={link} slotProps={{ input: { readOnly: true } }} />
+              <InputField label={t('url')} value={link} readOnly={true} />
               <Copy value={link} />
             </>
           )}

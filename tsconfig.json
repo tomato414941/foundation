@@ -11,6 +11,7 @@
     "lib": ["DOM", "DOM.Iterable", "ES2023"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "paths": { "@/*": ["./web/app/*"] },
     "jsx": "react-jsx",
     "strict": true,
     "noUncheckedIndexedAccess": true,

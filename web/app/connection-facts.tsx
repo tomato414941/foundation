@@ -1,13 +1,10 @@
-import { Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionView } from '../../shared/contracts';
 import { Detail } from './components';
-
 export type ConnectionFactsValue = Pick<
   ConnectionView['data'],
   'account' | 'accountId' | 'accountVerified' | 'scopes' | 'scopesStatus'
 >;
-
 export function ConnectionFacts({ value }: { value: ConnectionFactsValue }) {
   const { t } = useTranslation();
   return (
@@ -15,9 +12,7 @@ export function ConnectionFacts({ value }: { value: ConnectionFactsValue }) {
       <Detail label={t('accountName')}>
         {value.account || t('accountUnverified')}
         {value.account && !value.accountVerified && (
-          <Typography variant="body2" color="text.secondary">
-            {t('accountUnverified')}
-          </Typography>
+          <p className="leading-relaxed text-muted-foreground text-sm">{t('accountUnverified')}</p>
         )}
       </Detail>
       {value.accountId && value.accountId !== value.account && (
@@ -29,9 +24,9 @@ export function ConnectionFacts({ value }: { value: ConnectionFactsValue }) {
         ) : (
           <>
             {value.scopes.join(', ') || t('scopesEmpty')}
-            <Typography variant="body2" color="text.secondary">
+            <p className="leading-relaxed text-muted-foreground text-sm">
               {t('scopes.' + value.scopesStatus)}
-            </Typography>
+            </p>
           </>
         )}
       </Detail>

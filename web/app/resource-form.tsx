@@ -1,15 +1,9 @@
+import { Button } from './components/ui/button';
+import { SelectItem } from './components/ui/select';
+import { InputField, TextareaField, SelectField, CheckboxField } from './form-fields';
+import { Notice } from './components';
 import { useState } from 'react';
 import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router';
-import {
-  Alert,
-  Button,
-  Checkbox,
-  FormControlLabel,
-  MenuItem,
-  Stack,
-  TextField,
-  Typography,
-} from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
 import { CatalogEntry, CatalogMethod, Resource, Payment, Usage, listOf } from '../../shared/contracts';
@@ -21,12 +15,26 @@ import { ErrorNotice, ExternalLink, JsonField, JsonView, Page, Panel, SaveBar } 
 import { resourceKind, resourcePath } from './navigation';
 import { useWorkspace } from './routes/workspace';
 import { serviceLabels } from './service-labels';
-
 type ConnectionResult =
-  | { kind: 'connected'; resource: ResourceView; returnTo: string }
-  | { kind: 'authorize'; url: string }
-  | { kind: 'role'; id: string; externalId: string; principalArn: string }
-  | { kind: 'review'; id: string };
+  | {
+      kind: 'connected';
+      resource: ResourceView;
+      returnTo: string;
+    }
+  | {
+      kind: 'authorize';
+      url: string;
+    }
+  | {
+      kind: 'role';
+      id: string;
+      externalId: string;
+      principalArn: string;
+    }
+  | {
+      kind: 'review';
+      id: string;
+    };
 export async function formLoader({ params, request }: LoaderFunctionArgs) {
   const kind = resourceKind(params.section);
   const query = new URL(request.url).searchParams;
@@ -43,29 +51,41 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       throw error;
     }
   };
-  const [resource, catalog, apps, sessionData, payment, usage, methods, connections, pinnedMethod, shared] =
-    await Promise.all([
-      id ? api('/resources/' + id, { signal: request.signal }, Resource) : null,
-      ['connection', 'app'].includes(kind)
-        ? api('/catalog', { signal: request.signal }, listOf(CatalogEntry))
-        : null,
-      kind === 'connection' ? ownedItems('app') : null,
-      session(request),
-      ['object', 'environment'].includes(kind)
-        ? api(`/principals/${params.owner}/payment`, { signal: request.signal }, Payment)
-        : null,
-      kind === 'environment'
-        ? api(`/principals/${params.owner}/usage`, { signal: request.signal }, Usage)
-        : null,
-      ['connection', 'app'].includes(kind)
-        ? api('/connection-methods', { signal: request.signal }, listOf(CatalogMethod))
-        : null,
-      kind === 'connection' && !id ? ownedItems('connection') : null,
-      kind === 'connection' && id
-        ? api(`/connections/${id}/method`, { signal: request.signal }, CatalogMethod)
-        : null,
-      kind === 'connection' ? api('/resources/shared', { signal: request.signal }, listOf(Resource)) : null,
-    ]);
+  const [
+    resource,
+    catalog,
+    apps,
+    sessionData,
+    payment,
+    usage,
+    methods,
+    connections,
+    pinnedMethod,
+    shared,
+  ] = await Promise.all([
+    id ? api('/resources/' + id, { signal: request.signal }, Resource) : null,
+    ['connection', 'app'].includes(kind)
+      ? api('/catalog', { signal: request.signal }, listOf(CatalogEntry))
+      : null,
+    kind === 'connection' ? ownedItems('app') : null,
+    session(request),
+    ['object', 'environment'].includes(kind)
+      ? api(`/principals/${params.owner}/payment`, { signal: request.signal }, Payment)
+      : null,
+    kind === 'environment'
+      ? api(`/principals/${params.owner}/usage`, { signal: request.signal }, Usage)
+      : null,
+    ['connection', 'app'].includes(kind)
+      ? api('/connection-methods', { signal: request.signal }, listOf(CatalogMethod))
+      : null,
+    kind === 'connection' && !id ? ownedItems('connection') : null,
+    kind === 'connection' && id
+      ? api(`/connections/${id}/method`, { signal: request.signal }, CatalogMethod)
+      : null,
+    kind === 'connection'
+      ? api('/resources/shared', { signal: request.signal }, listOf(Resource))
+      : null,
+  ]);
   if (resource && (resource.ownerId !== params.owner || resource.kind !== kind))
     throw new Response('Not found', { status: 404 });
   let content = '',
@@ -194,7 +214,8 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
           idleSeconds: Number(formText(form, 'idle')) * 60,
           maxSeconds: Number(formText(form, 'maximum')) * 60,
         },
-        identityId: formText(form, 'identityId') || null,
+        identityId:
+          formText(form, 'identityId') === 'none' ? null : formText(form, 'identityId') || null,
       };
     else if (kind === 'function')
       body.definition = {
@@ -239,34 +260,36 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
 export function RequestFields({
   value,
 }: {
-  value?: Extract<ResourceView, { kind: 'function' }>['data']['request'];
+  value?: Extract<
+    ResourceView,
+    {
+      kind: 'function';
+    }
+  >['data']['request'];
 }) {
   const { t } = useTranslation();
   return (
     <>
-      <TextField
+      <InputField
         name="url"
         label={t('url')}
         defaultValue={value?.url ?? ''}
         required
-        fullWidth
         placeholder="https://api.example.com/items"
       />
-      <TextField select name="httpMethod" label={t('httpMethod')} defaultValue={value?.method ?? 'GET'}>
+      <SelectField name="httpMethod" label={t('httpMethod')} defaultValue={value?.method ?? 'GET'}>
         {['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].map((method) => (
-          <MenuItem key={method} value={method}>
+          <SelectItem key={method} value={method}>
             {method}
-          </MenuItem>
+          </SelectItem>
         ))}
-      </TextField>
+      </SelectField>
       <JsonField name="headers" label={t('headers')} value={value?.headers ?? {}} rows={3} />
-      <TextField
+      <TextareaField
         name="body"
         label={t('body')}
         defaultValue={value?.body ?? (value?.json === undefined ? '' : JSON.stringify(value.json))}
-        multiline
-        minRows={3}
-        fullWidth
+        rows={3}
       />
       <JsonField name="bindings" label={t('bindings')} value={value?.bindings ?? []} rows={3} />
     </>
@@ -299,7 +322,9 @@ export default function ResourceForm() {
   const service = data.catalog.find((item) => item.id === serviceId);
   const offered = (entry: typeof service) =>
     entry
-      ? eligibleMethods.filter((item) => Object.values(entry.methods).some((method) => method.id === item.id))
+      ? eligibleMethods.filter((item) =>
+          Object.values(entry.methods).some((method) => method.id === item.id),
+        )
       : eligibleMethods;
   const methods = offered(service);
   const [methodId, setMethodId] = useState(
@@ -348,37 +373,37 @@ export default function ResourceForm() {
       narrow
     >
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
-      {unavailable && <Alert severity="info">{t('featureUnavailable')}</Alert>}
+      {unavailable && <Notice tone={'info'}>{t('featureUnavailable')}</Notice>}
       {data.payment?.required && !data.payment.active && (
-        <Alert
-          severity="info"
+        <Notice
           action={
             sessionData.principals.some(
               (item) => item.id === data.payment?.payer?.id && item.permissions.includes('billing'),
             ) ? (
-              <Button component={Link} to={'/p/' + data.payment.payer?.id + '/settings/billing'}>
-                {t('addPayment')}
+              <Button variant="ghost" asChild>
+                <Link to={'/p/' + data.payment.payer?.id + '/settings/billing'}>{t('addPayment')}</Link>
               </Button>
             ) : undefined
           }
+          tone={'info'}
         >
           {t('paymentRequired')}
-        </Alert>
+        </Notice>
       )}
       {data.locked ? (
-        <Alert
-          severity="warning"
+        <Notice
           action={
-            <Button component={Link} to="/account">
-              {t('unlock')}
+            <Button variant="ghost" asChild>
+              <Link to="/account">{t('unlock')}</Link>
             </Button>
           }
+          tone={'warning'}
         >
           {t('keyLocked')}
-        </Alert>
+        </Notice>
       ) : (
         <Form method="post" encType="multipart/form-data">
-          <Stack spacing={3}>
+          <div className="flex min-w-0 flex-col gap-6">
             <input type="hidden" name="version" value={existing?.version ?? ''} />
             {existing?.kind === 'connection' && (
               <input type="hidden" name="connectionId" value={existing.id} />
@@ -386,7 +411,7 @@ export default function ResourceForm() {
             {role ? (
               <Panel title={t('role')}>
                 <input type="hidden" name="roleId" value={role.id} />
-                <Typography>{t('roleHelp')}</Typography>
+                <p className="leading-relaxed">{t('roleHelp')}</p>
                 <JsonView
                   value={{
                     Version: '2012-10-17',
@@ -400,79 +425,63 @@ export default function ResourceForm() {
                     ],
                   }}
                 />
-                <TextField
+                <InputField
                   name="arn"
                   label={t('roleArn')}
                   defaultValue={existing?.kind === 'connection' ? (existing.data.accountId ?? '') : ''}
                   required
-                  fullWidth
                 />
-                <TextField name="region" label={t('region')} defaultValue="ap-northeast-1" required />
+                <InputField name="region" label={t('region')} defaultValue="ap-northeast-1" required />
               </Panel>
             ) : (
               <>
-                <TextField
+                <InputField
                   name="name"
                   label={t('name')}
                   defaultValue={existing?.name ?? ''}
                   required={!['environment', 'connection', 'object'].includes(data.kind)}
-                  fullWidth
-                  slotProps={{ htmlInput: { maxLength: 200 } }}
-                  helperText={data.kind === 'object' && fileName ? fileName : undefined}
+                  hint={data.kind === 'object' && fileName ? fileName : undefined}
+                  maxLength={200}
                 />
                 {data.kind === 'secret' && (
                   <Panel>
                     {!sessionData.principal?.publicKey && (
-                      <Alert
-                        severity="info"
+                      <Notice
                         action={
-                          <Button component={Link} to="/account">
-                            {t('addPasskey')}
+                          <Button variant="ghost" asChild>
+                            <Link to="/account">{t('addPasskey')}</Link>
                           </Button>
                         }
+                        tone={'info'}
                       >
                         {t('keyLocked')}
-                      </Alert>
+                      </Notice>
                     )}
                     {!data.binary && (
-                      <TextField
+                      <TextareaField
                         name="value"
                         label={t('value')}
                         defaultValue={data.content}
-                        multiline
-                        minRows={5}
-                        fullWidth
                         autoComplete="off"
-                        slotProps={{ htmlInput: { spellCheck: false } }}
+                        rows={5}
+                        spellCheck={false}
                       />
                     )}
-                    <TextField
-                      type="file"
-                      name="file"
-                      label={t('file')}
-                      slotProps={{ inputLabel: { shrink: true } }}
-                    />
-                    <FormControlLabel
-                      control={
-                        <Checkbox
-                          name="allowUse"
-                          defaultChecked={existing?.kind === 'secret' && existing.data.allowUse}
-                        />
-                      }
+                    <InputField type="file" name="file" label={t('file')} />
+                    <CheckboxField
+                      name="allowUse"
+                      defaultChecked={existing?.kind === 'secret' && existing.data.allowUse}
                       label={t('allowUse')}
                     />
-                    <Typography variant="body2" color="text.secondary">
-                      {t('allowUseHelp')}
-                    </Typography>
+                    <p className="leading-relaxed text-muted-foreground text-sm">{t('allowUseHelp')}</p>
                   </Panel>
                 )}
                 {data.kind === 'object' && (
-                  <TextField
+                  <InputField
                     type="file"
                     required
                     name="file"
                     label={t('file')}
-                    slotProps={{ inputLabel: { shrink: true } }}
                     onChange={(event) =>
                       setFileName((event.target as HTMLInputElement).files?.[0]?.name ?? '')
                     }
@@ -480,19 +489,18 @@ export default function ResourceForm() {
                 )}
                 {['connection', 'app'].includes(data.kind) && (
                   <Panel>
-                    <TextField
-                      select
+                    <SelectField
                       label={t('service')}
-                      value={serviceId}
+                      value={serviceId || 'none'}
                       disabled={!!existing}
-                      onChange={(event) => {
-                        setServiceId(event.target.value);
-                        const next = data.catalog.find((item) => item.id === event.target.value);
+                      onValueChange={(value) => {
+                        const selectedId = value === 'none' ? '' : value;
+                        setServiceId(selectedId);
+                        const next = data.catalog.find((item) => item.id === selectedId);
                         setMethodId(preferred(offered(next))?.id ?? '');
                       }}
-                      slotProps={{ select: { displayEmpty: true }, inputLabel: { shrink: true } }}
                     >
-                      <MenuItem value="">{t('allMethods')}</MenuItem>
+                      <SelectItem value="none">{t('allMethods')}</SelectItem>
                       {data.catalog
                         .filter(
                           (item) =>
@@ -500,46 +508,47 @@ export default function ResourceForm() {
                             Object.values(item.methods).some((method) => method.kind === 'oauth'),
                         )
                         .map((item) => (
-                          <MenuItem key={item.id} value={item.id}>
+                          <SelectItem key={item.id} value={item.id}>
                             {item.name}
-                          </MenuItem>
+                          </SelectItem>
                         ))}
-                    </TextField>
-                    <TextField
-                      select
+                    </SelectField>
+                    <SelectField
+                      key={serviceId}
                       name="methodId"
                       label={t('method')}
                       value={methodId}
                       disabled={!!existing}
-                      onChange={(event) => setMethodId(event.target.value)}
+                      onValueChange={(value) => setMethodId(value)}
                     >
                       {(existing && method ? [method] : methods).map((item) => (
-                        <MenuItem value={item.id} key={item.id}>
+                        <SelectItem key={item.id} value={item.id}>
                           {item.name}
-                        </MenuItem>
+                        </SelectItem>
                       ))}
-                    </TextField>
+                    </SelectField>
                     {existing && <input type="hidden" name="methodId" value={methodId} />}
                     {!existing && !!existingConnections.length && (
-                      <Alert severity="info">
-                        <Typography variant="body2">{t('existingConnections')}</Typography>
+                      <Notice tone={'info'}>
+                        <p className="leading-relaxed text-sm">{t('existingConnections')}</p>
                         {existingConnections.map((item) => (
-                          <Button key={item.id} component={Link} to={resourcePath(item)}>
-                            {item.name}
+                          <Button key={item.id} variant="ghost" asChild>
+                            <Link to={resourcePath(item)}>{item.name}</Link>
                           </Button>
                         ))}
-                      </Alert>
+                      </Notice>
                     )}
                     {methodUnavailable && (
-                      <Alert severity="info">
-                        {t(method?.availability === 'app-required' ? 'appRequired' : 'methodUnavailable')}
-                      </Alert>
+                      <Notice tone={'info'}>
+                        {t(
+                          method?.availability === 'app-required' ? 'appRequired' : 'methodUnavailable',
+                        )}
+                      </Notice>
                     )}
-                    <Stack spacing={3} key={methodId}>
+                    <div key={methodId} className="flex min-w-0 flex-col gap-6">
                       {data.kind === 'connection' && method?.kind === 'oauth' && (
                         <>
-                          <TextField
-                            select
+                          <SelectField
                             name="appId"
                             label={t('app')}
                             defaultValue={
@@ -550,16 +559,16 @@ export default function ResourceForm() {
                                   : (matchingApps[0]?.id ?? 'foundation')
                             }
                           >
-                            <MenuItem value="foundation" disabled={method.availability !== 'ready'}>
+                            <SelectItem disabled={method.availability !== 'ready'} value={'foundation'}>
                               {t('foundationApp')}
-                            </MenuItem>
+                            </SelectItem>
                             {matchingApps.map((item) => (
-                              <MenuItem key={item.id} value={item.id}>
+                              <SelectItem key={item.id} value={item.id}>
                                 {item.name}
-                              </MenuItem>
+                              </SelectItem>
                             ))}
-                          </TextField>
-                          <TextField
+                          </SelectField>
+                          <InputField
                             name="scopes"
                             label={t('scopes')}
                             defaultValue={
@@ -567,7 +576,7 @@ export default function ResourceForm() {
                                 ? existing.data.scopes.join(' ')
                                 : method.config.scopes.default.join(' ')
                             }
-                            helperText={t('scopesHelp')}
+                            hint={t('scopesHelp')}
                           />
                           {method.config.scopes.docs && (
                             <ExternalLink href={method.config.scopes.docs}>{t('docs')}</ExternalLink>
@@ -576,30 +585,32 @@ export default function ResourceForm() {
                       )}
                       {data.kind === 'app' && (
                         <>
-                          <TextField
+                          <InputField
                             name="clientId"
                             required
                             label={t('clientId')}
                             defaultValue={existing?.kind === 'app' ? existing.data.clientId : ''}
                           />
-                          <TextField
+                          <InputField
                             name="clientSecret"
                             type="password"
                             autoComplete="new-password"
                             label={t('clientSecret')}
-                            helperText={existing ? t('unchangedSecret') : undefined}
+                            hint={existing ? t('unchangedSecret') : undefined}
                           />
-                          <TextField
+                          <InputField
                             label={t('callbackUrl')}
                             value={
-                              typeof window !== 'undefined' ? window.location.origin + '/oauth/callback' : ''
+                              typeof window !== 'undefined'
+                                ? window.location.origin + '/oauth/callback'
+                                : ''
                             }
-                            slotProps={{ input: { readOnly: true } }}
+                            readOnly={true}
                           />
                         </>
                       )}
                       {fields.map((field) => (
-                        <TextField
+                        <InputField
                           key={field.name}
                           name={'field.' + field.name}
                           label={
@@ -619,7 +630,7 @@ export default function ResourceForm() {
                           }
                           placeholder={field.placeholder}
                           autoComplete="off"
-                          helperText={
+                          hint={
                             i18n.language === 'ja'
                               ? (serviceLabels[`${labelService}.${method?.kind}.${field.name}.note`] ??
                                 field.note)
@@ -640,80 +651,79 @@ export default function ResourceForm() {
                           {t('serviceConsole')}
                         </ExternalLink>
                       )}
-                    </Stack>
+                    </div>
                   </Panel>
                 )}
                 {data.kind === 'environment' && (
                   <Panel>
-                    <Typography variant="body2" color="text.secondary">
+                    <p className="leading-relaxed text-muted-foreground text-sm">
                       {t('environmentBudgetHelp')}
-                    </Typography>
+                    </p>
                     {data.usage && (
-                      <Typography variant="body2">
+                      <p className="leading-relaxed text-sm">
                         {t('computeUsage', {
                           used: Math.ceil(data.usage.computeSeconds / 60),
                           limit: Math.floor(data.usage.computeLimit / 60),
                         })}
-                      </Typography>
+                      </p>
                     )}
-                    <Button component={Link} to={'/p/' + principal.id + '/settings/billing'}>
-                      {t('billing')}
+                    <Button variant="ghost" asChild>
+                      <Link to={'/p/' + principal.id + '/settings/billing'}>{t('billing')}</Link>
                     </Button>
-                    <TextField name="image" label={t('image')} placeholder={t('defaultImage')} />
-                    <TextField select name="size" label={t('size')} defaultValue="small">
+                    <InputField name="image" label={t('image')} placeholder={t('defaultImage')} />
+                    <SelectField name="size" label={t('size')} defaultValue="small">
                       {['small', 'medium', 'large'].map((value) => (
-                        <MenuItem key={value} value={value}>
+                        <SelectItem key={value} value={value}>
                           {t(value)}
-                        </MenuItem>
+                        </SelectItem>
                       ))}
-                    </TextField>
-                    <TextField
+                    </SelectField>
+                    <InputField
                       type="number"
                       name="idle"
                       label={t('idle')}
                       defaultValue={60}
                       required
-                      slotProps={{ htmlInput: { min: 1, max: 1440 } }}
+                      min={1}
+                      max={1440}
                     />
-                    <TextField
+                    <InputField
                       type="number"
                       name="maximum"
                       label={t('maximum')}
                       defaultValue={60}
                       required
-                      slotProps={{ htmlInput: { min: 1, max: 1440 } }}
+                      min={1}
+                      max={1440}
                     />
-                    <TextField
-                      select
-                      name="identityId"
-                      label={t('identity')}
-                      defaultValue=""
-                      slotProps={{ select: { displayEmpty: true }, inputLabel: { shrink: true } }}
-                    >
-                      <MenuItem value="">{t('none')}</MenuItem>
+                    <SelectField name="identityId" label={t('identity')} defaultValue="none">
+                      <SelectItem value="none">{t('none')}</SelectItem>
                       {sessionData.principals
                         .filter((item) => item.permissions.includes('credentials'))
                         .map((item) => (
-                          <MenuItem key={item.id} value={item.id}>
+                          <SelectItem key={item.id} value={item.id}>
                             {item.name}
-                          </MenuItem>
+                          </SelectItem>
                         ))}
-                    </TextField>
+                    </SelectField>
                   </Panel>
                 )}
                 {data.kind === 'function' && (
                   <>
-                    <TextField
+                    <TextareaField
                       name="description"
                       label={t('description')}
                       defaultValue={spec?.description ?? ''}
-                      multiline
-                      minRows={2}
+                      rows={2}
                     />
                     <Panel title={t('http')}>
                       <RequestFields value={spec?.request} />
                     </Panel>
-                    <JsonField name="parameters" label={t('parameters')} value={spec?.parameters ?? []} />
+                    <JsonField
+                      name="parameters"
+                      label={t('parameters')}
+                      value={spec?.parameters ?? []}
+                    />
                     <JsonField name="save" label={t('saveOutputs')} value={spec?.save ?? {}} />
                   </>
                 )}
@@ -729,7 +739,9 @@ export default function ResourceForm() {
                           ? {
                               kind: 'token',
                               config: {
-                                fields: [{ name: 'token', label: 'API key', secret: true, required: true }],
+                                fields: [
+                                  { name: 'token', label: 'API key', secret: true, required: true },
+                                ],
                                 outputs: { API_KEY: '/token' },
                               },
                             }
@@ -758,7 +770,7 @@ export default function ResourceForm() {
                 busy={navigation.state === 'submitting'}
               />
             )}
-          </Stack>
+          </div>
         </Form>
       )}
     </Page>

@@ -1,6 +1,9 @@
+import { Button } from '../components/ui/button';
+import { SelectItem } from '../components/ui/select';
+import { InputField, TextareaField, SelectField } from '../form-fields';
+import { Notice } from '../components';
 import { useState } from 'react';
 import { Form, Link, useActionData, useNavigate, useRevalidator } from 'react-router';
-import { Alert, Button, MenuItem, Stack, TextField } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/credential-new';
 import { actionResult, api, formText } from '../api';
@@ -12,7 +15,9 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
   return actionResult(async () => {
     const form = await request.formData();
     if (formText(form, 'kind') === 'email')
-      return api<{ email: string }>('/auth/email', {
+      return api<{
+        email: string;
+      }>('/auth/email', {
         method: 'POST',
         body: {
           email: formText(form, 'email'),
@@ -21,11 +26,15 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
           locale: i18n.language === 'en' ? 'en' : 'ja',
         },
       });
-    return api<{ token: string }>('/principals/' + params.owner + '/credentials', {
+    return api<{
+      token: string;
+    }>('/principals/' + params.owner + '/credentials', {
       method: 'POST',
       body: {
         name: formText(form, 'name'),
-        expiresAt: formText(form, 'expiresAt') ? new Date(formText(form, 'expiresAt')).toISOString() : null,
+        expiresAt: formText(form, 'expiresAt')
+          ? new Date(formText(form, 'expiresAt')).toISOString()
+          : null,
       },
     });
   });
@@ -45,16 +54,11 @@ export default function CredentialNew() {
       <ErrorNotice error={task.error ?? (result && 'error' in result ? result.error : null)} />
       {result && 'token' in result ? (
         <Panel title={t('apiKey')}>
-          <Alert severity="info">{t('keyOnce')}</Alert>
-          <TextField
-            label={t('apiKey')}
-            value={result.token}
-            multiline
-            slotProps={{ input: { readOnly: true } }}
-          />
+          <Notice tone={'info'}>{t('keyOnce')}</Notice>
+          <TextareaField label={t('apiKey')} value={result.token} readOnly={true} />
           <Copy value={result.token} />
-          <Button component={Link} to={back}>
-            {t('close')}
+          <Button variant="ghost" asChild>
+            <Link to={back}>{t('close')}</Link>
           </Button>
         </Panel>
       ) : (
@@ -71,22 +75,21 @@ export default function CredentialNew() {
             }
           }}
         >
-          <Stack spacing={3}>
-            <TextField
-              select
+          <div className="flex min-w-0 flex-col gap-6">
+            <SelectField
               name="kind"
               label={t('kind')}
               value={kind}
-              onChange={(event) => setKind(event.target.value)}
+              onValueChange={(value) => setKind(value)}
             >
-              <MenuItem value="passkey">{t('addPasskey')}</MenuItem>
-              {session.features.email && <MenuItem value="email">{t('email')}</MenuItem>}
-              <MenuItem value="key">{t('apiKey')}</MenuItem>
-            </TextField>
+              <SelectItem value={'passkey'}>{t('addPasskey')}</SelectItem>
+              {session.features.email && <SelectItem value={'email'}>{t('email')}</SelectItem>}
+              <SelectItem value={'key'}>{t('apiKey')}</SelectItem>
+            </SelectField>
             {kind === 'email' ? (
-              <TextField name="email" type="email" label={t('email')} required autoComplete="email" />
+              <InputField name="email" type="email" label={t('email')} required autoComplete="email" />
             ) : (
-              <TextField
+              <InputField
                 name="name"
                 label={t('name')}
                 value={name}
@@ -95,19 +98,18 @@ export default function CredentialNew() {
               />
             )}
             {kind === 'key' && (
-              <TextField
+              <InputField
                 name="expiresAt"
                 type="datetime-local"
                 label={t('expires')}
-                helperText={t('noExpiry')}
-                slotProps={{ inputLabel: { shrink: true } }}
+                hint={t('noExpiry')}
               />
             )}
             {result && 'email' in result && (
-              <Alert severity="success">{t('emailSent', { email: result.email })}</Alert>
+              <Notice tone={'success'}>{t('emailSent', { email: result.email })}</Notice>
             )}
             <SaveBar back={back} label={kind === 'email' ? 'sendLink' : 'add'} busy={task.busy} />
-          </Stack>
+          </div>
         </Form>
       )}
     </Page>

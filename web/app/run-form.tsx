@@ -1,6 +1,6 @@
+import { InputField, TextareaField } from './form-fields';
 import { Form, redirect, useActionData, useLoaderData } from 'react-router';
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
-import { Stack, TextField } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { Resource, Run } from '../../shared/contracts';
 import type { NewRun } from '../../shared/contracts';
@@ -47,7 +47,11 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
         },
         save: jsonField(form, 'save', {}),
       };
-    const result = await api('/principals/' + params.owner + '/runs', { method: 'POST', body: input }, Run);
+    const result = await api(
+      '/principals/' + params.owner + '/runs',
+      { method: 'POST', body: input },
+      Run,
+    );
     return redirect('/runs/' + result.id);
   });
 }
@@ -59,10 +63,10 @@ export default function RunForm() {
     <Page title={resource ? t('execute') + ' — ' + resource.name : t('http')} narrow>
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
       <Form method="post">
-        <Stack spacing={3}>
+        <div className="flex min-w-0 flex-col gap-6">
           {resource?.kind === 'function' ? (
             resource.data.parameters.map((parameter) => (
-              <TextField
+              <InputField
                 key={parameter.name}
                 name={'argument.' + parameter.name}
                 label={parameter.label || parameter.name}
@@ -79,14 +83,15 @@ export default function RunForm() {
                 rows={3}
                 helperText={t('commandHelp')}
               />
-              <TextField name="stdin" label={t('stdin')} multiline minRows={3} />
-              <TextField
+              <TextareaField name="stdin" label={t('stdin')} rows={3} />
+              <InputField
                 type="number"
                 name="timeout"
                 label={t('timeout')}
                 defaultValue={60}
                 required
-                slotProps={{ htmlInput: { min: 1, max: 3600 } }}
+                min={1}
+                max={3600}
               />
               <JsonField name="inputs" label={t('inputs')} value={[]} />
             </>
@@ -99,7 +104,7 @@ export default function RunForm() {
             </>
           )}
           <SaveBar back={resource ? resourcePath(resource) : '..'} label="execute" />
-        </Stack>
+        </div>
       </Form>
     </Page>
   );

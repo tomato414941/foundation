@@ -1,6 +1,8 @@
+import { Button } from '../components/ui/button';
+import { InputField, TextareaField, CheckboxField } from '../form-fields';
+import { Notice } from '../components';
 import { useState } from 'react';
 import { Link, redirect, useActionData, useLoaderData } from 'react-router';
-import { Alert, Button, Checkbox, FormControlLabel, Stack, TextField, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/resource';
 import { Resource } from '../../../shared/contracts';
@@ -56,7 +58,10 @@ export default function ResourceDetail() {
   const { t } = useTranslation();
   const task = useTask();
   const [content, setContent] = useState<Uint8Array | null>(null);
-  const [link, setLink] = useState<{ url: string; expiresAt: string } | null>(null);
+  const [link, setLink] = useState<{
+    url: string;
+    expiresAt: string;
+  } | null>(null);
   const [minutes, setMinutes] = useState(15);
   const can = (action: (typeof item.permissions)[number]) => item.permissions.includes(action);
   usePolling(
@@ -78,18 +83,18 @@ export default function ResourceDetail() {
       actions={
         <>
           {can('update') && !['environment', 'connection'].includes(item.kind) && (
-            <Button component={Link} to="edit" variant="outlined">
-              {t('edit')}
+            <Button variant="outline" asChild>
+              <Link to="edit">{t('edit')}</Link>
             </Button>
           )}
           {can('share') && (
-            <Button component={Link} to="share">
-              {t('share')}
+            <Button variant="ghost" asChild>
+              <Link to="share">{t('share')}</Link>
             </Button>
           )}
           {can('transfer') && item.kind !== 'environment' && (
-            <Button component={Link} to="transfer">
-              {t('transfer')}
+            <Button variant="ghost" asChild>
+              <Link to="transfer">{t('transfer')}</Link>
             </Button>
           )}
         </>
@@ -101,30 +106,30 @@ export default function ResourceDetail() {
       </Panel>
       {item.kind === 'secret' && can('reveal') && (
         <Panel>
-          <Stack direction="row" spacing={1}>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Button
-              variant="contained"
               loading={task.busy}
               onClick={() => task.run(async () => setContent(content ? null : await secret()))}
+              variant="default"
             >
               {t(content ? 'hide' : 'reveal')}
             </Button>
             <Button
               loading={task.busy}
               onClick={() => task.run(async () => downloadBytes(await secret(), item.name))}
+              variant="ghost"
             >
               {t('download')}
             </Button>
-          </Stack>
+          </div>
           {content && (
             <>
-              <TextField
+              <TextareaField
                 label={t('value')}
                 value={decode(content)}
-                multiline
-                minRows={3}
-                fullWidth
-                slotProps={{ input: { readOnly: true }, htmlInput: { spellCheck: false } }}
+                rows={3}
+                readOnly={true}
+                spellCheck={false}
               />
               <Copy value={decode(content)} />
             </>
@@ -133,60 +138,63 @@ export default function ResourceDetail() {
       )}
       {item.kind === 'connection' && (
         <Panel title={t('outputs')}>
-          {item.data.state !== 'ready' && <Alert severity="warning">{t('state.' + item.data.state)}</Alert>}
+          {item.data.state !== 'ready' && (
+            <Notice tone={'warning'}>{t('state.' + item.data.state)}</Notice>
+          )}
           <JsonView value={item.data.outputs} />
-          <Typography variant="body2" color="text.secondary">
-            {t('connectionUseHelp')}
-          </Typography>
+          <p className="leading-relaxed text-muted-foreground text-sm">{t('connectionUseHelp')}</p>
           {can('update') && (
-            <Button component={Link} to={`../new?connection=${item.id}`} relative="path" variant="outlined">
-              {t('reconnect')}
+            <Button variant="outline" asChild>
+              <Link to={`../new?connection=${item.id}`} relative="path">
+                {t('reconnect')}
+              </Link>
             </Button>
           )}
         </Panel>
       )}
       {item.kind === 'object' && (
         <Panel>
-          <Stack direction="row" spacing={2}>
-            <Button href={`/api/resources/${item.id}/content`} variant="contained">
-              {t('download')}
+          <div className="flex min-w-0 flex-wrap items-center gap-4">
+            <Button variant="default" asChild>
+              <a href={`/api/resources/${item.id}/content`}>{t('download')}</a>
             </Button>
             {can('update') && (
-              <Button component={Link} to="edit">
-                {t('replaceFile')}
+              <Button variant="ghost" asChild>
+                <Link to="edit">{t('replaceFile')}</Link>
               </Button>
             )}
-          </Stack>
-          <Typography variant="body2" color="text.secondary">
-            {t('linkHelp')}
-          </Typography>
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-            <TextField
-              size="small"
+          </div>
+          <p className="leading-relaxed text-muted-foreground text-sm">{t('linkHelp')}</p>
+          <div className="flex min-w-0 flex-col sm:flex-row sm:items-center gap-4">
+            <InputField
               type="number"
               label={t('expires') + ' (' + t('minutes') + ')'}
               value={minutes}
               onChange={(event) => setMinutes(Number(event.target.value))}
-              slotProps={{ htmlInput: { min: 1, max: 1440 } }}
+              min={1}
+              max={1440}
             />
             <Button
               loading={task.busy}
               onClick={() =>
                 task.run(async () =>
-                  setLink(await api(`/resources/${item.id}/link`, { method: 'POST', body: { minutes } })),
+                  setLink(
+                    await api(`/resources/${item.id}/link`, { method: 'POST', body: { minutes } }),
+                  ),
                 )
               }
+              variant="ghost"
             >
               {t('createLink')}
             </Button>
-          </Stack>
+          </div>
           {link && (
             <>
-              <TextField label={t('link')} value={link.url} slotProps={{ input: { readOnly: true } }} />
+              <InputField label={t('link')} value={link.url} readOnly={true} />
               <Copy value={link.url} />
-              <Typography variant="body2">
+              <p className="leading-relaxed text-sm">
                 <DateText value={link.expiresAt} />
-              </Typography>
+              </p>
             </>
           )}
         </Panel>
@@ -197,10 +205,10 @@ export default function ResourceDetail() {
           <Detail label={t('size')}>{t(item.data.size)}</Detail>
           <Detail label={t('maximum')}>{item.data.lifetime.maxSeconds / 60}</Detail>
           <Detail label={t('idle')}>{item.data.lifetime.idleSeconds / 60}</Detail>
-          {item.data.error && <Alert severity="error">{t('failure')}</Alert>}
+          {item.data.error && <Notice tone={'error'}>{t('failure')}</Notice>}
           {item.data.state === 'running' && can('execute') && (
-            <Button component={Link} to="run" variant="contained">
-              {t('execute')}
+            <Button variant="default" asChild>
+              <Link to="run">{t('execute')}</Link>
             </Button>
           )}
           {['starting', 'running'].includes(item.data.state) && can('update') && (
@@ -209,17 +217,17 @@ export default function ResourceDetail() {
             </Confirm>
           )}
           {['stopped', 'failed'].includes(item.data.state) && (
-            <Typography color="text.secondary">{t('stoppedHelp')}</Typography>
+            <p className="leading-relaxed text-muted-foreground">{t('stoppedHelp')}</p>
           )}
         </Panel>
       )}
       {item.kind === 'function' && (
         <Panel>
-          <Typography>{item.data.description}</Typography>
+          <p className="leading-relaxed">{item.data.description}</p>
           <JsonView value={item.data} />
           {can('execute') && (
-            <Button component={Link} to="run" variant="contained">
-              {t('execute')}
+            <Button variant="default" asChild>
+              <Link to="run">{t('execute')}</Link>
             </Button>
           )}
         </Panel>
@@ -228,24 +236,23 @@ export default function ResourceDetail() {
         <Panel>
           <JsonView value={item.data} />
           {item.kind === 'method' && can('use') && (
-            <Button component={Link} to={`/p/${item.ownerId}/services/new?method=${item.id}`}>
-              {t('connect')}
+            <Button variant="ghost" asChild>
+              <Link to={`/p/${item.ownerId}/services/new?method=${item.id}`}>{t('connect')}</Link>
             </Button>
           )}
         </Panel>
       )}
       {can('delete') && (
-        <Stack direction="row">
+        <div className="flex min-w-0 flex-wrap items-center">
           <Confirm label={t(item.kind === 'connection' ? 'disconnect' : 'delete')} name={item.name}>
             {item.kind === 'connection' && item.data.methodKind === 'oauth' && (
-              <FormControlLabel
-                control={<Checkbox name="revoke" defaultChecked />}
-                label={t('revokeProvider')}
-              />
+              <CheckboxField name="revoke" defaultChecked label={t('revokeProvider')} />
             )}
-            {item.kind === 'connection' && <Typography variant="body2">{t('disconnectHelp')}</Typography>}
+            {item.kind === 'connection' && (
+              <p className="leading-relaxed text-sm">{t('disconnectHelp')}</p>
+            )}
           </Confirm>
-        </Stack>
+        </div>
       )}
     </Page>
   );

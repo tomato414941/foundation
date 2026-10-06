@@ -1,7 +1,8 @@
 import { Form, Link, useLoaderData, useSearchParams, useParams } from 'react-router';
-import { Alert, Button, InputAdornment, Stack, TextField } from '@mui/material';
-import SearchIcon from '@mui/icons-material/Search';
-import AddIcon from '@mui/icons-material/Add';
+import { Plus, Search } from 'lucide-react';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Notice } from '../components';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/resource-list';
 import { Resource, listOf } from '../../../shared/contracts';
@@ -14,7 +15,11 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
   const search = new URL(request.url).searchParams;
   const query = new URLSearchParams({ kind: resourceKind(params.section), limit: '50' });
   for (const key of ['query', 'after']) if (search.has(key)) query.set(key, search.get(key)!);
-  return api(`/principals/${params.owner}/resources?${query}`, { signal: request.signal }, listOf(Resource));
+  return api(
+    `/principals/${params.owner}/resources?${query}`,
+    { signal: request.signal },
+    listOf(Resource),
+  );
 }
 export default function ResourceList() {
   const { t } = useTranslation();
@@ -39,49 +44,50 @@ export default function ResourceList() {
       actions={
         available &&
         principal.createKinds.includes(resourceKind(section)) && (
-          <Button component={Link} to="new" startIcon={<AddIcon />} variant="contained">
-            {t(section === 'services' ? 'connect' : section === 'objects' ? 'upload' : 'create')}
+          <Button asChild>
+            <Link to="new">
+              <Plus className="size-4" />
+              {t(section === 'services' ? 'connect' : section === 'objects' ? 'upload' : 'create')}
+            </Link>
           </Button>
         )
       }
     >
       <ErrorNotice error={search.get('error')} />
-      {!available && <Alert severity="info">{t('featureUnavailable')}</Alert>}
-      <Form method="get">
-        <Stack direction="row" spacing={1}>
-          <TextField
-            size="small"
-            label={t('search')}
-            name="query"
-            defaultValue={search.get('query') ?? ''}
-            fullWidth
-            slotProps={{
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon />
-                  </InputAdornment>
-                ),
-              },
-            }}
+      {!available && <Notice>{t('featureUnavailable')}</Notice>}
+      <Form method="get" className="flex items-center gap-2">
+        <div className="relative min-w-0 flex-1 sm:max-w-sm">
+          <Search
+            className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground"
+            aria-hidden="true"
           />
-          <Button type="submit">{t('search')}</Button>
-        </Stack>
+          <Input
+            type="search"
+            name="query"
+            aria-label={t('search')}
+            placeholder={t('search')}
+            defaultValue={search.get('query') ?? ''}
+            className="h-9 pl-9"
+          />
+        </div>
+        <Button type="submit" variant="outline" className="h-9">
+          {t('search')}
+        </Button>
       </Form>
       <ResourceTable items={data.items} search={!!search.get('query')} />
       <Paging next={data.next} search={search} />
       {section === 'services' && (
-        <Stack direction="row" spacing={2} useFlexGap sx={{ flexWrap: 'wrap' }}>
-          <Button component={Link} to={'/p/' + principal.id + '/definitions'}>
-            {t('definitions')}
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="ghost">
+            <Link to={'/p/' + principal.id + '/definitions'}>{t('definitions')}</Link>
           </Button>
-          <Button component={Link} to={'/p/' + principal.id + '/methods'}>
-            {t('methods')}
+          <Button asChild variant="ghost">
+            <Link to={'/p/' + principal.id + '/methods'}>{t('methods')}</Link>
           </Button>
-          <Button component={Link} to={'/p/' + principal.id + '/apps'}>
-            {t('apps')}
+          <Button asChild variant="ghost">
+            <Link to={'/p/' + principal.id + '/apps'}>{t('apps')}</Link>
           </Button>
-        </Stack>
+        </div>
       )}
     </Page>
   );

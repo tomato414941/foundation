@@ -1,5 +1,6 @@
+import { Button } from '../components/ui/button';
+import { Notice } from '../components';
 import { Form, redirect, useActionData, useLoaderData } from 'react-router';
-import { Alert, Button, Stack } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/service-review';
 import { actionResult, api, formText, safeReturn, session } from '../api';
@@ -10,14 +11,17 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
   const current = await session(request);
   if (!current.principal)
     throw redirect('/signin?returnTo=' + encodeURIComponent(new URL(request.url).pathname));
-  return api<{ before: ConnectionFactsValue; after: ConnectionFactsValue }>(
-    '/connections/' + params.id + '/review',
-  );
+  return api<{
+    before: ConnectionFactsValue;
+    after: ConnectionFactsValue;
+  }>('/connections/' + params.id + '/review');
 }
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
   return actionResult(async () => {
     const form = await request.formData();
-    const result = await api<{ returnTo?: string }>('/connections/' + params.id + '/review', {
+    const result = await api<{
+      returnTo?: string;
+    }>('/connections/' + params.id + '/review', {
       method: 'POST',
       body: { accept: formText(form, 'accept') === 'true' },
     });
@@ -31,7 +35,7 @@ export default function Review() {
   return (
     <Page title={t('reviewConnection')} narrow>
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
-      <Alert severity="warning">{t('reviewConnectionHelp')}</Alert>
+      <Notice tone={'warning'}>{t('reviewConnectionHelp')}</Notice>
       <Panel title={t('before')}>
         <ConnectionFacts value={data.before} />
       </Panel>
@@ -39,14 +43,14 @@ export default function Review() {
         <ConnectionFacts value={data.after} />
       </Panel>
       <Form method="post">
-        <Stack direction="row" spacing={2}>
-          <Button type="submit" name="accept" value="true" variant="contained">
+        <div className="flex min-w-0 flex-wrap items-center gap-4">
+          <Button type="submit" name="accept" value="true" variant="default">
             {t('accept')}
           </Button>
-          <Button type="submit" name="accept" value="false">
+          <Button type="submit" name="accept" value="false" variant="ghost">
             {t('cancel')}
           </Button>
-        </Stack>
+        </div>
       </Form>
     </Page>
   );

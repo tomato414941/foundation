@@ -1,6 +1,8 @@
+import { Button } from '../components/ui/button';
+import { InputField } from '../form-fields';
+import { Notice } from '../components';
 import { useEffect, useState } from 'react';
 import { Form, Link, useActionData, useLoaderData, useNavigate, useRevalidator } from 'react-router';
-import { Alert, Button, Stack, TextField, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/account';
 import { actionResult, api, formText, signedIn } from '../api';
@@ -13,7 +15,9 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
 export async function clientAction({ request }: Route.ClientActionArgs) {
   return actionResult(async () => {
     const form = await request.formData();
-    return api<{ email: string }>('/account/merge/email', {
+    return api<{
+      email: string;
+    }>('/account/merge/email', {
       method: 'POST',
       body: { email: formText(form, 'email'), locale: i18n.language === 'en' ? 'en' : 'ja' },
     });
@@ -40,18 +44,17 @@ export default function Account() {
           {principal.id}
           <Copy value={principal.id} />
         </Detail>
-        <Button component={Link} to={prefix + 'general'}>
-          {t('general')}
+        <Button variant="ghost" asChild>
+          <Link to={prefix + 'general'}>{t('general')}</Link>
         </Button>
-        <Button component={Link} to={prefix + 'credentials'}>
-          {t('credentials')}
+        <Button variant="ghost" asChild>
+          <Link to={prefix + 'credentials'}>{t('credentials')}</Link>
         </Button>
       </Panel>
       <Panel title={t('secrets')}>
-        <Alert severity={unlocked ? 'success' : 'info'}>{t(unlocked ? 'keyReady' : 'keyLocked')}</Alert>
-        <Stack direction="row" spacing={2}>
+        <Notice tone={unlocked ? 'success' : 'info'}>{t(unlocked ? 'keyReady' : 'keyLocked')}</Notice>
+        <div className="flex min-w-0 flex-wrap items-center gap-4">
           <Button
-            variant="outlined"
             loading={task.busy}
             onClick={() =>
               task.run(async () => {
@@ -61,18 +64,18 @@ export default function Account() {
                 await revalidator.revalidate();
               })
             }
+            variant="outline"
           >
             {t('unlock')}
           </Button>
-          <Button component={Link} to={prefix + 'credentials/new'}>
-            {t('addPasskey')}
+          <Button variant="ghost" asChild>
+            <Link to={prefix + 'credentials/new'}>{t('addPasskey')}</Link>
           </Button>
-        </Stack>
+        </div>
       </Panel>
       <Panel title={t('merge')}>
-        <Typography color="text.secondary">{t('mergeHelp')}</Typography>
+        <p className="leading-relaxed text-muted-foreground">{t('mergeHelp')}</p>
         <Button
-          variant="outlined"
           loading={task.busy}
           onClick={() =>
             task.run(async () => {
@@ -80,18 +83,21 @@ export default function Account() {
               await navigate('/account/merge/' + proof.id);
             })
           }
+          variant="outline"
         >
           {t('passkeySignin')}
         </Button>
         {data.features.email && (
           <Form method="post">
-            <Stack spacing={2}>
-              <TextField name="email" type="email" label={t('email')} required fullWidth />
+            <div className="flex min-w-0 flex-col gap-4">
+              <InputField name="email" type="email" label={t('email')} required />
               {result && 'email' in result && (
-                <Alert severity="success">{t('emailSent', { email: result.email })}</Alert>
+                <Notice tone={'success'}>{t('emailSent', { email: result.email })}</Notice>
               )}
-              <Button type="submit">{t('sendLink')}</Button>
-            </Stack>
+              <Button type="submit" variant="ghost">
+                {t('sendLink')}
+              </Button>
+            </div>
           </Form>
         )}
       </Panel>

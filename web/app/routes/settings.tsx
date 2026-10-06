@@ -1,17 +1,17 @@
-import { Form, Link, redirect, useActionData, useLoaderData, useSearchParams } from 'react-router';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
+import { Button } from '../components/ui/button';
+import { Progress } from '../components/ui/progress';
+import { InputField } from '../form-fields';
+import { Notice } from '../components';
 import {
-  Alert,
-  Button,
-  LinearProgress,
-  List,
-  ListItem,
-  ListItemText,
-  Stack,
-  Tab,
-  Tabs,
-  TextField,
-  Typography,
-} from '@mui/material';
+  Form,
+  Link,
+  redirect,
+  useActionData,
+  useLoaderData,
+  useSearchParams,
+  useNavigate,
+} from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/settings';
 import {
@@ -38,7 +38,9 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
       : null,
     params.tab === 'billing' ? api(prefix + '/payment', { signal: request.signal }, Payment) : null,
     params.tab === 'billing' ? api(prefix + '/usage', { signal: request.signal }, Usage) : null,
-    params.tab === 'integrations' ? api(prefix + '/settings', { signal: request.signal }, Settings) : null,
+    params.tab === 'integrations'
+      ? api(prefix + '/settings', { signal: request.signal }, Settings)
+      : null,
     params.tab === 'audit'
       ? api(
           prefix + '/audit?' + new URL(request.url).searchParams,
@@ -54,7 +56,8 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
     const form = await request.formData();
     const prefix = '/principals/' + params.owner;
     const intent = formText(form, 'intent');
-    if (intent === 'rename') await api(prefix, { method: 'PATCH', body: { name: formText(form, 'name') } });
+    if (intent === 'rename')
+      await api(prefix, { method: 'PATCH', body: { name: formText(form, 'name') } });
     else if (intent === 'delete') {
       await api(prefix, { method: 'DELETE' });
       return redirect('/');
@@ -69,16 +72,22 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       await api(prefix + '/limits', {
         method: 'PUT',
         body: {
-          storageBytes: Math.round(Number(formText(form, 'storage')) * 1_000_000),
+          storageBytes: Math.round(Number(formText(form, 'storage')) * 1000000),
           computeSeconds: Math.round(Number(formText(form, 'compute')) * 60),
         },
       });
     else if (intent === 'checkout' || intent === 'portal')
       return redirect(
-        (await api<{ url: string }>(prefix + '/payment/' + intent, { method: 'POST', body: {} })).url,
+        (
+          await api<{
+            url: string;
+          }>(prefix + '/payment/' + intent, { method: 'POST', body: {} })
+        ).url,
       );
     else if (intent === 'settings')
-      return api<{ webhookSecret?: string }>(prefix + '/settings', {
+      return api<{
+        webhookSecret?: string;
+      }>(prefix + '/settings', {
         method: 'PUT',
         body: Object.fromEntries(
           ['returnUrl', 'refreshUrl', 'webhookUrl']
@@ -87,7 +96,9 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
         ),
       });
     else if (intent === 'rotate')
-      return api<{ webhookSecret: string }>(prefix + '/settings/rotate', { method: 'POST', body: {} });
+      return api<{
+        webhookSecret: string;
+      }>(prefix + '/settings/rotate', { method: 'POST', body: {} });
     return { ok: true };
   });
 }
@@ -97,256 +108,282 @@ export default function SettingsPage() {
   const result = useActionData<typeof clientAction>();
   const { session } = useWorkspace();
   const [search] = useSearchParams();
+  const navigate = useNavigate();
   const can = (action: (typeof data.principal.permissions)[number]) =>
     data.principal.permissions.includes(action);
   const prefix = '/p/' + data.principal.id + '/settings/';
   return (
     <Page title={t('settings')}>
-      <Tabs value={data.tab} variant="scrollable" scrollButtons="auto" aria-label={t('settings')}>
-        {(['general', 'credentials', 'billing', 'integrations', 'audit'] as const)
-          .filter((tab) =>
-            tab === 'credentials'
-              ? can('credentials')
-              : tab === 'billing'
-                ? can('billing')
-                : tab === 'integrations'
-                  ? can('share')
-                  : true,
-          )
-          .map((tab) => (
-            <Tab key={tab} value={tab} label={t(tab)} component={Link} to={prefix + tab} />
-          ))}
-      </Tabs>
-      <ErrorNotice error={result && 'error' in result ? result.error : null} />
-      {result && 'ok' in result && <Alert severity="success">{t('saved')}</Alert>}
-      {data.tab === 'general' && (
-        <>
-          <Panel title={t('general')}>
-            <Detail label={t('id')}>
-              {data.principal.id}
-              <Copy value={data.principal.id} />
-            </Detail>
-            <Form method="post">
-              <Stack spacing={2}>
-                <TextField
-                  name="name"
-                  label={t('name')}
-                  defaultValue={data.principal.name}
-                  key={data.principal.name}
-                  required
-                  fullWidth
-                  disabled={!can('update')}
-                />
-                {can('update') && (
-                  <Button type="submit" name="intent" value="rename" variant="contained">
-                    {t('save')}
+      <Tabs value={data.tab} onValueChange={(tab) => void navigate(prefix + tab)} className="gap-6">
+        <TabsList aria-label={t('settings')} className="max-w-full justify-start overflow-x-auto">
+          {(['general', 'credentials', 'billing', 'integrations', 'audit'] as const)
+            .filter((tab) =>
+              tab === 'credentials'
+                ? can('credentials')
+                : tab === 'billing'
+                  ? can('billing')
+                  : tab === 'integrations'
+                    ? can('share')
+                    : true,
+            )
+            .map((tab) => (
+              <TabsTrigger key={tab} value={tab}>
+                {t(tab)}
+              </TabsTrigger>
+            ))}
+        </TabsList>
+        <TabsContent value={data.tab} className="flex min-w-0 flex-col gap-6">
+          <ErrorNotice error={result && 'error' in result ? result.error : null} />
+          {result && 'ok' in result && <Notice tone={'success'}>{t('saved')}</Notice>}
+          {data.tab === 'general' && (
+            <>
+              <Panel title={t('general')}>
+                <Detail label={t('id')}>
+                  {data.principal.id}
+                  <Copy value={data.principal.id} />
+                </Detail>
+                <Form method="post">
+                  <div className="flex min-w-0 flex-col gap-4">
+                    <InputField
+                      name="name"
+                      label={t('name')}
+                      defaultValue={data.principal.name}
+                      key={data.principal.name}
+                      required
+                      disabled={!can('update')}
+                    />
+                    {can('update') && (
+                      <Button type="submit" name="intent" value="rename" variant="default">
+                        {t('save')}
+                      </Button>
+                    )}
+                  </div>
+                </Form>
+                {can('share') && (
+                  <Button variant="ghost" asChild>
+                    <Link to={prefix + 'general/share'}>{t('share')}</Link>
                   </Button>
                 )}
-              </Stack>
-            </Form>
-            {can('share') && (
-              <Button component={Link} to={prefix + 'general/share'}>
-                {t('share')}
-              </Button>
-            )}
-          </Panel>
-          {can('export') && (
-            <Panel title={t('export')}>
-              <Typography color="text.secondary">{t('exportHelp')}</Typography>
-              <Button href={`/api/principals/${data.principal.id}/export`} variant="outlined">
-                {t('download')}
-              </Button>
-            </Panel>
-          )}
-          {can('transfer') && data.principal.id !== session.principal?.id && (
-            <Panel title={t('transfer')}>
-              <Typography color="text.secondary">{t('transferHelp')}</Typography>
-              <Form method="post">
-                <Stack spacing={2}>
-                  <TextField name="to" label={t('transferTo')} required fullWidth />
-                  <Button name="intent" value="transfer" type="submit">
-                    {t('transfer')}
+              </Panel>
+              {can('export') && (
+                <Panel title={t('export')}>
+                  <p className="leading-relaxed text-muted-foreground">{t('exportHelp')}</p>
+                  <Button variant="outline" asChild>
+                    <a href={`/api/principals/${data.principal.id}/export`}>{t('download')}</a>
                   </Button>
-                </Stack>
-              </Form>
-            </Panel>
+                </Panel>
+              )}
+              {can('transfer') && data.principal.id !== session.principal?.id && (
+                <Panel title={t('transfer')}>
+                  <p className="leading-relaxed text-muted-foreground">{t('transferHelp')}</p>
+                  <Form method="post">
+                    <div className="flex min-w-0 flex-col gap-4">
+                      <InputField name="to" label={t('transferTo')} required />
+                      <Button name="intent" value="transfer" type="submit" variant="ghost">
+                        {t('transfer')}
+                      </Button>
+                    </div>
+                  </Form>
+                </Panel>
+              )}
+              {can('delete') && (
+                <div className="flex min-w-0 flex-wrap items-center">
+                  <Confirm label={t('deletePrincipal')} name={data.principal.name}>
+                    <input type="hidden" name="intent" value="delete" />
+                  </Confirm>
+                </div>
+              )}
+            </>
           )}
-          {can('delete') && (
-            <Stack direction="row">
-              <Confirm label={t('deletePrincipal')} name={data.principal.name}>
-                <input type="hidden" name="intent" value="delete" />
-              </Confirm>
-            </Stack>
-          )}
-        </>
-      )}
-      {data.credentials && (
-        <Panel title={t('credentials')}>
-          <Button component={Link} to="new" variant="contained">
-            {t('add')}
-          </Button>
-          <List>
-            {data.credentials.items.map((credential) => (
-              <ListItem key={credential.id} disableGutters sx={{ flexWrap: 'wrap' }}>
-                <ListItemText
-                  primary={credential.name}
-                  secondary={
-                    <>
-                      {t(
-                        credential.kind === 'key'
-                          ? 'apiKey'
-                          : credential.kind === 'email'
-                            ? 'email'
-                            : 'passkeySignin',
-                      )}{' '}
-                      · <DateText value={credential.lastUsedAt ?? credential.createdAt} />
-                      {credential.expiresAt && (
-                        <>
-                          {' '}
-                          · {t('expires')}: <DateText value={credential.expiresAt} />
-                        </>
-                      )}
-                    </>
-                  }
-                />
-                <Confirm label={t('delete')} name={credential.name}>
-                  <input type="hidden" name="intent" value="credential" />
-                  <input type="hidden" name="credentialId" value={credential.id} />
-                </Confirm>
-              </ListItem>
-            ))}
-          </List>
-        </Panel>
-      )}
-      {data.payment && data.usage && (
-        <>
-          <Panel title={t('billing')}>
-            <Detail label={t('status')}>
-              {t(data.payment.required ? (data.payment.active ? 'active' : 'inactive') : 'paymentNotRequired')}
-            </Detail>
-            <Detail label={t('payer')}>{data.payment.payer?.name ?? '—'}</Detail>
-            {data.payment.available ? (
-              <Form method="post">
-                <Button
-                  type="submit"
-                  name="intent"
-                  value={data.payment.active ? 'portal' : 'checkout'}
-                  variant="contained"
-                >
-                  {t(data.payment.active ? 'managePayment' : 'addPayment')}
-                </Button>
-              </Form>
-            ) : (
-              <Alert severity="info">
-                {t(data.payment.required ? 'featureUnavailable' : 'paymentIncluded')}
-              </Alert>
-            )}
-          </Panel>
-          <Panel title={t('usage') + ' — ' + data.usage.month}>
-            <Detail label={t('storage')}>
-              <Bytes value={data.usage.storageBytes} /> / <Bytes value={data.usage.storageLimit} />
-            </Detail>
-            <LinearProgress
-              variant="determinate"
-              value={Math.min(100, (data.usage.storageBytes / data.usage.storageLimit) * 100)}
-              aria-label={t('storage')}
-            />
-            <Detail label={t('compute')}>
-              {Math.ceil(data.usage.computeSeconds / 60)} / {Math.floor(data.usage.computeLimit / 60)}{' '}
-              {t('minutes')}
-            </Detail>
-            <LinearProgress
-              variant="determinate"
-              value={Math.min(100, (data.usage.computeSeconds / data.usage.computeLimit) * 100)}
-              aria-label={t('compute')}
-            />
-          </Panel>
-          <Panel>
-            <Typography color="text.secondary">{t('limitsHelp')}</Typography>
-            <Form method="post">
-              <Stack spacing={3}>
-                <TextField
-                  type="number"
-                  name="storage"
-                  label={t('storageLimit')}
-                  defaultValue={data.usage.storageLimit / 1_000_000}
-                  required
-                  slotProps={{ htmlInput: { min: 0.000001, max: 1_000_000, step: 'any' } }}
-                />
-                <TextField
-                  type="number"
-                  name="compute"
-                  label={t('computeLimit')}
-                  defaultValue={data.usage.computeLimit / 60}
-                  required
-                  slotProps={{ htmlInput: { min: 1, max: 166666, step: 'any' } }}
-                />
-                <Button name="intent" value="limits" type="submit" variant="contained">
-                  {t('save')}
-                </Button>
-              </Stack>
-            </Form>
-          </Panel>
-        </>
-      )}
-      {data.settings && (
-        <>
-          <Panel title={t('integrations')}>
-            <Form method="post">
-              <Stack spacing={3}>
-                {['returnUrl', 'refreshUrl', 'webhookUrl'].map((key) => (
-                  <TextField
-                    key={key}
-                    type="url"
-                    name={key}
-                    label={t(key)}
-                    defaultValue={data.settings?.[key as keyof typeof data.settings] ?? ''}
-                    fullWidth
-                  />
+          {data.credentials && (
+            <Panel title={t('credentials')}>
+              <Button variant="default" asChild>
+                <Link to="new">{t('add')}</Link>
+              </Button>
+              <ul className="divide-y divide-border">
+                {data.credentials.items.map((credential) => (
+                  <li
+                    key={credential.id}
+                    className="flex flex-wrap items-center gap-3 py-4 first:pt-0 last:pb-0"
+                  >
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="font-medium wrap-anywhere">{credential.name}</div>
+                      <div className="text-xs leading-relaxed text-muted-foreground wrap-anywhere">
+                        {
+                          <>
+                            {t(
+                              credential.kind === 'key'
+                                ? 'apiKey'
+                                : credential.kind === 'email'
+                                  ? 'email'
+                                  : 'passkeySignin',
+                            )}{' '}
+                            · <DateText value={credential.lastUsedAt ?? credential.createdAt} />
+                            {credential.expiresAt && (
+                              <>
+                                {' '}
+                                · {t('expires')}: <DateText value={credential.expiresAt} />
+                              </>
+                            )}
+                          </>
+                        }
+                      </div>
+                    </div>
+                    <Confirm label={t('delete')} name={credential.name}>
+                      <input type="hidden" name="intent" value="credential" />
+                      <input type="hidden" name="credentialId" value={credential.id} />
+                    </Confirm>
+                  </li>
                 ))}
-                <Button name="intent" value="settings" type="submit" variant="contained">
-                  {t('save')}
-                </Button>
-              </Stack>
-            </Form>
-          </Panel>
-          {result && 'webhookSecret' in result && result.webhookSecret && (
-            <Panel title={t('webhookSecret')}>
-              <TextField
-                value={result.webhookSecret}
-                label={t('webhookSecret')}
-                slotProps={{ input: { readOnly: true } }}
-              />
-              <Copy value={result.webhookSecret} />
+              </ul>
             </Panel>
           )}
-          {data.settings.webhookUrl && (
-            <Confirm label={t('rotate')} name={t('webhookSecret')} body={t('rotateHelp')} danger={false}>
-              <input type="hidden" name="intent" value="rotate" />
-            </Confirm>
-          )}
-        </>
-      )}
-      {data.audit && (
-        <Panel title={t('audit')}>
-          <List>
-            {data.audit.items.map((entry) => (
-              <ListItem key={entry.id} disableGutters>
-                <ListItemText
-                  primary={entry.action}
-                  secondary={
-                    <>
-                      <DateText value={entry.createdAt} /> · {entry.actorId ?? 'Foundation'}
-                    </>
-                  }
+          {data.payment && data.usage && (
+            <>
+              <Panel title={t('billing')}>
+                <Detail label={t('status')}>
+                  {t(
+                    data.payment.required
+                      ? data.payment.active
+                        ? 'active'
+                        : 'inactive'
+                      : 'paymentNotRequired',
+                  )}
+                </Detail>
+                <Detail label={t('payer')}>{data.payment.payer?.name ?? '—'}</Detail>
+                {data.payment.available ? (
+                  <Form method="post">
+                    <Button
+                      type="submit"
+                      name="intent"
+                      value={data.payment.active ? 'portal' : 'checkout'}
+                      variant="default"
+                    >
+                      {t(data.payment.active ? 'managePayment' : 'addPayment')}
+                    </Button>
+                  </Form>
+                ) : (
+                  <Notice tone={'info'}>
+                    {t(data.payment.required ? 'featureUnavailable' : 'paymentIncluded')}
+                  </Notice>
+                )}
+              </Panel>
+              <Panel title={t('usage') + ' — ' + data.usage.month}>
+                <Detail label={t('storage')}>
+                  <Bytes value={data.usage.storageBytes} /> / <Bytes value={data.usage.storageLimit} />
+                </Detail>
+                <Progress
+                  value={Math.min(100, (data.usage.storageBytes / data.usage.storageLimit) * 100)}
+                  aria-label={t('storage')}
                 />
-              </ListItem>
-            ))}
-          </List>
-          {!data.audit.items.length && <Typography color="text.secondary">{t('empty')}</Typography>}
-          <Paging next={data.audit.next} search={search} />
-        </Panel>
-      )}
+                <Detail label={t('compute')}>
+                  {Math.ceil(data.usage.computeSeconds / 60)} /{' '}
+                  {Math.floor(data.usage.computeLimit / 60)} {t('minutes')}
+                </Detail>
+                <Progress
+                  value={Math.min(100, (data.usage.computeSeconds / data.usage.computeLimit) * 100)}
+                  aria-label={t('compute')}
+                />
+              </Panel>
+              <Panel>
+                <p className="leading-relaxed text-muted-foreground">{t('limitsHelp')}</p>
+                <Form method="post">
+                  <div className="flex min-w-0 flex-col gap-6">
+                    <InputField
+                      type="number"
+                      name="storage"
+                      label={t('storageLimit')}
+                      defaultValue={data.usage.storageLimit / 1000000}
+                      required
+                      min={0.000001}
+                      max={1000000}
+                      step={'any'}
+                    />
+                    <InputField
+                      type="number"
+                      name="compute"
+                      label={t('computeLimit')}
+                      defaultValue={data.usage.computeLimit / 60}
+                      required
+                      min={1}
+                      max={166666}
+                      step={'any'}
+                    />
+                    <Button name="intent" value="limits" type="submit" variant="default">
+                      {t('save')}
+                    </Button>
+                  </div>
+                </Form>
+              </Panel>
+            </>
+          )}
+          {data.settings && (
+            <>
+              <Panel title={t('integrations')}>
+                <Form method="post">
+                  <div className="flex min-w-0 flex-col gap-6">
+                    {['returnUrl', 'refreshUrl', 'webhookUrl'].map((key) => (
+                      <InputField
+                        key={key}
+                        type="url"
+                        name={key}
+                        label={t(key)}
+                        defaultValue={data.settings?.[key as keyof typeof data.settings] ?? ''}
+                      />
+                    ))}
+                    <Button name="intent" value="settings" type="submit" variant="default">
+                      {t('save')}
+                    </Button>
+                  </div>
+                </Form>
+              </Panel>
+              {result && 'webhookSecret' in result && result.webhookSecret && (
+                <Panel title={t('webhookSecret')}>
+                  <InputField value={result.webhookSecret} label={t('webhookSecret')} readOnly={true} />
+                  <Copy value={result.webhookSecret} />
+                </Panel>
+              )}
+              {data.settings.webhookUrl && (
+                <Confirm
+                  label={t('rotate')}
+                  name={t('webhookSecret')}
+                  body={t('rotateHelp')}
+                  danger={false}
+                >
+                  <input type="hidden" name="intent" value="rotate" />
+                </Confirm>
+              )}
+            </>
+          )}
+          {data.audit && (
+            <Panel title={t('audit')}>
+              <ul className="divide-y divide-border">
+                {data.audit.items.map((entry) => (
+                  <li
+                    key={entry.id}
+                    className="flex flex-wrap items-center gap-3 py-4 first:pt-0 last:pb-0"
+                  >
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="font-medium wrap-anywhere">{entry.action}</div>
+                      <div className="text-xs leading-relaxed text-muted-foreground wrap-anywhere">
+                        {
+                          <>
+                            <DateText value={entry.createdAt} /> · {entry.actorId ?? 'Foundation'}
+                          </>
+                        }
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              {!data.audit.items.length && (
+                <p className="leading-relaxed text-muted-foreground">{t('empty')}</p>
+              )}
+              <Paging next={data.audit.next} search={search} />
+            </Panel>
+          )}
+        </TabsContent>
+      </Tabs>
     </Page>
   );
 }

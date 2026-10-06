@@ -1,7 +1,10 @@
+import { Button } from '../components/ui/button';
+import { Separator } from '../components/ui/separator';
+import { InputField } from '../form-fields';
+import { Notice } from '../components';
+import { Fingerprint as FingerprintIcon } from 'lucide-react';
 import { useState } from 'react';
 import { Form, useActionData, useLoaderData, useSearchParams } from 'react-router';
-import { Alert, Button, Divider, Stack, TextField, Typography } from '@mui/material';
-import FingerprintIcon from '@mui/icons-material/Fingerprint';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/signin';
 import { actionResult, api, formText, safeReturn, session } from '../api';
@@ -14,7 +17,9 @@ export async function clientLoader() {
 export async function clientAction({ request }: Route.ClientActionArgs) {
   return actionResult(async () => {
     const form = await request.formData();
-    return api<{ email: string }>('/auth/email', {
+    return api<{
+      email: string;
+    }>('/auth/email', {
       method: 'POST',
       body: {
         email: formText(form, 'email'),
@@ -34,65 +39,72 @@ export default function Signin() {
   const task = useTask();
   const back = safeReturn(search.get('returnTo'));
   return (
-    <Page title={t(create ? 'signup' : 'signinTitle')} narrow>
-      <Typography color="text.secondary">{t('signinDescription')}</Typography>
-      <ErrorNotice error={task.error ?? (result && 'error' in result ? result.error : null)} />
-      <Panel>
-        <Stack spacing={3}>
-          {create && (
-            <TextField
-              required
-              label={t('name')}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              autoComplete="name"
-              slotProps={{ htmlInput: { maxLength: 200 } }}
-            />
-          )}
-          <Button
-            variant="contained"
-            size="large"
-            startIcon={<FingerprintIcon />}
-            loading={task.busy}
-            disabled={create && !name.trim()}
-            onClick={() =>
-              task.run(async () => {
-                const auth = create ? await registerPasskey(name) : await authenticate();
-                window.location.assign(
-                  back === '/' && !auth.encrypted ? '/account?encryption=unavailable' : back,
-                );
-              })
-            }
-          >
-            {t(create ? 'passkeyCreate' : 'passkeySignin')}
-          </Button>
-          <Button onClick={() => setCreate(!create)}>{t(create ? 'signin' : 'signup')}</Button>
-          {data.features.email && (
-            <>
-              <Divider>{t('or')}</Divider>
-              <Form method="post">
-                <Stack spacing={2}>
-                  <input type="hidden" name="returnTo" value={back} />
-                  <TextField
-                    required
-                    type="email"
-                    name="email"
-                    label={t('email')}
-                    autoComplete="email"
-                    fullWidth
-                  />
-                  {result && 'email' in result && (
-                    <Alert severity="success">{t('emailSent', { email: result.email })}</Alert>
-                  )}
-                  <Button type="submit" variant="outlined">
-                    {t('sendLink')}
-                  </Button>
-                </Stack>
-              </Form>
-            </>
-          )}
-        </Stack>
-      </Panel>
-    </Page>
+    <div className="mx-auto max-w-sm py-8 sm:py-16">
+      <Page title={t(create ? 'signup' : 'signinTitle')} narrow>
+        <p className="leading-relaxed text-muted-foreground">{t('signinDescription')}</p>
+        <ErrorNotice error={task.error ?? (result && 'error' in result ? result.error : null)} />
+        <Panel>
+          <div className="flex min-w-0 flex-col gap-6">
+            {create && (
+              <InputField
+                required
+                label={t('name')}
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                autoComplete="name"
+                maxLength={200}
+              />
+            )}
+            <Button
+              loading={task.busy}
+              disabled={create && !name.trim()}
+              onClick={() =>
+                task.run(async () => {
+                  const auth = create ? await registerPasskey(name) : await authenticate();
+                  window.location.assign(
+                    back === '/' && !auth.encrypted ? '/account?encryption=unavailable' : back,
+                  );
+                })
+              }
+              variant="default"
+              size="lg"
+            >
+              {<FingerprintIcon />}
+              {t(create ? 'passkeyCreate' : 'passkeySignin')}
+            </Button>
+            <Button onClick={() => setCreate(!create)} variant="ghost">
+              {t(create ? 'signin' : 'signup')}
+            </Button>
+            {data.features.email && (
+              <>
+                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                  <Separator className="flex-1" />
+                  <span>{t('or')}</span>
+                  <Separator className="flex-1" />
+                </div>
+                <Form method="post">
+                  <div className="flex min-w-0 flex-col gap-4">
+                    <input type="hidden" name="returnTo" value={back} />
+                    <InputField
+                      required
+                      type="email"
+                      name="email"
+                      label={t('email')}
+                      autoComplete="email"
+                    />
+                    {result && 'email' in result && (
+                      <Notice tone={'success'}>{t('emailSent', { email: result.email })}</Notice>
+                    )}
+                    <Button type="submit" variant="outline">
+                      {t('sendLink')}
+                    </Button>
+                  </div>
+                </Form>
+              </>
+            )}
+          </div>
+        </Panel>
+      </Page>
+    </div>
   );
 }

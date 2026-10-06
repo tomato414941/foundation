@@ -409,6 +409,7 @@ class BrowserTests(unittest.TestCase):
         page.wait_for_url("**/p/**")
         self.select(page, "言語", "English")
         page.get_by_role("button", name="Open navigation", exact=True).click()
+        expect(page.get_by_role("dialog")).to_be_visible()
         page.get_by_role("link", name="Environments", exact=True).click()
         page.get_by_role("link", name="Create", exact=True).click()
         expect(page.get_by_role("heading", name="Create environment", exact=True)).to_be_visible()
@@ -419,6 +420,29 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("heading", name="Environments", exact=True)).to_be_visible()
         page.reload()
         expect(page.get_by_role("button", name="Sign out", exact=True)).to_be_visible()
+
+    def test_設定を保存しキーボードでタブと確認画面を操作する(self):
+        page, principal = self.passkey_account("Keyboard account")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/settings/general")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Updated keyboard account")
+        page.get_by_role("button", name="保存", exact=True).click()
+        expect(page.get_by_role("alert")).to_contain_text("保存しました")
+        page.get_by_role("tab", name="基本情報", exact=True).focus()
+        page.keyboard.press("ArrowRight")
+        page.wait_for_url("**/settings/credentials")
+        expect(page.get_by_text("Keyboard account", exact=True)).to_be_visible()
+        page.get_by_role("tab", name="ログイン方法・APIキー", exact=True).focus()
+        page.keyboard.press("ArrowRight")
+        page.wait_for_url("**/settings/billing")
+        expect(page.get_by_role("progressbar", name="ストレージ", exact=True)).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "settings-desktop-ja.png"), full_page=True)
+        page.get_by_role("tab", name="基本情報", exact=True).click()
+        remove = page.get_by_role("button", name="プリンシパルを削除", exact=True)
+        remove.click()
+        expect(page.get_by_role("dialog")).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(remove).to_be_focused()
+        expect(page.get_by_role("textbox", name="名前", exact=True)).to_have_value("Updated keyboard account")
 
 
 if __name__ == "__main__":

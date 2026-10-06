@@ -1,5 +1,5 @@
+import { Button } from '../components/ui/button';
 import { Form, Link, redirect, useActionData, useLoaderData } from 'react-router';
-import { Button, Stack, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/merge';
 import type { PublicEncryptionKey, ResourceView, SealedContent } from '../../../shared/contracts';
@@ -9,10 +9,20 @@ import { getKey } from '../keys';
 import { ErrorNotice, Page, Panel } from '../components';
 import { ResourceTable } from '../resource-table';
 type MergePlan = {
-  from: { id: string; name: string; publicKey: PublicEncryptionKey | null };
+  from: {
+    id: string;
+    name: string;
+    publicKey: PublicEncryptionKey | null;
+  };
   resources: ResourceView[];
-  secrets: Array<{ id: string; sealed: SealedContent }>;
-  recipients: Array<{ id: string; publicKey: PublicEncryptionKey }>;
+  secrets: Array<{
+    id: string;
+    sealed: SealedContent;
+  }>;
+  recipients: Array<{
+    id: string;
+    publicKey: PublicEncryptionKey;
+  }>;
 };
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   await signedIn(request);
@@ -48,21 +58,21 @@ export default function Merge() {
     <Page title={t('mergeReview')}>
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
       <Panel>
-        <Typography>
+        <p className="leading-relaxed">
           {t('mergeFrom')}: {data.from.name}
-        </Typography>
-        <Typography>{t('mergeCount', { count: data.resources.length })}</Typography>
+        </p>
+        <p className="leading-relaxed">{t('mergeCount', { count: data.resources.length })}</p>
       </Panel>
       <ResourceTable items={data.resources} kinds />
       <Form method="post">
-        <Stack direction="row" spacing={2}>
-          <Button variant="contained" type="submit">
+        <div className="flex min-w-0 flex-wrap items-center gap-4">
+          <Button type="submit" variant="default">
             {t('mergeConfirm')}
           </Button>
-          <Button component={Link} to="/account">
-            {t('cancel')}
+          <Button variant="ghost" asChild>
+            <Link to="/account">{t('cancel')}</Link>
           </Button>
-        </Stack>
+        </div>
       </Form>
     </Page>
   );

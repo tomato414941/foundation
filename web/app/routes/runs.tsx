@@ -1,5 +1,5 @@
+import { Button } from '../components/ui/button';
 import { Link, useLoaderData, useSearchParams } from 'react-router';
-import { Button, List, ListItemButton, ListItemText, Paper } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/runs';
 import { Run, listOf } from '../../../shared/contracts';
@@ -18,27 +18,40 @@ export default function Runs() {
     <Page
       title={t('runs')}
       actions={
-        <Button component={Link} to="new" variant="contained">
-          {t('http')}
+        <Button variant="default" asChild>
+          <Link to="new">{t('http')}</Link>
         </Button>
       }
     >
       {data.items.length ? (
-        <Paper variant="outlined">
-          <List>
+        <div className="overflow-hidden rounded-xl border bg-card">
+          <ul className="divide-y divide-border">
             {data.items.map((item) => (
-              <ListItemButton component={Link} to={'/runs/' + item.id} key={item.id}>
-                <ListItemText
-                  primary={t(
-                    item.kind === 'http' ? 'http' : item.kind === 'command' ? 'command' : 'functions',
-                  )}
-                  secondary={<DateText value={item.createdAt} />}
-                />
-                <State value={item.state} />
-              </ListItemButton>
+              <li key={item.id}>
+                <Link
+                  to={'/runs/' + item.id}
+                  className="flex items-center gap-4 p-4 transition-colors hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="font-medium wrap-anywhere">
+                      {t(
+                        item.kind === 'http'
+                          ? 'http'
+                          : item.kind === 'command'
+                            ? 'command'
+                            : 'functions',
+                      )}
+                    </div>
+                    <div className="text-xs leading-relaxed text-muted-foreground wrap-anywhere">
+                      {<DateText value={item.createdAt} />}
+                    </div>
+                  </div>
+                  <State value={item.state} />
+                </Link>
+              </li>
             ))}
-          </List>
-        </Paper>
+          </ul>
+        </div>
       ) : (
         <Empty />
       )}
