@@ -12,6 +12,10 @@ import { DomainError } from '../server/errors.js';
 const redirect = 'https://foundation.test/oauth/callback';
 const verifier = 'a'.repeat(43);
 const app: OAuthApp = { clientId: 'client: id', clientSecret: 'secret+ :/!', fields: {} };
+const authorization = (code: string) => ({
+  parameters: new URLSearchParams({ code, state: 'state-1' }),
+  state: 'state-1',
+});
 const definition = (options: Record<string, unknown> = {}) =>
   OAuthDefinition.parse({
     authorizeUrl: 'https://provider.test/authorize',
@@ -101,7 +105,9 @@ test('記号を含むアプリ認証情報で認可コードを交換し、更�
     url.searchParams.get('code_challenge'),
     createHash('sha256').update(verifier).digest('base64url'),
   );
-  const token = await oauth.exchange(spec, app, 'authorization-code', verifier, redirect, ['read']);
+  const token = await oauth.exchange(spec, app, authorization('authorization-code'), verifier, redirect, [
+    'read',
+  ]);
   assert.equal(token.accessToken, 'access-1');
   const refreshed = await oauth.refresh(spec, app, token);
   assert.equal(refreshed.accessToken, 'access-2');
@@ -117,7 +123,12 @@ test('保存済みトークンを更新し、更新用トークンと権限を�
     assert.equal(form.get('client_id'), app.clientId);
     assert.equal(form.get('client_secret'), app.clientSecret);
     assert.equal(form.get('refresh_token'), old.refreshToken);
-    return response({ access_token: 'new-access', expires_in: '3600', refresh_token_expires_in: 86_400 });
+    return response({
+      access_token: 'new-access',
+      token_type: 'Bearer',
+      expires_in: 3600,
+      refresh_token_expires_in: 86_400,
+    });
   });
   const updated = await new OAuth(provider).refresh(definition(), app, old);
   assert.equal(updated.accessToken, 'new-access');
@@ -130,6 +141,25 @@ test('保存済みトークンを更新し、更新用トークンと権限を�
   assert.ok(updated.expiresAt! > Date.now() + 3_500_000);
 });
 
+test('クライアント認証が必要なアプリではシークレットの設定を要求する', async () => {
+  const provider = new Provider(() => response({}));
+  const oauth = new OAuth(provider);
+  for (const clientAuth of ['basic', 'body']) {
+    await assert.rejects(
+      oauth.exchange(
+        definition({ clientAuth }),
+        { clientId: 'client', fields: {} },
+        authorization('code'),
+        verifier,
+        redirect,
+        [],
+      ),
+      { code: 'app_required' },
+    );
+  }
+  assert.equal(provider.requests.length, 0);
+});
+
 test('NotionのJSON形式で認可コードを交換し、応答のワークスペースを接続先として確認する', async () => {
   const spec = await builtin('notion');
   const provider = new Provider((request) => {
@@ -140,15 +170,50 @@ test('NotionのJSON形式で認可コードを交換し、応答のワークス�
     assert.equal(body.redirect_uri, redirect);
     return response({
       access_token: 'notion-access',
+      token_type: 'bearer',
+      refresh_token: null,
       workspace_id: 'workspace-1',
       workspace_name: 'Workspace',
       bot_id: 'bot-1',
     });
   });
-  const token = await new OAuth(provider).exchange(spec, app, 'notion-code', verifier, redirect, []);
+  const token = await new OAuth(provider).exchange(
+    spec,
+    app,
+    authorization('notion-code'),
+    verifier,
+    redirect,
+    [],
+  );
   assert.equal(token.accessToken, 'notion-access');
   assert.equal(token.account, 'workspace-1');
   assert.equal(token.accountVerified, true);
+  assert.equal(token.refreshToken, undefined);
+});
+
+test('Shopifyの応答から接続し、更新用トークンで新しいアクセストークンを取得する', async () => {
+  const spec = await builtin('shopify');
+  const shopifyApp = { ...app, fields: { shop: 'example', name: 'Example shop' } };
+  let exchanges = 0;
+  const provider = new Provider((request) => {
+    const form = new URLSearchParams(String(request.body));
+    if (++exchanges === 1) assert.equal(form.get('code'), 'shopify-code');
+    else assert.equal(form.get('refresh_token'), 'shopify-refresh-1');
+    return response({
+      access_token: 'shopify-access-' + exchanges,
+      refresh_token: 'shopify-refresh-' + exchanges,
+      scope: 'read_products,write_orders',
+      expires_in: 10,
+      refresh_token_expires_in: 7_776_000,
+    });
+  });
+  const oauth = new OAuth(provider);
+  const token = await oauth.exchange(spec, shopifyApp, authorization('shopify-code'), verifier, redirect, []);
+  assert.equal(token.account, 'example');
+  assert.deepEqual(token.scopes, ['read_products', 'write_orders']);
+  const refreshed = await oauth.refresh(spec, shopifyApp, token);
+  assert.equal(refreshed.accessToken, 'shopify-access-2');
+  assert.equal(refreshed.refreshToken, 'shopify-refresh-2');
 });
 
 test('eBayのRuNameで認可し、独自のトークン種別と照会結果を使って更新と失効を実行する', async () => {
@@ -183,7 +248,9 @@ test('eBayのRuNameで認可し、独自のトークン種別と照会結果を�
   const oauth = new OAuth(provider);
   const url = new URL(await oauth.authorize(spec, ebayApp, 'state-1', verifier, redirect, ['read']));
   assert.equal(url.searchParams.get('redirect_uri'), ebayApp.fields.ruName);
-  const connected = await oauth.exchange(spec, ebayApp, 'ebay-code', verifier, redirect, ['read']);
+  const connected = await oauth.exchange(spec, ebayApp, authorization('ebay-code'), verifier, redirect, [
+    'read',
+  ]);
   assert.equal(connected.account, 'seller-1');
   assert.deepEqual(connected.scopes, ['read', 'write']);
   const refreshed = await oauth.refresh(spec, ebayApp, connected);
@@ -218,7 +285,9 @@ test('GitHubのJSON応答と報告された権限で接続し、専用APIで認�
     return response('', 204);
   });
   const oauth = new OAuth(provider);
-  const token = await oauth.exchange(spec, githubApp, 'github-code', verifier, redirect, ['repo']);
+  const token = await oauth.exchange(spec, githubApp, authorization('github-code'), verifier, redirect, [
+    'repo',
+  ]);
   assert.equal(token.account, '123');
   assert.equal(token.accountName, 'person');
   assert.deepEqual(token.scopes, ['read:org', 'repo']);
@@ -248,7 +317,7 @@ test('Googleの接続名義をアカウントAPIで確認し、アプリ認証�
     return response('');
   });
   const oauth = new OAuth(provider);
-  const token = await oauth.exchange(spec, app, 'google-code', verifier, redirect, ['openid']);
+  const token = await oauth.exchange(spec, app, authorization('google-code'), verifier, redirect, ['openid']);
   assert.equal(token.account, 'google-account');
   assert.equal(token.accountVerified, true);
   await oauth.revoke(spec, app, token);
@@ -272,7 +341,14 @@ test('OpenRouterのコードからAPIキーを取得し、キーの情報を接�
     publicApp = { clientId: '', fields: {} };
   const url = new URL(await oauth.authorize(spec, publicApp, 'state-1', verifier, redirect, []));
   assert.equal(url.searchParams.get('callback_url'), redirect);
-  const token = await oauth.exchange(spec, publicApp, 'openrouter-code', verifier, redirect, []);
+  const token = await oauth.exchange(
+    spec,
+    publicApp,
+    authorization('openrouter-code'),
+    verifier,
+    redirect,
+    [],
+  );
   assert.equal(token.accessToken, 'openrouter-key');
   assert.equal(token.accountName, 'Foundation');
   assert.equal(token.facts.is_management_key, false);
@@ -285,29 +361,50 @@ test('開始時のstateと設定した発行者を照合し、異なる認可応
   );
   const oauth = new OAuth(provider);
   const parameters = new URLSearchParams({ code: 'code', state: 'state-1', iss: spec.issuer! });
-  const token = await oauth.exchange(spec, app, 'code', verifier, redirect, [], undefined, {
-    parameters,
-    state: 'state-1',
-  });
+  const token = await oauth.exchange(
+    spec,
+    app,
+    {
+      parameters,
+      state: 'state-1',
+    },
+    verifier,
+    redirect,
+    [],
+  );
   assert.equal(token.accessToken, 'valid-access');
   for (const changes of [{ state: 'wrong' }, { iss: 'https://another.test' }]) {
     const changed = new URLSearchParams(parameters);
     for (const [key, value] of Object.entries(changes)) changed.set(key, value);
     await assert.rejects(
-      oauth.exchange(spec, app, 'code', verifier, redirect, [], undefined, {
-        parameters: changed,
-        state: 'state-1',
-      }),
+      oauth.exchange(
+        spec,
+        app,
+        {
+          parameters: changed,
+          state: 'state-1',
+        },
+        verifier,
+        redirect,
+        [],
+      ),
       { code: 'invalid_state' },
     );
   }
   const duplicate = new URLSearchParams(parameters);
   duplicate.append('code', 'another-code');
   await assert.rejects(
-    oauth.exchange(spec, app, 'code', verifier, redirect, [], undefined, {
-      parameters: duplicate,
-      state: 'state-1',
-    }),
+    oauth.exchange(
+      spec,
+      app,
+      {
+        parameters: duplicate,
+        state: 'state-1',
+      },
+      verifier,
+      redirect,
+      [],
+    ),
     { code: 'invalid_state' },
   );
   assert.equal(provider.requests.length, 1);
@@ -318,19 +415,22 @@ test('無効なトークン応答を拒否し、更新不能と流量制限を�
     { access_token: '' },
     { access_token: 'bad token' },
     { token_type: 'DPoP' },
+    { token_type: undefined },
+    { token_type: 'User Access Token' },
     { token_type: 'constructor' },
     { token_type: '__proto__' },
     { expires_in: '10seconds' },
     { expires_in: -1 },
     { scope: ['read'] },
     { refresh_token: '' },
+    { refresh_token: null },
   ]) {
     const oauth = new OAuth(
       new Provider(() =>
         response({ access_token: 'access', token_type: 'Bearer', account_id: 'account-1', ...values }),
       ),
     );
-    await assert.rejects(oauth.exchange(definition(), app, 'code', verifier, redirect, []), {
+    await assert.rejects(oauth.exchange(definition(), app, authorization('code'), verifier, redirect, []), {
       code: 'invalid_response',
     });
   }

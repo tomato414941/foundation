@@ -44,8 +44,10 @@ const lifetime = (value: unknown) => {
   return seconds;
 };
 const tokenTypes: oauth.RecognizedTokenTypes = Object.assign(Object.create(null), {
-  'user access token': () => {},
   dpop: () => fail(502, 'invalid_response', 'The service returned an unsupported token.'),
+});
+const ebayTokenTypes: oauth.RecognizedTokenTypes = Object.assign(Object.create(null), tokenTypes, {
+  'user access token': () => {},
 });
 export class OAuth {
   constructor(readonly transport: Transport) {}
@@ -89,11 +91,11 @@ export class OAuth {
     return { server, client: { client_id: app.clientId } };
   }
   private authentication(app: OAuthApp, method: OAuthSpec['clientAuth']): oauth.ClientAuth {
-    if (method === 'basic') {
-      if (!app.clientSecret) fail(409, 'app_required', 'Add a client secret to this OAuth application.');
-      return oauth.ClientSecretBasic(app.clientSecret);
-    }
-    return method === 'body' && app.clientSecret ? oauth.ClientSecretPost(app.clientSecret) : oauth.None();
+    if (method === 'none') return oauth.None();
+    if (!app.clientSecret) fail(409, 'app_required', 'Add a client secret to this OAuth application.');
+    return method === 'basic'
+      ? oauth.ClientSecretBasic(app.clientSecret)
+      : oauth.ClientSecretPost(app.clientSecret);
   }
   private options(
     format: OAuthSpec['tokenFormat'] = 'form',
@@ -136,14 +138,25 @@ export class OAuth {
   private async tokenResponse(spec: OAuthSpec, app: OAuthApp, response: Response, refresh = false) {
     if (response.status === 429) fail(503, 'service_rate_limit', 'The service is busy. Try again later.');
     const data = this.checkResponse(spec, response.status, await this.json(response), refresh);
+    const { server, client } = this.configuration(spec, app);
+    const endpoint = new URL(server.token_endpoint!);
     const normalized = { ...data };
     // inspect() resolves the service account; OIDC ID tokens are not used to authenticate sessions.
     delete normalized.id_token;
-    // Existing connection definitions deliver Bearer tokens, including providers that omit this field.
-    if (normalized.token_type === undefined) normalized.token_type = 'bearer';
-    if (normalized.refresh_token === null) delete normalized.refresh_token;
+    // Shopify omits token_type; Notion defines refresh_token as string | null.
+    if (
+      endpoint.hostname.endsWith('.myshopify.com') &&
+      endpoint.pathname === '/admin/oauth/access_token' &&
+      normalized.token_type === undefined
+    )
+      normalized.token_type = 'bearer';
+    if (
+      endpoint.hostname === 'api.notion.com' &&
+      endpoint.pathname === '/v1/oauth/token' &&
+      normalized.refresh_token === null
+    )
+      delete normalized.refresh_token;
     if (normalized.expires_in !== undefined) normalized.expires_in = lifetime(normalized.expires_in);
-    const { server, client } = this.configuration(spec, app);
     try {
       const processResponse = refresh
         ? oauth.processRefreshTokenResponse
@@ -153,7 +166,7 @@ export class OAuth {
         client,
         Response.json(normalized, { status: response.status }),
         {
-          recognizedTokenTypes: tokenTypes,
+          recognizedTokenTypes: spec.adapter === 'ebay' ? ebayTokenTypes : tokenTypes,
         },
       );
       return { ...data, ...result };
@@ -220,22 +233,29 @@ export class OAuth {
   async exchange(
     spec: OAuthSpec,
     app: OAuthApp,
-    code: string,
+    authorization: { parameters: URLSearchParams; state: string },
     verifier: string,
     redirectUri: string,
     scopes: string[],
     previous?: OAuthToken,
-    authorization?: { parameters: URLSearchParams; state: string },
   ) {
     let data: Record<string, unknown>;
     if (spec.adapter === 'openrouter') {
+      const parameters = authorization.parameters;
+      if (
+        parameters.getAll('state').length !== 1 ||
+        parameters.get('state') !== authorization.state ||
+        parameters.getAll('code').length !== 1 ||
+        !parameters.get('code')
+      )
+        fail(400, 'invalid_state', 'Start the connection again.');
       const response = await this.transport.send({
         url: expandUrl(spec.tokenUrl, app.fields),
         method: 'POST',
         headers: { accept: 'application/json', 'content-type': 'application/json' },
         body: JSON.stringify({
           ...spec.tokenParams,
-          code,
+          code: parameters.get('code'),
           code_verifier: verifier,
           code_challenge_method: 'S256',
         }),
@@ -248,10 +268,9 @@ export class OAuth {
         const parameters = oauth.validateAuthResponse(
           server,
           client,
-          authorization?.parameters ?? new URLSearchParams({ code }),
-          authorization?.state ?? oauth.expectNoState,
+          authorization.parameters,
+          authorization.state,
         );
-        if (parameters.get('code') !== code) fail(400, 'invalid_state', 'Start the connection again.');
         response = await oauth.authorizationCodeGrantRequest(
           server,
           client,

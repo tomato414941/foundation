@@ -318,10 +318,11 @@ test('OAuthの応答を開始したブラウザーへ結び付け、接続後に
   assert.equal(started.kind, 'authorize');
   if (started.kind !== 'authorize') return;
   const state = new URL(started.url).searchParams.get('state')!;
-  await assert.rejects(() => f.services.callback(state, 'authorization-code', 'other-browser'), {
+  const parameters = new URLSearchParams({ state, code: 'authorization-code' });
+  await assert.rejects(() => f.services.callback(parameters, 'other-browser'), {
     code: 'invalid_state',
   });
-  const complete = await f.services.callback(state, 'authorization-code', 'right-browser');
+  const complete = await f.services.callback(parameters, 'right-browser');
   assert.equal(complete.kind, 'connected');
   if (complete.kind !== 'connected') return;
   assert.equal(
@@ -333,7 +334,7 @@ test('OAuthの応答を開始したブラウザーへ結び付け、接続後に
     'refreshed-token',
   );
   assert.equal(exchanges, 2);
-  await assert.rejects(() => f.services.callback(state, 'authorization-code', 'right-browser'), {
+  await assert.rejects(() => f.services.callback(parameters, 'right-browser'), {
     code: 'invalid_state',
   });
 });
@@ -375,8 +376,7 @@ test('同時に届いた利用要求に同じ更新済みトークンを渡す',
   );
   if (begin.kind !== 'authorize') throw new Error('Expected consent');
   const connected = await f.services.callback(
-    new URL(begin.url).searchParams.get('state')!,
-    'code',
+    new URLSearchParams({ state: new URL(begin.url).searchParams.get('state')!, code: 'code' }),
     'browser',
   );
   if (connected.kind !== 'connected') throw new Error('Expected connection');
@@ -489,8 +489,7 @@ test('Renderの登録済みOAuthアプリで認可し、更新したトークン
     throw new Error('Unexpected Render request: ' + request.url);
   };
   const connected = await f.services.callback(
-    authorize.searchParams.get('state')!,
-    'render-authorization-code',
+    new URLSearchParams({ state: authorize.searchParams.get('state')!, code: 'render-authorization-code' }),
     'browser',
   );
   assert.equal(connected.kind, 'connected');

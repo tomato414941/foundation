@@ -304,6 +304,7 @@ test('要求したスコープと報告されたスコープを区別し、更�
     request.url.includes('/token')
       ? json({
           access_token: 'key-' + ++exchanges,
+          token_type: 'Bearer',
           refresh_token: 'refresh',
           expires_in: exchanges === 1 ? 1 : 3600,
           ...(exchanges === 1
@@ -320,7 +321,10 @@ test('要求したスコープと報告されたスコープを区別し、更�
     );
     assert.equal(result.kind, 'authorize');
     if (result.kind !== 'authorize') throw new Error('Expected authorization');
-    return f.services.callback(new URL(result.url).searchParams.get('state')!, 'code', 'browser');
+    return f.services.callback(
+      new URLSearchParams({ state: new URL(result.url).searchParams.get('state')!, code: 'code' }),
+      'browser',
+    );
   };
   const initial = await authorize();
   assert.equal(initial.kind, 'connected');
@@ -391,7 +395,7 @@ test('同方式のOAuthアプリを接続方法ごとに使い分け、名義を
       ),
     { code: 'wrong_app' },
   );
-  f.provider.respond = () => json({ access_token: 'unverified-account-key', scope: 'read' });
+  f.provider.respond = () => json({ access_token: 'unverified-account-key', token_type: 'Bearer', scope: 'read' });
   const authorize = async (connectionId?: string) => {
     const result = await f.services.begin(
       owner.actor,
@@ -406,7 +410,10 @@ test('同方式のOAuthアプリを接続方法ごとに使い分け、名義を
     assert.equal(result.kind, 'authorize');
     if (result.kind !== 'authorize') throw new Error('Expected authorization');
     assert.equal(new URL(result.url).searchParams.get('client_id'), 'First-client');
-    return f.services.callback(new URL(result.url).searchParams.get('state')!, 'code', 'browser');
+    return f.services.callback(
+      new URLSearchParams({ state: new URL(result.url).searchParams.get('state')!, code: 'code' }),
+      'browser',
+    );
   };
   const initial = await authorize();
   assert.equal(initial.kind, 'connected');
@@ -556,7 +563,7 @@ test('既存のサービス定義と接続とOAuthアプリを移行し、共有
   await f.db.initialize();
   const catalog = await Catalog.load(f.resources, f.config),
     provider = new Provider();
-  provider.respond = () => json({ access_token: 'oauth-key', user_id: 'user-1' });
+  provider.respond = () => json({ access_token: 'oauth-key', token_type: 'Bearer', user_id: 'user-1' });
   const services = new Services(f.resources, catalog, f.vault, new OAuth(provider), f.config);
   await services.initialize();
   await services.initialize();
@@ -570,7 +577,7 @@ test('既存のサービス定義と接続とOAuthアプリを移行し、共有
   assert.deepEqual(await f.vault.decrypt((await f.resources.get(appId)).private_data!, 'resource:' + appId), {
     clientSecret: 'legacy-secret',
   });
-  const connected = await services.callback(pendingId, 'code', 'browser');
+  const connected = await services.callback(new URLSearchParams({ state: pendingId, code: 'code' }), 'browser');
   assert.equal(connected.kind, 'connected');
   if (connected.kind !== 'connected') return;
   assert.equal(

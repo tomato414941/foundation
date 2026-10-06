@@ -396,10 +396,8 @@ export async function routesResources(app: ApiApp, context: Context) {
         );
       try {
         const result = await services.callback(
-          request.query.state,
-          request.query.code,
-          request.browser,
           new URL(request.url, context.config.origin).searchParams,
+          request.browser,
         );
         if (result.kind === 'review') return reply.redirect('/services/review/' + result.id);
         const path = 'returnTo' in result ? result.returnTo : '/services';
