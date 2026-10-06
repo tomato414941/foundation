@@ -26,16 +26,19 @@ import {
   listOf,
 } from '../../shared/contracts.js';
 import type { ResourceView } from '../../shared/contracts.js';
-import { newEncryptionKey, open, seal } from '../../shared/encryption.js';
+import { Session } from '../../shared/session.js';
+import { encode, newEncryptionKey, open, seal, unwrap } from '../../shared/encryption.js';
 import { Client, ApiError } from './client.js';
 import { configPath, origin, readIdentity, saveIdentity, secureWrite } from './config.js';
+import type { IdentityConfig } from './config.js';
 import { execute } from './execute.js';
 
 const help = `Foundation ${packageInfo.version}
 
 Usage: foundation <command> [options]
 
-  init --name NAME [--origin URL]       Register this machine and save its key
+  init --key TOKEN [--origin URL]       Sign in with a key you issued and save it
+  init --name NAME [--origin URL]       Register this machine as a new principal
   status                               Show this machine and its accessible principals
   join [--to ID] [--wait]               Ask a person to take on this machine
   api METHOD /api/PATH [--body JSON]    Call the common Foundation API
@@ -53,6 +56,7 @@ Usage: foundation <command> [options]
 
 Options:
   --owner ID             Choose the principal that owns a new item or run
+  --key TOKEN            A key issued from a browser (@FILE or @- to read it)
   --origin URL           Choose a server when initializing a machine
   --allow-use            Allow Foundation to use a saved secret in runs
   --no-allow-use         Turn off use when updating a secret
@@ -65,7 +69,9 @@ Options:
   --help                 Show this help
   --version              Show the version
 
-JSON may be supplied as @FILE, or @- to read standard input.
+JSON and the key may be supplied as @FILE, or @- to read standard input.
+A key issued in a browser carries your encryption key, so the machine acts as
+you. Registering with --name creates a separate principal instead.
 New secrets require --allow-use to be delivered to commands. Updates retain the
 current setting unless --allow-use or --no-allow-use is supplied.
 exec masks input values in stdout and stderr. read deliberately reveals content.
@@ -79,6 +85,7 @@ const textOption = { type: 'string' as const },
   booleanOption = { type: 'boolean' as const };
 const options = {
   name: textOption,
+  key: textOption,
   origin: textOption,
   owner: textOption,
   to: textOption,
@@ -123,14 +130,16 @@ async function stdin(max = 2_200_000) {
   }
   return Buffer.concat(chunks);
 }
+async function text(value: string) {
+  return value === '@-'
+    ? (await stdin()).toString('utf8')
+    : value.startsWith('@')
+      ? await readFile(value.slice(1), 'utf8')
+      : value;
+}
 async function json(value: string | undefined, fallback: unknown = {}) {
   if (!value) return fallback;
-  const source =
-    value === '@-'
-      ? (await stdin()).toString('utf8')
-      : value.startsWith('@')
-        ? await readFile(value.slice(1), 'utf8')
-        : value;
+  const source = await text(value);
   try {
     return JSON.parse(source) as unknown;
   } catch {
@@ -177,8 +186,33 @@ async function initialize(args: Arguments) {
   } catch (error) {
     if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
   }
+  const base = origin(args.values.origin);
+  if (args.values.key) {
+    if (args.values.name) throw new Error('Choose --key or --name.');
+    const token = (await text(args.values.key)).trim();
+    let response: Response;
+    try {
+      response = await fetch(base + '/api/session', {
+        headers: { authorization: 'Bearer ' + token },
+        redirect: 'error',
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch {
+      throw new Error('Could not reach Foundation. Check --origin and your network connection.');
+    }
+    if (!response.ok) throw new Error('Sign-in failed (HTTP ' + response.status + ').');
+    const current = Session.parse(await response.json());
+    if (!current.principal) throw new Error('The key was not accepted.');
+    if (!current.wrappedKey)
+      throw new Error('This key does not carry an encryption key. Issue it from a browser that can open secrets.');
+    const privateKey = await unwrap(current.wrappedKey, encode(token), current.principal.id).catch(() => {
+      throw new Error('The encryption key could not be unlocked with this key.');
+    });
+    await saveIdentity({ origin: base, principalId: current.principal.id, token, privateKey: privateKey as IdentityConfig['privateKey'] });
+    print({ principal: { id: current.principal.id, name: current.principal.name }, origin: base, identity: path });
+    return;
+  }
   const name = Name.parse(args.values.name || hostname()),
-    base = origin(args.values.origin),
     keys = await newEncryptionKey();
   let response: Response;
   try {
@@ -299,7 +333,8 @@ async function main(argv: string[]) {
   if (!current.principal) throw new Error('The machine identity is no longer valid.');
   const owner = Id.parse(args.values.owner ?? current.principal.id);
   if (command === 'status') {
-    await output(current, args);
+    const { wrappedKey: _wrappedKey, ...status } = current;
+    await output(status, args);
     return 0;
   }
   if (command === 'api' || command === 'schema') {

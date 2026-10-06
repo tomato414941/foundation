@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -8,6 +9,7 @@ import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { Redactor, secretVariants } from '../cli/src/execute.js';
+import { encode, seal, wrap } from '../shared/encryption.js';
 
 async function cliFixture() {
   const f = await fixture(),
@@ -138,6 +140,53 @@ test('CLIの確認コードを承認し、同じAPIから所有者のリソー�
   ]);
   assert.equal(used.code, 0, used.stderr);
   assert.equal(used.stdout, '[redacted]');
+});
+
+test('発行されたキーで初期化した CLI は本人として入り、別の端末が封じたシークレットを読む', async (t) => {
+  const c = await cliFixture();
+  t.after(c.close);
+  const person = await c.f.person('Person');
+  const headers = { authorization: 'Bearer ' + person.token };
+  const issued = await c.app.inject({
+    method: 'POST',
+    url: `/api/principals/${person.actor.id}/credentials`,
+    headers,
+    payload: { name: 'Laptop' },
+  });
+  assert.equal(issued.statusCode, 201, issued.body);
+  const { credential, token } = issued.json();
+  const refused = await c.run(['init', '--key', token, '--origin', c.origin]);
+  assert.notEqual(refused.code, 0);
+  assert.match(refused.stderr, /encryption key/);
+  const wrappedKey = await wrap(person.keys.privateKey, encode(token), person.actor.id);
+  const placed = await c.app.inject({
+    method: 'PUT',
+    url: `/api/principals/${person.actor.id}/credentials/${credential.id}/wrap`,
+    headers,
+    payload: { wrappedKey, publicKey: person.keys.publicKey },
+  });
+  assert.equal(placed.statusCode, 200, placed.body);
+  const keyFile = join(c.directory, 'key.txt');
+  await writeFile(keyFile, token + '\n', { mode: 0o600 });
+  const initialized = await c.run(['init', '--key', '@' + keyFile, '--origin', c.origin]);
+  assert.equal(initialized.code, 0, initialized.stderr);
+  assert.equal(JSON.parse(initialized.stdout).principal.id, person.actor.id);
+  const id = randomUUID(),
+    content = encode('sealed elsewhere');
+  const sealed = await seal(content, [{ id: person.actor.id, publicKey: person.keys.publicKey }], 'resource:' + id);
+  await c.f.resources.createSecret(person.actor, person.actor.id, {
+    kind: 'secret',
+    id,
+    name: 'Browser secret',
+    sealed,
+    bytes: content.length,
+    allowUse: false,
+  });
+  const read = await c.run(['read', id]);
+  assert.equal(read.code, 0, read.stderr);
+  assert.equal(read.stdout, 'sealed elsewhere');
+  const status = await c.run(['status']);
+  assert.equal(JSON.parse(status.stdout).principal.id, person.actor.id);
 });
 
 test('UTF8と秘密値の境界をまたぐ出力を最後まで伏せて表示する', () => {
