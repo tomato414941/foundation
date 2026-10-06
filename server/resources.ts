@@ -18,6 +18,7 @@ import type {
 } from '../shared/contracts.js';
 import { base64url, encode } from '../shared/encryption.js';
 import { fail, required } from './errors.js';
+import { validateRecipientKeys } from './encryption-validation.js';
 
 export interface ResourceRow extends ResourceIdentity {
   name: string;
@@ -196,6 +197,11 @@ export class Resources {
       fail(400, 'missing_recipient', 'Encrypt the secret for each owner and member with an encryption key.');
     if (allowUse && !addressed.has(this.identity.id))
       fail(400, 'missing_recipient', 'Include Foundation as a recipient to use the secret in tools.');
+    const keys = await this.db.all<{ id: string; public_key: PublicEncryptionKey }>(
+      'SELECT id,public_key FROM principals WHERE id=ANY($1::uuid[]) AND public_key IS NOT NULL',
+      [[...addressed]], connection,
+    );
+    validateRecipientKeys(sealed, keys.map(key => ({ id: key.id, publicKey: key.public_key })));
   }
   async createSecret(actor: Actor, ownerId: string, input: Extract<NewResourceInput, { kind: 'secret' }>) {
     if (!(await this.authorization.canCreate(actor, ownerId, 'secret')))

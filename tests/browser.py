@@ -86,6 +86,65 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("option", name=option, exact=True).click()
         expect(page.get_by_role("listbox")).to_be_hidden()
 
+    def existing_encryption(self, page, principal):
+        prf = page.evaluate("""async () => {
+            const credential = await navigator.credentials.get({publicKey: {
+                challenge: crypto.getRandomValues(new Uint8Array(32)),
+                rpId: location.hostname, userVerification: 'required',
+                extensions: {prf: {eval: {first: new TextEncoder().encode('foundation-key')}}}
+            }});
+            const result = credential.getClientExtensionResults().prf.results.first;
+            return btoa(String.fromCharCode(...new Uint8Array(result)))
+                .replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+        }""")
+        response = page.request.post(ORIGIN + "/__test/existing-encryption", data={"principalId": principal["id"], "prf": prf})
+        self.assertTrue(response.ok, response.text())
+        return response.json()
+
+    def test_暗号鍵を更新して保存済みのシークレットを再ログイン後も復号する(self):
+        page, principal = self.passkey_account("Migrating account")
+        saved = self.existing_encryption(page, principal)
+        page.goto(ORIGIN + "/account")
+        expect(page.get_by_role("heading", name="暗号鍵の更新", exact=True)).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "key-migration-before-ja.png"), full_page=True)
+        with page.expect_response(lambda response: response.url.endswith("/key-migration")) as migration:
+            page.get_by_role("button", name="パスキーで暗号鍵を更新", exact=True).click()
+        self.assertTrue(migration.value.ok, migration.value.text())
+        expect(page.get_by_text("暗号鍵とシークレットの更新が完了しました。", exact=True)).to_be_visible()
+        self.assertEqual(page.request.get(ORIGIN + "/api/session").json()["principal"]["publicKey"]["crv"], "P-256")
+        page.screenshot(path=str(ARTIFACTS / "key-migration-complete-ja.png"), full_page=True)
+        page.get_by_role("button", name="ログアウト", exact=True).click()
+        page.wait_for_url("**/signin")
+        page.get_by_role("button", name="パスキーでログイン", exact=True).click()
+        page.wait_for_url("**/p/**")
+        for resource_id, value in [(saved["id"], saved["plaintext"]), (saved["jweId"], "Current-format secret")]:
+            page.goto(f"{ORIGIN}/p/{principal['id']}/secrets/{resource_id}")
+            page.get_by_role("button", name="内容を表示", exact=True).click()
+            expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value(value)
+
+    def test_暗号鍵の更新を中断した後も同じパスキーで復号して再実行する(self):
+        page, principal = self.passkey_account("Cancelled migration")
+        saved = self.existing_encryption(page, principal)
+        page.goto(ORIGIN + "/account")
+        page.wait_for_load_state("networkidle")
+        page.evaluate("""() => {
+            window.originalCredentialGet = navigator.credentials.get.bind(navigator.credentials);
+            navigator.credentials.get = async () => { throw new DOMException('Cancelled', 'NotAllowedError'); };
+        }""")
+        page.get_by_role("button", name="パスキーで暗号鍵を更新", exact=True).click()
+        expect(page.get_by_text("パスキーでの認証をキャンセルしました。", exact=True)).to_be_visible()
+        page.evaluate("() => { navigator.credentials.get = window.originalCredentialGet; }")
+        page.get_by_role("button", name="ログアウト", exact=True).click()
+        page.wait_for_url("**/signin")
+        page.get_by_role("button", name="パスキーでログイン", exact=True).click()
+        page.wait_for_url("**/p/**")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/secrets/{saved['id']}")
+        page.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value(saved["plaintext"])
+        page.goto(ORIGIN + "/account")
+        page.get_by_role("button", name="パスキーで暗号鍵を更新", exact=True).click()
+        expect(page.get_by_text("暗号鍵とシークレットの更新が完了しました。", exact=True)).to_be_visible()
+
     def test_パスキーで登録してシークレットを編集し再ログイン後に復号する(self):
         page, principal = self.passkey_account()
         path = self.secret(page, principal)

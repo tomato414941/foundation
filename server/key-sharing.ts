@@ -4,6 +4,7 @@ import type { ResourceRow } from './resources.js';
 import type { PublicEncryptionKey, SealedContent } from '../shared/contracts.js';
 import { base64url, encode } from '../shared/encryption.js';
 import { fail } from './errors.js';
+import { validateRecipientKeys } from './encryption-validation.js';
 
 export type KeyUpdates = Record<string, { version: number; sealed: SealedContent }>;
 
@@ -86,6 +87,7 @@ export class KeySharing {
         item.recipients.some((recipient) => !addressed.has(recipient.id))
       )
         fail(400, 'missing_recipient', 'Encrypt the secret for the specified recipients.');
+      validateRecipientKeys(update.sealed, item.recipients);
       await connection.query(
         "UPDATE resources SET sealed=$2,data=jsonb_set(data,'{recipients}',$3::jsonb),version=version+1,updated_at=now() WHERE id=$1",
         [item.id, JSON.stringify(update.sealed), JSON.stringify([...addressed])],

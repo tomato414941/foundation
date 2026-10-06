@@ -10,7 +10,7 @@ import type {
   AuthenticationResponseJSON,
   AuthenticatorTransport,
 } from '@simplewebauthn/server';
-import { importJWK } from 'jose';
+import { decodeProtectedHeader, importJWK } from 'jose';
 import { z } from 'zod';
 import type { Database, Queryable } from './database.js';
 import { iso } from './database.js';
@@ -23,6 +23,7 @@ import { Credential, P256Key, PublicKey, WrappedKey } from '../shared/contracts.
 import type { P256PublicKey, PublicEncryptionKey, WrappedEncryptionKey } from '../shared/contracts.js';
 import { digest, token } from './vault.js';
 import { fail, required } from './errors.js';
+import { samePublicKey } from './encryption-validation.js';
 
 interface PasskeyData {
   publicKey: string;
@@ -402,7 +403,8 @@ export class Authentication {
           id,
           browserHash,
           input.principalId ?? null,
-          JSON.stringify({ challenge: options.challenge, principalId, name, returnTo }),
+          JSON.stringify({ challenge: options.challenge, principalId, name, returnTo,
+            publicKey: input.principalId ? (await this.principals.get(principalId)).public_key : null }),
         ],
       );
       return { challengeId: id, principalId, options };
@@ -437,7 +439,7 @@ export class Authentication {
   }
   async verifyPasskey(
     browser: string,
-    input: { challengeId: string; credential: unknown; publicKey?: P256PublicKey; wrappedKey?: WrappedEncryptionKey },
+    input: { challengeId: string; credential: unknown; publicKey?: P256PublicKey; existingPublicKey?: PublicEncryptionKey; wrappedKey?: WrappedEncryptionKey },
     actor?: Actor,
   ): Promise<
     SigninResult & {
@@ -479,6 +481,14 @@ export class Authentication {
       wrappedKey = input.wrappedKey ? WrappedKey.parse(input.wrappedKey) : null;
       if (input.publicKey) await importJWK(P256Key.parse(input.publicKey), 'ECDH-ES+A256KW');
       await this.db.transaction(async (connection) => {
+        if (row.principal_id) {
+          await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
+          const current = await this.principals.get(principalId, connection);
+          if (wrappedKey && !samePublicKey(current.public_key, (row.data.publicKey ?? null) as PublicEncryptionKey | null))
+            fail(409, 'encryption_key_changed', 'The encryption key changed. Add the passkey again.');
+          if (wrappedKey && current.public_key && !samePublicKey(current.public_key, input.existingPublicKey ?? null))
+            fail(409, 'encryption_key_changed', 'The encryption key changed. Add the passkey again.');
+        }
         if (!row.principal_id)
           await this.principals.create(
             String(row.data.name),
@@ -579,11 +589,19 @@ export class Authentication {
       publicKey: principal.public_key,
     };
   }
-  async setWrap(actor: Actor, principalId: string, credentialId: string, value: WrappedEncryptionKey) {
+  async setWrap(actor: Actor, principalId: string, credentialId: string, value: WrappedEncryptionKey, publicKey: PublicEncryptionKey) {
     if (actor.id !== principalId) fail(403, 'forbidden', 'Sign in as this principal to wrap its key.');
-    await this.db.pool.query(
-      "UPDATE credentials SET private_wrap=$3 WHERE id=$1 AND principal_id=$2 AND kind='passkey'",
-      [credentialId, principalId, WrappedKey.parse(value)],
-    );
+    await this.db.transaction(async connection => {
+      await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
+      const principal = await this.principals.get(principalId, connection);
+      if (!samePublicKey(principal.public_key, publicKey))
+        fail(409, 'encryption_key_changed', 'The encryption key changed. Unlock it again.');
+      if (decodeProtectedHeader(value).sub !== principalId)
+        fail(400, 'invalid_envelope', 'Wrap the key for this account.');
+      await connection.query(
+        "UPDATE credentials SET private_wrap=$3 WHERE id=$1 AND principal_id=$2 AND kind='passkey'",
+        [credentialId, principalId, WrappedKey.parse(value)],
+      );
+    });
   }
 }

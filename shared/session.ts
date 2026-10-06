@@ -37,6 +37,7 @@ export const PasskeyVerify = z
     challengeId: Id,
     credential: z.json(),
     publicKey: P256Key.optional(),
+    existingPublicKey: PublicKey.optional(),
     wrappedKey: WrappedKey.optional(),
   })
   .strict();
