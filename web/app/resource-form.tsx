@@ -549,6 +549,7 @@ export default function ResourceForm() {
                       {data.kind === 'connection' && method?.kind === 'oauth' && (
                         <>
                           <SelectField
+                            key={methodId}
                             name="appId"
                             label={t('app')}
                             defaultValue={
