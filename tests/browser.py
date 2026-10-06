@@ -168,6 +168,70 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("Edited existing secret")
         page.screenshot(path=str(ARTIFACTS / "additional-passkey-ja.png"), full_page=True)
 
+    def test_ブラウザで発行したキーでCLIを初期化しブラウザが封じたシークレットを読む(self):
+        import tempfile
+        page, principal = self.passkey_account("Key issuer")
+        path = self.secret(page, principal, "Issuer secret", "Issued through the browser")
+        secret_id = path.rstrip("/").split("/")[-1]
+        page.goto(f"{ORIGIN}/p/{principal['id']}/settings/credentials/new")
+        page.wait_for_load_state("networkidle")
+        self.select(page, "種類", "APIキー")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Laptop key")
+        page.get_by_role("button", name="追加", exact=True).click()
+        token = page.get_by_role("textbox", name="APIキー", exact=True).input_value()
+        self.assertTrue(token.startswith("fk_"))
+        page.screenshot(path=str(ARTIFACTS / "issued-key-ja.png"), full_page=True)
+        session = page.request.get(ORIGIN + "/api/session", headers={"authorization": "Bearer " + token}).json()
+        self.assertEqual(session["principal"]["id"], principal["id"])
+        self.assertIsNotNone(session["wrappedKey"])
+        with tempfile.TemporaryDirectory() as home:
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("FOUNDATION_")}
+            environment["XDG_CONFIG_HOME"] = home
+            key_file = Path(home) / "key.txt"
+            key_file.write_text(token + "\n")
+            initialized = subprocess.run(
+                ["node", "cli/dist/cli.mjs", "init", "--key", "@" + str(key_file), "--origin", ORIGIN],
+                capture_output=True, text=True, env=environment,
+            )
+            self.assertEqual(initialized.returncode, 0, initialized.stderr)
+            self.assertEqual(json.loads(initialized.stdout)["principal"]["id"], principal["id"])
+            read = subprocess.run(
+                ["node", "cli/dist/cli.mjs", "read", secret_id],
+                capture_output=True, text=True, env=environment,
+            )
+            self.assertEqual(read.returncode, 0, read.stderr)
+            self.assertEqual(read.stdout, "Issued through the browser")
+        created = page.request.post(ORIGIN + "/api/principals", data={"name": "Keyless child", "ownerId": principal["id"]}, headers={"origin": ORIGIN})
+        self.assertEqual(created.status, 201, created.text())
+        child = created.json()
+        self.assertIsNone(child["publicKey"])
+        page.goto(f"{ORIGIN}/p/{child['id']}/settings/credentials/new")
+        page.wait_for_load_state("networkidle")
+        self.select(page, "種類", "APIキー")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Child key")
+        page.get_by_role("button", name="追加", exact=True).click()
+        child_token = page.get_by_role("textbox", name="APIキー", exact=True).input_value()
+        self.assertIsNotNone(page.request.get(ORIGIN + "/api/principals/" + child["id"]).json()["publicKey"])
+        with tempfile.TemporaryDirectory() as home:
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("FOUNDATION_")}
+            environment["XDG_CONFIG_HOME"] = home
+            initialized = subprocess.run(
+                ["node", "cli/dist/cli.mjs", "init", "--key", "@-", "--origin", ORIGIN],
+                capture_output=True, text=True, env=environment, input=child_token,
+            )
+            self.assertEqual(initialized.returncode, 0, initialized.stderr)
+            kept = subprocess.run(
+                ["node", "cli/dist/cli.mjs", "keep", "Child secret", "--stdin"],
+                capture_output=True, text=True, env=environment, input="kept by the child",
+            )
+            self.assertEqual(kept.returncode, 0, kept.stderr)
+            read = subprocess.run(
+                ["node", "cli/dist/cli.mjs", "read", json.loads(kept.stdout)["id"]],
+                capture_output=True, text=True, env=environment,
+            )
+            self.assertEqual(read.returncode, 0, read.stderr)
+            self.assertEqual(read.stdout, "kept by the child")
+
     def test_メンバー追加と所有者変更でシークレットを引き継ぐ(self):
         owner, principal = self.passkey_account("Project owner")
         member, recipient = self.passkey_account("Project member")

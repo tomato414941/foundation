@@ -179,6 +179,39 @@ export async function registerPasskey(name: string, principal?: Pick<PrincipalVi
     return authenticate(result.principalId, credential.id, existing);
   return { ...result, encrypted: !!(await getKey(result.principalId)) };
 }
+export async function issueKey(
+  principal: Pick<PrincipalView, 'id' | 'publicKey'>,
+  name: string,
+  expiresAt: string | null,
+) {
+  let existing = unlocked.get(principal.id);
+  if (existing && !matchesPublicKey(existing, principal.publicKey)) existing = undefined;
+  if (principal.publicKey && !existing) {
+    await authenticate(principal.id);
+    existing = unlocked.get(principal.id);
+    if (!existing) throw new ApiFailure('key_unavailable');
+  }
+  const issued = await api<{ credential: { id: string }; token: string }>(
+    `/principals/${principal.id}/credentials`,
+    { method: 'POST', body: { name, expiresAt } },
+  );
+  const pair = existing
+    ? { privateKey: existing, publicKey: principal.publicKey! }
+    : await newEncryptionKey();
+  const wrappedKey = await wrap(pair.privateKey, encode(issued.token), principal.id);
+  if (existing)
+    await api(`/principals/${principal.id}/credentials/${issued.credential.id}/wrap`, {
+      method: 'PUT',
+      body: { wrappedKey, publicKey: pair.publicKey },
+    });
+  else
+    await api(`/principals/${principal.id}/encryption-key`, {
+      method: 'PUT',
+      body: { publicKey: pair.publicKey, wraps: { [issued.credential.id]: wrappedKey } },
+    });
+  await keep(principal.id, pair.privateKey);
+  return { token: issued.token };
+}
 export async function decryptSecret(id: string, principalId: string) {
   const key = await getKey(principalId);
   if (!key) throw new ApiFailure('key_locked');

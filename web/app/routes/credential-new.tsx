@@ -7,7 +7,8 @@ import { Form, Link, useActionData, useNavigate, useRevalidator } from 'react-ro
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/credential-new';
 import { actionResult, api, formText } from '../api';
-import { registerPasskey } from '../keys';
+import { issueKey, registerPasskey } from '../keys';
+import { Principal } from '../../../shared/contracts';
 import { Copy, ErrorNotice, Page, Panel, SaveBar, useTask } from '../components';
 import { useWorkspace } from './workspace';
 import i18n from '../i18n';
@@ -26,17 +27,12 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
           locale: i18n.language === 'en' ? 'en' : 'ja',
         },
       });
-    return api<{
-      token: string;
-    }>('/principals/' + params.owner + '/credentials', {
-      method: 'POST',
-      body: {
-        name: formText(form, 'name'),
-        expiresAt: formText(form, 'expiresAt')
-          ? new Date(formText(form, 'expiresAt')).toISOString()
-          : null,
-      },
-    });
+    const principal = await api('/principals/' + params.owner, {}, Principal);
+    return issueKey(
+      principal,
+      formText(form, 'name'),
+      formText(form, 'expiresAt') ? new Date(formText(form, 'expiresAt')).toISOString() : null,
+    );
   });
 }
 export default function CredentialNew() {
