@@ -333,7 +333,7 @@ export async function prepareRun(
       { id: intent.executor.id, publicKey: intent.executor.encryption },
     ], await runContext(intent, 'input')),
   };
-  return { ...value, signature: await sign(value, keys.signing, 'run') };
+  return DelegatedRun.parse({ ...value, signature: await sign(value, keys.signing, 'run') });
 }
 
 export async function verifyRun(input: SealedRun, now = Date.now()): Promise<SealedRun> {

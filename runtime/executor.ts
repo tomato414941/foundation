@@ -6,7 +6,7 @@ import {
 } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent, SealedRun } from '../shared/custody.js';
 import {
-  RuntimeOperation, authorizeEnvironment, makeReceipt,
+  ResultTooLarge, RuntimeOperation, authorizeEnvironment, makeReceipt,
 } from '../shared/execution.js';
 import type { ExecutionOperation as Operation, RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/execution.js';
 import { functionRequest } from '../shared/function-request.js';
@@ -134,6 +134,8 @@ export class Executor {
       receipt = await makeReceipt(intent, 'succeeded', { ok: true, result, error: null }, this.keys);
     } catch (error) {
       if (error instanceof DeliveryPending) throw error;
+      if (error instanceof ResultTooLarge) error = new DomainError(413, 'result_too_large',
+        'The operation completed, but its result is too large to return. Check the destination before starting it again.');
       const uncertain = dispatched && (runningSignal.aborted || !(error instanceof DomainError) ||
         ['service_unavailable', 'connection_uncertain', 'lease_lost'].includes(error.code));
       receipt = await makeReceipt(intent, uncertain ? 'uncertain' : 'failed', {

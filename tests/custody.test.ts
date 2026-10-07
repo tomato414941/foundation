@@ -105,6 +105,15 @@ test('実行依頼を署名者、実行先、入力、結果の宛先、有効�
   await assert.rejects(verifyRun(await prepareRun(tooLong, operation, caller.keys)));
 });
 
+test('大きな実行入力を暗号化して復元し、送信形式の上限を超える入力は準備時に知らせる', async () => {
+  const { caller, executor, intent, operation } = await setup();
+  const large = { ...operation, request: { ...operation.request, body: 'x'.repeat(1_000_000) } };
+  const request = await prepareRun({ ...intent, operationDigest: await hash(large) }, large, caller.keys);
+  assert.deepEqual((await openRun(request, executor.binding, executor.keys)).operation, large);
+  const oversized = { ...large, request: { ...large.request, body: '\0'.repeat(300_000) } };
+  await assert.rejects(prepareRun({ ...intent, operationDigest: await hash(oversized) }, oversized, caller.keys));
+});
+
 test('一つの委任に含まれる依頼者、実行先、操作、送信先の条件をすべて照合する', async () => {
   const { owner, policy, intent, stranger } = await setup();
   const grant = policy.grants[0]!;
@@ -148,6 +157,20 @@ test('秘密、接続情報、OAuthアプリに同じ宛先指定と暗号化を
     await assert.rejects(verifyContent({ ...content, policy: { ...content.policy,
       kind: kind === 'secret' ? 'app' : 'secret' } }));
   }
+});
+
+test('上限サイズの内容を100人へ暗号化し、所有者と共有相手の鍵で読み出す', async () => {
+  const recipients = await Promise.all(Array.from({ length: 100 }, () => identity()));
+  const owner = recipients[0]!, last = recipients.at(-1)!;
+  const policy = AccessPolicy.parse({ format: 1, origin: 'https://foundation.test', id: crypto.randomUUID(),
+    ownerId: owner.binding.principalId, kind: 'secret', revision: 1,
+    authorities: recipients.map(recipient => recipient.binding), readers: recipients.map(recipient => recipient.binding),
+    grants: [],
+  });
+  const bytes = new Uint8Array(1_000_000).fill(171);
+  const content = await protect(bytes, policy, 1, owner.binding, owner.keys);
+  assert.deepEqual(await reveal(content, owner.binding, owner.keys.encryption), bytes);
+  assert.deepEqual(await reveal(content, last.binding, last.keys.encryption), bytes);
 });
 
 test('許可した実行先が接続を更新し、所有者が署名した権限と宛先を保持する', async () => {

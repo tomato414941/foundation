@@ -8,7 +8,7 @@ import type { PublicEncryptionKey } from './contracts.js';
 import { base64url, encode, newEncryptionKey } from './encryption.js';
 
 export const Fingerprint = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
-export const Signature = z.string().min(100).max(2_000_000);
+export const Signature = z.string().min(100).max(4_000_000);
 export const PrivateKey = PublicKey.extend({ d: z.string().regex(/^[A-Za-z0-9_-]{43}$/) });
 export const PrivateKeys = z.object({ encryption: PrivateKey, signing: PrivateKey }).strict();
 export type IdentityKeys = z.infer<typeof PrivateKeys>;

@@ -66,17 +66,23 @@ export const ExecutionReceipt = z.object({
 }).strict();
 export type SignedReceipt = z.infer<typeof ExecutionReceipt>;
 
+export class ResultTooLarge extends Error {
+  constructor() { super('The encoded execution result exceeds 1,400,000 bytes.'); }
+}
+
 export async function makeReceipt(
   intent: ExecutionIntent, state: SignedReceipt['state'], result: ExecutionResult, keys: KeyMaterial,
 ): Promise<SignedReceipt> {
   const body = TaskResult.parse(result);
   if ((state === 'succeeded') !== body.ok) throw new Error('The result must match its completion state.');
-  const sealed = await seal(encode(canonical(body)), intent.resultRecipients.map(binding => ({
+  const bytes = encode(canonical(body));
+  if (bytes.byteLength > 1_400_000) throw new ResultTooLarge();
+  const sealed = await seal(bytes, intent.resultRecipients.map(binding => ({
     id: binding.id, publicKey: binding.encryption,
   })), await runContext(intent, 'result'));
   const value = { id: intent.id, intentDigest: await hash(intent), executorId: intent.executor.id,
     state, finishedAt: new Date().toISOString(), sealed };
-  return { ...value, signature: await sign(value, keys.signing, 'receipt') };
+  return ExecutionReceipt.parse({ ...value, signature: await sign(value, keys.signing, 'receipt') });
 }
 
 export async function verifyReceipt(input: SignedReceipt, intent: ExecutionIntent) {

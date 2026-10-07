@@ -57,6 +57,33 @@ test('実行結果を送れない場合は記録から再送し、外部操作�
   } finally { await f.close(); }
 });
 
+test('大きな応答を暗号化して届け、返却上限を超えた応答は処理済みのエラーとして確定する', async () => {
+  const f = await delegatedFixture();
+  try {
+    for (const body of ['x'.repeat(1_000_000), '\0'.repeat(300_000)]) {
+      let calls = 0;
+      const intent = { ...f.intent, id: crypto.randomUUID() };
+      await f.delegation.submit(f.owner.actor, await prepareRun(intent, f.operation, f.owner.keys));
+      const executor = new Executor(f.environment, f.executor.keys, f.broker, new MemoryJournal(), {
+        async send() { calls++; return { status: 200, headers: {}, body: encode(body) }; },
+      }, new CommandProcess({ isolation: 'process' }));
+      await executor.tick();
+      assert.deepEqual(await executor.reconcile(), []);
+      const task = await f.delegation.get(f.owner.actor, intent.id);
+      const result = await readReceipt(task.receipt!, intent, f.owner.binding.id, f.owner.keys);
+      if (body.startsWith('x')) {
+        assert.equal(task.state, 'succeeded');
+        assert.deepEqual(result.result, { status: 200, headers: {}, body });
+      } else {
+        assert.equal(task.state, 'failed');
+        assert.equal(result.error!.code, 'result_too_large');
+        assert.match(result.error!.message, /operation completed/);
+      }
+      assert.equal(calls, 1);
+    }
+  } finally { await f.close(); }
+});
+
 test('応答を受け取れない外部操作を確認待ちとして保持し、再起動後もその記録を利用する', async () => {
   const f = await delegatedFixture();
   try {

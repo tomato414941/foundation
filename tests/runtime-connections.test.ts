@@ -65,13 +65,15 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
     assert.equal(task.state, 'succeeded', JSON.stringify(result.error));
     return result.result as Record<string, JsonValue>;
   }
-  async function storedConnection(name = 'Connection') {
+  async function storedConnection(name = 'Connection', grants?: CustodyPolicy['grants']) {
     const material = ConnectionMaterial.parse({ format: 1, methodId: 'provider:oauth', method,
       generation: crypto.randomUUID(), appId: appPolicy.id, appGeneration: appMaterial.generation,
       oauth: { accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: 0,
         scopes: ['read'], scopesStatus: 'reported', account: 'account-1', accountName: 'Account',
         accountVerified: true, extra: {}, facts: {} } });
-    const content = await protect(encode(canonical(material)), policy('connection', ['http', 'refresh', 'revoke']),
+    const connectionPolicy = policy('connection', ['http', 'refresh', 'revoke']);
+    if (grants) connectionPolicy.grants = grants;
+    const content = await protect(encode(canonical(material)), connectionPolicy,
       1, f.owner.binding, f.owner.keys, await connectionMetadata(material));
     await f.custody.put(f.owner.actor, { name, content });
     const authorization = await intent({ kind: 'http' }, [content, appContent], 'http');
@@ -129,6 +131,35 @@ test('更新したトークンを実行先に記録し、管理サーバーへ�
     assert.equal(updated.materialRevision, 2);
     assert.equal(ConnectionMaterial.parse(JSON.parse(decode(await reveal(updated, f.owner.binding,
       f.owner.keys.encryption)))).oauth!.refreshToken, 'new-refresh');
+    assert.equal(f.requests.filter(request => request.url.endsWith('/token')).length, 1);
+  } finally { await f.close(); }
+});
+
+test('自動更新の依頼者と利用先を照合し、同じ委任で許可された接続だけを更新する', async () => {
+  const f = await setup(request => request.url.endsWith('/token')
+    ? response({ access_token: 'new-access', refresh_token: 'new-refresh', token_type: 'bearer', expires_in: 3600, scope: 'read' })
+    : response({ id: 'account-1', name: 'Account' }));
+  try {
+    const grant = f.appPolicy.grants[0]!;
+    for (const refresh of [
+      { ...grant, actor: f.stranger.binding, operations: ['refresh'] as const },
+      { ...grant, origins: ['https://another.example'], operations: ['refresh'] as const },
+    ]) {
+      const c = await f.storedConnection('Needs approval', [
+        { ...grant, operations: ['http'] }, { ...refresh, operations: [...refresh.operations] },
+      ]);
+      await assert.rejects(f.connections.outputs(c.content, c.authorization, c.sources,
+        new AbortController().signal, 'https://service.example/items'), { code: 'refresh_required' });
+      assert.equal(await f.operations.state(f.executor.actor, c.content.policy.id), null);
+    }
+    assert.equal(f.requests.length, 0);
+    const c = await f.storedConnection('Approved refresh', [
+      { ...grant, operations: ['http', 'refresh'], origins: ['https://service.example'] },
+    ]);
+    await f.connections.outputs(c.content, c.authorization, c.sources,
+      new AbortController().signal, 'https://service.example/items');
+    const updated = await f.custody.get(c.content.policy.id);
+    assert.equal(updated.materialRevision, 2);
     assert.equal(f.requests.filter(request => request.url.endsWith('/token')).length, 1);
   } finally { await f.close(); }
 });

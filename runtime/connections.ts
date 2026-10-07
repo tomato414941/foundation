@@ -5,7 +5,7 @@ import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
 import type { JsonValue, MethodDescription } from '../shared/contracts.js';
 import { AppMaterial, ConnectionAction, ConnectionMaterial, connectionMetadata, requiresApp } from '../shared/connections.js';
 import type { AppState, ConnectionCommand, ConnectionState } from '../shared/connections.js';
-import { produceContent, renewContent, useContent, verifyPolicyApproval } from '../shared/custody.js';
+import { authorizeUse, produceContent, renewContent, useContent, verifyPolicyApproval } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent } from '../shared/custody.js';
 import { encode } from '../shared/encryption.js';
 import { atPointer, textValue } from '../shared/values.js';
@@ -277,7 +277,7 @@ export class Connections implements ExecutionExtension {
     if (state.method.kind === 'role') return this.roles.obtain(state.role!.arn, state.role!.externalId, state.role!.region);
     if (await this.broker.state(content.policy.id))
       fail(409, 'connection_busy', 'Resolve the current token update before using this connection.');
-    state = await this.refresh(content, state, intent, sources, signal);
+    state = await this.refresh(content, state, intent, sources, signal, destination);
     if (state.method.kind !== 'oauth') throw new Error('Use an OAuth connection.');
     return this.oauth(signal).outputs(state.method.config, await this.connectionApp(state, intent, sources), state.oauth!);
   }
@@ -297,13 +297,11 @@ export class Connections implements ExecutionExtension {
     return material;
   }
   private async refresh(content: CustodyContent, material: ConnectionState, intent: ExecutionIntent,
-    sources: CustodyContent[], signal: AbortSignal) {
+    sources: CustodyContent[], signal: AbortSignal, destination?: string) {
     if (material.method.kind !== 'oauth') return material;
     if (material.oauth!.expiresAt === null || material.oauth!.expiresAt! >= Date.now() + 60_000) return material;
-    if (!(content.policy.authorities.some(authority => canonical(authority) === canonical(this.binding)) ||
-      content.policy.grants.some(grant => canonical(grant.executor) === canonical(this.binding) &&
-      grant.operations.includes('refresh') && Date.parse(grant.expiresAt) > Date.now())))
-      fail(403, 'refresh_required', 'Authorize this executor to renew the connection.');
+    try { await authorizeUse(content, { ...intent, operation: 'refresh' }, { destination }); }
+    catch { fail(403, 'refresh_required', 'Authorize this requester and executor to renew the connection for this destination.'); }
     const app = await this.connectionApp(material, intent, sources), id = randomUUID();
     const operation = await this.broker.prepare(id, content.policy.id, content.materialRevision);
     const record: Renewal = { operation, previous: content, material, app, phase: 'prepared', delivered: false };
