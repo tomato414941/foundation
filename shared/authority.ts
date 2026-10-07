@@ -12,6 +12,7 @@ export const Signature = z.string().min(100).max(2_000_000);
 export const PrivateKey = PublicKey.extend({ d: z.string().regex(/^[A-Za-z0-9_-]{43}$/) });
 export const PrivateKeys = z.object({ encryption: PrivateKey, signing: PrivateKey }).strict();
 export type IdentityKeys = z.infer<typeof PrivateKeys>;
+export interface KeyMaterial { encryption: JWK | CryptoKey; signing: JWK | CryptoKey }
 export const KeyBinding = z.object({
   id: Id,
   principalId: Id,
@@ -73,14 +74,21 @@ export async function sign(value: unknown, key: JWK | CryptoKey, purpose: string
 export async function verify(
   value: unknown, signature: string, key: PublicEncryptionKey, purpose: string,
 ): Promise<void> {
+  if (canonical(await signedValue(signature, key, purpose)) !== canonical(value))
+    throw new Error('The signature does not authorize this content.');
+}
+
+export async function signedValue(signature: string, key: PublicEncryptionKey, purpose: string): Promise<unknown> {
   const result = await compactVerify(signature, await importJWK(PublicKey.parse(key), 'ES256'), {
     algorithms: ['ES256'],
   });
   if (
     result.protectedHeader.typ !== 'foundation.' + purpose + '+jws' ||
-    Object.keys(result.protectedHeader).some(field => !['alg', 'typ'].includes(field)) ||
-    new TextDecoder('utf-8', { fatal: true }).decode(result.payload) !== canonical(value)
+    Object.keys(result.protectedHeader).some(field => !['alg', 'typ'].includes(field))
   ) throw new Error('The signature does not authorize this content.');
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(result.payload), value: unknown = JSON.parse(text);
+  if (canonical(value) !== text) throw new Error('Sign canonical JSON content.');
+  return value;
 }
 
 export const SignedBinding = z.object({ binding: KeyBinding, signature: Signature }).strict();

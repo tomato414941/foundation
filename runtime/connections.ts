@@ -270,8 +270,9 @@ export class Connections implements ExecutionExtension {
     sources: CustodyContent[], signal: AbortSignal) {
     if (material.method.kind !== 'oauth') return material;
     if (material.oauth!.expiresAt === null || material.oauth!.expiresAt! >= Date.now() + 60_000) return material;
-    if (!content.policy.grants.some(grant => canonical(grant.executor) === canonical(this.binding) &&
-      grant.operations.includes('refresh') && Date.parse(grant.expiresAt) > Date.now()))
+    if (!(content.policy.authorities.some(authority => canonical(authority) === canonical(this.binding)) ||
+      content.policy.grants.some(grant => canonical(grant.executor) === canonical(this.binding) &&
+      grant.operations.includes('refresh') && Date.parse(grant.expiresAt) > Date.now())))
       fail(403, 'refresh_required', 'Authorize this executor to renew the connection.');
     const app = await this.connectionApp(material, intent, sources), id = randomUUID();
     const operation = await this.broker.prepare(id, content.policy.id, content.materialRevision);

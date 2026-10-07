@@ -17,6 +17,7 @@ import { token } from './vault.js';
 import * as C from '../shared/contracts.js';
 import * as S from '../shared/session.js';
 import { routesResources } from './routes-resources.js';
+import { routesExecution } from './routes-execution.js';
 import { routesRequests } from './routes-requests.js';
 import { routesAccounts } from './routes-accounts.js';
 import { routesMcp } from './mcp.js';
@@ -49,7 +50,7 @@ export async function buildApp(context: Context) {
       },
       redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers.set-cookie'],
     },
-    bodyLimit: 2_200_000,
+    bodyLimit: 8_000_000,
     requestTimeout: 90_000,
     trustProxy: config.FOUNDATION_PROXY_ADDRESSES || false,
   }).withTypeProvider<ZodTypeProvider>();
@@ -636,6 +637,7 @@ export async function buildApp(context: Context) {
     },
   );
   await routesResources(app, context);
+  await routesExecution(app, context);
   await routesRequests(app, context, cookieOptions);
   await routesAccounts(app, context);
   await routesMcp(app);

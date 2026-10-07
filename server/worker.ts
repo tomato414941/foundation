@@ -38,6 +38,8 @@ export class Worker {
     for (let index = 0; index < 4; index++) this.schedule(() => this.context.runs.tick(), 500);
     for (let index = 0; index < 2; index++) this.schedule(() => this.context.environments.tick(), 1000);
     this.schedule(() => this.context.runs.recover(), 15_000);
+    this.schedule(() => this.context.delegation.recover(), 15_000);
+    this.schedule(() => this.context.connectionOperations.recover(), 15_000);
     this.schedule(() => this.context.integrations.deliver(), 2000);
     this.schedule(async () => {
       await this.context.environments.enforcePayment();

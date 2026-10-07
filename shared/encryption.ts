@@ -83,17 +83,17 @@ async function wrappingKey(prf: Uint8Array): Promise<Uint8Array> {
     ),
   );
 }
-export async function wrap(privateKey: JWK, prf: Uint8Array, principalId: string): Promise<WrappedEncryptionKey> {
+export async function wrap(privateKey: unknown, prf: Uint8Array, principalId: string): Promise<WrappedEncryptionKey> {
   return WrappedKey.parse(await new CompactEncrypt(encode(JSON.stringify(privateKey)))
     .setProtectedHeader({ alg: 'dir', enc: encryption, sub: principalId })
     .encrypt(await wrappingKey(prf)));
 }
-export async function unwrap(value: string, prf: Uint8Array, principalId: string): Promise<JWK> {
+export async function unwrap<T = JWK>(value: string, prf: Uint8Array, principalId: string): Promise<T> {
   const result = await compactDecrypt(value, await wrappingKey(prf), {
     keyManagementAlgorithms: ['dir'],
     contentEncryptionAlgorithms: [encryption],
   });
   if (result.protectedHeader.sub !== principalId)
     throw new Error('The key belongs to a different principal.');
-  return JSON.parse(decode(result.plaintext)) as JWK;
+  return JSON.parse(decode(result.plaintext)) as T;
 }

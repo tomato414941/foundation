@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { createServer } from 'node:net';
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -9,13 +10,19 @@ import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { Redactor, secretVariants } from '../cli/src/execute.js';
-import { encode, seal, wrap } from '../shared/encryption.js';
+import { encode, wrap } from '../shared/encryption.js';
+import { AccessPolicy, protect } from '../shared/custody.js';
+import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 
 async function cliFixture() {
-  const f = await fixture(),
+  const reserved = createServer();
+  await new Promise<void>(resolve => reserved.listen(0, '127.0.0.1', resolve));
+  const port = (reserved.address() as { port: number }).port;
+  await new Promise<void>((resolve, reject) => reserved.close(error => error ? reject(error) : resolve()));
+  const f = await fixture({ FOUNDATION_ORIGIN: 'http://127.0.0.1:' + port }),
     context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
     app = await buildApp(context);
-  const origin = await app.listen({ host: '127.0.0.1', port: 0 }),
+  const origin = await app.listen({ host: '127.0.0.1', port }),
     directory = await mkdtemp(join(tmpdir(), 'foundation-cli-test-'));
   const environment = { ...process.env, XDG_CONFIG_HOME: directory };
   for (const key of [
@@ -23,6 +30,8 @@ async function cliFixture() {
     'FOUNDATION_TOKEN',
     'FOUNDATION_PRINCIPAL_ID',
     'FOUNDATION_PRIVATE_KEY',
+    'FOUNDATION_PRIVATE_KEYS',
+    'FOUNDATION_KEY_BINDING',
   ])
     delete environment[key];
   async function run(args: string[], input?: string) {
@@ -49,7 +58,15 @@ async function cliFixture() {
     await f.close();
     await rm(directory, { recursive: true, force: true });
   }
-  return { f, context, app, origin, directory, run, close };
+  async function person(name: string) {
+    const keys = await newIdentityKeys();
+    const enrolled = await f.authentication.enroll(name, publicPart(keys.encryption));
+    const actor = (await f.authentication.authenticate(enrolled.token))!;
+    const binding = bindKeys(actor.id, keys);
+    await context.bindings.publish(actor, await signBinding(binding, keys));
+    return { ...enrolled, actor, keys, binding };
+  }
+  return { f, context, app, origin, directory, run, close, person };
 }
 
 test('CLIで登録してシークレットを保存し、コマンドへ渡して出力を伏せる', async (t) => {
@@ -60,11 +77,11 @@ test('CLIで登録してシークレットを保存し、コマンドへ渡し�
   const identityPath = join(c.directory, 'foundation', 'identity.json');
   assert.equal((await stat(identityPath)).mode & 0o777, 0o600);
   assert.equal((await stat(join(c.directory, 'foundation'))).mode & 0o777, 0o700);
-  const kept = await c.run(['keep', 'CLI secret', '--stdin', '--allow-use'], '秘密-value/123');
+  const kept = await c.run(['keep', 'CLI secret', '--stdin'], '秘密-value/123');
   assert.equal(kept.code, 0, kept.stderr);
   const resource = JSON.parse(kept.stdout);
   assert.equal(resource.kind, 'secret');
-  assert.equal(resource.data.allowUse, true);
+  assert.equal(resource.data.custodyRevision, 1);
   const output = join(c.directory, 'revealed.txt'),
     read = await c.run(['read', resource.id, '--output', output]);
   assert.equal(read.code, 0, read.stderr);
@@ -97,12 +114,15 @@ test('CLIで登録してシークレットを保存し、コマンドへ渡し�
   assert.equal(exportResult.code, 0, exportResult.stderr);
   assert.equal((await stat(exported)).mode & 0o777, 0o600);
   assert.ok((await readFile(exported, 'utf8')).includes('CLI secret'));
+  const exportedResource = (await readFile(exported, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    .find(item => item.type === 'resource');
+  assert.equal(exportedResource.custody.policy.id, resource.id);
 });
 
 test('CLIの確認コードを承認し、同じAPIから所有者のリソースを利用する', async (t) => {
   const c = await cliFixture();
   t.after(c.close);
-  const owner = await c.f.person('Human owner');
+  const owner = await c.person('Human owner');
   const initialized = await c.run(['init', '--name', 'Joining machine', '--origin', c.origin]);
   assert.equal(initialized.code, 0, initialized.stderr);
   const joined = await c.run(['join']);
@@ -123,8 +143,10 @@ test('CLIの確認コードを承認し、同じAPIから所有者のリソー�
   const status = await c.run(['status']);
   assert.equal(status.code, 0, status.stderr);
   assert.ok(JSON.parse(status.stdout).principals.some((item: { id: string }) => item.id === owner.actor.id));
+  const trusted = await c.run(['trust', owner.actor.id, '--fingerprint', await hash(owner.binding)]);
+  assert.equal(trusted.code, 0, trusted.stderr);
   const kept = await c.run(
-    ['keep', 'Owner secret', '--owner', owner.actor.id, '--stdin', '--allow-use'],
+    ['keep', 'Owner secret', '--owner', owner.actor.id, '--stdin'],
     'delegated-value',
   );
   assert.equal(kept.code, 0, kept.stderr);
@@ -145,7 +167,7 @@ test('CLIの確認コードを承認し、同じAPIから所有者のリソー�
 test('発行されたキーで初期化した CLI は本人として入り、別の端末が封じたシークレットを読む', async (t) => {
   const c = await cliFixture();
   t.after(c.close);
-  const person = await c.f.person('Person');
+  const person = await c.person('Person');
   const headers = { authorization: 'Bearer ' + person.token };
   const issued = await c.app.inject({
     method: 'POST',
@@ -157,36 +179,56 @@ test('発行されたキーで初期化した CLI は本人として入り、別
   const { credential, token } = issued.json();
   const refused = await c.run(['init', '--key', token, '--origin', c.origin]);
   assert.notEqual(refused.code, 0);
-  assert.match(refused.stderr, /encryption key/);
-  const wrappedKey = await wrap(person.keys.privateKey, encode(token), person.actor.id);
+  assert.match(refused.stderr, /separate encryption unlock code/);
+  const unlock = randomBytes(32);
+  const wrappedKey = await wrap(person.keys, unlock, person.actor.id);
   const placed = await c.app.inject({
     method: 'PUT',
     url: `/api/principals/${person.actor.id}/credentials/${credential.id}/wrap`,
     headers,
-    payload: { wrappedKey, publicKey: person.keys.publicKey },
+    payload: { wrappedKey, publicKey: publicPart(person.keys.encryption) },
   });
   assert.equal(placed.statusCode, 200, placed.body);
   const keyFile = join(c.directory, 'key.txt');
-  await writeFile(keyFile, token + '\n', { mode: 0o600 });
+  await writeFile(keyFile, token + '.' + unlock.toString('base64url') + '\n', { mode: 0o600 });
   const initialized = await c.run(['init', '--key', '@' + keyFile, '--origin', c.origin]);
   assert.equal(initialized.code, 0, initialized.stderr);
   assert.equal(JSON.parse(initialized.stdout).principal.id, person.actor.id);
   const id = randomUUID(),
     content = encode('sealed elsewhere');
-  const sealed = await seal(content, [{ id: person.actor.id, publicKey: person.keys.publicKey }], 'resource:' + id);
-  await c.f.resources.createSecret(person.actor, person.actor.id, {
-    kind: 'secret',
-    id,
+  const policy = AccessPolicy.parse({ format: 1, id, origin: c.origin, ownerId: person.actor.id, kind: 'secret',
+    revision: 1, authorities: [person.binding], readers: [person.binding], grants: [] });
+  await c.context.custody.put(person.actor, {
     name: 'Browser secret',
-    sealed,
-    bytes: content.length,
-    allowUse: false,
+    content: await protect(content, policy, 1, person.binding, person.keys),
   });
   const read = await c.run(['read', id]);
   assert.equal(read.code, 0, read.stderr);
   assert.equal(read.stdout, 'sealed elsewhere');
   const status = await c.run(['status']);
   assert.equal(JSON.parse(status.stdout).principal.id, person.actor.id);
+});
+
+test('CLIで実行先を登録し、指定した実行先へ暗号化したコマンドを送り結果を復号する', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  const initialized = await c.run(['init', '--name', 'Executor', '--origin', c.origin]);
+  assert.equal(initialized.code, 0, initialized.stderr);
+  const id = randomUUID();
+  const registered = await c.run(['agent', 'start', '--id', id, '--once']);
+  assert.equal(registered.code, 0, registered.stderr);
+  assert.equal(JSON.parse(registered.stdout).environmentId, id);
+  const kept = await c.run(['keep', 'Command credential', '--stdin', '--for', id], 'command-secret');
+  assert.equal(kept.code, 0, kept.stderr);
+  const resource = JSON.parse(kept.stdout);
+  const run = await c.run(['run', '--environment', id, '--inputs', JSON.stringify([
+    { name: 'TOKEN', source: { kind: 'secret', id: resource.id } },
+  ]), '--', process.execPath, '-e', 'process.stdout.write("executed:" + process.env.TOKEN)']);
+  assert.equal(run.code, 0, run.stderr);
+  const executed = await c.run(['agent', 'start', '--id', id, '--once']);
+  assert.equal(executed.code, 0, executed.stderr);
+  const result = await c.run(['wait', JSON.parse(run.stdout).id, '--timeout', '5']);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).result.stdout, 'executed:[redacted]');
 });
 
 test('UTF8と秘密値の境界をまたぐ出力を最後まで伏せて表示する', () => {

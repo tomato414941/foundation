@@ -24,9 +24,10 @@ export class ConnectionOperations {
     await this.custody.resources.authorization.active(actor, connection);
     const content = await this.custody.get(resourceId, connection);
     const { binding } = await this.custody.bindings.current(actor.id, connection);
-    if (content.policy.kind !== 'connection' || !content.policy.grants.some(grant =>
+    if (content.policy.kind !== 'connection' || !(content.policy.authorities.some(authority =>
+      canonical(authority) === canonical(binding)) || content.policy.grants.some(grant =>
       canonical(grant.executor) === canonical(binding) && (!refresh || grant.operations.includes('refresh')) &&
-      Date.parse(grant.expiresAt) > Date.now()))
+      Date.parse(grant.expiresAt) > Date.now())))
       fail(403, 'forbidden', 'This executor cannot renew the connection.');
     return content;
   }

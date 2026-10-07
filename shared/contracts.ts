@@ -329,15 +329,20 @@ export const EnvironmentInput = z
   })
   .strict();
 export type EnvironmentOptions = z.infer<typeof EnvironmentInput>;
+const custodyMetadata = {
+  recipients: z.array(Id).default([]), executors: z.array(Id).default([]),
+  custodyRevision: z.number().int().positive().nullable().default(null),
+};
 export const SecretResource = z.object({
   ...resourceBase,
   kind: z.literal('secret'),
-  data: z.object({ bytes: z.number().int().nonnegative(), recipients: z.array(Id), allowUse: z.boolean() }),
+  data: z.object({ ...custodyMetadata, bytes: z.number().int().nonnegative(), allowUse: z.boolean() }),
 });
 export const ConnectionResource = z.object({
   ...resourceBase,
   kind: z.literal('connection'),
   data: z.object({
+    ...custodyMetadata,
     methodId: z.string(),
     methodName: z.string(),
     methodKind: AuthKind,
@@ -348,8 +353,10 @@ export const ConnectionResource = z.object({
     scopes: z.array(z.string()),
     scopesStatus: z.enum(['unknown', 'requested', 'reported']).default('unknown'),
     outputs: z.array(z.string()),
-    state: z.enum(['ready', 'reconnect', 'review', 'disconnecting']),
+    state: z.enum(['ready', 'reconnect', 'review', 'disconnecting', 'uncertain']),
     appId: Id.nullable(),
+    generation: Id.optional(),
+    authorizationDigest: z.string().optional(),
   }),
 });
 export const ServiceResource = z.object({
@@ -365,7 +372,8 @@ export const MethodResource = z.object({
 export const AppResource = z.object({
   ...resourceBase,
   kind: z.literal('app'),
-  data: z.object({ methodId: z.string(), clientId: z.string(), fields: z.record(z.string(), z.string()) }),
+  data: z.object({ ...custodyMetadata, methodId: z.string(), clientId: z.string(),
+    fields: z.record(z.string(), z.string()).default({}), generation: Id.optional() }),
 });
 export const ObjectResource = z.object({
   ...resourceBase,
@@ -376,6 +384,9 @@ export const EnvironmentResource = z.object({
   ...resourceBase,
   kind: z.literal('environment'),
   data: EnvironmentInput.extend({
+    executorId: Id.optional(), operatorId: Id.optional(), driver: z.enum(['attached', 'managed']).optional(),
+    capabilities: z.array(z.string()).optional(), isolation: z.enum(['process', 'container']).optional(),
+    manifestDigest: z.string().optional(),
     state: EnvironmentState,
     startedAt: Time.nullable(),
     stoppedAt: Time.nullable(),

@@ -3,11 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { z } from 'zod';
-import type { Client } from './client.js';
-import type { InjectionInput } from '../../shared/contracts.js';
-import { Injection } from '../../shared/session.js';
-import { decode, open } from '../../shared/encryption.js';
+import { childEnvironment } from '../../runtime/command.js';
 
 export function secretVariants(values: string[]) {
   return [
@@ -60,33 +56,13 @@ export class Redactor {
     if (result) this.output(result);
   }
 }
-const Payload = z
-  .object({
-    environment: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()),
-    files: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()),
-  })
-  .strict();
-export async function execute(client: Client, inputs: InjectionInput[], command: string[]) {
+export async function execute(payload: { environment: Record<string, string>; files: Record<string, string>; sensitive: string[] }, command: string[]) {
   if (!command.length) throw new Error('Put the command after --.');
-  const session = await client.session();
-  if (!session.principal) throw new Error('The machine identity is no longer valid.');
-  const injection = await client.json('/api/inputs', { method: 'POST', body: { inputs } }, Injection);
-  const payload = Payload.parse(
-    JSON.parse(
-      decode(
-        await open(injection.sealed, client.identity.privateKey, session.principal.id, injection.context),
-      ),
-    ),
-  );
   const directory = await mkdtemp(join(tmpdir(), 'foundation-'));
   await chmod(directory, 0o700);
   try {
-    const environment = { ...process.env, ...payload.environment };
-    const sensitive = [
-      ...Object.values(payload.environment),
-      process.env.FOUNDATION_TOKEN ?? '',
-      process.env.FOUNDATION_PRIVATE_KEY ?? '',
-    ];
+    const environment = childEnvironment(payload.environment);
+    const sensitive = [...payload.sensitive];
     for (const [name, value] of Object.entries(payload.files)) {
       const bytes = Buffer.from(value, 'base64');
       const path = join(directory, name);

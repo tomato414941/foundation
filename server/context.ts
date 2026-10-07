@@ -26,6 +26,10 @@ import { Environments } from './environments.js';
 import { Runs } from './runs.js';
 import { Integrations } from './integrations.js';
 import { Requests } from './requests.js';
+import { Bindings } from './bindings.js';
+import { Custody } from './custody.js';
+import { Delegation } from './delegation.js';
+import { ConnectionOperations } from './connection-operations.js';
 
 export interface Dependencies {
   db?: Database;
@@ -79,6 +83,10 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   services.checkApproval = (actor, connection) => requests.continuation(actor, connection);
   services.completed = (actor, result) => requests.completed(actor, result);
   services.cancelled = (actor) => requests.connectionCancelled(actor);
+  const bindings = new Bindings(db, authorization, audit),
+    custody = new Custody(resources, bindings, config.origin),
+    delegation = new Delegation(resources, bindings, custody, config.origin),
+    connectionOperations = new ConnectionOperations(custody);
   return {
     config,
     db,
@@ -102,6 +110,10 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     runs,
     integrations,
     requests,
+    bindings,
+    custody,
+    delegation,
+    connectionOperations,
   };
 }
 export type Context = Awaited<ReturnType<typeof createContext>>;

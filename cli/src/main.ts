@@ -15,23 +15,21 @@ import {
   Id,
   Input,
   Name,
-  NewResource,
-  PublicKey,
-  Recipient,
   RequestInput,
   Resource,
-  Run,
-  RunInput,
-  Sealed,
   listOf,
 } from '../../shared/contracts.js';
 import type { ResourceView } from '../../shared/contracts.js';
 import { Session } from '../../shared/session.js';
-import { encode, newEncryptionKey, open, seal, unwrap } from '../../shared/encryption.js';
+import { unbase64url, unwrap } from '../../shared/encryption.js';
+import { bindKeys, hash, newIdentityKeys, PrivateKeys, publicPart, signBinding, SignedBinding } from '../../shared/authority.js';
+import { RuntimeOperation, Task } from '../../shared/execution.js';
+import type { TaskView } from '../../shared/execution.js';
 import { Client, ApiError } from './client.js';
 import { configPath, origin, readIdentity, saveIdentity, secureWrite } from './config.js';
-import type { IdentityConfig } from './config.js';
 import { execute } from './execute.js';
+import { localInputs, privateClient } from './custody.js';
+import { startAgent } from './agent.js';
 
 const help = `Foundation ${packageInfo.version}
 
@@ -43,11 +41,13 @@ Usage: foundation <command> [options]
   join [--to ID] [--wait]               Ask a person to take on this machine
   api METHOD /api/PATH [--body JSON]    Call the common Foundation API
   schema [--output FILE]                Read the OpenAPI specification
-  keep NAME (--file FILE | --stdin)    Encrypt and save a secret
+  trust ID --fingerprint VALUE         Trust identity keys verified with their holder
+  agent start [--id ID]                Register this machine as an execution environment
+  keep NAME (--file FILE | --stdin)    Encrypt and save a secret (--for ENV to allow execution)
   read ID [--output FILE]               Decrypt a secret you can reveal
   exec --inputs JSON -- COMMAND ...    Deliver inputs to a local command
-  run --request JSON [--save JSON]      Run an HTTP request
-  run --function ID [--arguments JSON] Run a saved function
+  run --environment ID --request JSON  Run an HTTP request on the selected executor
+  run --environment ID --function ID   Run a saved function on the selected executor
   run --environment ID -- COMMAND ...  Run a command in an environment
   wait ID [--timeout SECONDS]           Wait for a run to finish
   request --body JSON                  Create an approval request
@@ -58,8 +58,10 @@ Options:
   --owner ID             Choose the principal that owns a new item or run
   --key TOKEN            A key issued from a browser (@FILE or @- to read it)
   --origin URL           Choose a server when initializing a machine
-  --allow-use            Allow Foundation to use a saved secret in runs
-  --no-allow-use         Turn off use when updating a secret
+  --for ID               Allow this executor to use the content (repeatable)
+  --caller ID            Accept requests from this identity (repeatable, agent start)
+  --isolation MODE       process for trusted local code, or container
+  --image IMAGE          Command container image pinned with @sha256:DIGEST
   --inputs JSON         Inputs for exec or a remote command (default: [])
   --wait                 Wait after starting a run or requesting approval
   --timeout SECONDS      Maximum waiting or command time (default: 60 for commands)
@@ -72,14 +74,18 @@ Options:
 JSON and the key may be supplied as @FILE, or @- to read standard input.
 A key issued in a browser carries your encryption key, so the machine acts as
 you. Registering with --name creates a separate principal instead.
-New secrets require --allow-use to be delivered to commands. Updates retain the
-current setting unless --allow-use or --no-allow-use is supplied.
+The unlock portion of a sign-in key stays on this machine. Verify fingerprints
+with each identity holder before trusting their keys. --for permits that executor
+to read the content and use it in commands or HTTP requests you supply.
+Without --for, content is readable only by its approved readers. Updates preserve
+existing permissions unless --for is supplied. Local exec decrypts on this machine.
 exec masks input values in stdout and stderr. read deliberately reveals content.
 Ctrl+C while waiting stops the wait; use the API to cancel the remote operation.
 
 Identity: $XDG_CONFIG_HOME/foundation/identity.json (defaults to ~/.config)
 Environment identity: FOUNDATION_ORIGIN, FOUNDATION_TOKEN,
-FOUNDATION_PRINCIPAL_ID, FOUNDATION_PRIVATE_KEY (base64url-encoded private JWK).
+FOUNDATION_PRINCIPAL_ID, FOUNDATION_PRIVATE_KEYS, FOUNDATION_KEY_BINDING.
+The last two values are base64url-encoded JSON; omit both for metadata-only access.
 `;
 const textOption = { type: 'string' as const },
   booleanOption = { type: 'boolean' as const };
@@ -93,7 +99,14 @@ const options = {
   body: textOption,
   file: textOption,
   stdin: booleanOption,
-  'allow-use': booleanOption,
+  for: { type: 'string' as const, multiple: true as const },
+  caller: { type: 'string' as const, multiple: true as const },
+  fingerprint: textOption,
+  id: textOption,
+  isolation: textOption,
+  image: textOption,
+  managed: booleanOption,
+  once: booleanOption,
   inputs: textOption,
   request: textOption,
   save: textOption,
@@ -189,7 +202,10 @@ async function initialize(args: Arguments) {
   const base = origin(args.values.origin);
   if (args.values.key) {
     if (args.values.name) throw new Error('Choose --key or --name.');
-    const token = (await text(args.values.key)).trim();
+    const imported = (await text(args.values.key)).trim().split('.');
+    if (imported.length !== 2 || !/^[A-Za-z0-9_-]+$/.test(imported[0]!) || !/^[A-Za-z0-9_-]{43}$/.test(imported[1]!))
+      throw new Error('Use a sign-in key containing an authentication token and a separate encryption unlock code.');
+    const [token, unlock] = imported as [string, string];
     let response: Response;
     try {
       response = await fetch(base + '/api/session', {
@@ -205,21 +221,25 @@ async function initialize(args: Arguments) {
     if (!current.principal) throw new Error('The key was not accepted.');
     if (!current.wrappedKey)
       throw new Error('This key does not carry an encryption key. Issue it from a browser that can open secrets.');
-    const privateKey = await unwrap(current.wrappedKey, encode(token), current.principal.id).catch(() => {
+    const keys = PrivateKeys.parse(await unwrap(current.wrappedKey, unbase64url(unlock), current.principal.id).catch(() => {
       throw new Error('The encryption key could not be unlocked with this key.');
-    });
-    await saveIdentity({ origin: base, principalId: current.principal.id, token, privateKey: privateKey as IdentityConfig['privateKey'] });
-    print({ principal: { id: current.principal.id, name: current.principal.name }, origin: base, identity: path });
+    }));
+    const unsigned = new Client({ origin: base, principalId: current.principal.id, token, keys: null, binding: null });
+    const { binding } = await unsigned.json('/api/identities/' + current.principal.id + '/binding', {}, SignedBinding);
+    await signBinding(binding, keys);
+    await saveIdentity({ origin: base, principalId: current.principal.id, token, keys, binding });
+    print({ principal: { id: current.principal.id, name: current.principal.name }, origin: base, identity: path,
+      fingerprint: await hash(binding) });
     return;
   }
   const name = Name.parse(args.values.name || hostname()),
-    keys = await newEncryptionKey();
+    keys = await newIdentityKeys();
   let response: Response;
   try {
     response = await fetch(base + '/api/auth/enroll', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name, publicKey: keys.publicKey }),
+      body: JSON.stringify({ name, publicKey: publicPart(keys.encryption) }),
       redirect: 'error',
       signal: AbortSignal.timeout(30_000),
     });
@@ -230,13 +250,17 @@ async function initialize(args: Arguments) {
   const registered = z
     .object({ principal: z.object({ id: Id, name: Name }), credential: Credential, token: z.string() })
     .parse(await response.json());
-  await saveIdentity({
+  const binding = bindKeys(registered.principal.id, keys), identity = {
     origin: base,
     principalId: registered.principal.id,
     token: registered.token,
-    privateKey: keys.privateKey as { kty: 'EC'; crv: 'P-256'; x: string; y: string; d: string },
-  });
-  print({ principal: registered.principal, origin: base, identity: path });
+    keys, binding,
+  };
+  await saveIdentity(identity);
+  await new Client(identity).json('/api/principals/' + registered.principal.id + '/binding', {
+    method: 'PUT', body: await signBinding(binding, keys),
+  }, SignedBinding);
+  print({ principal: registered.principal, origin: base, identity: path, fingerprint: await hash(binding) });
 }
 async function waitFor<T>(fetcher: () => Promise<T>, state: (value: T) => string, timeout: number) {
   const deadline = Date.now() + timeout * 1000;
@@ -270,45 +294,19 @@ async function keep(client: Client, args: Arguments, owner: string) {
     );
     after = page.next;
   } while (after && !existing);
-  const current = await client.session();
-  const id = existing?.id ?? randomUUID(),
-    allowUse = args.values['allow-use'] ?? existing?.data.allowUse ?? false;
-  const recipients = (
-    await client.json(
-      existing ? `/api/resources/${id}/recipients` : `/api/principals/${owner}/recipients`,
-      {},
-      listOf(Recipient),
-    )
-  ).items;
-  for (const recipientId of existing?.data.recipients ?? [])
-    if (recipientId !== current.server.id && !recipients.some((recipient) => recipient.id === recipientId)) {
-      const recipient = await client.json(
-        '/api/identities/' + recipientId,
-        {},
-        z.object({ id: Id, name: Name, publicKey: PublicKey.nullable() }),
-      );
-      if (recipient.publicKey) recipients.push({ ...recipient, publicKey: recipient.publicKey });
-    }
-  if (allowUse) recipients.push(current.server);
-  const sealed = await seal(content, recipients, 'resource:' + id);
-  const result = existing
-    ? await client.json(
-        '/api/resources/' + id,
-        {
-          method: 'PATCH',
-          body: { version: existing.version, name, sealed, bytes: content.length, allowUse },
-        },
-        Resource,
-      )
-    : await client.json(
-        '/api/principals/' + owner + '/resources',
-        {
-          method: 'POST',
-          body: NewResource.parse({ kind: 'secret', id, name, sealed, bytes: content.length, allowUse }),
-        },
-        Resource,
-      );
+  const { custody } = privateClient(client);
+  const previous = existing ? await custody.read(existing.id) : undefined;
+  const environments = await Promise.all((args.values.for ?? []).map(id => custody.environment(Id.parse(id))));
+  const policy = previous && !args.values.for ? previous.content.policy
+    : await custody.policy(owner, 'secret', environments, { previous: previous?.content.policy });
+  const result = await custody.save(name, content, policy, { previous });
   await output(result, args);
+}
+
+async function taskOutput(client: Client, task: TaskView, args: Arguments) {
+  const result = await privateClient(client).custody.result(task);
+  await output({ id: task.id, state: task.state, environmentId: task.environmentId,
+    result: result?.result ?? null, error: result?.error ?? task.error }, args);
 }
 async function main(argv: string[]) {
   const boundary = argv.indexOf('--'),
@@ -336,6 +334,25 @@ async function main(argv: string[]) {
     const { wrappedKey: _wrappedKey, ...status } = current;
     await output(status, args);
     return 0;
+  }
+  if (command === 'trust') {
+    const { custody } = privateClient(client), id = Id.parse(requireArgument(args.positionals[0], 'Supply an identity ID.'));
+    if (!args.values.fingerprint) {
+      const identity = await custody.inspectIdentity(id);
+      await output({ identityId: id, fingerprint: identity.fingerprint,
+        next: 'Verify this fingerprint with the identity holder, then repeat with --fingerprint.' }, args);
+    } else {
+      const identity = await custody.trustIdentity(id, args.values.fingerprint);
+      await output({ identityId: id, fingerprint: identity.fingerprint, trusted: true }, args);
+    }
+    return 0;
+  }
+  if (command === 'agent') {
+    if (args.positionals[0] !== 'start') throw new Error('Use foundation agent start.');
+    return startAgent(client, { id: args.values.id ? Id.parse(args.values.id) : undefined,
+      ownerId: owner, name: Name.parse(args.values.name ?? hostname()), callers: (args.values.caller ?? []).map(id => Id.parse(id)),
+      isolation: z.enum(['process', 'container']).parse(args.values.isolation ?? 'process'),
+      image: args.values.image, managed: args.values.managed, once: args.values.once });
   }
   if (command === 'api' || command === 'schema') {
     const method =
@@ -371,18 +388,8 @@ async function main(argv: string[]) {
     return 0;
   }
   if (command === 'read') {
-    const id = Id.parse(requireArgument(args.positionals[0], 'Supply the secret ID.')),
-      content = await client.json(
-        '/api/resources/' + id + '/secret',
-        {},
-        z.object({ sealed: Sealed, context: z.string() }),
-      );
-    const bytes = await open(
-      content.sealed,
-      client.identity.privateKey,
-      current.principal.id,
-      content.context,
-    );
+    const id = Id.parse(requireArgument(args.positionals[0], 'Supply the resource ID.'));
+    const bytes = await privateClient(client).custody.reveal(id);
     if (args.values.output) await secureWrite(args.values.output, bytes, !!args.values.force);
     else process.stdout.write(bytes);
     return 0;
@@ -392,49 +399,49 @@ async function main(argv: string[]) {
       .array(Input)
       .max(32)
       .parse(await json(args.values.inputs, []));
-    return execute(client, inputs, commandArguments);
+    return execute(await localInputs(client, inputs), commandArguments);
   }
   if (command === 'run') {
-    const modes = [args.values.request, args.values.function, args.values.environment].filter(Boolean);
-    if (modes.length !== 1) throw new Error('Choose one of --request, --function, or --environment.');
+    const environmentId = Id.parse(requireArgument(args.values.environment, 'Choose an explicit execution environment with --environment ID.'));
+    const modes = [args.values.request, args.values.function, commandArguments.length ? true : false].filter(Boolean);
+    if (modes.length !== 1) throw new Error('Choose --request, --function, or a command after --.');
+    const fn = args.values.function ? await client.json('/api/resources/' + Id.parse(args.values.function), {}, Resource) : null;
+    if (fn && fn.kind !== 'function') throw new Error('Choose a saved function.');
     const input = args.values.request
-      ? { kind: 'http', request: await json(args.values.request), save: await json(args.values.save, {}) }
-      : args.values.function
+      ? { kind: 'http', request: await json(args.values.request) }
+      : fn?.kind === 'function'
         ? {
             kind: 'function',
-            functionId: args.values.function,
+            definition: fn.data,
             arguments: await json(args.values.arguments, {}),
           }
         : {
             kind: 'command',
-            environmentId: args.values.environment,
             command: commandArguments,
             timeoutSeconds: seconds(args.values.timeout, 60, 3600),
             inputs: await json(args.values.inputs, []),
           };
-    const run = await client.json(
-      '/api/principals/' + owner + '/runs',
-      { method: 'POST', body: RunInput.parse(input) },
-      Run,
-    );
+    const run = await privateClient(client).custody.submit(owner, environmentId, RuntimeOperation.parse(input), {
+      save: z.record(z.string(), Name).parse(await json(args.values.save, {})),
+    });
     const result = args.values.wait
       ? await waitFor(
-          () => client.json('/api/runs/' + run.id, {}, Run),
+          () => client.json('/api/executions/' + run.id, {}, Task),
           (value) => value.state,
           seconds(args.values.timeout, 3600),
         )
       : run;
-    await output(result, args);
-    return result.state === 'failed' || result.state === 'cancelled' ? 1 : 0;
+    await taskOutput(client, result, args);
+    return ['failed', 'cancelled', 'uncertain'].includes(result.state) ? 1 : 0;
   }
   if (command === 'wait') {
     const id = Id.parse(requireArgument(args.positionals[0], 'Supply a run ID.'));
     const result = await waitFor(
-      () => client.json('/api/runs/' + id, {}, Run),
+      () => client.json('/api/executions/' + id, {}, Task),
       (value) => value.state,
       seconds(args.values.timeout, 3600),
     );
-    await output(result, args);
+    await taskOutput(client, result, args);
     return result.state === 'succeeded' ? 0 : 1;
   }
   if (command === 'join' || command === 'request') {

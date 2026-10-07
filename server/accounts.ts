@@ -4,7 +4,6 @@ import type { Context } from './context.js';
 import type { ResourceRow } from './resources.js';
 import type { SealedContent } from '../shared/contracts.js';
 import { Sealed } from '../shared/contracts.js';
-import { encode } from '../shared/encryption.js';
 import { fail } from './errors.js';
 
 export class Accounts {
@@ -12,12 +11,9 @@ export class Accounts {
   async *export(actor: Actor, id: string) {
     const c = this.context;
     await c.authorization.requirePrincipal(actor, id, 'export');
-    const recipient = await c.principals.get(actor.id);
-    if (!recipient.public_key)
-      fail(409, 'encryption_key_required', 'Add an encryption key before exporting private data.');
     yield JSON.stringify({
       format: 'foundation',
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       principal: await c.principals.view(actor, await c.principals.get(id)),
     }) + '\n';
@@ -32,21 +28,13 @@ export class Accounts {
           type: 'resource',
           resource: await c.resources.view(actor, row),
         };
-        if (row.kind === 'secret') entry.sealed = row.sealed;
+        if (['secret', 'connection', 'app'].includes(row.kind)) {
+          const content = await c.db.one<{ content: unknown }>('SELECT content FROM resource_custody WHERE resource_id=$1', [row.id]);
+          if (content) entry.custody = content.content;
+          else entry.encryptedStorage = { sealed: row.sealed, privateData: row.private_data };
+        }
         if (row.kind === 'object')
           entry.content = Buffer.from(await c.objects.store.get(row.private_data!)).toString('base64');
-        if (['app', 'connection'].includes(row.kind) && row.private_data) {
-          const privateData = await c.vault.decrypt<unknown>(row.private_data, 'resource:' + row.id),
-            context = 'export:' + row.id;
-          entry.private = {
-            context,
-            sealed: await c.identity.seal(
-              encode(JSON.stringify(privateData)),
-              [{ id: actor.id, publicKey: recipient.public_key }],
-              context,
-            ),
-          };
-        }
         yield JSON.stringify(entry) + '\n';
       }
       if (rows.length < 50) break;

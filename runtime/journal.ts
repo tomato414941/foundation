@@ -13,7 +13,7 @@ export interface Journal {
   keys(prefix: string): Promise<string[]>;
 }
 
-const JournalId = z.string().regex(/^(run|oauth|refresh|checkpoint)_[A-Za-z0-9_-]{1,100}$/);
+const JournalId = z.string().regex(/^(run|oauth|refresh|checkpoint|identity|environment|flow)_[A-Za-z0-9_-]{1,100}$/);
 export class FileJournal implements Journal {
   constructor(readonly directory: string, readonly origin: string,
     readonly binding: BoundKeys, readonly privateKeys: IdentityKeys) {}

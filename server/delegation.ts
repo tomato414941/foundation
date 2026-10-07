@@ -134,7 +134,8 @@ export class Delegation {
   private view(row: TaskRow): TaskView {
     return Task.parse({
       id: row.id, ownerId: row.owner_id, actorId: row.actor_id, environmentId: row.environment_id,
-      kind: row.kind, state: row.state, intent: row.request.intent, receipt: row.receipt, error: row.error,
+      kind: row.kind, state: row.state, intent: row.request.intent, requestSignature: row.request.signature,
+      receipt: row.receipt, error: row.error,
       createdAt: iso(row.created_at), startedAt: row.started_at ? iso(row.started_at) : null,
       finishedAt: row.finished_at ? iso(row.finished_at) : null,
     });
@@ -160,6 +161,8 @@ export class Delegation {
         fail(409, 'changed', 'An input changed. Review it before submitting another execution.');
       sources.push(content);
     }
+    if (sources.reduce((bytes, content) => bytes + JSON.stringify(content).length, 0) > 16_000_000)
+      fail(413, 'input_limit', 'Use at most 16 MB of encrypted inputs in one execution.');
     return { run, sources };
   }
 

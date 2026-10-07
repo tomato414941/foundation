@@ -3,13 +3,13 @@ import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { KeyBinding, PrivateKeys } from '../../shared/authority.js';
 
-const PrivateKey = z
-  .object({ kty: z.literal('EC'), crv: z.literal('P-256'), x: z.string(), y: z.string(), d: z.string() })
-  .passthrough();
 const Identity = z
-  .object({ origin: z.url(), principalId: z.uuid(), token: z.string().min(20), privateKey: PrivateKey })
-  .strict();
+  .object({ origin: z.url(), principalId: z.uuid(), token: z.string().min(20),
+    keys: PrivateKeys.nullable(), binding: KeyBinding.nullable() })
+  .strict().refine(value => Boolean(value.keys) === Boolean(value.binding) &&
+    (!value.binding || value.binding.principalId === value.principalId), 'Use the keys bound to this identity.');
 export type IdentityConfig = z.infer<typeof Identity>;
 export function configPath() {
   return join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'foundation', 'identity.json');
@@ -51,15 +51,16 @@ export async function readIdentity(override?: string): Promise<IdentityConfig> {
     if (override && process.env.FOUNDATION_ORIGIN && destination !== origin(process.env.FOUNDATION_ORIGIN))
       throw new Error('The environment identity belongs to a different origin.');
     const principalId = process.env.FOUNDATION_PRINCIPAL_ID,
-      privateValue = process.env.FOUNDATION_PRIVATE_KEY;
-    if (!principalId || !privateValue)
-      throw new Error('FOUNDATION_TOKEN requires FOUNDATION_PRINCIPAL_ID and FOUNDATION_PRIVATE_KEY.');
+      privateValue = process.env.FOUNDATION_PRIVATE_KEYS,
+      publicValue = process.env.FOUNDATION_KEY_BINDING;
+    if (!principalId) throw new Error('FOUNDATION_TOKEN requires FOUNDATION_PRINCIPAL_ID.');
     try {
       return Identity.parse({
         origin: destination,
         principalId,
         token: environmentToken,
-        privateKey: JSON.parse(Buffer.from(privateValue, 'base64url').toString('utf8')),
+        keys: privateValue ? JSON.parse(Buffer.from(privateValue, 'base64url').toString('utf8')) : null,
+        binding: publicValue ? JSON.parse(Buffer.from(publicValue, 'base64url').toString('utf8')) : null,
       });
     } catch {
       throw new Error('The Foundation environment identity is invalid.');

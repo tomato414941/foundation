@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { Command, FunctionDefinition, HttpRequest, Id, Json, Name, Sealed, Time } from './contracts.js';
 import { Fingerprint, KeyBinding, Signature, canonical, hash, sign, validateBinding, verify } from './authority.js';
-import type { IdentityKeys } from './authority.js';
+import type { KeyMaterial } from './authority.js';
 import { ExecutionKind, Origin, PolicyApproval, RunIntent, runContext } from './custody.js';
 import type { ExecutionIntent } from './custody.js';
 import { base64url, encode, open, seal } from './encryption.js';
@@ -20,7 +20,7 @@ export type ExecutorManifest = z.infer<typeof EnvironmentManifest>;
 export const SignedEnvironment = z.object({ manifest: EnvironmentManifest, signature: Signature }).strict();
 export type RegisteredEnvironment = z.infer<typeof SignedEnvironment>;
 
-export async function signEnvironment(manifest: ExecutorManifest, keys: IdentityKeys) {
+export async function signEnvironment(manifest: ExecutorManifest, keys: KeyMaterial) {
   const normalized = EnvironmentManifest.parse(manifest);
   const result = { manifest: normalized,
     signature: await sign(normalized, keys.signing, 'environment') };
@@ -67,7 +67,7 @@ export const ExecutionReceipt = z.object({
 export type SignedReceipt = z.infer<typeof ExecutionReceipt>;
 
 export async function makeReceipt(
-  intent: ExecutionIntent, state: SignedReceipt['state'], result: ExecutionResult, keys: IdentityKeys,
+  intent: ExecutionIntent, state: SignedReceipt['state'], result: ExecutionResult, keys: KeyMaterial,
 ): Promise<SignedReceipt> {
   const body = TaskResult.parse(result);
   if ((state === 'succeeded') !== body.ok) throw new Error('The result must match its completion state.');
@@ -92,7 +92,7 @@ export async function verifyReceipt(input: SignedReceipt, intent: ExecutionInten
 }
 
 export async function readReceipt(
-  receipt: SignedReceipt, intent: ExecutionIntent, bindingId: string, keys: IdentityKeys,
+  receipt: SignedReceipt, intent: ExecutionIntent, bindingId: string, keys: KeyMaterial,
 ) {
   await verifyReceipt(receipt, intent);
   const bytes = await open(receipt.sealed, keys.encryption, bindingId, await runContext(intent, 'result'));
@@ -104,7 +104,7 @@ export async function readReceipt(
 
 export const Task = z.object({
   id: Id, ownerId: Id, actorId: Id, environmentId: Id, kind: ExecutionKind,
-  state: TaskState, intent: RunIntent,
+  state: TaskState, intent: RunIntent, requestSignature: Signature,
   receipt: ExecutionReceipt.nullable(),
   error: z.string().nullable(), createdAt: Time, startedAt: Time.nullable(), finishedAt: Time.nullable(),
 }).strict();

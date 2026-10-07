@@ -6,7 +6,7 @@ import { base64url, encode, open, seal } from './encryption.js';
 import {
   Fingerprint, KeyBinding, Signature, canonical, hash, sign, validateBinding, verify,
 } from './authority.js';
-import type { BoundKeys, IdentityKeys } from './authority.js';
+import type { BoundKeys, KeyMaterial } from './authority.js';
 
 export const Origin = z.url().refine(value => {
   const url = new URL(value);
@@ -96,7 +96,7 @@ export async function contentContext(policy: CustodyPolicy, materialRevision: nu
 
 export async function protect(
   bytes: Uint8Array, input: CustodyPolicy, materialRevision: number,
-  signer: BoundKeys, keys: IdentityKeys,
+  signer: BoundKeys, keys: KeyMaterial,
   metadata?: Record<string, JsonValue>,
 ): Promise<CustodyContent> {
   if (bytes.byteLength > 1_000_000) throw new Error('The content exceeds 1,000,000 bytes.');
@@ -145,14 +145,15 @@ export async function verifyContent(input: CustodyContent) {
 }
 
 export async function renewContent(
-  input: CustodyContent, bytes: Uint8Array, executor: BoundKeys, keys: IdentityKeys,
+  input: CustodyContent, bytes: Uint8Array, executor: BoundKeys, keys: KeyMaterial,
   metadata: Record<string, JsonValue> = input.metadata,
 ): Promise<CustodyContent> {
   const content = await verifyContent(input);
-  if (content.policy.kind !== 'connection' || !content.policy.grants.some(grant =>
+  if (content.policy.kind !== 'connection' || !(content.policy.authorities.some(authority =>
+    canonical(authority) === canonical(executor)) || content.policy.grants.some(grant =>
     canonical(grant.executor) === canonical(executor) && grant.operations.includes('refresh') &&
     Date.parse(grant.expiresAt) > Date.now(),
-  )) throw new Error('This executor cannot renew this connection.');
+  ))) throw new Error('This executor cannot renew this connection.');
   if (bytes.byteLength > 1_000_000) throw new Error('The content exceeds 1,000,000 bytes.');
   const materialRevision = content.materialRevision + 1;
   const sealed = await seal(bytes, policyRecipients(content.policy).map(binding => ({
@@ -165,7 +166,7 @@ export async function renewContent(
   return result;
 }
 
-export async function approvePolicy(policy: CustodyPolicy, authority: BoundKeys, keys: IdentityKeys): Promise<ApprovedPolicy> {
+export async function approvePolicy(policy: CustodyPolicy, authority: BoundKeys, keys: KeyMaterial): Promise<ApprovedPolicy> {
   const approved = await validatePolicy(policy);
   if (!approved.authorities.some(binding => canonical(binding) === canonical(authority)))
     throw new Error('Only an authority can approve this policy.');
@@ -186,7 +187,7 @@ export async function verifyPolicyApproval(input: ApprovedPolicy) {
 
 export async function produceContent(
   bytes: Uint8Array, input: ApprovedPolicy, runId: string,
-  executor: BoundKeys, keys: IdentityKeys, metadata: Record<string, JsonValue>,
+  executor: BoundKeys, keys: KeyMaterial, metadata: Record<string, JsonValue>,
 ): Promise<CustodyContent> {
   const approval = await verifyPolicyApproval(input), { policy } = approval;
   const producer = policy.producers.find(producer => producer.runId === runId &&
@@ -249,7 +250,7 @@ export async function runContext(intent: ExecutionIntent, purpose: 'input' | 're
 }
 
 export async function prepareRun(
-  intent: ExecutionIntent, operation: unknown, keys: IdentityKeys,
+  intent: ExecutionIntent, operation: unknown, keys: KeyMaterial,
 ): Promise<SealedRun> {
   RunIntent.parse(intent);
   if (await hash(operation) !== intent.operationDigest)
@@ -280,7 +281,7 @@ export async function verifyRun(input: SealedRun, now = Date.now()): Promise<Sea
   return run;
 }
 
-export async function openRun(input: SealedRun, executor: BoundKeys, keys: IdentityKeys) {
+export async function openRun(input: SealedRun, executor: BoundKeys, keys: KeyMaterial) {
   const run = await verifyRun(input);
   if (canonical(run.intent.executor) !== canonical(executor))
     throw new Error('This operation belongs to another executor.');
@@ -300,6 +301,8 @@ export async function authorizeUse(
   const pin = intent.sources.find(source => source.id === policy.id);
   if (!pin || intent.origin !== policy.origin || !await matchesPin(content, pin))
     throw new Error('The input changed after this execution was authorized.');
+  if (canonical(intent.actor) === canonical(intent.executor) &&
+    policy.readers.some(reader => canonical(reader) === canonical(intent.actor))) return content;
   const matching = policy.grants.filter(grant =>
     canonical(grant.actor) === canonical(intent.actor) &&
     canonical(grant.executor) === canonical(intent.executor) &&
@@ -320,7 +323,7 @@ export async function authorizeUse(
 }
 
 export async function useContent(
-  content: CustodyContent, intent: ExecutionIntent, keys: IdentityKeys,
+  content: CustodyContent, intent: ExecutionIntent, keys: KeyMaterial,
   options: { destination?: string; now?: number } = {},
 ) {
   await authorizeUse(content, intent, options);
