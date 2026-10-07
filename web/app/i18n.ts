@@ -301,11 +301,6 @@ const words: Record<string, [string, string]> = {
     'Enter the code shown on the requesting device.',
   ],
   signinToApprove: ['ログインして依頼を確認', 'Sign in to review request'],
-  requestLink: ['確認用リンクを作成', 'Create review link'],
-  requestLinkHelp: [
-    'このリンクから依頼を承認できます。依頼を確認する本人にだけ共有してください。',
-    'This link allows approval of the request. Share it only with the intended reviewer.',
-  ],
   newRequest: ['依頼を作成', 'Create request'],
   requestTo: ['依頼先のプリンシパルID', 'Recipient principal ID'],
   requestOperations: ['操作（JSON）', 'Operations (JSON)'],

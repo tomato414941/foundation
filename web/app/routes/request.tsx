@@ -1,6 +1,6 @@
 import { Button } from '../components/ui/button';
 import { InputField, TextareaField } from '../form-fields';
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import {
   Form,
   Link,
@@ -25,7 +25,6 @@ import {
   Panel,
   State,
   usePolling,
-  useTask,
 } from '../components';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   const fragment = new URLSearchParams(window.location.hash.slice(1));
@@ -70,8 +69,6 @@ export default function RequestPage() {
   const { t, i18n } = useTranslation();
   const { item, account } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>();
-  const task = useTask();
-  const [link, setLink] = useState('');
   const pending = ['pending', 'running'].includes(item.state);
   const requester = item.from.id === account.principal?.id;
   const root = useRouteLoaderData<typeof rootLoader>('root');
@@ -83,7 +80,7 @@ export default function RequestPage() {
   usePolling(pending, 5000);
   return (
     <Page title={t('requests')} narrow>
-      <ErrorNotice error={task.error ?? (result && 'error' in result ? result.error : null)} />
+      <ErrorNotice error={result && 'error' in result ? result.error : null} />
       <Panel>
         <Detail label={t('status')}>
           <State value={item.state} />
@@ -195,34 +192,6 @@ export default function RequestPage() {
         <Button variant="ghost" asChild>
           <a href={item.refreshUrl}>{t('retry')}</a>
         </Button>
-      )}
-      {pending && item.canRespond && !account.requestId && item.to && (
-        <Panel>
-          <p className="leading-relaxed text-muted-foreground text-sm">{t('requestLinkHelp')}</p>
-          <Button
-            loading={task.busy}
-            onClick={() =>
-              task.run(async () =>
-                setLink(
-                  (
-                    await api<{
-                      url: string;
-                    }>(`/requests/${item.id}/links`, { method: 'POST', body: {} })
-                  ).url,
-                ),
-              )
-            }
-            variant="ghost"
-          >
-            {t('requestLink')}
-          </Button>
-          {link && (
-            <>
-              <InputField label={t('url')} value={link} readOnly={true} />
-              <Copy value={link} />
-            </>
-          )}
-        </Panel>
       )}
     </Page>
   );
