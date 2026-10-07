@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
-import { newEncryptionKey, encode, decode, open, unwrap, wrap } from '../shared/encryption.js';
+import { newEncryptionKey, encode, decode, open, seal, unwrap, wrap } from '../shared/encryption.js';
 import { delegatedFixture } from './delegation-support.js';
 import { AccessPolicy, prepareRun, protect } from '../shared/custody.js';
 import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
@@ -158,6 +158,54 @@ test('キーにも暗号鍵の包みを置き、そのキーで入ったセッ�
     payload: { wrappedKey, publicKey: owner.keys.publicKey },
   });
   assert.equal(missing.statusCode, 404);
+});
+
+test('デバイスの依頼をブラウザで承認すると、デバイスがそのプリンシパルの鍵を受け取る', async (t) => {
+  const f = await fixture(),
+    context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
+    app = await buildApp(context);
+  t.after(async () => {
+    await app.close();
+    await f.close();
+  });
+  const person = await f.person('Person');
+  const headers = { authorization: 'Bearer ' + person.token };
+  const device = await newEncryptionKey();
+  const begun = await app.inject({ method: 'POST', url: '/api/auth/devices', payload: { name: 'Laptop', publicKey: device.publicKey } });
+  assert.equal(begun.statusCode, 201, begun.body);
+  const { id, code, poll, url } = begun.json();
+  assert.match(code, /^[A-Z0-9]{8}$/);
+  assert.equal(url, 'https://foundation.test/devices/' + id);
+  const waiting = await app.inject({ url: `/api/auth/devices/${id}?poll=${poll}` });
+  assert.deepEqual(waiting.json(), { state: 'pending', principalId: null, sealed: null });
+  assert.equal((await app.inject({ url: `/api/auth/devices/${id}?poll=wrong` })).statusCode, 403);
+  const shown = await app.inject({ url: '/api/auth/devices/' + id, headers });
+  assert.equal(shown.json().name, 'Laptop');
+  const wrongCode = await app.inject({ method: 'POST', url: `/api/auth/devices/${id}/approve`, headers, payload: { code: 'AAAAAAAA', principalId: person.actor.id } });
+  assert.equal(wrongCode.statusCode, 400);
+  const approved = await app.inject({ method: 'POST', url: `/api/auth/devices/${id}/approve`, headers, payload: { code, principalId: person.actor.id } });
+  assert.equal(approved.statusCode, 200, approved.body);
+  assert.equal(approved.json().state, 'approving');
+  const issued = await app.inject({ method: 'POST', url: `/api/principals/${person.actor.id}/credentials`, headers, payload: { name: 'Laptop' } });
+  const { credential, token } = issued.json();
+  await app.inject({
+    method: 'PUT',
+    url: `/api/principals/${person.actor.id}/credentials/${credential.id}/wrap`,
+    headers,
+    payload: { wrappedKey: await wrap(person.keys.privateKey, encode(token), person.actor.id), publicKey: person.keys.publicKey },
+  });
+  const sealed = await seal(encode(token), [{ id, publicKey: device.publicKey }], 'device:' + id);
+  const completed = await app.inject({ method: 'POST', url: `/api/auth/devices/${id}/complete`, headers, payload: { sealed } });
+  assert.equal(completed.statusCode, 200, completed.body);
+  const done = await app.inject({ url: `/api/auth/devices/${id}?poll=${poll}` });
+  assert.equal(done.json().state, 'approved');
+  assert.equal(done.json().principalId, person.actor.id);
+  const received = decode(await open(done.json().sealed, device.privateKey, id, 'device:' + id));
+  assert.equal(received, token);
+  const session = await app.inject({ url: '/api/session', headers: { authorization: 'Bearer ' + received } });
+  assert.equal(session.json().principal.id, person.actor.id);
+  assert.deepEqual(await unwrap(session.json().wrappedKey, encode(received), person.actor.id), person.keys.privateKey);
+  assert.equal((await app.inject({ url: `/api/auth/devices/${id}?poll=${poll}` })).statusCode, 404);
 });
 
 test('サーバーは動いているコミットをセッションで名乗る', async (t) => {

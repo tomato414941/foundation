@@ -22,6 +22,7 @@ import type { Runner } from './runner.js';
 import { Environments } from './environments.js';
 import { Integrations } from './integrations.js';
 import { Requests } from './requests.js';
+import { Devices } from './devices.js';
 import { Bindings } from './bindings.js';
 import { Custody } from './custody.js';
 import { Delegation } from './delegation.js';
@@ -65,6 +66,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
       config,
       delegation,
     );
+  const devices = new Devices(db, authorization, audit, config.origin);
   const integrations = new Integrations(db, authorization, vault, transport, config.origin),
     requests = new Requests(
       db,
@@ -100,6 +102,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     environments,
     integrations,
     requests,
+    devices,
     bindings,
     custody,
     delegation,

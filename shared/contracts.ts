@@ -488,6 +488,16 @@ export const ApprovalRequest = z.object({
   canRespond: z.boolean(),
 });
 export type ApprovalView = z.infer<typeof ApprovalRequest>;
+export const DeviceRequest = z.object({
+  id: Id,
+  name: Name,
+  publicKey: PublicKey,
+  state: z.enum(['pending', 'approving', 'approved']),
+  principalId: Id.nullable(),
+  createdAt: Time,
+  expiresAt: Time,
+});
+export type DeviceView = z.infer<typeof DeviceRequest>;
 export const Payment = z.object({
   available: z.boolean(),
   required: z.boolean(),

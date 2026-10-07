@@ -21,6 +21,7 @@ import * as P from '../shared/protocol.js';
 import { routesResources } from './routes-resources.js';
 import { routesExecution } from './routes-execution.js';
 import { routesRequests } from './routes-requests.js';
+import { routesDevices } from './routes-devices.js';
 import { routesAccounts } from './routes-accounts.js';
 import { routesMcp } from './mcp.js';
 import { web } from './web.js';
@@ -658,6 +659,7 @@ export async function buildApp(context: Context) {
   await routesResources(app, context);
   await routesExecution(app, context);
   await routesRequests(app, context, cookieOptions);
+  await routesDevices(app, context);
   await routesAccounts(app, context);
   await routesMcp(app);
   await web(app);
