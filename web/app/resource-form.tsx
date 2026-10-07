@@ -1,6 +1,6 @@
 import { Button } from './components/ui/button';
 import { SelectItem } from './components/ui/select';
-import { InputField, TextareaField, SelectField, CheckboxField } from './form-fields';
+import { InputField, TextareaField, SelectField } from './form-fields';
 import { Notice } from './components';
 import { useState } from 'react';
 import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router';
@@ -8,33 +8,17 @@ import { useTranslation } from 'react-i18next';
 import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
 import { CatalogEntry, CatalogMethod, Resource, Payment, Usage, listOf } from '../../shared/contracts';
 import type { CatalogConnectionMethod, ResourceView } from '../../shared/contracts';
-import { encode } from '../../shared/encryption';
+import { decode, encode } from '../../shared/encryption';
+import { canonical } from '../../shared/authority';
+import { AppMaterial, ConnectionMaterial } from '../../shared/connections';
 import { actionResult, api, ApiFailure, formText, jsonField, session, upload } from './api';
-import { decryptSecret, sealSecret } from './keys';
-import { ErrorNotice, ExternalLink, JsonField, JsonView, Page, Panel, SaveBar } from './components';
+import { decryptSecret } from './keys';
+import { connectionClient, custodyClient } from './custody';
+import { availableEnvironments, EnvironmentChoice } from './environments';
+import { ErrorNotice, ExternalLink, JsonField, Page, Panel, SaveBar } from './components';
 import { resourceKind, resourcePath } from './navigation';
 import { useWorkspace } from './routes/workspace';
 import { serviceLabels } from './service-labels';
-type ConnectionResult =
-  | {
-      kind: 'connected';
-      resource: ResourceView;
-      returnTo: string;
-    }
-  | {
-      kind: 'authorize';
-      url: string;
-    }
-  | {
-      kind: 'role';
-      id: string;
-      externalId: string;
-      principalArn: string;
-    }
-  | {
-      kind: 'review';
-      id: string;
-    };
 export async function formLoader({ params, request }: LoaderFunctionArgs) {
   const kind = resourceKind(params.section);
   const query = new URL(request.url).searchParams;
@@ -60,8 +44,8 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     usage,
     methods,
     connections,
-    pinnedMethod,
     shared,
+    environments,
   ] = await Promise.all([
     id ? api('/resources/' + id, { signal: request.signal }, Resource) : null,
     ['connection', 'app'].includes(kind)
@@ -79,18 +63,31 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       ? api('/connection-methods', { signal: request.signal }, listOf(CatalogMethod))
       : null,
     kind === 'connection' && !id ? ownedItems('connection') : null,
-    kind === 'connection' && id
-      ? api(`/connections/${id}/method`, { signal: request.signal }, CatalogMethod)
-      : null,
     kind === 'connection'
       ? api('/resources/shared', { signal: request.signal }, listOf(Resource))
       : null,
+    ['secret', 'connection', 'app'].includes(kind) ? availableEnvironments(params.owner!) : [],
   ]);
   if (resource && (resource.ownerId !== params.owner || resource.kind !== kind))
     throw new Response('Not found', { status: 404 });
   let content = '',
     binary = false,
     locked = false;
+  let appMaterial: ReturnType<typeof AppMaterial.parse> | null = null;
+  let pinnedMethod: CatalogConnectionMethod | null = null;
+  let selectedExecutors: string[] = [];
+  if (resource && ['secret', 'connection', 'app'].includes(resource.kind)) {
+    try {
+      const client = await custodyClient(), item = await client.read(resource.id);
+      selectedExecutors = environments.filter(environment => environment.kind === 'environment' &&
+        item.content.policy.grants.some(grant => grant.actor.id === client.binding.id && grant.executor.principalId === environment.data.executorId)).map(environment => environment.id);
+      if (resource.kind === 'app') appMaterial = AppMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
+      if (resource.kind === 'connection') {
+        const state = ConnectionMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
+        pinnedMethod = { ...state.method, id: state.methodId, builtin: false, availability: 'ready' };
+      }
+    } catch { locked = true; }
+  }
   if (resource?.kind === 'secret') {
     try {
       const bytes = await decryptSecret(resource.id, sessionData.principal!.id);
@@ -125,18 +122,15 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       ).values(),
     ],
     pinnedMethod,
+    appMaterial,
+    environments,
+    selectedExecutors,
     content,
     binary,
     locked,
     serviceId: query.get('service'),
     methodId: query.get('method'),
   };
-}
-function connectRedirect(result: ConnectionResult) {
-  if (result.kind === 'authorize') return redirect(result.url);
-  if (result.kind === 'connected') return redirect(resourcePath(result.resource));
-  if (result.kind === 'review') return redirect('/services/review/' + result.id);
-  return result;
 }
 export async function formAction({ params, request }: ActionFunctionArgs) {
   return actionResult(async () => {
@@ -148,30 +142,25 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
     const existing = params.id ? await api('/resources/' + params.id, {}, Resource) : null;
     const version = Number(formText(form, 'version'));
     if (kind === 'connection') {
-      if (formText(form, 'roleId'))
-        return connectRedirect(
-          await api<ConnectionResult>(`/connections/${formText(form, 'roleId')}/role`, {
-            method: 'POST',
-            body: { arn: formText(form, 'arn'), region: formText(form, 'region') },
-          }),
-        );
+      const client = await connectionClient();
+      const selected = (await api('/connection-methods', {}, listOf(CatalogMethod))).items.find(method => method.id === formText(form, 'methodId'));
+      if (!selected) throw new ApiFailure('invalid_input');
+      const { id: methodId, builtin: _builtin, availability: _availability, ...method } = selected;
       const fields = Object.fromEntries(
         [...form.entries()]
           .filter(([key]) => key.startsWith('field.'))
           .map(([key, value]) => [key.slice(6), String(value)]),
       );
-      const input = {
-        methodId: formText(form, 'methodId'),
-        name: name || undefined,
-        appId: formText(form, 'appId') || 'foundation',
+      const progress = await client.start({
+        ownerId: owner, environmentId: formText(form, 'environmentId'), methodId, method,
+        name: name || existing?.name || method.name,
+        appId: formText(form, 'appId') || undefined,
         fields,
-        returnTo: back,
+        ...(method.kind === 'role' ? { role: { arn: formText(form, 'arn'), region: formText(form, 'region'), externalId: formText(form, 'externalId') } } : {}),
         ...(form.has('scopes') ? { scopes: formText(form, 'scopes').split(/\s+/).filter(Boolean) } : {}),
         ...(formText(form, 'connectionId') ? { connectionId: formText(form, 'connectionId') } : {}),
-      };
-      return connectRedirect(
-        await api<ConnectionResult>(`/principals/${owner}/connections`, { method: 'POST', body: input }),
-      );
+      });
+      return redirect('/connections/' + progress.flow.id);
     }
     if (kind === 'object') {
       const file = form.get('file');
@@ -185,27 +174,28 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       return redirect(back + '/' + item.id);
     }
     let body: Record<string, unknown> = { kind, name };
-    if (kind === 'secret') {
-      const data = await session();
-      const id = existing?.id ?? crypto.randomUUID();
+    if (kind === 'secret' || kind === 'app') {
+      const client = await custodyClient();
+      const previous = existing ? await client.read(existing.id) : undefined;
+      if (previous && previous.version !== version) throw new ApiFailure('changed');
+      const environments = await Promise.all(form.getAll('environments').map(id => client.environment(String(id))));
+      const policy = await client.policy(owner, kind, environments, { previous: previous?.content.policy });
       const file = form.get('file');
-      const content =
+      let content =
         file instanceof File && file.name
           ? new Uint8Array(await file.arrayBuffer())
           : encode(String(form.get('value') ?? ''));
-      const allowUse = form.has('allowUse');
-      const sealed = await sealSecret(
-        id,
-        owner,
-        content,
-        data.server,
-        allowUse,
-        existing?.kind === 'secret' ? existing.data.recipients : [],
-        !!existing,
-      );
-      body = existing
-        ? { name, version, sealed, bytes: content.length, allowUse }
-        : { kind, id, name, sealed, bytes: content.length, allowUse };
+      let metadata;
+      if (kind === 'app') {
+        const old = previous ? AppMaterial.parse(JSON.parse(decode(await client.reveal(previous.content.policy.id)))) : null;
+        const fields = Object.fromEntries([...form.entries()].filter(([key]) => key.startsWith('field.')).map(([key, value]) => [key.slice(6), String(value)]));
+        const app = AppMaterial.parse({ format: 1, methodId: formText(form, 'methodId'), clientId: formText(form, 'clientId'), fields,
+          generation: old && old.methodId === formText(form, 'methodId') && old.clientId === formText(form, 'clientId') && canonical(old.fields) === canonical(fields) ? old.generation : crypto.randomUUID(),
+          ...(formText(form, 'clientSecret') || old?.clientSecret ? { clientSecret: formText(form, 'clientSecret') || old?.clientSecret } : {}) });
+        content = encode(canonical(app));
+        metadata = { methodId: app.methodId, clientId: app.clientId, generation: app.generation };
+      }
+      return redirect(resourcePath(await client.save(name, content, policy, { previous, metadata })));
     } else if (kind === 'environment')
       body.options = {
         image: formText(form, 'image') || undefined,
@@ -232,18 +222,6 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       };
     else if (kind === 'service' || kind === 'method')
       body.definition = { ...jsonField<Record<string, unknown>>(form, 'definition', {}), name };
-    else if (kind === 'app')
-      body = {
-        ...body,
-        methodId: formText(form, 'methodId'),
-        clientId: formText(form, 'clientId'),
-        ...(formText(form, 'clientSecret') ? { clientSecret: formText(form, 'clientSecret') } : {}),
-        fields: Object.fromEntries(
-          [...form.entries()]
-            .filter(([key]) => key.startsWith('field.'))
-            .map(([key, value]) => [key.slice(6), String(value)]),
-        ),
-      };
     if (existing) {
       delete body.kind;
       delete body.methodId;
@@ -351,8 +329,7 @@ export default function ResourceForm() {
     data.kind === 'connection' &&
     (!method ||
       method.availability === 'unavailable' ||
-      (method.kind === 'oauth' && method.availability === 'app-required' && !matchingApps.length));
-  const role = result && 'kind' in result && result.kind === 'role' ? result : null;
+      (method.kind === 'oauth' && !matchingApps.length));
   const spec = existing?.kind === 'function' ? existing.data : undefined;
   const unavailable =
     data.kind === 'environment'
@@ -408,32 +385,6 @@ export default function ResourceForm() {
             {existing?.kind === 'connection' && (
               <input type="hidden" name="connectionId" value={existing.id} />
             )}
-            {role ? (
-              <Panel title={t('role')}>
-                <input type="hidden" name="roleId" value={role.id} />
-                <p className="leading-relaxed">{t('roleHelp')}</p>
-                <JsonView
-                  value={{
-                    Version: '2012-10-17',
-                    Statement: [
-                      {
-                        Effect: 'Allow',
-                        Principal: { AWS: role.principalArn },
-                        Action: 'sts:AssumeRole',
-                        Condition: { StringEquals: { 'sts:ExternalId': role.externalId } },
-                      },
-                    ],
-                  }}
-                />
-                <InputField
-                  name="arn"
-                  label={t('roleArn')}
-                  defaultValue={existing?.kind === 'connection' ? (existing.data.accountId ?? '') : ''}
-                  required
-                />
-                <InputField name="region" label={t('region')} defaultValue="ap-northeast-1" required />
-              </Panel>
-            ) : (
               <>
                 <InputField
                   name="name"
@@ -468,12 +419,6 @@ export default function ResourceForm() {
                       />
                     )}
                     <InputField type="file" name="file" label={t('file')} />
-                    <CheckboxField
-                      name="allowUse"
-                      defaultChecked={existing?.kind === 'secret' && existing.data.allowUse}
-                      label={t('allowUse')}
-                    />
-                    <p className="leading-relaxed text-muted-foreground text-sm">{t('allowUseHelp')}</p>
                   </Panel>
                 )}
                 {data.kind === 'object' && (
@@ -554,15 +499,10 @@ export default function ResourceForm() {
                             label={t('app')}
                             defaultValue={
                               existing?.kind === 'connection'
-                                ? (existing.data.appId ?? 'foundation')
-                                : method.availability === 'ready'
-                                  ? 'foundation'
-                                  : (matchingApps[0]?.id ?? 'foundation')
+                                ? (existing.data.appId ?? '')
+                                : (matchingApps[0]?.id ?? '')
                             }
                           >
-                            <SelectItem disabled={method.availability !== 'ready'} value={'foundation'}>
-                              {t('foundationApp')}
-                            </SelectItem>
                             {matchingApps.map((item) => (
                               <SelectItem key={item.id} value={item.id}>
                                 {item.name}
@@ -624,7 +564,7 @@ export default function ResourceForm() {
                           required={field.required ?? true}
                           defaultValue={
                             existing?.kind === 'app'
-                              ? (existing.data.fields[field.name] ?? '')
+                              ? (data.appMaterial?.fields[field.name] ?? '')
                               : data.kind === 'app' && method?.kind === 'oauth'
                                 ? (method.config.defaults[field.name] ?? '')
                                 : ''
@@ -655,6 +595,14 @@ export default function ResourceForm() {
                     </div>
                   </Panel>
                 )}
+                {data.kind === 'connection' && method?.kind === 'role' && <Panel title={t('role')}>
+                  <p className="text-sm leading-relaxed text-muted-foreground">{t('executorRoleHelp')}</p>
+                  <InputField name="arn" label={t('roleArn')} required defaultValue={existing?.kind === 'connection' ? existing.data.accountId ?? '' : ''} />
+                  <InputField name="region" label={t('region')} defaultValue="ap-northeast-1" required />
+                  <InputField name="externalId" label="External ID" required minLength={16} />
+                </Panel>}
+                {['secret', 'app', 'connection'].includes(data.kind) && <EnvironmentChoice items={data.environments}
+                  selected={data.selectedExecutors} multiple={data.kind !== 'connection'} />}
                 {data.kind === 'environment' && (
                   <Panel>
                     <p className="leading-relaxed text-muted-foreground text-sm">
@@ -753,7 +701,6 @@ export default function ResourceForm() {
                   />
                 )}
               </>
-            )}
             {!unavailable && !methodUnavailable && (
               <SaveBar
                 back={back}

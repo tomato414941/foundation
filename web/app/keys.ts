@@ -5,15 +5,19 @@ import type {
   PublicKeyCredentialRequestOptionsJSON,
   RegistrationResponseJSON,
 } from '@simplewebauthn/browser';
-import type { JWK } from 'jose';
+import { importJWK } from 'jose';
 import type { PrincipalView, PublicEncryptionKey, SealedContent } from '../../shared/contracts';
-import { encode, hold, newEncryptionKey, open, seal, unwrap, wrap } from '../../shared/encryption';
+import { base64url, encode, hold, open, seal, unwrap, wrap } from '../../shared/encryption';
+import { PrivateKeys, SignedBinding, bindKeys, canonical, newIdentityKeys, publicPart, signBinding } from '../../shared/authority';
+import type { BoundKeys, IdentityKeys } from '../../shared/authority';
 import { api, ApiFailure, session } from './api';
-import { KeySharingItem, PublicKey, listOf } from '../../shared/contracts';
+import { KeySharingItem, listOf } from '../../shared/contracts';
+import { stored } from './storage';
 
-const unlocked = new Map<string, JWK>();
-const held = new Map<string, CryptoKey>();
-const seed = encode('Foundation passkey encryption v1');
+const unlocked = new Map<string, IdentityKeys>();
+type HeldIdentity = { binding: BoundKeys; keys: { encryption: CryptoKey; signing: CryptoKey } };
+const held = new Map<string, HeldIdentity>();
+const seed = encode('Foundation passkey identity keys v2');
 type Verified = {
   principalId: string;
   credentialId: string;
@@ -21,61 +25,45 @@ type Verified = {
   publicKey: PublicEncryptionKey | null;
   returnTo: string;
 };
-function database(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('foundation-keys', 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('keys');
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-async function stored<T>(
-  mode: IDBTransactionMode,
-  operation: (store: IDBObjectStore) => IDBRequest<T>,
-): Promise<T> {
-  const db = await database();
-  try {
-    return await new Promise<T>((resolve, reject) => {
-      const transaction = db.transaction('keys', mode);
-      const request = operation(transaction.objectStore('keys'));
-      transaction.oncomplete = () => resolve(request.result);
-      transaction.onerror = () => reject(transaction.error);
-      transaction.onabort = () => reject(transaction.error);
-    });
-  } finally {
-    db.close();
-  }
+export async function getIdentity(id: string): Promise<HeldIdentity | null> {
+  const identity = held.get(id) ?? await stored('keys', 'readonly', store => store.get('v2:' + id));
+  if (!identity?.keys || identity.binding?.principalId !== id ||
+    !(identity.keys.encryption instanceof CryptoKey) || !(identity.keys.signing instanceof CryptoKey)) return null;
+  held.set(id, identity);
+  return identity;
 }
 export async function getKey(id: string, publicKey?: PublicEncryptionKey | null): Promise<CryptoKey | null> {
-  const key = (
-    held.get(id) ??
-    ((await stored('readonly', (store) => store.get(id)).catch(() => null)) as CryptoKey | null)
-  );
-  if (key && (key.algorithm.name !== 'ECDH' || (key.algorithm as EcKeyAlgorithm).namedCurve !== (publicKey?.crv ?? 'P-256'))) {
-    await forget(id);
-    return null;
+  const identity = await getIdentity(id);
+  if (!identity || (publicKey && canonical(identity.binding.encryption) !== canonical(publicKey))) return null;
+  return identity.keys.encryption;
+}
+function matchesPublicKey(keys: IdentityKeys, publicKey: PublicEncryptionKey | null) {
+  return publicKey && canonical(publicPart(keys.encryption)) === canonical(publicKey);
+}
+async function keep(id: string, keys: IdentityKeys) {
+  let binding: BoundKeys;
+  try {
+    const existing = await api('/identities/' + id + '/binding', {}, SignedBinding);
+    await signBinding(existing.binding, keys);
+    binding = existing.binding;
+  } catch (error) {
+    if (!(error instanceof ApiFailure) || error.code !== 'key_binding_required') throw error;
+    binding = bindKeys(id, keys);
+    await api('/principals/' + id + '/binding', { method: 'PUT', body: await signBinding(binding, keys) }, SignedBinding);
   }
-  return key;
-}
-async function forget(id: string) {
-  held.delete(id);
-  unlocked.delete(id);
-  await stored('readwrite', store => store.delete(id)).catch(() => {});
-}
-function matchesPublicKey(key: JWK, publicKey: PublicEncryptionKey | null) {
-  return publicKey && key.kty === publicKey.kty && key.crv === publicKey.crv && key.x === publicKey.x &&
-    key.y === publicKey.y;
-}
-async function keep(id: string, key: JWK) {
-  const cryptoKey = await hold(key);
-  held.set(id, cryptoKey);
-  unlocked.set(id, key);
-  await stored('readwrite', (store) => store.put(cryptoKey, id)).catch(() => {});
+  const previous = await getIdentity(id);
+  if (previous && canonical(previous.binding) !== canonical(binding)) throw new ApiFailure('encryption_key_changed');
+  const signing = await importJWK(keys.signing, 'ES256', { extractable: false });
+  if (!(signing instanceof CryptoKey)) throw new ApiFailure('key_unavailable');
+  const identity = { binding, keys: { encryption: await hold(keys.encryption), signing } };
+  await stored('keys', 'readwrite', store => store.put(identity, 'v2:' + id));
+  held.set(id, identity);
+  unlocked.set(id, keys);
 }
 export async function clearKeys() {
   unlocked.clear();
   held.clear();
-  await stored('readwrite', (store) => store.clear()).catch(() => {});
+  await stored('keys', 'readwrite', (store) => store.clear());
 }
 function prf(credential: AuthenticationResponseJSON | RegistrationResponseJSON): Uint8Array | null {
   const output = credential.clientExtensionResults as { prf?: { results?: { first?: ArrayBuffer } } };
@@ -99,7 +87,7 @@ async function assertion(principalId?: string, credentialId?: string) {
   const credential = await startAuthentication({ optionsJSON: options });
   return { challengeId: data.challengeId, credential, secret: prf(credential) };
 }
-export async function authenticate(principalId?: string, credentialId?: string, wrapping?: JWK) {
+export async function authenticate(principalId?: string, credentialId?: string, wrapping?: IdentityKeys) {
   const proof = await assertion(principalId, credentialId);
   const result = await api<Verified>('/auth/passkeys/verify', {
     method: 'POST',
@@ -107,32 +95,28 @@ export async function authenticate(principalId?: string, credentialId?: string, 
   });
   if (proof.secret) {
     if (result.wrappedKey) {
-      const key = await unwrap(result.wrappedKey, proof.secret, result.principalId).catch(() => {
-        throw new ApiFailure('key_unavailable');
+      const key = await unwrap(result.wrappedKey, proof.secret, result.principalId).then(value => PrivateKeys.parse(value)).catch(() => {
+        throw new ApiFailure('key_migration_required');
       });
       if (!matchesPublicKey(key, result.publicKey)) throw new ApiFailure('encryption_key_changed');
       await keep(result.principalId, key);
     } else if (!result.publicKey || wrapping) {
       if (wrapping && result.publicKey && !matchesPublicKey(wrapping, result.publicKey))
         throw new ApiFailure('encryption_key_changed');
-      const pair = wrapping
-        ? {
-            privateKey: wrapping,
-            publicKey: PublicKey.parse({ kty: wrapping.kty, crv: wrapping.crv, x: wrapping.x, y: wrapping.y }),
-          }
-        : await newEncryptionKey();
-      const wrappedKey = await wrap(pair.privateKey, proof.secret, result.principalId);
+      const keys = wrapping ?? await newIdentityKeys();
+      const publicKey = publicPart(keys.encryption);
+      const wrappedKey = await wrap(keys, proof.secret, result.principalId);
       if (!result.publicKey)
         await api(`/principals/${result.principalId}/encryption-key`, {
           method: 'PUT',
-          body: { publicKey: pair.publicKey, wraps: { [result.credentialId]: wrappedKey } },
+          body: { publicKey, wraps: { [result.credentialId]: wrappedKey } },
         });
       else
         await api(`/principals/${result.principalId}/credentials/${result.credentialId}/wrap`, {
           method: 'PUT',
           body: { wrappedKey, publicKey: result.publicKey },
         });
-      await keep(result.principalId, pair.privateKey);
+      await keep(result.principalId, keys);
     }
   }
   return { ...result, encrypted: !!(await getKey(result.principalId)) };
@@ -160,21 +144,18 @@ export async function registerPasskey(name: string, principal?: Pick<PrincipalVi
     },
   });
   const secret = prf(credential);
-  const pair = secret
-    ? existing
-      ? { privateKey: existing, publicKey: principal!.publicKey! }
-      : await newEncryptionKey()
-    : null;
-  const wrappedKey = secret && pair ? await wrap(pair.privateKey, secret, data.principalId) : undefined;
+  const keys = secret ? existing ?? await newIdentityKeys() : null;
+  const publicKey = keys ? publicPart(keys.encryption) : null;
+  const wrappedKey = secret && keys ? await wrap(keys, secret, data.principalId) : undefined;
   const result = await api<Verified>('/auth/passkeys/verify', {
     method: 'POST',
     body: {
       challengeId: data.challengeId,
       credential: verificationCredential(credential),
-      ...(pair ? { wrappedKey, ...(!principal?.publicKey ? { publicKey: pair.publicKey } : { existingPublicKey: pair.publicKey }) } : {}),
+      ...(keys ? { wrappedKey, ...(!principal?.publicKey ? { publicKey } : { existingPublicKey: publicKey }) } : {}),
     },
   });
-  if (pair) await keep(result.principalId, pair.privateKey);
+  if (keys) await keep(result.principalId, keys);
   else if ((credential.clientExtensionResults as { prf?: { enabled?: boolean } }).prf?.enabled)
     return authenticate(result.principalId, credential.id, existing);
   return { ...result, encrypted: !!(await getKey(result.principalId)) };
@@ -195,33 +176,25 @@ export async function issueKey(
     `/principals/${principal.id}/credentials`,
     { method: 'POST', body: { name, expiresAt } },
   );
-  const pair = existing
-    ? { privateKey: existing, publicKey: principal.publicKey! }
-    : await newEncryptionKey();
-  const wrappedKey = await wrap(pair.privateKey, encode(issued.token), principal.id);
+  const keys = existing ?? await newIdentityKeys(), publicKey = publicPart(keys.encryption);
+  const unlock = crypto.getRandomValues(new Uint8Array(32));
+  const wrappedKey = await wrap(keys, unlock, principal.id);
   if (existing)
     await api(`/principals/${principal.id}/credentials/${issued.credential.id}/wrap`, {
       method: 'PUT',
-      body: { wrappedKey, publicKey: pair.publicKey },
+      body: { wrappedKey, publicKey },
     });
   else
     await api(`/principals/${principal.id}/encryption-key`, {
       method: 'PUT',
-      body: { publicKey: pair.publicKey, wraps: { [issued.credential.id]: wrappedKey } },
+      body: { publicKey, wraps: { [issued.credential.id]: wrappedKey } },
     });
-  await keep(principal.id, pair.privateKey);
-  return { token: issued.token };
+  await keep(principal.id, keys);
+  return { token: issued.token + '.' + base64url(unlock) };
 }
 export async function decryptSecret(id: string, principalId: string) {
-  const key = await getKey(principalId);
-  if (!key) throw new ApiFailure('key_locked');
-  const content = await api<{ sealed: SealedContent; context: string }>(`/resources/${id}/secret`);
-  try {
-    return await open(content.sealed, key, principalId, content.context);
-  } catch {
-    await forget(principalId);
-    throw new ApiFailure('key_unavailable');
-  }
+  const { custodyClient } = await import('./custody');
+  return (await custodyClient(principalId)).reveal(id);
 }
 
 export async function sealSecret(
@@ -257,7 +230,7 @@ export async function mergeWithPasskey() {
     },
   );
   if (result.wrappedKey && proof.secret)
-    await keep(result.fromId, await unwrap(result.wrappedKey, proof.secret, result.fromId));
+    await keep(result.fromId, PrivateKeys.parse(await unwrap(result.wrappedKey, proof.secret, result.fromId)));
   return result;
 }
 

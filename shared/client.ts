@@ -23,6 +23,9 @@ export interface TrustStore {
   run(id: string): Promise<SealedRun | null>;
   rememberRun(request: SealedRun): Promise<void>;
 }
+export class ClientFailure extends Error {
+  constructor(readonly code: string, message: string) { super(message); }
+}
 export class SubmissionPending extends Error {
   constructor(readonly id: string) {
     super('The execution request is saved locally. Check execution ' + id + ' before starting another operation.');
@@ -35,7 +38,7 @@ export class CustodyClient {
   async trusted(binding: BoundKeys) {
     const pinned = binding.principalId === this.binding.principalId ? this.binding : await this.trust.binding(binding.principalId);
     if (!pinned || canonical(pinned) !== canonical(binding))
-      throw new Error('Verify and trust the encryption and signing keys for identity ' + binding.principalId + ' before sharing.');
+      throw new ClientFailure('identity_untrusted', 'Verify and trust the encryption and signing keys for identity ' + binding.principalId + ' before sharing.');
     return binding;
   }
   async inspectIdentity(id: string) {
@@ -45,7 +48,7 @@ export class CustodyClient {
   }
   async trustIdentity(id: string, expectedFingerprint: string) {
     const identity = await this.inspectIdentity(id);
-    if (identity.fingerprint !== expectedFingerprint) throw new Error('The identity fingerprint does not match.');
+    if (identity.fingerprint !== expectedFingerprint) throw new ClientFailure('fingerprint_mismatch', 'The identity fingerprint does not match.');
     await this.trust.rememberBinding(identity.binding);
     return identity;
   }

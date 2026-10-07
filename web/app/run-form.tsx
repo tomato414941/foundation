@@ -2,24 +2,31 @@ import { InputField, TextareaField } from './form-fields';
 import { Form, redirect, useActionData, useLoaderData } from 'react-router';
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 import { useTranslation } from 'react-i18next';
-import { Resource, Run } from '../../shared/contracts';
-import type { NewRun } from '../../shared/contracts';
+import { Resource } from '../../shared/contracts';
+import type { ExecutionOperation } from '../../shared/execution';
 import { actionResult, api, formText, jsonField } from './api';
 import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { RequestFields } from './resource-form';
 import { resourcePath } from './navigation';
+import { custodyClient } from './custody';
+import { availableEnvironments, EnvironmentChoice } from './environments';
 export async function runLoader({ params }: LoaderFunctionArgs) {
-  return params.id ? api('/resources/' + params.id, {}, Resource) : null;
+  const [resource, environments] = await Promise.all([
+    params.id ? api('/resources/' + params.id, {}, Resource) : null,
+    availableEnvironments(params.owner!),
+  ]);
+  return { resource, environments };
 }
 export async function runAction({ params, request }: ActionFunctionArgs) {
   return actionResult(async () => {
     const form = await request.formData();
     const resource = params.id ? await api('/resources/' + params.id, {}, Resource) : null;
-    let input: NewRun;
+    let input: ExecutionOperation;
     if (resource?.kind === 'function')
       input = {
         kind: 'function',
-        functionId: resource.id,
+        definition: resource.data,
+        outputs: {},
         arguments: Object.fromEntries(
           [...form.entries()]
             .filter(([key]) => key.startsWith('argument.'))
@@ -29,7 +36,6 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
     else if (resource?.kind === 'environment')
       input = {
         kind: 'command',
-        environmentId: resource.id,
         command: jsonField(form, 'command', []),
         stdin: String(form.get('stdin') ?? ''),
         timeoutSeconds: Number(formText(form, 'timeout')),
@@ -45,18 +51,16 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
           ...(formText(form, 'body') ? { body: String(form.get('body')) } : {}),
           bindings: jsonField(form, 'bindings', []),
         },
-        save: jsonField(form, 'save', {}),
+        save: {},
       };
-    const result = await api(
-      '/principals/' + params.owner + '/runs',
-      { method: 'POST', body: input },
-      Run,
-    );
+    const result = await (await custodyClient()).submit(params.owner!,
+      resource?.kind === 'environment' ? resource.id : formText(form, 'environmentId'), input,
+      { save: jsonField(form, 'save', {}) });
     return redirect('/runs/' + result.id);
   });
 }
 export default function RunForm() {
-  const resource = useLoaderData<typeof runLoader>();
+  const { resource, environments } = useLoaderData<typeof runLoader>();
   const result = useActionData<typeof runAction>();
   const { t } = useTranslation();
   return (
@@ -64,6 +68,7 @@ export default function RunForm() {
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
       <Form method="post">
         <div className="flex min-w-0 flex-col gap-6">
+          {resource?.kind !== 'environment' && <EnvironmentChoice items={environments} />}
           {resource?.kind === 'function' ? (
             resource.data.parameters.map((parameter) => (
               <InputField

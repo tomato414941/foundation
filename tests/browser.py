@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import time
@@ -76,7 +77,6 @@ class BrowserTests(unittest.TestCase):
         page.goto(f"{ORIGIN}/p/{principal['id']}/secrets/new")
         page.get_by_role("textbox", name="名前", exact=True).fill(name)
         page.get_by_role("textbox", name="値", exact=True).fill(value)
-        page.get_by_role("checkbox", name="Foundationでの実行に使用する").check()
         page.get_by_role("button", name="作成", exact=True).click()
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible()
         return page.url
@@ -181,7 +181,7 @@ class BrowserTests(unittest.TestCase):
         token = page.get_by_role("textbox", name="APIキー", exact=True).input_value()
         self.assertTrue(token.startswith("fk_"))
         page.screenshot(path=str(ARTIFACTS / "issued-key-ja.png"), full_page=True)
-        session = page.request.get(ORIGIN + "/api/session", headers={"authorization": "Bearer " + token}).json()
+        session = page.request.get(ORIGIN + "/api/session", headers={"authorization": "Bearer " + token.split(".")[0]}).json()
         self.assertEqual(session["principal"]["id"], principal["id"])
         self.assertIsNotNone(session["wrappedKey"])
         with tempfile.TemporaryDirectory() as home:
@@ -205,6 +205,8 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(created.status, 201, created.text())
         child = created.json()
         self.assertIsNone(child["publicKey"])
+        page.goto(ORIGIN + "/account/trust")
+        owner_fingerprint = page.get_by_text(re.compile(r"^[A-Za-z0-9_-]{43}$")).inner_text()
         page.goto(f"{ORIGIN}/p/{child['id']}/settings/credentials/new")
         page.wait_for_load_state("networkidle")
         self.select(page, "種類", "APIキー")
@@ -220,6 +222,11 @@ class BrowserTests(unittest.TestCase):
                 capture_output=True, text=True, env=environment, input=child_token,
             )
             self.assertEqual(initialized.returncode, 0, initialized.stderr)
+            trusted = subprocess.run(
+                ["node", "cli/dist/cli.mjs", "trust", principal["id"], "--fingerprint", owner_fingerprint],
+                capture_output=True, text=True, env=environment,
+            )
+            self.assertEqual(trusted.returncode, 0, trusted.stderr)
             kept = subprocess.run(
                 ["node", "cli/dist/cli.mjs", "keep", "Child secret", "--stdin"],
                 capture_output=True, text=True, env=environment, input="kept by the child",

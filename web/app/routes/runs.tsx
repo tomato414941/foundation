@@ -2,12 +2,13 @@ import { Button } from '../components/ui/button';
 import { Link, useLoaderData, useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/runs';
-import { Run, listOf } from '../../../shared/contracts';
+import { listOf } from '../../../shared/contracts';
+import { Task } from '../../../shared/execution';
 import { api } from '../api';
 import { DateText, Empty, Page, Paging, State, usePolling } from '../components';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   const query = new URL(request.url).searchParams;
-  return api(`/principals/${params.owner}/runs?${query}`, { signal: request.signal }, listOf(Run));
+  return api(`/principals/${params.owner}/executions?${query}`, { signal: request.signal }, listOf(Task));
 }
 export default function Runs() {
   const { t } = useTranslation();

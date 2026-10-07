@@ -2,6 +2,7 @@ import { redirect } from 'react-router';
 import type { z } from 'zod';
 import { Session } from '../../shared/session';
 import type { SessionView } from '../../shared/session';
+import { ClientFailure, SubmissionPending } from '../../shared/client';
 
 export class ApiFailure extends Error {
   constructor(
@@ -70,7 +71,7 @@ export function jsonField<T>(form: FormData, name: string, fallback: T): T {
   }
 }
 export function errorCode(error: unknown) {
-  return error instanceof ApiFailure
+  return error instanceof SubmissionPending ? 'submission_pending' : error instanceof ApiFailure || error instanceof ClientFailure
     ? error.code
     : error instanceof Error && ['NotAllowedError', 'AbortError', 'WebAuthnError'].includes(error.name)
       ? 'passkey_cancelled'

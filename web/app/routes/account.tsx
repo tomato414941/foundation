@@ -54,6 +54,7 @@ export default function Account() {
       <Panel title={t('secrets')}>
         <Notice tone={unlocked ? 'success' : 'info'}>{t(unlocked ? 'keyReady' : 'keyLocked')}</Notice>
         <div className="flex min-w-0 flex-wrap items-center gap-4">
+          {unlocked && <Button variant="ghost" asChild><Link to="/account/trust">{t('trustIdentity')}</Link></Button>}
           <Button
             loading={task.busy}
             onClick={() =>

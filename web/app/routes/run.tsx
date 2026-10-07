@@ -1,22 +1,25 @@
 import { Button } from '../components/ui/button';
-import { Form, useActionData, useLoaderData } from 'react-router';
+import { Form, Link, useActionData, useLoaderData } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/run';
-import { Run } from '../../../shared/contracts';
-import { actionResult, api, signedIn } from '../api';
-import { DateText, Detail, ErrorNotice, JsonView, Page, Panel, State, usePolling } from '../components';
+import { Task } from '../../../shared/execution';
+import { actionResult, api, errorCode, signedIn } from '../api';
+import { custodyClient } from '../custody';
+import { DateText, Detail, ErrorNotice, JsonView, Notice, Page, Panel, State, usePolling } from '../components';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   await signedIn(request);
-  return api('/runs/' + params.id, { signal: request.signal }, Run);
+  const task = await api('/executions/' + params.id, { signal: request.signal }, Task);
+  try { return { task, decrypted: task.receipt ? await (await custodyClient()).result(task) : null, decryptError: null }; }
+  catch (error) { return { task, decrypted: null, decryptError: errorCode(error) }; }
 }
 export async function clientAction({ params }: Route.ClientActionArgs) {
   return actionResult(async () =>
-    api('/runs/' + params.id + '/cancel', { method: 'POST', body: {} }, Run),
+    api('/executions/' + params.id + '/cancel', { method: 'POST', body: {} }, Task),
   );
 }
 export default function RunPage() {
   const { t } = useTranslation();
-  const data = useLoaderData<typeof clientLoader>();
+  const { task: data, decrypted, decryptError } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>();
   usePolling(['queued', 'running'].includes(data.state));
   return (
@@ -43,9 +46,11 @@ export default function RunPage() {
         </Detail>
       </Panel>
       {data.error && <ErrorNotice error={data.error} />}
-      {data.result !== null && (
+      {decryptError && <Notice tone="info"><ErrorNotice error={decryptError} /><Link to="/account">{t('unlock')}</Link></Notice>}
+      {decrypted?.error && <ErrorNotice error={decrypted.error.code} />}
+      {decrypted?.result !== null && decrypted?.result !== undefined && (
         <Panel>
-          <JsonView value={data.result} />
+          <JsonView value={decrypted.result} />
         </Panel>
       )}
     </Page>
