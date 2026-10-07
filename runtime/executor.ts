@@ -29,7 +29,7 @@ export interface ExecutionBroker {
 export interface ExecutionExtension {
   validate(operation: JsonValue, intent: ExecutionIntent, sources: CustodyContent[]): Promise<void>;
   execute(operation: JsonValue, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal): Promise<JsonValue>;
-  outputs(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal): Promise<Record<string, string>>;
+  outputs(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal, destination?: string): Promise<Record<string, string>>;
 }
 interface RunRecord {
   digest: string;
@@ -217,7 +217,7 @@ export class Executor {
         ...(request ? { destination: request.url } : {}),
       });
       if (!this.extension) throw new Error('This executor cannot use connections.');
-      if (!cache.has(source.id)) cache.set(source.id, this.extension.outputs(content, intent, sources, signal));
+      if (!cache.has(source.id)) cache.set(source.id, this.extension.outputs(content, intent, sources, signal, request?.url));
       const outputs = await cache.get(source.id)!;
       if (!Object.hasOwn(outputs, source.output)) throw new Error('Choose an available connection output.');
       return encode(outputs[source.output]!);

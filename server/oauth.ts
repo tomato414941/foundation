@@ -1,4 +1,5 @@
 import { Template } from '@fedify/uri-template';
+import { createHash } from 'node:crypto';
 import * as oauth from 'oauth4webapi';
 import type { z } from 'zod';
 import type { OAuthDefinition } from '../shared/contracts.js';
@@ -6,7 +7,8 @@ import { atPointer, textValue } from '../shared/values.js';
 import { publicUrl, responseJson } from './transport.js';
 import type { Transport } from './transport.js';
 import { DomainError, fail } from './errors.js';
-import { digest } from './vault.js';
+
+const digest = (value: string) => createHash('sha256').update(value).digest('base64url');
 
 export type OAuthSpec = z.infer<typeof OAuthDefinition>;
 export interface OAuthApp {
@@ -28,6 +30,7 @@ export interface OAuthToken {
   extra: Record<string, string>;
   facts: Record<string, unknown>;
 }
+export type TokenCheckpoint = (token: OAuthToken, response: Record<string, unknown>) => Promise<void>;
 export function expandUrl(template: string, values: Record<string, string>): string {
   try {
     return publicUrl(new Template(template).expand(values)).href;
@@ -238,6 +241,7 @@ export class OAuth {
     redirectUri: string,
     scopes: string[],
     previous?: OAuthToken,
+    checkpoint?: TokenCheckpoint,
   ) {
     let data: Record<string, unknown>;
     if (spec.adapter === 'openrouter') {
@@ -290,12 +294,14 @@ export class OAuth {
       }
       data = await this.tokenResponse(spec, app, response);
     }
-    const result = await this.inspect(spec, app, this.token(spec, data, scopes, previous), data);
+    const received = this.token(spec, data, scopes, previous);
+    await checkpoint?.(received, data);
+    const result = await this.inspect(spec, app, received, data);
     if (previous && result.account !== previous.account && spec.adapter !== 'openrouter')
       fail(409, 'account_changed', 'Reconnect using the same service account.');
     return result;
   }
-  async refresh(spec: OAuthSpec, app: OAuthApp, previous: OAuthToken): Promise<OAuthToken> {
+  async refresh(spec: OAuthSpec, app: OAuthApp, previous: OAuthToken, checkpoint?: TokenCheckpoint): Promise<OAuthToken> {
     let current = previous;
     if (previous.expiresAt !== null && previous.expiresAt < Date.now() + 60_000) {
       if (!previous.refreshToken || (previous.refreshExpiresAt && previous.refreshExpiresAt <= Date.now()))
@@ -310,6 +316,7 @@ export class OAuth {
       );
       const data = await this.tokenResponse(spec, app, response, true);
       current = this.token(spec, data, previous.scopes, previous, true);
+      await checkpoint?.(current, data);
     }
     if (spec.identity?.url || spec.adapter === 'ebay' || spec.adapter === 'openrouter')
       current = await this.inspect(spec, app, current);
@@ -317,7 +324,7 @@ export class OAuth {
       fail(409, 'account_changed', 'Reconnect using the same service account.');
     return current;
   }
-  private async inspect(
+  async inspect(
     spec: OAuthSpec,
     app: OAuthApp,
     current: OAuthToken,

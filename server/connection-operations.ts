@@ -20,12 +20,12 @@ export class ConnectionOperations {
   constructor(readonly custody: Custody) {}
   get db() { return this.custody.resources.db; }
 
-  private async allowed(actor: Actor, resourceId: string, connection: Queryable = this.db.pool) {
+  private async allowed(actor: Actor, resourceId: string, connection: Queryable = this.db.pool, refresh = true) {
     await this.custody.resources.authorization.active(actor, connection);
     const content = await this.custody.get(resourceId, connection);
     const { binding } = await this.custody.bindings.current(actor.id, connection);
     if (content.policy.kind !== 'connection' || !content.policy.grants.some(grant =>
-      canonical(grant.executor) === canonical(binding) && grant.operations.includes('refresh') &&
+      canonical(grant.executor) === canonical(binding) && (!refresh || grant.operations.includes('refresh')) &&
       Date.parse(grant.expiresAt) > Date.now()))
       fail(403, 'forbidden', 'This executor cannot renew the connection.');
     return content;
@@ -137,7 +137,7 @@ export class ConnectionOperations {
   }
 
   async state(actor: Actor, resourceId: string) {
-    await this.allowed(actor, resourceId);
+    await this.allowed(actor, resourceId, this.db.pool, false);
     return await this.db.one<ConnectionOperation>(
       "SELECT * FROM connection_operations WHERE resource_id=$1 AND state IN ('prepared','in_flight','uncertain')", [resourceId],
     ) ?? null;
