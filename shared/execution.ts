@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { Id, Json, Name, Sealed, Time } from './contracts.js';
+import { Command, FunctionDefinition, HttpRequest, Id, Json, Name, Sealed, Time } from './contracts.js';
 import { Fingerprint, KeyBinding, Signature, canonical, hash, sign, validateBinding, verify } from './authority.js';
 import type { IdentityKeys } from './authority.js';
-import { ExecutionKind, Origin, RunIntent, runContext } from './custody.js';
+import { ExecutionKind, Origin, PolicyApproval, RunIntent, runContext } from './custody.js';
 import type { ExecutionIntent } from './custody.js';
 import { base64url, encode, open, seal } from './encryption.js';
 
@@ -13,6 +13,7 @@ export const EnvironmentManifest = z.object({
   capabilities: z.array(ExecutionKind).min(1).max(6),
   callers: z.array(KeyBinding).min(1).max(100),
   isolation: z.enum(['process', 'container']),
+  commandImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/).optional(),
   revision: z.number().int().positive(),
 }).strict();
 export type ExecutorManifest = z.infer<typeof EnvironmentManifest>;
@@ -20,8 +21,9 @@ export const SignedEnvironment = z.object({ manifest: EnvironmentManifest, signa
 export type RegisteredEnvironment = z.infer<typeof SignedEnvironment>;
 
 export async function signEnvironment(manifest: ExecutorManifest, keys: IdentityKeys) {
-  const result = { manifest: EnvironmentManifest.parse(manifest),
-    signature: await sign(manifest, keys.signing, 'environment') };
+  const normalized = EnvironmentManifest.parse(manifest);
+  const result = { manifest: normalized,
+    signature: await sign(normalized, keys.signing, 'environment') };
   await verifyEnvironment(result);
   return result;
 }
@@ -33,6 +35,10 @@ export async function verifyEnvironment(input: RegisteredEnvironment) {
   if (new Set(manifest.callers.map(binding => binding.id)).size !== manifest.callers.length ||
     new Set(manifest.capabilities).size !== manifest.capabilities.length)
     throw new Error('Choose distinct callers and execution capabilities.');
+  if (manifest.capabilities.includes('command') && manifest.isolation === 'container' && !manifest.commandImage)
+    throw new Error('Choose the container image used for commands.');
+  if (manifest.driver === 'managed' && manifest.capabilities.includes('command') && manifest.isolation !== 'container')
+    throw new Error('Managed commands require container isolation.');
   await verify(manifest, environment.signature, manifest.executor.signing, 'environment');
   return environment;
 }
@@ -103,3 +109,15 @@ export const Task = z.object({
   error: z.string().nullable(), createdAt: Time, startedAt: Time.nullable(), finishedAt: Time.nullable(),
 }).strict();
 export type TaskView = z.infer<typeof Task>;
+
+export const OutputDestination = z.object({ name: Name, approval: PolicyApproval }).strict();
+export const RuntimeOperation = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('http'), request: HttpRequest,
+    save: z.record(z.string(), OutputDestination).default({}) }).strict(),
+  z.object({ kind: z.literal('command'), ...Command.shape }).strict(),
+  z.object({ kind: z.literal('function'), definition: FunctionDefinition,
+    arguments: z.record(z.string(), z.string()).default({}),
+    outputs: z.record(z.string(), OutputDestination).default({}) }).strict(),
+  z.object({ kind: z.enum(['connect', 'refresh', 'revoke']), input: Json }).strict(),
+]);
+export type ExecutionOperation = z.infer<typeof RuntimeOperation>;

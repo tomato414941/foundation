@@ -299,6 +299,7 @@ export const FunctionDefinition = z
       .max(32)
       .default([]),
     save: z.record(z.string(), Name).default({}),
+    outputOwnerId: Id.optional(),
   })
   .strict();
 export type FunctionSpec = z.infer<typeof FunctionDefinition>;

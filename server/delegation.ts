@@ -6,7 +6,7 @@ import type { Custody } from './custody.js';
 import type { Queryable } from './database.js';
 import { iso } from './database.js';
 import { canonical, hash } from '../shared/authority.js';
-import { verifyRun } from '../shared/custody.js';
+import { matchesPin, verifyRun } from '../shared/custody.js';
 import type { CustodyContent, SealedRun } from '../shared/custody.js';
 import { Task, authorizeEnvironment, verifyEnvironment, verifyReceipt } from '../shared/execution.js';
 import type { RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/execution.js';
@@ -156,8 +156,7 @@ export class Delegation {
       const row = await this.resources.get(pin.id);
       await this.resources.authorization.requireResource(actor, row, 'use');
       const content = await this.custody.get(pin.id);
-      if (pin.kind !== content.policy.kind || pin.policyDigest !== await hash(content.policy) ||
-        pin.materialRevision !== content.materialRevision)
+      if (!await matchesPin(content, pin))
         fail(409, 'changed', 'An input changed. Review it before submitting another execution.');
       sources.push(content);
     }

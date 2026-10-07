@@ -12,7 +12,7 @@ import { fail } from './errors.js';
 export interface ProtectedWrite {
   name: string;
   content: CustodyContent;
-  data: Record<string, JsonValue>;
+  data?: Record<string, JsonValue>;
   version?: number;
 }
 
@@ -50,6 +50,8 @@ export class Custody {
 
   async put(actor: Actor, input: ProtectedWrite) {
     const content = await verifyContent(input.content), policy = content.policy;
+    if (input.data && canonical(input.data) !== canonical(content.metadata))
+      fail(400, 'invalid_metadata', 'Sign the public metadata together with its encrypted content.');
     if (policy.origin !== this.origin) fail(400, 'wrong_origin', 'This content belongs to another Foundation server.');
     const { binding } = await this.bindings.current(actor.id);
     if (content.signerId !== binding.id || !policy.authorities.some(authority => canonical(authority) === canonical(binding)))
@@ -98,7 +100,7 @@ export class Custody {
         if (!policy.readers.some(reader => canonical(reader) === canonical(recipient.binding)))
           fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
       }
-      const data = { ...input.data, recipients: policy.readers.map(reader => reader.principalId),
+      const data = { ...content.metadata, recipients: policy.readers.map(reader => reader.principalId),
         executors: [...new Set(policy.grants.map(grant => grant.executor.principalId))],
         custodyRevision: policy.revision };
       let row: ResourceRow;
@@ -115,6 +117,67 @@ export class Custody {
       await this.projectGrants(content, connection);
       await this.resources.audit.record(policy.ownerId, actor.id, 'resource.protect', policy.id,
         { policyRevision: policy.revision, materialRevision: content.materialRevision }, connection);
+      return row;
+    });
+  }
+
+  async putProduced(actor: Actor, input: ProtectedWrite) {
+    const content = await verifyContent(input.content), policy = content.policy;
+    const { binding } = await this.bindings.current(actor.id);
+    if (policy.origin !== this.origin || content.signerId !== binding.id || !content.creationRunId)
+      fail(403, 'forbidden', 'Store output from an execution approved for this identity.');
+    const producer = policy.producers.find(producer => producer.runId === content.creationRunId &&
+      producer.materialRevision === content.materialRevision && canonical(producer.executor) === canonical(binding) &&
+      Date.parse(producer.expiresAt) > Date.now());
+    if (!producer) fail(403, 'forbidden', 'Approve this execution before saving its output.');
+    const authority = policy.authorities.find(authority => authority.id === content.authorityId)!;
+    await this.bindings.requireCurrent(authority);
+    const task = await this.resources.db.one<{ request: { intent: { actor: BoundKeys; ownerId: string; executor: BoundKeys } } }>(
+      "SELECT request FROM execution_tasks WHERE id=$1 AND phase='dispatched' AND state IN ('running','uncertain')",
+      [content.creationRunId],
+    );
+    if (!task || task.request.intent.ownerId !== policy.ownerId ||
+      canonical(task.request.intent.actor) !== canonical(authority) ||
+      canonical(task.request.intent.executor) !== canonical(binding))
+      fail(403, 'forbidden', 'Use the output destination approved by this execution requester.');
+    return this.resources.db.transaction(async connection => {
+      await connection.query('SELECT pg_advisory_xact_lock(736023743)');
+      const current = await this.resources.db.one<ResourceRow>('SELECT * FROM resources WHERE id=$1 FOR UPDATE', [policy.id], connection);
+      if (current) {
+        const previous = await this.get(policy.id, connection);
+        if (canonical(previous) === canonical(content)) return current;
+        await this.resources.authorization.requireResource({ id: authority.principalId }, current, 'update', connection);
+        if (current.owner_id !== policy.ownerId || current.kind !== policy.kind ||
+          !previous.policy.authorities.some(value => canonical(value) === canonical(authority)) ||
+          content.materialRevision !== previous.materialRevision + 1 ||
+          policy.revision !== previous.policy.revision + (await hash(policy) === await hash(previous.policy) ? 0 : 1))
+          fail(409, 'changed', 'Review the current output destination before replacing it.');
+        const pending = await this.resources.db.one(
+          "SELECT 1 FROM connection_operations WHERE resource_id=$1 AND state IN ('prepared','in_flight','uncertain')",
+          [policy.id], connection,
+        );
+        if (pending) fail(409, 'connection_busy', 'Resolve the current connection update before replacing it.');
+      } else {
+        if (content.materialRevision !== 1 || policy.revision !== 1)
+          fail(400, 'invalid_revision', 'Start a new output at revision one.');
+        if (!(await this.resources.authorization.canCreate({ id: authority.principalId }, policy.ownerId, policy.kind, connection)))
+          fail(403, 'forbidden', 'The execution requester cannot create this output.');
+      }
+      for (const recipient of await this.recipients(policy.ownerId, connection))
+        if (!policy.readers.some(reader => canonical(reader) === canonical(recipient.binding)))
+          fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
+      const data = { ...content.metadata, recipients: policy.readers.map(reader => reader.principalId),
+        executors: [...new Set(policy.grants.map(grant => grant.executor.principalId))], custodyRevision: policy.revision };
+      const row = current
+        ? await this.resources.update(current, { name: input.name, data }, connection)
+        : await this.resources.insert(policy.ownerId, policy.kind, input.name, data, { id: policy.id }, connection);
+      await connection.query(
+        'INSERT INTO resource_custody(resource_id,content) VALUES($1,$2) ON CONFLICT(resource_id) DO UPDATE SET content=EXCLUDED.content',
+        [policy.id, JSON.stringify(content)],
+      );
+      await this.projectGrants(content, connection);
+      await this.resources.audit.record(policy.ownerId, actor.id, 'resource.capture', policy.id,
+        { runId: content.creationRunId }, connection);
       return row;
     });
   }

@@ -142,7 +142,9 @@ export class HttpExecution {
   async create(actor: Actor, ownerId: string, name: string, definition: FunctionSpec) {
     if (!(await this.resources.authorization.canCreate(actor, ownerId, 'function')))
       fail(403, 'forbidden', 'You cannot create functions for this principal.');
-    const spec = await this.validateFunction(actor, definition);
+    const spec = await this.validateFunction(actor, {
+      ...definition, ...(Object.keys(definition.save).length ? { outputOwnerId: ownerId } : {}),
+    });
     // The owner provides the authority each invocation uses. Validate its sources before publishing.
     await this.validate(
       { id: ownerId },

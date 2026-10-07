@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { JWK } from 'jose';
-import { Id, Sealed, Time } from './contracts.js';
+import { Id, JsonObject, Sealed, Time } from './contracts.js';
+import type { JsonValue } from './contracts.js';
 import { base64url, encode, open, seal } from './encryption.js';
 import {
   Fingerprint, KeyBinding, Signature, canonical, hash, sign, validateBinding, verify,
@@ -34,14 +35,20 @@ export const AccessPolicy = z.object({
   authorities: z.array(KeyBinding).min(1).max(100),
   readers: z.array(KeyBinding).min(1).max(100),
   grants: z.array(ExecutionGrant).max(100),
+  producers: z.array(z.object({ executor: KeyBinding, runId: Id, expiresAt: Time,
+    materialRevision: z.number().int().positive().default(1) }).strict()).max(100).default([]),
 }).strict();
 export type CustodyPolicy = z.infer<typeof AccessPolicy>;
+export const PolicyApproval = z.object({ policy: AccessPolicy, authorityId: Id, signature: Signature }).strict();
+export type ApprovedPolicy = z.infer<typeof PolicyApproval>;
 export const ProtectedContent = z.object({
   policy: AccessPolicy,
   authorityId: Id,
   authorization: Signature,
   materialRevision: z.number().int().positive(),
   updatedAt: Time,
+  creationRunId: Id.nullable(),
+  metadata: JsonObject,
   sealed: Sealed,
   signerId: Id,
   signature: Signature,
@@ -51,7 +58,7 @@ export type CustodyContent = z.infer<typeof ProtectedContent>;
 export async function validatePolicy(input: CustodyPolicy) {
   const policy = AccessPolicy.parse(input);
   const bindings = [...policy.authorities, ...policy.readers,
-    ...policy.grants.flatMap(grant => [grant.actor, grant.executor])];
+    ...policy.grants.flatMap(grant => [grant.actor, grant.executor]), ...policy.producers.map(producer => producer.executor)];
   const known = new Map<string, string>();
   for (const binding of bindings) {
     await validateBinding(binding);
@@ -90,6 +97,7 @@ export async function contentContext(policy: CustodyPolicy, materialRevision: nu
 export async function protect(
   bytes: Uint8Array, input: CustodyPolicy, materialRevision: number,
   signer: BoundKeys, keys: IdentityKeys,
+  metadata?: Record<string, JsonValue>,
 ): Promise<CustodyContent> {
   if (bytes.byteLength > 1_000_000) throw new Error('The content exceeds 1,000,000 bytes.');
   const policy = await validatePolicy(input);
@@ -100,7 +108,8 @@ export async function protect(
   })), await contentContext(policy, materialRevision));
   const value = {
     policy, authorityId: signer.id, authorization: await sign(policy, keys.signing, 'access-policy'),
-    materialRevision, updatedAt: new Date().toISOString(), sealed, signerId: signer.id,
+    materialRevision, updatedAt: new Date().toISOString(), creationRunId: null,
+    metadata: metadata ?? (policy.kind === 'secret' ? { bytes: bytes.byteLength } : {}), sealed, signerId: signer.id,
   };
   const result = ProtectedContent.parse({ ...value, signature: await sign(value, keys.signing, 'resource') });
   await verifyContent(result);
@@ -115,6 +124,11 @@ export async function verifyContent(input: CustodyContent) {
   if (!authority) throw new Error('The policy must be signed by an authority.');
   await verify(content.policy, content.authorization, authority.signing, 'access-policy');
   const signer = content.policy.authorities.find(binding => binding.id === content.signerId) ??
+    content.policy.producers.find(producer =>
+      producer.executor.id === content.signerId && producer.runId === content.creationRunId &&
+      producer.materialRevision === content.materialRevision &&
+      Date.parse(producer.expiresAt) > Date.parse(content.updatedAt),
+    )?.executor ??
     (content.policy.kind === 'connection' ? content.policy.grants.find(grant =>
       grant.executor.id === content.signerId && grant.operations.includes('refresh') &&
       Date.parse(grant.expiresAt) > Date.parse(content.updatedAt),
@@ -132,6 +146,7 @@ export async function verifyContent(input: CustodyContent) {
 
 export async function renewContent(
   input: CustodyContent, bytes: Uint8Array, executor: BoundKeys, keys: IdentityKeys,
+  metadata: Record<string, JsonValue> = input.metadata,
 ): Promise<CustodyContent> {
   const content = await verifyContent(input);
   if (content.policy.kind !== 'connection' || !content.policy.grants.some(grant =>
@@ -144,7 +159,47 @@ export async function renewContent(
     id: binding.id, publicKey: binding.encryption,
   })), await contentContext(content.policy, materialRevision));
   const { signature: _signature, ...previous } = content;
-  const value = { ...previous, materialRevision, updatedAt: new Date().toISOString(), sealed, signerId: executor.id };
+  const value = { ...previous, materialRevision, updatedAt: new Date().toISOString(), metadata, sealed, signerId: executor.id };
+  const result = { ...value, signature: await sign(value, keys.signing, 'resource') };
+  await verifyContent(result);
+  return result;
+}
+
+export async function approvePolicy(policy: CustodyPolicy, authority: BoundKeys, keys: IdentityKeys): Promise<ApprovedPolicy> {
+  const approved = await validatePolicy(policy);
+  if (!approved.authorities.some(binding => canonical(binding) === canonical(authority)))
+    throw new Error('Only an authority can approve this policy.');
+  const approval = { policy: approved, authorityId: authority.id,
+    signature: await sign(approved, keys.signing, 'access-policy') };
+  await verifyPolicyApproval(approval);
+  return approval;
+}
+
+export async function verifyPolicyApproval(input: ApprovedPolicy) {
+  const approval = PolicyApproval.parse(input);
+  await validatePolicy(approval.policy);
+  const authority = approval.policy.authorities.find(binding => binding.id === approval.authorityId);
+  if (!authority) throw new Error('The policy must be signed by an authority.');
+  await verify(approval.policy, approval.signature, authority.signing, 'access-policy');
+  return approval;
+}
+
+export async function produceContent(
+  bytes: Uint8Array, input: ApprovedPolicy, runId: string,
+  executor: BoundKeys, keys: IdentityKeys, metadata: Record<string, JsonValue>,
+): Promise<CustodyContent> {
+  const approval = await verifyPolicyApproval(input), { policy } = approval;
+  const producer = policy.producers.find(producer => producer.runId === runId &&
+    canonical(producer.executor) === canonical(executor) && Date.parse(producer.expiresAt) > Date.now());
+  if (!producer)
+    throw new Error('Approve this execution before storing its output.');
+  if (bytes.byteLength > 1_000_000) throw new Error('The content exceeds 1,000,000 bytes.');
+  const sealed = await seal(bytes, policyRecipients(policy).map(binding => ({
+    id: binding.id, publicKey: binding.encryption,
+  })), await contentContext(policy, producer.materialRevision));
+  const value = { policy, authorityId: approval.authorityId, authorization: approval.signature,
+    materialRevision: producer.materialRevision, updatedAt: new Date().toISOString(), creationRunId: runId, metadata,
+    sealed, signerId: executor.id };
   const result = { ...value, signature: await sign(value, keys.signing, 'resource') };
   await verifyContent(result);
   return result;
@@ -163,7 +218,17 @@ export async function reveal(
 export const SourcePin = z.object({
   id: Id, kind: ProtectedKind, policyDigest: Fingerprint,
   materialRevision: z.number().int().positive(),
+  authorizationDigest: Fingerprint.optional(),
 }).strict();
+export async function matchesPin(content: CustodyContent, pin: z.infer<typeof SourcePin>) {
+  return pin.id === content.policy.id && pin.kind === content.policy.kind &&
+    pin.policyDigest === await hash(content.policy) &&
+    (pin.authorizationDigest === undefined || pin.authorizationDigest === content.metadata.authorizationDigest) &&
+    (pin.materialRevision === content.materialRevision ||
+      (pin.kind === 'connection' && pin.authorizationDigest !== undefined &&
+        pin.authorizationDigest === content.metadata.authorizationDigest &&
+        content.materialRevision >= pin.materialRevision));
+}
 export const RunIntent = z.object({
   format: z.literal(1), id: Id, origin: Origin, ownerId: Id,
   actor: KeyBinding, environmentId: Id, executor: KeyBinding,
@@ -233,8 +298,7 @@ export async function authorizeUse(
 ) {
   const content = await verifyContent(input), policy = content.policy;
   const pin = intent.sources.find(source => source.id === policy.id);
-  if (!pin || intent.origin !== policy.origin || pin.kind !== policy.kind ||
-    pin.policyDigest !== await hash(policy) || pin.materialRevision !== content.materialRevision)
+  if (!pin || intent.origin !== policy.origin || !await matchesPin(content, pin))
     throw new Error('The input changed after this execution was authorized.');
   const matching = policy.grants.filter(grant =>
     canonical(grant.actor) === canonical(intent.actor) &&
