@@ -53,6 +53,15 @@ export async function newIdentityKeys(): Promise<IdentityKeys> {
   return PrivateKeys.parse({ encryption: encryption.privateKey, signing: privateSigningKey });
 }
 
+// Keys wrapped before signing keys existed hold the encryption key alone. Complete them with
+// a fresh signing key; the caller re-wraps and publishes the binding. Returns whether it did.
+export async function completeKeys(unwrapped: unknown): Promise<{ keys: IdentityKeys; completed: boolean }> {
+  const whole = PrivateKeys.safeParse(unwrapped);
+  if (whole.success) return { keys: whole.data, completed: false };
+  const encryption = PrivateKey.safeParse(unwrapped);
+  if (!encryption.success) throw new Error('The unwrapped value is not an identity key.');
+  return { keys: { encryption: encryption.data, signing: (await newIdentityKeys()).signing }, completed: true };
+}
 export function publicPart(key: JWK): PublicEncryptionKey {
   return PublicKey.parse({ kty: key.kty, crv: key.crv, x: key.x, y: key.y });
 }

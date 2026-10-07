@@ -8,7 +8,7 @@ import type {
 import { importJWK } from 'jose';
 import type { PrincipalView, PublicEncryptionKey } from '../../shared/contracts';
 import { base64url, encode, hold, unwrap, wrap } from '../../shared/encryption';
-import { PrivateKeys, SignedBinding, bindKeys, canonical, newIdentityKeys, publicPart, signBinding } from '../../shared/authority';
+import { PrivateKeys, SignedBinding, bindKeys, canonical, completeKeys, newIdentityKeys, publicPart, signBinding } from '../../shared/authority';
 import type { BoundKeys, IdentityKeys } from '../../shared/authority';
 import { api, ApiFailure } from './api';
 import { listOf } from '../../shared/contracts';
@@ -98,10 +98,18 @@ export async function authenticate(principalId?: string, credentialId?: string, 
   });
   if (proof.secret) {
     if (result.wrappedKey) {
-      const key = await unwrap(result.wrappedKey, proof.secret, result.principalId).then(value => PrivateKeys.parse(value)).catch(() => {
-        throw new ApiFailure('key_migration_required');
+      const unwrapped = await unwrap(result.wrappedKey, proof.secret, result.principalId).catch(() => {
+        throw new ApiFailure('key_unavailable');
+      });
+      const { keys: key, completed } = await completeKeys(unwrapped).catch(() => {
+        throw new ApiFailure('key_unavailable');
       });
       if (!matchesPublicKey(key, result.publicKey)) throw new ApiFailure('encryption_key_changed');
+      if (completed)
+        await api(`/principals/${result.principalId}/credentials/${result.credentialId}/wrap`, {
+          method: 'PUT',
+          body: { wrappedKey: await wrap(key, proof.secret, result.principalId), publicKey: result.publicKey },
+        });
       await keep(result.principalId, key);
     } else if (!result.publicKey || wrapping) {
       if (wrapping && result.publicKey && !matchesPublicKey(wrapping, result.publicKey))

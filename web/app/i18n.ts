@@ -26,7 +26,6 @@ const words: Record<string, [string, string]> = {
   'state.uncertain': ['結果の確認が必要', 'Outcome needs review'],
   'errors.identity_untrusted': ['相手の鍵が未確認です。「相手の鍵を確認」で照合してから続けてください。', 'Verify the identity keys before continuing.'],
   'errors.fingerprint_mismatch': ['鍵の指紋が一致しません。相手に現在の指紋を確認してください。', 'The key fingerprint does not match. Check the current fingerprint with the other party.'],
-  'errors.key_migration_required': ['この鍵は移行が必要です。旧端末の鍵を保持したまま、移行手続きを行ってください。', 'This key needs migration. Keep the keys on your previous device until migration is complete.'],
   'errors.submission_pending': ['実行依頼をこの端末に保存しました。重複して依頼する前に実行履歴を確認してください。', 'The signed request is saved on this device. Check execution history before starting another operation.'],
   returnToService: ['{{name}}に戻る', 'Return to {{name}}'],
   retry: ['やり直す', 'Try again'],
