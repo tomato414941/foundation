@@ -58,7 +58,11 @@ export async function newIdentityKeys(): Promise<IdentityKeys> {
 export async function completeKeys(unwrapped: unknown): Promise<{ keys: IdentityKeys; completed: boolean }> {
   const whole = PrivateKeys.safeParse(unwrapped);
   if (whole.success) return { keys: whole.data, completed: false };
-  const encryption = PrivateKey.safeParse(unwrapped);
+  // Browsers add ext, key_ops and alg when exporting a key; only the curve point and scalar matter.
+  const bare = unwrapped && typeof unwrapped === 'object'
+    ? Object.fromEntries(['kty', 'crv', 'x', 'y', 'd'].filter((k) => k in unwrapped).map((k) => [k, (unwrapped as Record<string, unknown>)[k]]))
+    : unwrapped;
+  const encryption = PrivateKey.safeParse(bare);
   if (!encryption.success) throw new Error('The unwrapped value is not an identity key.');
   return { keys: { encryption: encryption.data, signing: (await newIdentityKeys()).signing }, completed: true };
 }

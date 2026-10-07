@@ -449,6 +449,10 @@ const words: Record<string, [string, string]> = {
     'Could not connect. Check your internet connection.',
   ],
   'errors.invalid_json': ['JSONの形式を確認してください。', 'Check the JSON format.'],
+  'errors.key_unreadable': [
+    'この端末で解いた鍵の形式を読めませんでした。',
+    'The key unlocked on this device could not be read.',
+  ],
   'errors.key_unavailable': [
     '登録済みの別のパスキーで認証してください。',
     'Authenticate with another registered passkey.',

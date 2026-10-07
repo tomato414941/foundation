@@ -56,5 +56,7 @@ test('署名鍵ができる前に包んだ暗号鍵を、同じ暗号鍵のま�
   const kept = await completeKeys(current);
   assert.equal(kept.completed, false);
   assert.deepEqual(kept.keys, current);
+  const exported = { ...old.privateKey, ext: true, key_ops: ['deriveBits'], alg: 'ECDH-ES' };
+  assert.deepEqual((await completeKeys(exported)).keys.encryption, old.privateKey);
   await assert.rejects(completeKeys({ kty: 'oct' }), /not an identity key/);
 });

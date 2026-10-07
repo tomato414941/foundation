@@ -102,7 +102,7 @@ export async function authenticate(principalId?: string, credentialId?: string, 
         throw new ApiFailure('key_unavailable');
       });
       const { keys: key, completed } = await completeKeys(unwrapped).catch(() => {
-        throw new ApiFailure('key_unavailable');
+        throw new ApiFailure('key_unreadable');
       });
       if (!matchesPublicKey(key, result.publicKey)) throw new ApiFailure('encryption_key_changed');
       if (completed)
