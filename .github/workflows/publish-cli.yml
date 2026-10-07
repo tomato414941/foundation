@@ -148,5 +148,8 @@ jobs:
             --build-arg "FOUNDATION_COMMIT=$GITHUB_SHA" \
             --tag "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}" \
             --tag "ghcr.io/${GITHUB_REPOSITORY,,}:main" \
-            --provenance=false --push .
+            --provenance=false --load .
+          docker run --rm "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}" node --input-type=module -e "await import('/app/dist/server/app.js')"
+          docker push "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}"
+          docker push "ghcr.io/${GITHUB_REPOSITORY,,}:main"
           docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}" | head -3

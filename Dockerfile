@@ -12,9 +12,7 @@ ENV NODE_ENV=production FOUNDATION_HOST=0.0.0.0 FOUNDATION_PORT=3417 FOUNDATION_
 WORKDIR /app
 COPY --from=build --chown=node:node /app/package.json ./package.json
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
-COPY --from=build --chown=node:node /app/dist/server ./dist/server
-COPY --from=build --chown=node:node /app/dist/shared ./dist/shared
-COPY --from=build --chown=node:node /app/dist/web/client ./dist/web/client
+COPY --from=build --chown=node:node /app/dist ./dist
 RUN mkdir -p /var/lib/foundation && chown node:node /var/lib/foundation
 USER node
 EXPOSE 3417
