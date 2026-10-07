@@ -10,6 +10,7 @@ import type { Audit } from './audit.js';
 import { Vault, digest, token } from './vault.js';
 import { ApprovalRequest, ConnectionRequest } from '../shared/contracts.js';
 import type {
+  OperationTitle,
   RequestedOperation,
   RequestInput,
   ApprovalView,
@@ -42,6 +43,7 @@ interface ResponseContext {
 }
 export interface OperationDispatcher {
   allows(operation: RequestedOperation): boolean;
+  describe(operation: RequestedOperation): OperationTitle;
   execute(actor: Actor, operation: RequestedOperation, browser: string): Promise<JsonValue>;
 }
 export class Requests {
@@ -87,9 +89,9 @@ export class Requests {
       from: { id: from.id, name: from.name },
       to: to ? { id: to.id, name: to.name } : null,
       message: row.message,
-      operations: await this.vault.decrypt<RequestedOperation[]>(
-        row.operations,
-        'request-operations:' + row.id,
+      // Each operation with what it does in words, from the route it calls: the one asked reads that, not the call.
+      operations: (await this.vault.decrypt<RequestedOperation[]>(row.operations, 'request-operations:' + row.id)).map(
+        (operation) => ({ ...operation, title: required(this.dispatcher).describe(operation) }),
       ),
       results: row.results,
       state: row.state,

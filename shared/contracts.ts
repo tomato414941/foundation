@@ -457,6 +457,9 @@ export const Operation = z
   })
   .strict();
 export type RequestedOperation = z.infer<typeof Operation>;
+// What an operation does, in the words shown to the one asked to approve it: Japanese and English.
+export const OperationTitle = z.object({ ja: z.string(), en: z.string() }).strict();
+export type OperationTitle = z.infer<typeof OperationTitle>;
 export const ConnectionRequest = z.object({ ownerId: z.union([Id, z.literal('$approver')]),
   methodId: z.string().min(1).max(200), connectionId: Id.optional(), environmentId: Id.optional(), name: Name.optional() }).strict();
 export const RequestInput = z
@@ -472,7 +475,7 @@ export const ApprovalRequest = z.object({
   from: Principal.pick({ id: true, name: true }),
   to: Principal.pick({ id: true, name: true }).nullable(),
   message: z.string(),
-  operations: z.array(Operation),
+  operations: z.array(Operation.extend({ title: OperationTitle })),
   state: z.enum(['pending', 'running', 'approved', 'declined', 'cancelled', 'expired']),
   results: z.array(Json.nullable()),
   createdAt: Time,

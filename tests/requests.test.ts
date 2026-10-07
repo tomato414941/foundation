@@ -158,3 +158,35 @@ test('承認依頼の取り消しで待機中の接続を止め、その依頼�
   if (progress.kind === 'failed') assert.equal(progress.task.state, 'cancelled');
   await assert.rejects(f.connections.start(input), { code: 'request_answered' });
 });
+
+test('依頼の各操作は、承認する人が読む名前を日本語と英語で持ち、呼び出しの形は見せずに済む', async (t) => {
+  const f = await fixture(),
+    context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
+    app = await buildApp(context);
+  t.after(async () => {
+    await app.close();
+    await f.close();
+  });
+  const person = await f.person('Person'),
+    device = await f.person('Device'),
+    headers = { authorization: 'Bearer ' + device.token };
+  const ask = async (operations: unknown[], to?: string) => {
+    const response = await app.inject({ method: 'POST', url: '/api/requests', headers, payload: { ...(to ? { to } : {}), operations } });
+    assert.equal(response.statusCode, 201, response.body);
+    return ApprovalRequest.parse(response.json()).operations.map((operation) => operation.title);
+  };
+  assert.deepEqual(await ask([{ method: 'POST', path: '/api/relations', body: { relation: 'agent', principalId: '$approver', subjectId: device.actor.id } }]),
+    [{ ja: 'アクセスを許可する', en: 'Allow access' }]);
+  const target = '00000000-0000-4000-8000-000000000001';
+  assert.deepEqual(await ask([
+    { method: 'POST', path: '/api/relations', body: { relation: 'viewer', principalId: target, subjectId: device.actor.id } },
+    { method: 'PATCH', path: '/api/principals/' + device.actor.id, body: { name: 'renamed' } },
+    { method: 'DELETE', path: '/api/resources/' + target },
+    { method: 'CONNECT', path: '/api/connections', body: { ownerId: '$approver', methodId: 'github-token' } },
+  ], person.actor.id), [
+    { ja: '関係を結ぶ', en: 'Add a relation' },
+    { ja: 'プリンシパルを変更する', en: 'Change a principal' },
+    { ja: '項目を削除する', en: 'Delete an item' },
+    { ja: 'サービスに接続する', en: 'Connect a service' },
+  ]);
+});

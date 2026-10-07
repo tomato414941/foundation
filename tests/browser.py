@@ -485,6 +485,9 @@ class BrowserTests(unittest.TestCase):
         sender.wait_for_url("**/requests/*")
         expect(sender.get_by_text("確認待ち", exact=True)).to_be_visible()
         receiver.goto(sender.url)
+        expect(receiver.get_by_text("1. プリンシパルを作る", exact=True)).to_be_visible()
+        expect(receiver.get_by_text("POST /api/principals")).to_have_count(0)
+        receiver.screenshot(path=str(ARTIFACTS / "request-approval-ja.png"), full_page=True)
         receiver.get_by_role("button", name="承認", exact=True).click()
         expect(receiver.get_by_text("承認済み", exact=True)).to_be_visible()
         projects = receiver.request.get(ORIGIN + "/api/principals").json()["items"]

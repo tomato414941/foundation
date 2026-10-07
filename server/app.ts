@@ -15,6 +15,7 @@ import type { SigninResult } from './authentication.js';
 import { fail, failure } from './errors.js';
 import { token } from './vault.js';
 import * as C from '../shared/contracts.js';
+import { atPointer } from '../shared/values.js';
 import * as S from '../shared/session.js';
 import * as P from '../shared/protocol.js';
 import { routesResources } from './routes-resources.js';
@@ -30,8 +31,14 @@ declare module 'fastify' {
     browser: string;
   }
   interface FastifyContextConfig {
-    approval?: boolean;
+    approval?: Approval;
   }
+}
+// A route one principal may ask another to call for it, and what calling it does in the words the one asked reads:
+// Japanese and English, or worked out from the body when its meaning depends on it.
+type Title = readonly [string, string];
+export interface Approval {
+  title: Title | ((body: C.JsonValue | undefined) => Title);
 }
 export function actor(request: FastifyRequest): Actor {
   if (!request.actor) fail(401, 'unauthenticated', 'Sign in to continue.');
@@ -90,7 +97,7 @@ export async function buildApp(context: Context) {
   app.decorateRequest('actor', null);
   app.decorateRequest('browser', '');
   const internalActors = new Map<string, Actor>();
-  const eligible: Array<{ method: string; pattern: RegExp }> = [];
+  const eligible: Array<{ method: string; pattern: RegExp; approval: Approval }> = [];
   app.addHook('onRoute', (route) => {
     if (!route.config?.approval) return;
     const pattern = new RegExp(
@@ -102,13 +109,21 @@ export async function buildApp(context: Context) {
         '$',
     );
     for (const method of Array.isArray(route.method) ? route.method : [route.method])
-      eligible.push({ method, pattern });
+      eligible.push({ method, pattern, approval: route.config.approval });
   });
+  const approvable = (operation: C.RequestedOperation) => {
+    if (!operation.path.startsWith('/api/') || /[\\\u0000-\u001f]/.test(operation.path)) return null;
+    const path = operation.path.split('?')[0]!;
+    return eligible.find((route) => route.method === operation.method && route.pattern.test(path))?.approval ?? null;
+  };
   context.requests.dispatcher = {
-    allows: (operation) => {
-      if (!operation.path.startsWith('/api/') || /[\\\u0000-\u001f]/.test(operation.path)) return false;
-      const path = operation.path.split('?')[0]!;
-      return eligible.some((route) => route.method === operation.method && route.pattern.test(path));
+    allows: (operation) => Boolean(approvable(operation)),
+    describe: (operation) => {
+      // A connection is made on an executor the one asked chooses, not by calling a route here.
+      if (operation.method === 'CONNECT') return { ja: 'サービスに接続する', en: 'Connect a service' };
+      const title = approvable(operation)?.title;
+      const [ja, en] = typeof title === 'function' ? title(operation.body) : (title ?? ['依頼された操作', 'Requested operation']);
+      return { ja, en };
     },
     execute: async (who, operation, browser) => {
       if (operation.method === 'CONNECT') fail(400, 'invalid_operation', 'Continue this connection on the selected executor.');
@@ -381,7 +396,7 @@ export async function buildApp(context: Context) {
   app.post(
     '/api/principals',
     {
-      config: { approval: true },
+      config: { approval: { title: ['プリンシパルを作る', 'Create a principal'] } },
       schema: { body: z.object({ name: C.Name, ownerId: C.Id }).strict(), response: { 201: C.Principal } },
     },
     async (request, reply) => {
@@ -406,7 +421,7 @@ export async function buildApp(context: Context) {
   app.patch(
     '/api/principals/:id',
     {
-      config: { approval: true },
+      config: { approval: { title: ['プリンシパルを変更する', 'Change a principal'] } },
       schema: {
         params: C.IdParams,
         body: z.object({ name: C.Name }).strict(),
@@ -501,7 +516,7 @@ export async function buildApp(context: Context) {
     '/api/relations',
     {
       bodyLimit: 32 * 1024 * 1024,
-      config: { approval: true },
+      config: { approval: { title: (body) => atPointer(body, '/relation') === 'agent' && atPointer(body, '/principalId') === '$approver' ? ['アクセスを許可する', 'Allow access'] : ['関係を結ぶ', 'Add a relation'] } },
       schema: { body: C.RelationInput.extend({ secrets: P.KeyUpdates.optional() }), response: { 200: C.Ok } },
     },
     async (request) => {
@@ -538,7 +553,7 @@ export async function buildApp(context: Context) {
   );
   app.delete(
     '/api/relations',
-    { bodyLimit: 32 * 1024 * 1024, config: { approval: true }, schema: { body: C.RelationInput.extend({ secrets: P.KeyUpdates.optional() }), response: { 200: C.Ok } } },
+    { bodyLimit: 32 * 1024 * 1024, config: { approval: { title: ['関係を外す', 'Remove a relation'] } }, schema: { body: C.RelationInput.extend({ secrets: P.KeyUpdates.optional() }), response: { 200: C.Ok } } },
     async (request) => {
       await principals.unrelate(
         actor(request),
@@ -558,7 +573,7 @@ export async function buildApp(context: Context) {
   app.put(
     '/api/principals/:id/grants/:principalId',
     {
-      config: { approval: true },
+      config: { approval: { title: ['権限を渡す', 'Grant permissions'] } },
       schema: {
         params: z.object({ id: C.Id, principalId: C.Id }),
         body: z.object({ actions: z.array(C.Action).min(1) }).strict(),
@@ -578,7 +593,7 @@ export async function buildApp(context: Context) {
   app.delete(
     '/api/principals/:id/grants/:principalId',
     {
-      config: { approval: true },
+      config: { approval: { title: ['権限を外す', 'Remove permissions'] } },
       schema: { params: z.object({ id: C.Id, principalId: C.Id }), response: { 200: C.Ok } },
     },
     async (request) => {
@@ -593,7 +608,7 @@ export async function buildApp(context: Context) {
   app.post(
     '/api/principals/:id/revoke',
     {
-      config: { approval: true },
+      config: { approval: { title: ['アクセスを取り消す', 'Revoke access'] } },
       schema: { params: C.IdParams, body: z.object({ principalId: C.Id }).strict(), response: { 200: C.Ok } },
     },
     async (request) => {
@@ -605,7 +620,7 @@ export async function buildApp(context: Context) {
     '/api/principals/:id/transfer',
     {
       bodyLimit: 32 * 1024 * 1024,
-      config: { approval: true },
+      config: { approval: { title: ['プリンシパルを譲る', 'Transfer a principal'] } },
       schema: {
         params: C.IdParams,
         body: z.object({ to: C.Id, secrets: P.KeyUpdates.optional() }).strict(),

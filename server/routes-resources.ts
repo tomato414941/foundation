@@ -5,6 +5,17 @@ import type { Context } from './context.js';
 import { fail } from './errors.js';
 import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
+import { atPointer } from '../shared/values.js';
+
+// What creating each kind of item is called, for the one asked to approve it.
+const CREATED: Record<string, readonly [string, string]> = {
+  secret: ['シークレットを保存する', 'Save a secret'],
+  service: ['サービス定義を作る', 'Create a service definition'],
+  method: ['接続方法を作る', 'Create a connection method'],
+  app: ['OAuthアプリを登録する', 'Register an OAuth app'],
+  environment: ['実行環境を作る', 'Create an environment'],
+  function: ['関数を作る', 'Create a function'],
+};
 
 export async function routesResources(app: ApiApp, context: Context) {
   const { resources, authorization, catalog, functions, objects, environments, billing } = context;
@@ -75,7 +86,7 @@ export async function routesResources(app: ApiApp, context: Context) {
   app.post(
     '/api/principals/:id/resources',
     {
-      config: { approval: true },
+      config: { approval: { title: (body) => CREATED[String(atPointer(body, '/kind'))] ?? ['項目を作る', 'Create an item'] } },
       schema: { params: C.IdParams, body: C.NewResource, response: { 201: C.Resource } },
     },
     async (request, reply) => {
@@ -110,7 +121,7 @@ export async function routesResources(app: ApiApp, context: Context) {
   app.patch(
     '/api/resources/:id',
     {
-      config: { approval: true },
+      config: { approval: { title: ['項目を変更する', 'Change an item'] } },
       schema: { params: C.IdParams, body: C.UpdateResource, response: { 200: C.Resource } },
     },
     async (request) => {
@@ -199,7 +210,7 @@ export async function routesResources(app: ApiApp, context: Context) {
   app.delete(
     '/api/resources/:id',
     {
-      config: { approval: true },
+      config: { approval: { title: ['項目を削除する', 'Delete an item'] } },
       schema: {
         params: C.IdParams,
         querystring: z.object({}).strict(),
@@ -235,7 +246,7 @@ export async function routesResources(app: ApiApp, context: Context) {
   app.put(
     '/api/resources/:id/grants/:principalId',
     {
-      config: { approval: true },
+      config: { approval: { title: ['項目を共有する', 'Share an item'] } },
       schema: {
         params: z.object({ id: C.Id, principalId: C.Id }),
         body: z.object({ actions: z.array(C.Action).min(1) }).strict(),
@@ -255,7 +266,7 @@ export async function routesResources(app: ApiApp, context: Context) {
   app.delete(
     '/api/resources/:id/grants/:principalId',
     {
-      config: { approval: true },
+      config: { approval: { title: ['項目の共有をやめる', 'Stop sharing an item'] } },
       schema: { params: z.object({ id: C.Id, principalId: C.Id }), response: { 200: C.Ok } },
     },
     async (request) => {
@@ -270,7 +281,7 @@ export async function routesResources(app: ApiApp, context: Context) {
   app.post(
     '/api/resources/:id/transfer',
     {
-      config: { approval: true },
+      config: { approval: { title: ['項目を譲る', 'Transfer an item'] } },
       schema: {
         params: C.IdParams,
         body: z.object({ to: C.Id }).strict(),
@@ -327,7 +338,7 @@ export async function routesResources(app: ApiApp, context: Context) {
   app.post(
     '/api/resources/:id/stop',
     {
-      config: { approval: true },
+      config: { approval: { title: ['実行環境を止める', 'Stop an environment'] } },
       schema: { params: C.IdParams, body: z.object({}).strict(), response: { 200: C.Resource } },
     },
     async (request) =>

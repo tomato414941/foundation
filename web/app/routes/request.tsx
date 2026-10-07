@@ -67,7 +67,7 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
   });
 }
 export default function RequestPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { item, account } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>();
   const task = useTask();
@@ -113,7 +113,7 @@ export default function RequestPage() {
       <Form method="post">
         <div className="flex min-w-0 flex-col gap-6">
           {item.operations.map((operation, index) => (
-            <Panel key={index} title={`${index + 1}. ${operation.method} ${operation.path}`}>
+            <Panel key={index} title={`${index + 1}. ${i18n.language === 'ja' ? operation.title.ja : operation.title.en}`}>
               <JsonView value={operation.body ?? {}} />
               {operation.inputs.map((input, inputIndex) => (
                 <div key={input.pointer} className="flex min-w-0 flex-col gap-2">
