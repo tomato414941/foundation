@@ -47,7 +47,13 @@ class BrowserRunner extends MemoryRunner {
 const fixtureData = await fixture();
 const origin = 'http://localhost:3458';
 const context = await createContext(
-  { ...fixtureData.config, origin, FOUNDATION_ORIGIN: origin, FOUNDATION_PORT: 3458 },
+  {
+    ...fixtureData.config,
+    origin,
+    FOUNDATION_ORIGIN: origin,
+    FOUNDATION_PORT: 3458,
+    FOUNDATION_PROXY_ADDRESSES: '127.0.0.1',
+  },
   {
     db: fixtureData.db,
     mailer: fixtureData.mailer,

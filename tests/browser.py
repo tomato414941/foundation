@@ -19,6 +19,7 @@ class BrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        cls.next_client = 1
         cls.playwright = sync_playwright().start()
         cls.chromium = cls.playwright.chromium.launch(headless=True)
         cls.webkit = cls.playwright.webkit.launch(headless=True)
@@ -50,9 +51,12 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(self.errors, [], "Browser scripts complete successfully")
 
     def page(self, webkit=False, mobile=False):
+        client = type(self).next_client
+        type(self).next_client += 1
         context = (self.webkit if webkit else self.chromium).new_context(
             viewport={"width": 390 if mobile else 1440, "height": 844 if mobile else 1050},
             is_mobile=mobile, has_touch=mobile,
+            extra_http_headers={"x-forwarded-for": f"198.18.{client // 256}.{client % 256}"},
         )
         self.contexts.append(context)
         page = context.new_page()
@@ -79,7 +83,9 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("button", name="パスキーを作成", exact=True).click()
         page.wait_for_url("**/p/**")
         page.wait_for_load_state("networkidle")
-        principal = page.request.get(ORIGIN + "/api/session").json()["principal"]
+        response = page.request.get(ORIGIN + "/api/session")
+        self.assertTrue(response.ok, response.text())
+        principal = response.json()["principal"]
         self.assertIsNotNone(principal["publicKey"])
         return page, principal
 
@@ -584,7 +590,7 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("tab", name="基本情報", exact=True).focus()
         page.keyboard.press("ArrowRight")
         page.wait_for_url("**/settings/credentials")
-        expect(page.get_by_text("Keyboard account", exact=True)).to_be_visible()
+        expect(page.get_by_role("tabpanel").get_by_text("Keyboard account", exact=True)).to_be_visible()
         page.get_by_role("tab", name="ログイン方法・APIキー", exact=True).focus()
         page.keyboard.press("ArrowRight")
         page.wait_for_url("**/settings/billing")
