@@ -41,6 +41,18 @@ export class Custody {
     }
     await this.resources.references(content.policy.id, values.map(value => value.id), connection);
   }
+  private async replacePending(previous: CustodyContent, next: CustodyContent, connection: Queryable) {
+    const pending = await this.resources.db.one<{ id: string; state: string }>(
+      "SELECT id,state FROM connection_operations WHERE resource_id=$1 AND state IN ('prepared','in_flight','uncertain')",
+      [previous.policy.id], connection);
+    if (!pending) return;
+    // A fresh, owner-approved authorization supersedes an ambiguous old token
+    // generation. Resharing the existing generation must remain frozen.
+    if (pending.state !== 'uncertain' || next.policy.kind !== 'connection' ||
+      next.metadata.generation === previous.metadata.generation)
+      fail(409, 'connection_busy', 'Resolve the current token update or approve a new connection before changing it.');
+    await connection.query("UPDATE connection_operations SET state='aborted',updated_at=now() WHERE id=$1", [pending.id]);
+  }
 
   async get(id: string, connection: Queryable = this.resources.db.pool): Promise<CustodyContent> {
     const row = await this.resources.db.one<{ content: CustodyContent }>(
@@ -106,11 +118,7 @@ export class Custody {
           if (policy.revision !== previous.content.policy.revision + (policyChanged ? 1 : 0) ||
             content.materialRevision !== previous.content.materialRevision + 1)
             fail(409, 'changed', 'Advance the current content and policy revisions.');
-          const pending = await this.resources.db.one(
-            "SELECT 1 FROM connection_operations WHERE resource_id=$1 AND state IN ('prepared','in_flight','uncertain')",
-            [policy.id], connection,
-          );
-          if (pending) fail(409, 'connection_busy', 'Resolve the current connection update before editing its recipients.');
+          await this.replacePending(previous.content, content, connection);
         } else {
           await this.resources.authorization.requireResource(actor, current, 'reveal', connection);
           if (policy.revision !== 1 || content.materialRevision !== 1)
@@ -184,11 +192,7 @@ export class Custody {
           content.materialRevision !== previous.materialRevision + 1 ||
           policy.revision !== previous.policy.revision + (await hash(policy) === await hash(previous.policy) ? 0 : 1))
           fail(409, 'changed', 'Review the current output destination before replacing it.');
-        const pending = await this.resources.db.one(
-          "SELECT 1 FROM connection_operations WHERE resource_id=$1 AND state IN ('prepared','in_flight','uncertain')",
-          [policy.id], connection,
-        );
-        if (pending) fail(409, 'connection_busy', 'Resolve the current connection update before replacing it.');
+        await this.replacePending(previous, content, connection);
       } else {
         if (content.materialRevision !== 1 || policy.revision !== 1)
           fail(400, 'invalid_revision', 'Start a new output at revision one.');

@@ -4,7 +4,7 @@ import { delegatedFixture, MemoryJournal } from './delegation-support.js';
 import { ConnectionOperations } from '../server/connection-operations.js';
 import { Connections } from '../runtime/connections.js';
 import type { ConnectionBroker } from '../runtime/connections.js';
-import { Executor } from '../runtime/executor.js';
+import { DeliveryPending, Executor } from '../runtime/executor.js';
 import { CommandProcess } from '../runtime/command.js';
 import { MethodDefinition } from '../shared/contracts.js';
 import type { JsonValue } from '../shared/contracts.js';
@@ -65,7 +65,7 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
     assert.equal(task.state, 'succeeded', JSON.stringify(result.error));
     return result.result as Record<string, JsonValue>;
   }
-  async function storedConnection() {
+  async function storedConnection(name = 'Connection') {
     const material = ConnectionMaterial.parse({ format: 1, methodId: 'provider:oauth', method,
       generation: crypto.randomUUID(), appId: appPolicy.id, appGeneration: appMaterial.generation,
       oauth: { accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: 0,
@@ -73,12 +73,12 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
         accountVerified: true, extra: {}, facts: {} } });
     const content = await protect(encode(canonical(material)), policy('connection', ['http', 'refresh', 'revoke']),
       1, f.owner.binding, f.owner.keys, await connectionMetadata(material));
-    await f.custody.put(f.owner.actor, { name: 'Connection', content });
+    await f.custody.put(f.owner.actor, { name, content });
     const authorization = await intent({ kind: 'http' }, [content, appContent], 'http');
     return { material, content, authorization, sources: [content, appContent] };
   }
   return { ...f, method, policy, appMaterial, appContent, appPolicy, operations, journal, broker, connections,
-    requests, transport, run, storedConnection };
+    requests, transport, run, storedConnection, worker: executor };
 }
 
 test('選んだ実行先でOAuthコードを交換し、接続先と権限を確認してから承認した宛先へ保存する', async () => {
@@ -179,5 +179,71 @@ test('更新要求の結果が不明な場合は接続を保留し、別の実�
     await assert.rejects(f.operations.prepare(f.executor.actor, crypto.randomUUID(), c.content.policy.id, 1),
       { code: 'connection_uncertain' });
     assert.equal(f.requests.length, 1);
+  } finally { await f.close(); }
+});
+
+test('OAuth接続の保存応答が途切れた場合、記録した暗号文を再送して実行結果を確定する', async () => {
+  const f = await setup(request => request.url.endsWith('/token')
+    ? response({ access_token: 'runtime-access', refresh_token: 'runtime-refresh', token_type: 'bearer', expires_in: 3600, scope: 'read' })
+    : response({ id: 'account-1', name: 'Account' }));
+  try {
+    const flowId = crypto.randomUUID();
+    const started = await f.run({ action: 'start', flowId, name: 'Saved once', methodId: 'provider:oauth',
+      method: f.method, appId: f.appPolicy.id, redirectUri: f.config.origin + '/oauth/callback' });
+    const reviewed = await f.run({ action: 'exchange', flowId, parameters: new URLSearchParams({
+      state: new URL(String(started.url)).searchParams.get('state')!, code: 'approved-code',
+    }).toString() });
+    const runId = crypto.randomUUID(), policy = { ...f.policy('connection', ['http', 'refresh']), producers: [{
+      executor: f.executor.binding, runId, expiresAt: f.intent.expiresAt, materialRevision: 1,
+    }] };
+    const capture = f.broker.capture;
+    let attempts = 0;
+    f.broker.capture = async (name, content) => {
+      const saved = await capture(name, content);
+      if (++attempts === 1) throw new Error('saved response lost');
+      return saved;
+    };
+    await assert.rejects(f.run({ action: 'commit', flowId,
+      authorizationDigest: (reviewed.metadata as Record<string, JsonValue>).authorizationDigest!,
+      approval: await approvePolicy(policy, f.owner.binding, f.owner.keys) }, [], runId), DeliveryPending);
+    assert.deepEqual(await f.worker.reconcile(), []);
+    const task = await f.delegation.get(f.owner.actor, runId);
+    assert.equal(task.state, 'succeeded');
+    assert.equal((await f.custody.read(f.owner.actor, policy.id)).content.creationRunId, runId);
+    assert.equal(attempts, 2);
+    assert.equal(f.requests.filter(request => request.url.endsWith('/token')).length, 1);
+  } finally { await f.close(); }
+});
+
+test('トークン更新の送信前に通信が途切れた場合、予約を解放して新しい更新を開始する', async () => {
+  const f = await setup(() => response({}));
+  try {
+    const c = await f.storedConnection();
+    const disconnected = new Connections(f.executor.binding, f.executor.keys,
+      { ...f.broker, async dispatch() { throw new Error('offline before dispatch'); } }, f.journal, f.transport);
+    await assert.rejects(disconnected.outputs(c.content, c.authorization, c.sources, new AbortController().signal),
+      { code: 'connection_uncertain' });
+    assert.deepEqual(await f.connections.reconcile(), []);
+    const next = await f.operations.prepare(f.executor.actor, crypto.randomUUID(), c.content.policy.id, 1);
+    assert.equal(next.state, 'prepared');
+    assert.equal(f.requests.length, 0);
+  } finally { await f.close(); }
+});
+
+test('再承認が必要な接続を保留したまま、別の接続の復旧を完了する', async () => {
+  let refreshes = 0;
+  const f = await setup(request => request.url.endsWith('/token')
+    ? response({ access_token: 'new-access', refresh_token: 'new-refresh', token_type: 'bearer', expires_in: 3600,
+        scope: ++refreshes === 1 ? 'read write' : 'read' })
+    : response({ id: 'account-1', name: 'Account' }));
+  try {
+    const first = await f.storedConnection('Changed permissions'), second = await f.storedConnection('Unchanged permissions');
+    const offline = new Connections(f.executor.binding, f.executor.keys,
+      { ...f.broker, async commit() { throw new Error('offline'); } }, f.journal, f.transport);
+    await assert.rejects(offline.outputs(first.content, first.authorization, first.sources, new AbortController().signal), { code: 'connection_review' });
+    await assert.rejects(offline.outputs(second.content, second.authorization, second.sources, new AbortController().signal), { code: 'connection_uncertain' });
+    assert.equal((await f.connections.reconcile()).length, 1);
+    assert.equal((await f.custody.get(second.content.policy.id)).materialRevision, 2);
+    assert.equal((await f.operations.state(f.executor.actor, first.content.policy.id))!.state, 'uncertain');
   } finally { await f.close(); }
 });

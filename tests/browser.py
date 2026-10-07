@@ -33,8 +33,18 @@ class BrowserTests(unittest.TestCase):
         self.contexts = []
         self.errors = []
         self.authenticators = {}
+        self.environments = []
 
     def tearDown(self):
+        result = self._outcome.result
+        if any(test is self for test, _ in result.failures + result.errors):
+            for index, context in enumerate(self.contexts):
+                for page in context.pages:
+                    if not page.is_closed():
+                        page.screenshot(path=str(ARTIFACTS / (self._testMethodName + str(index) + '.png')), full_page=True)
+                        print(page.url + '\n' + page.locator('body').inner_text()[:10000], flush=True)
+        for page, environment_id in self.environments:
+            page.request.post(ORIGIN + '/api/resources/' + environment_id + '/stop', data={}, headers={'origin': ORIGIN})
         for context in self.contexts:
             context.close()
         self.assertEqual(self.errors, [], "Browser scripts complete successfully")
@@ -86,6 +96,42 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("option", name=option, exact=True).click()
         expect(page.get_by_role("listbox")).to_be_hidden()
 
+    def trust_fingerprint(self, page, principal_id, fingerprint):
+        previous = page.url
+        page.goto(ORIGIN + "/account/trust")
+        page.get_by_role("textbox", name="共有相手のプリンシパルID", exact=True).fill(principal_id)
+        page.get_by_role("textbox", name="鍵の指紋", exact=True).fill(fingerprint)
+        page.get_by_role("button", name="相手の鍵を確認", exact=True).click()
+        expect(page.get_by_text("保存しました。", exact=True)).to_be_visible()
+        page.goto(previous)
+
+    def trust(self, page, other, principal):
+        previous = other.url
+        other.goto(ORIGIN + "/account/trust")
+        fingerprint = other.get_by_text(re.compile(r"^[A-Za-z0-9_-]{43}$")).inner_text()
+        other.goto(previous)
+        self.trust_fingerprint(page, principal["id"], fingerprint)
+
+    def executor(self, page, principal, name="Browser executor"):
+        response = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
+        self.assertTrue(response.ok, response.text())
+        page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
+        page.get_by_role("textbox", name="名前", exact=True).fill(name)
+        page.get_by_role("button", name="起動", exact=True).click()
+        expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible()
+        expect(page.get_by_role("link", name="実行", exact=True)).to_be_visible(timeout=15000)
+        path = page.url
+        self.environments.append((page, path.rsplit('/', 1)[1]))
+        fingerprint = page.request.get(ORIGIN + "/__test/executor/" + path.rsplit("/", 1)[1] + "/fingerprint").json()
+        self.trust_fingerprint(page, fingerprint["id"], fingerprint["fingerprint"])
+        return path
+
+    def accept_connection(self, page, name):
+        expect(page.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
+        page.get_by_role("button", name="保存", exact=True).click()
+        expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible(timeout=15000)
+        page.wait_for_url("**/services/*")
+
     def test_パスキーで登録してシークレットを編集し再ログイン後に復号する(self):
         page, principal = self.passkey_account()
         path = self.secret(page, principal)
@@ -114,6 +160,8 @@ class BrowserTests(unittest.TestCase):
     def test_相手の鍵で共有したシークレットを開き共有解除を反映する(self):
         owner, principal = self.passkey_account("Secret owner")
         reader, recipient = self.passkey_account("Secret reader")
+        self.trust(owner, reader, recipient)
+        self.trust(reader, owner, principal)
         path = self.secret(owner, principal, "Shared secret")
         owner.get_by_role("link", name="共有", exact=True).click()
         owner.get_by_role("textbox", name="共有相手のプリンシパルID").fill(recipient["id"])
@@ -127,7 +175,7 @@ class BrowserTests(unittest.TestCase):
         owner.get_by_role("listitem").filter(has_text="Secret reader").get_by_role("button", name="権限を解除", exact=True).click()
         expect(owner.get_by_text("Secret reader", exact=True)).to_be_hidden()
         resource_id = path.rsplit("/", 1)[1]
-        self.assertEqual(reader.request.get(f"{ORIGIN}/api/resources/{resource_id}/secret").status, 403)
+        self.assertEqual(reader.request.get(f"{ORIGIN}/api/resources/{resource_id}/custody").status, 403)
 
     def test_追加したパスキーでログインして保存済みのシークレットを復号する(self):
         page, principal = self.passkey_account("Existing account")
@@ -243,6 +291,11 @@ class BrowserTests(unittest.TestCase):
         owner, principal = self.passkey_account("Project owner")
         member, recipient = self.passkey_account("Project member")
         successor, new_owner = self.passkey_account("Project successor")
+        self.trust(owner, member, recipient)
+        self.trust(owner, successor, new_owner)
+        self.trust(member, owner, principal)
+        self.trust(successor, owner, principal)
+        self.trust(successor, member, recipient)
         owner.goto(f"{ORIGIN}/p/{principal['id']}/principals/new")
         owner.get_by_role("textbox", name="名前", exact=True).fill("Shared project")
         owner.get_by_role("button", name="作成", exact=True).click()
@@ -267,12 +320,15 @@ class BrowserTests(unittest.TestCase):
 
     def test_サービス接続とプリンシパルを作成して委任する(self):
         page, principal = self.passkey_account()
+        self.executor(page, principal)
         page.goto(f"{ORIGIN}/p/{principal['id']}/services/new")
         self.select(page, "サービス", "AWS")
         self.select(page, "サービス", "GitHub")
         page.get_by_role("textbox", name="名前", exact=True).fill("GitHub test")
         page.get_by_label("Personal access token").fill("test-provider-token")
+        self.select(page, "実行環境", "Browser executor")
         page.get_by_role("button", name="接続する", exact=True).click()
+        self.accept_connection(page, "GitHub test")
         expect(page.get_by_role("heading", name="GitHub test", exact=True)).to_be_visible()
         expect(page.get_by_text("GH_TOKEN", exact=False)).to_be_visible()
         page.goto(f"{ORIGIN}/p/{principal['id']}/principals/new")
@@ -287,6 +343,7 @@ class BrowserTests(unittest.TestCase):
 
     def test_接続方法を選んで登録し共有分類から再利用して再認証を確認する(self):
         page, principal = self.passkey_account("Connection owner")
+        self.executor(page, principal)
         root = f"{ORIGIN}/p/{principal['id']}"
         methods = {
             "personal": {"name": "Personal access", "kind": "token", "config": {
@@ -313,8 +370,10 @@ class BrowserTests(unittest.TestCase):
         self.select(page, "接続方法", "Project access")
         page.get_by_label("Project key").fill("project-fixture-key")
         page.get_by_role("textbox", name="名前", exact=True).fill("Primary account")
+        self.select(page, "実行環境", "Browser executor")
         page.screenshot(path=str(ARTIFACTS / "connection-method-ja.png"), full_page=True, animations="disabled")
         page.get_by_role("button", name="接続する", exact=True).click()
+        self.accept_connection(page, "Primary account")
         expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible()
         expect(page.get_by_text("外部サービスの権限は未確認", exact=True)).to_be_visible()
         expect(page.get_by_text("接続先の名義は未確認", exact=True)).to_be_visible()
@@ -336,20 +395,20 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("link", name="再接続", exact=True).click()
         expect(page.get_by_role("combobox", name="接続方法", exact=True)).to_be_disabled()
         page.get_by_label("Project key").fill("rotated-fixture-key")
+        self.select(page, "実行環境", "Browser executor")
         page.get_by_role("button", name="接続する", exact=True).click()
-        expect(page.get_by_role("heading", name="接続の変更を確認", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
         page.wait_for_load_state("networkidle")
         page.screenshot(path=str(ARTIFACTS / "connection-review-ja.png"), full_page=True, animations="disabled")
         self.select(page, "言語", "English")
         page.set_viewport_size({"width": 390, "height": 844})
         page.wait_for_load_state("networkidle")
-        expect(page.get_by_role("heading", name="Review connection changes", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="Confirm account and permissions, then save", exact=True)).to_be_visible()
         self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
         page.screenshot(path=str(ARTIFACTS / "connection-review-mobile-en.png"), full_page=True, animations="disabled")
-        page.get_by_role("button", name="Accept changes", exact=True).click()
-        expect(page.get_by_role("heading", name="Connections", exact=True)).to_be_visible()
-        page.get_by_role("link", name="Primary account", exact=True).click()
-        expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible()
+        page.get_by_role("button", name="Save", exact=True).click()
+        page.wait_for_url(connection_path)
+        expect(page.get_by_role("heading", name="Primary account", exact=True)).to_be_visible(timeout=15000)
         self.assertEqual(page.url, connection_path)
         connection = page.request.get(ORIGIN + "/api/resources/" + connection_id).json()
         self.assertEqual(connection["data"]["methodId"], service["data"]["methods"]["project"])
@@ -361,6 +420,7 @@ class BrowserTests(unittest.TestCase):
 
     def test_独立した接続方法を登録しOAuthアプリを対応する方法に結び付ける(self):
         page, principal = self.passkey_account("Method owner")
+        self.executor(page, principal)
         root = f"{ORIGIN}/p/{principal['id']}"
         page.goto(root + "/methods/new")
         page.wait_for_load_state("networkidle")
@@ -384,7 +444,8 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("heading", name="Workspace application", exact=True)).to_be_visible()
         application = page.request.get(ORIGIN + "/api/resources/" + page.url.rsplit("/", 1)[1]).json()
         self.assertEqual(application["data"]["methodId"], method_id)
-        self.assertEqual(application["data"]["fields"], {"workspace": "workspace-name"})
+        page.get_by_role("link", name="編集", exact=True).click()
+        expect(page.get_by_label("Workspace", exact=False)).to_have_value("workspace-name")
         page.goto(root + "/services/new?method=" + method_id)
         page.wait_for_load_state("networkidle")
         expect(page.get_by_role("combobox", name="接続方法", exact=True)).to_have_text("Workspace sign-in")
@@ -403,13 +464,9 @@ class BrowserTests(unittest.TestCase):
         with page.expect_download() as download:
             page.get_by_role("link", name="ダウンロード", exact=True).click()
         self.assertEqual(Path(download.value.path()).read_text(), "browser file")
-        page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
-        page.get_by_role("textbox", name="名前", exact=True).fill("Worker")
-        page.get_by_role("button", name="起動", exact=True).click()
-        expect(page.get_by_role("heading", name="Worker", exact=True)).to_be_visible()
-        expect(page.get_by_role("link", name="実行", exact=True)).to_be_visible(timeout=15000)
-        environment_path = page.url
+        environment_path = self.executor(page, principal, "Worker")
         page.get_by_role("link", name="実行", exact=True).click()
+        page.get_by_role("textbox", name="コマンド", exact=True).fill(json.dumps(["node", "-e", "process.stdout.write('ok')"]))
         page.get_by_role("button", name="実行", exact=True).click()
         expect(page.get_by_text('"stdout": "ok"', exact=False)).to_be_visible(timeout=15000)
         page.goto(environment_path)

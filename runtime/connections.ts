@@ -3,7 +3,7 @@ import safeRegex from 'safe-regex2';
 import { canonical, hash } from '../shared/authority.js';
 import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
 import type { JsonValue, MethodDescription } from '../shared/contracts.js';
-import { AppMaterial, ConnectionAction, ConnectionMaterial, connectionMetadata } from '../shared/connections.js';
+import { AppMaterial, ConnectionAction, ConnectionMaterial, connectionMetadata, requiresApp } from '../shared/connections.js';
 import type { AppState, ConnectionCommand, ConnectionState } from '../shared/connections.js';
 import { produceContent, renewContent, useContent, verifyPolicyApproval } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent } from '../shared/custody.js';
@@ -15,6 +15,7 @@ import type { ConnectionOperation } from '../server/connection-operations.js';
 import type { Transport } from '../server/transport.js';
 import { DomainError, fail } from '../server/errors.js';
 import type { ExecutionExtension } from './executor.js';
+import { DeliveryPending } from './executor.js';
 import type { Journal } from './journal.js';
 import type { RoleProvider } from './roles.js';
 import { AwsRoles } from './roles.js';
@@ -100,6 +101,8 @@ export class Connections implements ExecutionExtension {
     return value;
   }
   private async connectionApp(state: ConnectionState, intent: ExecutionIntent, sources: CustodyContent[]) {
+    if (!requiresApp(state.method)) return AppMaterial.parse({ format: 1, methodId: state.methodId,
+      generation: state.generation, clientId: '', fields: {} });
     const operation = intent.operation === 'revoke' ? 'revoke' : 'refresh';
     const app = await this.app(state.appId!, state.methodId, { ...intent, operation }, sources);
     if (app.generation !== state.appGeneration)
@@ -119,15 +122,17 @@ export class Connections implements ExecutionExtension {
     if (intent.operation !== expected) fail(400, 'wrong_operation', 'Use the approved connection operation.');
     if (action.action === 'start') {
       if (action.method.kind === 'oauth') {
-        if (!action.appId || !action.redirectUri) fail(400, 'app_required', 'Choose an OAuth application and callback URL.');
+        if ((requiresApp(action.method) && !action.appId) || !action.redirectUri)
+          fail(400, 'app_required', 'Choose an OAuth application and callback URL.');
         const redirect = new URL(action.redirectUri);
         if (redirect.username || redirect.password || redirect.hash || redirect.search ||
           !(action.redirectUri === intent.origin + '/oauth/callback' ||
             (redirect.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(redirect.hostname))))
           fail(400, 'invalid_redirect', 'Use the Foundation callback or a callback on this computer.');
-        const app = await this.app(action.appId, action.methodId, intent, sources);
+        const app = action.appId ? await this.app(action.appId, action.methodId, intent, sources)
+          : AppMaterial.parse({ format: 1, methodId: action.methodId, generation: action.flowId, clientId: '', fields: {} });
         fields(action.method, app.fields);
-        if (action.method.config.clientAuth !== 'none' && !app.clientSecret)
+        if (requiresApp(action.method) && action.method.config.clientAuth !== 'none' && !app.clientSecret)
           fail(409, 'app_required', 'Add a client secret to this OAuth application.');
       } else if (action.method.kind === 'token') fields(action.method, action.fields);
       else if (!action.role) fail(400, 'role_required', 'Choose a role trusted for this executor.');
@@ -141,7 +146,7 @@ export class Connections implements ExecutionExtension {
         fail(403, 'approval_required', 'Review the connection and approve its recipients before saving.');
     } else if (action.action === 'exchange') {
       const flow = await this.flow(action.flowId, intent);
-      if (flow.app) {
+      if (flow.app && flow.input.appId) {
         const app = await this.app(flow.input.appId!, flow.input.methodId, intent, sources);
         if (canonical(app) !== canonical(flow.app)) fail(409, 'app_changed', 'Start the connection again with the current application.');
       }
@@ -179,7 +184,9 @@ export class Connections implements ExecutionExtension {
     const id = 'oauth_' + input.flowId;
     if (await this.journal.read(id)) fail(409, 'flow_exists', 'Use a new connection request.');
     const flow: Flow = { actor: intent.actor, ownerId: intent.ownerId, input,
-      app: input.method.kind === 'oauth' ? await this.app(input.appId!, input.methodId, intent, sources) : null,
+      app: input.method.kind !== 'oauth' ? null : input.appId
+        ? await this.app(input.appId, input.methodId, intent, sources)
+        : AppMaterial.parse({ format: 1, methodId: input.methodId, generation: input.flowId, clientId: '', fields: {} }),
       state: randomBytes(32).toString('base64url'), verifier: randomBytes(32).toString('base64url'),
       expiresAt: Math.min(Date.now() + 600_000, Date.parse(intent.expiresAt)), phase: input.method.kind === 'oauth' ? 'authorize' : 'review' };
     if (input.method.kind !== 'oauth') {
@@ -219,7 +226,7 @@ export class Connections implements ExecutionExtension {
         });
     }
     flow.material = ConnectionMaterial.parse({ format: 1, methodId: flow.input.methodId, method: flow.input.method,
-      generation: randomUUID(), appId: flow.input.appId, appGeneration: flow.app.generation, oauth: token });
+      generation: randomUUID(), appId: flow.input.appId, appGeneration: flow.input.appId ? flow.app.generation : null, oauth: token });
     flow.phase = 'review';
     await this.journal.write(id, flow);
     return this.review(action.flowId, flow);
@@ -236,10 +243,30 @@ export class Connections implements ExecutionExtension {
     } else if (canonical(flow.content.policy) !== canonical(action.approval.policy) || flow.content.creationRunId !== intent.id) {
       fail(409, 'connection_uncertain', 'Finish saving the previously approved connection before starting another save.');
     }
-    const resource = await this.broker.capture(flow.input.name, flow.content);
+    let resource;
+    try { resource = await this.broker.capture(flow.input.name, flow.content); }
+    catch (error) {
+      if (error instanceof DomainError && error.status < 500) throw error;
+      throw new DeliveryPending();
+    }
     flow.phase = 'committed';
     await this.journal.write(id, flow);
     return { kind: 'connected', id: resource.id };
+  }
+  async recover(input: JsonValue, intent: ExecutionIntent): Promise<JsonValue | null> {
+    const action = ConnectionAction.parse(input);
+    if (action.action !== 'commit') return null;
+    const id = 'oauth_' + action.flowId, flow = await this.journal.read<Flow>(id);
+    if (!flow?.content || flow.ownerId !== intent.ownerId || canonical(flow.actor) !== canonical(intent.actor) ||
+      flow.content.creationRunId !== intent.id || canonical(flow.content.policy) !== canonical(action.approval.policy) ||
+      !['committing', 'committed'].includes(flow.phase)) return null;
+    try { await this.broker.capture(flow.input.name, flow.content); }
+    catch (error) {
+      if (error instanceof DomainError && error.status < 500) return null;
+      throw new DeliveryPending();
+    }
+    flow.phase = 'committed'; await this.journal.write(id, flow);
+    return { kind: 'connected', id: flow.content.policy.id };
   }
 
   async outputs(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal,
@@ -301,7 +328,9 @@ export class Connections implements ExecutionExtension {
   }
 
   async reconcile() {
+    const pending: string[] = [];
     for (const id of await this.journal.keys('refresh_')) {
+      try {
       const record = (await this.journal.read<Renewal>(id))!;
       if (record.delivered) continue;
       if (record.content) {
@@ -310,15 +339,22 @@ export class Connections implements ExecutionExtension {
         await this.journal.write(id, record);
         continue;
       }
-      if (record.phase === 'prepared') {
-        await this.broker.abort(record.operation.id, record.operation.fence);
+      const active = await this.broker.state(record.operation.resource_id);
+      if (!active || active.id !== record.operation.id || active.state === 'prepared') {
+        if (active?.id === record.operation.id && active.state === 'prepared')
+          await this.broker.abort(record.operation.id, record.operation.fence);
         record.delivered = true;
         await this.journal.write(id, record);
       } else if (record.checkpoint && record.material.method.kind === 'oauth') {
         const token = await this.oauth().inspect(record.material.method.config, record.app,
           record.checkpoint.token, record.checkpoint.response);
         await this.refreshed(record, token);
-      } else await this.broker.uncertain(record.operation.id, record.operation.fence);
+      } else {
+        await this.broker.uncertain(record.operation.id, record.operation.fence);
+        record.delivered = true; await this.journal.write(id, record);
+      }
+      } catch { pending.push(id.slice(8)); }
     }
+    return pending;
   }
 }

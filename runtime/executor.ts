@@ -30,6 +30,10 @@ export interface ExecutionExtension {
   validate(operation: JsonValue, intent: ExecutionIntent, sources: CustodyContent[]): Promise<void>;
   execute(operation: JsonValue, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal): Promise<JsonValue>;
   outputs(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal, destination?: string): Promise<Record<string, string>>;
+  recover?(operation: JsonValue, intent: ExecutionIntent): Promise<JsonValue | null>;
+}
+export class DeliveryPending extends Error {
+  constructor() { super('A completed result is waiting for delivery. Restart or leave this executor running to reconcile it.'); }
 }
 interface RunRecord {
   digest: string;
@@ -38,6 +42,7 @@ interface RunRecord {
   phase: 'prepared' | 'dispatched' | 'settled';
   receipt?: SignedReceipt;
   delivered: boolean;
+  operation?: Operation;
 }
 
 export class Executor {
@@ -53,11 +58,17 @@ export class Executor {
   get binding(): BoundKeys { return this.environment.manifest.executor; }
 
   async reconcile() {
+    const pending: string[] = [];
     for (const key of await this.journal.keys('run_')) {
+      try {
       const record = await this.journal.read<RunRecord>(key);
       if (!record || record.delivered) continue;
       if (!record.receipt && record.phase === 'dispatched') {
-        record.receipt = await makeReceipt(record.request.intent, 'uncertain', {
+        const recovered = record.operation?.kind === 'connect'
+          ? await this.extension?.recover?.(record.operation.input, record.request.intent) : null;
+        record.receipt = recovered ? await makeReceipt(record.request.intent, 'succeeded', {
+          ok: true, result: recovered, error: null,
+        }, this.keys) : await makeReceipt(record.request.intent, 'uncertain', {
           ok: false, result: null,
           error: { code: 'execution_interrupted', message: 'Check the destination before starting another operation.' },
         }, this.keys);
@@ -69,7 +80,9 @@ export class Executor {
         record.delivered = true;
         await this.journal.write(key, record);
       }
+      } catch { pending.push(key.slice(4)); }
     }
+    return pending;
   }
 
   async tick(signal: AbortSignal = new AbortController().signal) {
@@ -111,6 +124,7 @@ export class Executor {
       if (operation.kind !== intent.operation) throw new Error('Use the operation authorized by this intent.');
       await this.preflight(operation, intent, claim.sources);
       runningSignal.throwIfAborted();
+      record.operation = operation;
       record.phase = 'dispatched';
       await this.journal.write(id, record);
       dispatched = true;
@@ -119,6 +133,7 @@ export class Executor {
       const result = await this.execute(operation, intent, claim.sources, runningSignal);
       receipt = await makeReceipt(intent, 'succeeded', { ok: true, result, error: null }, this.keys);
     } catch (error) {
+      if (error instanceof DeliveryPending) throw error;
       const uncertain = dispatched && (runningSignal.aborted || !(error instanceof DomainError) ||
         ['service_unavailable', 'connection_uncertain', 'lease_lost'].includes(error.code));
       receipt = await makeReceipt(intent, uncertain ? 'uncertain' : 'failed', {

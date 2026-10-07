@@ -6,9 +6,21 @@ import type { SignedReceipt } from '../shared/execution.js';
 import { ClaimedExecution, OAuthRelay, ProtectedContent, RenewalOperation, Task } from '../shared/protocol.js';
 import type { ExecutionBroker } from './executor.js';
 import type { ConnectionBroker } from './connections.js';
+import { DomainError } from '../server/errors.js';
 
 export class HttpBroker implements ExecutionBroker {
-  constructor(readonly api: JsonApi) {}
+  readonly api: JsonApi;
+  constructor(api: JsonApi) {
+    this.api = { async json<T>(path: string, options = {}, schema?: z.ZodType<T>): Promise<T> {
+      try { return await api.json(path, options, schema); }
+      catch (error) {
+        if (error instanceof Error && 'status' in error && typeof error.status === 'number' &&
+          'code' in error && typeof error.code === 'string')
+          throw new DomainError(error.status, error.code, error.message);
+        throw error;
+      }
+    } };
+  }
   claim(id: string) { return this.api.json('/api/environments/' + id + '/claim', { method: 'POST', body: {} }, ClaimedExecution); }
   renew(id: string, lease: string) {
     return this.api.json('/api/executions/' + id + '/renew', { method: 'POST', body: { lease } }, z.object({ active: z.boolean() }));

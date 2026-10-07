@@ -10,7 +10,7 @@ import { CatalogEntry, CatalogMethod, Resource, Payment, Usage, listOf } from '.
 import type { CatalogConnectionMethod, ResourceView } from '../../shared/contracts';
 import { decode, encode } from '../../shared/encryption';
 import { canonical } from '../../shared/authority';
-import { AppMaterial, ConnectionMaterial } from '../../shared/connections';
+import { AppMaterial, ConnectionMaterial, requiresApp } from '../../shared/connections';
 import { actionResult, api, ApiFailure, formText, jsonField, session, upload } from './api';
 import { decryptSecret } from './keys';
 import { connectionClient, custodyClient } from './custody';
@@ -330,7 +330,7 @@ export default function ResourceForm() {
     data.kind === 'connection' &&
     (!method ||
       method.availability === 'unavailable' ||
-      (method.kind === 'oauth' && !matchingApps.length));
+      (requiresApp(method) && !matchingApps.length));
   const spec = existing?.kind === 'function' ? existing.data : undefined;
   const unavailable =
     data.kind === 'environment'
@@ -495,7 +495,7 @@ export default function ResourceForm() {
                     <div key={methodId} className="flex min-w-0 flex-col gap-6">
                       {data.kind === 'connection' && method?.kind === 'oauth' && (
                         <>
-                          <SelectField
+                          {requiresApp(method) && <SelectField
                             key={methodId}
                             name="appId"
                             label={t('app')}
@@ -510,7 +510,7 @@ export default function ResourceForm() {
                                 {item.name}
                               </SelectItem>
                             ))}
-                          </SelectField>
+                          </SelectField>}
                           <InputField
                             name="scopes"
                             label={t('scopes')}

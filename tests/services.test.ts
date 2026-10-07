@@ -109,6 +109,31 @@ test('APIキーの更新を確認して同じ接続へ反映し、取り消し�
   assert.equal(material.fields!.token, 'updated');
 });
 
+test('OpenRouterの公開PKCEフローを選んだ実行先で完了し、承認したキーでAPIを呼び出す', async t => {
+  const f = await flowFixture(request => {
+    if (request.url.endsWith('/auth/keys')) return jsonResponse({ key: 'openrouter-private-key' });
+    if (request.url.endsWith('/key')) return jsonResponse({ data: { label: 'Selected key' } });
+    return jsonResponse({ ok: true });
+  });
+  t.after(f.close);
+  const started = await f.start({ methodId: 'openrouter:oauth' });
+  const authorize = await f.tick(started.flow.id);
+  assert.equal(authorize.kind, 'authorize');
+  if (authorize.kind !== 'authorize') return;
+  const url = new URL(authorize.url);
+  assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
+  await f.connections.complete(started.flow.id, new URLSearchParams({
+    state: url.searchParams.get('state')!, code: 'openrouter-code',
+  }).toString());
+  const review = await f.tick(started.flow.id);
+  assert.equal(review.kind, 'review', JSON.stringify(review));
+  const saved = await f.accept(started.flow.id);
+  const material = ConnectionMaterial.parse(JSON.parse(decode(await f.client.reveal(saved.id))));
+  assert.equal(material.oauth!.accountName, 'Selected key');
+  assert.equal((await f.http(saved.id, 'OPENROUTER_API_KEY', 'https://openrouter.ai/api/v1/chat/completions'))?.ok, true);
+  assert.equal(f.requests.at(-1)!.headers.authorization, 'Bearer openrouter-private-key');
+});
+
 test('先に承認した接続を保持し、古い確認画面には最新の権限の再確認を求める', async t => {
   const f = await flowFixture(); t.after(f.close);
   const started = await f.start({ methodId: 'github:token', fields: { token: 'initial' } });

@@ -67,10 +67,28 @@ test('接続更新中は宛先の変更を待ち、承認した接続先と権�
       f.owner.binding, f.owner.keys, source.metadata);
     await assert.rejects(f.custody.put(f.owner.actor, { name: 'Connection', content: changed,
       version: f.connection.resource.version }), { code: 'connection_busy' });
+    await assert.rejects(f.resources.delete(f.owner.actor, f.connection.resource), { code: 'connection_busy' });
     await f.operations.dispatch(f.executor.actor, operation.id, operation.fence);
     const broadened = await renewContent(source, encode('other-account-token'), f.executor.binding, f.executor.keys,
       { ...source.metadata, authorizationDigest: await hash({ account: 'another-account' }) });
     await assert.rejects(f.operations.commit(f.executor.actor, operation.id, operation.fence, broadened), { code: 'changed' });
+  } finally { await f.close(); }
+});
+
+test('結果が不明な古い更新を新しく承認した接続に置き換え、新世代の更新を開始する', async () => {
+  const f = await setup();
+  try {
+    const previous = f.connection.content;
+    const pending = await f.operations.prepare(f.executor.actor, crypto.randomUUID(), previous.policy.id, 1);
+    await f.operations.dispatch(f.executor.actor, pending.id, pending.fence);
+    await f.operations.uncertain(f.executor.actor, pending.id, pending.fence);
+    const replacement = await protect(encode('new-authorization'), previous.policy, 2, f.owner.binding, f.owner.keys,
+      { ...previous.metadata, generation: crypto.randomUUID(), authorizationDigest: await hash('new-authorization') });
+    await f.custody.put(f.owner.actor, { name: 'Connection', content: replacement,
+      version: (await f.resources.get(previous.policy.id)).version });
+    assert.equal((await f.operations.prepare(f.executor.actor, crypto.randomUUID(), previous.policy.id, 2)).state, 'prepared');
+    const late = await renewContent(previous, encode('old-authorization'), f.executor.binding, f.executor.keys);
+    await assert.rejects(f.operations.commit(f.executor.actor, pending.id, pending.fence, late), { code: 'invalid_operation' });
   } finally { await f.close(); }
 });
 

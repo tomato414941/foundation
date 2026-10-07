@@ -506,24 +506,6 @@ export const AuditEntry = z.object({
   createdAt: Time,
   details: JsonObject,
 });
-export const ConnectionInput = z
-  .object({
-    methodId: z.string().min(1).optional(),
-    serviceId: z.string().min(1).optional(),
-    scheme: AuthKind.optional(),
-    name: Name.optional(),
-    connectionId: Id.optional(),
-    appId: z.union([Id, z.literal('foundation')]).default('foundation'),
-    scopes: z.array(z.string()).max(200).optional(),
-    fields: z.record(z.string(), z.union([z.string(), Source])).default({}),
-    returnTo: z.string().startsWith('/').default('/services'),
-  })
-  .strict()
-  .refine((input) => Boolean(input.methodId || (input.serviceId && input.scheme)), {
-    message: 'Choose a connection method.',
-    path: ['methodId'],
-  });
-export type ConnectInput = z.infer<typeof ConnectionInput>;
 export const Settings = z
   .object({ returnUrl: z.url().optional(), refreshUrl: z.url().optional(), webhookUrl: z.url().optional() })
   .strict();
@@ -534,14 +516,4 @@ export const OwnerParams = z.object({ owner: Id });
 export const PageQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(100),
   after: z.string().optional(),
-});
-
-export const KeyUpdate = z.object({ version: z.number().int().positive(), sealed: Sealed });
-export const KeyUpdates = z.record(Id, KeyUpdate);
-export const KeySharingItem = z.object({
-  id: Id,
-  name: Name,
-  version: z.number().int().positive(),
-  sealed: Sealed,
-  recipients: z.array(Recipient),
 });

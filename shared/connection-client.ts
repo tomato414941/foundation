@@ -9,7 +9,7 @@ import { ConnectionPlan, OAuthRelay, relayContext } from './protocol.js';
 import { Task } from './execution.js';
 import type { TaskView } from './execution.js';
 import { decode, open } from './encryption.js';
-import { ConnectionMaterial } from './connections.js';
+import { ConnectionMaterial, requiresApp } from './connections.js';
 
 const Review = z.object({ kind: z.literal('review'), flowId: Id, name: Name, metadata: JsonObject }).strict();
 export const FlowRecord = z.object({
@@ -61,7 +61,7 @@ export class ConnectionClient {
     const policy = await this.custody.policy(input.ownerId, 'connection', environments, {
       previous: previous?.content.policy,
     });
-    const appId = input.method.kind === 'oauth' ? Id.parse(input.appId) : null;
+    const appId = requiresApp(input.method) ? Id.parse(input.appId) : null;
     const request = await this.custody.prepare(input.ownerId, input.environmentId, { kind: 'connect', input: {
       action: 'start', flowId: id, name: input.name, methodId: input.methodId, method: input.method, appId,
       fields: input.fields ?? {}, scopes: input.scopes ?? [],

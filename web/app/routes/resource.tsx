@@ -214,10 +214,10 @@ export default function ResourceDetail() {
             <span className="break-all font-mono text-sm">{item.data.executorId}</span><Copy value={item.data.executorId} />
             <Link className="ml-3 underline" to={'/account/trust?principal=' + item.data.executorId}>{t('trustIdentity')}</Link>
           </Detail>}
-          <Detail label={t('image')}>{item.data.image ?? t('defaultImage')}</Detail>
+          {item.data.driver !== 'attached' && <><Detail label={t('image')}>{item.data.image ?? t('defaultImage')}</Detail>
           <Detail label={t('size')}>{t(item.data.size)}</Detail>
           <Detail label={t('maximum')}>{item.data.lifetime.maxSeconds / 60}</Detail>
-          <Detail label={t('idle')}>{item.data.lifetime.idleSeconds / 60}</Detail>
+          <Detail label={t('idle')}>{item.data.lifetime.idleSeconds / 60}</Detail></>}
           {item.data.error && <Notice tone={'error'}>{t('failure')}</Notice>}
           {item.data.state === 'running' && can('execute') && (
             <Button variant="default" asChild>

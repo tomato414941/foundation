@@ -1,4 +1,4 @@
-import { lstat, mkdir, open as openFile, readFile, readdir } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { CompactEncrypt, compactDecrypt, importJWK } from 'jose';
@@ -55,10 +55,6 @@ export class FileJournal implements Journal {
     }).encrypt(await importJWK(this.binding.encryption, 'ECDH-ES+A256KW'));
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await secureWrite(join(this.directory, id + '.json'), canonical(envelope), true);
-    if (process.platform !== 'win32') {
-      const directory = await openFile(this.directory, 'r');
-      try { await directory.sync(); } finally { await directory.close(); }
-    }
   }
   async keys(prefix: string) {
     let files;

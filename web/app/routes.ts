@@ -10,7 +10,6 @@ export default [
   route('requests/new', 'routes/request-new.tsx'),
   route('requests/:id', 'routes/request.tsx'),
   route('services', 'routes/service-return.tsx'),
-  route('services/review/:id', 'routes/service-review.tsx'),
   route('connections/complete', 'routes/connection-complete.tsx'),
   route('connections/:id', 'routes/connection-flow.tsx'),
   route('shared', 'routes/shared.tsx'),

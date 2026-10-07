@@ -31,6 +31,7 @@ import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
 import { startAgent } from './agent.js';
 import { managedAgent } from './managed-agent.js';
+import { startMcp } from './mcp.js';
 import { connectionClient, flowOutput, saveApp, startConnection } from './connections.js';
 import type { FlowProgress } from '../../shared/connection-client.js';
 
@@ -44,6 +45,7 @@ Usage: foundation <command> [options]
   join [--to ID] [--wait]               Ask a person to take on this machine
   api METHOD /api/PATH [--body JSON]    Call the common Foundation API
   schema [--output FILE]                Read the OpenAPI specification
+  mcp                                  Serve local MCP using this identity's signing keys
   trust ID --fingerprint VALUE         Trust identity keys verified with their holder
   agent start [--id ID]                Register this machine as an execution environment
   app NAME --method ID --client-id ID  Encrypt an OAuth application (--for ENV to allow use)
@@ -352,6 +354,7 @@ async function main(argv: string[]) {
   const current = await client.session();
   if (!current.principal) throw new Error('The machine identity is no longer valid.');
   const owner = Id.parse(args.values.owner ?? current.principal.id);
+  if (command === 'mcp') return startMcp(client);
   if (command === 'status') {
     const { wrappedKey: _wrappedKey, ...status } = current;
     await output(status, args);

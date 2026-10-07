@@ -76,6 +76,11 @@ export async function readIdentity(override?: string): Promise<IdentityConfig> {
 export async function saveIdentity(identity: IdentityConfig) {
   await secureWrite(configPath(), JSON.stringify(Identity.parse(identity), null, 2) + '\n', false);
 }
+async function syncDirectory(path: string) {
+  if (process.platform === 'win32') return;
+  const directory = await open(path, 'r');
+  try { await directory.sync(); } finally { await directory.close(); }
+}
 export async function secureWrite(path: string, content: string | Uint8Array, replace: boolean) {
   const absolute = resolve(path),
     directory = dirname(absolute);
@@ -88,6 +93,7 @@ export async function secureWrite(path: string, content: string | Uint8Array, re
     } finally {
       await file.close();
     }
+    await syncDirectory(directory);
     return;
   }
   const temporary = join(directory, '.foundation-' + randomUUID());
@@ -100,6 +106,7 @@ export async function secureWrite(path: string, content: string | Uint8Array, re
       await file.close();
     }
     await rename(temporary, absolute);
+    await syncDirectory(directory);
   } finally {
     await rm(temporary, { force: true });
   }

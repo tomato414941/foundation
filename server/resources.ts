@@ -231,8 +231,14 @@ export class Resources {
       await this.audit.record(row.owner_id, actor.id, 'resource.transfer', row.id, { to }, connection);
     });
   }
-  async delete(actor: Actor, row: ResourceRow, connection: Queryable = this.db.pool) {
+  async delete(actor: Actor, row: ResourceRow, connection: Queryable = this.db.pool): Promise<void> {
+    if (connection === this.db.pool) return this.db.transaction(transaction => this.delete(actor, row, transaction));
+    await connection.query('SELECT id FROM resources WHERE id=$1 FOR UPDATE', [row.id]);
     await this.authorization.requireResource(actor, row, 'delete', connection);
+    const pending = await this.db.one(
+      "SELECT 1 FROM connection_operations WHERE resource_id=$1 AND state IN ('prepared','in_flight','uncertain')",
+      [row.id], connection);
+    if (pending) fail(409, 'connection_busy', 'Resolve the current token update or reconnect before deleting this connection.');
     await connection.query('DELETE FROM resources WHERE id=$1', [row.id]);
     await this.audit.record(
       row.owner_id,

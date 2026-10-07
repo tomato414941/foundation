@@ -1,11 +1,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
 import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import { Json } from '../shared/contracts.js';
 import { fail } from './errors.js';
+import { registerMetadataTools } from '../runtime/mcp-metadata.js';
 
 export async function routesMcp(app: ApiApp) {
   app.post('/api/mcp', { schema: { body: Json, hide: true } }, async (request, reply) => {
@@ -25,57 +25,31 @@ export async function routesMcp(app: ApiApp) {
       { name: 'Foundation', version: '1.0.0' },
       {
         instructions:
-          'Use foundation_api to manage principals, service connections, encrypted resources, and runs. Use approval requests when a person must provide permission or enter a secret. Secret values belong in approved input forms, not in messages.',
+          'This endpoint manages Foundation metadata and approval requests. Protected values and executions require client encryption and signatures. Use foundation mcp on a device holding an explicitly authorized identity to sign runs and decrypt results. For service consent or secret entry, create a CONNECT approval request for the browser; never submit plaintext credentials to this API.',
       },
     );
-    server.registerTool(
-      'foundation_schema',
-      { description: 'Read the Foundation API schema.', inputSchema: z.object({}) },
-      async () => ({ content: [{ type: 'text', text: JSON.stringify(app.swagger()) }] }),
-    );
-    server.registerTool(
-      'foundation_api',
-      {
-        description: 'Call the Foundation API with the authenticated principal’s permissions.',
-        inputSchema: z.object({
-          method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
-          path: z.string().startsWith('/api/').max(2048),
-          body: Json.optional(),
-        }),
-      },
-      async (input) => {
-        if (/^\/api\/mcp(?:[/?]|$)/u.test(input.path) || input.path.includes('\\'))
-          return {
-            isError: true,
-            content: [{ type: 'text', text: 'Choose a Foundation resource API path.' }],
-          };
+    registerMetadataTools(server, {
+      async schema() { return app.swagger(); },
+      async request(method, path, body) {
         const headers: Record<string, string> = {};
         if (request.headers.authorization) headers.authorization = request.headers.authorization;
         if (request.headers.cookie) headers.cookie = request.headers.cookie;
         if (request.headers.origin) headers.origin = request.headers.origin;
-        if (input.body !== undefined) headers['content-type'] = 'application/json';
+        if (body !== undefined) headers['content-type'] = 'application/json';
         const result = await app.inject({
-          method: input.method,
-          url: input.path,
+          method: method as 'GET',
+          url: path,
           headers,
-          ...(input.body !== undefined ? { payload: JSON.stringify(input.body) } : {}),
+          ...(body !== undefined ? { payload: JSON.stringify(body) } : {}),
         });
+        if (result.statusCode >= 400) throw new Error(result.headers['content-type']?.includes('application/json')
+          ? result.json().error?.message ?? 'The API request failed.' : 'The API request failed.');
         return {
-          isError: result.statusCode >= 400,
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                status: result.statusCode,
-                body: result.headers['content-type']?.includes('application/json')
-                  ? result.json()
-                  : result.body,
-              }),
-            },
-          ],
+          status: result.statusCode,
+          body: result.headers['content-type']?.includes('application/json') ? result.json() : result.body,
         };
       },
-    );
+    });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

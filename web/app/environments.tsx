@@ -27,7 +27,7 @@ export function EnvironmentChoice({ items, selected, multiple = false }: {
     {!items.length && <Notice tone="info">{t('noExecutors')}</Notice>}
     {multiple ? items.map(item => <CheckboxField key={item.id} name="environments" value={item.id}
       label={item.name} defaultChecked={selected?.includes(item.id)} />) :
-      <SelectField name="environmentId" label={t('environment')} defaultValue={selected?.[0] ?? ''} required>
+      <SelectField name="environmentId" label={t('singular.environment')} defaultValue={selected?.[0] ?? ''} required>
         {items.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
       </SelectField>}
     <Link className="text-sm underline underline-offset-4" to="/account/trust">{t('trustIdentity')}</Link>

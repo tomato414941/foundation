@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AuthKind, Id, JsonObject, MethodDefinition, Name } from './contracts.js';
+import type { MethodDescription } from './contracts.js';
 import { Fingerprint, hash } from './authority.js';
 import { PolicyApproval } from './custody.js';
 
@@ -9,6 +10,9 @@ export const AppMaterial = z.object({
   clientId: z.string().max(1000), clientSecret: z.string().max(16384).optional(), fields: Fields,
 }).strict();
 export type AppState = z.infer<typeof AppMaterial>;
+export function requiresApp(method: MethodDescription) {
+  return method.kind === 'oauth' && method.config.adapter !== 'openrouter';
+}
 export const TokenMaterial = z.object({
   accessToken: z.string().min(1).max(16384), refreshToken: z.string().min(1).max(16384).optional(),
   expiresAt: z.number().nullable(), refreshExpiresAt: z.number().optional(), scopes: z.array(z.string()),
@@ -22,9 +26,11 @@ export const ConnectionMaterial = z.object({
   role: z.object({ arn: z.string().regex(/^arn:aws(?:-us-gov|-cn)?:iam::\d{12}:role\/.+/),
     externalId: z.string().min(16).max(1000), region: z.string().regex(/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/) }).strict().optional(),
 }).strict().superRefine((value, ctx) => {
-  if ((value.method.kind === 'oauth' && (!value.oauth || !value.appId || !value.appGeneration)) ||
+  if ((value.method.kind === 'oauth' && (!value.oauth || (requiresApp(value.method) && (!value.appId || !value.appGeneration)))) ||
     (value.method.kind === 'token' && !value.fields) || (value.method.kind === 'role' && !value.role))
     ctx.addIssue({ code: 'custom', message: 'Supply the material required by this connection method.' });
+  if (Boolean(value.appId) !== Boolean(value.appGeneration))
+    ctx.addIssue({ code: 'custom', message: 'Bind the application and its generation together.' });
 });
 export type ConnectionState = z.infer<typeof ConnectionMaterial>;
 
