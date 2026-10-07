@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import type { CustodyClient } from './client.js';
-import { Id, JsonObject, Name } from './contracts.js';
+import { ApprovalRequest, Id, JsonObject, Name } from './contracts.js';
 import type { JsonValue, MethodDescription } from './contracts.js';
 import { canonical, hash } from './authority.js';
 import { AccessPolicy, approvePolicy } from './custody.js';
 import type { CustodyPolicy } from './custody.js';
-import { OAuthRelay, relayContext } from './protocol.js';
+import { ConnectionPlan, OAuthRelay, relayContext } from './protocol.js';
 import { Task } from './execution.js';
 import type { TaskView } from './execution.js';
 import { decode, open } from './encryption.js';
@@ -17,6 +17,8 @@ export const FlowRecord = z.object({
   policy: AccessPolicy, previousPolicyDigest: z.string().nullable(),
   step: z.enum(['start', 'authorize', 'exchange', 'review', 'commit', 'connected', 'cancelled']),
   taskId: Id, createdAt: z.iso.datetime(),
+  approval: z.object({ id: Id, index: z.number().int().min(0).max(7) }).strict().optional(),
+  approvalCompleted: z.boolean().optional(),
   url: z.url().nullable(), review: Review.nullable(), connectionId: Id.nullable(),
 }).strict();
 export type ConnectionFlow = z.infer<typeof FlowRecord>;
@@ -44,8 +46,14 @@ export class ConnectionClient {
   }
   async start(input: { ownerId: string; environmentId: string; name: string; methodId: string; method: MethodDescription;
     appId?: string; fields?: Record<string, string>; scopes?: string[]; role?: z.infer<typeof ConnectionMaterial.shape.role>;
-    connectionId?: string; environments?: string[]; redirectUri?: string }) {
+    connectionId?: string; environments?: string[]; redirectUri?: string; approvalId?: string }) {
     const id = crypto.randomUUID();
+    const plan = input.approvalId ? await this.custody.api.json('/api/requests/' + input.approvalId + '/connection', {}, ConnectionPlan) : null;
+    if (plan && (plan.input.ownerId !== input.ownerId || plan.input.methodId !== input.methodId ||
+      plan.input.connectionId !== input.connectionId ||
+      (plan.input.environmentId && plan.input.environmentId !== input.environmentId)))
+      throw new Error('Use the connection method and executor approved by this request.');
+    const approval = plan ? { id: plan.id, index: plan.index } : undefined;
     const previous = input.connectionId ? await this.custody.read(input.connectionId) : null;
     if (previous && (previous.content.policy.kind !== 'connection' || previous.content.policy.ownerId !== input.ownerId ||
       previous.content.metadata.methodId !== input.methodId)) throw new Error('Choose the existing connection and its method.');
@@ -59,17 +67,26 @@ export class ConnectionClient {
       fields: input.fields ?? {}, scopes: input.scopes ?? [],
       ...(input.role ? { role: input.role } : {}),
       ...(input.method.kind === 'oauth' ? { redirectUri: input.redirectUri ?? this.custody.origin + '/oauth/callback' } : {}),
-    } }, { sourceIds: appId ? [appId] : [] });
+    } }, { sourceIds: appId ? [appId] : [], approval });
     const flow: ConnectionFlow = { id, ownerId: input.ownerId, environmentId: input.environmentId, name: input.name,
       appId, policy, previousPolicyDigest: previous ? await hash(previous.content.policy) : null,
-      step: 'start', taskId: request.intent.id, createdAt: new Date().toISOString(), url: null, review: null, connectionId: null };
+      step: 'start', taskId: request.intent.id, createdAt: new Date().toISOString(), url: null, review: null, connectionId: null,
+      ...(approval ? { approval, approvalCompleted: false } : {}) };
     await this.store.put(flow);
     const task = await this.custody.submitPrepared(request);
     return { kind: 'pending' as const, flow, task };
   }
   async progress(id: string, relay = true): Promise<FlowProgress> {
     const flow = await this.flow(id);
-    if (flow.step === 'connected') return { kind: 'connected', flow, id: flow.connectionId! };
+    if (flow.step === 'connected') {
+      if (flow.approval && !flow.approvalCompleted) {
+        await this.custody.api.json('/api/requests/' + flow.approval.id + '/connection', {
+          method: 'POST', body: { runId: flow.taskId, resourceId: flow.connectionId },
+        }, ApprovalRequest);
+        flow.approvalCompleted = true; await this.store.put(flow);
+      }
+      return { kind: 'connected', flow, id: flow.connectionId! };
+    }
     if (flow.step === 'cancelled') return { kind: 'cancelled', flow };
     if (flow.step === 'review') return { kind: 'review', flow, metadata: flow.review!.metadata };
     if (flow.step === 'authorize') {
@@ -109,7 +126,7 @@ export class ConnectionClient {
     if (connected.id !== flow.policy.id) throw new Error('The connection was saved to another destination.');
     flow.step = 'connected'; flow.connectionId = connected.id;
     await this.store.put(flow);
-    return { kind: 'connected', flow, id: connected.id };
+    return this.progress(id);
   }
   async complete(id: string, parameters: string): Promise<FlowProgress> {
     const flow = await this.flow(id);
@@ -123,7 +140,7 @@ export class ConnectionClient {
     }
     const request = await this.custody.prepare(flow.ownerId, flow.environmentId, { kind: 'connect', input: {
       action: 'exchange', flowId: id, parameters,
-    } }, { sourceIds: flow.appId ? [flow.appId] : [] });
+    } }, { sourceIds: flow.appId ? [flow.appId] : [], approval: flow.approval });
     flow.step = 'exchange'; flow.taskId = request.intent.id;
     await this.store.put(flow);
     const task = await this.custody.submitPrepared(request);
@@ -141,8 +158,8 @@ export class ConnectionClient {
       runId, expiresAt, materialRevision: (previous?.content.materialRevision ?? 0) + 1 }] };
     const request = await this.custody.prepare(flow.ownerId, flow.environmentId, { kind: 'connect', input: {
       action: 'commit', flowId: id, authorizationDigest: flow.review!.metadata.authorizationDigest!,
-      approval: await approvePolicy(policy, this.custody.binding, this.custody.keys),
-    } }, { id: runId, expiresAt });
+      approval: await approvePolicy(policy, this.custody.binding, this.custody.keys, previous?.content),
+    } }, { id: runId, expiresAt, approval: flow.approval });
     flow.step = 'commit'; flow.taskId = request.intent.id;
     await this.store.put(flow);
     const task = await this.custody.submitPrepared(request);

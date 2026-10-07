@@ -35,9 +35,7 @@ export class Worker {
   start() {
     if (!this.stopped) return;
     this.stopped = false;
-    for (let index = 0; index < 4; index++) this.schedule(() => this.context.runs.tick(), 500);
     for (let index = 0; index < 2; index++) this.schedule(() => this.context.environments.tick(), 1000);
-    this.schedule(() => this.context.runs.recover(), 15_000);
     this.schedule(() => this.context.delegation.recover(), 15_000);
     this.schedule(() => this.context.connectionOperations.recover(), 15_000);
     this.schedule(() => this.context.integrations.deliver(), 2000);
@@ -61,7 +59,6 @@ export class Worker {
     this.stopped = true;
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
-    await this.context.runs.shutdown();
     await Promise.allSettled([...this.tasks]);
   }
 }

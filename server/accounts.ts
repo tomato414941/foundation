@@ -2,8 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Actor } from './authorization.js';
 import type { Context } from './context.js';
 import type { ResourceRow } from './resources.js';
-import type { SealedContent } from '../shared/contracts.js';
-import { Sealed } from '../shared/contracts.js';
+import type { CustodyContent } from '../shared/custody.js';
 import { fail } from './errors.js';
 
 export class Accounts {
@@ -52,7 +51,7 @@ export class Accounts {
   async remove(actor: Actor, id: string) {
     const c = this.context;
     await c.authorization.active(actor);
-    if (id === c.identity.id || actor.requestId) fail(403, 'forbidden', 'This principal cannot be removed.');
+    if (actor.requestId) fail(403, 'forbidden', 'This principal cannot be removed.');
     if (actor.id !== id) await c.authorization.requirePrincipal(actor, id, 'delete');
     const account = await c.db.one<{ status: string }>(
       'SELECT status FROM payment_accounts WHERE principal_id=$1',
@@ -119,13 +118,12 @@ export class Accounts {
       id,
       from: { id: from.id, name: from.name, publicKey: from.public_key },
       resources: await Promise.all(resources.map((row) => this.context.resources.view({ id: from.id }, row))),
-      secrets: resources
-        .filter((row) => row.kind === 'secret')
-        .map((row) => ({ id: row.id, sealed: row.sealed! })),
-      recipients: await this.context.resources.recipients(actor.id),
+      protectedItems: await Promise.all(resources.filter(row => ['secret', 'connection', 'app'].includes(row.kind))
+        .map(async row => ({ id: row.id, version: row.version, content: await this.context.custody.get(row.id) }))),
+      recipients: await this.context.custody.recipients(actor.id),
     };
   }
-  async merge(actor: Actor, id: string, secrets: Record<string, SealedContent>) {
+  async merge(actor: Actor, id: string, contents: Record<string, { version: number; content: CustodyContent }>) {
     const c = this.context,
       proof = await this.proof(actor, id),
       from = await c.principals.get(proof.from),
@@ -156,25 +154,19 @@ export class Accounts {
       )
     )
       fail(409, 'environment_active', 'Stop environments on the other account before merging.');
-    const recipients = await c.resources.recipients(to.id),
-      envelopes = new Map<string, SealedContent>();
-    for (const row of rows.filter((row) => row.kind === 'secret')) {
-      let sealed = secrets[row.id];
-      const allowUse = await c.authorization.resource({ id: c.identity.id }, row, 'use');
-      if (!sealed && allowUse) {
-        const addressed = [
-          ...recipients,
-          { id: c.identity.id, name: 'Foundation', publicKey: c.identity.publicKey },
-        ].filter((value, index, all) => all.findIndex((other) => other.id === value.id) === index);
-        sealed = await c.identity.seal(
-          await c.identity.open(row.sealed, 'resource:' + row.id),
-          addressed,
-          'resource:' + row.id,
-        );
-      }
-      if (!sealed) fail(409, 'encryption_access', 'Unlock the other account to merge its secrets.');
-      await c.resources.validateSecret(to.id, row.id, sealed, allowUse);
-      envelopes.set(row.id, Sealed.parse(sealed));
+    const externalKeys = await c.db.one(
+      `SELECT 1 FROM resource_custody c JOIN resources r ON r.id=c.resource_id
+       WHERE r.owner_id<>$1 AND jsonb_path_exists(c.content,
+         '$.policy.**.principalId ? (@ == $principal)',jsonb_build_object('principal',$1::text)) LIMIT 1`, [from.id]);
+    if (externalKeys) fail(409, 'rekey_required', 'Ask other resource owners to replace the previous account keys before merging.');
+    const children = await c.db.one("SELECT 1 FROM relations WHERE subject_id=$1 AND relation='owner' LIMIT 1", [from.id]);
+    if (children) fail(409, 'owned_principals', 'Transfer owned principals before merging accounts.');
+    if (await c.db.one("SELECT 1 FROM execution_tasks WHERE (owner_id=$1 OR actor_id=$1) AND state IN ('queued','running','uncertain') LIMIT 1", [from.id]))
+      fail(409, 'execution_active', 'Resolve active executions before merging accounts.');
+    for (const row of rows.filter(row => ['secret', 'connection', 'app'].includes(row.kind))) {
+      const update = contents[row.id];
+      if (!update || update.version !== row.version || update.content.policy.ownerId !== to.id)
+        fail(409, 'rekey_required', 'Unlock both accounts and re-encrypt protected items for the new owner.');
     }
     await c.db.transaction(async (connection) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
@@ -196,19 +188,14 @@ export class Accounts {
           )
         )
           name = name.slice(0, 150) + ' · ' + row.id;
-        const sealed = envelopes.get(row.id) ?? row.sealed;
-        if (row.kind === 'secret' && sealed)
-          await c.resources.validateSecret(to.id, row.id, sealed,
-            await c.authorization.resource({ id: c.identity.id }, row, 'use', connection), connection);
-        const data =
-          sealed && row.kind === 'secret'
-            ? { ...row.data, recipients: sealed.recipients.map((value) => value.header.kid) }
-            : row.data;
-        const changed = await connection.query(
-          'UPDATE resources SET owner_id=$3,name=$4,sealed=$5,data=$6,version=version+1,updated_at=now() WHERE id=$1 AND version=$2',
-          [row.id, row.version, to.id, name, JSON.stringify(sealed), JSON.stringify(data)],
-        );
-        if (!changed.rowCount) fail(409, 'changed', 'An item changed while merging. Start again.');
+        if (['secret', 'connection', 'app'].includes(row.kind)) {
+          await c.custody.put({ id: from.id, credentialId: proof.credentialId }, { ...contents[row.id]!, name }, connection);
+        } else {
+          const changed = await connection.query(
+            'UPDATE resources SET owner_id=$3,name=$4,version=version+1,updated_at=now() WHERE id=$1 AND version=$2',
+            [row.id, row.version, to.id, name]);
+          if (!changed.rowCount) fail(409, 'changed', 'An item changed while merging. Start again.');
+        }
       }
       const relations = await c.db.all<{ subject_id: string; principal_id: string; relation: string }>(
         'SELECT subject_id,principal_id,relation FROM relations WHERE subject_id=$1 OR principal_id=$1',
@@ -268,8 +255,8 @@ export class Accounts {
         from.id,
         to.id,
       ]);
-      await connection.query('UPDATE runs SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
-      await connection.query('UPDATE runs SET actor_id=$2 WHERE actor_id=$1', [from.id, to.id]);
+      await connection.query('UPDATE execution_tasks SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
+      await connection.query('UPDATE execution_tasks SET actor_id=$2 WHERE actor_id=$1', [from.id, to.id]);
       await connection.query('UPDATE audit_log SET owner_id=$2 WHERE owner_id=$1', [from.id, to.id]);
       await connection.query('UPDATE audit_log SET actor_id=$2 WHERE actor_id=$1', [from.id, to.id]);
       await connection.query('DELETE FROM principals WHERE id=$1', [from.id]);

@@ -1,14 +1,25 @@
 import { z } from 'zod';
-import { Id, Name, Sealed, Time } from './contracts.js';
-import { Fingerprint, Signature, SignedBinding } from './authority.js';
-import { DelegatedRun, ProtectedContent } from './custody.js';
+import { ConnectionRequest, Id, Name, Sealed, Time } from './contracts.js';
+import { Fingerprint, KeyBinding, Signature, SignedBinding } from './authority.js';
+import { AccessPolicy, DelegatedRun, ProtectedContent } from './custody.js';
 import { ExecutionReceipt, SignedEnvironment, Task } from './execution.js';
 
 export const BoundRecipient = SignedBinding.extend({ name: Name });
+export const ConnectionPlan = z.object({ id: Id, index: z.number().int().min(0).max(7),
+  input: ConnectionRequest.extend({ ownerId: Id }) }).strict();
+export const EnvironmentEnrollment = z.object({ bootstrap: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  binding: SignedBinding, token: z.string().regex(/^fk_[A-Za-z0-9_-]{43}$/) }).strict();
+export const EnvironmentBootstrap = z.object({ id: Id, executorId: Id, ownerId: Id, name: Name,
+  origin: z.url(), bootstrap: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  commandImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/),
+  callers: z.array(KeyBinding).min(1).max(100) }).strict();
 export const PublishBinding = SignedBinding.extend({ previousSignature: Signature.optional() }).strict();
 export const ProtectedWrite = z.object({ name: Name, content: ProtectedContent,
   version: z.number().int().positive().optional() }).strict();
 export const ProtectedRead = z.object({ content: ProtectedContent, version: z.number().int().positive() }).strict();
+export const KeyUpdates = z.record(Id, z.object({ version: z.number().int().positive(), content: ProtectedContent }).strict());
+export const KeySharingItem = z.object({ id: Id, name: Name, version: z.number().int().positive(),
+  content: ProtectedContent, policy: AccessPolicy }).strict();
 export const Registration = z.object({ registration: SignedEnvironment, stoppedAt: z.iso.datetime().nullable(),
   heartbeatAt: z.iso.datetime().nullable() }).strict();
 export const ClaimedExecution = z.object({ lease: Id, request: DelegatedRun,

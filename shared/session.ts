@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Principal, Id, Name, Locale, PublicKey, WrappedKey, Sealed } from './contracts.js';
+import { Principal, Id, Name, Locale, PublicKey, WrappedKey } from './contracts.js';
 
 export const Features = z.object({
   email: z.boolean(),
@@ -12,7 +12,7 @@ export const Session = z.object({
   credentialId: Id.nullable(),
   wrappedKey: WrappedKey.nullable(),
   requestId: Id.nullable(),
-  server: z.object({ id: Id, name: Name, publicKey: PublicKey, commit: z.string().nullable() }),
+  server: z.object({ name: Name, commit: z.string().nullable() }),
   features: Features,
   principals: z.array(Principal),
 });
@@ -42,4 +42,3 @@ export const PasskeyVerify = z
     wrappedKey: WrappedKey.optional(),
   })
   .strict();
-export const Injection = z.object({ id: Id, context: z.string(), sealed: Sealed });

@@ -5,6 +5,7 @@ import { actor } from './app.js';
 import type { Context } from './context.js';
 import { Accounts } from './accounts.js';
 import * as C from '../shared/contracts.js';
+import * as P from '../shared/protocol.js';
 
 export async function routesAccounts(app: ApiApp, context: Context) {
   const accounts = new Accounts(context);
@@ -75,8 +76,8 @@ export async function routesAccounts(app: ApiApp, context: Context) {
             id: C.Id,
             from: z.object({ id: C.Id, name: C.Name, publicKey: C.PublicKey.nullable() }),
             resources: z.array(C.Resource),
-            secrets: z.array(z.object({ id: C.Id, sealed: C.Sealed })),
-            recipients: z.array(C.Recipient),
+            protectedItems: z.array(P.ProtectedRead.extend({ id: C.Id })),
+            recipients: z.array(P.BoundRecipient),
           }),
         },
       },
@@ -88,10 +89,10 @@ export async function routesAccounts(app: ApiApp, context: Context) {
     {
       schema: {
         params: C.IdParams,
-        body: z.object({ secrets: z.record(C.Id, C.Sealed).default({}) }).strict(),
+        body: z.object({ contents: P.KeyUpdates.default({}) }).strict(),
         response: { 200: C.Principal },
       },
     },
-    (request) => accounts.merge(actor(request), request.params.id, request.body.secrets),
+    (request) => accounts.merge(actor(request), request.params.id, request.body.contents),
   );
 }

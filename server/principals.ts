@@ -6,7 +6,7 @@ import type { Audit } from './audit.js';
 import { Name, Principal, PublicKey, WrappedKey } from '../shared/contracts.js';
 import type { PublicEncryptionKey, WrappedEncryptionKey, ActionName } from '../shared/contracts.js';
 import { fail, required } from './errors.js';
-import { KeySharing, type KeyUpdates } from './key-sharing.js';
+import type { KeySharing, KeyUpdates } from './key-sharing.js';
 import { ResourceKind } from '../shared/contracts.js';
 
 export interface PrincipalRow {
@@ -16,15 +16,12 @@ export interface PrincipalRow {
   created_at: Date;
 }
 export class Principals {
+  keySharing!: KeySharing;
   constructor(
     readonly db: Database,
     readonly authorization: Authorization,
     readonly audit: Audit,
-    readonly serverId: string,
   ) {}
-  get keySharing() {
-    return new KeySharing(this.db, this.authorization, this.serverId);
-  }
   async get(id: string, connection: Queryable = this.db.pool): Promise<PrincipalRow> {
     return required(
       await this.db.one<PrincipalRow>('SELECT * FROM principals WHERE id=$1', [id], connection),
@@ -76,7 +73,6 @@ export class Principals {
   }
   async rename(actor: Actor, id: string, name: string) {
     await this.authorization.requirePrincipal(actor, id, 'update');
-    if (id === this.serverId) fail(403, 'forbidden', 'The service identity is managed by Foundation.');
     await this.db.pool.query('UPDATE principals SET name=$2 WHERE id=$1', [id, Name.parse(name)]);
     await this.audit.record(id, actor.id, 'principal.rename', id);
     return this.view(actor, await this.get(id));
@@ -142,14 +138,17 @@ export class Principals {
     subjectId: string,
     relation: 'agent' | 'member' | 'payer',
     principalId: string,
+    secrets: KeyUpdates = {},
   ) {
     if (!(await this.authorization.stands(actor.id, subjectId)))
       await this.authorization.requirePrincipal(actor, principalId, 'share');
-    await this.db.pool.query(
-      'DELETE FROM relations WHERE subject_id=$1 AND principal_id=$2 AND relation=$3',
-      [subjectId, principalId, relation],
-    );
-    await this.audit.record(principalId, actor.id, 'relation.remove', subjectId, { relation });
+    await this.db.transaction(async connection => {
+      await connection.query('SELECT pg_advisory_xact_lock(736023743)');
+      if (relation === 'member') await this.keySharing.apply(actor, principalId, subjectId, 'member', secrets, connection, true);
+      await connection.query('DELETE FROM relations WHERE subject_id=$1 AND principal_id=$2 AND relation=$3',
+        [subjectId, principalId, relation]);
+      await this.audit.record(principalId, actor.id, 'relation.remove', subjectId, { relation }, connection);
+    });
   }
   async relations(actor: Actor, id: string, limit = 100, after?: string) {
     await this.authorization.requirePrincipal(actor, id, 'share');

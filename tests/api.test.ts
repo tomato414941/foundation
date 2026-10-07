@@ -4,10 +4,10 @@ import { randomUUID } from 'node:crypto';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
-import { newEncryptionKey, seal, encode, decode, open, unwrap, wrap } from '../shared/encryption.js';
+import { newEncryptionKey, encode, decode, open, unwrap, wrap } from '../shared/encryption.js';
 import { delegatedFixture } from './delegation-support.js';
-import { prepareRun } from '../shared/custody.js';
-import { hash } from '../shared/authority.js';
+import { AccessPolicy, prepareRun, protect } from '../shared/custody.js';
+import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 
 test('OAuthの認可応答を開始した依頼者と実行先へ暗号化して中継し、同じ応答を一度だけ受け付ける', async (t) => {
   const f = await delegatedFixture();
@@ -52,38 +52,28 @@ test('HTTP APIで登録し、シークレットを保存して同じ権限で一
     await app.close();
     await f.close();
   });
-  const keys = await newEncryptionKey();
-  const enrolled = await app.inject({
-    method: 'POST',
-    url: '/api/auth/enroll',
-    payload: { name: 'API caller', publicKey: keys.publicKey },
-  });
+  const keys = await newIdentityKeys();
+  const enrolled = await app.inject({ method: 'POST', url: '/api/auth/enroll',
+    payload: { name: 'API caller', publicKey: publicPart(keys.encryption) } });
   assert.equal(enrolled.statusCode, 201, enrolled.body);
-  const identity = enrolled.json(),
-    headers = { authorization: 'Bearer ' + identity.token },
-    id = randomUUID();
-  const content = await seal(
-    encode('api-secret'),
-    [{ id: identity.principal.id, publicKey: keys.publicKey }],
-    'resource:' + id,
-  );
-  const created = await app.inject({
-    method: 'POST',
-    url: '/api/principals/' + identity.principal.id + '/resources',
-    headers,
-    payload: { kind: 'secret', id, name: 'API secret', sealed: content, bytes: 10 },
-  });
-  assert.equal(created.statusCode, 201, created.body);
+  const identity = enrolled.json(), headers = { authorization: 'Bearer ' + identity.token }, id = randomUUID();
+  const binding = bindKeys(identity.principal.id, keys);
+  const bound = await app.inject({ method: 'PUT', url: '/api/principals/' + identity.principal.id + '/binding',
+    headers, payload: await signBinding(binding, keys) });
+  assert.equal(bound.statusCode, 200, bound.body);
+  const content = await protect(encode('api-secret'), AccessPolicy.parse({ format: 1, id, origin: f.config.origin,
+    ownerId: identity.principal.id, kind: 'secret', revision: 1, authorities: [binding], readers: [binding], grants: [] }),
+    1, binding, keys);
+  const created = await app.inject({ method: 'PUT', url: '/api/resources/' + id + '/custody',
+    headers, payload: { name: 'API secret', content } });
+  assert.equal(created.statusCode, 200, created.body);
   assert.equal(created.json().kind, 'secret');
-  const list = await app.inject({
-    url: '/api/principals/' + identity.principal.id + '/resources?kind=secret',
-    headers,
-  });
+  const list = await app.inject({ url: '/api/principals/' + identity.principal.id + '/resources?kind=secret', headers });
   assert.equal(list.statusCode, 200, list.body);
   assert.equal(list.json().items[0].id, id);
-  const read = await app.inject({ url: '/api/resources/' + id + '/secret', headers });
+  const read = await app.inject({ url: '/api/resources/' + id + '/custody', headers });
   assert.equal(read.statusCode, 200, read.body);
-  assert.equal(read.json().sealed.ciphertext, content.ciphertext);
+  assert.equal(read.json().content.sealed.ciphertext, content.sealed.ciphertext);
   const changed = await app.inject({
     method: 'PATCH',
     url: '/api/resources/' + id,
@@ -149,7 +139,8 @@ test('キーにも暗号鍵の包みを置き、そのキーで入ったセッ�
   const before = await app.inject({ url: '/api/session', headers: { authorization: 'Bearer ' + token } });
   assert.equal(before.json().credentialId, credential.id);
   assert.equal(before.json().wrappedKey, null);
-  const wrappedKey = await wrap(owner.keys.privateKey, encode(token), owner.actor.id);
+  const unlock = crypto.getRandomValues(new Uint8Array(32));
+  const wrappedKey = await wrap(owner.keys.privateKey, unlock, owner.actor.id);
   const placed = await app.inject({
     method: 'PUT',
     url: `/api/principals/${owner.actor.id}/credentials/${credential.id}/wrap`,
@@ -159,7 +150,7 @@ test('キーにも暗号鍵の包みを置き、そのキーで入ったセッ�
   assert.equal(placed.statusCode, 200);
   const session = await app.inject({ url: '/api/session', headers: { authorization: 'Bearer ' + token } });
   assert.equal(session.json().wrappedKey, wrappedKey);
-  assert.deepEqual(await unwrap(session.json().wrappedKey, encode(token), owner.actor.id), owner.keys.privateKey);
+  assert.deepEqual(await unwrap(session.json().wrappedKey, unlock, owner.actor.id), owner.keys.privateKey);
   const missing = await app.inject({
     method: 'PUT',
     url: `/api/principals/${owner.actor.id}/credentials/${randomUUID()}/wrap`,

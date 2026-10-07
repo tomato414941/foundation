@@ -95,6 +95,11 @@ CREATE TABLE IF NOT EXISTS environment_jobs (
   attempts integer NOT NULL DEFAULT 0,
   retry_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS volume_id text;
+ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS bootstrap_digest text;
+ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS bootstrap_ciphertext text;
+ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS bootstrap_expires_at timestamptz;
+ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS enrollment_digest text;
 CREATE TABLE IF NOT EXISTS grants (
   resource_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
   principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
@@ -222,7 +227,7 @@ CREATE TABLE IF NOT EXISTS execution_tasks (
   id uuid PRIMARY KEY,
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
   actor_id uuid NOT NULL REFERENCES principals(id),
-  environment_id uuid NOT NULL REFERENCES executor_environments(resource_id),
+  environment_id uuid NOT NULL,
   kind text NOT NULL CHECK(kind IN ('http','command','function','connect','refresh','revoke')),
   state text NOT NULL CHECK(state IN ('queued','running','succeeded','failed','cancelled','uncertain')),
   actor jsonb NOT NULL,
@@ -238,6 +243,7 @@ CREATE TABLE IF NOT EXISTS execution_tasks (
   finished_at timestamptz
 );
 CREATE INDEX IF NOT EXISTS execution_queue ON execution_tasks(environment_id,state,created_at);
+ALTER TABLE execution_tasks DROP CONSTRAINT IF EXISTS execution_tasks_environment_id_fkey;
 CREATE INDEX IF NOT EXISTS execution_owner ON execution_tasks(owner_id,created_at DESC);
 ALTER TABLE execution_tasks ADD COLUMN IF NOT EXISTS cancel_requested boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS connection_operations (

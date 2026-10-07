@@ -10,7 +10,8 @@ import { Copy, Detail, ErrorNotice, Notice, Page, Panel, SaveBar } from '../comp
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   await signedIn(request);
   const client = await custodyClient();
-  return { id: client.binding.principalId, fingerprint: await hash(client.binding) };
+  return { id: client.binding.principalId, fingerprint: await hash(client.binding),
+    recipient: new URL(request.url).searchParams.get('principal') ?? '' };
 }
 export async function clientAction({ request }: Route.ClientActionArgs) {
   return actionResult(async () => {
@@ -30,7 +31,7 @@ export default function Trust() {
     </Panel>
     <Form method="post"><div className="flex flex-col gap-6">
       <p className="text-sm leading-relaxed text-muted-foreground">{t('trustIdentityHelp')}</p>
-      <InputField name="principalId" label={t('recipient')} required />
+      <InputField name="principalId" label={t('recipient')} required defaultValue={data.recipient} />
       <InputField name="fingerprint" label={t('fingerprint')} required autoComplete="off" minLength={43} maxLength={43} />
       <SaveBar back="/account" label="trustIdentity" />
     </div></Form>

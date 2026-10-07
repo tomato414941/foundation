@@ -24,8 +24,8 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       principalId = formText(form, 'principalId') || params.owner;
     const remove = formText(form, 'intent') === 'remove';
     const secrets =
-      !remove && relation === 'member'
-        ? await rekeySharing('/relations/recipients?' + new URLSearchParams({ subjectId, principalId }))
+      relation === 'member'
+        ? await rekeySharing('/relations/recipients?' + new URLSearchParams({ subjectId, principalId, remove: String(remove) }))
         : undefined;
     await api('/relations', {
       method: remove ? 'DELETE' : 'POST',

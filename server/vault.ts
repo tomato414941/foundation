@@ -1,10 +1,7 @@
-import { randomBytes, randomUUID, createHash } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { CompactEncrypt, compactDecrypt } from 'jose';
-import type { JWK } from 'jose';
 import { KMSClient, GenerateDataKeyCommand, DecryptCommand } from '@aws-sdk/client-kms';
-import { newEncryptionKey, encode, decode, seal, open } from '../shared/encryption.js';
-import { Sealed } from '../shared/contracts.js';
-import type { PublicEncryptionKey, SealedContent } from '../shared/contracts.js';
+import { encode, decode } from '../shared/encryption.js';
 import type { Database } from './database.js';
 import type { Configuration } from './config.js';
 
@@ -72,53 +69,5 @@ export class Vault {
         JSON.stringify(await vault.encrypt('Foundation', 'key-check')),
       ]);
     return vault;
-  }
-}
-export class ServerIdentity {
-  private constructor(
-    readonly id: string,
-    readonly publicKey: PublicEncryptionKey,
-    private readonly privateKey: JWK,
-  ) {}
-  static async initialize(db: Database, vault: Vault): Promise<ServerIdentity> {
-    return db.transaction(async (connection) => {
-      await connection.query('SELECT pg_advisory_xact_lock(736023742)');
-      const stored = await db.one<{ value: { id: string; key: string; publicKey: PublicEncryptionKey } }>(
-        "SELECT value FROM system_settings WHERE name='server-identity'",
-        [],
-        connection,
-      );
-      if (stored)
-        return new ServerIdentity(
-          stored.value.id,
-          stored.value.publicKey,
-          await vault.decrypt<JWK>(stored.value.key, 'server-identity'),
-        );
-      const id = randomUUID(),
-        pair = await newEncryptionKey();
-      await connection.query('INSERT INTO principals(id,name,public_key) VALUES($1,$2,$3)', [
-        id,
-        'Foundation',
-        JSON.stringify(pair.publicKey),
-      ]);
-      await connection.query("INSERT INTO system_settings(name,value) VALUES ('server-identity',$1)", [
-        JSON.stringify({
-          id,
-          publicKey: pair.publicKey,
-          key: await vault.encrypt(pair.privateKey, 'server-identity'),
-        }),
-      ]);
-      return new ServerIdentity(id, pair.publicKey, pair.privateKey);
-    });
-  }
-  async open(value: unknown, context: string): Promise<Uint8Array> {
-    return open(Sealed.parse(value), this.privateKey, this.id, context);
-  }
-  async seal(
-    bytes: Uint8Array,
-    recipients: Array<{ id: string; publicKey: PublicEncryptionKey }>,
-    context: string,
-  ): Promise<SealedContent> {
-    return seal(bytes, recipients, context);
   }
 }

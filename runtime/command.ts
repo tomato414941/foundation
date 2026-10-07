@@ -3,7 +3,20 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import type { RunnerJob, CommandResult } from '../server/runner.js';
+export interface RunnerJob {
+  command: string[];
+  stdin?: string;
+  timeoutSeconds: number;
+  environment: Record<string, string>;
+  files: Record<string, string>;
+}
+export interface CommandResult {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  truncated: boolean;
+}
 
 export interface CommandExecutor {
   execute(job: RunnerJob, signal: AbortSignal): Promise<CommandResult>;

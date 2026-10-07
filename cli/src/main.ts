@@ -30,6 +30,7 @@ import { configPath, origin, readIdentity, saveIdentity, secureWrite } from './c
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
 import { startAgent } from './agent.js';
+import { managedAgent } from './managed-agent.js';
 import { connectionClient, flowOutput, saveApp, startConnection } from './connections.js';
 import type { FlowProgress } from '../../shared/connection-client.js';
 
@@ -346,6 +347,7 @@ async function main(argv: string[]) {
     await initialize(args);
     return 0;
   }
+  if (command === 'agent' && args.positionals[0] === 'managed') return managedAgent();
   const client = new Client(await readIdentity(args.values.origin));
   const current = await client.session();
   if (!current.principal) throw new Error('The machine identity is no longer valid.');

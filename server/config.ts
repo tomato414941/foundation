@@ -30,9 +30,8 @@ const Environment = z.object({
   FLY_API_TOKEN: z.string().default(''),
   FLY_APP: z.string().default(''),
   FLY_IMAGE: z.string().default(''),
+  FLY_COMMAND_IMAGE: z.string().default(''),
   FLY_REGION: z.string().default('nrt'),
-  FOUNDATION_OAUTH_APPS: z.string().default('{}'),
-  FOUNDATION_AWS_PRINCIPAL_ARN: z.string().default(''),
   FOUNDATION_LOG_LEVEL: z
     .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'])
     .default('info'),
@@ -80,15 +79,5 @@ export async function configuration(env: NodeJS.ProcessEnv = process.env) {
     origin: origin.origin,
     dataDirectory,
     key: key ? new Uint8Array(Buffer.from(key, 'base64url')) : null,
-    oauthApps: z
-      .record(
-        z.string(),
-        z.object({
-          clientId: z.string(),
-          clientSecret: z.string().optional(),
-          fields: z.record(z.string(), z.string()).optional(),
-        }),
-      )
-      .parse(JSON.parse(value.FOUNDATION_OAUTH_APPS)),
   };
 }

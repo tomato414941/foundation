@@ -2,24 +2,12 @@ import { z } from 'zod';
 import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import type { Context } from './context.js';
-import { fail, required } from './errors.js';
+import { fail } from './errors.js';
 import * as C from '../shared/contracts.js';
-import { Injection } from '../shared/session.js';
+import * as P from '../shared/protocol.js';
 
-const connectionResult = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('connected'), resource: C.Resource, returnTo: z.string() }),
-  z.object({ kind: z.literal('authorize'), url: z.url() }),
-  z.object({ kind: z.literal('role'), id: C.Id, externalId: z.string(), principalArn: z.string() }),
-  z.object({
-    kind: z.literal('review'),
-    id: C.Id,
-    before: C.JsonObject,
-    after: C.JsonObject,
-    returnTo: z.string(),
-  }),
-]);
 export async function routesResources(app: ApiApp, context: Context) {
-  const { resources, authorization, services, catalog, http, objects, environments, runs, billing } = context;
+  const { resources, authorization, catalog, functions, objects, environments, billing } = context;
   app.get('/api/catalog', { schema: { response: { 200: C.listOf(C.CatalogEntry) } } }, async (request) => ({
     items: await catalog.list(actor(request)),
     next: null,
@@ -37,7 +25,13 @@ export async function routesResources(app: ApiApp, context: Context) {
     {
       schema: { params: C.IdParams, response: { 200: C.CatalogMethod } },
     },
-    async (request) => services.definition(actor(request), await resources.get(request.params.id)),
+    async (request) => {
+      const row = await resources.get(request.params.id);
+      await authorization.requireResource(actor(request), row, 'read');
+      if (row.kind !== 'connection') fail(400, 'wrong_kind', 'Choose a connection.');
+      const id = String(row.data.methodId);
+      return catalog.methodView(id, await catalog.method(actor(request), id));
+    },
   );
   app.get(
     '/api/identities/:id',
@@ -88,14 +82,18 @@ export async function routesResources(app: ApiApp, context: Context) {
       const who = actor(request),
         body = request.body,
         owner = request.params.id;
-      const row =
-        body.kind === 'secret'
-          ? await resources.createSecret(who, owner, body)
-          : body.kind === 'service' || body.kind === 'app' || body.kind === 'method'
-            ? await services.createDefinition(who, owner, body)
-            : body.kind === 'environment'
-              ? await environments.create(who, owner, body.options, body.name)
-              : await http.create(who, owner, body.name, body.definition);
+      const row = body.kind === 'service'
+        ? await catalog.createService(who, owner, body.name, body.definition)
+        : body.kind === 'method'
+          ? await (async () => {
+              if (!(await authorization.canCreate(who, owner, 'method')))
+                fail(403, 'forbidden', 'You cannot create this connection method.');
+              return resources.insert(owner, 'method', body.name, C.MethodDefinition.parse({
+                ...body.definition, name: body.name }) as unknown as Record<string, C.JsonValue>);
+            })()
+          : body.kind === 'environment'
+            ? await environments.create(who, owner, body.options, body.name)
+            : await functions.create(who, owner, body.name, body.definition);
       return reply.code(201).send(await resources.view(who, row));
     },
   );
@@ -124,27 +122,16 @@ export async function routesResources(app: ApiApp, context: Context) {
       const fields = [
         'version',
         'name',
-        ...(row.kind === 'secret'
-          ? ['sealed', 'bytes', 'allowUse']
-          : row.kind === 'function' || row.kind === 'service' || row.kind === 'method'
-            ? ['definition']
-            : row.kind === 'app'
-              ? ['clientId', 'clientSecret', 'fields']
-              : []),
+        ...(['function', 'service', 'method'].includes(row.kind) ? ['definition'] : []),
       ];
       if (Object.keys(body).some((field) => !fields.includes(field)))
         fail(400, 'invalid_input', 'Choose fields that can be edited for this item.');
       if (body.name && body.name !== row.name && !(await authorization.stands(who.id, row.owner_id)))
         await authorization.requireResource(who, row, 'share');
-      if (body.sealed || body.allowUse !== undefined) {
-        if (row.kind !== 'secret' || !body.sealed || body.bytes === undefined)
-          fail(400, 'invalid_secret', 'Provide the encrypted content and its size.');
-        row = await resources.updateSecret(who, row, body.sealed, body.bytes, body.allowUse, body.name);
-      }
       if (body.definition) {
         if (row.kind === 'function') {
-          const spec = await http.validateFunction(who, C.FunctionDefinition.parse(body.definition));
-          await http.validateFunction({ id: row.owner_id }, spec);
+          const spec = await functions.validateFunction(who, C.FunctionDefinition.parse(body.definition));
+          await functions.validateFunction({ id: row.owner_id }, spec);
           row = await resources.db.transaction(async (connection) => {
             const updated = await resources.update(
               row,
@@ -154,7 +141,7 @@ export async function routesResources(app: ApiApp, context: Context) {
               },
               connection,
             );
-            await resources.references(row.id, http.references(spec.request), connection);
+            await resources.references(row.id, functions.references(spec.request), connection);
             return updated;
           });
         } else if (row.kind === 'service') {
@@ -205,36 +192,6 @@ export async function routesResources(app: ApiApp, context: Context) {
           });
         } else fail(400, 'wrong_kind', 'This item does not have an editable definition.');
       }
-      if (body.clientId !== undefined || body.clientSecret !== undefined || body.fields !== undefined) {
-        if (row.kind !== 'app') fail(400, 'wrong_kind', 'This item is not an OAuth application.');
-        const old = await context.vault.decrypt<{ clientSecret?: string }>(
-          required(row.private_data),
-          'resource:' + row.id,
-        );
-        row = await resources.db.transaction(async (connection) => {
-          const updated = await resources.update(
-            row,
-            {
-              ...(body.name ? { name: body.name } : {}),
-              data: {
-                ...row.data,
-                ...(body.clientId !== undefined ? { clientId: body.clientId } : {}),
-                ...(body.fields ? { fields: body.fields } : {}),
-              },
-              privateData: await context.vault.encrypt(
-                { ...old, ...(body.clientSecret !== undefined ? { clientSecret: body.clientSecret } : {}) },
-                'resource:' + row.id,
-              ),
-            },
-            connection,
-          );
-          await connection.query(
-            "UPDATE resources SET data=jsonb_set(data,'{state}','\"reconnect\"'),version=version+1 WHERE kind='connection' AND data->>'appId'=$1",
-            [row.id],
-          );
-          return updated;
-        });
-      }
       if (body.name && body.name !== row.name) row = await resources.rename(who, row, body.name);
       return resources.view(who, row);
     },
@@ -245,31 +202,18 @@ export async function routesResources(app: ApiApp, context: Context) {
       config: { approval: true },
       schema: {
         params: C.IdParams,
-        querystring: z.object({
-          revoke: z
-            .enum(['true', 'false'])
-            .default('true')
-            .transform((value) => value === 'true'),
-        }),
+        querystring: z.object({}).strict(),
         response: { 200: C.Ok },
       },
     },
     async (request) => {
       const who = actor(request),
         row = await resources.get(request.params.id);
-      if (row.kind === 'connection') await services.remove(who, row, request.query.revoke);
-      else if (row.kind === 'environment') await environments.remove(who, row);
+      if (row.kind === 'environment') await environments.remove(who, row);
       else if (row.kind === 'object') await objects.remove(who, row);
       else await resources.delete(who, row);
       return { ok: true as const };
     },
-  );
-  app.get(
-    '/api/resources/:id/secret',
-    {
-      schema: { params: C.IdParams, response: { 200: z.object({ sealed: C.Sealed, context: z.string() }) } },
-    },
-    (request) => resources.secretContent(actor(request), request.params.id),
   );
   app.get(
     '/api/resources/:id/recipients',
@@ -329,7 +273,7 @@ export async function routesResources(app: ApiApp, context: Context) {
       config: { approval: true },
       schema: {
         params: C.IdParams,
-        body: z.object({ to: C.Id, sealed: C.Sealed.optional() }).strict(),
+        body: z.object({ to: C.Id }).strict(),
         response: { 200: C.Ok },
       },
     },
@@ -338,7 +282,6 @@ export async function routesResources(app: ApiApp, context: Context) {
         actor(request),
         await resources.get(request.params.id),
         request.body.to,
-        request.body.sealed,
       );
       return { ok: true as const };
     },
@@ -357,21 +300,6 @@ export async function routesResources(app: ApiApp, context: Context) {
       await context.principals.get(request.query.to);
       return { items: await resources.recipients(request.query.to), next: null };
     },
-  );
-  app.post(
-    '/api/inputs',
-    {
-      schema: { body: z.object({ inputs: z.array(C.Input).max(32) }).strict(), response: { 200: Injection } },
-    },
-    (request) => context.inputs.deliver(actor(request), request.body.inputs),
-  );
-  app.post(
-    '/api/principals/:id/connections',
-    {
-      config: { approval: true },
-      schema: { params: C.IdParams, body: C.ConnectionInput, response: { 200: connectionResult } },
-    },
-    (request) => services.begin(actor(request), request.params.id, request.body, request.browser),
   );
   app.get(
     '/oauth/callback',
@@ -397,47 +325,6 @@ export async function routesResources(app: ApiApp, context: Context) {
     },
   );
   app.post(
-    '/api/connections/:id/review',
-    {
-      schema: {
-        params: C.IdParams,
-        body: z.object({ accept: z.boolean() }).strict(),
-        response: {
-          200: z.union([connectionResult, z.object({ kind: z.literal('cancelled'), returnTo: z.string() })]),
-        },
-      },
-    },
-    (request) => services.review(actor(request), request.params.id, request.browser, request.body.accept),
-  );
-  app.get(
-    '/api/connections/:id/review',
-    {
-      schema: {
-        params: C.IdParams,
-        response: { 200: z.object({ id: C.Id, before: C.JsonObject, after: C.JsonObject }) },
-      },
-    },
-    (request) => services.pendingReview(actor(request), request.params.id, request.browser),
-  );
-  app.post(
-    '/api/connections/:id/role',
-    {
-      schema: {
-        params: C.IdParams,
-        body: z.object({ arn: z.string().max(600), region: z.string().max(50) }).strict(),
-        response: { 200: connectionResult },
-      },
-    },
-    (request) =>
-      services.completeRole(
-        actor(request),
-        request.params.id,
-        request.browser,
-        request.body.arn,
-        request.body.region,
-      ),
-  );
-  app.post(
     '/api/resources/:id/stop',
     {
       config: { approval: true },
@@ -449,28 +336,13 @@ export async function routesResources(app: ApiApp, context: Context) {
         await environments.stop(actor(request), await resources.get(request.params.id)),
       ),
   );
-  app.post(
-    '/api/principals/:id/runs',
-    {
-      config: { approval: true },
-      schema: { params: C.IdParams, body: C.RunInput, response: { 202: C.Run } },
-    },
-    async (request, reply) =>
-      reply.code(202).send(await runs.create(actor(request), request.params.id, request.body)),
-  );
-  app.get(
-    '/api/principals/:id/runs',
-    { schema: { params: C.IdParams, querystring: C.PageQuery, response: { 200: C.listOf(C.Run) } } },
-    (request) => runs.list(actor(request), request.params.id, request.query.limit, request.query.after),
-  );
-  app.get('/api/runs/:id', { schema: { params: C.IdParams, response: { 200: C.Run } } }, (request) =>
-    runs.get(actor(request), request.params.id),
-  );
-  app.post(
-    '/api/runs/:id/cancel',
-    { schema: { params: C.IdParams, body: z.object({}).strict(), response: { 200: C.Run } } },
-    (request) => runs.cancel(actor(request), request.params.id),
-  );
+  app.post('/api/environments/:id/enroll', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    schema: { params: C.IdParams, body: P.EnvironmentEnrollment, response: { 200: C.Ok }, security: [] },
+  }, async request => {
+    await environments.enroll(request.params.id, request.body);
+    return { ok: true as const };
+  });
   app.addContentTypeParser(
     'application/octet-stream',
     { parseAs: 'buffer', bodyLimit: 25 * 1024 * 1024 },

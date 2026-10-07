@@ -26,11 +26,13 @@ import {
 import { resourceKind } from '../navigation';
 import { useWorkspace } from './workspace';
 import { ConnectionFacts } from '../connection-facts';
+import { custodyClient } from '../custody';
+import { availableEnvironments, EnvironmentChoice } from '../environments';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   const resource = await api('/resources/' + params.id, { signal: request.signal }, Resource);
   if (resource.ownerId !== params.owner || resource.kind !== resourceKind(params.section))
     throw new Response('Not found', { status: 404 });
-  return resource;
+  return { resource, environments: resource.kind === 'connection' ? await availableEnvironments(resource.ownerId) : [] };
 }
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
   return actionResult(async () => {
@@ -39,7 +41,13 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       await api(`/resources/${params.id}/stop`, { method: 'POST', body: {} });
       return { ok: true };
     }
-    await api(`/resources/${params.id}?revoke=${form.has('revoke')}`, { method: 'DELETE' });
+    if (form.has('revoke')) {
+      const client = await custodyClient();
+      const task = await client.submit(params.owner, formText(form, 'environmentId'),
+        { kind: 'revoke', input: { action: 'revoke', id: params.id } }, { sourceIds: [params.id] });
+      return redirect('/runs/' + task.id);
+    }
+    await api(`/resources/${params.id}`, { method: 'DELETE' });
     return redirect(`/p/${params.owner}/${params.section}`);
   });
 }
@@ -52,7 +60,7 @@ function downloadBytes(bytes: Uint8Array, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 export default function ResourceDetail() {
-  const item = useLoaderData<typeof clientLoader>();
+  const { resource: item, environments } = useLoaderData<typeof clientLoader>();
   const result = useActionData<typeof clientAction>();
   const { session } = useWorkspace();
   const { t } = useTranslation();
@@ -63,6 +71,7 @@ export default function ResourceDetail() {
     expiresAt: string;
   } | null>(null);
   const [minutes, setMinutes] = useState(15);
+  const [revoke, setRevoke] = useState(true);
   const can = (action: (typeof item.permissions)[number]) => item.permissions.includes(action);
   usePolling(
     item.kind === 'environment' && ['starting', 'running', 'stopping'].includes(item.data.state),
@@ -201,6 +210,10 @@ export default function ResourceDetail() {
       )}
       {item.kind === 'environment' && (
         <Panel>
+          {item.data.executorId && <Detail label={t('executionDestination')}>
+            <span className="break-all font-mono text-sm">{item.data.executorId}</span><Copy value={item.data.executorId} />
+            <Link className="ml-3 underline" to={'/account/trust?principal=' + item.data.executorId}>{t('trustIdentity')}</Link>
+          </Detail>}
           <Detail label={t('image')}>{item.data.image ?? t('defaultImage')}</Detail>
           <Detail label={t('size')}>{t(item.data.size)}</Detail>
           <Detail label={t('maximum')}>{item.data.lifetime.maxSeconds / 60}</Detail>
@@ -246,7 +259,8 @@ export default function ResourceDetail() {
         <div className="flex min-w-0 flex-wrap items-center">
           <Confirm label={t(item.kind === 'connection' ? 'disconnect' : 'delete')} name={item.name}>
             {item.kind === 'connection' && item.data.methodKind === 'oauth' && (
-              <CheckboxField name="revoke" defaultChecked label={t('revokeProvider')} />
+              <><CheckboxField name="revoke" checked={revoke} onCheckedChange={value => setRevoke(value === true)} label={t('revokeProvider')} />
+                {revoke && <EnvironmentChoice items={environments} />}</>
             )}
             {item.kind === 'connection' && (
               <p className="leading-relaxed text-sm">{t('disconnectHelp')}</p>
@@ -257,7 +271,7 @@ export default function ResourceDetail() {
     </Page>
   );
 }
-function BoxDetails({ item }: { item: Awaited<ReturnType<typeof clientLoader>> }) {
+function BoxDetails({ item }: { item: Awaited<ReturnType<typeof clientLoader>>['resource'] }) {
   const { t } = useTranslation();
   return (
     <>

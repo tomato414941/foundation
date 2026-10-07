@@ -16,6 +16,7 @@ import { fail, failure } from './errors.js';
 import { token } from './vault.js';
 import * as C from '../shared/contracts.js';
 import * as S from '../shared/session.js';
+import * as P from '../shared/protocol.js';
 import { routesResources } from './routes-resources.js';
 import { routesExecution } from './routes-execution.js';
 import { routesRequests } from './routes-requests.js';
@@ -37,7 +38,7 @@ export function actor(request: FastifyRequest): Actor {
   return request.actor;
 }
 export async function buildApp(context: Context) {
-  const { config, authentication, principals, authorization, identity } = context;
+  const { config, authentication, principals, authorization } = context;
   const app = Fastify({
     logger: {
       level: config.FOUNDATION_LOG_LEVEL,
@@ -110,6 +111,7 @@ export async function buildApp(context: Context) {
       return eligible.some((route) => route.method === operation.method && route.pattern.test(path));
     },
     execute: async (who, operation, browser) => {
+      if (operation.method === 'CONNECT') fail(400, 'invalid_operation', 'Continue this connection on the selected executor.');
       const secret = 'internal_' + token();
       internalActors.set(secret, who);
       try {
@@ -190,7 +192,6 @@ export async function buildApp(context: Context) {
         path !== ownRequest &&
         !path.startsWith(ownRequest + '/') &&
         !/^\/api\/requests\/[^/]+\/redeem$/.test(path) &&
-        !/^\/api\/connections\/[^/]+\/(review|role)$/.test(path) &&
         path !== '/oauth/callback'
       )
         fail(403, 'forbidden', 'This link can open only its own request.');
@@ -230,7 +231,7 @@ export async function buildApp(context: Context) {
     wrappedKey: await authentication.wrapOf(request.actor),
     requestId: request.actor?.requestId ?? null,
     principals: request.actor && !request.actor.requestId ? await principals.accessible(request.actor) : [],
-    server: { id: identity.id, name: 'Foundation', publicKey: identity.publicKey, commit: config.FOUNDATION_COMMIT ?? null },
+    server: { name: 'Foundation', commit: config.FOUNDATION_COMMIT ?? null },
     features: {
       email: context.mailer.enabled,
       environments: context.environments.runner.enabled,
@@ -501,7 +502,7 @@ export async function buildApp(context: Context) {
     {
       bodyLimit: 32 * 1024 * 1024,
       config: { approval: true },
-      schema: { body: C.RelationInput.extend({ secrets: C.KeyUpdates.optional() }), response: { 200: C.Ok } },
+      schema: { body: C.RelationInput.extend({ secrets: P.KeyUpdates.optional() }), response: { 200: C.Ok } },
     },
     async (request) => {
       await principals.relate(
@@ -518,8 +519,8 @@ export async function buildApp(context: Context) {
     '/api/relations/recipients',
     {
       schema: {
-        querystring: z.object({ subjectId: C.Id, principalId: C.Id }),
-        response: { 200: C.listOf(C.KeySharingItem) },
+        querystring: z.object({ subjectId: C.Id, principalId: C.Id, remove: z.enum(['true', 'false']).default('false') }),
+        response: { 200: C.listOf(P.KeySharingItem) },
       },
     },
     async (request) => {
@@ -530,18 +531,21 @@ export async function buildApp(context: Context) {
         request.query.principalId,
         request.query.subjectId,
         'member',
+        undefined,
+        request.query.remove === 'true',
       );
     },
   );
   app.delete(
     '/api/relations',
-    { config: { approval: true }, schema: { body: C.RelationInput, response: { 200: C.Ok } } },
+    { bodyLimit: 32 * 1024 * 1024, config: { approval: true }, schema: { body: C.RelationInput.extend({ secrets: P.KeyUpdates.optional() }), response: { 200: C.Ok } } },
     async (request) => {
       await principals.unrelate(
         actor(request),
         request.body.subjectId,
         request.body.relation,
         request.body.principalId,
+        request.body.secrets,
       );
       return { ok: true as const };
     },
@@ -604,7 +608,7 @@ export async function buildApp(context: Context) {
       config: { approval: true },
       schema: {
         params: C.IdParams,
-        body: z.object({ to: C.Id, secrets: C.KeyUpdates.optional() }).strict(),
+        body: z.object({ to: C.Id, secrets: P.KeyUpdates.optional() }).strict(),
         response: { 200: C.Ok },
       },
     },
@@ -619,7 +623,7 @@ export async function buildApp(context: Context) {
       schema: {
         params: C.IdParams,
         querystring: z.object({ to: C.Id }),
-        response: { 200: C.listOf(C.KeySharingItem) },
+        response: { 200: C.listOf(P.KeySharingItem) },
       },
     },
     async (request) => {

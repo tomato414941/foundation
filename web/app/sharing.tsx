@@ -6,8 +6,10 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { Action, Grant, Principal, Resource, listOf } from '../../shared/contracts';
 import type { ActionName } from '../../shared/contracts';
-import { actionResult, api, ApiFailure, formText, session } from './api';
-import { decryptSecret, sealSecret } from './keys';
+import { actionResult, api, ApiFailure, formText } from './api';
+import { custodyClient } from './custody';
+import { canonical, hash } from '../../shared/authority';
+import { availableEnvironments, EnvironmentChoice } from './environments';
 import { ErrorNotice, Page, Panel, SaveBar } from './components';
 import { resourcePath } from './navigation';
 export async function shareLoader({ params, request }: LoaderFunctionArgs) {
@@ -18,7 +20,9 @@ export async function shareLoader({ params, request }: LoaderFunctionArgs) {
       : api(prefix, { signal: request.signal }, Principal),
     api(prefix + '/grants', { signal: request.signal }, listOf(Grant)),
   ]);
-  return { target, grants: grants.items, prefix };
+  const protectedItem = 'kind' in target && ['secret', 'connection', 'app'].includes(target.kind);
+  return { target, grants: grants.items, prefix, protectedItem,
+    environments: protectedItem ? await availableEnvironments(target.ownerId) : [] };
 }
 export async function shareAction({ params, request }: ActionFunctionArgs) {
   return actionResult(async () => {
@@ -28,24 +32,39 @@ export async function shareAction({ params, request }: ActionFunctionArgs) {
     const remove = formText(form, 'intent') === 'remove';
     const actions = form.getAll('actions').map((value) => Action.parse(value));
     if (!remove && !actions.length) throw new ApiFailure('invalid_input');
-    if (params.id && actions.includes('reveal')) {
+    if (params.id) {
       const resource = await api('/resources/' + params.id, {}, Resource);
-      if (resource.kind === 'secret' && !resource.data.recipients.includes(id)) {
-        const data = await session();
-        const content = await decryptSecret(resource.id, data.principal!.id);
-        const sealed = await sealSecret(
-          resource.id,
-          resource.ownerId,
-          content,
-          data.server,
-          resource.data.allowUse,
-          [...resource.data.recipients, id],
-          true,
-        );
-        await api('/resources/' + resource.id, {
-          method: 'PATCH',
-          body: { version: resource.version, sealed, bytes: content.length },
-        });
+      if (['secret', 'connection', 'app'].includes(resource.kind)) {
+        const client = await custodyClient(), previous = await client.read(resource.id);
+        const policy = { ...previous.content.policy, revision: previous.content.policy.revision + 1, producers: [],
+          readers: previous.content.policy.readers.filter(reader => reader.principalId !== id),
+          authorities: previous.content.policy.authorities.filter(authority => authority.principalId !== id),
+          grants: previous.content.policy.grants.filter(grant => grant.actor.principalId !== id && (remove ? grant.executor.principalId !== id : true)),
+          observers: (previous.content.policy.observers ?? []).filter(observer => observer !== id) };
+        if (!remove) {
+          if (actions.includes('read')) policy.observers.push(id);
+          if (actions.some(action => ['reveal', 'update', 'use'].includes(action))) {
+            const { binding } = await client.inspectIdentity(id); await client.trusted(binding);
+            if (actions.includes('reveal') || actions.includes('update')) policy.readers.push(binding);
+            if (actions.includes('update')) policy.authorities.push(binding);
+            if (actions.includes('use')) {
+              const environments = await Promise.all(form.getAll('environments').map(id => client.environment(String(id))));
+              if (!environments.length) throw new ApiFailure('environment_required');
+              const functionId = formText(form, 'functionId'), callerProgram = form.has('callerProgram');
+              const fn = functionId ? await api('/resources/' + functionId, {}, Resource) : null;
+              if (resource.kind !== 'app' && !callerProgram && (!fn || fn.kind !== 'function')) throw new ApiFailure('function_required');
+              for (const environment of environments) {
+                if (!environment.manifest.callers.some(caller => canonical(caller) === canonical(binding))) throw new ApiFailure('caller_required');
+                policy.grants.push({ actor: binding, executor: environment.manifest.executor,
+                  operations: resource.kind === 'app' ? ['connect', 'refresh', 'revoke'] : callerProgram ? ['http', 'command', 'function', 'refresh', 'revoke'] : ['function'],
+                  callerProgram, origins: [], functionDigests: fn?.kind === 'function' ? [await hash(fn.data)] : [],
+                  expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() });
+              }
+            }
+          }
+        }
+        await client.save(resource.name, await client.reveal(resource.id), policy, { previous, metadata: previous.content.metadata });
+        return { ok: true };
       }
     }
     await api(prefix + '/grants/' + id, {
@@ -113,7 +132,7 @@ export default function Sharing() {
           <Panel title={t('permissions')}>
             <div className="grid gap-3">
               {data.target.permissions
-                .filter((action) => 'kind' in data.target || !['delete', 'transfer'].includes(action))
+                .filter((action) => data.protectedItem ? ['read', 'reveal', 'update', 'use'].includes(action) : 'kind' in data.target || !['delete', 'transfer'].includes(action))
                 .map((action) => (
                   <CheckboxField
                     name="actions"
@@ -132,6 +151,12 @@ export default function Sharing() {
                 ))}
             </div>
           </Panel>
+          {data.protectedItem && actions.includes('update') && <p className="text-sm leading-relaxed text-muted-foreground">{t('editorDisclosure')}</p>}
+          {data.protectedItem && actions.includes('use') && <>
+            <EnvironmentChoice items={data.environments} multiple />
+            <InputField name="functionId" label={t('approvedFunction')} />
+            <CheckboxField name="callerProgram" label={t('callerProgram')} hint={t('callerProgramHelp')} />
+          </>}
           <SaveBar back={back} label="grant" />
         </div>
       </Form>

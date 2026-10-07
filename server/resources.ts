@@ -5,20 +5,16 @@ import { iso } from './database.js';
 import type { Authorization, Actor, ResourceIdentity } from './authorization.js';
 import type { Audit } from './audit.js';
 import type { Principals } from './principals.js';
-import type { ServerIdentity } from './vault.js';
-import { Resource, Name, Sealed, Action } from '../shared/contracts.js';
+import { Resource, Name, Action } from '../shared/contracts.js';
 import type {
   ResourceKindName,
   ResourceView,
-  NewResourceInput,
   ActionName,
   JsonValue,
   PublicEncryptionKey,
   SealedContent,
 } from '../shared/contracts.js';
-import { base64url, encode } from '../shared/encryption.js';
 import { fail, required } from './errors.js';
-import { validateRecipientKeys } from './encryption-validation.js';
 
 export interface ResourceRow extends ResourceIdentity {
   name: string;
@@ -36,7 +32,6 @@ export class Resources {
     readonly authorization: Authorization,
     readonly audit: Audit,
     readonly principals: Principals,
-    readonly identity: ServerIdentity,
   ) {}
   async get(id: string, connection: Queryable = this.db.pool): Promise<ResourceRow> {
     return required(await this.db.one<ResourceRow>('SELECT * FROM resources WHERE id=$1', [id], connection));
@@ -111,9 +106,7 @@ export class Resources {
   }
   async view(actor: Actor, row: ResourceRow, permissions?: ActionName[]): Promise<ResourceView> {
     const data =
-      row.kind === 'secret'
-        ? { ...row.data, allowUse: await this.authorization.resource({ id: this.identity.id }, row, 'use') }
-        : row.kind === 'service' || row.kind === 'method'
+      row.kind === 'service' || row.kind === 'method'
           ? { ...row.data, name: row.name }
           : row.kind === 'connection'
             ? {
@@ -176,103 +169,6 @@ export class Resources {
     );
     return rows.map((row) => ({ id: row.id, name: row.name, publicKey: row.public_key }));
   }
-  async validateSecret(
-    ownerId: string,
-    id: string,
-    sealed: SealedContent,
-    allowUse: boolean,
-    connection: Queryable = this.db.pool,
-  ) {
-    if (sealed.aad !== base64url(encode('resource:' + id)))
-      fail(400, 'invalid_envelope', 'Encrypt the content for this resource.');
-    const recipients = await this.recipients(ownerId, connection);
-    if (!recipients.length)
-      fail(409, 'encryption_key_required', 'Add a passkey with encryption support before saving secrets.');
-    const addressed = new Set(sealed.recipients.map((recipient) => recipient.header.kid));
-    if (
-      addressed.size !== sealed.recipients.length ||
-      recipients.some((recipient) => !addressed.has(recipient.id))
-    )
-      fail(400, 'missing_recipient', 'Encrypt the secret for each owner and member with an encryption key.');
-    if (allowUse && !addressed.has(this.identity.id))
-      fail(400, 'missing_recipient', 'Include Foundation as a recipient to use the secret in tools.');
-    const keys = await this.db.all<{ id: string; public_key: PublicEncryptionKey }>(
-      'SELECT id,public_key FROM principals WHERE id=ANY($1::uuid[]) AND public_key IS NOT NULL',
-      [[...addressed]], connection,
-    );
-    validateRecipientKeys(sealed, keys.map(key => ({ id: key.id, publicKey: key.public_key })));
-  }
-  async createSecret(actor: Actor, ownerId: string, input: Extract<NewResourceInput, { kind: 'secret' }>) {
-    if (!(await this.authorization.canCreate(actor, ownerId, 'secret')))
-      fail(403, 'forbidden', 'You cannot create secrets for this principal.');
-    return this.db.transaction(async (connection) => {
-      await connection.query('SELECT pg_advisory_xact_lock(736023743)');
-      if (!(await this.authorization.canCreate(actor, ownerId, 'secret', connection)))
-        fail(403, 'forbidden', 'You cannot create secrets for this principal.');
-      await this.validateSecret(ownerId, input.id, input.sealed, input.allowUse, connection);
-      const row = await this.insert(
-        ownerId,
-        'secret',
-        input.name,
-        { bytes: input.bytes, recipients: input.sealed.recipients.map((item) => item.header.kid) },
-        { id: input.id, sealed: input.sealed },
-        connection,
-      );
-      if (input.allowUse)
-        await connection.query(
-          "INSERT INTO grants(resource_id,principal_id,actions) VALUES($1,$2,ARRAY['use'])",
-          [row.id, this.identity.id],
-        );
-      await this.audit.record(ownerId, actor.id, 'secret.create', row.id, {}, connection);
-      return row;
-    });
-  }
-  async secretContent(actor: Actor, id: string) {
-    const row = await this.get(id);
-    if (row.kind !== 'secret') fail(400, 'wrong_kind', 'This item is not a secret.');
-    await this.authorization.requireResource(actor, row, 'reveal');
-    return { sealed: Sealed.parse(row.sealed), context: 'resource:' + row.id };
-  }
-  async updateSecret(
-    actor: Actor,
-    row: ResourceRow,
-    sealed: SealedContent,
-    bytes: number,
-    use?: boolean,
-    name?: string,
-  ) {
-    await this.authorization.requireResource(actor, row, 'update');
-    const allowUse = use ?? (await this.authorization.resource({ id: this.identity.id }, row, 'use'));
-    const updated = await this.db.transaction(async (connection) => {
-      await connection.query('SELECT pg_advisory_xact_lock(736023743)');
-      await this.authorization.requireResource(actor, row, 'update', connection);
-      await this.validateSecret(row.owner_id, row.id, sealed, allowUse, connection);
-      const updated = await this.update(
-        row,
-        {
-          sealed,
-          ...(name ? { name: Name.parse(name) } : {}),
-          data: { bytes, recipients: sealed.recipients.map((recipient) => recipient.header.kid) },
-        },
-        connection,
-      );
-      if (use !== undefined) {
-        if (use)
-          await connection.query(
-            "INSERT INTO grants(resource_id,principal_id,actions) VALUES($1,$2,ARRAY['use']) ON CONFLICT(resource_id,principal_id) DO UPDATE SET actions=ARRAY['use']",
-            [row.id, this.identity.id],
-          );
-        else
-          await connection.query('DELETE FROM grants WHERE resource_id=$1 AND principal_id=$2', [
-            row.id,
-            this.identity.id,
-          ]);
-      }
-      return updated;
-    });
-    await this.audit.record(row.owner_id, actor.id, 'secret.update', row.id);
-    return updated;
-  }
   async rename(actor: Actor, row: ResourceRow, name: string) {
     await this.authorization.requireResource(actor, row, 'update');
     if (!(await this.authorization.stands(actor.id, row.owner_id)))
@@ -296,6 +192,8 @@ export class Resources {
   async grant(actor: Actor, row: ResourceRow, principalId: string, actions: ActionName[]) {
     await this.authorization.requireResource(actor, row, 'share');
     await this.principals.get(principalId);
+    if (['secret', 'connection', 'app'].includes(row.kind))
+      fail(409, 'rekey_required', 'Sign and encrypt the new access policy to share this item.');
     for (const action of actions) {
       Action.parse(action);
       await this.authorization.requireResource(actor, row, action);
@@ -307,6 +205,8 @@ export class Resources {
     await this.audit.record(row.owner_id, actor.id, 'resource.share', row.id, { principalId, actions });
   }
   async revoke(actor: Actor, row: ResourceRow, principalId: string) {
+    if (['secret', 'connection', 'app'].includes(row.kind))
+      fail(409, 'rekey_required', 'Sign and encrypt the new access policy to remove access.');
     await this.authorization.requireResource(actor, row, 'share');
     await this.db.pool.query('DELETE FROM grants WHERE resource_id=$1 AND principal_id=$2', [
       row.id,
@@ -314,38 +214,19 @@ export class Resources {
     ]);
     await this.audit.record(row.owner_id, actor.id, 'resource.revoke', row.id, { principalId });
   }
-  async transfer(actor: Actor, row: ResourceRow, to: string, sealed?: SealedContent) {
+  async transfer(actor: Actor, row: ResourceRow, to: string) {
     await this.authorization.requireResource(actor, row, 'transfer');
     await this.principals.get(to);
+    if (['secret', 'connection', 'app'].includes(row.kind))
+      fail(409, 'rekey_required', 'Encrypt this item for its new owner before transferring it.');
     if (row.kind === 'environment')
       fail(400, 'not_transferable', 'An environment stays with the principal that created it.');
-    if (row.kind === 'secret') {
-      if (!sealed) fail(400, 'envelope_required', 'Encrypt the secret for its new owner.');
-    }
-    await this.db.transaction(async (connection) => {
-      await connection.query('SELECT pg_advisory_xact_lock(736023743)');
-      await this.authorization.requireResource(actor, row, 'transfer', connection);
-      if (row.kind === 'secret')
-        await this.validateSecret(
-          to,
-          row.id,
-          sealed!,
-          await this.authorization.resource({ id: this.identity.id }, row, 'use', connection),
-          connection,
-        );
-      const data =
-        sealed && row.kind === 'secret'
-          ? { ...row.data, recipients: sealed.recipients.map((recipient) => recipient.header.kid) }
-          : row.data;
-      const result = await connection.query(
-        'UPDATE resources SET owner_id=$3,sealed=$4,data=$5,version=version+1,updated_at=now() WHERE id=$1 AND version=$2',
-        [row.id, row.version, to, JSON.stringify(sealed ?? row.sealed), JSON.stringify(data)],
-      );
-      if (!result.rowCount) fail(409, 'changed', 'This item changed. Reload it before transferring.');
-      await connection.query('DELETE FROM grants WHERE resource_id=$1 AND principal_id<>$2', [
-        row.id,
-        this.identity.id,
-      ]);
+    await this.db.transaction(async connection => {
+      const changed = await connection.query(
+        'UPDATE resources SET owner_id=$3,version=version+1,updated_at=now() WHERE id=$1 AND version=$2',
+        [row.id, row.version, to]);
+      if (!changed.rowCount) fail(409, 'changed', 'Reload this item before transferring it.');
+      await connection.query('DELETE FROM grants WHERE resource_id=$1', [row.id]);
       await this.audit.record(to, actor.id, 'resource.receive', row.id, { from: row.owner_id }, connection);
       await this.audit.record(row.owner_id, actor.id, 'resource.transfer', row.id, { to }, connection);
     });

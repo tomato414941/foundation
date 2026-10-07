@@ -54,7 +54,6 @@ export function inlineService(value: ServiceDefinitionInput) {
 
 export class Catalog {
   readonly aliases = new Map<string, string>();
-  private readonly legacyApplications = new Map<string, string>();
   private constructor(
     readonly definitions: Map<string, ServiceDescription>,
     readonly methods: Map<string, MethodDescription>,
@@ -104,7 +103,6 @@ export class Catalog {
   }
   private registerAlias(serviceId: string, kind: AuthKindName, methodId: string) {
     this.aliases.set(legacyKey(serviceId, kind), methodId);
-    if (kind === 'oauth') this.legacyApplications.set(methodId, serviceId);
   }
   async legacyMethodId(
     serviceId: string,
@@ -125,11 +123,6 @@ export class Catalog {
       }
     }
     fail(400, 'method_required', 'Choose a connection method.');
-  }
-  foundationApp(methodId: string) {
-    return (
-      this.config.oauthApps[methodId] ?? this.config.oauthApps[this.legacyApplications.get(methodId) ?? '']
-    );
   }
   private async methodName(ownerId: string, name: string, connection: Queryable) {
     const prefix = name.slice(0, 180);
@@ -282,12 +275,10 @@ export class Catalog {
       builtin: this.methods.has(id),
       availability:
         value.kind === 'oauth'
-          ? value.config.adapter === 'openrouter' || this.foundationApp(id)
+          ? value.config.adapter === 'openrouter'
             ? 'ready'
             : 'app-required'
-          : value.kind === 'role' && !this.config.FOUNDATION_AWS_PRINCIPAL_ARN
-            ? 'unavailable'
-            : 'ready',
+          : 'ready',
     });
   }
   async listMethods(actor: Actor): Promise<CatalogConnectionMethod[]> {

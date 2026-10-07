@@ -3,83 +3,8 @@ import assert from 'node:assert/strict';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
-import { encode } from '../shared/encryption.js';
-import { ConnectionInput } from '../shared/contracts.js';
-
-test('依頼された鍵の更新を確認待ちにし、承認後に同じ接続で依頼を完了する', async (t) => {
-  const f = await fixture(),
-    context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
-    app = await buildApp(context);
-  t.after(async () => {
-    await app.close();
-    await f.close();
-  });
-  const owner = await f.person('Owner'),
-    sender = await f.person('Sender');
-  const connected = await context.services.begin(
-    owner.actor,
-    owner.actor.id,
-    ConnectionInput.parse({
-      methodId: 'github:token',
-      fields: { token: 'before-key' },
-    }),
-    'initial-browser',
-  );
-  assert.equal(connected.kind, 'connected');
-  if (connected.kind !== 'connected') return;
-  const asked = await app.inject({
-    method: 'POST',
-    url: '/api/requests',
-    headers: { authorization: 'Bearer ' + sender.token },
-    payload: {
-      to: owner.actor.id,
-      operations: [
-        {
-          method: 'POST',
-          path: '/api/principals/' + owner.actor.id + '/connections',
-          body: { methodId: 'github:token', connectionId: connected.resource.id, fields: { token: '' } },
-          inputs: [{ pointer: '/fields/token', label: 'Replacement key', secret: true }],
-        },
-      ],
-    },
-  });
-  assert.equal(asked.statusCode, 201, asked.body);
-  const answer = await app.inject({
-    method: 'POST',
-    url: '/api/requests/' + asked.json().id + '/approve',
-    headers: { authorization: 'Bearer ' + owner.token },
-    payload: { values: [{ '/fields/token': 'after-key' }] },
-  });
-  assert.equal(answer.statusCode, 200, answer.body);
-  assert.equal(answer.json().state, 'running');
-  const reviewId = new URL(answer.json().continueUrl).pathname.split('/').at(-1)!;
-  const browserCookie = answer.cookies.find((cookie) => cookie.name === 'foundation_browser')!;
-  const headers = {
-    authorization: 'Bearer ' + owner.token,
-    cookie: browserCookie.name + '=' + browserCookie.value,
-  };
-  const review = await app.inject({ url: '/api/connections/' + reviewId + '/review', headers });
-  assert.equal(review.statusCode, 200, review.body);
-  assert.equal(
-    (await context.services.outputs(owner.actor, await context.resources.get(connected.resource.id)))
-      .GH_TOKEN,
-    'before-key',
-  );
-  const accepted = await app.inject({
-    method: 'POST',
-    url: '/api/connections/' + reviewId + '/review',
-    headers,
-    payload: { accept: true },
-  });
-  assert.equal(accepted.statusCode, 200, accepted.body);
-  assert.equal(accepted.json().resource.id, connected.resource.id);
-  assert.equal((await context.requests.get(sender.actor, asked.json().id)).state, 'approved');
-  assert.equal(
-    (await context.services.outputs(owner.actor, await context.resources.get(connected.resource.id)))
-      .GH_TOKEN,
-    'after-key',
-  );
-});
+import { ApprovalRequest } from '../shared/contracts.js';
+import { flowFixture } from './flow-support.js';
 
 test('確認コードで端末を引き受け、承認者の権限で利用を委任する', async (t) => {
   const f = await fixture(),
@@ -128,58 +53,6 @@ test('確認コードで端末を引き受け、承認者の権限で利用を�
   assert.equal(await context.authorization.principal(person.actor, device.actor.id, 'credentials'), true);
   const polled = await app.inject({ url: '/api/requests/' + pending.id, headers });
   assert.equal(polled.json().state, 'approved');
-});
-
-test('依頼に入力された秘密値でサービスへ接続し、結果を依頼元へ返す', async (t) => {
-  const f = await fixture(),
-    context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
-    app = await buildApp(context);
-  t.after(async () => {
-    await app.close();
-    await f.close();
-  });
-  const owner = await f.person('Owner'),
-    agent = await f.person('Agent');
-  await f.principals.relate(owner.actor, agent.actor.id, 'agent', owner.actor.id);
-  const asked = await app.inject({
-    method: 'POST',
-    url: '/api/requests',
-    headers: { authorization: 'Bearer ' + agent.token },
-    payload: {
-      to: owner.actor.id,
-      message: 'Connect GitHub',
-      operations: [
-        {
-          method: 'POST',
-          path: '/api/principals/' + owner.actor.id + '/connections',
-          body: { serviceId: 'github', scheme: 'token', fields: { token: '' } },
-          inputs: [{ pointer: '/fields/token', label: 'GitHub token', secret: true }],
-        },
-      ],
-    },
-  });
-  assert.equal(asked.statusCode, 201, asked.body);
-  const answered = await app.inject({
-    method: 'POST',
-    url: '/api/requests/' + asked.json().id + '/approve',
-    headers: { authorization: 'Bearer ' + owner.token },
-    payload: { values: [{ '/fields/token': 'secret-from-person' }] },
-  });
-  assert.equal(answered.statusCode, 200, answered.body);
-  assert.equal(answered.json().state, 'approved');
-  const connection = answered.json().results[0].resource;
-  assert.equal(connection.ownerId, owner.actor.id);
-  assert.equal(
-    await context.inputs.text(agent.actor, { kind: 'connection', id: connection.id, output: 'GH_TOKEN' }),
-    'secret-from-person',
-  );
-  assert.equal(
-    (await context.requests.get(agent.actor, asked.json().id)).operations[0]!.body &&
-      JSON.stringify((await context.requests.get(agent.actor, asked.json().id)).operations).includes(
-        'secret-from-person',
-      ),
-    false,
-  );
 });
 
 test('依頼専用リンクでその依頼を承認し、通常のAPI操作を拒否する', async (t) => {
@@ -244,89 +117,44 @@ test('依頼専用リンクでその依頼を承認し、通常のAPI操作を�
   assert.equal(repeated.statusCode, 400, repeated.body);
 });
 
-test('OAuthの完了後に依頼を再開し、取り消された依頼の接続を拒否する', async (t) => {
-  const f = await fixture();
-  f.config.oauthApps.google = { clientId: 'test-client', clientSecret: 'test-secret' };
-  const context = await createContext(f.config, {
-      db: f.db,
-      mailer: f.mailer,
-      transport: {
-        async send(input) {
-          return {
-            status: 200,
-            headers: {},
-            body: encode(
-              JSON.stringify(
-                input.url.includes('/token')
-                  ? {
-                      access_token: 'oauth-token',
-                      refresh_token: 'refresh-token',
-                      expires_in: 3600,
-                      token_type: 'Bearer',
-                    }
-                  : { sub: 'account', email: 'owner@example.com', email_verified: true },
-              ),
-            ),
-          };
-        },
-      },
-    }),
-    app = await buildApp(context);
-  t.after(async () => {
-    await app.close();
-    await f.close();
-  });
-  const owner = await f.person('Owner'),
-    sender = await f.person('Sender'),
-    headers = { authorization: 'Bearer ' + owner.token, cookie: 'foundation_browser=approval-browser' };
-  async function ask(name: string) {
-    const request = await app.inject({
-      method: 'POST',
-      url: '/api/requests',
-      headers: { authorization: 'Bearer ' + sender.token },
-      payload: {
-        to: owner.actor.id,
-        operations: [
-          {
-            method: 'POST',
-            path: '/api/principals/' + owner.actor.id + '/connections',
-            body: { serviceId: 'google', scheme: 'oauth', name },
-          },
-          { method: 'PATCH', path: '/api/principals/' + owner.actor.id, body: { name: 'Connected owner' } },
-        ],
-      },
-    });
-    assert.equal(request.statusCode, 201, request.body);
-    const approval = await app.inject({
-      method: 'POST',
-      url: '/api/requests/' + request.json().id + '/approve',
-      headers,
-      payload: {},
-    });
-    assert.equal(approval.statusCode, 200, approval.body);
-    assert.equal(approval.json().state, 'running');
-    return approval.json();
-  }
-  const first = await ask('Allowed connection'),
-    state = new URL(first.continueUrl).searchParams.get('state');
-  const callback = await app.inject({
-    url: '/oauth/callback?state=' + state + '&code=authorization-code',
-    headers,
-  });
-  assert.equal(callback.statusCode, 302, callback.body);
-  assert.equal((await context.requests.get(owner.actor, first.id)).state, 'approved');
-  assert.equal((await context.principals.get(owner.actor.id)).name, 'Connected owner');
-  const second = await ask('Cancelled connection');
-  await context.requests.decline(owner.actor, second.id);
-  await app.inject({
-    url:
-      '/oauth/callback?state=' +
-      new URL(second.continueUrl).searchParams.get('state') +
-      '&code=authorization-code',
-    headers,
-  });
-  assert.equal(
-    (await context.resources.list(owner.actor, owner.actor.id, { kind: 'connection' })).items.length,
-    1,
-  );
+test('接続の承認後に実行先で秘密を受け取り、暗号化した接続の作成結果を依頼元へ返す', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const sender = f.api(f.stranger.token);
+  const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
+    operations: [{ method: 'CONNECT', path: '/api/connections', body: {
+      ownerId: f.owner.actor.id, methodId: 'github:token', environmentId: f.environment.manifest.id,
+    } }] } }, ApprovalRequest);
+  const answer = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
+  assert.equal(answer.state, 'running');
+  assert.equal(new URL(answer.continueUrl!).searchParams.get('approval'), asked.id);
+  const started = await f.connections.start({ ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id,
+    methodId: 'github:token', method: await f.method('github:token'), name: 'Requested connection',
+    fields: { token: 'owner-provided-key' }, approvalId: asked.id });
+  assert.equal((await f.tick(started.flow.id)).kind, 'review');
+  const connection = await f.accept(started.flow.id);
+  const completed = await sender.json('/api/requests/' + asked.id, {}, ApprovalRequest);
+  assert.equal(completed.state, 'approved');
+  assert.equal((completed.results[0] as { id: string }).id, connection.id);
+  assert.equal((await f.http(connection.id, 'GH_TOKEN'))?.ok, true);
+  assert.equal(f.requests.at(-1)!.headers.authorization, 'Bearer owner-provided-key');
+  assert.equal((await f.connections.progress(started.flow.id)).kind, 'connected');
+});
+
+test('承認依頼の取り消しで待機中の接続を止め、その依頼による再開を拒否する', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const sender = f.api(f.stranger.token);
+  const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,
+    operations: [{ method: 'CONNECT', path: '/api/connections', body: {
+      ownerId: f.owner.actor.id, methodId: 'render:token',
+    } }] } }, ApprovalRequest);
+  await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
+  const input = { ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id,
+    methodId: 'render:token', method: await f.method('render:token'), name: 'Requested',
+    fields: { token: 'provided-key' }, approvalId: asked.id };
+  const started = await f.connections.start(input);
+  assert.equal((await sender.json('/api/requests/' + asked.id + '/cancel', { method: 'POST', body: {} }, ApprovalRequest)).state, 'cancelled');
+  const progress = await f.tick(started.flow.id);
+  assert.equal(progress.kind, 'failed');
+  if (progress.kind === 'failed') assert.equal(progress.task.state, 'cancelled');
+  await assert.rejects(f.connections.start(input), { code: 'request_answered' });
 });

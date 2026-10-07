@@ -47,13 +47,6 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
   return actionResult(async () => {
     const form = await request.formData();
     const intent = formText(form, 'intent');
-    if (intent === 'role') {
-      await api(`/connections/${formText(form, 'roleId')}/role`, {
-        method: 'POST',
-        body: { arn: formText(form, 'arn'), region: formText(form, 'region') },
-      });
-      return api('/requests/' + params.id, {}, ApprovalRequest);
-    }
     const item = await api('/requests/' + params.id, {}, ApprovalRequest);
     const values = item.operations.map((operation, index) =>
       Object.fromEntries(
@@ -87,20 +80,6 @@ export default function RequestPage() {
     if (account.requestId && root?.requestId !== account.requestId && revalidator.state === 'idle')
       void revalidator.revalidate();
   }, [account.requestId, root?.requestId, revalidator]);
-  const role = item.results.find(
-    (value) =>
-      value &&
-      typeof value === 'object' &&
-      !Array.isArray(value) &&
-      value.kind === 'role' &&
-      value.pending,
-  ) as
-    | {
-        id: string;
-        principalArn: string;
-        externalId: string;
-      }
-    | undefined;
   usePolling(pending, 5000);
   return (
     <Page title={t('requests')} narrow>
@@ -172,7 +151,7 @@ export default function RequestPage() {
               <a href={item.continueUrl}>{t('finishConnection')}</a>
             </Button>
           )}
-          {pending && item.canRespond && !item.continueUrl && !role && (
+          {pending && item.canRespond && !item.continueUrl && (
             <div className="flex min-w-0 flex-wrap items-center gap-4">
               <Button
                 type="submit"
@@ -195,34 +174,6 @@ export default function RequestPage() {
           )}
         </div>
       </Form>
-      {pending && item.canRespond && role && (
-        <Panel title={t('role')}>
-          <p className="leading-relaxed">{t('roleHelp')}</p>
-          <JsonView
-            value={{
-              Version: '2012-10-17',
-              Statement: [
-                {
-                  Effect: 'Allow',
-                  Principal: { AWS: role.principalArn },
-                  Action: 'sts:AssumeRole',
-                  Condition: { StringEquals: { 'sts:ExternalId': role.externalId } },
-                },
-              ],
-            }}
-          />
-          <Form method="post">
-            <div className="flex min-w-0 flex-col gap-4">
-              <input type="hidden" name="roleId" value={role.id} />
-              <InputField name="arn" label={t('roleArn')} required />
-              <InputField name="region" label={t('region')} defaultValue="ap-northeast-1" required />
-              <Button type="submit" name="intent" value="role" variant="default">
-                {t('connect')}
-              </Button>
-            </div>
-          </Form>
-        </Panel>
-      )}
       {!account.principal && pending && (
         <Button variant="default" asChild>
           <Link to={'/signin?returnTo=' + encodeURIComponent('/requests/' + item.id)}>

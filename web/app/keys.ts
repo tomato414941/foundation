@@ -6,12 +6,15 @@ import type {
   RegistrationResponseJSON,
 } from '@simplewebauthn/browser';
 import { importJWK } from 'jose';
-import type { PrincipalView, PublicEncryptionKey, SealedContent } from '../../shared/contracts';
-import { base64url, encode, hold, open, seal, unwrap, wrap } from '../../shared/encryption';
+import type { PrincipalView, PublicEncryptionKey } from '../../shared/contracts';
+import { base64url, encode, hold, unwrap, wrap } from '../../shared/encryption';
 import { PrivateKeys, SignedBinding, bindKeys, canonical, newIdentityKeys, publicPart, signBinding } from '../../shared/authority';
 import type { BoundKeys, IdentityKeys } from '../../shared/authority';
-import { api, ApiFailure, session } from './api';
-import { KeySharingItem, listOf } from '../../shared/contracts';
+import { api, ApiFailure } from './api';
+import { listOf } from '../../shared/contracts';
+import { KeySharingItem } from '../../shared/protocol';
+import { protect } from '../../shared/custody';
+import type { CustodyContent } from '../../shared/custody';
 import { stored } from './storage';
 
 const unlocked = new Map<string, IdentityKeys>();
@@ -197,29 +200,6 @@ export async function decryptSecret(id: string, principalId: string) {
   return (await custodyClient(principalId)).reveal(id);
 }
 
-export async function sealSecret(
-  id: string,
-  owner: string,
-  content: Uint8Array,
-  server: { id: string; publicKey: PublicEncryptionKey },
-  allowUse: boolean,
-  extra: string[] = [],
-  existing = false,
-) {
-  const recipients = (
-    await api<{ items: Array<{ id: string; publicKey: PublicEncryptionKey }> }>(
-      existing ? `/resources/${id}/recipients` : `/principals/${owner}/recipients`,
-    )
-  ).items;
-  for (const id of extra)
-    if (id !== server.id && !recipients.some((value) => value.id === id)) {
-      const recipient = await api<{ id: string; publicKey: PublicEncryptionKey | null }>(`/identities/${id}`);
-      if (recipient.publicKey) recipients.push({ id, publicKey: recipient.publicKey });
-    }
-  if (allowUse) recipients.push(server);
-  if (!recipients.length) throw new ApiFailure('key_locked');
-  return seal(content, recipients, 'resource:' + id);
-}
 export async function mergeWithPasskey() {
   const proof = await assertion();
   const result = await api<{ id: string; fromId: string; wrappedKey: string | null; publicKey: PublicEncryptionKey | null }>(
@@ -236,27 +216,18 @@ export async function mergeWithPasskey() {
 
 export async function rekeySharing(path: string) {
   const plan = await api(path, {}, listOf(KeySharingItem));
-  const updates: Record<string, { version: number; sealed: SealedContent }> = {};
+  const updates: Record<string, { version: number; content: CustodyContent }> = {};
   if (!plan.items.length) return updates;
-  const principal = (await session()).principal;
-  if (!principal) throw new ApiFailure('unauthenticated');
-  let key = await getKey(principal.id);
-  if (!key) {
-    await authenticate(principal.id);
-    key = await getKey(principal.id);
-  }
-  if (!key) throw new ApiFailure('key_locked');
+  const { custodyClient } = await import('./custody');
+  const client = await custodyClient();
   for (const item of plan.items) {
-    let content: Uint8Array;
-    try {
-      content = await open(item.sealed, key, principal.id, 'resource:' + item.id);
-    } catch {
-      throw new ApiFailure('key_unavailable');
-    }
-    updates[item.id] = {
-      version: item.version,
-      sealed: await seal(content, item.recipients, 'resource:' + item.id),
-    };
+    const current = await client.read(item.id);
+    if (current.version !== item.version || canonical(current.content) !== canonical(item.content))
+      throw new ApiFailure('changed');
+    for (const recipient of item.policy.readers) await client.trusted(recipient);
+    updates[item.id] = { version: item.version,
+      content: await protect(await client.reveal(item.id), item.policy, item.content.materialRevision + 1,
+        client.binding, client.keys, item.content.metadata, item.content) };
   }
   return updates;
 }

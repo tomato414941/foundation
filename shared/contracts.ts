@@ -325,7 +325,7 @@ export const EnvironmentInput = z
     image: z.string().min(1).max(300).optional(),
     size: z.enum(['small', 'medium', 'large']).default('small'),
     lifetime: Lifetime.default({ idleSeconds: 3600, maxSeconds: 3600 }),
-    identityId: Id.nullable().default(null),
+    callerIds: z.array(Id).min(1).max(100).optional(),
   })
   .strict();
 export type EnvironmentOptions = z.infer<typeof EnvironmentInput>;
@@ -336,7 +336,7 @@ const custodyMetadata = {
 export const SecretResource = z.object({
   ...resourceBase,
   kind: z.literal('secret'),
-  data: z.object({ ...custodyMetadata, bytes: z.number().int().nonnegative(), allowUse: z.boolean() }),
+  data: z.object({ ...custodyMetadata, bytes: z.number().int().nonnegative() }),
 });
 export const ConnectionResource = z.object({
   ...resourceBase,
@@ -415,29 +415,8 @@ export type ConnectionView = z.infer<typeof ConnectionResource>;
 export type EnvironmentView = z.infer<typeof EnvironmentResource>;
 export type ObjectView = z.infer<typeof ObjectResource>;
 export const NewResource = z.discriminatedUnion('kind', [
-  z
-    .object({
-      kind: z.literal('secret'),
-      id: Id,
-      name: Name,
-      sealed: Sealed,
-      bytes: z.number().int().min(0).max(1_000_000),
-      allowUse: z.boolean().default(false),
-    })
-    .strict(),
   z.object({ kind: z.literal('service'), name: Name, definition: ServiceInputDefinition }).strict(),
   z.object({ kind: z.literal('method'), name: Name, definition: MethodDefinition }).strict(),
-  z
-    .object({
-      kind: z.literal('app'),
-      name: Name,
-      methodId: z.string().min(1).optional(),
-      serviceId: z.string().min(1).optional(),
-      clientId: z.string().min(1),
-      clientSecret: z.string().optional(),
-      fields: z.record(z.string(), z.string()).default({}),
-    })
-    .strict(),
   z.object({ kind: z.literal('environment'), name: Name.optional(), options: EnvironmentInput }).strict(),
   z.object({ kind: z.literal('function'), name: Name, definition: FunctionDefinition }).strict(),
 ]);
@@ -446,17 +425,10 @@ export const UpdateResource = z
   .object({
     version: z.number().int().positive(),
     name: Name.optional(),
-    sealed: Sealed.optional(),
-    bytes: z.number().int().nonnegative().max(1_000_000).optional(),
-    allowUse: z.boolean().optional(),
     definition: z.union([ServiceInputDefinition, MethodDefinition, FunctionDefinition]).optional(),
-    clientId: z.string().optional(),
-    clientSecret: z.string().optional(),
-    fields: z.record(z.string(), z.string()).optional(),
   })
   .strict();
 
-export const RunState = z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled']);
 export const Command = z
   .object({
     command: z.array(z.string().max(8192)).min(1).max(100),
@@ -465,37 +437,9 @@ export const Command = z
     inputs: z.array(Input).max(32).default([]),
   })
   .strict();
-export const RunInput = z.discriminatedUnion('kind', [
-  z
-    .object({ kind: z.literal('http'), request: HttpRequest, save: z.record(z.string(), Name).default({}) })
-    .strict(),
-  z.object({ kind: z.literal('command'), environmentId: Id, ...Command.shape }).strict(),
-  z
-    .object({
-      kind: z.literal('function'),
-      functionId: Id,
-      arguments: z.record(z.string(), z.string()).default({}),
-    })
-    .strict(),
-]);
-export type NewRun = z.infer<typeof RunInput>;
-export const Run = z.object({
-  id: Id,
-  ownerId: Id,
-  actorId: Id,
-  kind: z.enum(['http', 'command', 'function']),
-  resourceId: Id.nullable(),
-  state: RunState,
-  createdAt: Time,
-  startedAt: Time.nullable(),
-  finishedAt: Time.nullable(),
-  result: Json.nullable(),
-  error: z.string().nullable(),
-});
-export type RunView = z.infer<typeof Run>;
 export const Operation = z
   .object({
-    method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
+    method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'CONNECT']),
     path: z.string().startsWith('/api/').max(2048),
     body: Json.optional(),
     inputs: z
@@ -513,6 +457,8 @@ export const Operation = z
   })
   .strict();
 export type RequestedOperation = z.infer<typeof Operation>;
+export const ConnectionRequest = z.object({ ownerId: z.union([Id, z.literal('$approver')]),
+  methodId: z.string().min(1).max(200), connectionId: Id.optional(), environmentId: Id.optional(), name: Name.optional() }).strict();
 export const RequestInput = z
   .object({
     to: Id.optional(),

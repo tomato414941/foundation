@@ -18,10 +18,10 @@ export interface ResourceIdentity {
 }
 const resourceActions: Record<ResourceKindName, ActionName[]> = {
   secret: ['read', 'update', 'delete', 'share', 'transfer', 'reveal', 'use'],
-  connection: ['read', 'update', 'delete', 'share', 'transfer', 'use'],
+  connection: ['read', 'update', 'delete', 'share', 'transfer', 'reveal', 'use'],
   service: ['read', 'update', 'delete', 'share', 'transfer', 'use'],
   method: ['read', 'update', 'delete', 'share', 'transfer', 'use'],
-  app: ['read', 'update', 'delete', 'share', 'transfer', 'use'],
+  app: ['read', 'update', 'delete', 'share', 'transfer', 'reveal', 'use'],
   object: ['read', 'update', 'delete', 'share', 'transfer', 'use'],
   environment: ['read', 'update', 'delete', 'share', 'use', 'execute'],
   function: ['read', 'update', 'delete', 'share', 'transfer', 'execute'],
@@ -41,7 +41,7 @@ export class Authorization {
   async active(actor: Actor, connection: Queryable = this.db.pool) {
     const exists = await this.db.one<{ active: boolean }>(
       `SELECT EXISTS(SELECT 1 FROM principals WHERE id=$1)
-      AND ($2::uuid IS NULL OR EXISTS(SELECT 1 FROM credentials c LEFT JOIN resources e ON e.id=c.environment_id WHERE c.id=$2 AND c.principal_id=$1 AND (c.expires_at IS NULL OR c.expires_at>now()) AND (c.environment_id IS NULL OR e.data->>'state'='running')))
+      AND ($2::uuid IS NULL OR EXISTS(SELECT 1 FROM credentials c LEFT JOIN resources e ON e.id=c.environment_id WHERE c.id=$2 AND c.principal_id=$1 AND (c.expires_at IS NULL OR c.expires_at>now()) AND (c.environment_id IS NULL OR e.data->>'state' IN ('starting','running'))))
       AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM sessions WHERE id=$3 AND principal_id=$1 AND expires_at>now()))
       AND ($4::uuid IS NULL OR EXISTS(SELECT 1 FROM approval_requests WHERE id=$4 AND state='running' AND expires_at>now())) AS active`,
       [actor.id, actor.credentialId ?? null, actor.sessionId ?? null, actor.approvalId ?? null],

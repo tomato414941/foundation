@@ -78,6 +78,7 @@ export class ConnectionOperations {
 
   async commit(actor: Actor, id: string, fence: string, input: CustodyContent) {
     const content = await verifyContent(input);
+    this.custody.metadata(content);
     return this.db.transaction(async connection => {
       const operation = await this.operation(actor, id, fence, connection);
       await connection.query('SELECT id FROM resources WHERE id=$1 FOR UPDATE', [operation.resource_id]);

@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { Actor } from './authorization.js';
-import type { Resources } from './resources.js';
+import type { Resources, ResourceRow } from './resources.js';
 import type { Bindings } from './bindings.js';
 import type { Custody } from './custody.js';
 import type { Queryable } from './database.js';
 import { iso } from './database.js';
 import { canonical, hash } from '../shared/authority.js';
 import { matchesPin, verifyRun } from '../shared/custody.js';
-import type { CustodyContent, SealedRun } from '../shared/custody.js';
+import type { CustodyContent, ExecutionIntent, SealedRun } from '../shared/custody.js';
 import { Task, authorizeEnvironment, verifyEnvironment, verifyReceipt } from '../shared/execution.js';
 import type { RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/execution.js';
 import { fail, required } from './errors.js';
@@ -45,6 +45,7 @@ export interface ClaimedTask {
 }
 
 export class Delegation {
+  checkApproval?: (actor: Actor, intent: ExecutionIntent) => Promise<void>;
   constructor(
     readonly resources: Resources, readonly bindings: Bindings,
     readonly custody: Custody, readonly origin: string,
@@ -70,6 +71,14 @@ export class Delegation {
       const old = await this.resources.db.one<EnvironmentRow>(
         'SELECT * FROM executor_environments WHERE resource_id=$1 FOR UPDATE', [manifest.id], connection,
       );
+      const reserved = await this.resources.db.one<ResourceRow>(
+        'SELECT r.* FROM resources r JOIN environment_jobs j ON j.resource_id=r.id WHERE r.id=$1 FOR UPDATE OF r',
+        [manifest.id], connection,
+      );
+      if (reserved && (reserved.owner_id !== manifest.ownerId || reserved.data.executorId !== actor.id ||
+        !['starting', 'running'].includes(String(reserved.data.state)) || manifest.driver !== 'managed' ||
+        manifest.isolation !== 'container' || manifest.commandImage !== reserved.data.image))
+        fail(403, 'forbidden', 'Use the identity and isolation reserved for this environment.');
       if (old) {
         if (old.executor_id !== actor.id || old.registration.manifest.ownerId !== manifest.ownerId)
           fail(403, 'forbidden', 'This execution environment belongs to another identity.');
@@ -79,19 +88,20 @@ export class Delegation {
           fail(409, 'changed', 'Use the next environment revision.');
         await this.resources.authorization.requireResource(actor, await this.resources.get(manifest.id, connection), 'update', connection);
       } else {
-        if (!(await this.resources.authorization.canCreate(actor, manifest.ownerId, 'environment', connection)))
+        if (!reserved && !(await this.resources.authorization.canCreate(actor, manifest.ownerId, 'environment', connection)))
           fail(403, 'forbidden', 'You cannot open an environment for this principal.');
         if (manifest.revision !== 1) fail(400, 'invalid_revision', 'Start the environment at revision one.');
       }
       const now = new Date().toISOString();
       const data = {
+        ...(reserved?.data ?? {}),
         driver: manifest.driver, executorId: actor.id, operatorId: manifest.operatorId,
         capabilities: manifest.capabilities, isolation: manifest.isolation,
         manifestDigest: await hash(manifest),
-        size: 'small', lifetime: { idleSeconds: 86400, maxSeconds: 86400 }, identityId: null,
-        state: 'running', startedAt: now, stoppedAt: null, lastActiveAt: now, error: null,
+        size: reserved?.data.size ?? 'small', lifetime: reserved?.data.lifetime ?? { idleSeconds: 86400, maxSeconds: 86400 },
+        state: 'running', startedAt: reserved?.data.startedAt ?? now, stoppedAt: null, lastActiveAt: now, error: null,
       };
-      const row = old
+      const row = old || reserved
         ? await this.resources.update(await this.resources.get(manifest.id, connection), { name: manifest.name, data }, connection)
         : await this.resources.insert(manifest.ownerId, 'environment', manifest.name, data, { id: manifest.id }, connection);
       await connection.query(
@@ -146,6 +156,10 @@ export class Delegation {
     if (intent.origin !== this.origin || intent.actor.principalId !== actor.id)
       fail(403, 'forbidden', 'Sign execution requests with your own identity.');
     await this.bindings.requireCurrent(intent.actor);
+    if (intent.approval) {
+      if (!this.checkApproval) fail(503, 'approval_unavailable', 'The approval request cannot be checked.');
+      await this.checkApproval(actor, intent);
+    }
     await this.resources.authorization.requirePrincipal(actor, intent.ownerId, 'execute');
     const environment = await this.environment(intent.environmentId);
     if (environment.stopped_at) fail(409, 'environment_stopped', 'Choose an active execution environment.');
@@ -252,6 +266,10 @@ export class Delegation {
        AND phase='claimed' AND cancel_requested=false AND lease_until>now() RETURNING id`, [id, lease],
     );
     if (!updated) fail(409, 'lease_lost', 'The execution lease is no longer valid.');
+    await this.resources.db.pool.query(
+      "UPDATE resources SET data=jsonb_set(data,'{lastActiveAt}',to_jsonb($2::text)) WHERE id=$1",
+      [row.environment_id, new Date().toISOString()],
+    );
     return { ok: true as const };
   }
 

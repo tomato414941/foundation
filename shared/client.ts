@@ -4,7 +4,7 @@ import type { JsonValue, ResourceView } from './contracts.js';
 import { SignedBinding, canonical, hash, signedValue, verifyBinding } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
 import {
-  AccessPolicy, approvePolicy, authorizeUse, prepareRun, protect, reveal, verifyContent,
+  AccessPolicy, approvePolicy, authorizeUse, continuesPolicy, policyAuthority, prepareRun, protect, reveal, verifyContent,
 } from './custody.js';
 import type { CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun } from './custody.js';
 import { BoundRecipient, ProtectedRead, Registration } from './protocol.js';
@@ -68,9 +68,13 @@ export class CustodyClient {
   }
   async read(id: string) {
     const item = await this.api.json('/api/resources/' + Id.parse(id) + '/custody', {}, ProtectedRead);
-    const content = await verifyContent(item.content);
+    await this.observe(item.content, id);
+    return item;
+  }
+  async observe(input: CustodyContent, id = input.policy.id) {
+    const content = await verifyContent(input);
     if (content.policy.id !== id || content.policy.origin !== this.origin) throw new Error('The encrypted content belongs to another item.');
-    const author = content.policy.authorities.find(authority => authority.id === content.authorityId)!;
+    const author = policyAuthority(content);
     await this.trusted(author);
     const observed = await this.trust.checkpoint(id);
     if (observed) {
@@ -79,11 +83,11 @@ export class CustodyClient {
         (content.materialRevision === observed.materialRevision && await hash(content) !== observed.digest))
         throw new Error('The encrypted content is older than this device has already observed.');
       if (content.policy.revision > observed.policy.revision &&
-        !observed.policy.authorities.some(authority => canonical(authority) === canonical(author)))
+        !continuesPolicy(observed.policy, content))
         throw new Error('An existing policy authority must approve the new recipients.');
     }
     await this.trust.rememberContent(content);
-    return item;
+    return content;
   }
   async reveal(id: string) {
     return reveal((await this.read(id)).content, this.binding, this.keys.encryption);
@@ -106,7 +110,7 @@ export class CustodyClient {
     }
     return AccessPolicy.parse({ format: 1, id: options.id ?? options.previous?.id ?? crypto.randomUUID(),
       origin: this.origin, ownerId, kind, revision: (options.previous?.revision ?? 0) + 1,
-      authorities: options.previous?.authorities ?? [this.binding], readers, grants, producers: [] });
+      authorities: options.previous?.authorities ?? readers, readers, grants, producers: [] });
   }
   async save(name: string, bytes: Uint8Array, policy: CustodyPolicy,
     options: { metadata?: Record<string, JsonValue>; previous?: { content: CustodyContent; version: number } } = {}) {
@@ -114,7 +118,7 @@ export class CustodyClient {
     if (previous && canonical(policy) === canonical({ ...previous.content.policy, revision: policy.revision }))
       policy = { ...policy, revision: previous.content.policy.revision };
     const content = await protect(bytes, policy, (previous?.content.materialRevision ?? 0) + 1,
-      this.binding, this.keys, options.metadata);
+      this.binding, this.keys, options.metadata, previous?.content);
     const resource = await this.api.json('/api/resources/' + policy.id + '/custody', { method: 'PUT',
       body: { name, content, ...(previous ? { version: previous.version } : {}) } }, Resource);
     await this.trust.rememberContent(content);
@@ -141,10 +145,11 @@ export class CustodyClient {
       : await this.policy(ownerId, 'secret');
     policy.producers = [{ executor: environment.manifest.executor, runId, expiresAt,
       materialRevision: (previous?.materialRevision ?? 0) + 1 }];
-    return { name, approval: await approvePolicy(policy, this.binding, this.keys) };
+    return { name, approval: await approvePolicy(policy, this.binding, this.keys, previous) };
   }
   async prepare(ownerId: string, environmentId: string, input: ExecutionOperation,
-    options: { id?: string; sourceIds?: string[]; save?: Record<string, string>; expiresAt?: string } = {}) {
+    options: { id?: string; sourceIds?: string[]; save?: Record<string, string>; expiresAt?: string;
+      approval?: ExecutionIntent['approval'] } = {}) {
     const environment = await this.environment(environmentId), operation = RuntimeOperation.parse(input);
     const id = options.id ?? crypto.randomUUID(), expiresAt = options.expiresAt ?? new Date(Date.now() + 3_600_000).toISOString();
     const request = operation.kind === 'http' ? operation.request : operation.kind === 'function'
@@ -164,6 +169,7 @@ export class CustodyClient {
     const intent: ExecutionIntent = { format: 1, id, origin: this.origin, ownerId, actor: this.binding,
       environmentId, executor: environment.manifest.executor, environmentDigest: await hash(environment.manifest),
       operation: operation.kind, operationDigest: await hash(operation),
+      ...(options.approval ? { approval: options.approval } : {}),
       functionDigest: operation.kind === 'function' ? await hash(operation.definition) : null,
       sources: await Promise.all(sources.map(async content => ({ id: content.policy.id, kind: content.policy.kind,
         materialRevision: content.materialRevision, policyDigest: await hash(content.policy),

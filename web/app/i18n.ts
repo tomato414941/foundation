@@ -3,6 +3,13 @@ import { initReactI18next } from 'react-i18next';
 
 const words: Record<string, [string, string]> = {
   executionDestination: ['実行先', 'Run on'],
+  editorDisclosure: ['編集を許可した相手は、内容の表示と共有先の変更もできます。', 'Editors can also reveal content and change who has access.'],
+  approvedFunction: ['使用を許可する関数ID', 'Approved function ID'],
+  callerProgram: ['相手が指定するHTTPリクエストやコマンドにも使用を許可する', 'Allow use in HTTP requests and commands supplied by this person'],
+  callerProgramHelp: ['指定された処理によって秘密が相手へ渡る可能性があります。関数を限定する場合は選択しないでください。', 'The supplied program can disclose the secret to this person. Leave unchecked to allow only the selected function.'],
+  'errors.environment_required': ['実行先を選んでください。', 'Choose an executor.'],
+  'errors.function_required': ['関数を指定するか、任意の処理への使用を明示して許可してください。', 'Choose a function or explicitly allow caller-supplied programs.'],
+  'errors.caller_required': ['実行先に共有相手を依頼者として登録してください。', 'Register this person as an accepted caller on the executor.'],
   executorRoleHelp: ['選んだ実行先のAWSアカウントに、このロールの引き受けを許可してください。設定したExternal IDを入力します。', 'Allow the chosen executor’s AWS account to assume this role, then enter the configured External ID.'],
   approvedExecutors: ['使用を許可する実行先', 'Approved executors'],
   executorChoiceHelp: ['この処理を行う実行先を選んでください。停止中は、別の実行先へ切り替わらず待機します。', 'Choose where this operation runs. If it is offline, the operation waits for that executor.'],
@@ -108,11 +115,9 @@ const words: Record<string, [string, string]> = {
   reveal: ['内容を表示', 'Reveal content'],
   hide: ['内容を隠す', 'Hide content'],
   value: ['値', 'Value'],
-  allowUse: ['Foundationでの実行に使用する', 'Allow use in Foundation runs'],
-  allowUseHelp: [
-    'CLIへの受け渡しや、関数・実行環境で使えるようにします。',
-    'Make this secret available to CLI commands, functions, and environments.',
-  ],
+  managedExecutorHelp: ['Foundationが運用する実行環境です。起動後に実行先の鍵を確認し、使用を許可する秘密や接続を選んでください。',
+    'This executor is operated by Foundation. Verify its keys after startup, then choose which secrets and connections it may use.'],
+  removeRevokedConnection: ['アクセス取消済みの接続を削除', 'Remove the revoked connection'],
   keyLocked: [
     'シークレットを開くには、暗号化に対応したパスキーで認証してください。',
     'Authenticate with an encryption-capable passkey to open secrets.',

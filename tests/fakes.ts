@@ -1,6 +1,6 @@
 import type { PaymentProvider, PaymentEvent } from '../server/billing.js';
 import type { ObjectStore } from '../server/objects.js';
-import type { Runner, RunnerJob, CommandResult } from '../server/runner.js';
+import type { Runner } from '../server/runner.js';
 import type { EnvironmentOptions } from '../shared/contracts.js';
 
 export class MemoryPayments implements PaymentProvider {
@@ -44,23 +44,19 @@ export class MemoryObjects implements ObjectStore {
 export class MemoryRunner implements Runner {
   readonly enabled = true;
   machines = new Map<string, { environment: Record<string, string>; options: EnvironmentOptions }>();
-  jobs: RunnerJob[] = [];
-  result: CommandResult = { exitCode: 0, stdout: 'ok', stderr: '', timedOut: false, truncated: false };
+  volumes = new Set<string>();
   async start(
     id: string,
     options: EnvironmentOptions,
     environment: Record<string, string>,
-    created: (id: string) => Promise<void>,
+    created: (id: string, volume: string) => Promise<void>,
   ) {
     this.machines.set(id, { environment, options });
-    await created(id);
+    this.volumes.add('vol_' + id.replaceAll('-', ''));
+    await created(id, 'vol_' + id.replaceAll('-', ''));
     return id;
   }
-  async execute(_id: string, job: RunnerJob, signal: AbortSignal) {
-    signal.throwIfAborted();
-    this.jobs.push(job);
-    return this.result;
-  }
+  async removeVolume(id: string) { this.volumes.delete(id); }
   async stop(id: string) {
     this.machines.delete(id);
   }

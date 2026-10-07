@@ -130,6 +130,8 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     locked,
     serviceId: query.get('service'),
     methodId: query.get('method'),
+    approvalId: query.get('approval'),
+    environmentId: query.get('environment'),
   };
 }
 export async function formAction({ params, request }: ActionFunctionArgs) {
@@ -154,6 +156,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       const progress = await client.start({
         ownerId: owner, environmentId: formText(form, 'environmentId'), methodId, method,
         name: name || existing?.name || method.name,
+        ...(formText(form, 'approvalId') ? { approvalId: formText(form, 'approvalId') } : {}),
         appId: formText(form, 'appId') || undefined,
         fields,
         ...(method.kind === 'role' ? { role: { arn: formText(form, 'arn'), region: formText(form, 'region'), externalId: formText(form, 'externalId') } } : {}),
@@ -204,8 +207,6 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
           idleSeconds: Number(formText(form, 'idle')) * 60,
           maxSeconds: Number(formText(form, 'maximum')) * 60,
         },
-        identityId:
-          formText(form, 'identityId') === 'none' ? null : formText(form, 'identityId') || null,
       };
     else if (kind === 'function')
       body.definition = {
@@ -382,6 +383,7 @@ export default function ResourceForm() {
         <Form method="post" encType="multipart/form-data">
           <div className="flex min-w-0 flex-col gap-6">
             <input type="hidden" name="version" value={existing?.version ?? ''} />
+            {data.approvalId && <input type="hidden" name="approvalId" value={data.approvalId} />}
             {existing?.kind === 'connection' && (
               <input type="hidden" name="connectionId" value={existing.id} />
             )}
@@ -602,7 +604,7 @@ export default function ResourceForm() {
                   <InputField name="externalId" label="External ID" required minLength={16} />
                 </Panel>}
                 {['secret', 'app', 'connection'].includes(data.kind) && <EnvironmentChoice items={data.environments}
-                  selected={data.selectedExecutors} multiple={data.kind !== 'connection'} />}
+                  selected={data.environmentId ? [data.environmentId] : data.selectedExecutors} multiple={data.kind !== 'connection'} />}
                 {data.kind === 'environment' && (
                   <Panel>
                     <p className="leading-relaxed text-muted-foreground text-sm">
@@ -645,16 +647,7 @@ export default function ResourceForm() {
                       min={1}
                       max={1440}
                     />
-                    <SelectField name="identityId" label={t('identity')} defaultValue="none">
-                      <SelectItem value="none">{t('none')}</SelectItem>
-                      {sessionData.principals
-                        .filter((item) => item.permissions.includes('credentials'))
-                        .map((item) => (
-                          <SelectItem key={item.id} value={item.id}>
-                            {item.name}
-                          </SelectItem>
-                        ))}
-                    </SelectField>
+                    <Notice tone="info">{t('managedExecutorHelp')}</Notice>
                   </Panel>
                 )}
                 {data.kind === 'function' && (

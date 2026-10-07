@@ -1,96 +1,62 @@
-import type { Database, Queryable } from './database.js';
-import type { Authorization, Actor } from './authorization.js';
+import type { Queryable } from './database.js';
+import type { Actor } from './authorization.js';
 import type { ResourceRow } from './resources.js';
-import type { PublicEncryptionKey, SealedContent } from '../shared/contracts.js';
-import { base64url, encode } from '../shared/encryption.js';
+import type { Custody } from './custody.js';
+import type { BoundKeys } from '../shared/authority.js';
+import { canonical } from '../shared/authority.js';
+import type { CustodyContent } from '../shared/custody.js';
 import { fail } from './errors.js';
-import { validateRecipientKeys } from './encryption-validation.js';
 
-export type KeyUpdates = Record<string, { version: number; sealed: SealedContent }>;
+export type KeyUpdates = Record<string, { version: number; content: CustodyContent }>;
 
 export class KeySharing {
-  constructor(
-    readonly db: Database,
-    readonly authorization: Authorization,
-    readonly serverId: string,
-  ) {}
-
-  async plan(
-    actor: Actor,
-    target: string,
-    subject: string,
-    relation: 'owner' | 'member',
-    connection: Queryable = this.db.pool,
-  ) {
-    const descendants = await this.authorization.standsAs(target, connection);
-    const rows = await this.db.all<ResourceRow>(
-      "SELECT * FROM resources WHERE kind='secret' AND owner_id=ANY($1::uuid[]) ORDER BY id",
-      [descendants],
-      connection,
-    );
+  constructor(readonly custody: Custody) {}
+  async plan(actor: Actor, target: string, subject: string, relation: 'owner' | 'member',
+    connection: Queryable = this.custody.resources.db.pool, remove = false) {
+    const { resources, bindings } = this.custody;
+    const descendants = await resources.authorization.standsAs(target, connection);
+    const rows = await resources.db.all<ResourceRow>(
+      "SELECT * FROM resources WHERE kind IN ('secret','connection','app') AND owner_id=ANY($1::uuid[]) ORDER BY id",
+      [descendants], connection);
     const items = [];
     for (const row of rows) {
-      const recipients = await this.db.all<{ id: string; name: string; public_key: PublicEncryptionKey }>(
+      const content = await this.custody.get(row.id, connection);
+      const oldReaders = new Set((await resources.recipients(row.owner_id, connection)).map(item => item.id));
+      const next = await resources.db.all<{ id: string }>(
         `WITH RECURSIVE edges(subject_id,principal_id) AS (
-        SELECT subject_id,principal_id FROM relations WHERE relation IN ('owner','member') AND NOT ($3='owner' AND relation='owner' AND principal_id=$1)
-        UNION SELECT $2::uuid,$1::uuid
-      ), readers(id) AS (
-        SELECT $4::uuid UNION SELECT principal_id FROM grants WHERE resource_id=$5 AND 'reveal'=ANY(actions)
-        UNION SELECT e.subject_id FROM edges e JOIN readers r ON e.principal_id=r.id
-      ) SELECT p.id,p.name,p.public_key FROM principals p WHERE p.public_key IS NOT NULL AND (
-        p.id IN (SELECT id FROM readers) OR (p.id=$6 AND EXISTS(SELECT 1 FROM grants WHERE resource_id=$5 AND principal_id=$6 AND 'use'=ANY(actions)))
-      ) ORDER BY p.id`,
-        [target, subject, relation, row.owner_id, row.id, this.serverId],
-        connection,
-      );
-      if (!recipients.some((recipient) => recipient.id !== this.serverId))
-        fail(409, 'encryption_key_required', 'The new owner or member needs an encryption key.');
-      const current = new Set(row.sealed!.recipients.map((recipient) => recipient.header.kid));
-      if (current.size === recipients.length && recipients.every((recipient) => current.has(recipient.id)))
-        continue;
-      await this.authorization.requireResource(actor, row, 'reveal', connection);
-      await this.authorization.requireResource(actor, row, 'update', connection);
-      items.push({
-        id: row.id,
-        name: row.name,
-        version: row.version,
-        sealed: row.sealed!,
-        recipients: recipients.map((recipient) => ({
-          id: recipient.id,
-          name: recipient.name,
-          publicKey: recipient.public_key,
-        })),
-      });
+          SELECT subject_id,principal_id FROM relations WHERE relation IN ('owner','member')
+            AND NOT(principal_id=$1 AND relation=$3 AND ($3='owner' OR subject_id=$2))
+          UNION SELECT $2::uuid,$1::uuid WHERE NOT $5::boolean
+        ), readers(id) AS (SELECT $4::uuid UNION SELECT e.subject_id FROM edges e JOIN readers r ON e.principal_id=r.id)
+        SELECT p.id FROM principals p JOIN readers r ON r.id=p.id WHERE p.public_key IS NOT NULL ORDER BY p.id`,
+        [target, subject, relation, row.owner_id, remove], connection);
+      const readers: BoundKeys[] = await Promise.all(next.map(async item => (await bindings.current(item.id, connection)).binding));
+      if (!readers.length) fail(409, 'encryption_key_required', 'The owner or remaining members need encryption keys.');
+      const removed = (binding: BoundKeys) => oldReaders.has(binding.principalId) && !readers.some(next => next.id === binding.id);
+      const unique = (values: BoundKeys[]) => [...new Map(values.map(item => [item.id, item])).values()];
+      const policy = { ...content.policy, revision: content.policy.revision + 1,
+        readers: unique([...content.policy.readers.filter(binding => !removed(binding)), ...readers]),
+        authorities: unique([...content.policy.authorities.filter(binding => !removed(binding)), ...readers]),
+        grants: content.policy.grants.filter(grant => !removed(grant.actor) && !removed(grant.executor)), producers: [],
+        ...(content.policy.observers ? { observers: content.policy.observers.filter(id => !oldReaders.has(id) || readers.some(item => item.principalId === id)) } : {}),
+      };
+      if (canonical({ ...policy, revision: content.policy.revision }) === canonical(content.policy)) continue;
+      await resources.authorization.requireResource(actor, row, 'reveal', connection);
+      await resources.authorization.requireResource(actor, row, 'update', connection);
+      items.push({ id: row.id, name: row.name, version: row.version, content, policy });
     }
     return { items, next: null };
   }
-
-  async apply(
-    actor: Actor,
-    target: string,
-    subject: string,
-    relation: 'owner' | 'member',
-    updates: KeyUpdates,
-    connection: Queryable,
-  ) {
-    const plan = await this.plan(actor, target, subject, relation, connection);
+  async apply(actor: Actor, target: string, subject: string, relation: 'owner' | 'member',
+    updates: KeyUpdates, connection: Queryable, remove = false) {
+    const plan = await this.plan(actor, target, subject, relation, connection, remove);
     for (const item of plan.items) {
       const update = updates[item.id];
-      if (!update) fail(409, 'rekey_required', 'Encrypt existing secrets for the new owner or member.');
-      if (update.version !== item.version) fail(409, 'changed', 'A secret changed. Reload before sharing.');
-      const addressed = new Set(update.sealed.recipients.map((recipient) => recipient.header.kid));
-      if (
-        update.sealed.aad !== base64url(encode('resource:' + item.id)) ||
-        addressed.size !== item.recipients.length ||
-        update.sealed.recipients.length !== addressed.size ||
-        item.recipients.some((recipient) => !addressed.has(recipient.id))
-      )
-        fail(400, 'missing_recipient', 'Encrypt the secret for the specified recipients.');
-      validateRecipientKeys(update.sealed, item.recipients);
-      await connection.query(
-        "UPDATE resources SET sealed=$2,data=jsonb_set(data,'{recipients}',$3::jsonb),version=version+1,updated_at=now() WHERE id=$1",
-        [item.id, JSON.stringify(update.sealed), JSON.stringify([...addressed])],
-      );
+      if (!update) fail(409, 'rekey_required', 'Re-encrypt protected items for their new owners and members.');
+      if (update.version !== item.version || canonical(update.content.policy) !== canonical(item.policy) ||
+        canonical(update.content.metadata) !== canonical(item.content.metadata))
+        fail(409, 'changed', 'Use the current recipient plan before changing access.');
+      await this.custody.put(actor, { ...update, name: item.name }, connection, item.policy.readers);
     }
   }
 }

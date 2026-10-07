@@ -35,16 +35,23 @@ export const AccessPolicy = z.object({
   authorities: z.array(KeyBinding).min(1).max(100),
   readers: z.array(KeyBinding).min(1).max(100),
   grants: z.array(ExecutionGrant).max(100),
+  observers: z.array(Id).max(100).optional(),
   producers: z.array(z.object({ executor: KeyBinding, runId: Id, expiresAt: Time,
     materialRevision: z.number().int().positive().default(1) }).strict()).max(100).default([]),
 }).strict();
 export type CustodyPolicy = z.infer<typeof AccessPolicy>;
-export const PolicyApproval = z.object({ policy: AccessPolicy, authorityId: Id, signature: Signature }).strict();
+const AuthoritySet = z.object({ ownerId: Id, authorities: z.array(KeyBinding).min(1).max(100) }).strict();
+const HandoffBody = z.object({ origin: Origin, id: Id, kind: ProtectedKind, revision: z.number().int().positive(),
+  from: AuthoritySet, to: AuthoritySet, policyDigest: Fingerprint, previous: Fingerprint.nullable(), signerId: Id }).strict();
+export const AuthorityHandoff = HandoffBody.extend({ signature: Signature });
+const Lineage = z.array(AuthorityHandoff).max(16);
+export const PolicyApproval = z.object({ policy: AccessPolicy, authorityId: Id, signature: Signature, lineage: Lineage.optional() }).strict();
 export type ApprovedPolicy = z.infer<typeof PolicyApproval>;
 export const ProtectedContent = z.object({
   policy: AccessPolicy,
   authorityId: Id,
   authorization: Signature,
+  lineage: Lineage.optional(),
   materialRevision: z.number().int().positive(),
   updatedAt: Time,
   creationRunId: Id.nullable(),
@@ -54,6 +61,59 @@ export const ProtectedContent = z.object({
   signature: Signature,
 }).strict();
 export type CustodyContent = z.infer<typeof ProtectedContent>;
+
+const authoritySet = (policy: CustodyPolicy) => ({ ownerId: policy.ownerId, authorities: policy.authorities });
+
+async function validateLineage(policy: CustodyPolicy, lineage: z.infer<typeof Lineage> = []) {
+  let preceding: z.infer<typeof AuthorityHandoff> | undefined;
+  for (const entry of lineage) {
+    const { signature, ...body } = entry;
+    if (entry.origin !== policy.origin || entry.id !== policy.id || entry.kind !== policy.kind ||
+      entry.revision > policy.revision || (preceding && (entry.revision <= preceding.revision ||
+        canonical(preceding.to) !== canonical(entry.from))) ||
+      entry.previous !== (preceding ? await hash(preceding) : null))
+      throw new Error('Keep the signed chain of authority changes for this item.');
+    const signer = entry.from.authorities.find(binding => binding.id === entry.signerId);
+    if (!signer) throw new Error('Only an existing authority can hand over this item.');
+    await verify(body, signature, signer.signing, 'authority-handoff');
+    preceding = entry;
+  }
+  if (preceding && canonical(preceding.to) !== canonical(authoritySet(policy)))
+    throw new Error('Use the authorities approved by the latest handoff.');
+}
+
+export function policyAuthority(content: Pick<CustodyContent, 'policy' | 'authorityId' | 'lineage'>): BoundKeys {
+  const current = content.policy.authorities.find(binding => binding.id === content.authorityId);
+  if (current) return current;
+  const handoff = content.lineage?.at(-1);
+  const prior = handoff?.revision === content.policy.revision
+    ? handoff.from.authorities.find(binding => binding.id === content.authorityId) : undefined;
+  if (!prior || prior.id !== handoff?.signerId) throw new Error('The policy must be signed by an approved authority.');
+  return prior;
+}
+
+export function continuesPolicy(previous: CustodyPolicy, content: Pick<CustodyContent, 'policy' | 'lineage'>) {
+  if (previous.id !== content.policy.id || previous.origin !== content.policy.origin || previous.kind !== content.policy.kind) return false;
+  const expected = canonical(authoritySet(previous));
+  if (expected === canonical(authoritySet(content.policy))) return true;
+  return Boolean(content.lineage?.some(entry => entry.revision > previous.revision && canonical(entry.from) === expected));
+}
+
+async function nextLineage(previous: CustodyContent | undefined, policy: CustodyPolicy, signer: BoundKeys, keys: KeyMaterial) {
+  const lineage = [...(previous?.lineage ?? [])];
+  if (previous && canonical(authoritySet(previous.policy)) !== canonical(authoritySet(policy))) {
+    await verifyContent(previous);
+    if (!previous.policy.authorities.some(authority => canonical(authority) === canonical(signer)) ||
+      previous.policy.id !== policy.id || previous.policy.origin !== policy.origin || previous.policy.kind !== policy.kind ||
+      policy.revision !== previous.policy.revision + 1)
+      throw new Error('An existing authority must approve this handoff at the next policy revision.');
+    const body = HandoffBody.parse({ origin: policy.origin, id: policy.id, kind: policy.kind, revision: policy.revision,
+      from: authoritySet(previous.policy), to: authoritySet(policy), policyDigest: await hash(policy),
+      previous: lineage.length ? await hash(lineage.at(-1)) : null, signerId: signer.id });
+    lineage.push({ ...body, signature: await sign(body, keys.signing, 'authority-handoff') });
+  }
+  return lineage.length ? { lineage: Lineage.parse(lineage) } : {};
+}
 
 export async function validatePolicy(input: CustodyPolicy) {
   const policy = AccessPolicy.parse(input);
@@ -98,16 +158,19 @@ export async function protect(
   bytes: Uint8Array, input: CustodyPolicy, materialRevision: number,
   signer: BoundKeys, keys: KeyMaterial,
   metadata?: Record<string, JsonValue>,
+  previous?: CustodyContent,
 ): Promise<CustodyContent> {
   if (bytes.byteLength > 1_000_000) throw new Error('The content exceeds 1,000,000 bytes.');
   const policy = await validatePolicy(input);
-  if (!policy.authorities.some(binding => canonical(binding) === canonical(signer)))
+  const lineage = await nextLineage(previous, policy, signer, keys);
+  if (!policy.authorities.some(binding => canonical(binding) === canonical(signer)) &&
+    lineage.lineage?.at(-1)?.revision !== policy.revision)
     throw new Error('Only a policy authority can replace its content.');
   const sealed = await seal(bytes, policyRecipients(policy).map(binding => ({
     id: binding.id, publicKey: binding.encryption,
   })), await contentContext(policy, materialRevision));
   const value = {
-    policy, authorityId: signer.id, authorization: await sign(policy, keys.signing, 'access-policy'),
+    policy, ...lineage, authorityId: signer.id, authorization: await sign(policy, keys.signing, 'access-policy'),
     materialRevision, updatedAt: new Date().toISOString(), creationRunId: null,
     metadata: metadata ?? (policy.kind === 'secret' ? { bytes: bytes.byteLength } : {}), sealed, signerId: signer.id,
   };
@@ -120,10 +183,14 @@ export async function verifyContent(input: CustodyContent) {
   const content = ProtectedContent.parse(input);
   const { signature, ...value } = content;
   await validatePolicy(content.policy);
-  const authority = content.policy.authorities.find(binding => binding.id === content.authorityId);
-  if (!authority) throw new Error('The policy must be signed by an authority.');
+  await validateLineage(content.policy, content.lineage);
+  const authority = policyAuthority(content);
+  const handoff = content.lineage?.at(-1);
+  if (handoff?.revision === content.policy.revision && handoff.policyDigest !== await hash(content.policy))
+    throw new Error('The handoff approves a different access policy.');
   await verify(content.policy, content.authorization, authority.signing, 'access-policy');
-  const signer = content.policy.authorities.find(binding => binding.id === content.signerId) ??
+  const signer = (content.signerId === authority.id ? authority : undefined) ??
+    content.policy.authorities.find(binding => binding.id === content.signerId) ??
     content.policy.producers.find(producer =>
       producer.executor.id === content.signerId && producer.runId === content.creationRunId &&
       producer.materialRevision === content.materialRevision &&
@@ -166,11 +233,11 @@ export async function renewContent(
   return result;
 }
 
-export async function approvePolicy(policy: CustodyPolicy, authority: BoundKeys, keys: KeyMaterial): Promise<ApprovedPolicy> {
+export async function approvePolicy(policy: CustodyPolicy, authority: BoundKeys, keys: KeyMaterial, previous?: CustodyContent): Promise<ApprovedPolicy> {
   const approved = await validatePolicy(policy);
   if (!approved.authorities.some(binding => canonical(binding) === canonical(authority)))
     throw new Error('Only an authority can approve this policy.');
-  const approval = { policy: approved, authorityId: authority.id,
+  const approval = { policy: approved, ...await nextLineage(previous, approved, authority, keys), authorityId: authority.id,
     signature: await sign(approved, keys.signing, 'access-policy') };
   await verifyPolicyApproval(approval);
   return approval;
@@ -179,6 +246,10 @@ export async function approvePolicy(policy: CustodyPolicy, authority: BoundKeys,
 export async function verifyPolicyApproval(input: ApprovedPolicy) {
   const approval = PolicyApproval.parse(input);
   await validatePolicy(approval.policy);
+  await validateLineage(approval.policy, approval.lineage);
+  const handoff = approval.lineage?.at(-1);
+  if (handoff?.revision === approval.policy.revision && handoff.policyDigest !== await hash(approval.policy))
+    throw new Error('The handoff approves a different access policy.');
   const authority = approval.policy.authorities.find(binding => binding.id === approval.authorityId);
   if (!authority) throw new Error('The policy must be signed by an authority.');
   await verify(approval.policy, approval.signature, authority.signing, 'access-policy');
@@ -198,7 +269,7 @@ export async function produceContent(
   const sealed = await seal(bytes, policyRecipients(policy).map(binding => ({
     id: binding.id, publicKey: binding.encryption,
   })), await contentContext(policy, producer.materialRevision));
-  const value = { policy, authorityId: approval.authorityId, authorization: approval.signature,
+  const value = { policy, ...(approval.lineage ? { lineage: approval.lineage } : {}), authorityId: approval.authorityId, authorization: approval.signature,
     materialRevision: producer.materialRevision, updatedAt: new Date().toISOString(), creationRunId: runId, metadata,
     sealed, signerId: executor.id };
   const result = { ...value, signature: await sign(value, keys.signing, 'resource') };
@@ -232,6 +303,7 @@ export async function matchesPin(content: CustodyContent, pin: z.infer<typeof So
 }
 export const RunIntent = z.object({
   format: z.literal(1), id: Id, origin: Origin, ownerId: Id,
+  approval: z.object({ id: Id, index: z.number().int().min(0).max(7) }).strict().optional(),
   actor: KeyBinding, environmentId: Id, executor: KeyBinding,
   environmentDigest: Fingerprint,
   operation: ExecutionKind, functionDigest: Fingerprint.nullable(),

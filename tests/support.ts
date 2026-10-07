@@ -5,14 +5,17 @@ import { join } from 'node:path';
 import pg from 'pg';
 import { configuration } from '../server/config.js';
 import { Database } from '../server/database.js';
-import { Vault, ServerIdentity } from '../server/vault.js';
+import { Vault } from '../server/vault.js';
 import { Authorization } from '../server/authorization.js';
 import { Audit } from '../server/audit.js';
 import { Principals } from '../server/principals.js';
 import { Authentication } from '../server/authentication.js';
 import { Resources } from '../server/resources.js';
 import type { Mailer } from '../server/mail.js';
-import { newEncryptionKey } from '../shared/encryption.js';
+import { bindKeys, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
+import { Bindings } from '../server/bindings.js';
+import { Custody } from '../server/custody.js';
+import { KeySharing } from '../server/key-sharing.js';
 
 export const databaseUrl =
   process.env.TEST_DATABASE_URL ??
@@ -35,23 +38,28 @@ export async function fixture(overrides: Record<string, string> = {}) {
     FOUNDATION_DATA: dataDirectory,
     FOUNDATION_ORIGIN: 'https://foundation.test',
     FOUNDATION_LOG_LEVEL: 'silent',
+    FLY_COMMAND_IMAGE: 'docker.io/library/node@sha256:' + '1'.repeat(64),
     ...overrides,
   });
   const db = new Database(databaseUrl, { schema });
   await db.initialize();
-  const vault = await Vault.initialize(db, config),
-    identity = await ServerIdentity.initialize(db, vault);
+  const vault = await Vault.initialize(db, config);
   const authorization = new Authorization(db),
     audit = new Audit(db),
-    principals = new Principals(db, authorization, audit, identity.id);
+    principals = new Principals(db, authorization, audit);
   const mailer = new TestMailer(),
     authentication = new Authentication(db, principals, authorization, audit, mailer, config);
-  const resources = new Resources(db, authorization, audit, principals, identity);
+  const resources = new Resources(db, authorization, audit, principals);
+  const bindings = new Bindings(db, authorization, audit), custody = new Custody(resources, bindings, config.origin);
+  principals.keySharing = new KeySharing(custody);
   async function person(name = 'Owner') {
-    const keys = await newEncryptionKey();
+    const identityKeys = await newIdentityKeys();
+    const keys = { ...identityKeys, publicKey: publicPart(identityKeys.encryption), privateKey: identityKeys.encryption };
     const enrollment = await authentication.enroll(name, keys.publicKey);
     const actor = (await authentication.authenticate(enrollment.token))!;
-    return { ...enrollment, actor, keys };
+    const binding = bindKeys(actor.id, identityKeys);
+    await bindings.publish(actor, await signBinding(binding, identityKeys));
+    return { ...enrollment, actor, keys, binding };
   }
   async function close() {
     await db.close();
@@ -63,7 +71,8 @@ export async function fixture(overrides: Record<string, string> = {}) {
     config,
     db,
     vault,
-    identity,
+    bindings,
+    custody,
     authorization,
     audit,
     principals,

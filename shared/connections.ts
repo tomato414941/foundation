@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Id, JsonObject, MethodDefinition, Name } from './contracts.js';
+import { AuthKind, Id, JsonObject, MethodDefinition, Name } from './contracts.js';
 import { Fingerprint, hash } from './authority.js';
 import { PolicyApproval } from './custody.js';
 
@@ -28,6 +28,16 @@ export const ConnectionMaterial = z.object({
 });
 export type ConnectionState = z.infer<typeof ConnectionMaterial>;
 
+export const AppMetadata = z.object({ methodId: z.string().min(1).max(200),
+  clientId: z.string().max(1000), generation: Id }).strict();
+export const ConnectionMetadata = z.object({
+  methodId: z.string().min(1).max(200), methodName: Name, methodKind: AuthKind,
+  generation: Id, authorizationDigest: Fingerprint, appId: Id.nullable(),
+  account: z.string().max(2000), accountId: z.string().max(2000).nullable(), accountVerified: z.boolean(),
+  scopes: z.array(z.string().max(1000)).max(200), scopesStatus: z.enum(['unknown', 'requested', 'reported']),
+  outputs: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(100), state: z.literal('ready'),
+}).strict();
+
 export async function connectionMetadata(state: ConnectionState) {
   const outputs = state.method.kind === 'role'
     ? ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION']
@@ -39,7 +49,7 @@ export async function connectionMetadata(state: ConnectionState) {
     accountVerified: state.oauth?.accountVerified ?? false,
     scopes: [...(state.oauth?.scopes ?? [])].sort(), role: state.role ?? null,
   });
-  return {
+  return ConnectionMetadata.parse({
     methodId: state.methodId, methodName: state.method.name, methodKind: state.method.kind,
     generation: state.generation, authorizationDigest, appId: state.appId,
     account: state.oauth?.accountName ?? state.role?.arn ?? state.method.name,
@@ -47,7 +57,7 @@ export async function connectionMetadata(state: ConnectionState) {
     accountVerified: Boolean(state.role || state.oauth?.accountVerified),
     scopes: state.oauth?.scopes ?? [], scopesStatus: state.oauth?.scopesStatus ?? 'unknown',
     outputs, state: 'ready' as const,
-  };
+  });
 }
 
 const FlowStart = z.object({
