@@ -197,3 +197,58 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS audit_owner ON audit_log(owner_id,id DESC);
+
+CREATE TABLE IF NOT EXISTS principal_key_bindings (
+  id uuid PRIMARY KEY,
+  principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  binding jsonb NOT NULL,
+  signature text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  retired_at timestamptz
+);
+CREATE UNIQUE INDEX IF NOT EXISTS principal_current_binding ON principal_key_bindings(principal_id) WHERE retired_at IS NULL;
+CREATE TABLE IF NOT EXISTS resource_custody (
+  resource_id uuid PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+  content jsonb NOT NULL
+);
+CREATE TABLE IF NOT EXISTS executor_environments (
+  resource_id uuid PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+  executor_id uuid NOT NULL REFERENCES principals(id),
+  registration jsonb NOT NULL,
+  heartbeat_at timestamptz,
+  stopped_at timestamptz
+);
+CREATE TABLE IF NOT EXISTS execution_tasks (
+  id uuid PRIMARY KEY,
+  owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  actor_id uuid NOT NULL REFERENCES principals(id),
+  environment_id uuid NOT NULL REFERENCES executor_environments(resource_id),
+  kind text NOT NULL CHECK(kind IN ('http','command','function','connect','refresh','revoke')),
+  state text NOT NULL CHECK(state IN ('queued','running','succeeded','failed','cancelled','uncertain')),
+  actor jsonb NOT NULL,
+  request jsonb NOT NULL,
+  receipt jsonb,
+  error text,
+  phase text NOT NULL DEFAULT 'queued' CHECK(phase IN ('queued','claimed','dispatched','settled')),
+  cancel_requested boolean NOT NULL DEFAULT false,
+  lease_token uuid,
+  lease_until timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  started_at timestamptz,
+  finished_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS execution_queue ON execution_tasks(environment_id,state,created_at);
+CREATE INDEX IF NOT EXISTS execution_owner ON execution_tasks(owner_id,created_at DESC);
+ALTER TABLE execution_tasks ADD COLUMN IF NOT EXISTS cancel_requested boolean NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS connection_operations (
+  id uuid PRIMARY KEY,
+  resource_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+  executor_id uuid NOT NULL REFERENCES principals(id),
+  expected_revision integer NOT NULL,
+  state text NOT NULL CHECK(state IN ('prepared','in_flight','committed','uncertain','aborted')),
+  fence bigint GENERATED ALWAYS AS IDENTITY,
+  result jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS connection_current_operation ON connection_operations(resource_id) WHERE state IN ('prepared','in_flight','uncertain');

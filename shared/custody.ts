@@ -167,6 +167,7 @@ export const SourcePin = z.object({
 export const RunIntent = z.object({
   format: z.literal(1), id: Id, origin: Origin, ownerId: Id,
   actor: KeyBinding, environmentId: Id, executor: KeyBinding,
+  environmentDigest: Fingerprint,
   operation: ExecutionKind, functionDigest: Fingerprint.nullable(),
   operationDigest: Fingerprint,
   sources: z.array(SourcePin).max(100),

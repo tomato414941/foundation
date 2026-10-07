@@ -29,6 +29,7 @@ async function setup() {
   const intent: ExecutionIntent = {
     format: 1, id: crypto.randomUUID(), origin: policy.origin, ownerId: policy.ownerId,
     actor: caller.binding, environmentId: crypto.randomUUID(), executor: executor.binding,
+    environmentDigest: await hash({ environment: 'test' }),
     operation: 'http', functionDigest: null, operationDigest: await hash(operation),
     sources: [{ id: policy.id, kind: 'secret', policyDigest: await hash(policy), materialRevision: 1 }],
     resultRecipients: [caller.binding], createdAt: new Date().toISOString(),
