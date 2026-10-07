@@ -30,6 +30,8 @@ import { configPath, origin, readIdentity, saveIdentity, secureWrite } from './c
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
 import { startAgent } from './agent.js';
+import { connectionClient, flowOutput, saveApp, startConnection } from './connections.js';
+import type { FlowProgress } from '../../shared/connection-client.js';
 
 const help = `Foundation ${packageInfo.version}
 
@@ -43,6 +45,10 @@ Usage: foundation <command> [options]
   schema [--output FILE]                Read the OpenAPI specification
   trust ID --fingerprint VALUE         Trust identity keys verified with their holder
   agent start [--id ID]                Register this machine as an execution environment
+  app NAME --method ID --client-id ID  Encrypt an OAuth application (--for ENV to allow use)
+  connect --method ID --environment ID Start a connection on the selected executor
+  connect wait ID                      Continue after service authorization
+  connect accept ID                    Save the reviewed connection and its permissions
   keep NAME (--file FILE | --stdin)    Encrypt and save a secret (--for ENV to allow execution)
   read ID [--output FILE]               Decrypt a secret you can reveal
   exec --inputs JSON -- COMMAND ...    Deliver inputs to a local command
@@ -50,6 +56,7 @@ Usage: foundation <command> [options]
   run --environment ID --function ID   Run a saved function on the selected executor
   run --environment ID -- COMMAND ...  Run a command in an environment
   wait ID [--timeout SECONDS]           Wait for a run to finish
+  retry ID                             Submit the same saved, signed execution request
   request --body JSON                  Create an approval request
   request wait ID [--timeout SECONDS]  Wait for an approval request
   export --output FILE                 Download an encrypted account export
@@ -60,6 +67,9 @@ Options:
   --origin URL           Choose a server when initializing a machine
   --for ID               Allow this executor to use the content (repeatable)
   --caller ID            Accept requests from this identity (repeatable, agent start)
+  --app ID               OAuth application to use for a connection
+  --fields JSON          Connection or application fields (@FILE or @- accepted)
+  --client-secret VALUE  OAuth application secret (@FILE or @- recommended)
   --isolation MODE       process for trusted local code, or container
   --image IMAGE          Command container image pinned with @sha256:DIGEST
   --inputs JSON         Inputs for exec or a remote command (default: [])
@@ -107,6 +117,16 @@ const options = {
   image: textOption,
   managed: booleanOption,
   once: booleanOption,
+  method: textOption,
+  'client-id': textOption,
+  'client-secret': textOption,
+  app: textOption,
+  connection: textOption,
+  fields: textOption,
+  scopes: textOption,
+  role: textOption,
+  parameters: textOption,
+  'redirect-uri': textOption,
   inputs: textOption,
   request: textOption,
   save: textOption,
@@ -353,6 +373,49 @@ async function main(argv: string[]) {
       ownerId: owner, name: Name.parse(args.values.name ?? hostname()), callers: (args.values.caller ?? []).map(id => Id.parse(id)),
       isolation: z.enum(['process', 'container']).parse(args.values.isolation ?? 'process'),
       image: args.values.image, managed: args.values.managed, once: args.values.once });
+  }
+  if (command === 'app') {
+    const resource = await saveApp(client, { ownerId: owner,
+      name: requireArgument(args.positionals[0], 'Supply an application name.'), id: args.values.id,
+      methodId: requireArgument(args.values.method, 'Choose --method ID.'), clientId: args.values['client-id'] ?? '',
+      clientSecret: args.values['client-secret'] === undefined ? undefined : await text(args.values['client-secret']),
+      fields: await json(args.values.fields, {}), environments: args.values.for });
+    await output(resource, args); return 0;
+  }
+  if (command === 'connect') {
+    const flowClient = connectionClient(client), action = args.positionals[0] ?? 'start';
+    let progress: FlowProgress;
+    if (action === 'start') progress = await startConnection(client, { ownerId: owner,
+      environmentId: requireArgument(args.values.environment, 'Choose --environment ID.'),
+      methodId: requireArgument(args.values.method, 'Choose --method ID.'), name: args.values.name,
+      appId: args.values.app, connectionId: args.values.connection,
+      fields: await json(args.values.fields, {}), scopes: await json(args.values.scopes, []),
+      role: args.values.role ? await json(args.values.role) : undefined,
+      environments: args.values.for, redirectUri: args.values['redirect-uri'] });
+    else {
+      const id = Id.parse(requireArgument(args.positionals[1], 'Supply a connection request ID.'));
+      if (action === 'accept') progress = await flowClient.accept(id);
+      else if (action === 'cancel') progress = await flowClient.cancel(id);
+      else if (action === 'complete') {
+        const value = await text(requireArgument(args.values.parameters, 'Supply the authorization response with --parameters.'));
+        progress = await flowClient.complete(id, value.includes('://') ? new URL(value).search.slice(1) : value.replace(/^\?/, ''));
+      } else if (action === 'status' || action === 'wait') progress = await flowClient.progress(id);
+      else throw new Error('Choose connect start, status, wait, complete, accept, or cancel.');
+    }
+    if (args.values.wait || action === 'wait') {
+      const deadline = Date.now() + seconds(args.values.timeout, 600) * 1000;
+      while (progress.kind === 'pending' || (action === 'wait' && progress.kind === 'authorize')) {
+        if (Date.now() >= deadline) break;
+        await delay(1000);
+        progress = await flowClient.progress(progress.flow.id);
+      }
+    }
+    await output(flowOutput(progress), args);
+    return ['failed', 'cancelled'].includes(progress.kind) ? 1 : 0;
+  }
+  if (command === 'retry') {
+    const id = Id.parse(requireArgument(args.positionals[0], 'Supply a saved execution ID.'));
+    await taskOutput(client, await privateClient(client).custody.resume(id), args); return 0;
   }
   if (command === 'api' || command === 'schema') {
     const method =

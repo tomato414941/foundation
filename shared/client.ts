@@ -6,7 +6,7 @@ import type { BoundKeys, KeyMaterial } from './authority.js';
 import {
   AccessPolicy, approvePolicy, authorizeUse, prepareRun, protect, reveal, verifyContent,
 } from './custody.js';
-import type { CustodyContent, CustodyPolicy, ExecutionIntent } from './custody.js';
+import type { CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun } from './custody.js';
 import { BoundRecipient, ProtectedRead, Registration } from './protocol.js';
 import { RuntimeOperation, Task, authorizeEnvironment, readReceipt, verifyEnvironment } from './execution.js';
 import type { ExecutionOperation, RegisteredEnvironment, TaskView } from './execution.js';
@@ -20,6 +20,13 @@ export interface TrustStore {
   rememberBinding(binding: BoundKeys): Promise<void>;
   checkpoint(id: string): Promise<{ policy: CustodyPolicy; materialRevision: number; digest: string } | null>;
   rememberContent(content: CustodyContent): Promise<void>;
+  run(id: string): Promise<SealedRun | null>;
+  rememberRun(request: SealedRun): Promise<void>;
+}
+export class SubmissionPending extends Error {
+  constructor(readonly id: string) {
+    super('The execution request is saved locally. Check execution ' + id + ' before starting another operation.');
+  }
 }
 export class CustodyClient {
   constructor(readonly api: JsonApi, readonly origin: string, readonly binding: BoundKeys,
@@ -168,7 +175,22 @@ export class CustodyClient {
   }
   async submit(ownerId: string, environmentId: string, operation: ExecutionOperation,
     options: Parameters<CustodyClient['prepare']>[3] = {}) {
-    return this.api.json('/api/executions', { method: 'POST', body: await this.prepare(ownerId, environmentId, operation, options) }, Task);
+    return this.submitPrepared(await this.prepare(ownerId, environmentId, operation, options));
+  }
+  async submitPrepared(request: SealedRun) {
+    await this.trust.rememberRun(request);
+    try { return await this.api.json('/api/executions', { method: 'POST', body: request }, Task); }
+    catch (error) {
+      if (error && typeof error === 'object' && 'status' in error) throw error;
+      throw new SubmissionPending(request.intent.id);
+    }
+  }
+  async resume(id: string) {
+    const request = await this.trust.run(Id.parse(id));
+    if (!request) throw new Error('Resume this execution from the device that saved its signed request.');
+    if (canonical(request.intent.actor) !== canonical(this.binding) || request.intent.origin !== this.origin)
+      throw new Error('Use the identity that signed this execution request.');
+    return this.submitPrepared(request);
   }
   async result(task: TaskView) {
     if (canonical(task.intent.actor) !== canonical(this.binding) || task.intent.origin !== this.origin || task.intent.id !== task.id)

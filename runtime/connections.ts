@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import safeRegex from 'safe-regex2';
-import { canonical } from '../shared/authority.js';
+import { canonical, hash } from '../shared/authority.js';
 import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
 import type { JsonValue, MethodDescription } from '../shared/contracts.js';
 import { AppMaterial, ConnectionAction, ConnectionMaterial, connectionMetadata } from '../shared/connections.js';
@@ -21,6 +21,7 @@ import { AwsRoles } from './roles.js';
 import { utf8 } from './inputs.js';
 
 export interface ConnectionBroker {
+  relay?(input: { id: string; runId: string; stateDigest: string; expiresAt: string }): Promise<unknown>;
   capture(name: string, content: CustodyContent): Promise<{ id: string }>;
   prepare(id: string, resourceId: string, expectedRevision: number): Promise<ConnectionOperation>;
   dispatch(id: string, fence: string): Promise<unknown>;
@@ -180,7 +181,7 @@ export class Connections implements ExecutionExtension {
     const flow: Flow = { actor: intent.actor, ownerId: intent.ownerId, input,
       app: input.method.kind === 'oauth' ? await this.app(input.appId!, input.methodId, intent, sources) : null,
       state: randomBytes(32).toString('base64url'), verifier: randomBytes(32).toString('base64url'),
-      expiresAt: Date.now() + 600_000, phase: input.method.kind === 'oauth' ? 'authorize' : 'review' };
+      expiresAt: Math.min(Date.now() + 600_000, Date.parse(intent.expiresAt)), phase: input.method.kind === 'oauth' ? 'authorize' : 'review' };
     if (input.method.kind !== 'oauth') {
       if (input.method.kind === 'role') await this.roles.obtain(input.role!.arn, input.role!.externalId, input.role!.region);
       flow.material = ConnectionMaterial.parse({ format: 1, methodId: input.methodId, method: input.method,
@@ -189,6 +190,8 @@ export class Connections implements ExecutionExtension {
     }
     await this.journal.write(id, flow);
     if (input.method.kind !== 'oauth') return this.review(input.flowId, flow);
+    if (input.redirectUri === intent.origin + '/oauth/callback') await this.broker.relay?.({ id: input.flowId,
+      runId: intent.id, stateDigest: await hash(flow.state), expiresAt: new Date(flow.expiresAt).toISOString() });
     const scopes = [...new Set([...input.method.config.scopes.default, ...input.scopes])];
     return { kind: 'authorize', flowId: input.flowId,
       url: await this.oauth().authorize(input.method.config, flow.app!, flow.state, flow.verifier, input.redirectUri!, scopes) };

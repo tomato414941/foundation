@@ -8,7 +8,7 @@ import { publicUrl, responseJson } from './transport.js';
 import type { Transport } from './transport.js';
 import { DomainError, fail } from './errors.js';
 
-const digest = (value: string) => createHash('sha256').update(value).digest('base64url');
+const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 
 export type OAuthSpec = z.infer<typeof OAuthDefinition>;
 export interface OAuthApp {

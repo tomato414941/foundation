@@ -10,6 +10,12 @@ import { SignedBinding } from '../shared/authority.js';
 
 export async function routesExecution(app: ApiApp, context: Context) {
   const { bindings, custody, delegation, connectionOperations: operations, resources, authorization } = context;
+  app.post('/api/oauth/relays', {
+    schema: { body: P.RegisterRelay, response: { 201: P.OAuthRelay } },
+  }, async (request, reply) => reply.code(201).send(await context.oauthRelays.register(actor(request), request.body)));
+  app.get('/api/oauth/relays/:id', {
+    schema: { params: C.IdParams, response: { 200: P.OAuthRelay } },
+  }, request => context.oauthRelays.get(actor(request), request.params.id));
   app.get('/api/identities/:id/binding', {
     schema: { params: C.IdParams, response: { 200: SignedBinding } },
   }, request => { actor(request); return bindings.current(request.params.id); });

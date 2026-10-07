@@ -30,6 +30,7 @@ import { Bindings } from './bindings.js';
 import { Custody } from './custody.js';
 import { Delegation } from './delegation.js';
 import { ConnectionOperations } from './connection-operations.js';
+import { OAuthRelays } from './oauth-relays.js';
 
 export interface Dependencies {
   db?: Database;
@@ -86,7 +87,8 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   const bindings = new Bindings(db, authorization, audit),
     custody = new Custody(resources, bindings, config.origin),
     delegation = new Delegation(resources, bindings, custody, config.origin),
-    connectionOperations = new ConnectionOperations(custody);
+    connectionOperations = new ConnectionOperations(custody),
+    oauthRelays = new OAuthRelays(delegation);
   return {
     config,
     db,
@@ -114,6 +116,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     custody,
     delegation,
     connectionOperations,
+    oauthRelays,
   };
 }
 export type Context = Awaited<ReturnType<typeof createContext>>;

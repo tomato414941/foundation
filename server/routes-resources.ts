@@ -379,7 +379,7 @@ export async function routesResources(app: ApiApp, context: Context) {
       schema: {
         querystring: z
           .object({
-            state: C.Id,
+            state: z.string().min(1).max(1000),
             code: z.string().max(16384).optional(),
             error: z.string().max(200).optional(),
           })
@@ -388,24 +388,11 @@ export async function routesResources(app: ApiApp, context: Context) {
       },
     },
     async (request, reply) => {
-      if (request.query.error || !request.query.code)
-        return reply.redirect(
-          await services
-            .cancel(request.query.state, request.browser)
-            .catch(() => '/services?connection=cancelled'),
-        );
       try {
-        const result = await services.callback(
-          new URL(request.url, context.config.origin).searchParams,
-          request.browser,
-        );
-        if (result.kind === 'review') return reply.redirect('/services/review/' + result.id);
-        const path = 'returnTo' in result ? result.returnTo : '/services';
-        return reply.redirect(path);
-      } catch (error) {
-        const code =
-          typeof error === 'object' && error && 'code' in error ? String(error.code) : 'connection_failed';
-        return reply.redirect('/services?error=' + encodeURIComponent(code));
+        const result = await context.oauthRelays.receive(new URL(request.url, context.config.origin).searchParams);
+        return reply.redirect('/connections/complete?flow=' + result.id);
+      } catch {
+        return reply.redirect('/connections/complete?error=connection_expired');
       }
     },
   );

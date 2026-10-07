@@ -248,3 +248,34 @@ test('UTF8と秘密値の境界をまたぐ出力を最後まで伏せて表示�
     }
   }
 });
+
+test('CLIで接続を実行先へ依頼し、確認した接続を暗号化して保存してから端末で利用する', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  assert.equal((await c.run(['init', '--name', 'Connection owner', '--origin', c.origin])).code, 0);
+  const environment = randomUUID();
+  const registered = await c.run(['agent', 'start', '--id', environment, '--once']);
+  assert.equal(registered.code, 0, registered.stderr);
+  const start = await c.run(['connect', '--method', 'render:token', '--environment', environment,
+    '--name', 'Render REST', '--fields', '@-'], '{"token":"render-connection-secret"}');
+  assert.equal(start.code, 0, start.stderr);
+  const flow = JSON.parse(start.stdout).flowId;
+  const execute = await c.run(['agent', 'start', '--id', environment, '--once']);
+  assert.equal(execute.code, 0, execute.stderr);
+  const review = await c.run(['connect', 'status', flow]);
+  assert.equal(review.code, 0, review.stderr);
+  assert.equal(JSON.parse(review.stdout).kind, 'review');
+  assert.equal(JSON.parse(review.stdout).metadata.methodId, 'render:token');
+  const accept = await c.run(['connect', 'accept', flow]);
+  assert.equal(accept.code, 0, accept.stderr);
+  const saved = await c.run(['agent', 'start', '--id', environment, '--once']);
+  assert.equal(saved.code, 0, saved.stderr);
+  const connected = await c.run(['connect', 'status', flow]);
+  assert.equal(connected.code, 0, connected.stderr);
+  assert.equal(JSON.parse(connected.stdout).kind, 'connected');
+  const id = JSON.parse(connected.stdout).id;
+  const used = await c.run(['exec', '--inputs', JSON.stringify([
+    { name: 'TOKEN', source: { kind: 'connection', id, output: 'RENDER_API_KEY' } },
+  ]), '--', process.execPath, '-e', 'process.stdout.write(process.env.TOKEN)']);
+  assert.equal(used.code, 0, used.stderr);
+  assert.equal(used.stdout, '[redacted]');
+});

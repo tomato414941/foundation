@@ -252,3 +252,14 @@ CREATE TABLE IF NOT EXISTS connection_operations (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS connection_current_operation ON connection_operations(resource_id) WHERE state IN ('prepared','in_flight','uncertain');
+CREATE TABLE IF NOT EXISTS oauth_relays (
+  id uuid PRIMARY KEY,
+  run_id uuid NOT NULL REFERENCES execution_tasks(id) ON DELETE CASCADE,
+  actor_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  executor_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  state_digest text NOT NULL UNIQUE,
+  callback_digest text,
+  sealed jsonb,
+  expires_at timestamptz NOT NULL,
+  received_at timestamptz
+);
