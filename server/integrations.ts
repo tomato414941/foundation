@@ -1,8 +1,9 @@
-import { createHmac, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { Webhook } from 'standardwebhooks';
 import type { z } from 'zod';
 import type { Database } from './database.js';
 import type { Authorization, Actor } from './authorization.js';
-import { Vault, token } from './vault.js';
+import { Vault } from './vault.js';
 import type { Transport } from './transport.js';
 import { publicUrl } from './transport.js';
 import type { Settings, JsonValue } from '../shared/contracts.js';
@@ -29,7 +30,7 @@ export class Integrations {
   async set(actor: Actor, id: string, settings: z.infer<typeof Settings>) {
     await this.authorization.requirePrincipal(actor, id, 'share');
     for (const value of Object.values(settings)) if (value) publicUrl(value, this.origin);
-    const secret = token();
+    const secret = 'whsec_' + randomBytes(32).toString('base64');
     const existing = await this.db.one('SELECT 1 FROM integration_settings WHERE principal_id=$1', [id]);
     await this.db.pool.query(
       'INSERT INTO integration_settings(principal_id,settings,webhook_secret) VALUES($1,$2,$3) ON CONFLICT(principal_id) DO UPDATE SET settings=EXCLUDED.settings',
@@ -39,7 +40,7 @@ export class Integrations {
   }
   async rotate(actor: Actor, id: string) {
     await this.authorization.requirePrincipal(actor, id, 'share');
-    const secret = token();
+    const secret = 'whsec_' + randomBytes(32).toString('base64');
     await this.db.pool.query(
       "INSERT INTO integration_settings(principal_id,settings,webhook_secret) VALUES($1,'{}',$2) ON CONFLICT(principal_id) DO UPDATE SET webhook_secret=$2",
       [id, await this.vault.encrypt(secret, 'integration:' + id)],
@@ -78,12 +79,10 @@ export class Integrations {
         await connection.query('UPDATE webhooks SET delivered_at=now() WHERE id=$1', [event.id]);
         return;
       }
-      const body = JSON.stringify({ id: event.id, ...event.payload }),
-        timestamp = String(Math.floor(Date.now() / 1000)),
-        secret = await this.vault.decrypt<string>(event.webhook_secret, 'integration:' + event.principal_id);
-      const signature = createHmac('sha256', secret)
-        .update(timestamp + '.' + body)
-        .digest('hex');
+      const body = JSON.stringify({ ...event.payload, id: event.id }),
+        secret = await this.vault.decrypt<string>(event.webhook_secret, 'integration:' + event.principal_id),
+        timestamp = new Date();
+      const signature = new Webhook(secret).sign(event.id, timestamp, body);
       let delivered = false;
       try {
         const result = await this.transport.send({
@@ -91,7 +90,9 @@ export class Integrations {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
-            'foundation-signature': 't=' + timestamp + ',v1=' + signature,
+            'webhook-id': event.id,
+            'webhook-timestamp': String(Math.floor(timestamp.getTime() / 1000)),
+            'webhook-signature': signature,
           },
           body,
         });
