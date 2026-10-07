@@ -131,6 +131,20 @@ test('キーにも暗号鍵の包みを置き、そのキーで入ったセッ�
   assert.equal(missing.statusCode, 404);
 });
 
+test('サーバーは動いているコミットをセッションで名乗る', async (t) => {
+  const commit = 'a'.repeat(40);
+  const f = await fixture({ FOUNDATION_COMMIT: commit }),
+    context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
+    app = await buildApp(context);
+  t.after(async () => {
+    await app.close();
+    await f.close();
+  });
+  const session = await app.inject({ url: '/api/session' });
+  assert.equal(session.json().server.commit, commit);
+  assert.equal(session.json().server.name, 'Foundation');
+});
+
 test('MCPで初期化し、認証したプリンシパルとして共通APIを呼び出す', async (t) => {
   const f = await fixture(),
     context = await createContext(f.config, { db: f.db, mailer: f.mailer }),

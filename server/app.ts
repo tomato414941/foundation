@@ -229,7 +229,7 @@ export async function buildApp(context: Context) {
     wrappedKey: await authentication.wrapOf(request.actor),
     requestId: request.actor?.requestId ?? null,
     principals: request.actor && !request.actor.requestId ? await principals.accessible(request.actor) : [],
-    server: { id: identity.id, name: 'Foundation', publicKey: identity.publicKey },
+    server: { id: identity.id, name: 'Foundation', publicKey: identity.publicKey, commit: config.FOUNDATION_COMMIT ?? null },
     features: {
       email: context.mailer.enabled,
       environments: context.environments.runner.enabled,

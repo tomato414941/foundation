@@ -1,4 +1,4 @@
-name: Publish Foundation CLI
+name: Publish Foundation
 
 on:
   push:
@@ -125,3 +125,28 @@ jobs:
       - name: Confirm npm publication
         if: github.event_name != 'workflow_dispatch' && steps.release.outputs.publish == 'true'
         run: node .github/scripts/cli-release.mjs wait
+  image:
+    needs: publish
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Sign in to the GitHub container registry
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Build and publish the server image
+        run: |
+          docker buildx create --use --name foundation >/dev/null
+          docker buildx build --platform linux/arm64 \
+            --build-arg "FOUNDATION_COMMIT=$GITHUB_SHA" \
+            --tag "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}" \
+            --tag "ghcr.io/${GITHUB_REPOSITORY,,}:main" \
+            --provenance=false --push .
+          docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}" | head -3

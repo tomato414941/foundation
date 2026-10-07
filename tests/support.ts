@@ -24,7 +24,7 @@ export class TestMailer implements Mailer {
     this.sent.push({ address, link, locale });
   }
 }
-export async function fixture() {
+export async function fixture(overrides: Record<string, string> = {}) {
   const schema = 'test_' + randomUUID().replaceAll('-', '');
   const admin = new pg.Pool({ connectionString: databaseUrl });
   await admin.query(`CREATE SCHEMA "${schema}"`);
@@ -35,6 +35,7 @@ export async function fixture() {
     FOUNDATION_DATA: dataDirectory,
     FOUNDATION_ORIGIN: 'https://foundation.test',
     FOUNDATION_LOG_LEVEL: 'silent',
+    ...overrides,
   });
   const db = new Database(databaseUrl, { schema });
   await db.initialize();

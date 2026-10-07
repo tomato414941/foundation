@@ -13,6 +13,7 @@ const Environment = z.object({
   FOUNDATION_KEY: z.string().optional(),
   FOUNDATION_KMS_KEY: z.string().optional(),
   AWS_REGION: z.string().default('ap-northeast-1'),
+  FOUNDATION_COMMIT: z.string().optional().transform((value) => value || undefined).pipe(z.string().regex(/^[0-9a-f]{40}$/).optional()),
   RESEND_API_KEY: z.string().default(''),
   FOUNDATION_MAIL_FROM: z.string().default(''),
   FOUNDATION_BILLING_MODE: z.enum(['required', 'included']).default('required'),

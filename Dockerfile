@@ -7,7 +7,8 @@ RUN npm run build
 RUN npm prune --omit=dev --offline --ignore-scripts --no-audit --no-fund
 
 FROM node:24-bookworm-slim AS runtime
-ENV NODE_ENV=production FOUNDATION_HOST=0.0.0.0 FOUNDATION_PORT=3417 FOUNDATION_DATA=/var/lib/foundation
+ARG FOUNDATION_COMMIT=
+ENV NODE_ENV=production FOUNDATION_HOST=0.0.0.0 FOUNDATION_PORT=3417 FOUNDATION_DATA=/var/lib/foundation FOUNDATION_COMMIT=$FOUNDATION_COMMIT
 WORKDIR /app
 COPY --from=build --chown=node:node /app/package.json ./package.json
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
