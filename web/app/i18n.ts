@@ -291,6 +291,11 @@ const words: Record<string, [string, string]> = {
   requestedTo: ['依頼先', 'Requested recipient'],
   operations: ['依頼された操作', 'Requested operations'],
   code: ['確認コード', 'Confirmation code'],
+  deviceTitle: ['端末のログイン', 'Device sign-in'],
+  deviceAsk: ['{{name}} がログインしようとしています。', '{{name}} is asking to sign in.'],
+  deviceAs: ['ログインするプリンシパル', 'Sign in as'],
+  allow: ['許可', 'Allow'],
+  deviceDone: ['{{name}} をログインさせました。端末に戻ってください。', '{{name}} is signed in. Return to the device.'],
   codeHelp: [
     '依頼した端末に表示されているコードを入力してください。',
     'Enter the code shown on the requesting device.',

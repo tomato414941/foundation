@@ -9,6 +9,7 @@ export default [
   route('requests', 'routes/requests.tsx'),
   route('requests/new', 'routes/request-new.tsx'),
   route('requests/:id', 'routes/request.tsx'),
+  route('devices/:id', 'routes/device.tsx'),
   route('services', 'routes/service-return.tsx'),
   route('connections/complete', 'routes/connection-complete.tsx'),
   route('connections/:id', 'routes/connection-flow.tsx'),

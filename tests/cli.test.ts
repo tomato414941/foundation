@@ -10,7 +10,7 @@ import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { Redactor, secretVariants } from '../cli/src/execute.js';
-import { encode, wrap } from '../shared/encryption.js';
+import { encode, seal, wrap } from '../shared/encryption.js';
 import { AccessPolicy, protect } from '../shared/custody.js';
 import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 
@@ -53,6 +53,18 @@ async function cliFixture() {
       child.stdin.end(input);
     });
   }
+  // Start a command and resolve as soon as its stderr matches, keeping the finished promise.
+  function start(args: string[], until: RegExp) {
+    const child = spawn(process.execPath, [resolve('cli/dist/cli.mjs'), ...args], { env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    const finished = new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveResult) =>
+      child.once('close', (code) => resolveResult({ code, stdout, stderr })));
+    const shown = new Promise<string>((resolveShown) =>
+      child.stderr.on('data', (chunk) => { stderr += chunk; if (until.test(stderr)) resolveShown(stderr); }));
+    child.stdin.end();
+    return { shown, finished };
+  }
   async function close() {
     await app.close();
     await f.close();
@@ -66,7 +78,7 @@ async function cliFixture() {
     await context.bindings.publish(actor, await signBinding(binding, keys));
     return { ...enrolled, actor, keys, binding };
   }
-  return { f, context, app, origin, directory, run, close, person };
+  return { f, context, app, origin, directory, run, start, close, person };
 }
 
 test('CLIで登録してシークレットを保存し、コマンドへ渡して出力を伏せる', async (t) => {
@@ -164,7 +176,7 @@ test('CLIの確認コードを承認し、同じAPIから所有者のリソー�
   assert.equal(used.stdout, '[redacted]');
 });
 
-test('発行されたキーで初期化した CLI は本人として入り、別の端末が封じたシークレットを読む', async (t) => {
+test('発行されたキーでログインした CLI は本人として入り、別の端末が封じたシークレットを読む', async (t) => {
   const c = await cliFixture();
   t.after(c.close);
   const person = await c.person('Person');
@@ -177,7 +189,7 @@ test('発行されたキーで初期化した CLI は本人として入り、別
   });
   assert.equal(issued.statusCode, 201, issued.body);
   const { credential, token } = issued.json();
-  const refused = await c.run(['init', '--key', token, '--origin', c.origin]);
+  const refused = await c.run(['login', '--key', token, '--origin', c.origin]);
   assert.notEqual(refused.code, 0);
   assert.match(refused.stderr, /separate encryption unlock code/);
   const unlock = randomBytes(32);
@@ -191,7 +203,7 @@ test('発行されたキーで初期化した CLI は本人として入り、別
   assert.equal(placed.statusCode, 200, placed.body);
   const keyFile = join(c.directory, 'key.txt');
   await writeFile(keyFile, token + '.' + unlock.toString('base64url') + '\n', { mode: 0o600 });
-  const initialized = await c.run(['init', '--key', '@' + keyFile, '--origin', c.origin]);
+  const initialized = await c.run(['login', '--key', '@' + keyFile, '--origin', c.origin]);
   assert.equal(initialized.code, 0, initialized.stderr);
   assert.equal(JSON.parse(initialized.stdout).principal.id, person.actor.id);
   const id = randomUUID(),
@@ -207,6 +219,42 @@ test('発行されたキーで初期化した CLI は本人として入り、別
   assert.equal(read.stdout, 'sealed elsewhere');
   const status = await c.run(['status']);
   assert.equal(JSON.parse(status.stdout).principal.id, person.actor.id);
+});
+
+test('ブラウザで承認すると、ログインを待つ CLI が本人のキーを受け取って入る', async (t) => {
+  const c = await cliFixture();
+  t.after(c.close);
+  const person = await c.person('Person');
+  const headers = { authorization: 'Bearer ' + person.token };
+  const waiting = c.start(['login', '--name', 'Laptop', '--origin', c.origin], /enter the code/);
+  const shown = await waiting.shown;
+  const url = shown.match(/Open (\S+)/)![1]!,
+    code = shown.match(/code ([A-Z0-9]{4}-[A-Z0-9]{4})/)![1]!;
+  const id = url.split('/').pop()!;
+  assert.equal(url, c.origin + '/devices/' + id);
+  const device = (await c.app.inject({ url: '/api/auth/devices/' + id, headers })).json();
+  assert.equal(device.name, 'Laptop');
+  const approved = await c.app.inject({ method: 'POST', url: `/api/auth/devices/${id}/approve`, headers, payload: { code, principalId: person.actor.id } });
+  assert.equal(approved.statusCode, 200, approved.body);
+  const issued = (await c.app.inject({ method: 'POST', url: `/api/principals/${person.actor.id}/credentials`, headers, payload: { name: 'Laptop' } })).json();
+  const unlock = randomBytes(32);
+  await c.app.inject({
+    method: 'PUT',
+    url: `/api/principals/${person.actor.id}/credentials/${issued.credential.id}/wrap`,
+    headers,
+    payload: { wrappedKey: await wrap(person.keys, unlock, person.actor.id), publicKey: publicPart(person.keys.encryption) },
+  });
+  const sealed = await seal(encode(issued.token + '.' + unlock.toString('base64url')), [{ id, publicKey: device.publicKey }], 'device:' + id);
+  const completed = await c.app.inject({ method: 'POST', url: `/api/auth/devices/${id}/complete`, headers, payload: { sealed } });
+  assert.equal(completed.statusCode, 200, completed.body);
+  const finished = await waiting.finished;
+  assert.equal(finished.code, 0, finished.stderr);
+  assert.equal(JSON.parse(finished.stdout).principal.id, person.actor.id);
+  const status = await c.run(['status']);
+  assert.equal(JSON.parse(status.stdout).principal.id, person.actor.id);
+  const saved = JSON.parse(await readFile(join(c.directory, 'foundation', 'identity.json'), 'utf8'));
+  assert.equal(saved.current, person.actor.id);
+  assert.equal(saved.identities.length, 1);
 });
 
 test('CLIで実行先を登録し、指定した実行先へ暗号化したコマンドを送り結果を復号する', async t => {

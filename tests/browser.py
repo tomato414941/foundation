@@ -216,7 +216,7 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("Edited existing secret")
         page.screenshot(path=str(ARTIFACTS / "additional-passkey-ja.png"), full_page=True)
 
-    def test_ブラウザで発行したキーでCLIを初期化しブラウザが封じたシークレットを読む(self):
+    def test_ブラウザで発行したキーでCLIにログインしブラウザが封じたシークレットを読む(self):
         import tempfile
         page, principal = self.passkey_account("Key issuer")
         path = self.secret(page, principal, "Issuer secret", "Issued through the browser")
@@ -238,7 +238,7 @@ class BrowserTests(unittest.TestCase):
             key_file = Path(home) / "key.txt"
             key_file.write_text(token + "\n")
             initialized = subprocess.run(
-                ["node", "cli/dist/cli.mjs", "init", "--key", "@" + str(key_file), "--origin", ORIGIN],
+                ["node", "cli/dist/cli.mjs", "login", "--key", "@" + str(key_file), "--origin", ORIGIN],
                 capture_output=True, text=True, env=environment,
             )
             self.assertEqual(initialized.returncode, 0, initialized.stderr)
@@ -266,7 +266,7 @@ class BrowserTests(unittest.TestCase):
             environment = {key: value for key, value in os.environ.items() if not key.startswith("FOUNDATION_")}
             environment["XDG_CONFIG_HOME"] = home
             initialized = subprocess.run(
-                ["node", "cli/dist/cli.mjs", "init", "--key", "@-", "--origin", ORIGIN],
+                ["node", "cli/dist/cli.mjs", "login", "--key", "@-", "--origin", ORIGIN],
                 capture_output=True, text=True, env=environment, input=child_token,
             )
             self.assertEqual(initialized.returncode, 0, initialized.stderr)
@@ -286,6 +286,39 @@ class BrowserTests(unittest.TestCase):
             )
             self.assertEqual(read.returncode, 0, read.stderr)
             self.assertEqual(read.stdout, "kept by the child")
+
+    def test_端末のログインをブラウザで許可すると端末が本人として入りシークレットを読む(self):
+        import re, tempfile
+        page, principal = self.passkey_account("Device approver")
+        path = self.secret(page, principal, "Approver secret", "Read after device sign-in")
+        secret_id = path.rstrip("/").split("/")[-1]
+        with tempfile.TemporaryDirectory() as home:
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("FOUNDATION_")}
+            environment["XDG_CONFIG_HOME"] = home
+            login = subprocess.Popen(
+                ["node", "cli/dist/cli.mjs", "login", "--name", "Approved laptop", "--origin", ORIGIN],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment,
+            )
+            shown = ""
+            for _ in range(200):
+                shown += login.stderr.readline()
+                if "enter the code" in shown:
+                    break
+            url = re.search(r"Open (\S+)", shown).group(1)
+            code = re.search(r"code ([A-Z0-9]{4}-[A-Z0-9]{4})", shown).group(1)
+            page.goto(url)
+            page.wait_for_load_state("networkidle")
+            expect(page.get_by_text("Approved laptop がログインしようとしています。", exact=True)).to_be_visible()
+            page.get_by_role("textbox", name="確認コード", exact=True).fill(code)
+            page.screenshot(path=str(ARTIFACTS / "device-signin-ja.png"), full_page=True)
+            page.get_by_role("button", name="許可", exact=True).click()
+            expect(page.get_by_text("Approved laptop をログインさせました。端末に戻ってください。", exact=True)).to_be_visible()
+            stdout, stderr = login.communicate(timeout=60)
+            self.assertEqual(login.returncode, 0, stderr)
+            self.assertEqual(json.loads(stdout)["principal"]["id"], principal["id"])
+            read = subprocess.run(["node", "cli/dist/cli.mjs", "read", secret_id], capture_output=True, text=True, env=environment)
+            self.assertEqual(read.returncode, 0, read.stderr)
+            self.assertEqual(read.stdout, "Read after device sign-in")
 
     def test_メンバー追加と所有者変更でシークレットを引き継ぐ(self):
         owner, principal = self.passkey_account("Project owner")

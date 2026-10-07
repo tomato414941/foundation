@@ -11,6 +11,11 @@ const Identity = z
   .strict().refine(value => Boolean(value.keys) === Boolean(value.binding) &&
     (!value.binding || value.binding.principalId === value.principalId), 'Use the keys bound to this identity.');
 export type IdentityConfig = z.infer<typeof Identity>;
+// The identity file holds every principal this machine has signed in as, and which one is current.
+const Identities = z
+  .object({ current: z.uuid(), identities: z.array(Identity).min(1) })
+  .strict()
+  .refine((value) => value.identities.some((item) => item.principalId === value.current), 'The current identity is missing.');
 export function configPath() {
   return join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'foundation', 'identity.json');
 }
@@ -40,7 +45,8 @@ export async function readIdentity(override?: string): Promise<IdentityConfig> {
       stat = await lstat(path);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('The identity must be a regular file.');
     if (process.platform !== 'win32' && stat.mode & 0o077) await chmod(path, 0o600);
-    saved = Identity.parse(JSON.parse(await readFile(path, 'utf8')));
+    const file = Identities.parse(JSON.parse(await readFile(path, 'utf8')));
+    saved = file.identities.find((item) => item.principalId === file.current);
   } catch (error) {
     if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
       throw new Error('The saved identity could not be read. Check its contents and permissions.');
@@ -66,7 +72,7 @@ export async function readIdentity(override?: string): Promise<IdentityConfig> {
       throw new Error('The Foundation environment identity is invalid.');
     }
   }
-  if (!saved) throw new Error('Run foundation init to register this machine.');
+  if (!saved) throw new Error('Run foundation login to sign in on this machine.');
   if (destination !== origin(saved.origin))
     throw new Error(
       'This identity belongs to another origin. Use a separate XDG_CONFIG_HOME to initialize another server.',
@@ -74,7 +80,23 @@ export async function readIdentity(override?: string): Promise<IdentityConfig> {
   return { ...saved, origin: destination };
 }
 export async function saveIdentity(identity: IdentityConfig) {
-  await secureWrite(configPath(), JSON.stringify(Identity.parse(identity), null, 2) + '\n', false);
+  const path = configPath();
+  let file: z.infer<typeof Identities> | undefined;
+  try {
+    file = Identities.parse(JSON.parse(await readFile(path, 'utf8')));
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
+      throw new Error('The saved identity could not be read. Check its contents and permissions.');
+  }
+  const added = Identity.parse(identity),
+    others = (file?.identities ?? []).filter(
+      (item) => !(item.origin === added.origin && item.principalId === added.principalId),
+    );
+  await secureWrite(
+    path,
+    JSON.stringify({ current: added.principalId, identities: [...others, added] }, null, 2) + '\n',
+    !!file,
+  );
 }
 async function syncDirectory(path: string) {
   if (process.platform === 'win32') return;

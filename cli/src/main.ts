@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { hostname } from 'node:os';
-import { lstat, open as openFile, readFile, rename, rm } from 'node:fs/promises';
+import { open as openFile, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -17,11 +17,12 @@ import {
   Name,
   RequestInput,
   Resource,
+  Sealed,
   listOf,
 } from '../../shared/contracts.js';
 import type { ResourceView } from '../../shared/contracts.js';
 import { Session } from '../../shared/session.js';
-import { unbase64url, unwrap } from '../../shared/encryption.js';
+import { newEncryptionKey, open as openSealed, unbase64url, unwrap } from '../../shared/encryption.js';
 import { bindKeys, hash, newIdentityKeys, PrivateKeys, publicPart, signBinding, SignedBinding } from '../../shared/authority.js';
 import { RuntimeOperation, Task } from '../../shared/execution.js';
 import type { TaskView } from '../../shared/execution.js';
@@ -39,7 +40,8 @@ const help = `Foundation ${packageInfo.version}
 
 Usage: foundation <command> [options]
 
-  init --key TOKEN [--origin URL]       Sign in with a key you issued and save it
+  login [--origin URL]                  Sign in by approving this machine in a browser
+  login --key TOKEN [--origin URL]      Sign in with a key issued in a browser
   init --name NAME [--origin URL]       Register this machine as a new principal
   status                               Show this machine and its accessible principals
   join [--to ID] [--wait]               Ask a person to take on this machine
@@ -66,8 +68,9 @@ Usage: foundation <command> [options]
 
 Options:
   --owner ID             Choose the principal that owns a new item or run
-  --key TOKEN            A key issued from a browser (@FILE or @- to read it)
-  --origin URL           Choose a server when initializing a machine
+  --key TOKEN            A key issued in a browser (@FILE or @- to read it)
+  --name NAME            How this machine appears when it signs in (default: host name)
+  --origin URL           Choose a server when signing in or registering
   --for ID               Allow this executor to use the content (repeatable)
   --caller ID            Accept requests from this identity (repeatable, agent start)
   --app ID               OAuth application to use for a connection
@@ -85,8 +88,8 @@ Options:
   --version              Show the version
 
 JSON and the key may be supplied as @FILE, or @- to read standard input.
-A key issued in a browser carries your encryption key, so the machine acts as
-you. Registering with --name creates a separate principal instead.
+Signing in makes this machine act as you, with your encryption key. Registering
+with --name creates a separate principal instead.
 The unlock portion of a sign-in key stays on this machine. Verify fingerprints
 with each identity holder before trusting their keys. --for permits that executor
 to read the content and use it in commands or HTTP requests you supply.
@@ -212,49 +215,83 @@ async function download(response: Response, path: string, replace: boolean) {
     if (!done) await rm(temporary, { force: true });
   }
 }
+async function signInWithKey(base: string, imported: string) {
+  const parts = imported.trim().split('.');
+  if (parts.length !== 2 || !/^[A-Za-z0-9_-]+$/.test(parts[0]!) || !/^[A-Za-z0-9_-]{43}$/.test(parts[1]!))
+    throw new Error('Use a sign-in key containing an authentication token and a separate encryption unlock code.');
+  const [token, unlock] = parts as [string, string];
+  let response: Response;
+  try {
+    response = await fetch(base + '/api/session', {
+      headers: { authorization: 'Bearer ' + token },
+      redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch {
+    throw new Error('Could not reach Foundation. Check --origin and your network connection.');
+  }
+  if (!response.ok) throw new Error('Sign-in failed (HTTP ' + response.status + ').');
+  const current = Session.parse(await response.json());
+  if (!current.principal) throw new Error('The key was not accepted.');
+  if (!current.wrappedKey)
+    throw new Error('This key does not carry an encryption key. Issue it from a browser that can open secrets.');
+  const keys = PrivateKeys.parse(await unwrap(current.wrappedKey, unbase64url(unlock), current.principal.id).catch(() => {
+    throw new Error('The encryption key could not be unlocked with this key.');
+  }));
+  const unsigned = new Client({ origin: base, principalId: current.principal.id, token, keys: null, binding: null });
+  const { binding } = await unsigned.json('/api/identities/' + current.principal.id + '/binding', {}, SignedBinding);
+  await signBinding(binding, keys);
+  await saveIdentity({ origin: base, principalId: current.principal.id, token, keys, binding });
+  print({ principal: { id: current.principal.id, name: current.principal.name }, origin: base, identity: configPath(),
+    fingerprint: await hash(binding) });
+}
+async function login(args: Arguments) {
+  const base = origin(args.values.origin);
+  if (args.values.key) return signInWithKey(base, await text(args.values.key));
+  const name = Name.parse(args.values.name || hostname()),
+    device = await newEncryptionKey();
+  let response: Response;
+  try {
+    response = await fetch(base + '/api/auth/devices', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, publicKey: device.publicKey }),
+      redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch {
+    throw new Error('Could not reach Foundation. Check --origin and your network connection.');
+  }
+  if (!response.ok) throw new Error('Sign-in could not start (HTTP ' + response.status + ').');
+  const started = z
+    .object({ id: Id, code: z.string(), poll: z.string(), url: z.url(), expiresAt: z.string() })
+    .parse(await response.json());
+  process.stderr.write(`Open ${started.url}\nand enter the code ${started.code.slice(0, 4)}-${started.code.slice(4)} to sign in as yourself.\n`);
+  const deadline = new Date(started.expiresAt).getTime();
+  while (true) {
+    if (Date.now() >= deadline) throw new Error('The sign-in was not approved in time. Run foundation login again.');
+    await delay(2000);
+    const polled = await fetch(`${base}/api/auth/devices/${started.id}?poll=${encodeURIComponent(started.poll)}`, {
+      redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
+    }).catch(() => null);
+    if (!polled) continue;
+    if (polled.status === 404) throw new Error('The sign-in was not approved in time. Run foundation login again.');
+    if (!polled.ok) throw new Error('Sign-in failed (HTTP ' + polled.status + ').');
+    const result = z
+      .object({ state: z.string(), sealed: Sealed.nullable() })
+      .parse(await polled.json());
+    if (result.state !== 'approved' || !result.sealed) continue;
+    const imported = new TextDecoder().decode(
+      await openSealed(result.sealed, device.privateKey, started.id, 'device:' + started.id),
+    );
+    return signInWithKey(base, imported);
+  }
+}
 async function initialize(args: Arguments) {
   const path = configPath();
-  try {
-    await lstat(path);
-    throw new Error(
-      'This machine is already initialized. Run foundation status, or use a separate XDG_CONFIG_HOME.',
-    );
-  } catch (error) {
-    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-  }
   const base = origin(args.values.origin);
-  if (args.values.key) {
-    if (args.values.name) throw new Error('Choose --key or --name.');
-    const imported = (await text(args.values.key)).trim().split('.');
-    if (imported.length !== 2 || !/^[A-Za-z0-9_-]+$/.test(imported[0]!) || !/^[A-Za-z0-9_-]{43}$/.test(imported[1]!))
-      throw new Error('Use a sign-in key containing an authentication token and a separate encryption unlock code.');
-    const [token, unlock] = imported as [string, string];
-    let response: Response;
-    try {
-      response = await fetch(base + '/api/session', {
-        headers: { authorization: 'Bearer ' + token },
-        redirect: 'error',
-        signal: AbortSignal.timeout(30_000),
-      });
-    } catch {
-      throw new Error('Could not reach Foundation. Check --origin and your network connection.');
-    }
-    if (!response.ok) throw new Error('Sign-in failed (HTTP ' + response.status + ').');
-    const current = Session.parse(await response.json());
-    if (!current.principal) throw new Error('The key was not accepted.');
-    if (!current.wrappedKey)
-      throw new Error('This key does not carry an encryption key. Issue it from a browser that can open secrets.');
-    const keys = PrivateKeys.parse(await unwrap(current.wrappedKey, unbase64url(unlock), current.principal.id).catch(() => {
-      throw new Error('The encryption key could not be unlocked with this key.');
-    }));
-    const unsigned = new Client({ origin: base, principalId: current.principal.id, token, keys: null, binding: null });
-    const { binding } = await unsigned.json('/api/identities/' + current.principal.id + '/binding', {}, SignedBinding);
-    await signBinding(binding, keys);
-    await saveIdentity({ origin: base, principalId: current.principal.id, token, keys, binding });
-    print({ principal: { id: current.principal.id, name: current.principal.name }, origin: base, identity: path,
-      fingerprint: await hash(binding) });
-    return;
-  }
+  if (args.values.key) throw new Error('Use foundation login --key to sign in with a key.');
   const name = Name.parse(args.values.name || hostname()),
     keys = await newIdentityKeys();
   let response: Response;
@@ -347,6 +384,10 @@ async function main(argv: string[]) {
     args = argumentsFor(head.slice(1));
   if (command === 'init') {
     await initialize(args);
+    return 0;
+  }
+  if (command === 'login') {
+    await login(args);
     return 0;
   }
   if (command === 'agent' && args.positionals[0] === 'managed') return managedAgent();
