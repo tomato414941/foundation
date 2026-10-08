@@ -37,10 +37,11 @@ export type ConnectionState = z.infer<typeof ConnectionMaterial>;
 
 export const AppMetadata = z.object({ methodId: z.string().min(1).max(200),
   clientId: z.string().max(1000), generation: Id }).strict();
+// Signed with the encrypted content. Display names are not part of it: they travel as labels.
 export const ConnectionMetadata = z.object({
-  methodId: z.string().min(1).max(200), methodName: Name, methodKind: AuthKind,
+  methodId: z.string().min(1).max(200), methodKind: AuthKind,
   generation: Id, authorizationDigest: Fingerprint, appId: Id.nullable(),
-  account: z.string().max(2000), accountId: z.string().max(2000).nullable(), accountVerified: z.boolean(),
+  accountId: z.string().max(2000).nullable(), accountVerified: z.boolean(),
   scopes: z.array(z.string().max(1000)).max(200), scopesStatus: z.enum(['unknown', 'requested', 'reported']),
   outputs: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(100), state: z.enum(['ready', 'reconnect']),
 }).strict();
@@ -58,14 +59,20 @@ export async function connectionMetadata(state: ConnectionState) {
     ...(state.state ? { state: state.state } : {}),
   });
   return ConnectionMetadata.parse({
-    methodId: state.methodId, methodName: state.method.name, methodKind: state.method.kind,
+    methodId: state.methodId, methodKind: state.method.kind,
     generation: state.generation, authorizationDigest, appId: state.appId,
-    account: state.oauth?.accountName ?? state.role?.arn ?? state.method.name,
     accountId: state.role?.arn ?? (state.oauth?.accountVerified ? state.oauth.account : null),
     accountVerified: Boolean(state.role || state.oauth?.accountVerified),
     scopes: state.oauth?.scopes ?? [], scopesStatus: state.oauth?.scopesStatus ?? 'unknown',
     outputs, state: state.state ?? 'ready',
   });
+}
+
+// What people read about a connection. The server stores these as given; they carry no authority.
+export const ConnectionLabels = z.object({ methodName: Name, account: z.string().max(2000) }).strict();
+export type ConnectionLabelValues = z.infer<typeof ConnectionLabels>;
+export function connectionLabels(state: ConnectionState): ConnectionLabelValues {
+  return { methodName: state.method.name, account: state.oauth?.accountName ?? state.role?.arn ?? state.method.name };
 }
 
 const FlowStart = z.object({

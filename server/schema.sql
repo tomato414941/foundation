@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS challenges (
 CREATE TABLE IF NOT EXISTS resources (
   id uuid PRIMARY KEY,
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  kind text NOT NULL CHECK (kind IN ('secret','connection','service','method','app','object','environment','function')),
+  kind text NOT NULL CHECK (kind IN ('variable','connection','service','method','app','object','environment','function')),
   name text NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
   data jsonb NOT NULL,
   sealed jsonb,

@@ -7,7 +7,7 @@ import { Executor } from '../runtime/executor.js';
 import { FileJournal } from '../runtime/journal.js';
 import { CommandProcess, childEnvironment } from '../runtime/command.js';
 import { hash } from '../shared/authority.js';
-import { approvePolicy, prepareRun, reveal } from '../shared/custody.js';
+import { Operations, approvePolicy, prepareRun, reveal } from '../shared/custody.js';
 import { readReceipt } from '../shared/execution.js';
 import { decode, encode } from '../shared/encryption.js';
 import type { OutboundRequest, Transport } from '../server/transport.js';
@@ -23,7 +23,7 @@ test('実行先で秘密を復号してHTTP要求へ渡し、依頼者が暗号�
     } };
     const operation = { kind: 'http', request: { url: 'https://service.example/items', method: 'POST',
       headers: {}, body: 'request-body', bindings: [{ pointer: '/headers/authorization',
-        parts: ['Bearer ', { kind: 'secret', id: f.policy.id }] }] } };
+        parts: ['Bearer ', { id: f.policy.id }] }] } };
     const intent = { ...f.intent, operationDigest: await hash(operation) };
     await f.delegation.submit(f.owner.actor, await prepareRun(intent, operation, f.owner.keys));
     const executor = new Executor(f.environment, f.executor.keys, f.broker, new MemoryJournal(), transport,
@@ -121,8 +121,8 @@ test('コマンドへ指定した入力だけを渡し、終了結果とマス�
   const f = await delegatedFixture();
   try {
     const operation = { kind: 'command', command: ['node', '-e', 'process.stdout.write(process.env.TOKEN)'],
-      timeoutSeconds: 5, inputs: [{ name: 'TOKEN', source: { kind: 'secret', id: f.policy.id }, format: 'text' }] };
-    const intent = { ...f.intent, operation: 'command' as const, operationDigest: await hash(operation) };
+      timeoutSeconds: 5, inputs: [{ name: 'TOKEN', source: { id: f.policy.id }, format: 'text' }] };
+    const intent = { ...f.intent, operation: Operations.command, operationDigest: await hash(operation) };
     await f.delegation.submit(f.owner.actor, await prepareRun(intent, operation, f.owner.keys));
     const executor = new Executor(f.environment, f.executor.keys, f.broker, new MemoryJournal(),
       { async send() { throw new Error('Unexpected HTTP request'); } }, new CommandProcess({ isolation: 'process' }));

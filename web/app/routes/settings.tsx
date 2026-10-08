@@ -64,8 +64,8 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       return redirect('/');
     } else if (intent === 'transfer') {
       const to = formText(form, 'to');
-      const secrets = await rekeySharing(prefix + '/transfer-recipients?' + new URLSearchParams({ to }));
-      await api(prefix + '/transfer', { method: 'POST', body: { to, secrets } });
+      const contents = await rekeySharing(prefix + '/transfer-recipients?' + new URLSearchParams({ to }));
+      await api(prefix + '/transfer', { method: 'POST', body: { to, contents } });
       return redirect('/');
     } else if (intent === 'credential')
       await api(prefix + '/credentials/' + formText(form, 'credentialId'), { method: 'DELETE' });

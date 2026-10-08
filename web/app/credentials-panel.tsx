@@ -11,7 +11,7 @@ import type { Credential } from '../../shared/contracts';
 
 type CredentialView = z.infer<typeof Credential>;
 
-// Every way into a principal, with whether it can open secrets. The state of this browser's key
+// Every way into a principal, with whether it can open encrypted values. The state of this browser's key
 // sits above the list, since it decides what the buttons below can do.
 export function CredentialsPanel({
   principal,

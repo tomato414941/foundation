@@ -101,7 +101,7 @@ export class Principals {
     subjectId: string,
     relation: 'agent' | 'member' | 'payer',
     principalId: string,
-    secrets: KeyUpdates = {},
+    contents: KeyUpdates = {},
   ) {
     if (subjectId === principalId) fail(400, 'invalid_relation', 'Choose a different principal.');
     await this.get(subjectId);
@@ -125,7 +125,7 @@ export class Principals {
         ]);
       }
       if (relation === 'member')
-        await this.keySharing.apply(actor, principalId, subjectId, 'member', secrets, connection);
+        await this.keySharing.apply(actor, principalId, subjectId, 'member', contents, connection);
       await connection.query(
         'INSERT INTO relations(id,subject_id,principal_id,relation) VALUES($1,$2,$3,$4) ON CONFLICT(subject_id,principal_id,relation) DO NOTHING',
         [randomUUID(), subjectId, principalId, relation],
@@ -138,13 +138,13 @@ export class Principals {
     subjectId: string,
     relation: 'agent' | 'member' | 'payer',
     principalId: string,
-    secrets: KeyUpdates = {},
+    contents: KeyUpdates = {},
   ) {
     if (!(await this.authorization.stands(actor.id, subjectId)))
       await this.authorization.requirePrincipal(actor, principalId, 'share');
     await this.db.transaction(async connection => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
-      if (relation === 'member') await this.keySharing.apply(actor, principalId, subjectId, 'member', secrets, connection, true);
+      if (relation === 'member') await this.keySharing.apply(actor, principalId, subjectId, 'member', contents, connection, true);
       await connection.query('DELETE FROM relations WHERE subject_id=$1 AND principal_id=$2 AND relation=$3',
         [subjectId, principalId, relation]);
       await this.audit.record(principalId, actor.id, 'relation.remove', subjectId, { relation }, connection);
@@ -179,14 +179,14 @@ export class Principals {
       next: rows.length > limit ? selected.at(-1)!.id : null,
     };
   }
-  async transfer(actor: Actor, id: string, to: string, secrets: KeyUpdates = {}) {
+  async transfer(actor: Actor, id: string, to: string, contents: KeyUpdates = {}) {
     await this.authorization.requirePrincipal(actor, id, 'transfer');
     await this.get(to);
     await this.db.transaction(async (connection) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023743)');
       if (await this.authorization.stands(id, to, connection))
         fail(409, 'relation_cycle', 'This transfer would create an ownership cycle.');
-      await this.keySharing.apply(actor, id, to, 'owner', secrets, connection);
+      await this.keySharing.apply(actor, id, to, 'owner', contents, connection);
       await connection.query("DELETE FROM relations WHERE principal_id=$1 AND relation='owner'", [id]);
       await connection.query(
         "INSERT INTO relations(id,subject_id,principal_id,relation) VALUES($1,$2,$3,'owner')",

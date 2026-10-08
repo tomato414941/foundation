@@ -3,7 +3,7 @@ import type { Client } from './client.js';
 import { configPath } from './config.js';
 import { CustodyClient } from '../../shared/client.js';
 import { hash } from '../../shared/authority.js';
-import { useContent } from '../../shared/custody.js';
+import { ContentTypes, Operations, useContent } from '../../shared/custody.js';
 import type { ExecutionIntent } from '../../shared/custody.js';
 import type { InjectionInput } from '../../shared/contracts.js';
 import { encode } from '../../shared/encryption.js';
@@ -30,22 +30,22 @@ export async function localInputs(client: Client, inputs: InjectionInput[]) {
   const { custody, keys, binding, connections } = privateClient(client);
   const sources = await custody.sourceContents(inputs.map(input => input.source.id));
   const intent: ExecutionIntent = {
-    format: 1, id: crypto.randomUUID(), origin: client.identity.origin, ownerId: binding.principalId,
+    format: 2, id: crypto.randomUUID(), origin: client.identity.origin, ownerId: binding.principalId,
     actor: binding, executor: binding, environmentId: binding.id, environmentDigest: await hash(binding),
-    operation: 'command', functionDigest: null, operationDigest: await hash(inputs),
-    sources: await Promise.all(sources.map(async content => ({ id: content.policy.id, kind: content.policy.kind,
+    operation: Operations.command, functionDigest: null, operationDigest: await hash(inputs),
+    sources: await Promise.all(sources.map(async content => ({ id: content.policy.id,
       policyDigest: await hash(content.policy), materialRevision: content.materialRevision,
-      ...(content.policy.kind === 'connection' ? { authorizationDigest: String(content.metadata.authorizationDigest) } : {}),
+      ...(content.policy.contentType === ContentTypes.tokenSet ? { authorizationDigest: String(content.metadata.authorizationDigest) } : {}),
     }))), resultRecipients: [binding], createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
   };
   const outputs = new Map<string, Promise<Record<string, string>>>();
   return processInputs(inputs, async source => {
     const content = sources.find(content => content.policy.id === source.id)!;
-    if (source.kind === 'secret') return useContent(content, intent, keys);
+    if (content.policy.contentType === ContentTypes.value) return useContent(content, intent, keys);
     if (!outputs.has(source.id)) outputs.set(source.id, connections.outputs(content, intent, sources, new AbortController().signal));
     const values = await outputs.get(source.id)!;
-    if (!Object.hasOwn(values, source.output)) throw new Error('Choose an available connection output.');
+    if (!source.output || !Object.hasOwn(values, source.output)) throw new Error('Choose an available connection output.');
     return encode(values[source.output]!);
   });
 }

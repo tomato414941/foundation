@@ -1,4 +1,5 @@
 import { fixture } from './support.js';
+import { Operations } from '../shared/custody.js';
 import { MemoryObjects, MemoryPayments, MemoryRunner } from './fakes.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
@@ -29,9 +30,9 @@ class BrowserRunner extends MemoryRunner {
       payload: { bootstrap: bootstrap.bootstrap, binding: await signBinding(binding, keys), token } });
     if (enrollment.statusCode !== 200) throw new Error(enrollment.body);
     const client = new Client({ origin, principalId: binding.principalId, token, keys, binding });
-    const registration = await signEnvironment({ format: 1, id, origin, ownerId: bootstrap.ownerId,
+    const registration = await signEnvironment({ format: 2, id, origin, ownerId: bootstrap.ownerId,
       name: bootstrap.name, executor: binding, operatorId: binding.principalId, driver: 'managed',
-      callers: bootstrap.callers, capabilities: ['http', 'command', 'function', 'connect', 'refresh', 'revoke'],
+      callers: bootstrap.callers, capabilities: Object.values(Operations),
       isolation: 'container', commandImage: bootstrap.commandImage,
       awsPrincipal: 'arn:aws:iam::123456789012:role/foundation-test-executor', revision: 1 }, keys);
     await client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: registration });
@@ -91,6 +92,13 @@ app.post<{ Body: { principalId: string } }>('/__test/payment', async (request) =
   );
   return { ok: true };
 });
+app.post<{ Body: { ownerId: string; id: string; kind: 'variable'; name: string; content: unknown; data: Record<string, number> } }>(
+  '/__test/stored', async (request) => {
+    const { ownerId, id, kind, name, content, data } = request.body;
+    await context.resources.insert(ownerId, kind, name, data, { id });
+    await context.db.pool.query('INSERT INTO resource_custody(resource_id,content) VALUES($1,$2)', [id, JSON.stringify(content)]);
+    return { ok: true };
+  });
 const worker = new Worker(context, (error) => app.log.error(error));
 try {
   await app.listen({ host: '127.0.0.1', port });

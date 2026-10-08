@@ -3,6 +3,8 @@ import { ConnectionRequest, Id, Name, Sealed, Time } from './contracts.js';
 import { Fingerprint, KeyBinding, Signature, SignedBinding } from './authority.js';
 import { AccessPolicy, DelegatedRun, ProtectedContent } from './custody.js';
 import { ExecutionReceipt, SignedEnvironment, Task } from './execution.js';
+import { ConnectionLabels } from './connections.js';
+import { LegacyContent } from './custody-legacy.js';
 
 export const BoundRecipient = SignedBinding.extend({ name: Name });
 export const ConnectionPlan = z.object({ id: Id, index: z.number().int().min(0).max(7),
@@ -14,9 +16,13 @@ export const EnvironmentBootstrap = z.object({ id: Id, executorId: Id, ownerId: 
   commandImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/),
   callers: z.array(KeyBinding).min(1).max(100) }).strict();
 export const PublishBinding = SignedBinding.extend({ previousSignature: Signature.optional() }).strict();
-export const ProtectedWrite = z.object({ name: Name, content: ProtectedContent,
+// Labels are what people read about an item. They are stored as given and carry no authority.
+export const ProtectedWrite = z.object({ name: Name, content: ProtectedContent, labels: ConnectionLabels.optional(),
   version: z.number().int().positive().optional() }).strict();
-export const ProtectedRead = z.object({ content: ProtectedContent, version: z.number().int().positive() }).strict();
+// Until every item is re-protected, an item may still be in the first format.
+export const ProtectedRead = z.object({ content: z.union([ProtectedContent, LegacyContent]),
+  version: z.number().int().positive() }).strict();
+export const Reprotection = z.object({ id: Id, reason: z.enum(['format']) }).strict();
 export const KeyUpdates = z.record(Id, z.object({ version: z.number().int().positive(), content: ProtectedContent }).strict());
 export const KeySharingItem = z.object({ id: Id, name: Name, version: z.number().int().positive(),
   content: ProtectedContent, policy: AccessPolicy }).strict();

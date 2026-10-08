@@ -12,8 +12,10 @@ import type { Route } from './+types/workspace';
 import { Principal } from '../../../shared/contracts';
 import type { PrincipalView } from '../../../shared/contracts';
 import { api, ApiFailure, signedIn } from '../api';
+import { reprotectInBackground } from '../keys';
 export async function clientLoader({ request, params }: Route.ClientLoaderArgs) {
   const session = await signedIn(request);
+  if (session.principal && !session.requestId) reprotectInBackground(session.principal.id);
   let principal: Pick<PrincipalView, 'id' | 'name' | 'permissions' | 'publicKey' | 'createKinds'>;
   try {
     principal = await api('/principals/' + params.owner, { signal: request.signal }, Principal);

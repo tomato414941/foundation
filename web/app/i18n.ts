@@ -6,8 +6,12 @@ const words: Record<string, [string, string]> = {
   editorDisclosure: ['編集を許可した相手は、内容の表示と共有先の変更もできます。', 'Editors can also reveal content and change who has access.'],
   approvedFunction: ['使用を許可する関数ID', 'Approved function ID'],
   callerProgram: ['相手が指定するHTTPリクエストやコマンドにも使用を許可する', 'Allow use in HTTP requests and commands supplied by this person'],
-  callerProgramHelp: ['指定された処理によって秘密が相手へ渡る可能性があります。関数を限定する場合は選択しないでください。', 'The supplied program can disclose the secret to this person. Leave unchecked to allow only the selected function.'],
+  callerProgramHelp: ['指定された処理によって値が相手へ渡る可能性があります。関数を限定する場合は選択しないでください。', 'The supplied program can disclose the value to this person. Leave unchecked to allow only the selected function.'],
   'errors.environment_required': ['実行先を選んでください。', 'Choose an executor.'],
+  'errors.reprotection_required': [
+    'この項目は暗号化の更新を待っています。この項目を開ける端末でロックを解除すると、自動で更新されます。',
+    'This item is waiting for its encryption to be updated. Unlocking a device that can open it updates it automatically.',
+  ],
   'errors.function_required': ['関数を指定するか、任意の処理への使用を明示して許可してください。', 'Choose a function or explicitly allow caller-supplied programs.'],
   'errors.caller_required': ['実行先に共有相手を依頼者として登録してください。', 'Register this person as an accepted caller on the executor.'],
   createRole: ['AWSでIAMロールを作る', 'Create the IAM role in AWS'],
@@ -17,7 +21,7 @@ const words: Record<string, [string, string]> = {
   externalIdHelp: ['ロールを作るときに自動で設定されます。', 'Set automatically when the role is created.'],
   approvedExecutors: ['使用を許可する実行先', 'Approved executors'],
   executorChoiceHelp: ['この処理を行う実行先を選んでください。停止中は、別の実行先へ切り替わらず待機します。', 'Choose where this operation runs. If it is offline, the operation waits for that executor.'],
-  executorDisclosure: ['選んだ実行先へ秘密を渡し、あなたが依頼する処理での使用を30日間許可します。実行先の運営者は内容を読めます。未選択なら、内容を読める端末だけで使用します。', 'Share the secret with selected executors for operations you request for 30 days. Their operators can read it. With none selected, use is limited to devices that can read the content.'],
+  executorDisclosure: ['選んだ実行先へ値を渡し、あなたが依頼する処理での使用を30日間許可します。実行先の運営者は内容を読めます。未選択なら、内容を読める端末だけで使用します。', 'Share the value with selected executors for operations you request for 30 days. Their operators can read it. With none selected, use is limited to devices that can read the content.'],
   noExecutors: ['利用できる実行先がありません。実行環境を登録してください。', 'No executors are available. Register an execution environment.'],
   trustIdentity: ['相手の鍵を確認', 'Verify an identity'],
   trustIdentityHelp: ['相手の端末や管理者から別の連絡手段で受け取ったIDと鍵の指紋を入力してください。この端末で、照合した鍵への共有を許可します。', 'Enter the ID and key fingerprint received separately from the other device or its administrator. This device will trust the verified keys for sharing.'],
@@ -35,7 +39,8 @@ const words: Record<string, [string, string]> = {
   retry: ['やり直す', 'Try again'],
   home: ['ホーム', 'Home'],
   services: ['サービス接続', 'Connections'],
-  secrets: ['シークレット', 'Secrets'],
+  variables: ['変数', 'Variables'],
+  encryptedValues: ['暗号化された値', 'Encrypted values'],
   objects: ['ファイル', 'Files'],
   environments: ['実行環境', 'Environments'],
   functions: ['関数', 'Functions'],
@@ -61,7 +66,7 @@ const words: Record<string, [string, string]> = {
   signin: ['ログイン', 'Sign in'],
   signup: ['アカウントを作成', 'Create account'],
   signinTitle: ['Foundationにログイン', 'Sign in to Foundation'],
-  signinDescription: ['サービス接続とシークレットを管理します。', 'Manage service connections and secrets.'],
+  signinDescription: ['サービス接続と変数を管理します。', 'Manage service connections and variables.'],
   passkeySignin: ['パスキーでログイン', 'Sign in with a passkey'],
   passkeyCreate: ['パスキーを作成', 'Create a passkey'],
   email: ['メールアドレス', 'Email address'],
@@ -118,12 +123,12 @@ const words: Record<string, [string, string]> = {
   reveal: ['内容を表示', 'Reveal content'],
   hide: ['内容を隠す', 'Hide content'],
   value: ['値', 'Value'],
-  managedExecutorHelp: ['Foundationが運用する実行環境です。起動後に実行先の鍵を確認し、使用を許可する秘密や接続を選んでください。',
-    'This executor is operated by Foundation. Verify its keys after startup, then choose which secrets and connections it may use.'],
+  managedExecutorHelp: ['Foundationが運用する実行環境です。起動後に実行先の鍵を確認し、使用を許可する変数や接続を選んでください。',
+    'This executor is operated by Foundation. Verify its keys after startup, then choose which variables and connections it may use.'],
   removeRevokedConnection: ['アクセス取消済みの接続を削除', 'Remove the revoked connection'],
   keyLocked: [
-    'シークレットを開くには、暗号化に対応したパスキーで認証してください。',
-    'Authenticate with an encryption-capable passkey to open secrets.',
+    '暗号化された値を開くには、パスキーで認証してください。',
+    'Authenticate with a passkey to open encrypted values.',
   ],
   unlock: ['パスキーでロック解除', 'Unlock with a passkey'],
   keyUnsupported: [
@@ -134,7 +139,7 @@ const words: Record<string, [string, string]> = {
     'このアカウントの暗号化キーを開けません。登録済みの別のパスキーで認証してください。',
     'The encryption key could not be opened. Authenticate with another registered passkey.',
   ],
-  keyReady: ['この端末でシークレットを開けます。', 'Secrets are unlocked on this device.'],
+  keyReady: ['この端末で暗号化された値を開けます。', 'Encrypted values are unlocked on this device.'],
   'errors.encryption_key_changed': ['暗号鍵が更新されました。画面を再読み込みし、パスキーでロックを解除してください。', 'The encryption key changed. Reload the page and unlock with a passkey.'],
   share: ['共有', 'Share'],
   transfer: ['所有者を変更', 'Transfer ownership'],
@@ -257,7 +262,7 @@ const words: Record<string, [string, string]> = {
   httpMethod: ['メソッド', 'Method'],
   headers: ['ヘッダー（JSON）', 'Headers (JSON)'],
   body: ['本文', 'Body'],
-  bindings: ['シークレットの割り当て（JSON）', 'Secret bindings (JSON)'],
+  bindings: ['値の割り当て（JSON）', 'Value bindings (JSON)'],
   description: ['説明', 'Description'],
   parameters: ['パラメーター（JSON）', 'Parameters (JSON)'],
   saveOutputs: ['結果の保存先（JSON）', 'Save outputs (JSON)'],
@@ -268,8 +273,8 @@ const words: Record<string, [string, string]> = {
   payer: ['支払元', 'Payer'],
   subject: ['相手のプリンシパルID', 'Other principal ID'],
   relationHelp: [
-    '代理はサービスやシークレットを使って操作します。メンバーは管理に参加します。',
-    'Agents use connections and secrets. Members participate in management.',
+    '代理はサービスや変数を使って操作します。メンバーは管理に参加します。',
+    'Agents use connections and variables. Members participate in management.',
   ],
   paymentHelp: [
     '支払元のプリンシパルが、このプリンシパルの利用料金を支払います。',
@@ -278,8 +283,8 @@ const words: Record<string, [string, string]> = {
   connectedPrincipals: ['関連するプリンシパル', 'Related principals'],
   createPrincipal: ['プリンシパルを作成', 'Create principal'],
   principalHelp: [
-    'エージェントやチームの接続・シークレットをまとめて管理します。',
-    'Manage connections and secrets for an agent or team.',
+    'エージェントやチームの接続・変数をまとめて管理します。',
+    'Manage connections and variables for an agent or team.',
   ],
   message: ['メッセージ', 'Message'],
   approve: ['承認', 'Approve'],
@@ -315,8 +320,8 @@ const words: Record<string, [string, string]> = {
   ],
   lastUsed: ['最終利用', 'Last used'],
   inUse: ['使用中', 'In use'],
-  canOpen: ['シークレットを開ける', 'Can open secrets'],
-  cannotOpen: ['シークレットを開けない', 'Cannot open secrets'],
+  canOpen: ['暗号化された値を開ける', 'Can open encrypted values'],
+  cannotOpen: ['暗号化された値を開けない', 'Cannot open encrypted values'],
   handKey: ['鍵を渡す', 'Hand over the key'],
   issueKey: ['キーを発行', 'Issue a key'],
   keyMissing: [
@@ -389,7 +394,7 @@ const words: Record<string, [string, string]> = {
   'permission.delete': ['削除する', 'Delete'],
   'permission.share': ['共有を管理する', 'Manage sharing'],
   'permission.transfer': ['所有者を変更する', 'Transfer ownership'],
-  'permission.reveal': ['内容を開く', 'Reveal secrets'],
+  'permission.reveal': ['内容を開く', 'Reveal contents'],
   'permission.use': ['実行に使用する', 'Use in runs'],
   'permission.execute': ['実行する', 'Run'],
   'permission.credentials': ['ログイン方法を管理する', 'Manage credentials'],
@@ -466,7 +471,7 @@ const words: Record<string, [string, string]> = {
 };
 Object.assign(words, {
   'singular.connection': ['サービス接続', 'connection'],
-  'singular.secret': ['シークレット', 'secret'],
+  'singular.variable': ['変数', 'variable'],
   'singular.object': ['ファイル', 'file'],
   'singular.environment': ['実行環境', 'environment'],
   'singular.function': ['関数', 'function'],
@@ -694,8 +699,8 @@ const errors: Array<[string[], string, string]> = [
 ];
 errors.push([
   ['rekey_required'],
-  'シークレットの共有先が変わりました。再読み込みして、もう一度お試しください。',
-  'Secret recipients changed. Reload the page and try again.',
+  '共有先が変わりました。再読み込みして、もう一度お試しください。',
+  'Recipients changed. Reload the page and try again.',
 ]);
 for (const [codes, ja, en] of errors) for (const code of codes) words['errors.' + code] = [ja, en];
 const resources = Object.fromEntries(

@@ -31,7 +31,7 @@ export const Action = z.enum([
 ]);
 export type ActionName = z.infer<typeof Action>;
 export const ResourceKind = z.enum([
-  'secret',
+  'variable',
   'connection',
   'service',
   'method',
@@ -99,7 +99,7 @@ export const Credential = z.object({
   createdAt: Time,
   lastUsedAt: Time.nullable(),
   expiresAt: Time.nullable(),
-  // Whether this way in carries the principal's wrapped encryption key, so it can open secrets.
+  // Whether this way in carries the principal's wrapped encryption key, so it can open encrypted values.
   canOpen: z.boolean(),
 });
 export const RelationInput = z
@@ -250,10 +250,8 @@ export const CatalogEntry = ServiceMetadata.extend({
 });
 export type CatalogService = z.infer<typeof CatalogEntry>;
 
-export const Source = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('secret'), id: Id }).strict(),
-  z.object({ kind: z.literal('connection'), id: Id, output: z.string().min(1).max(100) }).strict(),
-]);
+// An input names its item by id. A connection also names which of its outputs to use.
+export const Source = z.object({ id: Id, output: z.string().min(1).max(100).optional() }).strict();
 export type SourceReference = z.infer<typeof Source>;
 export const Input = z
   .object({
@@ -335,9 +333,9 @@ const custodyMetadata = {
   recipients: z.array(Id).default([]), executors: z.array(Id).default([]),
   custodyRevision: z.number().int().positive().nullable().default(null),
 };
-export const SecretResource = z.object({
+export const VariableResource = z.object({
   ...resourceBase,
-  kind: z.literal('secret'),
+  kind: z.literal('variable'),
   data: z.object({ ...custodyMetadata, bytes: z.number().int().nonnegative() }),
 });
 export const ConnectionResource = z.object({
@@ -403,7 +401,7 @@ export const FunctionResource = z.object({
   data: FunctionDefinition,
 });
 export const Resource = z.discriminatedUnion('kind', [
-  SecretResource,
+  VariableResource,
   ConnectionResource,
   ServiceResource,
   MethodResource,
@@ -413,7 +411,7 @@ export const Resource = z.discriminatedUnion('kind', [
   FunctionResource,
 ]);
 export type ResourceView = z.infer<typeof Resource>;
-export type SecretView = z.infer<typeof SecretResource>;
+export type VariableView = z.infer<typeof VariableResource>;
 export type ConnectionView = z.infer<typeof ConnectionResource>;
 export type EnvironmentView = z.infer<typeof EnvironmentResource>;
 export type ObjectView = z.infer<typeof ObjectResource>;

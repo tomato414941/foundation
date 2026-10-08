@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { Accounts } from '../server/accounts.js';
-import { AccessPolicy, protect, reveal } from '../shared/custody.js';
+import { AccessPolicy, ContentTypes, protect, reveal } from '../shared/custody.js';
 import { encode, decode } from '../shared/encryption.js';
 
 test('他方のメールアドレスを確認してアカウントを統合し、保管した内容を引き継ぐ', async (t) => {
@@ -23,8 +23,8 @@ test('他方のメールアドレスを確認してアカウントを統合し�
   );
   let params = new URLSearchParams(new URL(f.mailer.sent.at(-1)!.link).hash.slice(1));
   await c.authentication.verifyEmail(params.get('challenge')!, params.get('token')!);
-  const initial = await protect(encode('merge-secret'), AccessPolicy.parse({ format: 1, id: crypto.randomUUID(),
-    origin: f.config.origin, ownerId: source.actor.id, kind: 'secret', revision: 1,
+  const initial = await protect(encode('merge-secret'), AccessPolicy.parse({ format: 2, id: crypto.randomUUID(),
+    origin: f.config.origin, ownerId: source.actor.id, contentType: ContentTypes.value, revision: 1,
     authorities: [source.binding], readers: [source.binding], grants: [] }), 1, source.binding, source.keys);
   const secret = await c.custody.put(source.actor, { name: 'Saved value', content: initial });
   await c.authentication.beginEmail(

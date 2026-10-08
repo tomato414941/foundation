@@ -36,7 +36,7 @@ export function ResourceTable({
             const Icon =
               item.kind === 'connection'
                 ? Link2
-                : item.kind === 'secret'
+                : item.kind === 'variable'
                   ? KeyRound
                   : item.kind === 'object'
                     ? File
@@ -75,7 +75,7 @@ export function ResourceTable({
                       <div className="flex gap-2 text-xs text-muted-foreground sm:hidden">
                         {'state' in item.data && <State value={item.data.state} />}
                         {item.kind === 'object' && <Bytes value={item.data.size} />}
-                        {item.kind === 'secret' && <Bytes value={item.data.bytes} />}
+                        {item.kind === 'variable' && <Bytes value={item.data.bytes} />}
                       </div>
                     </div>
                   </div>
@@ -87,7 +87,7 @@ export function ResourceTable({
                     <State value={item.data.state} />
                   ) : item.kind === 'object' ? (
                     <Bytes value={item.data.size} />
-                  ) : item.kind === 'secret' ? (
+                  ) : item.kind === 'variable' ? (
                     <Bytes value={item.data.bytes} />
                   ) : (
                     '—'

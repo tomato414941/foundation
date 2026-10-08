@@ -146,9 +146,9 @@ export class Requests {
       if (operation.method === 'CONNECT') {
         ConnectionRequest.parse(operation.body);
         if (operation.path !== '/api/connections' || operation.inputs.length)
-          fail(400, 'invalid_operation', 'Request a connection method, then enter its secrets in the encrypted connection form.');
+          fail(400, 'invalid_operation', 'Request a connection method, then enter its credentials in the encrypted connection form.');
       } else if (operation.inputs.some(field => field.secret))
-        fail(400, 'encrypted_input_required', 'Use a CONNECT request to enter service secrets on a selected executor.');
+        fail(400, 'encrypted_input_required', 'Use a CONNECT request to enter service credentials on a selected executor.');
       else if (!this.dispatcher?.allows(operation))
         fail(400, 'operation_unavailable', 'This operation cannot be requested for approval.');
       for (const field of operation.inputs)

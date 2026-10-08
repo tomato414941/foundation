@@ -198,7 +198,7 @@ export class Billing {
       connection,
     );
     const storage = await this.db.one<{ bytes: string }>(
-      `SELECT coalesce(sum(CASE kind WHEN 'object' THEN (data->>'size')::bigint WHEN 'secret' THEN (data->>'bytes')::bigint ELSE 0 END),0) bytes FROM resources WHERE owner_id=$1`,
+      `SELECT coalesce(sum(CASE kind WHEN 'object' THEN (data->>'size')::bigint WHEN 'variable' THEN (data->>'bytes')::bigint ELSE 0 END),0) bytes FROM resources WHERE owner_id=$1`,
       [principalId],
       connection,
     );
@@ -238,7 +238,7 @@ export class Billing {
   private async reserveIncluded(kind: 'storage' | 'compute', amount: number, connection: Queryable) {
     if (kind === 'storage' && amount > 0) {
       const total = await this.db.one<{ bytes: string }>(
-        `SELECT coalesce(sum(CASE kind WHEN 'object' THEN (data->>'size')::bigint WHEN 'secret' THEN (data->>'bytes')::bigint ELSE 0 END),0) bytes FROM resources`,
+        `SELECT coalesce(sum(CASE kind WHEN 'object' THEN (data->>'size')::bigint WHEN 'variable' THEN (data->>'bytes')::bigint ELSE 0 END),0) bytes FROM resources`,
         [],
         connection,
       );

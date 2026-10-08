@@ -65,6 +65,22 @@ async function keep(id: string, keys: IdentityKeys) {
   await stored('keys', 'readwrite', store => store.put(identity, 'v2:' + id));
   held.set(id, identity);
   unlocked.set(id, keys);
+  reprotectInBackground(id);
+}
+// Whenever this browser holds a principal's keys, it seals again the items the server lists as
+// needing it. Each principal is handled once per page load.
+const reprotecting = new Set<string>();
+export function reprotectInBackground(id: string) {
+  if (reprotecting.has(id)) return;
+  reprotecting.add(id);
+  void (async () => {
+    if (!(await getIdentity(id))) { reprotecting.delete(id); return; }
+    const { custodyClient } = await import('./custody');
+    await (await custodyClient(id)).reprotectPending();
+  })().catch((error: unknown) => {
+    reprotecting.delete(id);
+    console.warn('Some items could not be updated to the current encryption.', error);
+  });
 }
 export async function clearKeys() {
   unlocked.clear();
@@ -224,7 +240,7 @@ export async function issueKey(
   await keep(principal.id, keys);
   return { token: issued.token + '.' + base64url(unlock) };
 }
-export async function decryptSecret(id: string, principalId: string) {
+export async function decryptVariable(id: string, principalId: string) {
   const { custodyClient } = await import('./custody');
   return (await custodyClient(principalId)).reveal(id);
 }

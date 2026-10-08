@@ -31,6 +31,16 @@ export class Database {
         );
         await client.query("INSERT INTO schema_migrations(name) VALUES('connection-method-resources')");
       }
+      const variables = await client.query("SELECT 1 FROM schema_migrations WHERE name='variables'");
+      if (!variables.rowCount) {
+        await client.query('ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_kind_check');
+        await client.query("UPDATE resources SET kind='variable' WHERE kind='secret'");
+        await client.query(
+          "ALTER TABLE resources ADD CONSTRAINT resources_kind_check CHECK (kind IN ('variable','connection','service','method','app','object','environment','function'))",
+        );
+        await client.query("UPDATE audit_log SET action='variable.'||substr(action,8) WHERE action LIKE 'secret.%'");
+        await client.query("INSERT INTO schema_migrations(name) VALUES('variables')");
+      }
       const notifications = await client.query(
         "SELECT 1 FROM schema_migrations WHERE name='remove-outbound-webhooks'",
       );

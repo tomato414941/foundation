@@ -7,6 +7,7 @@ import { EnvironmentInput } from '../shared/contracts.js';
 import { EnvironmentBootstrap } from '../shared/protocol.js';
 import { bindKeys, newIdentityKeys, signBinding } from '../shared/authority.js';
 import { signEnvironment } from '../shared/execution.js';
+import { Operations } from '../shared/custody.js';
 import { CommandProcess } from '../runtime/command.js';
 import { delegatedFixture } from './delegation-support.js';
 import { randomBytes } from 'node:crypto';
@@ -52,9 +53,9 @@ test('運営環境が自分の鍵で登録し、停止時に実行権を失効�
   await c.environments.enroll(row.id, { ...enrollment, binding: await signBinding(binding, keys) });
   const actor = (await c.authentication.authenticate(token))!;
   assert.equal(actor.id, input.executorId);
-  const registration = await signEnvironment({ format: 1, id: row.id, origin: f.config.origin,
+  const registration = await signEnvironment({ format: 2, id: row.id, origin: f.config.origin,
     ownerId: owner.actor.id, name: input.name, executor: binding, operatorId: actor.id,
-    driver: 'managed', capabilities: ['http', 'command', 'connect'], callers: input.callers,
+    driver: 'managed', capabilities: [Operations.http, Operations.command, Operations.connect], callers: input.callers,
     isolation: 'container', commandImage: input.commandImage, revision: 1 }, keys);
   await c.delegation.register(actor, registration);
   assert.equal((await c.resources.get(row.id)).data.state, 'running');
@@ -219,9 +220,9 @@ test('実行先が名乗るAWSの身元を実行環境に載せ、名乗らな�
   const f = await delegatedFixture();
   t.after(f.close);
   const awsPrincipal = 'arn:aws:iam::123456789012:role/own-server';
-  const manifest = { format: 1 as const, id: crypto.randomUUID(), origin: f.config.origin, ownerId: f.executor.actor.id,
+  const manifest = { format: 2 as const, id: crypto.randomUUID(), origin: f.config.origin, ownerId: f.executor.actor.id,
     name: 'Own server', executor: f.executor.binding, operatorId: f.executor.actor.id, driver: 'attached' as const,
-    capabilities: ['http' as const, 'connect' as const], callers: [f.owner.binding], isolation: 'process' as const };
+    capabilities: [Operations.http, Operations.connect], callers: [f.owner.binding], isolation: 'process' as const };
   await f.delegation.register(f.executor.actor, await signEnvironment({ ...manifest, awsPrincipal, revision: 1 }, f.executor.keys));
   assert.equal((await f.resources.get(manifest.id)).data.awsPrincipal, awsPrincipal);
   await f.delegation.register(f.executor.actor, await signEnvironment({ ...manifest, revision: 2 }, f.executor.keys));

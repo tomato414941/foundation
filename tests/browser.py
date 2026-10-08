@@ -89,8 +89,8 @@ class BrowserTests(unittest.TestCase):
         self.assertIsNotNone(principal["publicKey"])
         return page, principal
 
-    def secret(self, page, principal, name="Test secret", value="browser-secret"):
-        page.goto(f"{ORIGIN}/p/{principal['id']}/secrets/new")
+    def variable(self, page, principal, name="Test variable", value="browser-value"):
+        page.goto(f"{ORIGIN}/p/{principal['id']}/variables/new")
         page.get_by_role("textbox", name="名前", exact=True).fill(name)
         page.get_by_role("textbox", name="値", exact=True).fill(value)
         page.get_by_role("button", name="作成", exact=True).click()
@@ -138,11 +138,11 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible(timeout=15000)
         page.wait_for_url("**/services/*")
 
-    def test_パスキーで登録してシークレットを編集し再ログイン後に復号する(self):
+    def test_パスキーで登録して変数を編集し再ログイン後に復号する(self):
         page, principal = self.passkey_account()
-        path = self.secret(page, principal)
+        path = self.variable(page, principal)
         page.get_by_role("button", name="内容を表示", exact=True).click()
-        expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("browser-secret")
+        expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("browser-value")
         page.get_by_role("link", name="編集", exact=True).click()
         page.get_by_role("textbox", name="名前", exact=True).fill("Updated secret")
         page.get_by_role("textbox", name="値", exact=True).fill("updated-value")
@@ -163,12 +163,12 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("updated-value")
         page.screenshot(path=str(ARTIFACTS / "secret-desktop-ja.png"), full_page=True, caret="initial")
 
-    def test_相手の鍵で共有したシークレットを開き共有解除を反映する(self):
+    def test_相手の鍵で共有した変数を開き共有解除を反映する(self):
         owner, principal = self.passkey_account("Secret owner")
         reader, recipient = self.passkey_account("Secret reader")
         self.trust(owner, reader, recipient)
         self.trust(reader, owner, principal)
-        path = self.secret(owner, principal, "Shared secret")
+        path = self.variable(owner, principal, "Shared secret")
         owner.get_by_role("link", name="共有", exact=True).click()
         owner.get_by_role("textbox", name="共有相手のプリンシパルID").fill(recipient["id"])
         owner.get_by_role("checkbox", name="内容を開く", exact=True).check()
@@ -177,17 +177,17 @@ class BrowserTests(unittest.TestCase):
         reader.goto(ORIGIN + "/shared")
         reader.get_by_role("link", name="Shared secret", exact=True).click()
         reader.get_by_role("button", name="内容を表示", exact=True).click()
-        expect(reader.get_by_role("textbox", name="値", exact=True)).to_have_value("browser-secret")
+        expect(reader.get_by_role("textbox", name="値", exact=True)).to_have_value("browser-value")
         owner.get_by_role("listitem").filter(has_text="Secret reader").get_by_role("button", name="権限を解除", exact=True).click()
         expect(owner.get_by_text("Secret reader", exact=True)).to_be_hidden()
         resource_id = path.rsplit("/", 1)[1]
         self.assertEqual(reader.request.get(f"{ORIGIN}/api/resources/{resource_id}/custody").status, 403)
 
-    def test_追加したパスキーでログインして保存済みのシークレットを復号する(self):
+    def test_追加したパスキーでログインして保存済みの変数を復号する(self):
         page, principal = self.passkey_account("Existing account")
         cdp, authenticator_id = self.authenticators[page]
         original_credential = cdp.send("WebAuthn.getCredentials", {"authenticatorId": authenticator_id})["credentials"][0]["credentialId"]
-        path = self.secret(page, principal, "Existing secret", "Saved secret value")
+        path = self.variable(page, principal, "Existing secret", "Saved secret value")
         page.get_by_role("button", name="ログアウト", exact=True).click()
         page.wait_for_url("**/signin")
         page.get_by_role("button", name="パスキーでログイン", exact=True).click()
@@ -205,7 +205,7 @@ class BrowserTests(unittest.TestCase):
         with page.expect_response(lambda response: response.url.endswith("/auth/passkeys/verify")):
             unlock.click()
         expect(unlock).to_be_enabled()
-        expect(page.get_by_text("この端末でシークレットを開けます。", exact=True)).to_be_visible()
+        expect(page.get_by_text("この端末で暗号化された値を開けます。", exact=True)).to_be_visible()
         page.screenshot(path=str(ARTIFACTS / "account-desktop-ja.png"), full_page=True)
         cdp.send("WebAuthn.removeCredential", {"authenticatorId": authenticator_id, "credentialId": original_credential})
         page.get_by_role("link", name="パスキーを追加", exact=True).click()
@@ -222,10 +222,10 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("Edited existing secret")
         page.screenshot(path=str(ARTIFACTS / "additional-passkey-ja.png"), full_page=True)
 
-    def test_ブラウザで発行したキーでCLIにログインしブラウザが封じたシークレットを読む(self):
+    def test_ブラウザで発行したキーでCLIにログインしブラウザが封じた変数を読む(self):
         import tempfile
         page, principal = self.passkey_account("Key issuer")
-        path = self.secret(page, principal, "Issuer secret", "Issued through the browser")
+        path = self.variable(page, principal, "Issuer secret", "Issued through the browser")
         secret_id = path.rstrip("/").split("/")[-1]
         page.goto(f"{ORIGIN}/p/{principal['id']}/settings/credentials/new")
         page.wait_for_load_state("networkidle")
@@ -293,10 +293,10 @@ class BrowserTests(unittest.TestCase):
             self.assertEqual(read.returncode, 0, read.stderr)
             self.assertEqual(read.stdout, "kept by the child")
 
-    def test_端末のログインをブラウザで許可すると端末が本人として入りシークレットを読む(self):
+    def test_端末のログインをブラウザで許可すると端末が本人として入り変数を読む(self):
         import re, tempfile
         page, principal = self.passkey_account("Device approver")
-        path = self.secret(page, principal, "Approver secret", "Read after device sign-in")
+        path = self.variable(page, principal, "Approver secret", "Read after device sign-in")
         secret_id = path.rstrip("/").split("/")[-1]
         with tempfile.TemporaryDirectory() as home:
             environment = {key: value for key, value in os.environ.items() if not key.startswith("FOUNDATION_")}
@@ -330,10 +330,10 @@ class BrowserTests(unittest.TestCase):
         page, principal = self.passkey_account("Credentials viewer")
         page.goto(f"{ORIGIN}/p/{principal['id']}/settings/credentials")
         page.wait_for_load_state("networkidle")
-        expect(page.get_by_text("この端末でシークレットを開けます。", exact=True)).to_be_visible()
+        expect(page.get_by_text("この端末で暗号化された値を開けます。", exact=True)).to_be_visible()
         row = page.get_by_role("listitem").filter(has_text="Credentials viewer")
         expect(row.get_by_text("使用中", exact=True)).to_be_visible()
-        expect(row.get_by_text("シークレットを開ける", exact=False)).to_be_visible()
+        expect(row.get_by_text("暗号化された値を開ける", exact=False)).to_be_visible()
         expect(row.get_by_role("button", name="削除", exact=True)).to_have_count(0)
         page.get_by_role("link", name="キーを発行", exact=True).click()
         expect(page.get_by_role("heading", name="キーを発行", exact=True)).to_be_visible()
@@ -344,11 +344,55 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("link", name="閉じる", exact=True).click()
         page.wait_for_url("**/settings/credentials")
         key_row = page.get_by_role("listitem").filter(has_text="Issued key")
-        expect(key_row.get_by_text("シークレットを開ける", exact=False)).to_be_visible()
+        expect(key_row.get_by_text("暗号化された値を開ける", exact=False)).to_be_visible()
         expect(key_row.get_by_role("button", name="削除", exact=True)).to_be_visible()
         page.screenshot(path=str(ARTIFACTS / "credentials-desktop-ja.png"), full_page=True)
 
-    def test_メンバー追加と所有者変更でシークレットを引き継ぐ(self):
+    def test_旧い形式で保存された変数を鍵を持つブラウザが開いたときに封じ直して読めるようにする(self):
+        import re, tempfile
+        page, principal = self.passkey_account("Migrating owner")
+        with tempfile.TemporaryDirectory() as home:
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("FOUNDATION_")}
+            environment["XDG_CONFIG_HOME"] = home
+            login = subprocess.Popen(["node", "cli/dist/cli.mjs", "login", "--name", "Migrating laptop", "--origin", ORIGIN],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment)
+            shown = ""
+            for _ in range(200):
+                shown += login.stderr.readline()
+                if "enter the code" in shown:
+                    break
+            page.goto(re.search(r"Open (\S+)", shown).group(1))
+            page.get_by_role("textbox", name="確認コード", exact=True).fill(re.search(r"code ([A-Z0-9]{4}-[A-Z0-9]{4})", shown).group(1))
+            page.get_by_role("button", name="許可", exact=True).click()
+            login.communicate(timeout=60)
+            self.assertEqual(login.returncode, 0)
+            variable_id = str(uuid.uuid4())
+            stored = subprocess.run(["node", "--import", "tsx", "--input-type=module", "-e", f"""
+                import {{ readFile }} from 'node:fs/promises';
+                import {{ firstFormat }} from './tests/legacy-support.ts';
+                const file = JSON.parse(await readFile('{home}/foundation/identity.json', 'utf8'));
+                const me = file.identities.find(item => item.principalId === file.current);
+                const content = await firstFormat({{ origin: '{ORIGIN}', id: '{variable_id}', ownerId: me.principalId, kind: 'secret',
+                  authority: me.binding, keys: me.keys, readers: [me.binding], executor: me.binding, operations: ['command'],
+                  bytes: new TextEncoder().encode('saved before the change'), metadata: {{ bytes: 23 }} }});
+                const response = await fetch('{ORIGIN}/__test/stored', {{ method: 'POST', headers: {{ 'content-type': 'application/json' }},
+                  body: JSON.stringify({{ ownerId: me.principalId, id: '{variable_id}', kind: 'variable', name: 'Old token', content, data: {{ bytes: 23 }} }}) }});
+                if (!response.ok) throw new Error(await response.text());
+            """], capture_output=True, text=True, env=environment)
+            self.assertEqual(stored.returncode, 0, stored.stderr)
+        pending = lambda: page.request.get(f"{ORIGIN}/api/principals/{principal['id']}/reprotection").json()["items"]
+        self.assertEqual([item["id"] for item in pending()], [variable_id])
+        page.goto(f"{ORIGIN}/p/{principal['id']}/variables")
+        for _ in range(50):
+            if not pending():
+                break
+            page.wait_for_timeout(200)
+        self.assertEqual(pending(), [])
+        page.goto(f"{ORIGIN}/p/{principal['id']}/variables/{variable_id}")
+        page.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("saved before the change")
+
+    def test_メンバー追加と所有者変更で変数を引き継ぐ(self):
         owner, principal = self.passkey_account("Project owner")
         member, recipient = self.passkey_account("Project member")
         successor, new_owner = self.passkey_account("Project successor")
@@ -362,7 +406,7 @@ class BrowserTests(unittest.TestCase):
         owner.get_by_role("button", name="作成", exact=True).click()
         expect(owner.get_by_role("heading", name="Shared project", exact=True)).to_be_visible()
         project = {"id": owner.url.rsplit("/", 1)[1]}
-        secret_path = self.secret(owner, project, "Team secret", "team-secret-value")
+        secret_path = self.variable(owner, project, "Team secret", "team-secret-value")
         owner.goto(f"{ORIGIN}/p/{project['id']}/principals")
         owner.get_by_role("textbox", name="相手のプリンシパルID").fill(recipient["id"])
         self.select(owner, "関係", "メンバー")

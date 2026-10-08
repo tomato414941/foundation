@@ -3,9 +3,9 @@ import safeRegex from 'safe-regex2';
 import { canonical, hash } from '../shared/authority.js';
 import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
 import type { JsonValue, MethodDescription } from '../shared/contracts.js';
-import { AppMaterial, ConnectionAction, ConnectionMaterial, connectionMetadata, requiresApp } from '../shared/connections.js';
-import type { AppState, ConnectionCommand, ConnectionState } from '../shared/connections.js';
-import { authorizeUse, produceContent, renewContent, useContent, verifyPolicyApproval } from '../shared/custody.js';
+import { AppMaterial, ConnectionAction, ConnectionMaterial, connectionLabels, connectionMetadata, requiresApp } from '../shared/connections.js';
+import type { AppState, ConnectionCommand, ConnectionLabelValues, ConnectionState } from '../shared/connections.js';
+import { ContentTypes, Operations, authorizeUse, produceContent, renewContent, useContent, verifyPolicyApproval } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent } from '../shared/custody.js';
 import { encode } from '../shared/encryption.js';
 import { atPointer, textValue } from '../shared/values.js';
@@ -23,7 +23,7 @@ import { utf8 } from './inputs.js';
 
 export interface ConnectionBroker {
   relay?(input: { id: string; runId: string; stateDigest: string; expiresAt: string }): Promise<unknown>;
-  capture(name: string, content: CustodyContent): Promise<{ id: string }>;
+  capture(name: string, content: CustodyContent, labels: ConnectionLabelValues): Promise<{ id: string }>;
   prepare(id: string, resourceId: string, expectedRevision: number): Promise<ConnectionOperation>;
   dispatch(id: string, fence: string): Promise<unknown>;
   commit(id: string, fence: string, content: CustodyContent): Promise<CustodyContent>;
@@ -83,8 +83,8 @@ export class Connections implements ExecutionExtension {
       ...(signal ? { signal: AbortSignal.any([signal, ...(request.signal ? [request.signal] : [])]) } : {}),
     }) });
   }
-  private source(id: string, kind: 'app' | 'connection', sources: CustodyContent[]) {
-    const content = sources.find(source => source.policy.id === id && source.policy.kind === kind);
+  private source(id: string, type: typeof ContentTypes.clientCredential | typeof ContentTypes.tokenSet, sources: CustodyContent[]) {
+    const content = sources.find(source => source.policy.id === id && source.policy.contentType === type);
     if (!content) fail(409, 'input_required', 'Include the connection and its application in this execution.');
     return content;
   }
@@ -92,12 +92,12 @@ export class Connections implements ExecutionExtension {
     const result = ConnectionMaterial.parse(JSON.parse(utf8(await useContent(content, intent, this.keys, { destination }))));
     if ((await connectionMetadata(result)).authorizationDigest !== content.metadata.authorizationDigest)
       fail(409, 'connection_changed', 'Approve the current service account and permissions before using this connection.');
-    if (result.state === 'reconnect' && intent.operation !== 'revoke')
+    if (result.state === 'reconnect' && intent.operation !== Operations.revoke)
       fail(409, 'reconnect_required', 'Reconnect this service before using it.');
     return result;
   }
   private async app(id: string, methodId: string, intent: ExecutionIntent, sources: CustodyContent[]) {
-    const content = this.source(id, 'app', sources);
+    const content = this.source(id, ContentTypes.clientCredential, sources);
     const value = AppMaterial.parse(JSON.parse(utf8(await useContent(content, intent, this.keys))));
     if (value.methodId !== methodId) fail(400, 'wrong_app', 'Choose an application for this connection method.');
     return value;
@@ -105,7 +105,7 @@ export class Connections implements ExecutionExtension {
   private async connectionApp(state: ConnectionState, intent: ExecutionIntent, sources: CustodyContent[]) {
     if (!requiresApp(state.method)) return AppMaterial.parse({ format: 1, methodId: state.methodId,
       generation: state.generation, clientId: '', fields: {} });
-    const operation = intent.operation === 'revoke' ? 'revoke' : 'refresh';
+    const operation = intent.operation === Operations.revoke ? Operations.revoke : Operations.refresh;
     const app = await this.app(state.appId!, state.methodId, { ...intent, operation }, sources);
     if (app.generation !== state.appGeneration)
       fail(409, 'app_changed', 'Reconnect this service with the current application.');
@@ -120,7 +120,7 @@ export class Connections implements ExecutionExtension {
 
   async validate(input: JsonValue, intent: ExecutionIntent, sources: CustodyContent[]) {
     const action = ConnectionAction.parse(input);
-    const expected = action.action === 'refresh' || action.action === 'revoke' ? action.action : 'connect';
+    const expected = Operations[action.action === 'refresh' || action.action === 'revoke' ? action.action : 'connect'];
     if (intent.operation !== expected) fail(400, 'wrong_operation', 'Use the approved connection operation.');
     if (action.action === 'start') {
       if (action.method.kind === 'oauth') {
@@ -141,7 +141,7 @@ export class Connections implements ExecutionExtension {
     } else if (action.action === 'commit') {
       const flow = await this.flow(action.flowId, intent), approval = await verifyPolicyApproval(action.approval);
       if (!flow.material || action.authorizationDigest !== (await connectionMetadata(flow.material)).authorizationDigest ||
-        approval.policy.kind !== 'connection' || approval.policy.ownerId !== intent.ownerId || approval.policy.origin !== intent.origin ||
+        approval.policy.contentType !== ContentTypes.tokenSet || approval.policy.ownerId !== intent.ownerId || approval.policy.origin !== intent.origin ||
         canonical(approval.policy.authorities.find(authority => authority.id === approval.authorityId)) !== canonical(intent.actor) ||
         !approval.policy.producers.some(producer => producer.runId === intent.id &&
           canonical(producer.executor) === canonical(this.binding) && Date.parse(producer.expiresAt) > Date.now()))
@@ -153,7 +153,7 @@ export class Connections implements ExecutionExtension {
         if (canonical(app) !== canonical(flow.app)) fail(409, 'app_changed', 'Start the connection again with the current application.');
       }
     } else {
-      const content = this.source(action.id, 'connection', sources);
+      const content = this.source(action.id, ContentTypes.tokenSet, sources);
       const state = await this.material(content, intent);
       if (state.method.kind === 'oauth') await this.connectionApp(state, intent, sources);
     }
@@ -168,7 +168,7 @@ export class Connections implements ExecutionExtension {
       if (action.action === 'start') return await this.start(action, intent, sources);
       if (action.action === 'exchange') return await this.exchange(action, intent, signal);
       if (action.action === 'commit') return await this.commit(action, intent);
-      const content = this.source(action.id, 'connection', sources), state = await this.material(content, intent);
+      const content = this.source(action.id, ContentTypes.tokenSet, sources), state = await this.material(content, intent);
       if (action.action === 'refresh') {
         const refreshed = state.method.kind === 'oauth' ? await this.refresh(content, state, intent, sources, signal) : state;
         return { kind: 'refreshed', id: content.policy.id, ...(await connectionMetadata(refreshed)) };
@@ -180,7 +180,9 @@ export class Connections implements ExecutionExtension {
   }
 
   private async review(id: string, flow: Flow): Promise<JsonValue> {
-    return { kind: 'review', flowId: id, name: flow.input.name, metadata: await connectionMetadata(flow.material!) };
+    // The person reviewing reads the account and method by name; only the signed metadata is committed.
+    return { kind: 'review', flowId: id, name: flow.input.name,
+      metadata: { ...await connectionMetadata(flow.material!), ...connectionLabels(flow.material!) } };
   }
   private async start(input: Extract<ConnectionCommand, { action: 'start' }>, intent: ExecutionIntent, sources: CustodyContent[]) {
     const id = 'oauth_' + input.flowId;
@@ -246,7 +248,7 @@ export class Connections implements ExecutionExtension {
       fail(409, 'connection_uncertain', 'Finish saving the previously approved connection before starting another save.');
     }
     let resource;
-    try { resource = await this.broker.capture(flow.input.name, flow.content); }
+    try { resource = await this.broker.capture(flow.input.name, flow.content, connectionLabels(flow.material!)); }
     catch (error) {
       if (error instanceof DomainError && error.status < 500) throw error;
       throw new DeliveryPending();
@@ -262,7 +264,7 @@ export class Connections implements ExecutionExtension {
     if (!flow?.content || flow.ownerId !== intent.ownerId || canonical(flow.actor) !== canonical(intent.actor) ||
       flow.content.creationRunId !== intent.id || canonical(flow.content.policy) !== canonical(action.approval.policy) ||
       !['committing', 'committed'].includes(flow.phase)) return null;
-    try { await this.broker.capture(flow.input.name, flow.content); }
+    try { await this.broker.capture(flow.input.name, flow.content, connectionLabels(flow.material!)); }
     catch (error) {
       if (error instanceof DomainError && error.status < 500) return null;
       throw new DeliveryPending();
@@ -302,7 +304,7 @@ export class Connections implements ExecutionExtension {
     sources: CustodyContent[], signal: AbortSignal, destination?: string) {
     if (material.method.kind !== 'oauth') return material;
     if (material.oauth!.expiresAt === null || material.oauth!.expiresAt! >= Date.now() + 60_000) return material;
-    try { await authorizeUse(content, { ...intent, operation: 'refresh' }, { destination }); }
+    try { await authorizeUse(content, { ...intent, operation: Operations.refresh }, { destination }); }
     catch { fail(403, 'refresh_required', 'Authorize this requester and executor to renew the connection for this destination.'); }
     const app = await this.connectionApp(material, intent, sources), id = randomUUID();
     const operation = await this.broker.prepare(id, content.policy.id, content.materialRevision);

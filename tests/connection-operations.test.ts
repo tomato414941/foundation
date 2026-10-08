@@ -2,21 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { delegatedFixture } from './delegation-support.js';
 import { ConnectionOperations } from '../server/connection-operations.js';
-import { approvePolicy, prepareRun, produceContent, protect, renewContent, reveal, matchesPin } from '../shared/custody.js';
+import { ContentTypes, Operations, approvePolicy, matchesPin, prepareRun, produceContent, protect, renewContent, reveal } from '../shared/custody.js';
 import type { CustodyPolicy } from '../shared/custody.js';
 import { hash } from '../shared/authority.js';
 import { decode, encode } from '../shared/encryption.js';
 
 async function setup() {
   const f = await delegatedFixture();
-  const policy: CustodyPolicy = { ...f.policy, id: crypto.randomUUID(), kind: 'connection',
-    grants: [{ ...f.policy.grants[0]!, operations: ['http', 'refresh'] }] };
+  const policy: CustodyPolicy = { ...f.policy, id: crypto.randomUUID(), contentType: ContentTypes.tokenSet,
+    grants: [{ ...f.policy.grants[0]!, operations: [Operations.http, Operations.refresh] }] };
   const metadata = { state: 'ready', authorizationDigest: await hash({ account: 'account-1', scopes: ['read'] }),
-    methodId: 'provider:oauth', methodName: 'Provider', methodKind: 'oauth', generation: crypto.randomUUID(),
-    appId: null, account: 'Account', accountId: 'account-1', accountVerified: true,
+    methodId: 'provider:oauth', methodKind: 'oauth', generation: crypto.randomUUID(),
+    appId: null, accountId: 'account-1', accountVerified: true,
     scopes: ['read'], scopesStatus: 'reported', outputs: ['ACCESS_TOKEN'] };
   const content = await protect(encode('old-refresh-token'), policy, 1, f.owner.binding, f.owner.keys, metadata);
-  const resource = await f.custody.put(f.owner.actor, { name: 'Connection', content });
+  const resource = await f.custody.put(f.owner.actor, { name: 'Connection', content, labels: { methodName: 'Provider', account: 'Account' } });
   return { ...f, connection: { policy, content, resource }, operations: new ConnectionOperations(f.custody) };
 }
 
@@ -37,7 +37,7 @@ test('接続更新を一つの実行先が取得し、更新した暗号文を�
     const current = await f.custody.read(f.owner.actor, source.policy.id);
     assert.equal(current.content.materialRevision, 2);
     assert.equal(decode(await reveal(current.content, f.owner.binding, f.owner.keys.encryption)), 'rotated-refresh-token');
-    assert.equal(await matchesPin(content, { id: source.policy.id, kind: 'connection', policyDigest: await hash(source.policy),
+    assert.equal(await matchesPin(content, { id: source.policy.id, policyDigest: await hash(source.policy),
       materialRevision: 1, authorizationDigest: String(source.metadata.authorizationDigest) }), true);
   } finally { await f.close(); }
 });

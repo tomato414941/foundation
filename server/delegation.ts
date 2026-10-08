@@ -6,7 +6,7 @@ import type { Custody } from './custody.js';
 import type { Queryable } from './database.js';
 import { iso } from './database.js';
 import { canonical, hash } from '../shared/authority.js';
-import { matchesPin, verifyRun } from '../shared/custody.js';
+import { matchesPin, operationName, verifyRun } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent, SealedRun } from '../shared/custody.js';
 import { Task, authorizeEnvironment, verifyEnvironment, verifyReceipt } from '../shared/execution.js';
 import type { RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/execution.js';
@@ -96,7 +96,7 @@ export class Delegation {
       const data = {
         ...(reserved?.data ?? {}),
         driver: manifest.driver, executorId: actor.id, operatorId: manifest.operatorId,
-        capabilities: manifest.capabilities, isolation: manifest.isolation,
+        capabilities: manifest.capabilities.map(operationName), isolation: manifest.isolation,
         manifestDigest: await hash(manifest),
         ...(manifest.awsPrincipal ? { awsPrincipal: manifest.awsPrincipal } : {}),
         size: reserved?.data.size ?? 'small', lifetime: reserved?.data.lifetime ?? { idleSeconds: 86400, maxSeconds: 86400 },
@@ -202,10 +202,10 @@ export class Delegation {
       const row = required(await this.resources.db.one<TaskRow>(
         `INSERT INTO execution_tasks(id,owner_id,actor_id,environment_id,kind,state,actor,request)
          VALUES($1,$2,$3,$4,$5,'queued',$6,$7) RETURNING *`,
-        [intent.id, intent.ownerId, actor.id, intent.environmentId, intent.operation, JSON.stringify(runActor), JSON.stringify(run)], connection,
+        [intent.id, intent.ownerId, actor.id, intent.environmentId, operationName(intent.operation), JSON.stringify(runActor), JSON.stringify(run)], connection,
       ));
       await this.resources.audit.record(intent.ownerId, actor.id, 'run.create', intent.id,
-        { environmentId: intent.environmentId, kind: intent.operation }, connection);
+        { environmentId: intent.environmentId, kind: operationName(intent.operation) }, connection);
       return this.view(row);
     });
   }

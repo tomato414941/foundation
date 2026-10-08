@@ -2,16 +2,16 @@ import { z } from 'zod';
 import { Command, FunctionDefinition, HttpRequest, Id, Json, Name, Sealed, Time } from './contracts.js';
 import { Fingerprint, KeyBinding, Signature, canonical, hash, sign, validateBinding, verify } from './authority.js';
 import type { KeyMaterial } from './authority.js';
-import { ExecutionKind, Origin, PolicyApproval, RunIntent, runContext } from './custody.js';
+import { Operation, Operations, Origin, PolicyApproval, RunIntent, runContext } from './custody.js';
 import type { ExecutionIntent } from './custody.js';
 import { base64url, encode, open, seal } from './encryption.js';
 
 export const AwsPrincipal = z.string().regex(/^arn:aws[a-z-]*:iam::\d{12}:(?:role|user)\/[\w+=,.@/-]{1,200}$/);
 export const EnvironmentManifest = z.object({
-  format: z.literal(1), id: Id, origin: Origin, ownerId: Id,
+  format: z.literal(2), id: Id, origin: Origin, ownerId: Id,
   name: Name, executor: KeyBinding, operatorId: Id,
   driver: z.enum(['attached', 'managed']),
-  capabilities: z.array(ExecutionKind).min(1).max(6),
+  capabilities: z.array(Operation).min(1).max(6),
   callers: z.array(KeyBinding).min(1).max(100),
   isolation: z.enum(['process', 'container']),
   commandImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/).optional(),
@@ -38,9 +38,9 @@ export async function verifyEnvironment(input: RegisteredEnvironment) {
   if (new Set(manifest.callers.map(binding => binding.id)).size !== manifest.callers.length ||
     new Set(manifest.capabilities).size !== manifest.capabilities.length)
     throw new Error('Choose distinct callers and execution capabilities.');
-  if (manifest.capabilities.includes('command') && manifest.isolation === 'container' && !manifest.commandImage)
+  if (manifest.capabilities.includes(Operations.command) && manifest.isolation === 'container' && !manifest.commandImage)
     throw new Error('Choose the container image used for commands.');
-  if (manifest.driver === 'managed' && manifest.capabilities.includes('command') && manifest.isolation !== 'container')
+  if (manifest.driver === 'managed' && manifest.capabilities.includes(Operations.command) && manifest.isolation !== 'container')
     throw new Error('Managed commands require container isolation.');
   await verify(manifest, environment.signature, manifest.executor.signing, 'environment');
   return environment;
@@ -111,8 +111,11 @@ export async function readReceipt(
   return result;
 }
 
+// What a run does, as the API and people name it. Signed intents carry the operation's id instead.
+export const RunKind = z.enum(['http', 'command', 'function', 'connect', 'refresh', 'revoke']);
+export type RunKindName = z.infer<typeof RunKind>;
 export const Task = z.object({
-  id: Id, ownerId: Id, actorId: Id, environmentId: Id, kind: ExecutionKind,
+  id: Id, ownerId: Id, actorId: Id, environmentId: Id, kind: RunKind,
   state: TaskState, intent: RunIntent, requestSignature: Signature,
   receipt: ExecutionReceipt.nullable(),
   error: z.string().nullable(), createdAt: Time, startedAt: Time.nullable(), finishedAt: Time.nullable(),

@@ -6,6 +6,7 @@ import type { Route } from './+types/resource-transfer';
 import { Resource, listOf } from '../../../shared/contracts';
 import { BoundRecipient } from '../../../shared/protocol';
 import { verifyBinding } from '../../../shared/authority';
+import { isProtected } from '../../../shared/protected';
 import { actionResult, api, formText } from '../api';
 import { custodyClient } from '../custody';
 import { ErrorNotice, Page, SaveBar } from '../components';
@@ -18,7 +19,7 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
     const form = await request.formData();
     const to = formText(form, 'to');
     const resource = await api('/resources/' + params.id, {}, Resource);
-    if (['secret', 'connection', 'app'].includes(resource.kind)) {
+    if (isProtected(resource.kind)) {
       const client = await custodyClient(), previous = await client.read(resource.id);
       const recipients = await api(
         `/resources/${resource.id}/transfer-recipients?to=${encodeURIComponent(to)}`,

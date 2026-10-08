@@ -38,7 +38,8 @@ export class Functions {
       for (const part of binding.parts)
         if (typeof part !== 'string') {
           const row = await this.resources.get(part.id);
-          if (row.kind !== part.kind) fail(400, 'wrong_kind', 'Choose a secret or connection.');
+          if (row.kind === 'variable' ? part.output !== undefined : row.kind !== 'connection' || part.output === undefined)
+            fail(400, 'wrong_kind', 'Choose a variable, or a connection and one of its outputs.');
           await this.resources.authorization.requireResource(actor, row, 'use');
         }
     }

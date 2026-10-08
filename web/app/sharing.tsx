@@ -9,6 +9,8 @@ import type { ActionName } from '../../shared/contracts';
 import { actionResult, api, ApiFailure, formText } from './api';
 import { custodyClient } from './custody';
 import { canonical, hash } from '../../shared/authority';
+import { Operations, permittedOperations } from '../../shared/custody';
+import { isProtected } from '../../shared/protected';
 import { availableEnvironments, EnvironmentChoice } from './environments';
 import { ErrorNotice, Page, Panel, SaveBar } from './components';
 import { resourcePath } from './navigation';
@@ -20,7 +22,7 @@ export async function shareLoader({ params, request }: LoaderFunctionArgs) {
       : api(prefix, { signal: request.signal }, Principal),
     api(prefix + '/grants', { signal: request.signal }, listOf(Grant)),
   ]);
-  const protectedItem = 'kind' in target && ['secret', 'connection', 'app'].includes(target.kind);
+  const protectedItem = 'kind' in target && isProtected(target.kind);
   return { target, grants: grants.items, prefix, protectedItem,
     environments: protectedItem ? await availableEnvironments(target.ownerId) : [] };
 }
@@ -34,7 +36,7 @@ export async function shareAction({ params, request }: ActionFunctionArgs) {
     if (!remove && !actions.length) throw new ApiFailure('invalid_input');
     if (params.id) {
       const resource = await api('/resources/' + params.id, {}, Resource);
-      if (['secret', 'connection', 'app'].includes(resource.kind)) {
+      if (isProtected(resource.kind)) {
         const client = await custodyClient(), previous = await client.read(resource.id);
         const policy = { ...previous.content.policy, revision: previous.content.policy.revision + 1, producers: [],
           readers: previous.content.policy.readers.filter(reader => reader.principalId !== id),
@@ -56,7 +58,7 @@ export async function shareAction({ params, request }: ActionFunctionArgs) {
               for (const environment of environments) {
                 if (!environment.manifest.callers.some(caller => canonical(caller) === canonical(binding))) throw new ApiFailure('caller_required');
                 policy.grants.push({ actor: binding, executor: environment.manifest.executor,
-                  operations: resource.kind === 'app' ? ['connect', 'refresh', 'revoke'] : callerProgram ? ['http', 'command', 'function', 'refresh', 'revoke'] : ['function'],
+                  operations: callerProgram || resource.kind === 'app' ? [...permittedOperations(policy.contentType)] : [Operations.function],
                   callerProgram, origins: [], functionDigests: fn?.kind === 'function' ? [await hash(fn.data)] : [],
                   expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() });
               }

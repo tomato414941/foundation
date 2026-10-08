@@ -21,6 +21,7 @@ import {
   listOf,
 } from '../../shared/contracts.js';
 import type { ResourceView } from '../../shared/contracts.js';
+import { ContentTypes } from '../../shared/custody.js';
 import { Session } from '../../shared/session.js';
 import { newEncryptionKey, open as openSealed, unbase64url, unwrap } from '../../shared/encryption.js';
 import { bindKeys, hash, newIdentityKeys, PrivateKeys, publicPart, signBinding, SignedBinding } from '../../shared/authority.js';
@@ -54,8 +55,8 @@ Usage: foundation <command> [options]
   connect --method ID --environment ID Start a connection on the selected executor
   connect wait ID                      Continue after service authorization
   connect accept ID                    Save the reviewed connection and its permissions
-  keep NAME (--file FILE | --stdin)    Encrypt and save a secret (--for ENV to allow execution)
-  read ID [--output FILE]               Decrypt a secret you can reveal
+  keep NAME (--file FILE | --stdin)    Encrypt and save a variable (--for ENV to allow execution)
+  read ID [--output FILE]               Decrypt a variable you can reveal
   exec --inputs JSON -- COMMAND ...    Deliver inputs to a local command
   run --environment ID --request JSON  Run an HTTP request on the selected executor
   run --environment ID --function ID   Run a saved function on the selected executor
@@ -234,14 +235,22 @@ async function signInWithKey(base: string, imported: string) {
   const current = Session.parse(await response.json());
   if (!current.principal) throw new Error('The key was not accepted.');
   if (!current.wrappedKey)
-    throw new Error('This key does not carry an encryption key. Issue it from a browser that can open secrets.');
+    throw new Error('This key does not carry an encryption key. Issue it from a browser that can open encrypted values.');
   const keys = PrivateKeys.parse(await unwrap(current.wrappedKey, unbase64url(unlock), current.principal.id).catch(() => {
     throw new Error('The encryption key could not be unlocked with this key.');
   }));
   const unsigned = new Client({ origin: base, principalId: current.principal.id, token, keys: null, binding: null });
   const { binding } = await unsigned.json('/api/identities/' + current.principal.id + '/binding', {}, SignedBinding);
   await signBinding(binding, keys);
-  await saveIdentity({ origin: base, principalId: current.principal.id, token, keys, binding });
+  const identity = { origin: base, principalId: current.principal.id, token, keys, binding };
+  await saveIdentity(identity);
+  // This device can now open its items, so it seals again any that the server lists as needing it.
+  const updated = await privateClient(new Client(identity)).custody.reprotectPending().catch((error: unknown) => {
+    process.stderr.write('Some items could not be updated to the current encryption: ' +
+      (error instanceof Error ? error.message : String(error)) + '\n');
+    return [];
+  });
+  if (updated.length) process.stderr.write('Updated the encryption of ' + updated.length + ' item(s).\n');
   print({ principal: { id: current.principal.id, name: current.principal.name }, origin: base, identity: configPath(),
     fingerprint: await hash(binding) });
 }
@@ -334,24 +343,24 @@ async function waitFor<T>(fetcher: () => Promise<T>, state: (value: T) => string
   }
 }
 async function keep(client: Client, args: Arguments, owner: string) {
-  const name = Name.parse(requireArgument(args.positionals[0], 'Supply the secret name.'));
+  const name = Name.parse(requireArgument(args.positionals[0], 'Supply the variable name.'));
   if (Boolean(args.values.file) === Boolean(args.values.stdin))
     throw new Error('Choose exactly one of --file or --stdin.');
   const content = args.values.file ? await readFile(args.values.file) : await stdin(1_000_000);
-  if (content.length > 1_000_000) throw new Error('A secret must be at most 1,000,000 bytes.');
+  if (content.length > 1_000_000) throw new Error('A variable must be at most 1,000,000 bytes.');
   let after: string | null = null,
-    existing: Extract<ResourceView, { kind: 'secret' }> | undefined;
+    existing: Extract<ResourceView, { kind: 'variable' }> | undefined;
   do {
     const search = new URLSearchParams({
-      kind: 'secret',
+      kind: 'variable',
       query: name,
       limit: '200',
       ...(after ? { after } : {}),
     });
     const page = await client.json('/api/principals/' + owner + '/resources?' + search, {}, listOf(Resource));
     existing = page.items.find(
-      (item): item is Extract<ResourceView, { kind: 'secret' }> =>
-        item.kind === 'secret' && item.name === name,
+      (item): item is Extract<ResourceView, { kind: 'variable' }> =>
+        item.kind === 'variable' && item.name === name,
     );
     after = page.next;
   } while (after && !existing);
@@ -359,7 +368,7 @@ async function keep(client: Client, args: Arguments, owner: string) {
   const previous = existing ? await custody.read(existing.id) : undefined;
   const environments = await Promise.all((args.values.for ?? []).map(id => custody.environment(Id.parse(id))));
   const policy = previous && !args.values.for ? previous.content.policy
-    : await custody.policy(owner, 'secret', environments, { previous: previous?.content.policy });
+    : await custody.policy(owner, ContentTypes.value, environments, { previous: previous?.content.policy });
   const result = await custody.save(name, content, policy, { previous });
   await output(result, args);
 }

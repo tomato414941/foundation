@@ -3,7 +3,7 @@ import { Bindings } from '../server/bindings.js';
 import { Custody } from '../server/custody.js';
 import { Delegation } from '../server/delegation.js';
 import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
-import { AccessPolicy, prepareRun, protect } from '../shared/custody.js';
+import { AccessPolicy, ContentTypes, Operations, prepareRun, protect } from '../shared/custody.js';
 import type { ExecutionIntent } from '../shared/custody.js';
 import { signEnvironment } from '../shared/execution.js';
 import { encode } from '../shared/encryption.js';
@@ -33,17 +33,17 @@ export async function delegatedFixture() {
   const owner = await person('Owner'), executor = await person('Executor'), stranger = await person('Other');
   await f.principals.relate(owner.actor, executor.actor.id, 'agent', owner.actor.id);
   const environment = await signEnvironment({
-    format: 1, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
+    format: 2, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
     name: 'Own server', executor: executor.binding, operatorId: executor.actor.id,
-    driver: 'attached', capabilities: ['http', 'command', 'function', 'connect', 'refresh', 'revoke'],
+    driver: 'attached', capabilities: Object.values(Operations),
     callers: [owner.binding], isolation: 'process', revision: 1,
   }, executor.keys);
   await delegation.register(executor.actor, environment);
   const policy = AccessPolicy.parse({
-    format: 1, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
-    kind: 'secret', revision: 1, authorities: [owner.binding], readers: [owner.binding],
+    format: 2, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
+    contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding],
     grants: [{ actor: owner.binding, executor: executor.binding,
-      operations: ['http', 'command'], callerProgram: true,
+      operations: [Operations.http, Operations.command], callerProgram: true,
       expiresAt: new Date(Date.now() + 3_600_000).toISOString() }],
   });
   const content = await protect(encode('confidential-value'), policy, 1, owner.binding, owner.keys);
@@ -51,11 +51,11 @@ export async function delegatedFixture() {
   const operation = { kind: 'http', request: { url: 'https://service.example/items',
     method: 'POST', body: 'private-request-body' } };
   const intent: ExecutionIntent = {
-    format: 1, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
+    format: 2, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
     actor: owner.binding, environmentId: environment.manifest.id, executor: executor.binding,
     environmentDigest: await hash(environment.manifest),
-    operation: 'http', functionDigest: null, operationDigest: await hash(operation),
-    sources: [{ id: policy.id, kind: 'secret', materialRevision: 1, policyDigest: await hash(policy) }],
+    operation: Operations.http, functionDigest: null, operationDigest: await hash(operation),
+    sources: [{ id: policy.id, materialRevision: 1, policyDigest: await hash(policy) }],
     resultRecipients: [owner.binding], createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 600_000).toISOString(),
   };

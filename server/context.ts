@@ -28,6 +28,7 @@ import { Custody } from './custody.js';
 import { Delegation } from './delegation.js';
 import { ConnectionOperations } from './connection-operations.js';
 import { OAuthRelays } from './oauth-relays.js';
+import { Operations } from '../shared/custody.js';
 
 export interface Dependencies {
   db?: Database;
@@ -79,7 +80,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     );
   delegation.checkApproval = async (actor, intent) => {
     const plan = await requests.connectionPlan(actor, intent.approval!.id);
-    if (plan.index !== intent.approval!.index || plan.input.ownerId !== intent.ownerId || intent.operation !== 'connect' ||
+    if (plan.index !== intent.approval!.index || plan.input.ownerId !== intent.ownerId || intent.operation !== Operations.connect ||
       (plan.input.environmentId && plan.input.environmentId !== intent.environmentId))
       throw new Error('Use the connection and execution environment approved by this request.');
   };

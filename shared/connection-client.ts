@@ -3,7 +3,7 @@ import type { CustodyClient } from './client.js';
 import { ApprovalRequest, Id, JsonObject, Name } from './contracts.js';
 import type { JsonValue, MethodDescription } from './contracts.js';
 import { canonical, hash } from './authority.js';
-import { AccessPolicy, approvePolicy } from './custody.js';
+import { AccessPolicy, ContentTypes, approvePolicy } from './custody.js';
 import type { CustodyPolicy } from './custody.js';
 import { ConnectionPlan, OAuthRelay, relayContext } from './protocol.js';
 import { Task } from './execution.js';
@@ -55,10 +55,10 @@ export class ConnectionClient {
       throw new Error('Use the connection method and executor approved by this request.');
     const approval = plan ? { id: plan.id, index: plan.index } : undefined;
     const previous = input.connectionId ? await this.custody.read(input.connectionId) : null;
-    if (previous && (previous.content.policy.kind !== 'connection' || previous.content.policy.ownerId !== input.ownerId ||
+    if (previous && (previous.content.policy.contentType !== ContentTypes.tokenSet || previous.content.policy.ownerId !== input.ownerId ||
       previous.content.metadata.methodId !== input.methodId)) throw new Error('Choose the existing connection and its method.');
     const environments = await Promise.all((input.environments ?? [input.environmentId]).map(id => this.custody.environment(id)));
-    const policy = await this.custody.policy(input.ownerId, 'connection', environments, {
+    const policy = await this.custody.policy(input.ownerId, ContentTypes.tokenSet, environments, {
       previous: previous?.content.policy,
     });
     const appId = requiresApp(input.method) ? Id.parse(input.appId) : null;

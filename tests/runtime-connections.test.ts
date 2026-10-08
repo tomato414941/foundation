@@ -10,7 +10,7 @@ import { MethodDefinition } from '../shared/contracts.js';
 import type { JsonValue } from '../shared/contracts.js';
 import { AppMaterial, ConnectionMaterial, connectionMetadata } from '../shared/connections.js';
 import { hash, canonical } from '../shared/authority.js';
-import { approvePolicy, prepareRun, protect, reveal } from '../shared/custody.js';
+import { ContentTypes, Operations, approvePolicy, prepareRun, protect, reveal } from '../shared/custody.js';
 import type { CustodyContent, CustodyPolicy, ExecutionIntent } from '../shared/custody.js';
 import { readReceipt } from '../shared/execution.js';
 import { decode, encode } from '../shared/encryption.js';
@@ -25,18 +25,18 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
     identity: { url: 'https://provider.example/account', id: '/id', name: '/name' },
     scopes: { default: ['read'] },
   } });
-  const policy = (kind: CustodyPolicy['kind'], operations: CustodyPolicy['grants'][number]['operations']): CustodyPolicy => ({
-    ...f.policy, id: crypto.randomUUID(), kind, grants: [{ ...f.policy.grants[0]!, operations }],
+  const policy = (contentType: CustodyPolicy['contentType'], operations: CustodyPolicy['grants'][number]['operations']): CustodyPolicy => ({
+    ...f.policy, id: crypto.randomUUID(), contentType, grants: [{ ...f.policy.grants[0]!, operations }],
   });
   const appMaterial = AppMaterial.parse({ format: 1, methodId: 'provider:oauth', generation: crypto.randomUUID(),
     clientId: 'runtime-client', clientSecret: 'runtime-client-secret', fields: {} });
-  const appPolicy = policy('app', ['connect', 'refresh', 'revoke']);
+  const appPolicy = policy(ContentTypes.clientCredential, [Operations.connect, Operations.refresh, Operations.revoke]);
   const appContent = await protect(encode(canonical(appMaterial)), appPolicy, 1, f.owner.binding, f.owner.keys,
     { methodId: 'provider:oauth', clientId: appMaterial.clientId, generation: appMaterial.generation });
   await f.custody.put(f.owner.actor, { name: 'Application', content: appContent });
   const operations = new ConnectionOperations(f.custody), journal = new MemoryJournal();
   const broker: ConnectionBroker = {
-    capture: (name, content) => f.custody.putProduced(f.executor.actor, { name, content }),
+    capture: (name, content, labels) => f.custody.putProduced(f.executor.actor, { name, content, labels }),
     prepare: (id, resourceId, revision) => operations.prepare(f.executor.actor, id, resourceId, revision),
     dispatch: (id, fence) => operations.dispatch(f.executor.actor, id, fence),
     commit: (id, fence, content) => operations.commit(f.executor.actor, id, fence, content),
@@ -51,13 +51,13 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
     new CommandProcess({ isolation: 'process' }), connections);
   async function intent(operation: JsonValue, sources: CustodyContent[], kind: ExecutionIntent['operation'], id = crypto.randomUUID()) {
     return { ...f.intent, id, operation: kind, operationDigest: await hash(operation),
-      sources: await Promise.all(sources.map(async content => ({ id: content.policy.id, kind: content.policy.kind,
+      sources: await Promise.all(sources.map(async content => ({ id: content.policy.id,
         materialRevision: content.materialRevision, policyDigest: await hash(content.policy),
-        ...(content.policy.kind === 'connection' ? { authorizationDigest: String(content.metadata.authorizationDigest) } : {}),
+        ...(content.policy.contentType === ContentTypes.tokenSet ? { authorizationDigest: String(content.metadata.authorizationDigest) } : {}),
       }))) };
   }
   async function run(input: JsonValue, sources: CustodyContent[] = [appContent], id = crypto.randomUUID()) {
-    const operation = { kind: 'connect', input }, authorization = await intent(operation, sources, 'connect', id);
+    const operation = { kind: 'connect', input }, authorization = await intent(operation, sources, Operations.connect, id);
     await f.delegation.submit(f.owner.actor, await prepareRun(authorization, operation, f.owner.keys));
     await executor.tick();
     const task = await f.delegation.get(f.owner.actor, id);
@@ -72,12 +72,12 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
       oauth: { accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: 0,
         scopes: ['read'], scopesStatus: 'reported', account: 'account-1', accountName: 'Account',
         accountVerified: true, extra: {}, facts: {} } });
-    const connectionPolicy = policy('connection', ['http', 'refresh', 'revoke']);
+    const connectionPolicy = policy(ContentTypes.tokenSet, [Operations.http, Operations.refresh, Operations.revoke]);
     if (grants) connectionPolicy.grants = grants;
     const content = await protect(encode(canonical(material)), connectionPolicy,
       1, f.owner.binding, f.owner.keys, await connectionMetadata(material));
     await f.custody.put(f.owner.actor, { name, content });
-    const authorization = await intent({ kind: 'http' }, [content, appContent], 'http');
+    const authorization = await intent({ kind: 'http' }, [content, appContent], Operations.http);
     return { material, content, authorization, sources: [content, appContent] };
   }
   return { ...f, method, policy, appMaterial, appContent, appPolicy, operations, journal, broker, connections,
@@ -102,7 +102,7 @@ test('選んだ実行先でOAuthコードを交換し、接続先と権限を確
     assert.equal(metadata.account, 'Account');
     assert.deepEqual(metadata.scopes, ['read']);
     const runId = crypto.randomUUID();
-    const policy = { ...f.policy('connection', ['http', 'refresh']), producers: [{ executor: f.executor.binding,
+    const policy = { ...f.policy(ContentTypes.tokenSet, [Operations.http, Operations.refresh]), producers: [{ executor: f.executor.binding,
       runId, expiresAt: f.intent.expiresAt, materialRevision: 1 }] };
     const connected = await f.run({ action: 'commit', flowId, authorizationDigest: metadata.authorizationDigest!,
       approval: await approvePolicy(policy, f.owner.binding, f.owner.keys) }, [f.appContent], runId);
@@ -123,7 +123,7 @@ test('再認証が必要な接続は利用とトークン更新を再接続ま�
       new AbortController().signal), { code: 'reconnect_required' });
     const operation = { action: 'refresh', id: c.content.policy.id };
     await assert.rejects(f.connections.execute(operation, { ...c.authorization,
-      operation: 'refresh', operationDigest: await hash({ kind: 'refresh', input: operation }) },
+      operation: Operations.refresh, operationDigest: await hash({ kind: 'refresh', input: operation }) },
       c.sources, new AbortController().signal), { code: 'reconnect_required' });
     assert.equal(f.requests.length, 0);
     assert.equal((await f.custody.read(f.owner.actor, c.content.policy.id)).content.metadata.state, 'reconnect');
@@ -158,11 +158,11 @@ test('自動更新の依頼者と利用先を照合し、同じ委任で許可�
   try {
     const grant = f.appPolicy.grants[0]!;
     for (const refresh of [
-      { ...grant, actor: f.stranger.binding, operations: ['refresh'] as const },
-      { ...grant, origins: ['https://another.example'], operations: ['refresh'] as const },
+      { ...grant, actor: f.stranger.binding, operations: [Operations.refresh] as const },
+      { ...grant, origins: ['https://another.example'], operations: [Operations.refresh] as const },
     ]) {
       const c = await f.storedConnection('Needs approval', [
-        { ...grant, operations: ['http'] }, { ...refresh, operations: [...refresh.operations] },
+        { ...grant, operations: [Operations.http] }, { ...refresh, operations: [...refresh.operations] },
       ]);
       await assert.rejects(f.connections.outputs(c.content, c.authorization, c.sources,
         new AbortController().signal, 'https://service.example/items'), { code: 'refresh_required' });
@@ -170,7 +170,7 @@ test('自動更新の依頼者と利用先を照合し、同じ委任で許可�
     }
     assert.equal(f.requests.length, 0);
     const c = await f.storedConnection('Approved refresh', [
-      { ...grant, operations: ['http', 'refresh'], origins: ['https://service.example'] },
+      { ...grant, operations: [Operations.http, Operations.refresh], origins: ['https://service.example'] },
     ]);
     await f.connections.outputs(c.content, c.authorization, c.sources,
       new AbortController().signal, 'https://service.example/items');
@@ -240,13 +240,13 @@ test('OAuth接続の保存応答が途切れた場合、記録した暗号文を
     const reviewed = await f.run({ action: 'exchange', flowId, parameters: new URLSearchParams({
       state: new URL(String(started.url)).searchParams.get('state')!, code: 'approved-code',
     }).toString() });
-    const runId = crypto.randomUUID(), policy = { ...f.policy('connection', ['http', 'refresh']), producers: [{
+    const runId = crypto.randomUUID(), policy = { ...f.policy(ContentTypes.tokenSet, [Operations.http, Operations.refresh]), producers: [{
       executor: f.executor.binding, runId, expiresAt: f.intent.expiresAt, materialRevision: 1,
     }] };
     const capture = f.broker.capture;
     let attempts = 0;
-    f.broker.capture = async (name, content) => {
-      const saved = await capture(name, content);
+    f.broker.capture = async (name, content, labels) => {
+      const saved = await capture(name, content, labels);
       if (++attempts === 1) throw new Error('saved response lost');
       return saved;
     };

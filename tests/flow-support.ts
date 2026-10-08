@@ -12,6 +12,7 @@ import type { ConnectionFlow } from '../shared/connection-client.js';
 import { CatalogMethod, Resource, listOf } from '../shared/contracts.js';
 import { canonical } from '../shared/authority.js';
 import { AppMaterial } from '../shared/connections.js';
+import { ContentTypes } from '../shared/custody.js';
 import { encode } from '../shared/encryption.js';
 import { Task } from '../shared/execution.js';
 import { Connections } from '../runtime/connections.js';
@@ -59,7 +60,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
   const saveApp = async (methodId: string, name = 'Application', fields = {}) => {
     const material = AppMaterial.parse({ format: 1, methodId, clientId: 'application-id',
       clientSecret: 'application-secret', generation: crypto.randomUUID(), fields });
-    const policy = await client.policy(f.owner.actor.id, 'app', [f.environment]);
+    const policy = await client.policy(f.owner.actor.id, ContentTypes.clientCredential, [f.environment]);
     return client.save(name, encode(canonical(material)), policy, { metadata: {
       methodId, clientId: material.clientId, generation: material.generation,
     } });
@@ -84,7 +85,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
   async function http(id: string, output: string, url = 'https://api.example.com/items') {
     const task = await client.submit(f.owner.actor.id, f.environment.manifest.id, { kind: 'http', request: {
       url, method: 'GET', headers: {}, bindings: [{ pointer: '/headers/authorization',
-        parts: ['Bearer ', { kind: 'connection', id, output }] }],
+        parts: ['Bearer ', { id, output }] }],
     }, save: {} });
     await executor.tick();
     return client.result(await client.api.json('/api/executions/' + task.id, {}, Task));

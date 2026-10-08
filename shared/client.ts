@@ -4,10 +4,12 @@ import type { JsonValue, ResourceView } from './contracts.js';
 import { SignedBinding, canonical, hash, signedValue, verifyBinding } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
 import {
-  AccessPolicy, approvePolicy, authorizeUse, continuesPolicy, policyAuthority, prepareRun, protect, reveal, verifyContent,
+  AccessPolicy, ContentTypes, Operations, approvePolicy, authorizeUse, continuesPolicy, permittedOperations, policyAuthority,
+  prepareRun, protect, reveal, verifyContent,
 } from './custody.js';
-import type { CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun } from './custody.js';
-import { BoundRecipient, ProtectedRead, Registration } from './protocol.js';
+import type { ContentTypeId, CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun } from './custody.js';
+import { isLegacy, revealLegacy, upgradeMetadata, upgradePolicy, verifyLegacy } from './custody-legacy.js';
+import { BoundRecipient, ProtectedRead, Registration, Reprotection } from './protocol.js';
 import { RuntimeOperation, Task, authorizeEnvironment, readReceipt, verifyEnvironment } from './execution.js';
 import type { ExecutionOperation, RegisteredEnvironment, TaskView } from './execution.js';
 import { functionRequest } from './function-request.js';
@@ -67,9 +69,11 @@ export class CustodyClient {
     return items.map(item => item.binding);
   }
   async read(id: string) {
-    const item = await this.api.json('/api/resources/' + Id.parse(id) + '/custody', {}, ProtectedRead);
-    await this.observe(item.content, id);
-    return item;
+    const { content, version } = await this.api.json('/api/resources/' + Id.parse(id) + '/custody', {}, ProtectedRead);
+    if (isLegacy(content))
+      throw new ClientFailure('reprotection_required', 'Unlock a device that can open this item so it can update its encryption.');
+    await this.observe(content, id);
+    return { content, version };
   }
   async observe(input: CustodyContent, id = input.policy.id) {
     const content = await verifyContent(input);
@@ -77,7 +81,10 @@ export class CustodyClient {
     const author = policyAuthority(content);
     await this.trusted(author);
     const observed = await this.trust.checkpoint(id);
-    if (observed) {
+    if (observed && (observed.policy as { format: number }).format === 1) {
+      if (content.policy.revision <= observed.policy.revision || content.materialRevision <= observed.materialRevision)
+        throw new Error('The encrypted content is older than this device has already observed.');
+    } else if (observed) {
       if (content.policy.revision < observed.policy.revision || content.materialRevision < observed.materialRevision ||
         (content.policy.revision === observed.policy.revision && canonical(content.policy) !== canonical(observed.policy)) ||
         (content.materialRevision === observed.materialRevision && await hash(content) !== observed.digest))
@@ -92,7 +99,7 @@ export class CustodyClient {
   async reveal(id: string) {
     return reveal((await this.read(id)).content, this.binding, this.keys.encryption);
   }
-  async policy(ownerId: string, kind: CustodyPolicy['kind'], environments: RegisteredEnvironment[] = [],
+  async policy(ownerId: string, contentType: ContentTypeId, environments: RegisteredEnvironment[] = [],
     options: { id?: string; previous?: CustodyPolicy; expiresAt?: string } = {}) {
     const readers = options.previous?.readers ?? [...new Map([...(await this.recipients(ownerId)), this.binding]
       .map(binding => [binding.id, binding])).values()];
@@ -105,11 +112,11 @@ export class CustodyClient {
       if (!environment.manifest.callers.some(caller => canonical(caller) === canonical(this.binding)))
         throw new Error('This execution environment has not accepted your identity.');
       grants.push({ actor: this.binding, executor: environment.manifest.executor,
-        operations: kind === 'app' ? ['connect', 'refresh', 'revoke'] : ['http', 'command', 'function', 'refresh', 'revoke'],
-        origins: [], functionDigests: [], callerProgram: kind !== 'app', expiresAt });
+        operations: [...permittedOperations(contentType)],
+        origins: [], functionDigests: [], callerProgram: contentType !== ContentTypes.clientCredential, expiresAt });
     }
-    return AccessPolicy.parse({ format: 1, id: options.id ?? options.previous?.id ?? crypto.randomUUID(),
-      origin: this.origin, ownerId, kind, revision: (options.previous?.revision ?? 0) + 1,
+    return AccessPolicy.parse({ format: 2, id: options.id ?? options.previous?.id ?? crypto.randomUUID(),
+      origin: this.origin, ownerId, contentType, revision: (options.previous?.revision ?? 0) + 1,
       authorities: options.previous?.authorities ?? readers, readers, grants, producers: [] });
   }
   async save(name: string, bytes: Uint8Array, policy: CustodyPolicy,
@@ -124,11 +131,38 @@ export class CustodyClient {
     await this.trust.rememberContent(content);
     return resource;
   }
+  // Items this identity must seal again, and the work of doing so. The server lists them and checks
+  // each result; the device does the decryption, so content never leaves its readers.
+  async pendingProtection() {
+    return (await this.api.json('/api/principals/' + this.binding.principalId + '/reprotection', {}, listOf(Reprotection))).items;
+  }
+  async reprotect(id: string) {
+    const { content: stored, version } = await this.api.json('/api/resources/' + Id.parse(id) + '/custody', {}, ProtectedRead);
+    if (!isLegacy(stored)) return null;
+    const resource = await this.api.json('/api/resources/' + id, {}, Resource);
+    const legacy = await verifyLegacy(stored);
+    if (legacy.policy.origin !== this.origin || legacy.policy.id !== id) throw new Error('The encrypted content belongs to another item.');
+    const bytes = await revealLegacy(legacy, this.binding, this.keys.encryption);
+    const { metadata, labels } = upgradeMetadata(legacy);
+    const content = await protect(bytes, upgradePolicy(legacy.policy), legacy.materialRevision + 1, this.binding, this.keys, metadata);
+    const saved = await this.api.json('/api/resources/' + id + '/custody', { method: 'PUT',
+      body: { name: resource.name, content, version, ...(labels ? { labels } : {}) } }, Resource);
+    await this.trust.rememberContent(content);
+    return saved;
+  }
+  async reprotectPending() {
+    const done: string[] = [];
+    for (const item of await this.pendingProtection()) {
+      await this.reprotect(item.id);
+      done.push(item.id);
+    }
+    return done;
+  }
   async sourceContents(ids: string[]) {
     const sources = new Map<string, CustodyContent>();
     for (const id of new Set(ids)) sources.set(id, (await this.read(id)).content);
     for (const source of [...sources.values()]) {
-      if (source.policy.kind === 'connection' && typeof source.metadata.appId === 'string' && !sources.has(source.metadata.appId))
+      if (source.policy.contentType === ContentTypes.tokenSet && typeof source.metadata.appId === 'string' && !sources.has(source.metadata.appId))
         sources.set(source.metadata.appId, (await this.read(source.metadata.appId)).content);
     }
     return [...sources.values()];
@@ -136,13 +170,13 @@ export class CustodyClient {
   async output(ownerId: string, name: string, runId: string, environment: RegisteredEnvironment, expiresAt: string) {
     let existing: ResourceView | undefined, after: string | null = null;
     do {
-      const query = new URLSearchParams({ kind: 'secret', query: name, ...(after ? { after } : {}) });
+      const query = new URLSearchParams({ kind: 'variable', query: name, ...(after ? { after } : {}) });
       const page = await this.api.json('/api/principals/' + ownerId + '/resources?' + query, {}, listOf(Resource));
       existing = page.items.find(item => item.name === name); after = page.next;
     } while (!existing && after);
     const previous = existing ? (await this.read(existing.id)).content : undefined;
     const policy: CustodyPolicy = previous ? { ...previous.policy, revision: previous.policy.revision + 1, producers: [] }
-      : await this.policy(ownerId, 'secret');
+      : await this.policy(ownerId, ContentTypes.value);
     policy.producers = [{ executor: environment.manifest.executor, runId, expiresAt,
       materialRevision: (previous?.materialRevision ?? 0) + 1 }];
     return { name, approval: await approvePolicy(policy, this.binding, this.keys, previous) };
@@ -166,20 +200,21 @@ export class CustodyClient {
     const ids = operation.kind === 'command' ? operation.inputs.map(input => input.source.id)
       : request ? request.bindings.flatMap(binding => binding.parts.flatMap(part => typeof part === 'string' ? [] : [part.id])) : [];
     const sources = await this.sourceContents([...ids, ...(options.sourceIds ?? [])]);
-    const intent: ExecutionIntent = { format: 1, id, origin: this.origin, ownerId, actor: this.binding,
+    const intent: ExecutionIntent = { format: 2, id, origin: this.origin, ownerId, actor: this.binding,
       environmentId, executor: environment.manifest.executor, environmentDigest: await hash(environment.manifest),
-      operation: operation.kind, operationDigest: await hash(operation),
+      operation: Operations[operation.kind], operationDigest: await hash(operation),
       ...(options.approval ? { approval: options.approval } : {}),
       functionDigest: operation.kind === 'function' ? await hash(operation.definition) : null,
-      sources: await Promise.all(sources.map(async content => ({ id: content.policy.id, kind: content.policy.kind,
+      sources: await Promise.all(sources.map(async content => ({ id: content.policy.id,
         materialRevision: content.materialRevision, policyDigest: await hash(content.policy),
-        ...(content.policy.kind === 'connection' && typeof content.metadata.authorizationDigest === 'string'
+        ...(content.policy.contentType === ContentTypes.tokenSet && typeof content.metadata.authorizationDigest === 'string'
           ? { authorizationDigest: content.metadata.authorizationDigest } : {}),
       }))), resultRecipients: [this.binding], createdAt: new Date().toISOString(), expiresAt };
     await authorizeEnvironment(environment, intent);
-    for (const source of sources) await authorizeUse(source, source.policy.kind === 'app' &&
-      !['connect', 'revoke'].includes(intent.operation) ? { ...intent, operation: 'refresh' } : intent,
-      source.policy.kind === 'app' ? {} : { destination: request?.url });
+    const credential = (content: CustodyContent) => content.policy.contentType === ContentTypes.clientCredential;
+    for (const source of sources) await authorizeUse(source, credential(source) &&
+      intent.operation !== Operations.connect && intent.operation !== Operations.revoke ? { ...intent, operation: Operations.refresh } : intent,
+      credential(source) ? {} : { destination: request?.url });
     return prepareRun(intent, operation, this.keys);
   }
   async submit(ownerId: string, environmentId: string, operation: ExecutionOperation,

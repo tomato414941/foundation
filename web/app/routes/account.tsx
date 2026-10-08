@@ -51,7 +51,7 @@ export default function Account() {
           <Link to={prefix + 'credentials'}>{t('credentials')}</Link>
         </Button>
       </Panel>
-      <Panel title={t('secrets')}>
+      <Panel title={t('encryptedValues')}>
         <Notice tone={unlocked ? 'success' : 'info'}>{t(unlocked ? 'keyReady' : 'keyLocked')}</Notice>
         <div className="flex min-w-0 flex-wrap items-center gap-4">
           {unlocked && <Button variant="ghost" asChild><Link to="/account/trust">{t('trustIdentity')}</Link></Button>}

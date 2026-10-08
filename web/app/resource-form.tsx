@@ -12,8 +12,9 @@ import type { CatalogConnectionMethod, ResourceView } from '../../shared/contrac
 import { decode, encode } from '../../shared/encryption';
 import { canonical } from '../../shared/authority';
 import { AppMaterial, ConnectionMaterial, requiresApp } from '../../shared/connections';
+import { contentTypeOf, isProtected } from '../../shared/protected';
 import { actionResult, api, ApiFailure, formText, jsonField, session, upload } from './api';
-import { decryptSecret } from './keys';
+import { decryptVariable } from './keys';
 import { connectionClient, custodyClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
 import { ErrorNotice, ExternalLink, JsonField, Page, Panel, SaveBar } from './components';
@@ -67,7 +68,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     kind === 'connection'
       ? api('/resources/shared', { signal: request.signal }, listOf(Resource))
       : null,
-    ['secret', 'connection', 'app'].includes(kind) ? availableEnvironments(params.owner!) : [],
+    isProtected(kind) ? availableEnvironments(params.owner!) : [],
   ]);
   if (resource && (resource.ownerId !== params.owner || resource.kind !== kind))
     throw new Response('Not found', { status: 404 });
@@ -77,7 +78,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
   let appMaterial: ReturnType<typeof AppMaterial.parse> | null = null;
   let pinnedMethod: CatalogConnectionMethod | null = null;
   let selectedExecutors: string[] = [];
-  if (resource && ['secret', 'connection', 'app'].includes(resource.kind)) {
+  if (resource && isProtected(resource.kind)) {
     try {
       const client = await custodyClient(), item = await client.read(resource.id);
       selectedExecutors = environments.filter(environment => environment.kind === 'environment' &&
@@ -89,9 +90,9 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       }
     } catch { locked = true; }
   }
-  if (resource?.kind === 'secret') {
+  if (resource?.kind === 'variable') {
     try {
-      const bytes = await decryptSecret(resource.id, sessionData.principal!.id);
+      const bytes = await decryptVariable(resource.id, sessionData.principal!.id);
       try {
         content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
       } catch {
@@ -178,12 +179,12 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       return redirect(back + '/' + item.id);
     }
     let body: Record<string, unknown> = { kind, name };
-    if (kind === 'secret' || kind === 'app') {
+    if (kind === 'variable' || kind === 'app') {
       const client = await custodyClient();
       const previous = existing ? await client.read(existing.id) : undefined;
       if (previous && previous.version !== version) throw new ApiFailure('changed');
       const environments = await Promise.all(form.getAll('environments').map(id => client.environment(String(id))));
-      const policy = await client.policy(owner, kind, environments, { previous: previous?.content.policy });
+      const policy = await client.policy(owner, contentTypeOf(kind), environments, { previous: previous?.content.policy });
       const file = form.get('file');
       let content =
         file instanceof File && file.name
@@ -284,7 +285,7 @@ export default function ResourceForm() {
   const existing = data.resource;
   const back = existing
     ? resourcePath(existing)
-    : `/p/${principal.id}/${Object.entries({ connection: 'services', secret: 'secrets', object: 'objects', environment: 'environments', function: 'functions', service: 'definitions', method: 'methods', app: 'apps' }).find(([key]) => key === data.kind)?.[1]}`;
+    : `/p/${principal.id}/${Object.entries({ connection: 'services', variable: 'variables', object: 'objects', environment: 'environments', function: 'functions', service: 'definitions', method: 'methods', app: 'apps' }).find(([key]) => key === data.kind)?.[1]}`;
   const eligibleMethods = data.methods.filter((item) => data.kind !== 'app' || item.kind === 'oauth');
   const preferred = (methods: CatalogConnectionMethod[]) =>
     methods.find((item) => item.kind === 'oauth' && item.availability === 'ready') ??
@@ -336,7 +337,7 @@ export default function ResourceForm() {
         '#/stacks/create/review?' + new URLSearchParams({ templateURL: templateUrl,
           stackName: 'foundation-' + externalId.slice(0, 12), param_PrincipalArn: awsPrincipal, param_ExternalId: externalId })
       : '';
-  const executorChoice = ['secret', 'app', 'connection'].includes(data.kind) && (
+  const executorChoice = isProtected(data.kind) && (
     <EnvironmentChoice items={data.environments} multiple={data.kind !== 'connection'} onChange={setEnvironmentId}
       selected={data.environmentId ? [data.environmentId] : data.selectedExecutors} />
   );
@@ -423,7 +424,7 @@ export default function ResourceForm() {
                   hint={data.kind === 'object' && fileName ? fileName : undefined}
                   maxLength={200}
                 />
-                {data.kind === 'secret' && (
+                {data.kind === 'variable' && (
                   <Panel>
                     {!sessionData.principal?.publicKey && (
                       <Notice

@@ -6,6 +6,7 @@ import * as C from '../shared/contracts.js';
 import * as P from '../shared/protocol.js';
 import { canonical } from '../shared/authority.js';
 import { fail } from './errors.js';
+import { ContentTypes } from '../shared/custody.js';
 
 export async function routesRequests(
   app: ApiApp,
@@ -30,7 +31,7 @@ export async function routesRequests(
     const content = await context.custody.get(request.body.resourceId);
     if (task.state !== 'succeeded' || task.kind !== 'connect' || task.intent.approval?.id !== id ||
       task.intent.approval.index !== plan.index || task.intent.actor.principalId !== who.id ||
-      content.creationRunId !== task.id || content.policy.kind !== 'connection' ||
+      content.creationRunId !== task.id || content.policy.contentType !== ContentTypes.tokenSet ||
       content.policy.ownerId !== plan.input.ownerId || content.metadata.methodId !== plan.input.methodId ||
       !content.policy.authorities.some(binding => canonical(binding) === canonical(task.intent.actor)) ||
       (plan.input.connectionId && content.policy.id !== plan.input.connectionId))

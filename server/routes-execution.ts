@@ -33,6 +33,9 @@ export async function routesExecution(app: ApiApp, context: Context) {
     await authorization.requirePrincipal(actor(request), request.params.id, 'read');
     return { items: await custody.recipients(request.params.id), next: null };
   });
+  app.get('/api/principals/:id/reprotection', {
+    schema: { params: C.IdParams, response: { 200: C.listOf(P.Reprotection) } },
+  }, async request => ({ items: await custody.pending(actor(request), request.params.id), next: null }));
   app.get('/api/resources/:id/custody', {
     schema: { params: C.IdParams, response: { 200: P.ProtectedRead } },
   }, request => custody.read(actor(request), request.params.id));

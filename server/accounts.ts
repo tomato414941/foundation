@@ -4,6 +4,7 @@ import type { Context } from './context.js';
 import type { ResourceRow } from './resources.js';
 import type { CustodyContent } from '../shared/custody.js';
 import { fail } from './errors.js';
+import { isProtected } from '../shared/protected.js';
 
 export class Accounts {
   constructor(readonly context: Context) {}
@@ -27,7 +28,7 @@ export class Accounts {
           type: 'resource',
           resource: await c.resources.view(actor, row),
         };
-        if (['secret', 'connection', 'app'].includes(row.kind)) {
+        if (isProtected(row.kind)) {
           const content = await c.db.one<{ content: unknown }>('SELECT content FROM resource_custody WHERE resource_id=$1', [row.id]);
           if (content) entry.custody = content.content;
           else entry.encryptedStorage = { sealed: row.sealed, privateData: row.private_data };
@@ -118,7 +119,7 @@ export class Accounts {
       id,
       from: { id: from.id, name: from.name, publicKey: from.public_key },
       resources: await Promise.all(resources.map((row) => this.context.resources.view({ id: from.id }, row))),
-      protectedItems: await Promise.all(resources.filter(row => ['secret', 'connection', 'app'].includes(row.kind))
+      protectedItems: await Promise.all(resources.filter(row => isProtected(row.kind))
         .map(async row => ({ id: row.id, version: row.version, content: await this.context.custody.get(row.id) }))),
       recipients: await this.context.custody.recipients(actor.id),
     };
@@ -163,7 +164,7 @@ export class Accounts {
     if (children) fail(409, 'owned_principals', 'Transfer owned principals before merging accounts.');
     if (await c.db.one("SELECT 1 FROM execution_tasks WHERE (owner_id=$1 OR actor_id=$1) AND state IN ('queued','running','uncertain') LIMIT 1", [from.id]))
       fail(409, 'execution_active', 'Resolve active executions before merging accounts.');
-    for (const row of rows.filter(row => ['secret', 'connection', 'app'].includes(row.kind))) {
+    for (const row of rows.filter(row => isProtected(row.kind))) {
       const update = contents[row.id];
       if (!update || update.version !== row.version || update.content.policy.ownerId !== to.id)
         fail(409, 'rekey_required', 'Unlock both accounts and re-encrypt protected items for the new owner.');
@@ -188,7 +189,7 @@ export class Accounts {
           )
         )
           name = name.slice(0, 150) + ' · ' + row.id;
-        if (['secret', 'connection', 'app'].includes(row.kind)) {
+        if (isProtected(row.kind)) {
           await c.custody.put({ id: from.id, credentialId: proof.credentialId }, { ...contents[row.id]!, name }, connection);
         } else {
           const changed = await connection.query(

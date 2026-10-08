@@ -8,7 +8,7 @@ import type { Route } from './+types/resource';
 import { Resource } from '../../../shared/contracts';
 import { decode } from '../../../shared/encryption';
 import { api, actionResult, formText } from '../api';
-import { authenticate, decryptSecret } from '../keys';
+import { authenticate, decryptVariable } from '../keys';
 import {
   Bytes,
   Confirm,
@@ -79,11 +79,11 @@ export default function ResourceDetail() {
   );
   const secret = async () => {
     try {
-      return await decryptSecret(item.id, session.principal!.id);
+      return await decryptVariable(item.id, session.principal!.id);
     } catch {
       const result = await authenticate(session.principal!.id);
       if (!result.encrypted) throw new Error('key unavailable');
-      return decryptSecret(item.id, session.principal!.id);
+      return decryptVariable(item.id, session.principal!.id);
     }
   };
   return (
@@ -113,7 +113,7 @@ export default function ResourceDetail() {
       <Panel>
         <BoxDetails item={item} />
       </Panel>
-      {item.kind === 'secret' && can('reveal') && (
+      {item.kind === 'variable' && can('reveal') && (
         <Panel>
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Button
@@ -299,7 +299,7 @@ function BoxDetails({ item }: { item: Awaited<ReturnType<typeof clientLoader>>['
           <ConnectionFacts value={item.data} />
         </>
       )}
-      {item.kind === 'secret' && (
+      {item.kind === 'variable' && (
         <Detail label={t('size')}>
           <Bytes value={item.data.bytes} />
         </Detail>

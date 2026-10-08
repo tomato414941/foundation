@@ -5,32 +5,41 @@ import type { Resources, ResourceRow } from './resources.js';
 import type { Bindings } from './bindings.js';
 import { canonical, hash } from '../shared/authority.js';
 import type { BoundKeys } from '../shared/authority.js';
-import { ProtectedContent, ProtectedKind, continuesPolicy, policyAuthority, verifyContent } from '../shared/custody.js';
+import { ContentTypes, ProtectedContent, continuesPolicy, policyAuthority, verifyContent } from '../shared/custody.js';
 import type { CustodyContent } from '../shared/custody.js';
+import { LegacyContent, isLegacy, upgradeMetadata, upgradePolicy, verifyLegacy } from '../shared/custody-legacy.js';
 import type { JsonValue } from '../shared/contracts.js';
 import { Id } from '../shared/contracts.js';
 import { AppMetadata, ConnectionMetadata } from '../shared/connections.js';
+import type { ConnectionLabelValues } from '../shared/connections.js';
+import { kindOf } from '../shared/protected.js';
 import { fail } from './errors.js';
 
 export interface ProtectedWrite {
   name: string;
   content: CustodyContent;
+  labels?: ConnectionLabelValues;
   data?: Record<string, JsonValue>;
   version?: number;
 }
+const Stored = z.union([ProtectedContent, LegacyContent]);
+// Labels stay with the item until a writer gives new ones.
+const keptLabels = (data: Record<string, JsonValue> | undefined) =>
+  Object.fromEntries(['methodName', 'account'].filter(key => typeof data?.[key] === 'string').map(key => [key, data![key]!]));
 
 export class Custody {
   constructor(readonly resources: Resources, readonly bindings: Bindings, readonly origin: string) {}
 
   metadata(content: CustodyContent) {
-    const schema = content.policy.kind === 'connection' ? ConnectionMetadata : content.policy.kind === 'app'
-      ? AppMetadata : z.object({ bytes: z.number().int().min(0).max(1_000_000) }).strict();
+    const schema = content.policy.contentType === ContentTypes.tokenSet ? ConnectionMetadata
+      : content.policy.contentType === ContentTypes.clientCredential
+        ? AppMetadata : z.object({ bytes: z.number().int().min(0).max(1_000_000) }).strict();
     if (!schema.safeParse(content.metadata).success)
       fail(400, 'invalid_metadata', 'Provide only the public metadata for this protected item.');
     return content.metadata;
   }
   private async references(actor: Actor, content: CustodyContent, connection: Queryable) {
-    const values = content.policy.kind === 'secret' ? [] : [
+    const values = content.policy.contentType === ContentTypes.value ? [] : [
       ...(Id.safeParse(content.metadata.methodId).success ? [{ id: String(content.metadata.methodId), kind: 'method' }] : []),
       ...(content.metadata.appId ? [{ id: String(content.metadata.appId), kind: 'app' }] : []),
     ];
@@ -48,18 +57,36 @@ export class Custody {
     if (!pending) return;
     // A fresh, owner-approved authorization supersedes an ambiguous old token
     // generation. Resharing the existing generation must remain frozen.
-    if (pending.state !== 'uncertain' || next.policy.kind !== 'connection' ||
+    if (pending.state !== 'uncertain' || next.policy.contentType !== ContentTypes.tokenSet ||
       next.metadata.generation === previous.metadata.generation)
       fail(409, 'connection_busy', 'Resolve the current token update or approve a new connection before changing it.');
     await connection.query("UPDATE connection_operations SET state='aborted',updated_at=now() WHERE id=$1", [pending.id]);
   }
 
-  async get(id: string, connection: Queryable = this.resources.db.pool): Promise<CustodyContent> {
-    const row = await this.resources.db.one<{ content: CustodyContent }>(
+  private async stored(id: string, connection: Queryable = this.resources.db.pool) {
+    const row = await this.resources.db.one<{ content: unknown }>(
       'SELECT content FROM resource_custody WHERE resource_id=$1', [id], connection,
     );
     if (!row) fail(409, 'custody_required', 'Encrypt this item for its readers and execution environments.');
-    return ProtectedContent.parse(row.content);
+    return Stored.parse(row.content);
+  }
+  async get(id: string, connection: Queryable = this.resources.db.pool): Promise<CustodyContent> {
+    const content = await this.stored(id, connection);
+    if (isLegacy(content))
+      fail(409, 'reprotection_required', 'Unlock a device that can open this item so it can update its encryption.');
+    return content;
+  }
+
+  // Items whose authorities include this identity and which it must seal again.
+  async pending(actor: Actor, principalId: string) {
+    if (actor.id !== principalId || actor.requestId) fail(403, 'forbidden', 'Sign in as this principal to protect its items.');
+    const { binding } = await this.bindings.current(principalId);
+    const rows = await this.resources.db.all<{ id: string }>(
+      `SELECT c.resource_id AS id FROM resource_custody c
+       WHERE c.content->'policy'->>'format'='1' AND EXISTS (
+         SELECT 1 FROM jsonb_array_elements(c.content->'policy'->'authorities') a WHERE a->>'id'=$1)
+       ORDER BY c.resource_id`, [binding.id]);
+    return rows.map(row => ({ id: row.id, reason: 'format' as const }));
   }
 
   async recipients(ownerId: string, connection: Queryable = this.resources.db.pool) {
@@ -72,7 +99,7 @@ export class Custody {
   async read(actor: Actor, id: string) {
     await this.resources.authorization.active(actor);
     const row = await this.resources.get(id);
-    const content = await this.get(id);
+    const content = await this.stored(id);
     const { binding } = await this.bindings.current(actor.id);
     if (!content.policy.readers.some(reader => canonical(reader) === canonical(binding)) &&
       !content.policy.grants.some(grant => (canonical(grant.executor) === canonical(binding) ||
@@ -102,14 +129,25 @@ export class Custody {
         'SELECT * FROM resources WHERE id=$1 FOR UPDATE', [policy.id], connection,
       );
       if (current) {
-        if (current.kind !== policy.kind)
+        if (current.kind !== kindOf(policy.contentType))
           fail(400, 'wrong_resource', 'Keep the same resource kind when updating an item.');
         await this.resources.authorization.requireResource(actor, current, current.owner_id === policy.ownerId ? 'update' : 'transfer', connection);
         if (current.version !== input.version) fail(409, 'changed', 'This item changed. Reload it before saving.');
-        const previous = await this.resources.db.one<{ content: CustodyContent }>(
+        const stored = await this.resources.db.one<{ content: unknown }>(
           'SELECT content FROM resource_custody WHERE resource_id=$1', [policy.id], connection,
         );
-        if (previous) {
+        const previous = stored && !isLegacy(stored.content) ? { content: ProtectedContent.parse(stored.content) } : null;
+        if (stored && isLegacy(stored.content)) {
+          // An item in the first format may be replaced only by its exact upgrade, signed by one of its authorities.
+          const legacy = await verifyLegacy(stored.content);
+          const upgrade = upgradeMetadata(legacy);
+          if (!legacy.policy.authorities.some(authority => canonical(authority) === canonical(binding)) ||
+            canonical(policy) !== canonical(upgradePolicy(legacy.policy)) ||
+            content.materialRevision !== legacy.materialRevision + 1 ||
+            canonical(content.metadata) !== canonical(upgrade.metadata) ||
+            (upgrade.labels && !input.labels))
+            fail(409, 'changed', 'Re-protect the item exactly as it is, in the current format.');
+        } else if (previous) {
           if (!previous.content.policy.authorities.some(authority => canonical(authority) === canonical(binding)))
             fail(403, 'forbidden', 'The existing policy must authorize its editor.');
           if (!continuesPolicy(previous.content.policy, content))
@@ -125,7 +163,7 @@ export class Custody {
             fail(400, 'invalid_revision', 'Begin encrypted custody at revision one.');
         }
       } else {
-        if (!(await this.resources.authorization.canCreate(actor, policy.ownerId, policy.kind, connection)))
+        if (!(await this.resources.authorization.canCreate(actor, policy.ownerId, kindOf(policy.contentType), connection)))
           fail(403, 'forbidden', 'You cannot create this item for this principal.');
         if (policy.revision !== 1 || content.materialRevision !== 1)
           fail(400, 'invalid_revision', 'Begin encrypted custody at revision one.');
@@ -134,7 +172,8 @@ export class Custody {
         if (!policy.readers.some(reader => canonical(reader) === canonical(recipient)))
           fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
       }
-      const data = { ...content.metadata, recipients: policy.readers.map(reader => reader.principalId),
+      const data = { ...keptLabels(current?.data), ...content.metadata, ...(input.labels ?? {}),
+        recipients: policy.readers.map(reader => reader.principalId),
         executors: [...new Set(policy.grants.map(grant => grant.executor.principalId))],
         custodyRevision: policy.revision };
       let row: ResourceRow;
@@ -142,7 +181,7 @@ export class Custody {
         row = await this.resources.update(current, { name: input.name, data }, connection);
         await connection.query('UPDATE resources SET private_data=NULL,sealed=NULL,owner_id=$2 WHERE id=$1', [policy.id, policy.ownerId]);
         row = { ...row, owner_id: policy.ownerId, private_data: null, sealed: null };
-      } else row = await this.resources.insert(policy.ownerId, ProtectedKind.parse(policy.kind), input.name,
+      } else row = await this.resources.insert(policy.ownerId, kindOf(policy.contentType), input.name,
         data, { id: policy.id }, connection);
       await connection.query(
         'INSERT INTO resource_custody(resource_id,content) VALUES($1,$2) ON CONFLICT(resource_id) DO UPDATE SET content=EXCLUDED.content',
@@ -187,7 +226,7 @@ export class Custody {
         const previous = await this.get(policy.id, connection);
         if (canonical(previous) === canonical(content)) return current;
         await this.resources.authorization.requireResource({ id: authority.principalId }, current, 'update', connection);
-        if (current.owner_id !== policy.ownerId || current.kind !== policy.kind ||
+        if (current.owner_id !== policy.ownerId || current.kind !== kindOf(policy.contentType) ||
           !previous.policy.authorities.some(value => canonical(value) === canonical(authority)) ||
           content.materialRevision !== previous.materialRevision + 1 ||
           policy.revision !== previous.policy.revision + (await hash(policy) === await hash(previous.policy) ? 0 : 1))
@@ -196,17 +235,18 @@ export class Custody {
       } else {
         if (content.materialRevision !== 1 || policy.revision !== 1)
           fail(400, 'invalid_revision', 'Start a new output at revision one.');
-        if (!(await this.resources.authorization.canCreate({ id: authority.principalId }, policy.ownerId, policy.kind, connection)))
+        if (!(await this.resources.authorization.canCreate({ id: authority.principalId }, policy.ownerId, kindOf(policy.contentType), connection)))
           fail(403, 'forbidden', 'The execution requester cannot create this output.');
       }
       for (const recipient of await this.recipients(policy.ownerId, connection))
         if (!policy.readers.some(reader => canonical(reader) === canonical(recipient.binding)))
           fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
-      const data = { ...content.metadata, recipients: policy.readers.map(reader => reader.principalId),
+      const data = { ...keptLabels(current?.data), ...content.metadata, ...(input.labels ?? {}),
+        recipients: policy.readers.map(reader => reader.principalId),
         executors: [...new Set(policy.grants.map(grant => grant.executor.principalId))], custodyRevision: policy.revision };
       const row = current
         ? await this.resources.update(current, { name: input.name, data }, connection)
-        : await this.resources.insert(policy.ownerId, policy.kind, input.name, data, { id: policy.id }, connection);
+        : await this.resources.insert(policy.ownerId, kindOf(policy.contentType), input.name, data, { id: policy.id }, connection);
       await connection.query(
         'INSERT INTO resource_custody(resource_id,content) VALUES($1,$2) ON CONFLICT(resource_id) DO UPDATE SET content=EXCLUDED.content',
         [policy.id, JSON.stringify(content)],

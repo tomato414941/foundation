@@ -7,6 +7,7 @@ import { ConnectionClient, FlowRecord } from '../../shared/connection-client.js'
 import type { ConnectionFlow, FlowProgress } from '../../shared/connection-client.js';
 import { canonical } from '../../shared/authority.js';
 import { decode, encode } from '../../shared/encryption.js';
+import { ContentTypes } from '../../shared/custody.js';
 
 export async function method(client: Client, id: string) {
   const catalog = await client.json('/api/connection-methods', {}, listOf(CatalogMethod));
@@ -30,7 +31,7 @@ export async function saveApp(client: Client, input: {
   if (definition.kind !== 'oauth') throw new Error('Choose an OAuth connection method for this application.');
   const { custody } = privateClient(client);
   const previous = input.id ? await custody.read(Id.parse(input.id)) : undefined;
-  if (previous && previous.content.policy.kind !== 'app') throw new Error('Choose an OAuth application to update.');
+  if (previous && previous.content.policy.contentType !== ContentTypes.clientCredential) throw new Error('Choose an OAuth application to update.');
   const old = previous ? AppMaterial.parse(JSON.parse(decode(await custody.reveal(previous.content.policy.id)))) : null;
   const identity = { methodId: input.methodId, clientId: input.clientId,
     fields: z.record(z.string(), z.string()).parse(input.fields) };
@@ -39,7 +40,7 @@ export async function saveApp(client: Client, input: {
     ...(input.clientSecret !== undefined ? { clientSecret: input.clientSecret } : old?.clientSecret ? { clientSecret: old.clientSecret } : {}) });
   const environments = await Promise.all((input.environments ?? []).map(id => custody.environment(Id.parse(id))));
   const policy = previous && !input.environments ? previous.content.policy
-    : await custody.policy(input.ownerId, 'app', environments, { previous: previous?.content.policy });
+    : await custody.policy(input.ownerId, ContentTypes.clientCredential, environments, { previous: previous?.content.policy });
   return custody.save(Name.parse(input.name), encode(canonical(material)), policy, { previous,
     metadata: { methodId: material.methodId, clientId: material.clientId, generation: material.generation } });
 }

@@ -2,7 +2,7 @@ import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
 import { canonical, hash } from '../shared/authority.js';
 import type { HttpRequestInput, JsonValue, SourceReference } from '../shared/contracts.js';
 import {
-  authorizeUse, matchesPin, openRun, produceContent, useContent, verifyContent, verifyPolicyApproval,
+  ContentTypes, Operations, authorizeUse, matchesPin, openRun, produceContent, useContent, verifyContent, verifyPolicyApproval,
 } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent, SealedRun } from '../shared/custody.js';
 import {
@@ -31,6 +31,11 @@ export interface ExecutionExtension {
   execute(operation: JsonValue, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal): Promise<JsonValue>;
   outputs(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal, destination?: string): Promise<Record<string, string>>;
   recover?(operation: JsonValue, intent: ExecutionIntent): Promise<JsonValue | null>;
+}
+// A variable is used whole; a connection is used through one of its named outputs.
+function fits(content: CustodyContent, source: SourceReference) {
+  if (content.policy.contentType === ContentTypes.value) return source.output === undefined;
+  return content.policy.contentType === ContentTypes.tokenSet && source.output !== undefined;
 }
 export class DeliveryPending extends Error {
   constructor() { super('A completed result is waiting for delivery. Restart or leave this executor running to reconcile it.'); }
@@ -121,7 +126,7 @@ export class Executor {
       const opened = await openRun(claim.request, this.binding, this.keys);
       await authorizeEnvironment(this.environment, opened.intent);
       const operation = RuntimeOperation.parse(opened.operation);
-      if (operation.kind !== intent.operation) throw new Error('Use the operation authorized by this intent.');
+      if (Operations[operation.kind] !== intent.operation) throw new Error('Use the operation authorized by this intent.');
       await this.preflight(operation, intent, claim.sources);
       runningSignal.throwIfAborted();
       record.operation = operation;
@@ -202,7 +207,7 @@ export class Executor {
         const approval = await verifyPolicyApproval(output.approval);
         if (canonical(approval.policy.authorities.find(authority => authority.id === approval.authorityId)) !== canonical(intent.actor) ||
           approval.policy.origin !== intent.origin ||
-          approval.policy.kind !== 'secret' || approval.policy.ownerId !== intent.ownerId ||
+          approval.policy.contentType !== ContentTypes.value || approval.policy.ownerId !== intent.ownerId ||
           (operation.kind === 'function' && operation.definition.outputOwnerId !== approval.policy.ownerId) ||
           !approval.policy.producers.some(producer => producer.runId === intent.id &&
             canonical(producer.executor) === canonical(this.binding) && Date.parse(producer.expiresAt) > Date.now()))
@@ -213,7 +218,7 @@ export class Executor {
       : request ? request.bindings.flatMap(binding => binding.parts.filter((part): part is SourceReference => typeof part !== 'string')) : [];
     for (const source of references) {
       const content = sources.find(value => value.policy.id === source.id);
-      if (!content || content.policy.kind !== source.kind) throw new Error('Use the input named in the signed request.');
+      if (!content || !fits(content, source)) throw new Error('Use the input named in the signed request.');
       await authorizeUse(content, intent, { ...(request ? { destination: request.url } : {}) });
       await useContent(content, intent, this.keys, { ...(request ? { destination: request.url } : {}) });
     }
@@ -230,13 +235,13 @@ export class Executor {
     const sensitive: string[] = [], cache = new Map<string, Promise<Record<string, string>>>();
     const resolve = async (source: SourceReference) => {
       const content = sources.find(content => content.policy.id === source.id)!;
-      if (source.kind === 'secret') return useContent(content, intent, this.keys, {
+      if (content.policy.contentType === ContentTypes.value) return useContent(content, intent, this.keys, {
         ...(request ? { destination: request.url } : {}),
       });
       if (!this.extension) throw new Error('This executor cannot use connections.');
       if (!cache.has(source.id)) cache.set(source.id, this.extension.outputs(content, intent, sources, signal, request?.url));
       const outputs = await cache.get(source.id)!;
-      if (!Object.hasOwn(outputs, source.output)) throw new Error('Choose an available connection output.');
+      if (!source.output || !Object.hasOwn(outputs, source.output)) throw new Error('Choose an available connection output.');
       return encode(outputs[source.output]!);
     };
     if (operation.kind === 'command') {

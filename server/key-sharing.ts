@@ -16,7 +16,7 @@ export class KeySharing {
     const { resources, bindings } = this.custody;
     const descendants = await resources.authorization.standsAs(target, connection);
     const rows = await resources.db.all<ResourceRow>(
-      "SELECT * FROM resources WHERE kind IN ('secret','connection','app') AND owner_id=ANY($1::uuid[]) ORDER BY id",
+      "SELECT * FROM resources WHERE kind IN ('variable','connection','app') AND owner_id=ANY($1::uuid[]) ORDER BY id",
       [descendants], connection);
     const items = [];
     for (const row of rows) {

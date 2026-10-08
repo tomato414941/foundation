@@ -13,6 +13,7 @@ import { DeliveryPending, Executor } from '../../runtime/executor.js';
 import { CommandProcess } from '../../runtime/command.js';
 import { journalLock } from '../../runtime/lock.js';
 import { detectAwsPrincipal } from '../../runtime/roles.js';
+import { Operations } from '../../shared/custody.js';
 
 export async function startAgent(client: Client, options: {
   id?: string; ownerId: string; name: string; callers: string[]; isolation: 'process' | 'container';
@@ -46,9 +47,9 @@ export async function startAgent(client: Client, options: {
         const caller = principal === binding.principalId ? binding : (await custody.inspectIdentity(principal)).binding;
         await custody.trusted(caller); callers.push(caller);
       }
-      environment = await signEnvironment({ format: 1, id, origin: client.identity.origin, ownerId: options.ownerId,
+      environment = await signEnvironment({ format: 2, id, origin: client.identity.origin, ownerId: options.ownerId,
         name: options.name, executor: binding, operatorId: binding.principalId, driver: options.managed ? 'managed' : 'attached',
-        capabilities: ['http', 'command', 'function', 'connect', 'refresh', 'revoke'], callers,
+        capabilities: Object.values(Operations), callers,
         isolation: options.isolation, ...(options.image ? { commandImage: options.image } : {}),
         ...(awsPrincipal ? { awsPrincipal } : {}), revision: 1 }, keys);
       await journal.write('environment_' + id, environment);

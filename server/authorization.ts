@@ -17,7 +17,7 @@ export interface ResourceIdentity {
   kind: ResourceKindName;
 }
 const resourceActions: Record<ResourceKindName, ActionName[]> = {
-  secret: ['read', 'update', 'delete', 'share', 'transfer', 'reveal', 'use'],
+  variable: ['read', 'update', 'delete', 'share', 'transfer', 'reveal', 'use'],
   connection: ['read', 'update', 'delete', 'share', 'transfer', 'reveal', 'use'],
   service: ['read', 'update', 'delete', 'share', 'transfer', 'use'],
   method: ['read', 'update', 'delete', 'share', 'transfer', 'use'],
@@ -27,7 +27,7 @@ const resourceActions: Record<ResourceKindName, ActionName[]> = {
   function: ['read', 'update', 'delete', 'share', 'transfer', 'execute'],
 };
 const agentActions: Record<ResourceKindName, ActionName[]> = {
-  secret: ['read', 'create', 'update', 'delete', 'use'],
+  variable: ['read', 'create', 'update', 'delete', 'use'],
   connection: ['read', 'use'],
   service: ['read', 'create', 'update', 'delete'],
   method: ['read', 'create', 'update', 'delete'],

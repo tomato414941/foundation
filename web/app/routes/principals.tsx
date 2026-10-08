@@ -23,13 +23,13 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       relation = formText(form, 'relation'),
       principalId = formText(form, 'principalId') || params.owner;
     const remove = formText(form, 'intent') === 'remove';
-    const secrets =
+    const contents =
       relation === 'member'
         ? await rekeySharing('/relations/recipients?' + new URLSearchParams({ subjectId, principalId, remove: String(remove) }))
         : undefined;
     await api('/relations', {
       method: remove ? 'DELETE' : 'POST',
-      body: { subjectId, relation, principalId, ...(secrets ? { secrets } : {}) },
+      body: { subjectId, relation, principalId, ...(contents ? { contents } : {}) },
     });
     return { ok: true };
   });

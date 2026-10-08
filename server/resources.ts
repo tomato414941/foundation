@@ -15,6 +15,7 @@ import type {
   SealedContent,
 } from '../shared/contracts.js';
 import { fail, required } from './errors.js';
+import { isProtected } from '../shared/protected.js';
 
 export interface ResourceRow extends ResourceIdentity {
   name: string;
@@ -192,7 +193,7 @@ export class Resources {
   async grant(actor: Actor, row: ResourceRow, principalId: string, actions: ActionName[]) {
     await this.authorization.requireResource(actor, row, 'share');
     await this.principals.get(principalId);
-    if (['secret', 'connection', 'app'].includes(row.kind))
+    if (isProtected(row.kind))
       fail(409, 'rekey_required', 'Sign and encrypt the new access policy to share this item.');
     for (const action of actions) {
       Action.parse(action);
@@ -205,7 +206,7 @@ export class Resources {
     await this.audit.record(row.owner_id, actor.id, 'resource.share', row.id, { principalId, actions });
   }
   async revoke(actor: Actor, row: ResourceRow, principalId: string) {
-    if (['secret', 'connection', 'app'].includes(row.kind))
+    if (isProtected(row.kind))
       fail(409, 'rekey_required', 'Sign and encrypt the new access policy to remove access.');
     await this.authorization.requireResource(actor, row, 'share');
     await this.db.pool.query('DELETE FROM grants WHERE resource_id=$1 AND principal_id=$2', [
@@ -217,7 +218,7 @@ export class Resources {
   async transfer(actor: Actor, row: ResourceRow, to: string) {
     await this.authorization.requireResource(actor, row, 'transfer');
     await this.principals.get(to);
-    if (['secret', 'connection', 'app'].includes(row.kind))
+    if (isProtected(row.kind))
       fail(409, 'rekey_required', 'Encrypt this item for its new owner before transferring it.');
     if (row.kind === 'environment')
       fail(400, 'not_transferable', 'An environment stays with the principal that created it.');

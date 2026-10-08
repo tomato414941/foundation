@@ -3,9 +3,7 @@ import assert from 'node:assert/strict';
 import {
   bindKeys, canonical, fingerprint, hash, newIdentityKeys, sign, signBinding, verify, verifyBinding,
 } from '../shared/authority.js';
-import {
-  AccessPolicy, authorizeUse, openRun, prepareRun, protect, renewContent, reveal, useContent, verifyContent, verifyRun,
-} from '../shared/custody.js';
+import { AccessPolicy, ContentTypes, Operations, permittedOperations, authorizeUse, openRun, prepareRun, protect, renewContent, reveal, useContent, verifyContent, verifyRun } from '../shared/custody.js';
 import type { CustodyPolicy, ExecutionIntent } from '../shared/custody.js';
 import { decode, encode } from '../shared/encryption.js';
 
@@ -19,19 +17,19 @@ async function setup() {
   ]);
   const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
   const policy = AccessPolicy.parse({
-    format: 1, origin: 'https://foundation.test', id: crypto.randomUUID(),
-    ownerId: owner.binding.principalId, kind: 'secret', revision: 1,
+    format: 2, origin: 'https://foundation.test', id: crypto.randomUUID(),
+    ownerId: owner.binding.principalId, contentType: ContentTypes.value, revision: 1,
     authorities: [owner.binding], readers: [owner.binding],
-    grants: [{ actor: caller.binding, executor: executor.binding, operations: ['http'],
+    grants: [{ actor: caller.binding, executor: executor.binding, operations: [Operations.http],
       callerProgram: true, origins: ['https://service.example'], expiresAt }],
   });
   const operation = { kind: 'http', request: { method: 'GET', url: 'https://service.example/items' } };
   const intent: ExecutionIntent = {
-    format: 1, id: crypto.randomUUID(), origin: policy.origin, ownerId: policy.ownerId,
+    format: 2, id: crypto.randomUUID(), origin: policy.origin, ownerId: policy.ownerId,
     actor: caller.binding, environmentId: crypto.randomUUID(), executor: executor.binding,
     environmentDigest: await hash({ environment: 'test' }),
-    operation: 'http', functionDigest: null, operationDigest: await hash(operation),
-    sources: [{ id: policy.id, kind: 'secret', policyDigest: await hash(policy), materialRevision: 1 }],
+    operation: Operations.http, functionDigest: null, operationDigest: await hash(operation),
+    sources: [{ id: policy.id, policyDigest: await hash(policy), materialRevision: 1 }],
     resultRecipients: [caller.binding], createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 600_000).toISOString(),
   };
@@ -118,8 +116,8 @@ test('一つの委任に含まれる依頼者、実行先、操作、送信先�
   const { owner, policy, intent, stranger } = await setup();
   const grant = policy.grants[0]!;
   const split: CustodyPolicy = { ...policy, grants: [
-    { ...grant, origins: ['https://first.example'], operations: ['http'] },
-    { ...grant, origins: ['https://service.example'], operations: ['command'] },
+    { ...grant, origins: ['https://first.example'], operations: [Operations.http] },
+    { ...grant, origins: ['https://service.example'], operations: [Operations.command] },
   ] };
   const content = await protect(encode('value'), split, 1, owner.binding, owner.keys);
   const pinned = { ...intent, sources: [{ ...intent.sources[0]!, policyDigest: await hash(split) }] };
@@ -135,10 +133,10 @@ test('一つの委任に含まれる依頼者、実行先、操作、送信先�
 test('指定した関数の内容を照合し、任意のプログラムを動かす委任は明示して受け付ける', async () => {
   const { owner, policy, intent } = await setup();
   const functionDigest = await hash({ url: 'https://service.example/me', method: 'GET' });
-  const functions: CustodyPolicy = { ...policy, grants: [{ ...policy.grants[0]!, operations: ['function'],
+  const functions: CustodyPolicy = { ...policy, grants: [{ ...policy.grants[0]!, operations: [Operations.function],
     callerProgram: false, functionDigests: [functionDigest] }] };
   const content = await protect(encode('value'), functions, 1, owner.binding, owner.keys);
-  const pinned: ExecutionIntent = { ...intent, operation: 'function', functionDigest,
+  const pinned: ExecutionIntent = { ...intent, operation: Operations.function, functionDigest,
     sources: [{ ...intent.sources[0]!, policyDigest: await hash(functions) }] };
   await authorizeUse(content, pinned, { destination: 'https://service.example/me' });
   await assert.rejects(authorizeUse(content, { ...pinned, functionDigest: await hash({ changed: true }) }, {
@@ -148,22 +146,33 @@ test('指定した関数の内容を照合し、任意のプログラムを動�
     grants: [{ ...policy.grants[0]!, callerProgram: false }] }, 1, owner.binding, owner.keys));
 });
 
-test('秘密、接続情報、OAuthアプリに同じ宛先指定と暗号化を適用する', async () => {
+test('変数、接続情報、OAuthアプリに同じ宛先指定と暗号化を適用し、型を差し替えた内容を拒否する', async () => {
   const { owner, policy } = await setup();
-  for (const kind of ['secret', 'connection', 'app'] as const) {
-    const value = kind === 'secret' ? 'secret' : JSON.stringify({ accessToken: 'value', clientSecret: 'value' });
-    const content = await protect(encode(value), { ...policy, kind }, 1, owner.binding, owner.keys);
+  for (const contentType of Object.values(ContentTypes)) {
+    const value = contentType === ContentTypes.value ? 'value' : JSON.stringify({ accessToken: 'value', clientSecret: 'value' });
+    const operations = permittedOperations(contentType).filter(operation => operation !== Operations.function);
+    const typed = { ...policy, contentType, grants: policy.grants.map(grant => ({ ...grant, operations })) };
+    const content = await protect(encode(value), typed, 1, owner.binding, owner.keys);
     assert.equal(decode(await reveal(content, owner.binding, owner.keys.encryption)), value);
     await assert.rejects(verifyContent({ ...content, policy: { ...content.policy,
-      kind: kind === 'secret' ? 'app' : 'secret' } }));
+      contentType: contentType === ContentTypes.value ? ContentTypes.tokenSet : ContentTypes.value } }));
   }
+});
+
+test('内容の型が扱わない操作を許可するポリシーを拒否する', async () => {
+  const { owner, policy } = await setup();
+  await assert.rejects(protect(encode('value'), { ...policy, grants: policy.grants.map(grant =>
+    ({ ...grant, operations: [...grant.operations, Operations.refresh] })) }, 1, owner.binding, owner.keys),
+  /operations this kind of content supports/);
+  await assert.rejects(protect(encode('value'), { ...policy, contentType: ContentTypes.clientCredential }, 1,
+    owner.binding, owner.keys), /operations this kind of content supports/);
 });
 
 test('上限サイズの内容を100人へ暗号化し、所有者と共有相手の鍵で読み出す', async () => {
   const recipients = await Promise.all(Array.from({ length: 100 }, () => identity()));
   const owner = recipients[0]!, last = recipients.at(-1)!;
-  const policy = AccessPolicy.parse({ format: 1, origin: 'https://foundation.test', id: crypto.randomUUID(),
-    ownerId: owner.binding.principalId, kind: 'secret', revision: 1,
+  const policy = AccessPolicy.parse({ format: 2, origin: 'https://foundation.test', id: crypto.randomUUID(),
+    ownerId: owner.binding.principalId, contentType: ContentTypes.value, revision: 1,
     authorities: recipients.map(recipient => recipient.binding), readers: recipients.map(recipient => recipient.binding),
     grants: [],
   });
@@ -175,8 +184,8 @@ test('上限サイズの内容を100人へ暗号化し、所有者と共有相�
 
 test('許可した実行先が接続を更新し、所有者が署名した権限と宛先を保持する', async () => {
   const { owner, executor, stranger, policy } = await setup();
-  const connection: CustodyPolicy = { ...policy, kind: 'connection', grants: [
-    { ...policy.grants[0]!, operations: ['http', 'refresh'] },
+  const connection: CustodyPolicy = { ...policy, contentType: ContentTypes.tokenSet, grants: [
+    { ...policy.grants[0]!, operations: [Operations.http, Operations.refresh] },
   ] };
   const content = await protect(encode('old-token'), connection, 1, owner.binding, owner.keys);
   const renewed = await renewContent(content, encode('new-token'), executor.binding, executor.keys);

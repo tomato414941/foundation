@@ -13,12 +13,42 @@ export const Origin = z.url().refine(value => {
   return url.origin === value && !url.username && !url.password &&
     (url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)));
 }, 'Use an HTTPS origin, or HTTP on localhost.');
-export const ProtectedKind = z.enum(['secret', 'connection', 'app']);
-export const ExecutionKind = z.enum(['http', 'command', 'function', 'connect', 'refresh', 'revoke']);
+// Signed data names things only by fixed ids. These values never change and are never shown;
+// product names (variable, connection, application, run kinds) map to them outside the seal.
+export const ContentTypes = {
+  value: '03546b17-fa44-409f-b151-8da1a398b324',
+  tokenSet: '7d4b64dd-4546-4acb-8e96-91f864bccea6',
+  clientCredential: '714fc044-2cce-4f3f-a477-281ee64fe632',
+} as const;
+export const ContentType = z.enum([ContentTypes.value, ContentTypes.tokenSet, ContentTypes.clientCredential]);
+export type ContentTypeId = z.infer<typeof ContentType>;
+export const Operations = {
+  http: 'bdf57b0a-bce9-4a1d-ad62-0ccd73578e7a',
+  command: '85bb00b6-ca1e-478d-94ca-a217f0c73e49',
+  function: 'b6b12c71-7a51-4f18-930c-48e6f511a963',
+  connect: '5c0d6e68-61ef-4023-8500-05defca4edf1',
+  refresh: '00bc45aa-7b68-4350-b73e-eda476c6236c',
+  revoke: '832624ed-e6bb-4829-80a4-283f5333ce63',
+} as const;
+export const Operation = z.enum([Operations.http, Operations.command, Operations.function,
+  Operations.connect, Operations.refresh, Operations.revoke]);
+export type OperationId = z.infer<typeof Operation>;
+export type OperationName = keyof typeof Operations;
+export const operationName = (id: OperationId) =>
+  (Object.keys(Operations) as OperationName[]).find(name => Operations[name] === id)!;
+// The floor each content type keeps whatever a policy says: only token sets are renewed by
+// executors, and client credentials are used only to connect, refresh and revoke.
+const permitted: Record<ContentTypeId, readonly OperationId[]> = {
+  [ContentTypes.value]: [Operations.http, Operations.command, Operations.function],
+  [ContentTypes.tokenSet]: [Operations.http, Operations.command, Operations.function, Operations.refresh, Operations.revoke],
+  [ContentTypes.clientCredential]: [Operations.connect, Operations.refresh, Operations.revoke],
+};
+export const permittedOperations = (type: ContentTypeId) => permitted[type];
+export const renewable = (type: ContentTypeId) => type === ContentTypes.tokenSet;
 export const ExecutionGrant = z.object({
   actor: KeyBinding,
   executor: KeyBinding,
-  operations: z.array(ExecutionKind).min(1).max(6),
+  operations: z.array(Operation).min(1).max(6),
   functionDigests: z.array(Fingerprint).max(100).default([]),
   origins: z.array(Origin).max(100).default([]),
   callerProgram: z.boolean().default(false),
@@ -26,11 +56,11 @@ export const ExecutionGrant = z.object({
 }).strict();
 export type UseGrant = z.infer<typeof ExecutionGrant>;
 export const AccessPolicy = z.object({
-  format: z.literal(1),
+  format: z.literal(2),
   origin: Origin,
   id: Id,
   ownerId: Id,
-  kind: ProtectedKind,
+  contentType: ContentType,
   revision: z.number().int().positive(),
   authorities: z.array(KeyBinding).min(1).max(100),
   readers: z.array(KeyBinding).min(1).max(100),
@@ -41,7 +71,7 @@ export const AccessPolicy = z.object({
 }).strict();
 export type CustodyPolicy = z.infer<typeof AccessPolicy>;
 const AuthoritySet = z.object({ ownerId: Id, authorities: z.array(KeyBinding).min(1).max(100) }).strict();
-const HandoffBody = z.object({ origin: Origin, id: Id, kind: ProtectedKind, revision: z.number().int().positive(),
+const HandoffBody = z.object({ origin: Origin, id: Id, revision: z.number().int().positive(),
   from: AuthoritySet, to: AuthoritySet, policyDigest: Fingerprint, previous: Fingerprint.nullable(), signerId: Id }).strict();
 export const AuthorityHandoff = HandoffBody.extend({ signature: Signature });
 const Lineage = z.array(AuthorityHandoff).max(16);
@@ -68,7 +98,7 @@ async function validateLineage(policy: CustodyPolicy, lineage: z.infer<typeof Li
   let preceding: z.infer<typeof AuthorityHandoff> | undefined;
   for (const entry of lineage) {
     const { signature, ...body } = entry;
-    if (entry.origin !== policy.origin || entry.id !== policy.id || entry.kind !== policy.kind ||
+    if (entry.origin !== policy.origin || entry.id !== policy.id ||
       entry.revision > policy.revision || (preceding && (entry.revision <= preceding.revision ||
         canonical(preceding.to) !== canonical(entry.from))) ||
       entry.previous !== (preceding ? await hash(preceding) : null))
@@ -93,7 +123,8 @@ export function policyAuthority(content: Pick<CustodyContent, 'policy' | 'author
 }
 
 export function continuesPolicy(previous: CustodyPolicy, content: Pick<CustodyContent, 'policy' | 'lineage'>) {
-  if (previous.id !== content.policy.id || previous.origin !== content.policy.origin || previous.kind !== content.policy.kind) return false;
+  if (previous.id !== content.policy.id || previous.origin !== content.policy.origin ||
+    previous.contentType !== content.policy.contentType) return false;
   const expected = canonical(authoritySet(previous));
   if (expected === canonical(authoritySet(content.policy))) return true;
   return Boolean(content.lineage?.some(entry => entry.revision > previous.revision && canonical(entry.from) === expected));
@@ -104,10 +135,11 @@ async function nextLineage(previous: CustodyContent | undefined, policy: Custody
   if (previous && canonical(authoritySet(previous.policy)) !== canonical(authoritySet(policy))) {
     await verifyContent(previous);
     if (!previous.policy.authorities.some(authority => canonical(authority) === canonical(signer)) ||
-      previous.policy.id !== policy.id || previous.policy.origin !== policy.origin || previous.policy.kind !== policy.kind ||
+      previous.policy.id !== policy.id || previous.policy.origin !== policy.origin ||
+      previous.policy.contentType !== policy.contentType ||
       policy.revision !== previous.policy.revision + 1)
       throw new Error('An existing authority must approve this handoff at the next policy revision.');
-    const body = HandoffBody.parse({ origin: policy.origin, id: policy.id, kind: policy.kind, revision: policy.revision,
+    const body = HandoffBody.parse({ origin: policy.origin, id: policy.id, revision: policy.revision,
       from: authoritySet(previous.policy), to: authoritySet(policy), policyDigest: await hash(policy),
       previous: lineage.length ? await hash(lineage.at(-1)) : null, signerId: signer.id });
     lineage.push({ ...body, signature: await sign(body, keys.signing, 'authority-handoff') });
@@ -134,9 +166,12 @@ export async function validatePolicy(input: CustodyPolicy) {
     if (!policy.readers.some(reader => reader.id === authority.id))
       throw new Error('A policy authority must be able to open its content.');
   for (const grant of policy.grants) {
-    if (grant.operations.some(operation => ['http', 'command'].includes(operation)) && !grant.callerProgram)
+    if (new Set(grant.operations).size !== grant.operations.length ||
+      grant.operations.some(operation => !permittedOperations(policy.contentType).includes(operation)))
+      throw new Error('Grant only the operations this kind of content supports.');
+    if (grant.operations.some(operation => operation === Operations.http || operation === Operations.command) && !grant.callerProgram)
       throw new Error('Explicitly authorize caller-supplied programs before allowing arbitrary execution.');
-    if (grant.operations.includes('function') && !grant.functionDigests.length && !grant.callerProgram)
+    if (grant.operations.includes(Operations.function) && !grant.functionDigests.length && !grant.callerProgram)
       throw new Error('Choose the exact functions this grant authorizes.');
   }
   return policy;
@@ -147,11 +182,9 @@ export function policyRecipients(policy: CustodyPolicy): BoundKeys[] {
     .map(binding => [binding.id, binding])).values()];
 }
 
+// The policy digest already covers the item, its owner and its content type.
 export async function contentContext(policy: CustodyPolicy, materialRevision: number) {
-  return canonical({
-    purpose: 'resource', origin: policy.origin, id: policy.id, ownerId: policy.ownerId,
-    kind: policy.kind, policyDigest: await hash(policy), materialRevision,
-  });
+  return canonical({ purpose: 'resource', policyDigest: await hash(policy), materialRevision });
 }
 
 export async function protect(
@@ -172,7 +205,7 @@ export async function protect(
   const value = {
     policy, ...lineage, authorityId: signer.id, authorization: await sign(policy, keys.signing, 'access-policy'),
     materialRevision, updatedAt: new Date().toISOString(), creationRunId: null,
-    metadata: metadata ?? (policy.kind === 'secret' ? { bytes: bytes.byteLength } : {}), sealed, signerId: signer.id,
+    metadata: metadata ?? (policy.contentType === ContentTypes.value ? { bytes: bytes.byteLength } : {}), sealed, signerId: signer.id,
   };
   const result = ProtectedContent.parse({ ...value, signature: await sign(value, keys.signing, 'resource') });
   await verifyContent(result);
@@ -196,8 +229,8 @@ export async function verifyContent(input: CustodyContent) {
       producer.materialRevision === content.materialRevision &&
       Date.parse(producer.expiresAt) > Date.parse(content.updatedAt),
     )?.executor ??
-    (content.policy.kind === 'connection' ? content.policy.grants.find(grant =>
-      grant.executor.id === content.signerId && grant.operations.includes('refresh') &&
+    (renewable(content.policy.contentType) ? content.policy.grants.find(grant =>
+      grant.executor.id === content.signerId && grant.operations.includes(Operations.refresh) &&
       Date.parse(grant.expiresAt) > Date.parse(content.updatedAt),
     )?.executor : undefined);
   if (!signer || Date.parse(content.updatedAt) > Date.now() + 30_000)
@@ -216,9 +249,9 @@ export async function renewContent(
   metadata: Record<string, JsonValue> = input.metadata,
 ): Promise<CustodyContent> {
   const content = await verifyContent(input);
-  if (content.policy.kind !== 'connection' || !(content.policy.authorities.some(authority =>
+  if (!renewable(content.policy.contentType) || !(content.policy.authorities.some(authority =>
     canonical(authority) === canonical(executor)) || content.policy.grants.some(grant =>
-    canonical(grant.executor) === canonical(executor) && grant.operations.includes('refresh') &&
+    canonical(grant.executor) === canonical(executor) && grant.operations.includes(Operations.refresh) &&
     Date.parse(grant.expiresAt) > Date.now(),
   ))) throw new Error('This executor cannot renew this connection.');
   if (bytes.byteLength > 1_000_000) throw new Error('The content exceeds 1,000,000 bytes.');
@@ -288,25 +321,25 @@ export async function reveal(
 }
 
 export const SourcePin = z.object({
-  id: Id, kind: ProtectedKind, policyDigest: Fingerprint,
+  id: Id, policyDigest: Fingerprint,
   materialRevision: z.number().int().positive(),
   authorizationDigest: Fingerprint.optional(),
 }).strict();
 export async function matchesPin(content: CustodyContent, pin: z.infer<typeof SourcePin>) {
-  return pin.id === content.policy.id && pin.kind === content.policy.kind &&
+  return pin.id === content.policy.id &&
     pin.policyDigest === await hash(content.policy) &&
     (pin.authorizationDigest === undefined || pin.authorizationDigest === content.metadata.authorizationDigest) &&
     (pin.materialRevision === content.materialRevision ||
-      (pin.kind === 'connection' && pin.authorizationDigest !== undefined &&
+      (renewable(content.policy.contentType) && pin.authorizationDigest !== undefined &&
         pin.authorizationDigest === content.metadata.authorizationDigest &&
         content.materialRevision >= pin.materialRevision));
 }
 export const RunIntent = z.object({
-  format: z.literal(1), id: Id, origin: Origin, ownerId: Id,
+  format: z.literal(2), id: Id, origin: Origin, ownerId: Id,
   approval: z.object({ id: Id, index: z.number().int().min(0).max(7) }).strict().optional(),
   actor: KeyBinding, environmentId: Id, executor: KeyBinding,
   environmentDigest: Fingerprint,
-  operation: ExecutionKind, functionDigest: Fingerprint.nullable(),
+  operation: Operation, functionDigest: Fingerprint.nullable(),
   operationDigest: Fingerprint,
   sources: z.array(SourcePin).max(100),
   resultRecipients: z.array(KeyBinding).min(1).max(100),
@@ -383,12 +416,12 @@ export async function authorizeUse(
     Date.parse(grant.expiresAt) >= Date.parse(intent.expiresAt),
   );
   const granted = matching.some(grant => {
-    if (intent.operation === 'function' && !grant.callerProgram &&
+    if (intent.operation === Operations.function && !grant.callerProgram &&
       (!intent.functionDigest || !grant.functionDigests.includes(intent.functionDigest))) return false;
     if (grant.origins.length && (!options.destination || !grant.origins.includes(new URL(options.destination).origin)))
       return false;
     // Arbitrary programs can disclose their inputs. Such grants must be explicit.
-    return !['command', 'http'].includes(intent.operation) || grant.callerProgram;
+    return (intent.operation !== Operations.command && intent.operation !== Operations.http) || grant.callerProgram;
   });
   if (!granted) throw new Error('This identity cannot use this input on the selected executor.');
   return content;

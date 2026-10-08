@@ -1,5 +1,6 @@
 import type { Actor } from './authorization.js';
 import type { Delegation } from './delegation.js';
+import { Operations } from '../shared/custody.js';
 import type { SealedRun } from '../shared/custody.js';
 import type { SealedContent } from '../shared/contracts.js';
 import { canonical, hash } from '../shared/authority.js';
@@ -21,7 +22,7 @@ export class OAuthRelays {
       'SELECT request,phase,state FROM execution_tasks WHERE id=$1', [input.runId],
     ));
     const intent = task.request.intent;
-    if (intent.executor.principalId !== actor.id || intent.operation !== 'connect' ||
+    if (intent.executor.principalId !== actor.id || intent.operation !== Operations.connect ||
       task.phase !== 'dispatched' || task.state !== 'running' || Date.parse(input.expiresAt) <= Date.now() ||
       Date.parse(input.expiresAt) > Date.now() + 600_000 || Date.parse(input.expiresAt) > Date.parse(intent.expiresAt))
       fail(403, 'forbidden', 'Create a callback only for the authorized connection request.');

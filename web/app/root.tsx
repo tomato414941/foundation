@@ -8,7 +8,7 @@ import {
   Folder,
   House,
   Inbox,
-  KeyRound,
+  Variable,
   Link2,
   LogOut,
   Menu,
@@ -48,7 +48,7 @@ import './app.css';
 
 export const meta: Route.MetaFunction = () => [
   { title: 'Foundation' },
-  { name: 'description', content: 'Manage service connections and secrets.' },
+  { name: 'description', content: 'Manage service connections and variables.' },
   { name: 'theme-color', content: '#0a0a0a' },
 ];
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
@@ -112,7 +112,7 @@ export default function App() {
     [
       ['home', prefix, House],
       ['services', prefix + '/services', Link2],
-      ['secrets', prefix + '/secrets', KeyRound],
+      ['variables', prefix + '/variables', Variable],
       ['objects', prefix + '/objects', Folder],
       ['environments', prefix + '/environments', Terminal],
       ['functions', prefix + '/functions', Code2],

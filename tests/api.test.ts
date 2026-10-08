@@ -7,7 +7,7 @@ import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { newEncryptionKey, encode, decode, open, seal, unwrap, wrap } from '../shared/encryption.js';
 import { delegatedFixture } from './delegation-support.js';
-import { AccessPolicy, prepareRun, protect } from '../shared/custody.js';
+import { AccessPolicy, ContentTypes, Operations, prepareRun, protect } from '../shared/custody.js';
 import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 
 test('OAuthの認可応答を開始した依頼者と実行先へ暗号化して中継し、同じ応答を一度だけ受け付ける', async (t) => {
@@ -19,7 +19,7 @@ test('OAuthの認可応答を開始した依頼者と実行先へ暗号化して
     await f.close();
   });
   const input = { kind: 'connect', input: { action: 'start' } };
-  const intent = { ...f.intent, operation: 'connect' as const, operationDigest: await hash(input), sources: [] };
+  const intent = { ...f.intent, operation: Operations.connect, operationDigest: await hash(input), sources: [] };
   await f.delegation.submit(f.owner.actor, await prepareRun(intent, input, f.owner.keys));
   const claim = (await f.delegation.claim(f.executor.actor, f.environment.manifest.id))!;
   await f.delegation.dispatch(f.executor.actor, intent.id, claim.lease);
@@ -62,14 +62,14 @@ test('HTTP APIで登録し、シークレットを保存して同じ権限で一
   const bound = await app.inject({ method: 'PUT', url: '/api/principals/' + identity.principal.id + '/binding',
     headers, payload: await signBinding(binding, keys) });
   assert.equal(bound.statusCode, 200, bound.body);
-  const content = await protect(encode('api-secret'), AccessPolicy.parse({ format: 1, id, origin: f.config.origin,
-    ownerId: identity.principal.id, kind: 'secret', revision: 1, authorities: [binding], readers: [binding], grants: [] }),
+  const content = await protect(encode('api-secret'), AccessPolicy.parse({ format: 2, id, origin: f.config.origin,
+    ownerId: identity.principal.id, contentType: ContentTypes.value, revision: 1, authorities: [binding], readers: [binding], grants: [] }),
     1, binding, keys);
   const created = await app.inject({ method: 'PUT', url: '/api/resources/' + id + '/custody',
     headers, payload: { name: 'API secret', content } });
   assert.equal(created.statusCode, 200, created.body);
-  assert.equal(created.json().kind, 'secret');
-  const list = await app.inject({ url: '/api/principals/' + identity.principal.id + '/resources?kind=secret', headers });
+  assert.equal(created.json().kind, 'variable');
+  const list = await app.inject({ url: '/api/principals/' + identity.principal.id + '/resources?kind=variable', headers });
   assert.equal(list.statusCode, 200, list.body);
   assert.equal(list.json().items[0].id, id);
   const read = await app.inject({ url: '/api/resources/' + id + '/custody', headers });

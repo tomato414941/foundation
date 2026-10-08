@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fixture } from './support.js';
 import { seal, open, encode, decode, wrap, unwrap } from '../shared/encryption.js';
-import { AccessPolicy, protect, reveal, continuesPolicy } from '../shared/custody.js';
+import { AccessPolicy, ContentTypes, continuesPolicy, protect, reveal } from '../shared/custody.js';
 
 test('メンバー追加と所有者変更で配下の秘密を再暗号化し、新しい相手が開けるようにする', async t => {
   const f = await fixture(); t.after(f.close);
@@ -11,8 +11,8 @@ test('メンバー追加と所有者変更で配下の秘密を再暗号化し�
   const project = await f.principals.create('Project', null, owner.actor.id);
   const child = await f.principals.create('Nested project', null, project.id);
   const bytes = encode('shared project secret'), id = randomUUID();
-  const initial = await protect(bytes, AccessPolicy.parse({ format: 1, id, origin: f.config.origin,
-    ownerId: child.id, kind: 'secret', revision: 1, authorities: [owner.binding], readers: [owner.binding], grants: [] }),
+  const initial = await protect(bytes, AccessPolicy.parse({ format: 2, id, origin: f.config.origin,
+    ownerId: child.id, contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding], grants: [] }),
     1, owner.binding, owner.keys);
   await f.custody.put(owner.actor, { name: 'Project secret', content: initial });
   await assert.rejects(f.principals.relate(owner.actor, member.actor.id, 'member', project.id), { code: 'rekey_required' });
@@ -45,8 +45,8 @@ test('メンバー追加と所有者変更で配下の秘密を再暗号化し�
 test('シークレットを新しい所有者へ移し、宛先の鍵と編集権限を引き継ぐ', async t => {
   const f = await fixture(); t.after(f.close);
   const owner = await f.person('Before'), next = await f.person('After'), id = randomUUID();
-  const policy = AccessPolicy.parse({ format: 1, id, origin: f.config.origin, ownerId: owner.actor.id,
-    kind: 'secret', revision: 1, authorities: [owner.binding], readers: [owner.binding], grants: [] });
+  const policy = AccessPolicy.parse({ format: 2, id, origin: f.config.origin, ownerId: owner.actor.id,
+    contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding], grants: [] });
   const initial = await protect(encode('transfer-value'), policy, 1, owner.binding, owner.keys);
   const row = await f.custody.put(owner.actor, { name: 'Transferred secret', content: initial });
   const content = await protect(encode('transfer-value'), { ...policy, ownerId: next.actor.id,
@@ -75,8 +75,8 @@ test('メンバーを外すと宛先と編集権限を更新し、残る所有�
   const owner = await f.person(), member = await f.person('Member');
   const project = await f.principals.create('Project', null, owner.actor.id);
   await f.principals.relate(owner.actor, member.actor.id, 'member', project.id);
-  const policy = AccessPolicy.parse({ format: 1, id: randomUUID(), origin: f.config.origin,
-    ownerId: project.id, kind: 'secret', revision: 1, authorities: [owner.binding, member.binding], readers: [owner.binding, member.binding], grants: [] });
+  const policy = AccessPolicy.parse({ format: 2, id: randomUUID(), origin: f.config.origin,
+    ownerId: project.id, contentType: ContentTypes.value, revision: 1, authorities: [owner.binding, member.binding], readers: [owner.binding, member.binding], grants: [] });
   const bytes = encode('private value'), content = await protect(bytes, policy, 1, owner.binding, owner.keys);
   const row = await f.custody.put(owner.actor, { name: 'Credential', content });
   const plan = await f.principals.keySharing.plan(owner.actor, project.id, member.actor.id, 'member', f.db.pool, true);

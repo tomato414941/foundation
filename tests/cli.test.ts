@@ -11,7 +11,7 @@ import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { Redactor, secretVariants } from '../cli/src/execute.js';
 import { encode, seal, wrap } from '../shared/encryption.js';
-import { AccessPolicy, protect } from '../shared/custody.js';
+import { AccessPolicy, ContentTypes, Operations, protect } from '../shared/custody.js';
 import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 
 async function cliFixture() {
@@ -88,16 +88,16 @@ test('秘密を使用権限でローカルコマンドへ渡し、内容の読�
   const identity = JSON.parse(await readFile(join(c.directory, 'foundation', 'identity.json'), 'utf8')).identities[0];
   const owner = await c.person('Secret owner'), id = crypto.randomUUID();
   await c.context.principals.relate(owner.actor, identity.principalId, 'agent', owner.actor.id);
-  const policy = AccessPolicy.parse({ format: 1, id, origin: c.origin, ownerId: owner.actor.id, kind: 'secret',
+  const policy = AccessPolicy.parse({ format: 2, id, origin: c.origin, ownerId: owner.actor.id, contentType: ContentTypes.value,
     revision: 1, readers: [owner.binding], authorities: [owner.binding], producers: [],
-    grants: [{ actor: identity.binding, executor: identity.binding, operations: ['command'], callerProgram: true,
+    grants: [{ actor: identity.binding, executor: identity.binding, operations: [Operations.command], callerProgram: true,
       expiresAt: new Date(Date.now() + 7_200_000).toISOString() }] });
   await c.context.custody.put(owner.actor, { name: 'Command secret',
     content: await protect(encode('command-secret-token'), policy, 1, owner.binding, owner.keys) });
   const trusted = await c.run(['trust', owner.actor.id, '--fingerprint', await hash(owner.binding)]);
   assert.equal(trusted.code, 0, trusted.stderr);
   const executed = await c.run(['exec', '--inputs', JSON.stringify([
-    { name: 'SECRET_VALUE', source: { kind: 'secret', id } },
+    { name: 'SECRET_VALUE', source: { id } },
   ]), '--', process.execPath, '-e', 'if(process.env.SECRET_VALUE!=="command-secret-token")process.exit(2);console.log("Secret used");']);
   assert.equal(executed.code, 0, executed.stderr);
   assert.match(executed.stdout, /Secret used/);
@@ -117,7 +117,7 @@ test('CLIで登録してシークレットを保存し、コマンドへ渡し�
   const kept = await c.run(['keep', 'CLI secret', '--stdin'], '秘密-value/123');
   assert.equal(kept.code, 0, kept.stderr);
   const resource = JSON.parse(kept.stdout);
-  assert.equal(resource.kind, 'secret');
+  assert.equal(resource.kind, 'variable');
   assert.equal(resource.data.custodyRevision, 1);
   const output = join(c.directory, 'revealed.txt'),
     read = await c.run(['read', resource.id, '--output', output]);
@@ -126,8 +126,8 @@ test('CLIで登録してシークレットを保存し、コマンドへ渡し�
   assert.equal((await stat(output)).mode & 0o777, 0o600);
   const fileRecord = join(c.directory, 'file-path');
   const inputs = JSON.stringify([
-    { name: 'TEST_VALUE', source: { kind: 'secret', id: resource.id } },
-    { name: 'TEST_FILE', source: { kind: 'secret', id: resource.id }, format: 'file' },
+    { name: 'TEST_VALUE', source: { id: resource.id } },
+    { name: 'TEST_FILE', source: { id: resource.id }, format: 'file' },
   ]);
   const command =
     "const fs=require('node:fs');fs.writeFileSync(process.argv[1],process.env.TEST_FILE);process.stdout.write(process.env.TEST_VALUE+'|'+fs.readFileSync(process.env.TEST_FILE)+'|'+(fs.statSync(process.env.TEST_FILE).mode&511));process.stderr.write(Buffer.from(process.env.TEST_VALUE).toString('base64'));";
@@ -191,7 +191,7 @@ test('CLIの確認コードを承認し、同じAPIから所有者のリソー�
   const used = await c.run([
     'exec',
     '--inputs',
-    JSON.stringify([{ name: 'TEST_VALUE', source: { kind: 'secret', id: resource.id } }]),
+    JSON.stringify([{ name: 'TEST_VALUE', source: { id: resource.id } }]),
     '--',
     process.execPath,
     '-e',
@@ -233,7 +233,7 @@ test('発行されたキーでログインした CLI は本人として入り、
   assert.equal(JSON.parse(initialized.stdout).principal.id, person.actor.id);
   const id = randomUUID(),
     content = encode('sealed elsewhere');
-  const policy = AccessPolicy.parse({ format: 1, id, origin: c.origin, ownerId: person.actor.id, kind: 'secret',
+  const policy = AccessPolicy.parse({ format: 2, id, origin: c.origin, ownerId: person.actor.id, contentType: ContentTypes.value,
     revision: 1, authorities: [person.binding], readers: [person.binding], grants: [] });
   await c.context.custody.put(person.actor, {
     name: 'Browser secret',
@@ -294,7 +294,7 @@ test('CLIで実行先を登録し、指定した実行先へ暗号化したコ�
   assert.equal(kept.code, 0, kept.stderr);
   const resource = JSON.parse(kept.stdout);
   const run = await c.run(['run', '--environment', id, '--inputs', JSON.stringify([
-    { name: 'TOKEN', source: { kind: 'secret', id: resource.id } },
+    { name: 'TOKEN', source: { id: resource.id } },
   ]), '--', process.execPath, '-e', 'process.stdout.write("executed:" + process.env.TOKEN)']);
   assert.equal(run.code, 0, run.stderr);
   const executed = await c.run(['agent', 'start', '--id', id, '--once']);
@@ -347,7 +347,7 @@ test('CLIで接続を実行先へ依頼し、確認した接続を暗号化し�
   assert.equal(JSON.parse(connected.stdout).kind, 'connected');
   const id = JSON.parse(connected.stdout).id;
   const used = await c.run(['exec', '--inputs', JSON.stringify([
-    { name: 'TOKEN', source: { kind: 'connection', id, output: 'RENDER_API_KEY' } },
+    { name: 'TOKEN', source: { id, output: 'RENDER_API_KEY' } },
   ]), '--', process.execPath, '-e', 'process.stdout.write(process.env.TOKEN)']);
   assert.equal(used.code, 0, used.stderr);
   assert.equal(used.stdout, '[redacted]');

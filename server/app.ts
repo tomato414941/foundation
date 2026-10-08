@@ -518,7 +518,7 @@ export async function buildApp(context: Context) {
     {
       bodyLimit: 32 * 1024 * 1024,
       config: { approval: { title: (body) => atPointer(body, '/relation') === 'agent' && atPointer(body, '/principalId') === '$approver' ? ['アクセスを許可する', 'Allow access'] : ['関係を結ぶ', 'Add a relation'] } },
-      schema: { body: C.RelationInput.extend({ secrets: P.KeyUpdates.optional() }), response: { 200: C.Ok } },
+      schema: { body: C.RelationInput.extend({ contents: P.KeyUpdates.optional() }), response: { 200: C.Ok } },
     },
     async (request) => {
       await principals.relate(
@@ -526,7 +526,7 @@ export async function buildApp(context: Context) {
         request.body.subjectId,
         request.body.relation,
         request.body.principalId,
-        request.body.secrets,
+        request.body.contents,
       );
       return { ok: true as const };
     },
@@ -554,14 +554,14 @@ export async function buildApp(context: Context) {
   );
   app.delete(
     '/api/relations',
-    { bodyLimit: 32 * 1024 * 1024, config: { approval: { title: ['関係を外す', 'Remove a relation'] } }, schema: { body: C.RelationInput.extend({ secrets: P.KeyUpdates.optional() }), response: { 200: C.Ok } } },
+    { bodyLimit: 32 * 1024 * 1024, config: { approval: { title: ['関係を外す', 'Remove a relation'] } }, schema: { body: C.RelationInput.extend({ contents: P.KeyUpdates.optional() }), response: { 200: C.Ok } } },
     async (request) => {
       await principals.unrelate(
         actor(request),
         request.body.subjectId,
         request.body.relation,
         request.body.principalId,
-        request.body.secrets,
+        request.body.contents,
       );
       return { ok: true as const };
     },
@@ -624,12 +624,12 @@ export async function buildApp(context: Context) {
       config: { approval: { title: ['プリンシパルを譲る', 'Transfer a principal'] } },
       schema: {
         params: C.IdParams,
-        body: z.object({ to: C.Id, secrets: P.KeyUpdates.optional() }).strict(),
+        body: z.object({ to: C.Id, contents: P.KeyUpdates.optional() }).strict(),
         response: { 200: C.Ok },
       },
     },
     async (request) => {
-      await principals.transfer(actor(request), request.params.id, request.body.to, request.body.secrets);
+      await principals.transfer(actor(request), request.params.id, request.body.to, request.body.contents);
       return { ok: true as const };
     },
   );
