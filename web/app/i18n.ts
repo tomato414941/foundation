@@ -331,13 +331,6 @@ const words: Record<string, [string, string]> = {
   ],
   returnUrl: ['完了後のURL', 'Completion URL'],
   refreshUrl: ['やり直し用のURL', 'Retry URL'],
-  webhookUrl: ['Webhook URL', 'Webhook URL'],
-  webhookSecret: ['Webhook署名キー', 'Webhook signing secret'],
-  rotate: ['署名キーを更新', 'Rotate signing secret'],
-  rotateHelp: [
-    '更新すると、現在の署名キーは使えなくなります。',
-    'Rotating the key invalidates the current signing secret.',
-  ],
   export: ['データをエクスポート', 'Export data'],
   exportHelp: ['暗号化されたデータとファイルをダウンロードします。', 'Download encrypted data and files.'],
   merge: ['アカウントを統合', 'Merge accounts'],

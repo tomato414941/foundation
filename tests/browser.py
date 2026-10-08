@@ -581,6 +581,21 @@ class BrowserTests(unittest.TestCase):
         page.reload()
         expect(page.get_by_role("button", name="Sign out", exact=True)).to_be_visible()
 
+    def test_外部連携の完了URLとやり直し用URLを保存して表示する(self):
+        page, principal = self.passkey_account("URL settings account")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/settings/integrations")
+        page.wait_for_load_state("networkidle")
+        page.get_by_role("textbox", name="完了後のURL", exact=True).fill("https://client.example/complete")
+        page.get_by_role("textbox", name="やり直し用のURL", exact=True).fill("https://client.example/retry")
+        page.get_by_role("button", name="保存", exact=True).click()
+        expect(page.get_by_role("alert")).to_contain_text("保存しました")
+        page.reload()
+        page.wait_for_load_state("networkidle")
+        expect(page.get_by_role("textbox", name="完了後のURL", exact=True)).to_have_value("https://client.example/complete")
+        expect(page.get_by_role("textbox", name="やり直し用のURL", exact=True)).to_have_value("https://client.example/retry")
+        page.screenshot(path=str(ARTIFACTS / "integrations-desktop-ja.png"), full_page=True)
+        print("Rendered settings: " + page.get_by_role("tabpanel").inner_text(), flush=True)
+
     def test_設定を保存しキーボードでタブと確認画面を操作する(self):
         page, principal = self.passkey_account("Keyboard account")
         page.goto(f"{ORIGIN}/p/{principal['id']}/settings/general")

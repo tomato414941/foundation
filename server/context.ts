@@ -67,13 +67,12 @@ export async function createContext(config: Configuration, deps: Dependencies = 
       delegation,
     );
   const devices = new Devices(db, authorization, audit, config.origin);
-  const integrations = new Integrations(db, authorization, vault, transport, config.origin),
+  const integrations = new Integrations(db, authorization, config.origin),
     requests = new Requests(
       db,
       authorization,
       principals,
       authentication,
-      integrations,
       audit,
       vault,
       config.origin,

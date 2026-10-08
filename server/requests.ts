@@ -5,7 +5,6 @@ import { iso } from './database.js';
 import type { Authorization, Actor } from './authorization.js';
 import type { Principals } from './principals.js';
 import type { Authentication } from './authentication.js';
-import type { Integrations } from './integrations.js';
 import type { Audit } from './audit.js';
 import { Vault, digest, token } from './vault.js';
 import { ApprovalRequest, ConnectionRequest } from '../shared/contracts.js';
@@ -53,7 +52,6 @@ export class Requests {
     readonly authorization: Authorization,
     readonly principals: Principals,
     readonly authentication: Authentication,
-    readonly integrations: Integrations,
     readonly audit: Audit,
     readonly vault: Vault,
     readonly origin: string,
@@ -194,7 +192,6 @@ export class Requests {
           ],
         ),
       );
-    if (to) await this.integrations.enqueue(to, { type: 'request.created', requestId: id, from: actor.id });
     return this.view(actor, row, code);
   }
   private substitute(value: JsonValue, actorId: string, fromId: string): JsonValue {
@@ -351,7 +348,6 @@ export class Requests {
       "UPDATE approval_requests SET state='approved',finished_at=now(),private_input=NULL,continue_url=NULL WHERE id=$1 AND state='running'",
       [id],
     );
-    await this.integrations.enqueue(row.from_id, { type: 'request.approved', requestId: id });
     await this.audit.record(row.from_id, context.actor.id, 'request.approve', id);
   }
   async completed(actor: Actor, result: JsonValue) {
@@ -400,7 +396,6 @@ export class Requests {
       [id],
     );
     await this.stopExecutions(id);
-    await this.integrations.enqueue(row.from_id, { type: 'request.declined', requestId: id });
     return this.get(actor, id);
   }
   async cancel(actor: Actor, id: string) {

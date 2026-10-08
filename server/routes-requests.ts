@@ -128,20 +128,9 @@ export async function routesRequests(
       schema: {
         params: C.IdParams,
         body: C.Settings,
-        response: { 200: z.object({ settings: C.Settings, webhookSecret: z.string().optional() }) },
+        response: { 200: z.object({ settings: C.Settings }) },
       },
     },
     (request) => integrations.set(actor(request), request.params.id, request.body),
-  );
-  app.post(
-    '/api/principals/:id/settings/rotate',
-    {
-      schema: {
-        params: C.IdParams,
-        body: z.object({}).strict(),
-        response: { 200: z.object({ webhookSecret: z.string() }) },
-      },
-    },
-    (request) => integrations.rotate(actor(request), request.params.id),
   );
 }

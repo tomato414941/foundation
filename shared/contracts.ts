@@ -520,7 +520,7 @@ export const AuditEntry = z.object({
   details: JsonObject,
 });
 export const Settings = z
-  .object({ returnUrl: z.url().optional(), refreshUrl: z.url().optional(), webhookUrl: z.url().optional() })
+  .object({ returnUrl: z.url().optional(), refreshUrl: z.url().optional() })
   .strict();
 export const listOf = <T extends z.ZodType>(schema: T) =>
   z.object({ items: z.array(schema), next: z.string().nullable().default(null) });

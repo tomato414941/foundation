@@ -84,21 +84,16 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
           }>(prefix + '/payment/' + intent, { method: 'POST', body: {} })
         ).url,
       );
-    else if (intent === 'settings')
-      return api<{
-        webhookSecret?: string;
-      }>(prefix + '/settings', {
+    else if (intent === 'settings') {
+      await api(prefix + '/settings', {
         method: 'PUT',
         body: Object.fromEntries(
-          ['returnUrl', 'refreshUrl', 'webhookUrl']
+          ['returnUrl', 'refreshUrl']
             .map((key) => [key, formText(form, key)])
             .filter(([, value]) => value),
         ),
       });
-    else if (intent === 'rotate')
-      return api<{
-        webhookSecret: string;
-      }>(prefix + '/settings/rotate', { method: 'POST', body: {} });
+    }
     return { ok: true };
   });
 }
@@ -322,7 +317,7 @@ export default function SettingsPage() {
               <Panel title={t('integrations')}>
                 <Form method="post">
                   <div className="flex min-w-0 flex-col gap-6">
-                    {['returnUrl', 'refreshUrl', 'webhookUrl'].map((key) => (
+                    {['returnUrl', 'refreshUrl'].map((key) => (
                       <InputField
                         key={key}
                         type="url"
@@ -337,22 +332,6 @@ export default function SettingsPage() {
                   </div>
                 </Form>
               </Panel>
-              {result && 'webhookSecret' in result && result.webhookSecret && (
-                <Panel title={t('webhookSecret')}>
-                  <InputField value={result.webhookSecret} label={t('webhookSecret')} readOnly={true} />
-                  <Copy value={result.webhookSecret} />
-                </Panel>
-              )}
-              {data.settings.webhookUrl && (
-                <Confirm
-                  label={t('rotate')}
-                  name={t('webhookSecret')}
-                  body={t('rotateHelp')}
-                  danger={false}
-                >
-                  <input type="hidden" name="intent" value="rotate" />
-                </Confirm>
-              )}
             </>
           )}
           {data.audit && (

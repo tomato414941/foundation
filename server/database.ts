@@ -31,6 +31,15 @@ export class Database {
         );
         await client.query("INSERT INTO schema_migrations(name) VALUES('connection-method-resources')");
       }
+      const notifications = await client.query(
+        "SELECT 1 FROM schema_migrations WHERE name='remove-outbound-webhooks'",
+      );
+      if (!notifications.rowCount) {
+        await client.query('DROP TABLE IF EXISTS webhooks');
+        await client.query('ALTER TABLE integration_settings DROP COLUMN IF EXISTS webhook_secret');
+        await client.query("UPDATE integration_settings SET settings=settings-'webhookUrl' WHERE settings ? 'webhookUrl'");
+        await client.query("INSERT INTO schema_migrations(name) VALUES('remove-outbound-webhooks')");
+      }
     });
   }
   async all<T extends QueryResultRow>(

@@ -156,17 +156,9 @@ CREATE TABLE IF NOT EXISTS request_links (
 );
 CREATE TABLE IF NOT EXISTS integration_settings (
   principal_id uuid PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
-  settings jsonb NOT NULL,
-  webhook_secret text NOT NULL
+  settings jsonb NOT NULL
 );
-CREATE TABLE IF NOT EXISTS webhooks (
-  id uuid PRIMARY KEY,
-  principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  payload jsonb NOT NULL,
-  attempts integer NOT NULL DEFAULT 0,
-  next_attempt timestamptz NOT NULL DEFAULT now(),
-  delivered_at timestamptz
-);
+
 CREATE TABLE IF NOT EXISTS payment_accounts (
   principal_id uuid PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
   customer_id text NOT NULL UNIQUE,
