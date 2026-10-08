@@ -14,7 +14,6 @@ import { Connections } from '../runtime/connections.js';
 import { CommandProcess } from '../runtime/command.js';
 import { MemoryJournal } from './delegation-support.js';
 import type { EnvironmentOptions } from '../shared/contracts.js';
-import { encode, seal } from '../shared/encryption.js';
 
 const agents = new Map<string, Executor>();
 const running = new Map<string, Promise<void>>();
@@ -78,33 +77,6 @@ const context = await createContext(
 );
 const app = await buildApp(context);
 app.get('/__test/ready', async () => ({ pid: process.pid }));
-app.post<{ Body: { principalId: string } }>('/__test/legacy-secret', async request => {
-  const owner = await context.principals.get(request.body.principalId), id = crypto.randomUUID();
-  if (!owner.public_key) throw new Error('Create the account keys first.');
-  const bytes = encode('legacy-browser-secret');
-  const sealed = await seal(bytes, [{ id: owner.id, publicKey: owner.public_key }], 'resource:' + id);
-  const row = await context.resources.insert(owner.id, 'secret', 'Legacy browser secret',
-    { bytes: bytes.length, recipients: [owner.id] }, { id, sealed });
-  return { id: row.id };
-});
-app.post<{ Body: { principalId: string; oauth?: boolean; reconnect?: boolean } }>('/__test/legacy-connection', async request => {
-  const owner = await context.principals.get(request.body.principalId), id = crypto.randomUUID();
-  const methodId = request.body.oauth ? 'google:oauth' : 'render:token';
-  const method = await context.catalog.method({ id: owner.id }, methodId);
-  const material = { formatVersion: 2, methodId, method,
-    app: { clientId: request.body.oauth ? 'browser-client' : '', fields: {},
-      ...(request.body.oauth ? { clientSecret: 'browser-client-secret' } : {}) },
-    ...(request.body.oauth ? { oauth: { accessToken: 'browser-access', refreshToken: 'browser-refresh',
-      expiresAt: Date.now() + 3_600_000, scopes: ['read'], account: 'browser@example.test', accountName: 'Browser account',
-      accountVerified: true, scopesStatus: 'reported', extra: {}, facts: {} } } : { fields: { token: 'legacy-browser-token' } }),
-  };
-  const row = await context.resources.insert(owner.id, 'connection', request.body.oauth ? 'Browser OAuth account' : 'Browser API key',
-    { methodId, methodName: method.name, methodKind: method.kind, state: request.body.reconnect ? 'reconnect' : 'ready', appId: null,
-      account: request.body.oauth ? 'Browser account' : 'Browser API key', scopes: request.body.oauth ? ['read'] : [],
-      outputs: method.kind === 'role' ? [] : Object.keys(method.config.outputs) },
-    { id, privateData: await context.vault.encrypt(material, 'resource:' + id) });
-  return { id: row.id };
-});
 app.get<{ Params: { id: string } }>('/__test/executor/:id/fingerprint', async request => {
   const agent = agents.get(request.params.id);
   return agent ? { id: agent.binding.principalId, fingerprint: await hash(agent.binding) } : null;

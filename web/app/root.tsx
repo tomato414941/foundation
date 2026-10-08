@@ -37,7 +37,7 @@ import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/root';
 import i18n from './i18n';
 import { api, errorCode, session } from './api';
-import { clearKeys, migrateUnlockedContent } from './keys';
+import { clearKeys } from './keys';
 import { Busy, ErrorNotice, Page, useTask } from './components';
 import { Button } from './components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
@@ -93,13 +93,9 @@ export default function App() {
   const { owner } = useParams();
   const [drawer, setDrawer] = useState(false);
   const task = useTask();
-  const migration = useTask();
   const principal = data.principals.find((item) => item.id === owner) ?? data.principal;
   const prefix = '/p/' + (owner ?? data.principal?.id);
   const authenticated = !!data.principal && !data.requestId;
-  useEffect(() => {
-    if (authenticated) void migration.run(() => migrateUnlockedContent(data.principal!.id));
-  }, [authenticated, data.principal?.id]);
   useEffect(() => {
     const language = localStorage.getItem('foundation.language');
     if (language === 'en' || language === 'ja') void i18n.changeLanguage(language);
@@ -305,7 +301,7 @@ export default function App() {
           )}
         </header>
         <main tabIndex={-1} className="min-w-0 px-4 py-6 outline-none sm:px-6 lg:px-8 lg:py-8">
-          <ErrorNotice error={task.error ?? migration.error} />
+          <ErrorNotice error={task.error} />
           <Outlet />
         </main>
       </div>

@@ -17,15 +17,6 @@ export const PublishBinding = SignedBinding.extend({ previousSignature: Signatur
 export const ProtectedWrite = z.object({ name: Name, content: ProtectedContent,
   version: z.number().int().positive().optional() }).strict();
 export const ProtectedRead = z.object({ content: ProtectedContent, version: z.number().int().positive() }).strict();
-export const LegacySecretPlan = z.object({ id: Id, name: Name, version: z.number().int().positive(),
-  sealed: Sealed, policy: AccessPolicy, bindings: z.array(SignedBinding).max(100) }).strict();
-export const LegacyConnectionItem = z.object({ id: Id, name: Name, sealed: Sealed, policy: AccessPolicy,
-  metadata: z.record(z.string(), z.json()), materialHash: Fingerprint }).strict();
-export const LegacyConnectionPlan = z.object({ id: Id, version: z.number().int().positive(),
-  digest: Fingerprint, connection: LegacyConnectionItem, app: LegacyConnectionItem.nullable(),
-  bindings: z.array(SignedBinding).max(100) }).strict();
-export const LegacyConnectionWrite = z.object({ digest: Fingerprint, connection: ProtectedWrite,
-  app: ProtectedWrite.nullable() }).strict();
 export const KeyUpdates = z.record(Id, z.object({ version: z.number().int().positive(), content: ProtectedContent }).strict());
 export const KeySharingItem = z.object({ id: Id, name: Name, version: z.number().int().positive(),
   content: ProtectedContent, policy: AccessPolicy }).strict();

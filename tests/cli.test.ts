@@ -13,7 +13,6 @@ import { Redactor, secretVariants } from '../cli/src/execute.js';
 import { encode, seal, wrap } from '../shared/encryption.js';
 import { AccessPolicy, protect } from '../shared/custody.js';
 import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
-import { LegacySecrets } from '../server/legacy-secrets.js';
 
 async function cliFixture() {
   const reserved = createServer();
@@ -82,25 +81,24 @@ async function cliFixture() {
   return { f, context, app, origin, directory, run, start, close, person };
 }
 
-test('移行済みの秘密を使用権限でローカルコマンドへ渡し、内容の読み出しを制限する', async t => {
+test('秘密を使用権限でローカルコマンドへ渡し、内容の読み出しを制限する', async t => {
   const c = await cliFixture(); t.after(c.close);
-  const initialized = await c.run(['init', '--name', 'Legacy executor', '--origin', c.origin]);
+  const initialized = await c.run(['init', '--name', 'Secret executor', '--origin', c.origin]);
   assert.equal(initialized.code, 0, initialized.stderr);
   const identity = JSON.parse(await readFile(join(c.directory, 'foundation', 'identity.json'), 'utf8')).identities[0];
-  const owner = await c.person('Legacy owner'), id = crypto.randomUUID();
+  const owner = await c.person('Secret owner'), id = crypto.randomUUID();
   await c.context.principals.relate(owner.actor, identity.principalId, 'agent', owner.actor.id);
-  const bytes = encode('legacy-cli-token');
-  await c.context.resources.insert(owner.actor.id, 'secret', 'Legacy CLI secret',
-    { allowUse: true, bytes: bytes.length }, { id,
-      sealed: await seal(bytes, [{ id: owner.actor.id, publicKey: publicPart(owner.keys.encryption) }], 'resource:' + id) });
-  const legacy = new LegacySecrets(c.context.custody), plan = await legacy.plan(owner.actor, id);
-  await legacy.complete(owner.actor, { name: plan.name, version: plan.version,
-    content: await protect(bytes, plan.policy, 1, owner.binding, owner.keys) });
+  const policy = AccessPolicy.parse({ format: 1, id, origin: c.origin, ownerId: owner.actor.id, kind: 'secret',
+    revision: 1, readers: [owner.binding], authorities: [owner.binding], producers: [],
+    grants: [{ actor: identity.binding, executor: identity.binding, operations: ['command'], callerProgram: true,
+      expiresAt: new Date(Date.now() + 7_200_000).toISOString() }] });
+  await c.context.custody.put(owner.actor, { name: 'Command secret',
+    content: await protect(encode('command-secret-token'), policy, 1, owner.binding, owner.keys) });
   const trusted = await c.run(['trust', owner.actor.id, '--fingerprint', await hash(owner.binding)]);
   assert.equal(trusted.code, 0, trusted.stderr);
   const executed = await c.run(['exec', '--inputs', JSON.stringify([
-    { name: 'LEGACY_VALUE', source: { kind: 'secret', id } },
-  ]), '--', process.execPath, '-e', 'if(process.env.LEGACY_VALUE!=="legacy-cli-token")process.exit(2);console.log("Secret used");']);
+    { name: 'SECRET_VALUE', source: { kind: 'secret', id } },
+  ]), '--', process.execPath, '-e', 'if(process.env.SECRET_VALUE!=="command-secret-token")process.exit(2);console.log("Secret used");']);
   assert.equal(executed.code, 0, executed.stderr);
   assert.match(executed.stdout, /Secret used/);
   const read = await c.run(['read', id]);

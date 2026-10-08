@@ -65,9 +65,10 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
     assert.equal(task.state, 'succeeded', JSON.stringify(result.error));
     return result.result as Record<string, JsonValue>;
   }
-  async function storedConnection(name = 'Connection', grants?: CustodyPolicy['grants']) {
+  async function storedConnection(name = 'Connection', grants?: CustodyPolicy['grants'], state?: 'reconnect') {
     const material = ConnectionMaterial.parse({ format: 1, methodId: 'provider:oauth', method,
       generation: crypto.randomUUID(), appId: appPolicy.id, appGeneration: appMaterial.generation,
+      ...(state ? { state } : {}),
       oauth: { accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: 0,
         scopes: ['read'], scopesStatus: 'reported', account: 'account-1', accountName: 'Account',
         accountVerified: true, extra: {}, facts: {} } });
@@ -111,6 +112,21 @@ test('選んだ実行先でOAuthコードを交換し、接続先と権限を確
     assert.equal(material.oauth!.refreshToken, 'runtime-refresh');
     assert.equal(new URLSearchParams(String(f.requests[0]!.body)).get('client_secret'), 'runtime-client-secret');
     assert.equal(f.requests.length, 2);
+  } finally { await f.close(); }
+});
+
+test('再認証が必要な接続は利用とトークン更新を再接続まで保留する', async () => {
+  const f = await setup(() => response({ access_token: 'unexpected-access' }));
+  try {
+    const c = await f.storedConnection('Needs reconnection', undefined, 'reconnect');
+    await assert.rejects(f.connections.outputs(c.content, c.authorization, c.sources,
+      new AbortController().signal), { code: 'reconnect_required' });
+    const operation = { action: 'refresh', id: c.content.policy.id };
+    await assert.rejects(f.connections.execute(operation, { ...c.authorization,
+      operation: 'refresh', operationDigest: await hash({ kind: 'refresh', input: operation }) },
+      c.sources, new AbortController().signal), { code: 'reconnect_required' });
+    assert.equal(f.requests.length, 0);
+    assert.equal((await f.custody.read(f.owner.actor, c.content.policy.id)).content.metadata.state, 'reconnect');
   } finally { await f.close(); }
 });
 
