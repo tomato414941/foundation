@@ -611,7 +611,7 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("link", name="Create", exact=True).click()
         expect(page.get_by_role("heading", name="Create environment", exact=True)).to_be_visible()
         page.get_by_role("textbox", name="Name", exact=True).fill("Mobile worker")
-        self.select(page, "Size", "Medium — 2 CPU / 1 GB")
+        self.select(page, "Size", "Medium — 2 CPU / 2 GB")
         self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
         page.get_by_role("link", name="Cancel", exact=True).click()
         expect(page.get_by_role("heading", name="Environments", exact=True)).to_be_visible()
