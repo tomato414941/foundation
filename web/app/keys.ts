@@ -76,10 +76,11 @@ export function reprotectInBackground(id: string) {
   void (async () => {
     if (!(await getIdentity(id))) { reprotecting.delete(id); return; }
     const { custodyClient } = await import('./custody');
-    await (await custodyClient(id)).reprotectPending();
+    const { failed } = await (await custodyClient(id)).reprotectPending();
+    if (failed.length) throw new Error('Not sealed again: ' + failed.join(', '));
   })().catch((error: unknown) => {
     reprotecting.delete(id);
-    console.warn('Some items could not be updated to the current encryption.', error);
+    console.warn('Some items could not be sealed again for their current recipients.', error);
   });
 }
 export async function clearKeys() {

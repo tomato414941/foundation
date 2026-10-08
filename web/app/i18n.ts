@@ -8,10 +8,6 @@ const words: Record<string, [string, string]> = {
   callerProgram: ['相手が指定するHTTPリクエストやコマンドにも使用を許可する', 'Allow use in HTTP requests and commands supplied by this person'],
   callerProgramHelp: ['指定された処理によって値が相手へ渡る可能性があります。関数を限定する場合は選択しないでください。', 'The supplied program can disclose the value to this person. Leave unchecked to allow only the selected function.'],
   'errors.environment_required': ['実行先を選んでください。', 'Choose an executor.'],
-  'errors.reprotection_required': [
-    'この項目は暗号化の更新を待っています。この項目を開ける端末でロックを解除すると、自動で更新されます。',
-    'This item is waiting for its encryption to be updated. Unlocking a device that can open it updates it automatically.',
-  ],
   'errors.function_required': ['関数を指定するか、任意の処理への使用を明示して許可してください。', 'Choose a function or explicitly allow caller-supplied programs.'],
   'errors.caller_required': ['実行先に共有相手を依頼者として登録してください。', 'Register this person as an accepted caller on the executor.'],
   createRole: ['AWSでIAMロールを作る', 'Create the IAM role in AWS'],

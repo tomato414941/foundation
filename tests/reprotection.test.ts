@@ -1,91 +1,53 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { flowFixture } from './flow-support.js';
-import { hash } from '../shared/authority.js';
-import { firstFormat } from './legacy-support.js';
 import { ContentTypes, Operations, reveal } from '../shared/custody.js';
 import { decode, encode } from '../shared/encryption.js';
-import type { JsonValue } from '../shared/contracts.js';
 
-async function stored(f: Awaited<ReturnType<typeof flowFixture>>, id: string, kind: 'variable' | 'connection',
-  content: unknown, data: Record<string, JsonValue>) {
-  await f.resources.insert(f.owner.actor.id, kind, kind === 'variable' ? 'API token' : 'Provider account', data, { id });
-  await f.db.pool.query('INSERT INTO resource_custody(resource_id,content) VALUES($1,$2)', [id, JSON.stringify(content)]);
-}
+const minutes = (count: number) => new Date(Date.now() + count * 60_000).toISOString();
 
-test('旧い形式の項目を待ち行列に示し、所有者の端末が同じ内容と宛先のまま現在の形式へ封じ直す', async (t) => {
+test('期限の切れた許可が残る項目を待ち行列に示し、所有者の端末がその許可を外して封じ直す', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
-  const variable = crypto.randomUUID(), connection = crypto.randomUUID();
-  await stored(f, variable, 'variable', await firstFormat({ origin: f.config.origin, id: variable, ownerId: f.owner.actor.id,
-    kind: 'secret', authority: f.owner.binding, keys: f.owner.keys, readers: [f.owner.binding], executor: f.executor.binding,
-    operations: ['http', 'command', 'function', 'refresh', 'revoke'], bytes: encode('first-format-value'),
-    metadata: { bytes: 18 } }), { bytes: 18 });
-  const connectionMetadata = { methodId: 'provider:oauth', methodName: 'Provider', methodKind: 'oauth',
-    generation: crypto.randomUUID(), authorizationDigest: await hash({ account: 'account-1' }), appId: null,
-    account: 'Account One', accountId: 'account-1', accountVerified: true, scopes: ['read'], scopesStatus: 'reported',
-    outputs: ['ACCESS_TOKEN'], state: 'ready' };
-  await stored(f, connection, 'connection', await firstFormat({ origin: f.config.origin, id: connection,
-    ownerId: f.owner.actor.id, kind: 'connection', authority: f.owner.binding, keys: f.owner.keys,
-    readers: [f.owner.binding], executor: f.executor.binding, operations: ['http', 'refresh'],
-    bytes: encode('{"token":"first"}'), metadata: connectionMetadata }), connectionMetadata);
+  const save = async (name: string, value: string, expiresAt: string) => f.client.save(name, encode(value),
+    await f.client.policy(f.owner.actor.id, ContentTypes.value, [f.environment], { expiresAt }));
+  const expired = await save('Expired token', 'kept after expiry', minutes(-1));
+  const current = await save('Current token', 'still granted', minutes(60));
 
-  await assert.rejects(f.client.read(variable), { code: 'reprotection_required' });
-  assert.deepEqual((await f.client.pendingProtection()).map(item => item.id).sort(), [variable, connection].sort());
-  assert.deepEqual((await f.client.reprotectPending()).sort(), [variable, connection].sort());
+  assert.deepEqual(await f.client.pendingProtection(), [{ id: expired.id, reason: 'grantExpired' }]);
+  assert.deepEqual(await f.client.reprotectPending(), { done: [expired.id], failed: [] });
   assert.deepEqual(await f.client.pendingProtection(), []);
 
-  const value = (await f.client.read(variable)).content;
-  assert.equal(value.policy.format, 2);
-  assert.equal(value.policy.contentType, ContentTypes.value);
-  assert.equal(value.policy.revision, 2);
-  assert.equal(value.materialRevision, 2);
-  assert.deepEqual(value.policy.grants[0]!.operations, [Operations.http, Operations.command, Operations.function]);
-  assert.equal(decode(await reveal(value, f.owner.binding, f.owner.keys.encryption)), 'first-format-value');
-  assert.equal((await f.resources.get(variable)).kind, 'variable');
-
-  const renewed = (await f.client.read(connection)).content;
-  assert.equal(renewed.policy.contentType, ContentTypes.tokenSet);
-  assert.deepEqual(renewed.policy.grants[0]!.operations, [Operations.http, Operations.refresh]);
-  assert.equal('methodName' in renewed.metadata || 'account' in renewed.metadata, false);
-  const labels = (await f.resources.get(connection)).data;
-  assert.equal(labels.methodName, 'Provider');
-  assert.equal(labels.account, 'Account One');
-  assert.equal(decode(await reveal(renewed, f.owner.binding, f.owner.keys.encryption)), '{"token":"first"}');
+  const { content } = await f.client.read(expired.id);
+  assert.deepEqual(content.policy.grants, []);
+  assert.equal(content.policy.revision, 2);
+  assert.equal(content.materialRevision, 2);
+  assert.deepEqual(content.sealed.recipients.map(recipient => recipient.header.kid), [f.owner.binding.id]);
+  assert.equal(decode(await reveal(content, f.owner.binding, f.owner.keys.encryption)), 'kept after expiry');
+  assert.deepEqual((await f.resources.get(expired.id)).data.executors, []);
+  assert.equal((await f.client.read(current.id)).content.policy.grants.length, 1);
 });
 
-test('旧い形式の項目を、内容や宛先を変えた形で置き換える依頼を拒否する', async (t) => {
+test('実行結果の書き込みを待つ項目は、その書き込みの期限まで封じ直さない', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
-  const id = crypto.randomUUID();
-  const legacy = await firstFormat({ origin: f.config.origin, id, ownerId: f.owner.actor.id, kind: 'secret',
-    authority: f.owner.binding, keys: f.owner.keys, readers: [f.owner.binding], executor: f.executor.binding,
-    operations: ['command'], bytes: encode('kept'), metadata: { bytes: 4 } });
-  await stored(f, id, 'variable', legacy, { bytes: 4 });
-  const resource = await f.resources.get(id);
-  const policy = { format: 2 as const, origin: f.config.origin, id, ownerId: f.owner.actor.id, contentType: ContentTypes.value,
-    revision: 2, authorities: [f.owner.binding], readers: [f.owner.binding], grants: [], producers: [] };
-  const { protect } = await import('../shared/custody.js');
-  const content = await protect(encode('replaced'), policy, 2, f.owner.binding, f.owner.keys);
-  const response = await f.app.inject({ method: 'PUT', url: '/api/resources/' + id + '/custody',
-    headers: { authorization: 'Bearer ' + f.owner.token },
-    payload: { name: resource.name, content, version: resource.version } });
-  assert.equal(response.statusCode, 409);
-  assert.equal(response.json().error.code, 'changed');
-  assert.deepEqual((await f.client.pendingProtection()).map(item => item.id), [id]);
+  const policy = await f.client.policy(f.owner.actor.id, ContentTypes.value, [f.environment], { expiresAt: minutes(-1) });
+  policy.producers = [{ executor: f.environment.manifest.executor, runId: crypto.randomUUID(), expiresAt: minutes(60), materialRevision: 2 }];
+  const saved = await f.client.save('Run output', encode('before the run'), policy);
+
+  assert.deepEqual(await f.client.reprotectPending(), { done: [], failed: [] });
+  assert.deepEqual(await f.client.pendingProtection(), [{ id: saved.id, reason: 'grantExpired' }]);
+  assert.equal((await f.client.read(saved.id)).content.policy.revision, 1);
 });
 
-test('起動時に、旧い種類名の項目と操作履歴の名前を変数の名前へ移す', async (t) => {
+test('値を保存し直すとき、ほかの人が受けた許可のうち期限の切れたものを引き継がない', async (t) => {
   const f = await flowFixture();
   t.after(f.close);
-  await f.db.pool.query("DELETE FROM schema_migrations WHERE name='variables'");
-  await f.db.pool.query('ALTER TABLE resources DROP CONSTRAINT resources_kind_check');
-  const id = crypto.randomUUID();
-  await f.db.pool.query(
-    "INSERT INTO resources(id,owner_id,kind,name,data) VALUES($1,$2,'secret','Old token','{}')", [id, f.owner.actor.id]);
-  await f.audit.record(f.owner.actor.id, f.owner.actor.id, 'secret.create', id);
-  await f.db.initialize();
-  assert.equal((await f.resources.get(id)).kind, 'variable');
-  const actions = await f.db.all<{ action: string }>('SELECT action FROM audit_log WHERE target_id=$1', [id]);
-  assert.deepEqual(actions.map(row => row.action), ['variable.create']);
+  const grant = (expiresAt: string) => ({ actor: f.stranger.binding, executor: f.environment.manifest.executor,
+    operations: [Operations.command], functionDigests: [], origins: [], callerProgram: true, expiresAt });
+  const previous = { ...await f.client.policy(f.owner.actor.id, ContentTypes.value), grants: [grant(minutes(-1)), grant(minutes(60))] };
+
+  const next = await f.client.policy(f.owner.actor.id, ContentTypes.value, [], { previous });
+  assert.deepEqual(next.grants, [previous.grants[1]]);
+  assert.equal(next.revision, previous.revision + 1);
 });

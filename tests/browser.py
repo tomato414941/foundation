@@ -348,13 +348,13 @@ class BrowserTests(unittest.TestCase):
         expect(key_row.get_by_role("button", name="削除", exact=True)).to_be_visible()
         page.screenshot(path=str(ARTIFACTS / "credentials-desktop-ja.png"), full_page=True)
 
-    def test_旧い形式で保存された変数を鍵を持つブラウザが開いたときに封じ直して読めるようにする(self):
+    def test_期限の切れた許可が残る変数を鍵を持つブラウザが開いたときに外して封じ直す(self):
         import re, tempfile
-        page, principal = self.passkey_account("Migrating owner")
+        page, principal = self.passkey_account("Expiring owner")
         with tempfile.TemporaryDirectory() as home:
             environment = {key: value for key, value in os.environ.items() if not key.startswith("FOUNDATION_")}
             environment["XDG_CONFIG_HOME"] = home
-            login = subprocess.Popen(["node", "cli/dist/cli.mjs", "login", "--name", "Migrating laptop", "--origin", ORIGIN],
+            login = subprocess.Popen(["node", "cli/dist/cli.mjs", "login", "--name", "Expiring laptop", "--origin", ORIGIN],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment)
             shown = ""
             for _ in range(200):
@@ -369,28 +369,33 @@ class BrowserTests(unittest.TestCase):
             variable_id = str(uuid.uuid4())
             stored = subprocess.run(["node", "--import", "tsx", "--input-type=module", "-e", f"""
                 import {{ readFile }} from 'node:fs/promises';
-                import {{ firstFormat }} from './tests/legacy-support.ts';
+                import {{ ContentTypes, Operations, protect }} from './shared/custody.ts';
                 const file = JSON.parse(await readFile('{home}/foundation/identity.json', 'utf8'));
                 const me = file.identities.find(item => item.principalId === file.current);
-                const content = await firstFormat({{ origin: '{ORIGIN}', id: '{variable_id}', ownerId: me.principalId, kind: 'secret',
-                  authority: me.binding, keys: me.keys, readers: [me.binding], executor: me.binding, operations: ['command'],
-                  bytes: new TextEncoder().encode('saved before the change'), metadata: {{ bytes: 23 }} }});
-                const response = await fetch('{ORIGIN}/__test/stored', {{ method: 'POST', headers: {{ 'content-type': 'application/json' }},
-                  body: JSON.stringify({{ ownerId: me.principalId, id: '{variable_id}', kind: 'variable', name: 'Old token', content, data: {{ bytes: 23 }} }}) }});
+                const grant = {{ actor: me.binding, executor: me.binding, operations: [Operations.command], functionDigests: [], origins: [],
+                  callerProgram: true, expiresAt: new Date(Date.now() - 60_000).toISOString() }};
+                const policy = {{ format: 2, origin: '{ORIGIN}', id: '{variable_id}', ownerId: me.principalId, contentType: ContentTypes.value,
+                  revision: 1, authorities: [me.binding], readers: [me.binding], grants: [grant], producers: [] }};
+                const content = await protect(new TextEncoder().encode('saved with an expired grant'), policy, 1, me.binding, me.keys);
+                const response = await fetch('{ORIGIN}/api/resources/{variable_id}/custody', {{ method: 'PUT',
+                  headers: {{ 'content-type': 'application/json', authorization: 'Bearer ' + me.token }},
+                  body: JSON.stringify({{ name: 'Expiring token', content }}) }});
                 if (!response.ok) throw new Error(await response.text());
             """], capture_output=True, text=True, env=environment)
             self.assertEqual(stored.returncode, 0, stored.stderr)
         pending = lambda: page.request.get(f"{ORIGIN}/api/principals/{principal['id']}/reprotection").json()["items"]
-        self.assertEqual([item["id"] for item in pending()], [variable_id])
+        self.assertEqual(pending(), [{"id": variable_id, "reason": "grantExpired"}])
         page.goto(f"{ORIGIN}/p/{principal['id']}/variables")
         for _ in range(50):
             if not pending():
                 break
             page.wait_for_timeout(200)
         self.assertEqual(pending(), [])
+        policy = page.request.get(f"{ORIGIN}/api/resources/{variable_id}/custody").json()["content"]["policy"]
+        self.assertEqual(policy["grants"], [])
         page.goto(f"{ORIGIN}/p/{principal['id']}/variables/{variable_id}")
         page.get_by_role("button", name="内容を表示", exact=True).click()
-        expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("saved before the change")
+        expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("saved with an expired grant")
 
     def test_メンバー追加と所有者変更で変数を引き継ぐ(self):
         owner, principal = self.passkey_account("Project owner")

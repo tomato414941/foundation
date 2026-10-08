@@ -92,13 +92,6 @@ app.post<{ Body: { principalId: string } }>('/__test/payment', async (request) =
   );
   return { ok: true };
 });
-app.post<{ Body: { ownerId: string; id: string; kind: 'variable'; name: string; content: unknown; data: Record<string, number> } }>(
-  '/__test/stored', async (request) => {
-    const { ownerId, id, kind, name, content, data } = request.body;
-    await context.resources.insert(ownerId, kind, name, data, { id });
-    await context.db.pool.query('INSERT INTO resource_custody(resource_id,content) VALUES($1,$2)', [id, JSON.stringify(content)]);
-    return { ok: true };
-  });
 const worker = new Worker(context, (error) => app.log.error(error));
 try {
   await app.listen({ host: '127.0.0.1', port });

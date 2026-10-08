@@ -7,7 +7,6 @@ import { canonical, hash } from '../shared/authority.js';
 import type { BoundKeys } from '../shared/authority.js';
 import { ContentTypes, ProtectedContent, continuesPolicy, policyAuthority, verifyContent } from '../shared/custody.js';
 import type { CustodyContent } from '../shared/custody.js';
-import { LegacyContent, isLegacy, upgradeMetadata, upgradePolicy, verifyLegacy } from '../shared/custody-legacy.js';
 import type { JsonValue } from '../shared/contracts.js';
 import { Id } from '../shared/contracts.js';
 import { AppMetadata, ConnectionMetadata } from '../shared/connections.js';
@@ -22,7 +21,6 @@ export interface ProtectedWrite {
   data?: Record<string, JsonValue>;
   version?: number;
 }
-const Stored = z.union([ProtectedContent, LegacyContent]);
 // Labels stay with the item until a writer gives new ones.
 const keptLabels = (data: Record<string, JsonValue> | undefined) =>
   Object.fromEntries(['methodName', 'account'].filter(key => typeof data?.[key] === 'string').map(key => [key, data![key]!]));
@@ -63,30 +61,27 @@ export class Custody {
     await connection.query("UPDATE connection_operations SET state='aborted',updated_at=now() WHERE id=$1", [pending.id]);
   }
 
-  private async stored(id: string, connection: Queryable = this.resources.db.pool) {
-    const row = await this.resources.db.one<{ content: unknown }>(
+  async get(id: string, connection: Queryable = this.resources.db.pool): Promise<CustodyContent> {
+    const row = await this.resources.db.one<{ content: CustodyContent }>(
       'SELECT content FROM resource_custody WHERE resource_id=$1', [id], connection,
     );
     if (!row) fail(409, 'custody_required', 'Encrypt this item for its readers and execution environments.');
-    return Stored.parse(row.content);
-  }
-  async get(id: string, connection: Queryable = this.resources.db.pool): Promise<CustodyContent> {
-    const content = await this.stored(id, connection);
-    if (isLegacy(content))
-      fail(409, 'reprotection_required', 'Unlock a device that can open this item so it can update its encryption.');
-    return content;
+    return ProtectedContent.parse(row.content);
   }
 
-  // Items whose authorities include this identity and which it must seal again.
+  // Items this identity can seal again without anyone deciding anything: those still encrypted
+  // for executors whose grants have expired. The server cannot do it, because only the item's
+  // readers can open it.
   async pending(actor: Actor, principalId: string) {
     if (actor.id !== principalId || actor.requestId) fail(403, 'forbidden', 'Sign in as this principal to protect its items.');
     const { binding } = await this.bindings.current(principalId);
     const rows = await this.resources.db.all<{ id: string }>(
       `SELECT c.resource_id AS id FROM resource_custody c
-       WHERE c.content->'policy'->>'format'='1' AND EXISTS (
-         SELECT 1 FROM jsonb_array_elements(c.content->'policy'->'authorities') a WHERE a->>'id'=$1)
+       WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(c.content->'policy'->'authorities') a WHERE a->>'id'=$1)
+         AND EXISTS (SELECT 1 FROM jsonb_array_elements(c.content->'policy'->'grants') g
+           WHERE (g->>'expiresAt')::timestamptz <= now())
        ORDER BY c.resource_id`, [binding.id]);
-    return rows.map(row => ({ id: row.id, reason: 'format' as const }));
+    return rows.map(row => ({ id: row.id, reason: 'grantExpired' as const }));
   }
 
   async recipients(ownerId: string, connection: Queryable = this.resources.db.pool) {
@@ -99,7 +94,7 @@ export class Custody {
   async read(actor: Actor, id: string) {
     await this.resources.authorization.active(actor);
     const row = await this.resources.get(id);
-    const content = await this.stored(id);
+    const content = await this.get(id);
     const { binding } = await this.bindings.current(actor.id);
     if (!content.policy.readers.some(reader => canonical(reader) === canonical(binding)) &&
       !content.policy.grants.some(grant => (canonical(grant.executor) === canonical(binding) ||
@@ -133,21 +128,10 @@ export class Custody {
           fail(400, 'wrong_resource', 'Keep the same resource kind when updating an item.');
         await this.resources.authorization.requireResource(actor, current, current.owner_id === policy.ownerId ? 'update' : 'transfer', connection);
         if (current.version !== input.version) fail(409, 'changed', 'This item changed. Reload it before saving.');
-        const stored = await this.resources.db.one<{ content: unknown }>(
+        const previous = await this.resources.db.one<{ content: CustodyContent }>(
           'SELECT content FROM resource_custody WHERE resource_id=$1', [policy.id], connection,
         );
-        const previous = stored && !isLegacy(stored.content) ? { content: ProtectedContent.parse(stored.content) } : null;
-        if (stored && isLegacy(stored.content)) {
-          // An item in the first format may be replaced only by its exact upgrade, signed by one of its authorities.
-          const legacy = await verifyLegacy(stored.content);
-          const upgrade = upgradeMetadata(legacy);
-          if (!legacy.policy.authorities.some(authority => canonical(authority) === canonical(binding)) ||
-            canonical(policy) !== canonical(upgradePolicy(legacy.policy)) ||
-            content.materialRevision !== legacy.materialRevision + 1 ||
-            canonical(content.metadata) !== canonical(upgrade.metadata) ||
-            (upgrade.labels && !input.labels))
-            fail(409, 'changed', 'Re-protect the item exactly as it is, in the current format.');
-        } else if (previous) {
+        if (previous) {
           if (!previous.content.policy.authorities.some(authority => canonical(authority) === canonical(binding)))
             fail(403, 'forbidden', 'The existing policy must authorize its editor.');
           if (!continuesPolicy(previous.content.policy, content))

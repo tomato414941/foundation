@@ -8,7 +8,6 @@ import {
   prepareRun, protect, reveal, verifyContent,
 } from './custody.js';
 import type { ContentTypeId, CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun } from './custody.js';
-import { isLegacy, revealLegacy, upgradeMetadata, upgradePolicy, verifyLegacy } from './custody-legacy.js';
 import { BoundRecipient, ProtectedRead, Registration, Reprotection } from './protocol.js';
 import { RuntimeOperation, Task, authorizeEnvironment, readReceipt, verifyEnvironment } from './execution.js';
 import type { ExecutionOperation, RegisteredEnvironment, TaskView } from './execution.js';
@@ -69,22 +68,19 @@ export class CustodyClient {
     return items.map(item => item.binding);
   }
   async read(id: string) {
-    const { content, version } = await this.api.json('/api/resources/' + Id.parse(id) + '/custody', {}, ProtectedRead);
-    if (isLegacy(content))
-      throw new ClientFailure('reprotection_required', 'Unlock a device that can open this item so it can update its encryption.');
-    await this.observe(content, id);
-    return { content, version };
+    const item = await this.api.json('/api/resources/' + Id.parse(id) + '/custody', {}, ProtectedRead);
+    await this.observe(item.content, id);
+    return item;
   }
   async observe(input: CustodyContent, id = input.policy.id) {
     const content = await verifyContent(input);
     if (content.policy.id !== id || content.policy.origin !== this.origin) throw new Error('The encrypted content belongs to another item.');
     const author = policyAuthority(content);
     await this.trusted(author);
-    const observed = await this.trust.checkpoint(id);
-    if (observed && (observed.policy as { format: number }).format === 1) {
-      if (content.policy.revision <= observed.policy.revision || content.materialRevision <= observed.materialRevision)
-        throw new Error('The encrypted content is older than this device has already observed.');
-    } else if (observed) {
+    // A checkpoint written in an earlier format cannot be compared with this one, so this content replaces it.
+    const checkpoint = await this.trust.checkpoint(id);
+    const observed = checkpoint && AccessPolicy.safeParse(checkpoint.policy).success ? checkpoint : null;
+    if (observed) {
       if (content.policy.revision < observed.policy.revision || content.materialRevision < observed.materialRevision ||
         (content.policy.revision === observed.policy.revision && canonical(content.policy) !== canonical(observed.policy)) ||
         (content.materialRevision === observed.materialRevision && await hash(content) !== observed.digest))
@@ -106,7 +102,8 @@ export class CustodyClient {
     if (!readers.some(reader => canonical(reader) === canonical(this.binding)))
       throw new Error('Include your own identity as a reader before creating this item.');
     const expiresAt = options.expiresAt ?? new Date(Date.now() + 30 * 86_400_000).toISOString();
-    const grants = options.previous ? options.previous.grants.filter(grant => grant.actor.id !== this.binding.id) : [];
+    const grants = options.previous ? options.previous.grants.filter(grant =>
+      grant.actor.id !== this.binding.id && Date.parse(grant.expiresAt) > Date.now()) : [];
     for (const environment of environments) {
       await this.trusted(environment.manifest.executor);
       if (!environment.manifest.callers.some(caller => canonical(caller) === canonical(this.binding)))
@@ -131,32 +128,33 @@ export class CustodyClient {
     await this.trust.rememberContent(content);
     return resource;
   }
-  // Items this identity must seal again, and the work of doing so. The server lists them and checks
-  // each result; the device does the decryption, so content never leaves its readers.
+  // Items the server cannot seal again itself, because only their readers can open them. The list
+  // only says where to look: each item is checked here before anything changes.
   async pendingProtection() {
     return (await this.api.json('/api/principals/' + this.binding.principalId + '/reprotection', {}, listOf(Reprotection))).items;
   }
+  // Seals the item again without its expired grants, unless an execution may still write to it.
   async reprotect(id: string) {
-    const { content: stored, version } = await this.api.json('/api/resources/' + Id.parse(id) + '/custody', {}, ProtectedRead);
-    if (!isLegacy(stored)) return null;
-    const resource = await this.api.json('/api/resources/' + id, {}, Resource);
-    const legacy = await verifyLegacy(stored);
-    if (legacy.policy.origin !== this.origin || legacy.policy.id !== id) throw new Error('The encrypted content belongs to another item.');
-    const bytes = await revealLegacy(legacy, this.binding, this.keys.encryption);
-    const { metadata, labels } = upgradeMetadata(legacy);
-    const content = await protect(bytes, upgradePolicy(legacy.policy), legacy.materialRevision + 1, this.binding, this.keys, metadata);
-    const saved = await this.api.json('/api/resources/' + id + '/custody', { method: 'PUT',
-      body: { name: resource.name, content, version, ...(labels ? { labels } : {}) } }, Resource);
-    await this.trust.rememberContent(content);
-    return saved;
+    const previous = await this.read(id);
+    const { policy } = previous.content, now = Date.now();
+    const grants = policy.grants.filter(grant => Date.parse(grant.expiresAt) > now);
+    if (grants.length === policy.grants.length || policy.producers.some(producer => Date.parse(producer.expiresAt) > now))
+      return null;
+    const resource = await this.api.json('/api/resources/' + policy.id, {}, Resource);
+    const bytes = await reveal(previous.content, this.binding, this.keys.encryption);
+    return this.save(resource.name, bytes, { ...policy, revision: policy.revision + 1, grants, producers: [] },
+      { metadata: previous.content.metadata, previous });
   }
   async reprotectPending() {
-    const done: string[] = [];
+    const done: string[] = [], failed: string[] = [];
     for (const item of await this.pendingProtection()) {
-      await this.reprotect(item.id);
-      done.push(item.id);
+      try {
+        if (await this.reprotect(item.id)) done.push(item.id);
+      } catch {
+        failed.push(item.id);
+      }
     }
-    return done;
+    return { done, failed };
   }
   async sourceContents(ids: string[]) {
     const sources = new Map<string, CustodyContent>();
