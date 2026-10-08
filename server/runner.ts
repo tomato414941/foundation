@@ -47,7 +47,7 @@ export class FlyRunner implements Runner {
     return (rows.find(row => row.name === 'foundation-' + id)?.id as string | undefined) ?? null;
   }
   private async volume(id: string, options: EnvironmentOptions) {
-    const name = 'foundation_' + id.replaceAll('-', '');
+    const name = 'f_' + id.replaceAll('-', '').slice(0, 28);
     const list = async () => {
       const rows = await this.call('GET', '/volumes');
       if (!Array.isArray(rows)) fail(502, 'runner_response', 'The environment provider returned an invalid response.');
