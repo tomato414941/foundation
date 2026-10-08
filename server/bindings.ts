@@ -50,8 +50,7 @@ export class Bindings {
         const inUse = await this.db.one(
           `SELECT 1 FROM resource_custody WHERE jsonb_path_exists(content,
             '$.policy.**.id ? (@ == $binding)', jsonb_build_object('binding',$1::text))
-           UNION ALL SELECT 1 FROM executor_environments WHERE registration->'manifest'->'executor'->>'id'=$1
-           OR jsonb_path_exists(registration,'$.manifest.callers[*].id ? (@ == $binding)',jsonb_build_object('binding',$1::text)) LIMIT 1`,
+           UNION ALL SELECT 1 FROM executor_environments WHERE registration->'manifest'->'executor'->>'id'=$1 LIMIT 1`,
           [previous.binding.id], connection,
         );
         if (inUse) fail(409, 'rekey_required', 'Re-encrypt shared content and update execution environments before replacing these keys.');

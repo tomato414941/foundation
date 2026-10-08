@@ -16,10 +16,10 @@ import { detectAwsPrincipal } from '../../runtime/roles.js';
 import { Operations } from '../../shared/custody.js';
 
 export async function startAgent(client: Client, options: {
-  id?: string; ownerId: string; name: string; callers: string[]; isolation: 'process' | 'container';
+  id?: string; ownerId: string; name: string; isolation: 'process' | 'container';
   image?: string; managed?: boolean; once?: boolean;
 }) {
-  const { custody, directory, keys, binding, broker, transport } = privateClient(client);
+  const { directory, keys, binding, broker, transport } = privateClient(client);
   const id = Id.parse(options.id ?? crypto.randomUUID()), path = join(directory, 'executors', id);
   await mkdir(path, { recursive: true, mode: 0o700 });
   const release = await journalLock(join(path, 'process.lock'));
@@ -42,14 +42,9 @@ export async function startAgent(client: Client, options: {
         await journal.write('environment_' + id, environment);
       }
     } else {
-      const callers = [];
-      for (const principal of new Set(options.callers.length ? options.callers : [binding.principalId])) {
-        const caller = principal === binding.principalId ? binding : (await custody.inspectIdentity(principal)).binding;
-        await custody.trusted(caller); callers.push(caller);
-      }
-      environment = await signEnvironment({ format: 2, id, origin: client.identity.origin, ownerId: options.ownerId,
+      environment = await signEnvironment({ format: 3, id, origin: client.identity.origin, ownerId: options.ownerId,
         name: options.name, executor: binding, operatorId: binding.principalId, driver: options.managed ? 'managed' : 'attached',
-        capabilities: Object.values(Operations), callers,
+        capabilities: Object.values(Operations),
         isolation: options.isolation, ...(options.image ? { commandImage: options.image } : {}),
         ...(awsPrincipal ? { awsPrincipal } : {}), revision: 1 }, keys);
       await journal.write('environment_' + id, environment);

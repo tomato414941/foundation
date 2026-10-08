@@ -39,9 +39,9 @@ class BrowserRunner extends MemoryRunner {
       payload: { bootstrap: bootstrap.bootstrap, binding: await signBinding(binding, keys), token } });
     if (enrollment.statusCode !== 200) throw new Error(enrollment.body);
     const client = new Client({ origin, principalId: binding.principalId, token, keys, binding });
-    const registration = await signEnvironment({ format: 2, id, origin, ownerId: bootstrap.ownerId,
+    const registration = await signEnvironment({ format: 3, id, origin, ownerId: bootstrap.ownerId,
       name: bootstrap.name, executor: binding, operatorId: binding.principalId, driver: 'managed',
-      callers: bootstrap.callers, capabilities: Object.values(Operations),
+      capabilities: Object.values(Operations),
       isolation: 'container', commandImage: bootstrap.commandImage,
       awsPrincipal: 'arn:aws:iam::123456789012:role/foundation-test-executor', revision: 1 }, keys);
     await client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: registration });
@@ -100,11 +100,6 @@ app.post<{ Params: { id: string }; Body: { phase: 'stop' | 'volume'; mode: 'hold
     }
     return { ok: true };
   });
-app.post<{ Params: { id: string }; Body: { name: string } }>('/__test/caller/:id', async request => {
-  const caller = await fixtureData.person(request.body.name);
-  await context.principals.relate({ id: request.params.id }, caller.actor.id, 'agent', request.params.id);
-  return { id: caller.actor.id, name: request.body.name };
-});
 app.get<{ Params: { id: string } }>('/__test/executor/:id/fingerprint', async request => {
   const agent = agents.get(request.params.id);
   return agent ? { id: agent.binding.principalId, fingerprint: await hash(agent.binding) } : null;

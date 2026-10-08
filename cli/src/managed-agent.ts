@@ -1,10 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
 import { EnvironmentBootstrap } from '../../shared/protocol.js';
-import { bindKeys, canonical, newIdentityKeys, signBinding } from '../../shared/authority.js';
+import { bindKeys, newIdentityKeys, signBinding } from '../../shared/authority.js';
 import { ApiError, Client } from './client.js';
 import { configPath, origin, readIdentity, saveIdentity } from './config.js';
-import { privateClient } from './custody.js';
 import { startAgent } from './agent.js';
 
 export async function managedAgent() {
@@ -30,15 +29,8 @@ export async function managedAgent() {
     return client.session();
   });
   if (!current.principal) throw new Error('The executor credential is no longer active.');
-  const { custody } = privateClient(client);
-  for (const binding of input.callers) {
-    const known = await custody.trust.binding(binding.principalId);
-    if (known && canonical(known) !== canonical(binding))
-      throw new Error('A caller changed its keys. Verify its fingerprint before restarting this executor.');
-    await custody.trust.rememberBinding(binding);
-  }
   return startAgent(client, { id: input.id, ownerId: input.ownerId, name: input.name,
-    callers: input.callers.map(binding => binding.principalId), isolation: 'container',
+    isolation: 'container',
     image: input.commandImage, managed: true });
 }
 

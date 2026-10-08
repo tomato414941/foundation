@@ -329,7 +329,6 @@ export const EnvironmentInput = z
     image: z.string().min(1).max(300).optional(),
     size: z.enum(['small', 'medium', 'large']).default('small'),
     lifetime: Lifetime.default({ idleSeconds: 3600, maxSeconds: 3600 }),
-    callerIds: z.array(Id).min(1).max(100).optional(),
   })
   .strict();
 export type EnvironmentOptions = z.infer<typeof EnvironmentInput>;

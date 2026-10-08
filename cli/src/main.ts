@@ -73,7 +73,6 @@ Options:
   --name NAME            How this machine appears when it signs in (default: host name)
   --origin URL           Choose a server when signing in or registering
   --for ID               Allow this executor to use the content (repeatable)
-  --caller ID            Accept requests from this identity (repeatable, agent start)
   --app ID               OAuth application to use for a connection
   --fields JSON          Connection or application fields (@FILE or @- accepted)
   --client-secret VALUE  OAuth application secret (@FILE or @- recommended)
@@ -117,7 +116,6 @@ const options = {
   file: textOption,
   stdin: booleanOption,
   for: { type: 'string' as const, multiple: true as const },
-  caller: { type: 'string' as const, multiple: true as const },
   fingerprint: textOption,
   id: textOption,
   isolation: textOption,
@@ -427,7 +425,7 @@ async function main(argv: string[]) {
   if (command === 'agent') {
     if (args.positionals[0] !== 'start') throw new Error('Use foundation agent start.');
     return startAgent(client, { id: args.values.id ? Id.parse(args.values.id) : undefined,
-      ownerId: owner, name: Name.parse(args.values.name ?? hostname()), callers: (args.values.caller ?? []).map(id => Id.parse(id)),
+      ownerId: owner, name: Name.parse(args.values.name ?? hostname()),
       isolation: z.enum(['process', 'container']).parse(args.values.isolation ?? 'process'),
       image: args.values.image, managed: args.values.managed, once: args.values.once });
   }

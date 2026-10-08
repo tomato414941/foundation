@@ -8,11 +8,10 @@ import { base64url, encode, open, seal } from './encryption.js';
 
 export const AwsPrincipal = z.string().regex(/^arn:aws[a-z-]*:iam::\d{12}:(?:role|user)\/[\w+=,.@/-]{1,200}$/);
 export const EnvironmentManifest = z.object({
-  format: z.literal(2), id: Id, origin: Origin, ownerId: Id,
+  format: z.literal(3), id: Id, origin: Origin, ownerId: Id,
   name: Name, executor: KeyBinding, operatorId: Id,
   driver: z.enum(['attached', 'managed']),
   capabilities: z.array(Operation).min(1).max(6),
-  callers: z.array(KeyBinding).min(1).max(100),
   isolation: z.enum(['process', 'container']),
   commandImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/).optional(),
   // The IAM role or user this executor runs as, when it has one: what an account owner's role must trust.
@@ -34,10 +33,8 @@ export async function signEnvironment(manifest: ExecutorManifest, keys: KeyMater
 export async function verifyEnvironment(input: RegisteredEnvironment) {
   const environment = SignedEnvironment.parse(input), { manifest } = environment;
   await validateBinding(manifest.executor);
-  for (const caller of manifest.callers) await validateBinding(caller);
-  if (new Set(manifest.callers.map(binding => binding.id)).size !== manifest.callers.length ||
-    new Set(manifest.capabilities).size !== manifest.capabilities.length)
-    throw new Error('Choose distinct callers and execution capabilities.');
+  if (new Set(manifest.capabilities).size !== manifest.capabilities.length)
+    throw new Error('Choose distinct execution capabilities.');
   if (manifest.capabilities.includes(Operations.command) && manifest.isolation === 'container' && !manifest.commandImage)
     throw new Error('Choose the container image used for commands.');
   if (manifest.driver === 'managed' && manifest.capabilities.includes(Operations.command) && manifest.isolation !== 'container')
@@ -51,7 +48,6 @@ export async function authorizeEnvironment(environment: RegisteredEnvironment, i
   if (intent.environmentId !== manifest.id || intent.origin !== manifest.origin ||
     intent.environmentDigest !== await hash(manifest) ||
     canonical(intent.executor) !== canonical(manifest.executor) ||
-    !manifest.callers.some(caller => canonical(caller) === canonical(intent.actor)) ||
     !manifest.capabilities.includes(intent.operation))
     throw new Error('This environment does not authorize the requested execution.');
 }

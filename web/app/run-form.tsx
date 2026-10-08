@@ -2,9 +2,9 @@ import { InputField, TextareaField } from './form-fields';
 import { Form, redirect, useActionData, useLoaderData } from 'react-router';
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 import { useTranslation } from 'react-i18next';
-import { Resource } from '../../shared/contracts';
+import { Principal, Resource } from '../../shared/contracts';
 import type { ExecutionOperation } from '../../shared/execution';
-import { actionResult, api, formText, jsonField } from './api';
+import { actionResult, api, ApiFailure, formText, jsonField } from './api';
 import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { RequestFields } from './resource-form';
 import { resourcePath } from './navigation';
@@ -53,7 +53,16 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
         },
         save: {},
       };
-    const result = await (await custodyClient()).submit(params.owner!,
+    const client = await custodyClient();
+    let ownerId = params.owner!;
+    try {
+      const owner = await api('/principals/' + ownerId, {}, Principal);
+      if (!owner.permissions.includes('execute')) ownerId = client.binding.principalId;
+    } catch (error) {
+      if (!(error instanceof ApiFailure) || error.status !== 403) throw error;
+      ownerId = client.binding.principalId;
+    }
+    const result = await client.submit(ownerId,
       resource?.kind === 'environment' ? resource.id : formText(form, 'environmentId'), input,
       { save: jsonField(form, 'save', {}) });
     return redirect('/runs/' + result.id);

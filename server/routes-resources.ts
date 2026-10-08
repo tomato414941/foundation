@@ -21,9 +21,6 @@ const CREATED: Record<string, readonly [string, string]> = {
 const roleTemplate = () => readFileSync(new URL('./aws-connection.yaml', import.meta.url));
 export async function routesResources(app: ApiApp, context: Context) {
   const { resources, authorization, catalog, functions, objects, environments, billing } = context;
-  app.get('/api/principals/:id/environment-callers', {
-    schema: { params: C.IdParams, response: { 200: C.listOf(C.Recipient) } },
-  }, async request => ({ items: await environments.callers(actor(request), request.params.id), next: null }));
   app.get('/api/catalog', { schema: { response: { 200: C.listOf(C.CatalogEntry) } } }, async (request) => ({
     items: await catalog.list(actor(request)),
     next: null,

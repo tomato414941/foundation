@@ -106,8 +106,6 @@ export class CustodyClient {
       grant.actor.id !== this.binding.id && Date.parse(grant.expiresAt) > Date.now()) : [];
     for (const environment of environments) {
       await this.trusted(environment.manifest.executor);
-      if (!environment.manifest.callers.some(caller => canonical(caller) === canonical(this.binding)))
-        throw new Error('This execution environment has not accepted your identity.');
       grants.push({ actor: this.binding, executor: environment.manifest.executor,
         operations: [...permittedOperations(contentType)],
         origins: [], functionDigests: [], callerProgram: contentType !== ContentTypes.clientCredential, expiresAt });

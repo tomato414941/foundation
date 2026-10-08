@@ -8,7 +8,7 @@ import { Action, Grant, Principal, Resource, listOf } from '../../shared/contrac
 import type { ActionName } from '../../shared/contracts';
 import { actionResult, api, ApiFailure, formText } from './api';
 import { custodyClient } from './custody';
-import { canonical, hash } from '../../shared/authority';
+import { hash } from '../../shared/authority';
 import { Operations, permittedOperations } from '../../shared/custody';
 import { isProtected } from '../../shared/protected';
 import { availableEnvironments, EnvironmentChoice } from './environments';
@@ -56,7 +56,6 @@ export async function shareAction({ params, request }: ActionFunctionArgs) {
               const fn = functionId ? await api('/resources/' + functionId, {}, Resource) : null;
               if (resource.kind !== 'app' && !callerProgram && (!fn || fn.kind !== 'function')) throw new ApiFailure('function_required');
               for (const environment of environments) {
-                if (!environment.manifest.callers.some(caller => canonical(caller) === canonical(binding))) throw new ApiFailure('caller_required');
                 policy.grants.push({ actor: binding, executor: environment.manifest.executor,
                   operations: callerProgram || resource.kind === 'app' ? [...permittedOperations(policy.contentType)] : [Operations.function],
                   callerProgram, origins: [], functionDigests: fn?.kind === 'function' ? [await hash(fn.data)] : [],

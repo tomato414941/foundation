@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ConnectionRequest, Id, Name, Sealed, Time } from './contracts.js';
-import { Fingerprint, KeyBinding, Signature, SignedBinding } from './authority.js';
+import { Fingerprint, Signature, SignedBinding } from './authority.js';
 import { AccessPolicy, DelegatedRun, ProtectedContent } from './custody.js';
 import { ExecutionReceipt, SignedEnvironment, Task } from './execution.js';
 import { ConnectionLabels } from './connections.js';
@@ -12,8 +12,7 @@ export const EnvironmentEnrollment = z.object({ bootstrap: z.string().regex(/^[A
   binding: SignedBinding, token: z.string().regex(/^fk_[A-Za-z0-9_-]{43}$/) }).strict();
 export const EnvironmentBootstrap = z.object({ id: Id, executorId: Id, ownerId: Id, name: Name,
   origin: z.url(), bootstrap: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-  commandImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/),
-  callers: z.array(KeyBinding).min(1).max(100) }).strict();
+  commandImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/) }).strict();
 export const PublishBinding = SignedBinding.extend({ previousSignature: Signature.optional() }).strict();
 // Labels are what people read about an item. They are stored as given and carry no authority.
 export const ProtectedWrite = z.object({ name: Name, content: ProtectedContent, labels: ConnectionLabels.optional(),

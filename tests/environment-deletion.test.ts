@@ -30,9 +30,9 @@ async function register(s: Awaited<ReturnType<typeof setup>>) {
   const token = 'fk_' + randomBytes(32).toString('base64url');
   await s.c.environments.enroll(s.row.id, { bootstrap: bootstrap.bootstrap, binding: await signBinding(binding, keys), token });
   const actor = (await s.c.authentication.authenticate(token))!;
-  const registration = await signEnvironment({ format: 2, id: s.row.id,
+  const registration = await signEnvironment({ format: 3, id: s.row.id,
     origin: s.f.config.origin, ownerId: s.owner.actor.id, name: bootstrap.name, executor: binding,
-    operatorId: actor.id, driver: 'managed', callers: bootstrap.callers, capabilities: [Operations.command],
+    operatorId: actor.id, driver: 'managed', capabilities: [Operations.command],
     isolation: 'container', commandImage: bootstrap.commandImage, revision: 1 }, keys);
   await s.c.delegation.register(actor, registration);
   return { token, actor, keys, binding, registration };
@@ -152,35 +152,70 @@ test('起動中に作成されたディスクを見つけ、起動が失敗し�
   assert.equal(runner.volumes.size, 0);
 });
 
-test('自分のAIを環境の利用者に指定し、そのAIの実行依頼と結果を受け付ける', async t => {
-  const s = await setup(t), { f, c, owner } = s;
-  const ai = await f.person('My own AI'), other = await f.person('Other AI');
-  await f.principals.relate(owner.actor, ai.actor.id, 'agent', owner.actor.id);
-  await f.principals.relate(owner.actor, other.actor.id, 'agent', owner.actor.id);
-  const callers = await c.environments.callers(owner.actor, owner.actor.id);
-  assert.ok(callers.some(caller => caller.id === ai.actor.id && caller.name === 'My own AI'));
-  await assert.rejects(c.environments.callers(s.outsider.actor, owner.actor.id), { code: 'forbidden' });
-  await c.environments.remove(owner.actor, s.row);
-  await c.environments.tick();
-  const row = await c.environments.create(owner.actor, owner.actor.id,
-    EnvironmentInput.parse({ callerIds: [owner.actor.id, ai.actor.id] }));
-  const executor = await register({ ...s, row });
-  const operation = { kind: 'command', command: ['node', '-e', "process.stdout.write('from-my-ai')"],
+async function commandRequest(s: Awaited<ReturnType<typeof setup>>, executor: Awaited<ReturnType<typeof register>>,
+  principal: typeof s.owner, ownerId = s.owner.actor.id) {
+  const operation = { kind: 'command', command: ['node', '-e', "process.stdout.write('principal-result')"],
     inputs: [], environment: {}, files: {}, stdin: '', timeoutSeconds: 10 };
-  const intent = { format: 2 as const, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
-    actor: ai.binding, environmentId: row.id, executor: executor.binding,
+  const intent = { format: 2 as const, id: crypto.randomUUID(), origin: s.f.config.origin, ownerId,
+    actor: principal.binding, environmentId: s.row.id, executor: executor.binding,
     environmentDigest: await hash(executor.registration.manifest), operation: Operations.command,
-    functionDigest: null, operationDigest: await hash(operation), sources: [], resultRecipients: [ai.binding],
+    functionDigest: null, operationDigest: await hash(operation), sources: [], resultRecipients: [principal.binding],
     createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() };
-  const task = await c.delegation.submit(ai.actor, await prepareRun(intent, operation, ai.keys));
+  return { intent, request: await prepareRun(intent, operation, principal.keys) };
+}
+
+test('鍵が未登録の所有者の実行環境を作成し、所有者の権限で使用する', async t => {
+  const s = await setup(t);
+  await s.c.environments.remove(s.owner.actor, s.row);
+  await s.c.environments.tick();
+  const principal = await s.c.principals.create('Principal without keys');
+  const row = await s.c.environments.create({ id: principal.id }, principal.id, EnvironmentInput.parse({}));
+  assert.equal(row.owner_id, principal.id);
+  const view = await s.c.resources.view({ id: principal.id }, row);
+  assert.ok(view.permissions.includes('execute'));
+  const executor = await register({ ...s, row, owner: { ...s.owner, actor: { id: principal.id } } });
+  assert.equal((await s.c.resources.get(row.id)).data.state, 'running');
+  assert.equal(executor.registration.manifest.ownerId, principal.id);
+});
+
+test('所有者と関連プリンシパルの実行依頼を受け付け、結果を依頼元へ返す', async t => {
+  const s = await setup(t), { f, c, owner, row } = s;
+  const principal = await f.person('Related principal');
+  await f.principals.relate(owner.actor, principal.actor.id, 'agent', owner.actor.id);
+  const executor = await register(s);
+  for (const caller of [owner, principal]) {
+    const { intent, request } = await commandRequest(s, executor, caller);
+    const task = await c.delegation.submit(caller.actor, request);
+    assert.equal(task.state, 'queued');
+    const claim = (await c.delegation.claim(executor.actor, row.id))!;
+    await c.delegation.dispatch(executor.actor, task.id, claim.lease);
+    const receipt = await makeReceipt(intent, 'succeeded', { ok: true,
+      result: { exitCode: 0, stdout: 'principal-result', stderr: '' }, error: null }, executor.keys);
+    const finished = await c.delegation.finish(executor.actor, claim.lease, receipt);
+    assert.equal(finished.state, 'succeeded');
+    assert.equal((await readReceipt(finished.receipt!, intent, caller.binding.id, caller.keys)).result?.stdout, 'principal-result');
+  }
+});
+
+test('プリンシパルへの共有を登録更新後も保持し、権限の解除を待機中の実行にも反映する', async t => {
+  const s = await setup(t), { c, owner, outsider, row } = s;
+  let executor = await register(s);
+  const denied = await commandRequest(s, executor, outsider, outsider.actor.id);
+  await assert.rejects(c.delegation.submit(outsider.actor, denied.request), { code: 'forbidden' });
+  await c.resources.grant(owner.actor, await c.resources.get(row.id), outsider.actor.id, ['read', 'execute']);
+  const registration = await signEnvironment({ ...executor.registration.manifest, revision: 2 }, executor.keys);
+  await c.delegation.register(executor.actor, registration);
+  executor = { ...executor, registration };
+  const permissions = (await c.resources.view(outsider.actor, await c.resources.get(row.id))).permissions;
+  assert.ok(permissions.includes('execute'));
+  const { request } = await commandRequest(s, executor, outsider, outsider.actor.id);
+  const task = await c.delegation.submit(outsider.actor, request);
   assert.equal(task.state, 'queued');
-  const unselected = { ...intent, id: crypto.randomUUID(), actor: other.binding, resultRecipients: [other.binding] };
-  await assert.rejects(c.delegation.submit(other.actor, await prepareRun(unselected, operation, other.keys)));
-  const claim = (await c.delegation.claim(executor.actor, row.id))!;
-  await c.delegation.dispatch(executor.actor, task.id, claim.lease);
-  const receipt = await makeReceipt(intent, 'succeeded', { ok: true,
-    result: { exitCode: 0, stdout: 'from-my-ai', stderr: '' }, error: null }, executor.keys);
-  const finished = await c.delegation.finish(executor.actor, claim.lease, receipt);
-  assert.equal(finished.state, 'succeeded');
-  assert.equal((await readReceipt(finished.receipt!, intent, ai.binding.id, ai.keys)).result?.stdout, 'from-my-ai');
+  await c.resources.revoke(owner.actor, await c.resources.get(row.id), outsider.actor.id);
+  assert.equal(await c.delegation.claim(executor.actor, row.id), null);
+  const failed = await c.delegation.get(outsider.actor, task.id);
+  assert.equal(failed.state, 'failed');
+  assert.equal(failed.error, 'authorization_changed');
+  const revoked = await commandRequest(s, executor, outsider, outsider.actor.id);
+  await assert.rejects(c.delegation.submit(outsider.actor, revoked.request), { code: 'forbidden' });
 });

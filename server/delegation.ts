@@ -58,6 +58,7 @@ export class Delegation {
   }
 
   async register(actor: Actor, input: RegisteredEnvironment) {
+    await this.resources.authorization.active(actor);
     const environment = await verifyEnvironment(input), { manifest } = environment;
     if (manifest.origin !== this.origin || manifest.executor.principalId !== actor.id)
       fail(403, 'forbidden', 'Register an execution environment using its own identity.');
@@ -65,7 +66,6 @@ export class Delegation {
     if (manifest.operatorId !== actor.id)
       fail(400, 'invalid_operator', 'Use the registering identity as the execution operator.');
     await this.bindings.requireCurrent(manifest.executor);
-    for (const caller of manifest.callers) await this.bindings.requireCurrent(caller);
     return this.resources.db.transaction(async connection => {
       await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [manifest.ownerId]);
       const old = await this.resources.db.one<EnvironmentRow>(
@@ -86,40 +86,30 @@ export class Delegation {
         if (canonical(old.registration) === canonical(environment)) return this.resources.get(manifest.id, connection);
         if (manifest.revision !== old.registration.manifest.revision + 1)
           fail(409, 'changed', 'Use the next environment revision.');
-        await this.resources.authorization.requireResource(actor, await this.resources.get(manifest.id, connection), 'update', connection);
       } else {
         if (!reserved && !(await this.resources.authorization.canCreate(actor, manifest.ownerId, 'environment', connection)))
           fail(403, 'forbidden', 'You cannot open an environment for this principal.');
         if (manifest.revision !== 1) fail(400, 'invalid_revision', 'Start the environment at revision one.');
       }
       const now = new Date().toISOString();
+      const previous = old || reserved ? await this.resources.get(manifest.id, connection) : null;
+      const { awsPrincipal: _awsPrincipal, ...metadata } = previous?.data ?? {};
       const data = {
-        ...(reserved?.data ?? {}),
+        ...metadata,
         driver: manifest.driver, executorId: actor.id, operatorId: manifest.operatorId,
         capabilities: manifest.capabilities.map(operationName), isolation: manifest.isolation,
         manifestDigest: await hash(manifest),
         ...(manifest.awsPrincipal ? { awsPrincipal: manifest.awsPrincipal } : {}),
-        size: reserved?.data.size ?? 'small', lifetime: reserved?.data.lifetime ?? { idleSeconds: 86400, maxSeconds: 86400 },
-        state: 'running', startedAt: reserved?.data.startedAt ?? now, stoppedAt: null, lastActiveAt: now, error: null,
+        size: metadata.size ?? 'small', lifetime: metadata.lifetime ?? { idleSeconds: 86400, maxSeconds: 86400 },
+        state: 'running', startedAt: metadata.startedAt ?? now, stoppedAt: null, lastActiveAt: now, error: null,
       };
-      const row = old || reserved
-        ? await this.resources.update(await this.resources.get(manifest.id, connection), { name: manifest.name, data }, connection)
+      const row = previous
+        ? await this.resources.update(previous, { name: manifest.name, data }, connection)
         : await this.resources.insert(manifest.ownerId, 'environment', manifest.name, data, { id: manifest.id }, connection);
       await connection.query(
         `INSERT INTO executor_environments(resource_id,executor_id,registration,heartbeat_at) VALUES($1,$2,$3,now())
          ON CONFLICT(resource_id) DO UPDATE SET registration=EXCLUDED.registration,heartbeat_at=now()`,
         [manifest.id, actor.id, JSON.stringify(environment)],
-      );
-      await connection.query('DELETE FROM grants WHERE resource_id=$1', [manifest.id]);
-      for (const caller of manifest.callers) await connection.query(
-        `INSERT INTO grants(resource_id,principal_id,actions) VALUES($1,$2,ARRAY['read','use','execute'])
-         ON CONFLICT(resource_id,principal_id) DO UPDATE SET actions=EXCLUDED.actions`,
-        [manifest.id, caller.principalId],
-      );
-      await connection.query(
-        `INSERT INTO grants(resource_id,principal_id,actions) VALUES($1,$2,ARRAY['read','use','execute','update'])
-         ON CONFLICT(resource_id,principal_id) DO UPDATE SET actions=EXCLUDED.actions`,
-        [manifest.id, actor.id],
       );
       await this.resources.audit.record(manifest.ownerId, actor.id, 'environment.register', manifest.id,
         { executorId: actor.id, revision: manifest.revision }, connection);

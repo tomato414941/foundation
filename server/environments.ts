@@ -9,7 +9,7 @@ import type { Vault } from './vault.js';
 import type { Configuration } from './config.js';
 import type { Delegation } from './delegation.js';
 import { EnvironmentInput, EnvironmentDeletion } from '../shared/contracts.js';
-import type { EnvironmentOptions, PublicEncryptionKey } from '../shared/contracts.js';
+import type { EnvironmentOptions } from '../shared/contracts.js';
 import { EnvironmentBootstrap, EnvironmentEnrollment } from '../shared/protocol.js';
 import { canonical, hash, verifyBinding } from '../shared/authority.js';
 import { fail, failure, required } from './errors.js';
@@ -27,27 +27,6 @@ export class Environments {
   constructor(readonly resources: Resources, readonly billing: Billing, readonly runner: Runner,
     readonly vault: Vault, readonly config: Configuration, readonly delegation: Delegation) {}
 
-  async callers(actor: Actor, ownerId: string) {
-    if (!(await this.resources.authorization.canCreate(actor, ownerId, 'environment')))
-      fail(403, 'forbidden', 'You cannot open environments for this principal.');
-    const candidates = await this.resources.db.all<{ id: string; name: string; public_key: PublicEncryptionKey }>(
-      `WITH RECURSIVE members(id) AS (
-        SELECT $1::uuid UNION SELECT r.subject_id FROM relations r JOIN members m ON r.principal_id=m.id
-        WHERE r.relation IN ('owner','member')
-      ) SELECT p.id,p.name,p.public_key FROM principals p WHERE p.public_key IS NOT NULL
-        AND EXISTS(SELECT 1 FROM principal_key_bindings b WHERE b.principal_id=p.id)
-        AND (p.id=$2 OR p.id IN (SELECT id FROM members)
-          OR EXISTS(SELECT 1 FROM relations r WHERE r.subject_id=p.id AND r.principal_id IN (SELECT id FROM members) AND r.relation='agent')
-          OR EXISTS(SELECT 1 FROM principal_grants g WHERE g.principal_id=p.id AND g.target_id=$1 AND 'execute'=ANY(g.actions)))
-      ORDER BY p.name,p.id`, [ownerId, actor.id]);
-    const allowed = [];
-    for (const candidate of candidates) {
-      if (await this.resources.authorization.principal({ id: candidate.id }, ownerId, 'execute'))
-        allowed.push({ id: candidate.id, name: candidate.name, publicKey: candidate.public_key });
-    }
-    return allowed;
-  }
-
   async create(actor: Actor, ownerId: string, options: EnvironmentOptions, name?: string) {
     if (!this.runner.enabled) fail(503, 'environments_unavailable', 'Environments are not configured.');
     if (!(await this.resources.authorization.canCreate(actor, ownerId, 'environment')))
@@ -57,17 +36,13 @@ export class Environments {
     const image = options.image ?? this.config.FLY_COMMAND_IMAGE;
     if (!/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/.test(image))
       fail(400, 'image_required', 'Choose a command image pinned to its SHA-256 digest.');
-    const callers = await Promise.all([...new Set(options.callerIds ?? [actor.id])].map(async id => {
-      await this.resources.principals.get(id);
-      return (await this.delegation.bindings.current(id)).binding;
-    }));
     return this.resources.db.transaction(async connection => {
       await this.billing.reserve(ownerId, 'compute',
         options.lifetime.maxSeconds * { small: 1, medium: 2, large: 4 }[options.size], connection);
       const id = randomUUID(), label = name ?? '実行環境 ' + id.slice(0, 8);
       const executor = await this.resources.principals.create(label, null, undefined, connection);
       const bootstrap = EnvironmentBootstrap.parse({ id, executorId: executor.id, ownerId, name: label,
-        origin: this.config.origin, bootstrap: token(), commandImage: image, callers });
+        origin: this.config.origin, bootstrap: token(), commandImage: image });
       const row = await this.resources.insert(ownerId, 'environment', label, {
         ...options, image, driver: 'managed', executorId: executor.id, operatorId: executor.id,
         capabilities: ['http', 'command', 'function', 'connect', 'refresh', 'revoke'], isolation: 'container',
@@ -161,7 +136,7 @@ export class Environments {
         const bootstrap = EnvironmentBootstrap.parse(await this.vault.decrypt(
           required(job.bootstrap_ciphertext), 'executor-bootstrap:' + row.id));
         await this.runner.start(row.id, EnvironmentInput.parse({
-          image: row.data.image, size: row.data.size, lifetime: row.data.lifetime, callerIds: row.data.callerIds,
+          image: row.data.image, size: row.data.size, lifetime: row.data.lifetime,
         }), { FOUNDATION_EXECUTOR_BOOTSTRAP: Buffer.from(canonical(bootstrap)).toString('base64url') },
         async (machineId, volumeId) => {
           await this.resources.db.pool.query(
