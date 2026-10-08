@@ -92,6 +92,8 @@ export class Connections implements ExecutionExtension {
     const result = ConnectionMaterial.parse(JSON.parse(utf8(await useContent(content, intent, this.keys, { destination }))));
     if ((await connectionMetadata(result)).authorizationDigest !== content.metadata.authorizationDigest)
       fail(409, 'connection_changed', 'Approve the current service account and permissions before using this connection.');
+    if (result.state === 'reconnect' && intent.operation !== 'revoke')
+      fail(409, 'reconnect_required', 'Reconnect this service before using it.');
     return result;
   }
   private async app(id: string, methodId: string, intent: ExecutionIntent, sources: CustodyContent[]) {

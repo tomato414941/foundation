@@ -49,6 +49,19 @@ export async function routesExecution(app: ApiApp, context: Context) {
       fail(400, 'wrong_resource', 'Migrate the selected secret.');
     return resources.view(actor(request), await context.legacySecrets.complete(actor(request), request.body));
   });
+  app.get('/api/migrations/connections', {
+    schema: { response: { 200: C.listOf(C.Id) } },
+  }, request => context.legacyConnections.pending(actor(request)));
+  app.get('/api/resources/:id/legacy-connection', {
+    schema: { params: C.IdParams, response: { 200: P.LegacyConnectionPlan } },
+  }, request => context.legacyConnections.plan(actor(request), request.params.id));
+  app.post('/api/resources/:id/legacy-connection', {
+    schema: { params: C.IdParams, body: P.LegacyConnectionWrite, response: { 200: C.Resource } },
+  }, async request => {
+    if (request.params.id !== request.body.connection.content.policy.id)
+      fail(400, 'wrong_resource', 'Migrate the selected connection.');
+    return resources.view(actor(request), await context.legacyConnections.complete(actor(request), request.body));
+  });
   app.put('/api/resources/:id/custody', {
     schema: { params: C.IdParams, body: P.ProtectedWrite, response: { 200: C.Resource } },
   }, async request => {

@@ -29,6 +29,7 @@ import { Delegation } from './delegation.js';
 import { ConnectionOperations } from './connection-operations.js';
 import { OAuthRelays } from './oauth-relays.js';
 import { LegacySecrets } from './legacy-secrets.js';
+import { LegacyConnections } from './legacy-connections.js';
 
 export interface Dependencies {
   db?: Database;
@@ -58,6 +59,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     oauthRelays = new OAuthRelays(delegation);
   principals.keySharing = new KeySharing(custody);
   const legacySecrets = new LegacySecrets(custody);
+  const legacyConnections = new LegacyConnections(custody, vault);
   const billing = new Billing(db, authorization, audit, deps.payments ?? new StripePayments(config), config),
     objects = new Objects(resources, billing, deps.storage ?? new S3Objects(config)),
     environments = new Environments(
@@ -107,6 +109,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     bindings,
     custody,
     legacySecrets,
+    legacyConnections,
     delegation,
     connectionOperations,
     oauthRelays,

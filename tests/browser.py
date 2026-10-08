@@ -11,7 +11,7 @@ import uuid
 from playwright.sync_api import sync_playwright, expect
 
 
-ORIGIN = "http://localhost:3458"
+ORIGIN = "http://localhost:" + os.environ.get("FOUNDATION_TEST_PORT", "3458")
 ARTIFACTS = Path("test-results/browser")
 
 
@@ -134,6 +134,46 @@ class BrowserTests(unittest.TestCase):
         current = page.request.get(f"{ORIGIN}/api/resources/{secret_id}/custody")
         self.assertTrue(current.ok, current.text())
         self.assertEqual(current.json()["content"]["policy"]["ownerId"], principal["id"])
+
+    def test_reload_migrates_existing_connection_and_preserves_its_account(self):
+        page, principal = self.passkey_account("Connection migration account")
+        created = page.request.post(ORIGIN + "/__test/legacy-connection", data={"principalId": principal["id"]})
+        self.assertTrue(created.ok, created.text())
+        connection_id = created.json()["id"]
+        with page.expect_response(lambda response: response.url.endswith(f"/resources/{connection_id}/legacy-connection") and response.request.method == "POST") as saved:
+            page.reload()
+        self.assertTrue(saved.value.ok, saved.value.text())
+        page.wait_for_load_state("networkidle")
+        current = page.request.get(f"{ORIGIN}/api/resources/{connection_id}/custody")
+        self.assertTrue(current.ok, current.text())
+        self.assertEqual(current.json()["content"]["policy"]["ownerId"], principal["id"])
+        self.assertEqual(current.json()["content"]["metadata"]["state"], "ready")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/{connection_id}")
+        page.wait_for_load_state("networkidle")
+        expect(page.get_by_role("heading", name="Browser API key", exact=True)).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "migrated-connection-ja.png"), full_page=True)
+
+    def test_reload_migrates_oauth_application_and_keeps_reconnect_status(self):
+        page, principal = self.passkey_account("OAuth migration account")
+        created = page.request.post(ORIGIN + "/__test/legacy-connection", data={"principalId": principal["id"], "oauth": True, "reconnect": True})
+        self.assertTrue(created.ok, created.text())
+        connection_id = created.json()["id"]
+        with page.expect_response(lambda response: response.url.endswith(f"/resources/{connection_id}/legacy-connection") and response.request.method == "POST") as saved:
+            page.reload()
+        self.assertTrue(saved.value.ok, saved.value.text())
+        page.wait_for_load_state("networkidle")
+        current = page.request.get(f"{ORIGIN}/api/resources/{connection_id}/custody")
+        self.assertTrue(current.ok, current.text())
+        metadata = current.json()["content"]["metadata"]
+        self.assertEqual(metadata["state"], "reconnect")
+        self.assertEqual(metadata["accountId"], "browser@example.test")
+        application = page.request.get(f"{ORIGIN}/api/resources/{metadata['appId']}/custody")
+        self.assertTrue(application.ok, application.text())
+        self.assertEqual(application.json()["content"]["metadata"]["clientId"], "browser-client")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/{connection_id}")
+        page.wait_for_load_state("networkidle")
+        expect(page.get_by_role("alert").get_by_text("再接続が必要", exact=True)).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "migrated-oauth-reconnect-ja.png"), full_page=True)
 
     def trust_fingerprint(self, page, principal_id, fingerprint):
         previous = page.url

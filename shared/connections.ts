@@ -22,6 +22,7 @@ export const TokenMaterial = z.object({
 export const ConnectionMaterial = z.object({
   format: z.literal(1), methodId: z.string().min(1), method: MethodDefinition, generation: Id,
   appId: Id.nullable(), appGeneration: Id.nullable(),
+  state: z.literal('reconnect').optional(),
   oauth: TokenMaterial.optional(), fields: Fields.optional(),
   role: z.object({ arn: z.string().regex(/^arn:aws(?:-us-gov|-cn)?:iam::\d{12}:role\/.+/),
     externalId: z.string().min(16).max(1000), region: z.string().regex(/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/) }).strict().optional(),
@@ -41,7 +42,7 @@ export const ConnectionMetadata = z.object({
   generation: Id, authorizationDigest: Fingerprint, appId: Id.nullable(),
   account: z.string().max(2000), accountId: z.string().max(2000).nullable(), accountVerified: z.boolean(),
   scopes: z.array(z.string().max(1000)).max(200), scopesStatus: z.enum(['unknown', 'requested', 'reported']),
-  outputs: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(100), state: z.literal('ready'),
+  outputs: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(100), state: z.enum(['ready', 'reconnect']),
 }).strict();
 
 export async function connectionMetadata(state: ConnectionState) {
@@ -54,6 +55,7 @@ export async function connectionMetadata(state: ConnectionState) {
     account: state.oauth?.account ?? state.role?.arn ?? null,
     accountVerified: state.oauth?.accountVerified ?? false,
     scopes: [...(state.oauth?.scopes ?? [])].sort(), role: state.role ?? null,
+    ...(state.state ? { state: state.state } : {}),
   });
   return ConnectionMetadata.parse({
     methodId: state.methodId, methodName: state.method.name, methodKind: state.method.kind,
@@ -62,7 +64,7 @@ export async function connectionMetadata(state: ConnectionState) {
     accountId: state.role?.arn ?? (state.oauth?.accountVerified ? state.oauth.account : null),
     accountVerified: Boolean(state.role || state.oauth?.accountVerified),
     scopes: state.oauth?.scopes ?? [], scopesStatus: state.oauth?.scopesStatus ?? 'unknown',
-    outputs, state: 'ready' as const,
+    outputs, state: state.state ?? 'ready',
   });
 }
 

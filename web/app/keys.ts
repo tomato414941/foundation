@@ -67,12 +67,16 @@ async function keep(id: string, keys: IdentityKeys) {
   unlocked.set(id, keys);
 }
 const migrations = new Map<string, Promise<void>>();
-export async function migrateUnlockedSecrets(id: string) {
+export async function migrateUnlockedContent(id: string) {
   if (!await getIdentity(id)) return;
   const existing = migrations.get(id);
   if (existing) return existing;
   const { custodyClient } = await import('./custody');
-  const migrating = (async () => { await (await custodyClient(id)).migrateSecrets(); })();
+  const migrating = (async () => {
+    const client = await custodyClient(id);
+    await client.migrateSecrets();
+    await client.migrateConnections();
+  })();
   migrations.set(id, migrating);
   try { await migrating; } finally { migrations.delete(id); }
 }
@@ -155,7 +159,7 @@ export async function authenticate(principalId?: string, credentialId?: string, 
       await keep(result.principalId, keys);
     }
   }
-  await migrateUnlockedSecrets(result.principalId);
+  await migrateUnlockedContent(result.principalId);
   return { ...result, encrypted: !!(await getKey(result.principalId)) };
 }
 export async function registerPasskey(name: string, principal?: Pick<PrincipalView, 'id' | 'publicKey'>) {
@@ -195,7 +199,7 @@ export async function registerPasskey(name: string, principal?: Pick<PrincipalVi
   if (keys) await keep(result.principalId, keys);
   else if ((credential.clientExtensionResults as { prf?: { enabled?: boolean } }).prf?.enabled)
     return authenticate(result.principalId, credential.id, existing);
-  await migrateUnlockedSecrets(result.principalId);
+  await migrateUnlockedContent(result.principalId);
   return { ...result, encrypted: !!(await getKey(result.principalId)) };
 }
 // Wrap this browser's unlocked keys for another of the principal's passkeys, by authenticating with it.

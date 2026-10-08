@@ -37,7 +37,7 @@ import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/root';
 import i18n from './i18n';
 import { api, errorCode, session } from './api';
-import { clearKeys, migrateUnlockedSecrets } from './keys';
+import { clearKeys, migrateUnlockedContent } from './keys';
 import { Busy, ErrorNotice, Page, useTask } from './components';
 import { Button } from './components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
@@ -98,7 +98,7 @@ export default function App() {
   const prefix = '/p/' + (owner ?? data.principal?.id);
   const authenticated = !!data.principal && !data.requestId;
   useEffect(() => {
-    if (authenticated) void migration.run(() => migrateUnlockedSecrets(data.principal!.id));
+    if (authenticated) void migration.run(() => migrateUnlockedContent(data.principal!.id));
   }, [authenticated, data.principal?.id]);
   useEffect(() => {
     const language = localStorage.getItem('foundation.language');
