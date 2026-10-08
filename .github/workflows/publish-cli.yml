@@ -11,12 +11,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: foundation-cli-publish
+  group: foundation-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
-  publish:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (startsWith(github.event.release.tag_name, 'cli-v') && !github.event.release.prerelease)
+  test:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -32,6 +31,36 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       TEST_DATABASE_URL: postgres://foundation:foundation-ci-only@127.0.0.1:5432/foundation_test
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install test dependencies
+        run: npm ci --include=dev --no-audit --no-fund
+      - name: Check and test
+        run: |
+          npm run check
+          npm test
+          npm run build
+      - name: Test browser workflows
+        run: |
+          python3 -m venv "$RUNNER_TEMP/foundation-ui"
+          "$RUNNER_TEMP/foundation-ui/bin/pip" install playwright==1.58.0
+          "$RUNNER_TEMP/foundation-ui/bin/python" -m playwright install --with-deps chromium webkit
+          "$RUNNER_TEMP/foundation-ui/bin/python" tests/browser.py
+  cli:
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (startsWith(github.event.release.tag_name, 'cli-v') && !github.event.release.prerelease)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Publishing to npm must happen one release at a time, whatever commit is being tested.
+    concurrency:
+      group: foundation-cli-publish
+      cancel-in-progress: false
     permissions:
       contents: write
       id-token: write
@@ -52,19 +81,10 @@ jobs:
         run: |
           git merge-base --is-ancestor HEAD origin/main
           node .github/scripts/cli-release.mjs plan
-      - name: Install test dependencies
-        run: npm ci --include=dev --no-audit --no-fund
-      - name: Check and test
+      - name: Build the CLI
         run: |
-          npm run check
-          npm test
-          npm run build
-      - name: Test browser workflows
-        run: |
-          python3 -m venv "$RUNNER_TEMP/foundation-ui"
-          "$RUNNER_TEMP/foundation-ui/bin/pip" install playwright==1.58.0
-          "$RUNNER_TEMP/foundation-ui/bin/python" -m playwright install --with-deps chromium webkit
-          "$RUNNER_TEMP/foundation-ui/bin/python" tests/browser.py
+          npm ci --include=dev --no-audit --no-fund
+          npm run build:cli
       - name: Pack and check the distributable
         id: package
         run: |
@@ -126,7 +146,7 @@ jobs:
         if: github.event_name != 'workflow_dispatch' && steps.release.outputs.publish == 'true'
         run: node .github/scripts/cli-release.mjs wait
   image:
-    needs: publish
+    needs: test
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
