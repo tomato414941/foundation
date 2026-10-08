@@ -573,6 +573,36 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(page.get_by_label("External ID", exact=True).input_value(), external_id)
         page.screenshot(path=str(ARTIFACTS / "connection-aws-role-ja.png"), full_page=True, animations="disabled")
 
+    def test_スマホで初期値のまま実行環境を起動して停止する(self):
+        owner, principal = self.passkey_account("Mobile environment owner")
+        response = owner.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
+        self.assertTrue(response.ok, response.text())
+        page = self.page(webkit=True, mobile=True)
+        page.context.add_cookies(owner.context.cookies())
+        page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
+        page.wait_for_load_state("networkidle")
+        start = page.get_by_role("button", name="起動", exact=True)
+        for scroll in [0, 10000, 0]:
+            page.evaluate("value => window.scrollTo(0, value)", scroll)
+            box = start.bounding_box()
+            self.assertIsNotNone(box)
+            self.assertGreaterEqual(box["y"], 0)
+            self.assertLessEqual(box["y"] + box["height"], page.evaluate("window.innerHeight"))
+        start.click()
+        page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
+        environment_id = page.url.rsplit("/", 1)[1]
+        self.environments.append((page, environment_id))
+        expect(page.get_by_role("link", name="実行", exact=True)).to_be_visible(timeout=15000)
+        response = page.request.get(ORIGIN + "/api/resources/" + environment_id)
+        self.assertTrue(response.ok, response.text())
+        environment = response.json()
+        self.assertTrue(environment["name"])
+        self.assertEqual(environment["data"]["size"], "small")
+        self.assertEqual(environment["data"]["lifetime"], {"idleSeconds": 3600, "maxSeconds": 3600})
+        page.get_by_role("button", name="停止", exact=True).click()
+        page.get_by_role("dialog").get_by_role("button", name="停止", exact=True).click()
+        expect(page.get_by_text("停止済み", exact=True)).to_be_visible(timeout=15000)
+
     def test_ファイルを保存して実行環境を起動しコマンドを実行して停止する(self):
         page, principal = self.passkey_account()
         response = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})

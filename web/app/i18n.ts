@@ -478,10 +478,6 @@ Object.assign(words, {
   'singular.service': ['サービス定義', 'service definition'],
   'singular.method': ['接続方法', 'connection method'],
   'singular.app': ['OAuthアプリ', 'OAuth app'],
-  environmentBudgetHelp: [
-    '起動時に最長稼働時間分の上限枠を確保します。Mediumは2倍、Largeは4倍の実行時間を使用します。',
-    'Starting an environment reserves its maximum lifetime from your monthly limit. Medium uses 2× and Large uses 4× compute time.',
-  ],
   computeUsage: [
     '今月の実行時間: {{used}} / {{limit}}分',
     'Compute this month: {{used}} / {{limit}} minutes',

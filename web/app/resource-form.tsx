@@ -201,7 +201,8 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
         metadata = { methodId: app.methodId, clientId: app.clientId, generation: app.generation };
       }
       return redirect(resourcePath(await client.save(name, content, policy, { previous, metadata })));
-    } else if (kind === 'environment')
+    } else if (kind === 'environment') {
+      if (!name) delete body.name;
       body.options = {
         image: formText(form, 'image') || undefined,
         size: formText(form, 'size'),
@@ -210,7 +211,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
           maxSeconds: Number(formText(form, 'maximum')) * 60,
         },
       };
-    else if (kind === 'function')
+    } else if (kind === 'function')
       body.definition = {
         description: formText(form, 'description'),
         request: {
@@ -409,7 +410,7 @@ export default function ResourceForm() {
         </Notice>
       ) : (
         <Form method="post" encType="multipart/form-data">
-          <div className="flex min-w-0 flex-col gap-6">
+          <div className={`flex min-w-0 flex-col gap-6 ${data.kind === 'environment' ? 'pb-[calc(5rem+env(safe-area-inset-bottom))] sm:pb-0' : ''}`}>
             <input type="hidden" name="version" value={existing?.version ?? ''} />
             {data.approvalId && <input type="hidden" name="approvalId" value={data.approvalId} />}
             {existing?.kind === 'connection' && (
@@ -641,9 +642,6 @@ export default function ResourceForm() {
                 {!roleSetup && executorChoice}
                 {data.kind === 'environment' && (
                   <Panel>
-                    <p className="leading-relaxed text-muted-foreground text-sm">
-                      {t('environmentBudgetHelp')}
-                    </p>
                     {data.usage && (
                       <p className="leading-relaxed text-sm">
                         {t('computeUsage', {
@@ -731,6 +729,7 @@ export default function ResourceForm() {
             {!unavailable && !methodUnavailable && (
               <SaveBar
                 back={back}
+                fixedOnMobile={data.kind === 'environment'}
                 label={
                   data.kind === 'connection'
                     ? 'connect'

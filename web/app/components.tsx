@@ -256,16 +256,20 @@ export function SaveBar({
   back,
   label = 'save',
   busy = false,
+  fixedOnMobile = false,
 }: {
   back: string;
   label?: string;
   busy?: boolean;
+  fixedOnMobile?: boolean;
 }) {
   const { t } = useTranslation();
   const navigation = useNavigation();
   return (
-    <div className="flex flex-wrap items-center gap-2 pt-2">
-      <Button type="submit" loading={busy || navigation.state === 'submitting'}>
+    <div className={cn('flex flex-wrap items-center gap-2 pt-2', fixedOnMobile &&
+      'fixed inset-x-0 bottom-0 z-30 border-t bg-background px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:static sm:z-auto sm:border-0 sm:bg-transparent sm:px-0 sm:pt-2 sm:pb-0')}>
+      <Button type="submit" className={fixedOnMobile ? 'h-11 flex-1 sm:h-9 sm:flex-none' : undefined}
+        loading={busy || navigation.state === 'submitting'}>
         {t(label)}
       </Button>
       <Button asChild variant="ghost">
