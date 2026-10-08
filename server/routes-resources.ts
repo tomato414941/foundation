@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import type { ApiApp } from './app.js';
 import { actor } from './app.js';
@@ -17,6 +18,7 @@ const CREATED: Record<string, readonly [string, string]> = {
   function: ['関数を作る', 'Create a function'],
 };
 
+const roleTemplate = () => readFileSync(new URL('./aws-connection.yaml', import.meta.url));
 export async function routesResources(app: ApiApp, context: Context) {
   const { resources, authorization, catalog, functions, objects, environments, billing } = context;
   app.get('/api/catalog', { schema: { response: { 200: C.listOf(C.CatalogEntry) } } }, async (request) => ({
@@ -31,6 +33,11 @@ export async function routesResources(app: ApiApp, context: Context) {
       next: null,
     }),
   );
+  // The account owner makes the role in their own console, from a template Foundation hands over as a one-hour link.
+  app.get('/api/aws/role-template', { schema: { response: { 200: z.object({ url: z.string() }) } } }, async (request) => {
+    actor(request);
+    return { url: await objects.store.publish('aws-connection.yaml', roleTemplate(), 'text/plain', 3600) };
+  });
   app.get(
     '/api/connections/:id/method',
     {

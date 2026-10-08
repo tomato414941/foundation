@@ -40,6 +40,10 @@ export class MemoryObjects implements ObjectStore {
   async link(id: string, _name: string, seconds: number) {
     return 'https://objects.example/' + id + '?expires=' + seconds;
   }
+  async publish(name: string, body: Uint8Array, _contentType: string, seconds: number) {
+    this.files.set('published/' + name, body.slice());
+    return 'https://objects.example/published/' + name + '?expires=' + seconds;
+  }
 }
 export class MemoryRunner implements Runner {
   readonly enabled = true;

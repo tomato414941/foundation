@@ -12,6 +12,7 @@ import { Connections } from '../../runtime/connections.js';
 import { DeliveryPending, Executor } from '../../runtime/executor.js';
 import { CommandProcess } from '../../runtime/command.js';
 import { journalLock } from '../../runtime/lock.js';
+import { detectAwsPrincipal } from '../../runtime/roles.js';
 
 export async function startAgent(client: Client, options: {
   id?: string; ownerId: string; name: string; callers: string[]; isolation: 'process' | 'container';
@@ -27,10 +28,18 @@ export async function startAgent(client: Client, options: {
   try {
     const journal = new FileJournal(path, client.identity.origin, binding, keys);
     let environment = await journal.read<RegisteredEnvironment>('environment_' + id);
+    const awsPrincipal = await detectAwsPrincipal();
     if (environment) {
       await verifyEnvironment(environment);
       if (environment.manifest.ownerId !== options.ownerId || canonical(environment.manifest.executor) !== canonical(binding))
         throw new Error('Use the owner and identity originally registered for this executor.');
+      // The AWS identity may come and go with the machine's credentials; the registration says what it is now.
+      if ((environment.manifest.awsPrincipal ?? null) !== awsPrincipal) {
+        const { awsPrincipal: _previous, ...manifest } = environment.manifest;
+        environment = await signEnvironment({ ...manifest, ...(awsPrincipal ? { awsPrincipal } : {}),
+          revision: manifest.revision + 1 }, keys);
+        await journal.write('environment_' + id, environment);
+      }
     } else {
       const callers = [];
       for (const principal of new Set(options.callers.length ? options.callers : [binding.principalId])) {
@@ -40,12 +49,14 @@ export async function startAgent(client: Client, options: {
       environment = await signEnvironment({ format: 1, id, origin: client.identity.origin, ownerId: options.ownerId,
         name: options.name, executor: binding, operatorId: binding.principalId, driver: options.managed ? 'managed' : 'attached',
         capabilities: ['http', 'command', 'function', 'connect', 'refresh', 'revoke'], callers,
-        isolation: options.isolation, ...(options.image ? { commandImage: options.image } : {}), revision: 1 }, keys);
+        isolation: options.isolation, ...(options.image ? { commandImage: options.image } : {}),
+        ...(awsPrincipal ? { awsPrincipal } : {}), revision: 1 }, keys);
       await journal.write('environment_' + id, environment);
     }
     await client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: environment });
     process.stdout.write(JSON.stringify({ environmentId: id, identityId: binding.principalId,
       fingerprint: await hash(binding), isolation: environment.manifest.isolation,
+      ...(environment.manifest.awsPrincipal ? { awsPrincipal: environment.manifest.awsPrincipal } : {}),
       ...(environment.manifest.isolation === 'process' ? { notice: 'Only allow trusted code on this host.' } : {}) }) + '\n');
     const connections = new Connections(binding, keys, broker.connections(), journal, transport);
     const executor = new Executor(environment, keys, broker, journal, transport,

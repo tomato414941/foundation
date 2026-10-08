@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: "Lets one Foundation act in this AWS account through a role, without any long-lived key. Foundation's own role may assume it, and only with the external ID this stack was made with. Delete the stack to take the permission back."
+Description: "Lets the executor you chose in Foundation act in this AWS account through a role, without any long-lived key. Only that executor's own IAM identity may assume it, and only with the external ID this stack was made with. Delete the stack to take the permission back."
 Parameters:
   PrincipalArn:
     Type: String
-    Description: The role Foundation itself runs as. Only this principal may assume the role made here.
-    AllowedPattern: '^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$'
+    Description: The IAM role or user the chosen executor runs as. Only this principal may assume the role made here.
+    AllowedPattern: '^arn:aws[a-z-]*:iam::[0-9]{12}:(role|user)/.+$'
   ExternalId:
     Type: String
     Description: The value Foundation gave you for this connection. It is checked on every use.
@@ -13,13 +13,13 @@ Parameters:
     NoEcho: true
   Policies:
     Type: CommaDelimitedList
-    Description: 'What Foundation may do here: the ARNs of the IAM policies to attach, separated by commas. AWS managed ones (arn:aws:iam::aws:policy/ReadOnlyAccess, .../AmazonS3FullAccess, ...) or your own. Up to 10.'
+    Description: 'What the executor may do here: the ARNs of the IAM policies to attach, separated by commas. AWS managed ones (arn:aws:iam::aws:policy/ReadOnlyAccess, .../AmazonS3FullAccess, ...) or your own. Up to 10.'
     Default: arn:aws:iam::aws:policy/ReadOnlyAccess
 Resources:
   FoundationRole:
     Type: AWS::IAM::Role
     Properties:
-      Description: Assumed by Foundation on your behalf. Made by the foundation-connection stack; delete the stack to revoke.
+      Description: Assumed by a Foundation executor on your behalf. Made by the foundation-connection stack; delete the stack to revoke.
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
         Version: '2012-10-17'

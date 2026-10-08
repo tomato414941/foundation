@@ -13,6 +13,8 @@ export interface ObjectStore {
   get(id: string): Promise<Uint8Array>;
   remove(id: string): Promise<void>;
   link(id: string, name: string, seconds: number): Promise<string>;
+  // A file Foundation itself hands out, such as a template, as a link that works for a while.
+  publish(name: string, body: Uint8Array, contentType: string, seconds: number): Promise<string>;
 }
 export class S3Objects implements ObjectStore {
   readonly client: S3Client;
@@ -52,6 +54,14 @@ export class S3Objects implements ObjectStore {
       }),
       { expiresIn: seconds },
     );
+  }
+  async publish(name: string, body: Uint8Array, contentType: string, seconds: number) {
+    if (!this.enabled) fail(503, 'storage_unavailable', 'Object storage is not configured.');
+    const target = { Bucket: this.config.FOUNDATION_BUCKET, Key: 'published/' + name };
+    await this.client.send(
+      new PutObjectCommand({ ...target, Body: body, ContentType: contentType, ServerSideEncryption: 'AES256' }),
+    );
+    return getSignedUrl(this.client, new GetObjectCommand(target), { expiresIn: seconds });
   }
 }
 export class Objects {

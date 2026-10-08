@@ -389,6 +389,7 @@ export const EnvironmentResource = z.object({
     executorId: Id.optional(), operatorId: Id.optional(), driver: z.enum(['attached', 'managed']).optional(),
     capabilities: z.array(z.string()).optional(), isolation: z.enum(['process', 'container']).optional(),
     manifestDigest: z.string().optional(),
+    awsPrincipal: z.string().optional(),
     state: EnvironmentState,
     startedAt: Time.nullable(),
     stoppedAt: Time.nullable(),

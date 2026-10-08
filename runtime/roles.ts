@@ -12,6 +12,26 @@ export interface RoleProvider {
   obtain(arn: string, externalId: string, region: string): Promise<RoleCredentials>;
 }
 
+// The IAM role or user behind a caller identity: what a role made for this executor must trust. A session of an
+// assumed role names the role; root and federated identities are not principals a trust policy should name.
+export function awsPrincipal(callerArn: string): string | null {
+  const assumed = /^arn:(aws[a-z-]*):sts::(\d{12}):assumed-role\/([^/]+)\/.+$/.exec(callerArn);
+  if (assumed) return `arn:${assumed[1]}:iam::${assumed[2]}:role/${assumed[3]}`;
+  return /^arn:aws[a-z-]*:iam::\d{12}:(?:role|user)\/.+$/.test(callerArn) ? callerArn : null;
+}
+
+// Which AWS identity this process runs as, if any, found the way the SDK finds credentials. Nothing to find is
+// the usual case on a machine outside AWS, so that answers quickly rather than failing.
+export async function detectAwsPrincipal(timeoutMs = 3000): Promise<string | null> {
+  const sts = new STSClient({ region: process.env.AWS_REGION || 'us-east-1' });
+  try {
+    const identity = await sts.send(new GetCallerIdentityCommand({}), { abortSignal: AbortSignal.timeout(timeoutMs) });
+    return identity.Arn ? awsPrincipal(identity.Arn) : null;
+  } catch {
+    return null;
+  } finally { sts.destroy(); }
+}
+
 // Credentials come from this executor's workload identity, never the control plane.
 export class AwsRoles implements RoleProvider {
   async obtain(arn: string, externalId: string, region: string) {

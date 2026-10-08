@@ -6,6 +6,7 @@ import { ExecutionKind, Origin, PolicyApproval, RunIntent, runContext } from './
 import type { ExecutionIntent } from './custody.js';
 import { base64url, encode, open, seal } from './encryption.js';
 
+export const AwsPrincipal = z.string().regex(/^arn:aws[a-z-]*:iam::\d{12}:(?:role|user)\/[\w+=,.@/-]{1,200}$/);
 export const EnvironmentManifest = z.object({
   format: z.literal(1), id: Id, origin: Origin, ownerId: Id,
   name: Name, executor: KeyBinding, operatorId: Id,
@@ -14,6 +15,8 @@ export const EnvironmentManifest = z.object({
   callers: z.array(KeyBinding).min(1).max(100),
   isolation: z.enum(['process', 'container']),
   commandImage: z.string().regex(/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/).optional(),
+  // The IAM role or user this executor runs as, when it has one: what an account owner's role must trust.
+  awsPrincipal: AwsPrincipal.optional(),
   revision: z.number().int().positive(),
 }).strict();
 export type ExecutorManifest = z.infer<typeof EnvironmentManifest>;

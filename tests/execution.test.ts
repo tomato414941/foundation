@@ -214,3 +214,16 @@ test('実行用プログラムが環境変数とファイルと標準入力を�
   assert.equal(result.exitCode, 0);
   assert.equal(result.stdout, 'value|file|input');
 });
+
+test('実行先が名乗るAWSの身元を実行環境に載せ、名乗らなくなれば外す', async t => {
+  const f = await delegatedFixture();
+  t.after(f.close);
+  const awsPrincipal = 'arn:aws:iam::123456789012:role/own-server';
+  const manifest = { format: 1 as const, id: crypto.randomUUID(), origin: f.config.origin, ownerId: f.executor.actor.id,
+    name: 'Own server', executor: f.executor.binding, operatorId: f.executor.actor.id, driver: 'attached' as const,
+    capabilities: ['http' as const, 'connect' as const], callers: [f.owner.binding], isolation: 'process' as const };
+  await f.delegation.register(f.executor.actor, await signEnvironment({ ...manifest, awsPrincipal, revision: 1 }, f.executor.keys));
+  assert.equal((await f.resources.get(manifest.id)).data.awsPrincipal, awsPrincipal);
+  await f.delegation.register(f.executor.actor, await signEnvironment({ ...manifest, revision: 2 }, f.executor.keys));
+  assert.equal((await f.resources.get(manifest.id)).data.awsPrincipal, undefined);
+});

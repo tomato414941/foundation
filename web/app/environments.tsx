@@ -18,8 +18,8 @@ export async function availableEnvironments(owner: string) {
   return [...new Map([...owned.items, ...shared.items].filter(item => item.kind === 'environment' &&
     item.data.executorId && item.data.state === 'running' && item.permissions.includes('execute')).map(item => [item.id, item])).values()];
 }
-export function EnvironmentChoice({ items, selected, multiple = false }: {
-  items: ResourceView[]; selected?: string[]; multiple?: boolean;
+export function EnvironmentChoice({ items, selected, multiple = false, onChange }: {
+  items: ResourceView[]; selected?: string[]; multiple?: boolean; onChange?: (id: string) => void;
 }) {
   const { t } = useTranslation();
   return <Panel title={t(multiple ? 'approvedExecutors' : 'executionDestination')}>
@@ -27,7 +27,8 @@ export function EnvironmentChoice({ items, selected, multiple = false }: {
     {!items.length && <Notice tone="info">{t('noExecutors')}</Notice>}
     {multiple ? items.map(item => <CheckboxField key={item.id} name="environments" value={item.id}
       label={item.name} defaultChecked={selected?.includes(item.id)} />) :
-      <SelectField name="environmentId" label={t('singular.environment')} defaultValue={selected?.[0] ?? ''} required>
+      <SelectField name="environmentId" label={t('singular.environment')} defaultValue={selected?.[0] ?? ''}
+        onValueChange={onChange} required>
         {items.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
       </SelectField>}
     <Link className="text-sm underline underline-offset-4" to="/account/trust">{t('trustIdentity')}</Link>

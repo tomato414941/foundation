@@ -547,6 +547,21 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("button", name="接続する", exact=True)).to_be_enabled()
         page.screenshot(path=str(ARTIFACTS / "connection-oauth-app-ja.png"), full_page=True, animations="disabled")
 
+    def test_選んだ実行先のAWSの身元を信頼するIAMロールをAWSで作るリンクを示す(self):
+        page, principal = self.passkey_account()
+        self.executor(page, principal)
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        self.select(page, "実行環境", "Browser executor")
+        link = page.get_by_role("link", name="AWSでIAMロールを作る", exact=True)
+        expect(link).to_be_visible()
+        href = link.get_attribute("href")
+        self.assertIn("console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/create/review?", href)
+        self.assertIn("templateURL=https%3A%2F%2Fobjects.example%2Fpublished%2Faws-connection.yaml", href)
+        self.assertIn("param_PrincipalArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Ffoundation-test-executor", href)
+        external_id = re.search(r"param_ExternalId=([0-9a-f]{32})", href).group(1)
+        self.assertEqual(page.get_by_label("External ID", exact=True).input_value(), external_id)
+        page.screenshot(path=str(ARTIFACTS / "connection-aws-role-ja.png"), full_page=True, animations="disabled")
+
     def test_ファイルを保存して実行環境を起動しコマンドを実行して停止する(self):
         page, principal = self.passkey_account()
         response = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})

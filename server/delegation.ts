@@ -98,6 +98,7 @@ export class Delegation {
         driver: manifest.driver, executorId: actor.id, operatorId: manifest.operatorId,
         capabilities: manifest.capabilities, isolation: manifest.isolation,
         manifestDigest: await hash(manifest),
+        ...(manifest.awsPrincipal ? { awsPrincipal: manifest.awsPrincipal } : {}),
         size: reserved?.data.size ?? 'small', lifetime: reserved?.data.lifetime ?? { idleSeconds: 86400, maxSeconds: 86400 },
         state: 'running', startedAt: reserved?.data.startedAt ?? now, stoppedAt: null, lastActiveAt: now, error: null,
       };

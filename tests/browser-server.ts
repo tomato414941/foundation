@@ -33,7 +33,8 @@ class BrowserRunner extends MemoryRunner {
     const registration = await signEnvironment({ format: 1, id, origin, ownerId: bootstrap.ownerId,
       name: bootstrap.name, executor: binding, operatorId: binding.principalId, driver: 'managed',
       callers: bootstrap.callers, capabilities: ['http', 'command', 'function', 'connect', 'refresh', 'revoke'],
-      isolation: 'container', commandImage: bootstrap.commandImage, revision: 1 }, keys);
+      isolation: 'container', commandImage: bootstrap.commandImage,
+      awsPrincipal: 'arn:aws:iam::123456789012:role/foundation-test-executor', revision: 1 }, keys);
     await client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: registration });
     const broker = new HttpBroker(client), journal = new MemoryJournal();
     const transport = { async send() { return { status: 200, headers: {}, body: new TextEncoder().encode('{}') }; } };
