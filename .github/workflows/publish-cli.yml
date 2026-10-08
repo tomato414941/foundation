@@ -145,8 +145,38 @@ jobs:
       - name: Confirm npm publication
         if: github.event_name != 'workflow_dispatch' && steps.release.outputs.publish == 'true'
         run: node .github/scripts/cli-release.mjs wait
-  image:
+  # Managed environments run this image on amd64 machines. The server image names it by digest,
+  # so every server starts environments from its own commit.
+  executor:
     needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.publish.outputs.image }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Sign in to the GitHub container registry
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Build and publish the executor image
+        id: publish
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:executor-${GITHUB_SHA::7}"
+          docker build --platform linux/amd64 --file deploy/environment/Dockerfile \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" --tag "$image" .
+          docker run --rm --entrypoint foundation "$image" --version
+          docker push "$image"
+          digest=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}@$digest" >> "$GITHUB_OUTPUT"
+  image:
+    needs: [test, executor]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
@@ -162,14 +192,17 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
       - name: Build and publish the server image
+        env:
+          EXECUTOR_IMAGE: ${{ needs.executor.outputs.image }}
         run: |
           docker buildx create --use --name foundation >/dev/null
           docker buildx build --platform linux/arm64 \
             --build-arg "FOUNDATION_COMMIT=$GITHUB_SHA" \
+            --build-arg "FLY_IMAGE=$EXECUTOR_IMAGE" \
             --tag "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}" \
             --tag "ghcr.io/${GITHUB_REPOSITORY,,}:main" \
             --provenance=false --load .
-          docker run --rm "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}" node --input-type=module -e "await import('/app/dist/server/app.js')"
+          docker run --rm "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}" node --input-type=module -e "await import('/app/dist/server/app.js'); if (!/@sha256:[a-f0-9]{64}$/.test(process.env.FLY_IMAGE)) process.exit(1)"
           docker push "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}"
           docker push "ghcr.io/${GITHUB_REPOSITORY,,}:main"
           docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}" | head -3
