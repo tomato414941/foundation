@@ -1,6 +1,7 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
 import { Webhook, WebhookVerificationError } from 'standardwebhooks';
 import { Integrations } from '../server/integrations.js';
 import type { Transport } from '../server/transport.js';
@@ -138,4 +139,79 @@ test('送信先の設定前に発行した署名キーでWebhookを検証する'
   assert.equal(f.deliveries.length, 1);
   const { body, headers } = f.deliveries[0]!;
   assert.deepEqual(new Webhook(webhookSecret).verify(body, headers), JSON.parse(body));
+});
+
+test('HTTP受信先の失敗と応答切断を再送し、処理済みイベントを受信側で一度だけ処理する', async (t) => {
+  let receiver: Webhook;
+  let attempts = 0;
+  const receipts: Array<{ id: string; body: string }> = [];
+  const errors: unknown[] = [];
+  const server = createServer(async (request, response) => {
+    try {
+      assert.equal(request.method, 'POST');
+      assert.equal(request.url, '/events');
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      const payload = receiver.verify(body, request.headers) as { id: string; type: string };
+      assert.equal(payload.type, 'request.created');
+      assert.equal(payload.id, request.headers['webhook-id']);
+      receipts.push({ id: payload.id, body });
+      attempts++;
+      if (attempts === 1) {
+        response.writeHead(503).end();
+        return;
+      }
+      await f.db.pool.query(
+        'INSERT INTO received_webhooks(id,payload) VALUES($1,$2) ON CONFLICT(id) DO NOTHING',
+        [payload.id, body],
+      );
+      if (attempts === 2) request.socket.destroy();
+      else response.writeHead(204).end();
+    } catch (error) {
+      errors.push(error);
+      response.writeHead(400).end();
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const f = await integrationFixture(t, async (input) => {
+    const response = await fetch(`http://127.0.0.1:${address.port}${new URL(input.url).pathname}`, {
+      method: input.method,
+      headers: input.headers,
+      body: input.body,
+      signal: AbortSignal.timeout(5000),
+    });
+    return { status: response.status, headers: {}, body: new Uint8Array(await response.arrayBuffer()) };
+  });
+  await f.db.pool.query('CREATE TABLE received_webhooks(id uuid PRIMARY KEY,payload jsonb NOT NULL)');
+  const { webhookSecret } = await f.integrations.set(f.owner.actor, f.owner.actor.id, {
+    webhookUrl: 'https://receiver.example/events',
+  });
+  receiver = new Webhook(webhookSecret!);
+  const payload = { type: 'request.created', requestId: randomUUID(), message: '承認をお願いします 🔐' };
+  await f.integrations.enqueue(f.owner.actor.id, payload);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await f.integrations.deliver();
+    assert.deepEqual(errors, []);
+    assert.equal(receipts.length, attempt);
+    assert.deepEqual(receipts[attempt - 1], receipts[0]);
+    const event = await f.db.one<{ attempts: number; delivered_at: Date | null }>(
+      'SELECT attempts,delivered_at FROM webhooks WHERE id=$1', [receipts[0]!.id],
+    );
+    assert.equal(event?.attempts, attempt);
+    const processed = await f.db.all<{ payload: unknown }>('SELECT payload FROM received_webhooks');
+    assert.equal(processed.length, attempt === 1 ? 0 : 1);
+    if (attempt > 1) assert.deepEqual(processed[0]!.payload, { ...payload, id: receipts[0]!.id });
+    if (attempt < 3) {
+      assert.equal(event?.delivered_at, null);
+      await f.db.pool.query('UPDATE webhooks SET next_attempt=now() WHERE id=$1', [receipts[0]!.id]);
+    } else assert.ok(event?.delivered_at);
+  }
+  await f.integrations.deliver();
+  assert.equal(receipts.length, 3);
 });
