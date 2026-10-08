@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
+import { principal } from '../server/authorization.js';
 import { ApprovalRequest } from '../shared/contracts.js';
 import { flowFixture } from './flow-support.js';
 
@@ -26,7 +27,7 @@ test('確認コードで端末を引き受け、承認者の権限で利用を�
         {
           method: 'POST',
           path: '/api/relations',
-          body: { relation: 'agent', principalId: '$approver', subjectId: device.actor.id },
+          body: { relation: 'agent', objectId: '$approver', subjectId: device.actor.id },
         },
       ],
     },
@@ -49,8 +50,8 @@ test('確認コードで端末を引き受け、承認者の権限で利用を�
   });
   assert.equal(answer.statusCode, 200, answer.body);
   assert.equal(answer.json().state, 'approved');
-  assert.equal(await context.authorization.uses(device.actor.id, person.actor.id), true);
-  assert.equal(await context.authorization.principal(person.actor, device.actor.id, 'credentials'), true);
+  assert.equal(await context.authorization.holds(device.actor.id, principal(person.actor.id), 'use'), true);
+  assert.equal(await context.authorization.can(person.actor, principal(device.actor.id), 'manage_credentials'), true);
   const polled = await app.inject({ url: '/api/requests/' + pending.id, headers });
   assert.equal(polled.json().state, 'approved');
 });
@@ -175,16 +176,16 @@ test('依頼の各操作は、承認する人が読む名前を日本語と英�
     assert.equal(response.statusCode, 201, response.body);
     return ApprovalRequest.parse(response.json()).operations.map((operation) => operation.title);
   };
-  assert.deepEqual(await ask([{ method: 'POST', path: '/api/relations', body: { relation: 'agent', principalId: '$approver', subjectId: device.actor.id } }]),
+  assert.deepEqual(await ask([{ method: 'POST', path: '/api/relations', body: { relation: 'agent', objectId: '$approver', subjectId: device.actor.id } }]),
     [{ ja: 'アクセスを許可する', en: 'Allow access' }]);
   const target = '00000000-0000-4000-8000-000000000001';
   assert.deepEqual(await ask([
-    { method: 'POST', path: '/api/relations', body: { relation: 'viewer', principalId: target, subjectId: device.actor.id } },
+    { method: 'POST', path: '/api/relations', body: { relation: 'reader', objectId: target, subjectId: device.actor.id } },
     { method: 'PATCH', path: '/api/principals/' + device.actor.id, body: { name: 'renamed' } },
     { method: 'DELETE', path: '/api/resources/' + target },
     { method: 'CONNECT', path: '/api/connections', body: { ownerId: '$approver', methodId: 'github-token' } },
   ], person.actor.id), [
-    { ja: '関係を結ぶ', en: 'Add a relation' },
+    { ja: '権限を渡す', en: 'Give a permission' },
     { ja: 'プリンシパルを変更する', en: 'Change a principal' },
     { ja: '項目を削除する', en: 'Delete an item' },
     { ja: 'サービスに接続する', en: 'Connect a service' },

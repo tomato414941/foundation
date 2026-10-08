@@ -416,7 +416,7 @@ class BrowserTests(unittest.TestCase):
         owner.get_by_role("textbox", name="相手のプリンシパルID").fill(recipient["id"])
         self.select(owner, "関係", "メンバー")
         owner.get_by_role("button", name="追加", exact=True).click()
-        expect(owner.get_by_text("Project member → メンバー → Shared project", exact=True)).to_be_visible()
+        expect(owner.get_by_text("Project member は Shared project のメンバー", exact=True)).to_be_visible()
         member.goto(secret_path)
         member.get_by_role("button", name="内容を表示", exact=True).click()
         expect(member.get_by_role("textbox", name="値", exact=True)).to_have_value("team-secret-value")
@@ -449,7 +449,7 @@ class BrowserTests(unittest.TestCase):
         page.goto(f"{ORIGIN}/p/{principal['id']}/principals")
         page.get_by_role("textbox", name="相手のプリンシパルID").fill(child_id)
         page.get_by_role("button", name="追加", exact=True).click()
-        expect(page.get_by_text("Automation → 代理 → Browser account", exact=True)).to_be_visible()
+        expect(page.get_by_text("Automation は Browser account の代理", exact=True)).to_be_visible()
 
     def test_接続方法を選んで登録し共有分類から再利用して再認証を確認する(self):
         page, principal = self.passkey_account("Connection owner")

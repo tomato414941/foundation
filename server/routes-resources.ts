@@ -144,8 +144,7 @@ export async function routesResources(app: ApiApp, context: Context) {
       ];
       if (Object.keys(body).some((field) => !fields.includes(field)))
         fail(400, 'invalid_input', 'Choose fields that can be edited for this item.');
-      if (body.name && body.name !== row.name && !(await authorization.stands(who.id, row.owner_id)))
-        await authorization.requireResource(who, row, 'share');
+      if (body.name && body.name !== row.name) await authorization.requireResource(who, row, 'rename');
       if (body.definition) {
         if (row.kind === 'function') {
           const spec = await functions.validateFunction(who, C.FunctionDefinition.parse(body.definition));
@@ -243,49 +242,6 @@ export async function routesResources(app: ApiApp, context: Context) {
       const row = await resources.get(request.params.id);
       await authorization.requireResource(actor(request), row, 'update');
       return { items: await resources.recipients(row.owner_id), next: null };
-    },
-  );
-  app.get(
-    '/api/resources/:id/grants',
-    { schema: { params: C.IdParams, response: { 200: C.listOf(C.Grant) } } },
-    async (request) => ({
-      items: await resources.grants(actor(request), await resources.get(request.params.id)),
-      next: null,
-    }),
-  );
-  app.put(
-    '/api/resources/:id/grants/:principalId',
-    {
-      config: { approval: { title: ['項目を共有する', 'Share an item'] } },
-      schema: {
-        params: z.object({ id: C.Id, principalId: C.Id }),
-        body: z.object({ actions: z.array(C.Action).min(1) }).strict(),
-        response: { 200: C.Ok },
-      },
-    },
-    async (request) => {
-      await resources.grant(
-        actor(request),
-        await resources.get(request.params.id),
-        request.params.principalId,
-        request.body.actions,
-      );
-      return { ok: true as const };
-    },
-  );
-  app.delete(
-    '/api/resources/:id/grants/:principalId',
-    {
-      config: { approval: { title: ['項目の共有をやめる', 'Stop sharing an item'] } },
-      schema: { params: z.object({ id: C.Id, principalId: C.Id }), response: { 200: C.Ok } },
-    },
-    async (request) => {
-      await resources.revoke(
-        actor(request),
-        await resources.get(request.params.id),
-        request.params.principalId,
-      );
-      return { ok: true as const };
     },
   );
   app.post(

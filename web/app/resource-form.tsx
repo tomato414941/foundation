@@ -385,7 +385,7 @@ export default function ResourceForm() {
         <Notice
           action={
             sessionData.principals.some(
-              (item) => item.id === data.payment?.payer?.id && item.permissions.includes('billing'),
+              (item) => item.id === data.payment?.payer?.id && item.permissions.includes('manage_billing'),
             ) ? (
               <Button variant="ghost" asChild>
                 <Link to={'/p/' + data.payment.payer?.id + '/settings/billing'}>{t('addPayment')}</Link>

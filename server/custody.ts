@@ -12,6 +12,7 @@ import { Id } from '../shared/contracts.js';
 import { AppMetadata, ConnectionMetadata } from '../shared/connections.js';
 import type { ConnectionLabelValues } from '../shared/connections.js';
 import { kindOf } from '../shared/protected.js';
+import { project } from './relations.js';
 import { fail } from './errors.js';
 
 export interface ProtectedWrite {
@@ -243,26 +244,21 @@ export class Custody {
     });
   }
 
+  // Who holds which role on the item, as its signed policy says: a reader opens it, an observer only sees it is there,
+  // an authority changes it and its policy, and a grant lets an actor use it on an executor.
   private async projectGrants(content: CustodyContent, connection: Queryable) {
-    const actions = new Map<string, Set<string>>();
-    const add = (binding: BoundKeys, values: string[]) => {
-      const current = actions.get(binding.principalId) ?? new Set<string>();
-      values.forEach(value => current.add(value));
-      actions.set(binding.principalId, current);
+    const lines = new Map<string, { subjectId: string; relation: string }>();
+    const add = (subjectId: string, relations: string[]) => {
+      for (const relation of relations) lines.set(subjectId + '#' + relation, { subjectId, relation });
     };
-    for (const reader of content.policy.readers) add(reader, ['read', 'reveal']);
-    for (const observer of content.policy.observers ?? []) {
-      const values = actions.get(observer) ?? new Set<string>(); values.add('read'); actions.set(observer, values);
-    }
-    for (const authority of content.policy.authorities) add(authority, ['read', 'reveal', 'update', 'share', 'use']);
+    for (const reader of content.policy.readers) add(reader.principalId, ['reader', 'revealer']);
+    for (const observer of content.policy.observers ?? []) add(observer, ['reader']);
+    for (const authority of content.policy.authorities) add(authority.principalId, ['reader', 'revealer', 'editor', 'sharer', 'user']);
     for (const grant of content.policy.grants) {
-      add(grant.actor, ['read', 'use']);
-      add(grant.executor, ['read', 'use']);
+      add(grant.actor.principalId, ['reader', 'user']);
+      add(grant.executor.principalId, ['reader', 'user']);
     }
-    await connection.query('DELETE FROM grants WHERE resource_id=$1', [content.policy.id]);
-    for (const [principal, values] of actions) await connection.query(
-      'INSERT INTO grants(resource_id,principal_id,actions) VALUES($1,$2,$3)',
-      [content.policy.id, principal, [...values]],
-    );
+    await project(connection, content.policy.id, [...lines.values()]);
   }
+
 }

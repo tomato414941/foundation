@@ -9,6 +9,7 @@ import { Vault } from '../server/vault.js';
 import { Authorization } from '../server/authorization.js';
 import { Audit } from '../server/audit.js';
 import { Principals } from '../server/principals.js';
+import { Relations } from '../server/relations.js';
 import { Authentication } from '../server/authentication.js';
 import { Resources } from '../server/resources.js';
 import type { Mailer } from '../server/mail.js';
@@ -46,7 +47,8 @@ export async function fixture(overrides: Record<string, string> = {}) {
   const vault = await Vault.initialize(db, config);
   const authorization = new Authorization(db),
     audit = new Audit(db),
-    principals = new Principals(db, authorization, audit);
+    principals = new Principals(db, authorization, audit),
+    relations = new Relations(db, authorization, audit, principals);
   const mailer = new TestMailer(),
     authentication = new Authentication(db, principals, authorization, audit, mailer, config);
   const resources = new Resources(db, authorization, audit, principals);
@@ -76,6 +78,7 @@ export async function fixture(overrides: Record<string, string> = {}) {
     authorization,
     audit,
     principals,
+    relations,
     authentication,
     resources,
     mailer,

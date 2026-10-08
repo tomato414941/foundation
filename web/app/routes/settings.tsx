@@ -115,9 +115,9 @@ export default function SettingsPage() {
           {(['general', 'credentials', 'billing', 'integrations', 'audit'] as const)
             .filter((tab) =>
               tab === 'credentials'
-                ? can('credentials')
+                ? can('manage_credentials')
                 : tab === 'billing'
-                  ? can('billing')
+                  ? can('manage_billing')
                   : tab === 'integrations'
                     ? can('share')
                     : true,

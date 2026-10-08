@@ -181,7 +181,7 @@ test('鍵が未登録の所有者の実行環境を作成し、所有者の権�
 test('所有者と関連プリンシパルの実行依頼を受け付け、結果を依頼元へ返す', async t => {
   const s = await setup(t), { f, c, owner, row } = s;
   const principal = await f.person('Related principal');
-  await f.principals.relate(owner.actor, principal.actor.id, 'agent', owner.actor.id);
+  await f.relations.draw(owner.actor, { subjectId: principal.actor.id, relation: 'agent', objectId: owner.actor.id });
   const executor = await register(s);
   for (const caller of [owner, principal]) {
     const { intent, request } = await commandRequest(s, executor, caller);
@@ -202,7 +202,8 @@ test('プリンシパルへの共有を登録更新後も保持し、権限の�
   let executor = await register(s);
   const denied = await commandRequest(s, executor, outsider, outsider.actor.id);
   await assert.rejects(c.delegation.submit(outsider.actor, denied.request), { code: 'forbidden' });
-  await c.resources.grant(owner.actor, await c.resources.get(row.id), outsider.actor.id, ['read', 'execute']);
+  for (const relation of ['reader', 'runner'])
+    await c.relations.draw(owner.actor, { subjectId: outsider.actor.id, relation, objectId: row.id });
   const registration = await signEnvironment({ ...executor.registration.manifest, revision: 2 }, executor.keys);
   await c.delegation.register(executor.actor, registration);
   executor = { ...executor, registration };
@@ -211,7 +212,8 @@ test('プリンシパルへの共有を登録更新後も保持し、権限の�
   const { request } = await commandRequest(s, executor, outsider, outsider.actor.id);
   const task = await c.delegation.submit(outsider.actor, request);
   assert.equal(task.state, 'queued');
-  await c.resources.revoke(owner.actor, await c.resources.get(row.id), outsider.actor.id);
+  for (const relation of ['reader', 'runner'])
+    await c.relations.erase(owner.actor, { subjectId: outsider.actor.id, relation, objectId: row.id });
   assert.equal(await c.delegation.claim(executor.actor, row.id), null);
   const failed = await c.delegation.get(outsider.actor, task.id);
   assert.equal(failed.state, 'failed');

@@ -181,7 +181,7 @@ export class Authentication {
     });
   }
   async credentials(actor: Actor, id: string) {
-    await this.authorization.requirePrincipal(actor, id, 'credentials');
+    await this.authorization.requirePrincipal(actor, id, 'manage_credentials');
     return (
       await this.db.all<CredentialRow>(
         'SELECT * FROM credentials WHERE principal_id=$1 ORDER BY created_at,id',
@@ -201,7 +201,7 @@ export class Authentication {
     });
   }
   async removeCredential(actor: Actor, principalId: string, id: string) {
-    await this.authorization.requirePrincipal(actor, principalId, 'credentials');
+    await this.authorization.requirePrincipal(actor, principalId, 'manage_credentials');
     await this.db.transaction(async (connection) => {
       await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [principalId]);
       const target = required(
@@ -239,7 +239,7 @@ export class Authentication {
     const email = z.email().max(254).parse(address).trim().toLowerCase();
     if (principalId) {
       if (!actor) fail(401, 'unauthenticated', 'Sign in to add an email address.');
-      await this.authorization.requirePrincipal(actor, principalId, 'credentials');
+      await this.authorization.requirePrincipal(actor, principalId, 'manage_credentials');
     }
     if (mergeTo && (!actor || actor.id !== mergeTo || actor.requestId))
       fail(403, 'forbidden', 'Sign in to the account you want to keep.');
@@ -378,7 +378,7 @@ export class Authentication {
     if (input.intent === 'register') {
       if (input.principalId) {
         if (!actor) fail(401, 'unauthenticated', 'Sign in to add a passkey.');
-        await this.authorization.requirePrincipal(actor, input.principalId, 'credentials');
+        await this.authorization.requirePrincipal(actor, input.principalId, 'manage_credentials');
       }
       const principalId = input.principalId ?? randomUUID(),
         name = input.name?.trim() || 'Foundation ' + principalId.slice(0, 6);
@@ -460,7 +460,7 @@ export class Authentication {
     if (row.kind === 'passkey-register') {
       if (row.principal_id) {
         if (!actor) fail(401, 'unauthenticated', 'Sign in to add a passkey.');
-        await this.authorization.requirePrincipal(actor, row.principal_id, 'credentials');
+        await this.authorization.requirePrincipal(actor, row.principal_id, 'manage_credentials');
       }
       let verification;
       try {

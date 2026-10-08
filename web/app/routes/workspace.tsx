@@ -16,7 +16,7 @@ import { reprotectInBackground } from '../keys';
 export async function clientLoader({ request, params }: Route.ClientLoaderArgs) {
   const session = await signedIn(request);
   if (session.principal && !session.requestId) reprotectInBackground(session.principal.id);
-  let principal: Pick<PrincipalView, 'id' | 'name' | 'permissions' | 'publicKey' | 'createKinds'>;
+  let principal: Pick<PrincipalView, 'id' | 'name' | 'owner' | 'permissions' | 'publicKey' | 'createKinds'>;
   try {
     principal = await api('/principals/' + params.owner, { signal: request.signal }, Principal);
   } catch (error) {
@@ -25,6 +25,7 @@ export async function clientLoader({ request, params }: Route.ClientLoaderArgs) 
       ...(await api<Pick<PrincipalView, 'id' | 'name' | 'publicKey'>>('/identities/' + params.owner, {
         signal: request.signal,
       })),
+      owner: null,
       permissions: [],
       createKinds: [],
     };

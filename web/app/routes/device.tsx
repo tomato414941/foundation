@@ -18,7 +18,7 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
 export default function DevicePage() {
   const { t } = useTranslation();
   const { device, account } = useLoaderData<typeof clientLoader>();
-  const candidates = account.principals.filter((item) => item.permissions.includes('credentials'));
+  const candidates = account.principals.filter((item) => item.permissions.includes('manage_credentials'));
   const [principalId, setPrincipalId] = useState(account.principal?.id ?? '');
   const [code, setCode] = useState('');
   const task = useTask();

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Actor } from './authorization.js';
+import { principal } from './authorization.js';
 import type { Context } from './context.js';
 import type { ResourceRow } from './resources.js';
 import type { CustodyContent } from '../shared/custody.js';
@@ -13,7 +14,7 @@ export class Accounts {
     await c.authorization.requirePrincipal(actor, id, 'export');
     yield JSON.stringify({
       format: 'foundation',
-      version: 2,
+      version: 3,
       exportedAt: new Date().toISOString(),
       principal: await c.principals.view(actor, await c.principals.get(id)),
     }) + '\n';
@@ -43,7 +44,8 @@ export class Accounts {
     yield JSON.stringify({
       type: 'relations',
       items: await c.db.all(
-        'SELECT subject_id,principal_id,relation FROM relations WHERE subject_id=$1 OR principal_id=$1',
+        `SELECT subject_id "subjectId",relation,coalesce(principal_id,resource_id) "objectId" FROM relations
+        WHERE subject_id=$1 OR principal_id=$1 OR resource_id IN (SELECT id FROM resources WHERE owner_id=$1)`,
         [id],
       ),
     }) + '\n';
@@ -60,10 +62,7 @@ export class Accounts {
     );
     if (account && ['active', 'trialing', 'past_due', 'unpaid'].includes(account.status))
       fail(409, 'subscription_active', 'Cancel the subscription before deleting this principal.');
-    const children = await c.db.one(
-      "SELECT 1 FROM relations WHERE subject_id=$1 AND relation='owner' LIMIT 1",
-      [id],
-    );
+    const children = await c.db.one('SELECT 1 FROM principals WHERE owner_id=$1 LIMIT 1', [id]);
     if (children) fail(409, 'owned_principals', 'Transfer or delete owned principals first.');
     const rows = await c.db.all<ResourceRow>('SELECT * FROM resources WHERE owner_id=$1', [id]);
     if (rows.some((row) => row.kind === 'connection'))
@@ -131,7 +130,8 @@ export class Accounts {
       to = await c.principals.get(actor.id);
     if (
       await c.db.one(
-        "SELECT 1 FROM relations WHERE principal_id=ANY($1::uuid[]) AND relation IN ('owner','member') LIMIT 1",
+        `SELECT 1 FROM principals WHERE id=ANY($1::uuid[]) AND owner_id IS NOT NULL
+        UNION ALL SELECT 1 FROM relations WHERE principal_id=ANY($1::uuid[]) AND relation='member' LIMIT 1`,
         [[from.id, to.id]],
       )
     )
@@ -140,7 +140,7 @@ export class Accounts {
         'managed_accounts',
         'Merge personal accounts that are not owned or managed by another principal.',
       );
-    if ((await c.authorization.stands(from.id, to.id)) || (await c.authorization.stands(to.id, from.id)))
+    if ((await c.authorization.holds(from.id, principal(to.id), 'stands')) || (await c.authorization.holds(to.id, principal(from.id), 'stands')))
       fail(409, 'related_accounts', 'These principals are already connected by ownership or membership.');
     const accounts = await c.db.all<{ principal_id: string; status: string }>(
       'SELECT principal_id,status FROM payment_accounts WHERE principal_id=ANY($1::uuid[])',
@@ -160,7 +160,7 @@ export class Accounts {
        WHERE r.owner_id<>$1 AND jsonb_path_exists(c.content,
          '$.policy.**.principalId ? (@ == $principal)',jsonb_build_object('principal',$1::text)) LIMIT 1`, [from.id]);
     if (externalKeys) fail(409, 'rekey_required', 'Ask other resource owners to replace the previous account keys before merging.');
-    const children = await c.db.one("SELECT 1 FROM relations WHERE subject_id=$1 AND relation='owner' LIMIT 1", [from.id]);
+    const children = await c.db.one('SELECT 1 FROM principals WHERE owner_id=$1 LIMIT 1', [from.id]);
     if (children) fail(409, 'owned_principals', 'Transfer owned principals before merging accounts.');
     if (await c.db.one("SELECT 1 FROM execution_tasks WHERE (owner_id=$1 OR actor_id=$1) AND state IN ('queued','running','uncertain') LIMIT 1", [from.id]))
       fail(409, 'execution_active', 'Resolve active executions before merging accounts.');
@@ -198,46 +198,22 @@ export class Accounts {
           if (!changed.rowCount) fail(409, 'changed', 'An item changed while merging. Start again.');
         }
       }
-      const relations = await c.db.all<{ subject_id: string; principal_id: string; relation: string }>(
-        'SELECT subject_id,principal_id,relation FROM relations WHERE subject_id=$1 OR principal_id=$1',
+      // The lines the other account was given, and those drawn onto it, become this account's.
+      const lines = await c.db.all<{ subject_id: string; relation: string; principal_id: string | null; resource_id: string | null }>(
+        'SELECT subject_id,relation,principal_id,resource_id FROM relations WHERE subject_id=$1 OR principal_id=$1',
         [from.id],
         connection,
       );
       await connection.query('DELETE FROM relations WHERE subject_id=$1 OR principal_id=$1', [from.id]);
-      for (const relation of relations) {
-        const subject = relation.subject_id === from.id ? to.id : relation.subject_id,
-          target = relation.principal_id === from.id ? to.id : relation.principal_id;
+      for (const line of lines) {
+        const subject = line.subject_id === from.id ? to.id : line.subject_id,
+          target = line.principal_id === from.id ? to.id : line.principal_id;
         if (subject !== target)
           await connection.query(
-            'INSERT INTO relations(id,subject_id,principal_id,relation) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',
-            [randomUUID(), subject, target, relation.relation],
+            'INSERT INTO relations(subject_id,relation,principal_id,resource_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+            [subject, line.relation, target, line.resource_id],
           );
       }
-      const grants = await c.db.all<{ resource_id: string; actions: string[] }>(
-        'SELECT resource_id,actions FROM grants WHERE principal_id=$1',
-        [from.id],
-        connection,
-      );
-      for (const grant of grants)
-        await connection.query(
-          'INSERT INTO grants(resource_id,principal_id,actions) VALUES($1,$2,$3) ON CONFLICT(resource_id,principal_id) DO UPDATE SET actions=ARRAY(SELECT DISTINCT unnest(grants.actions||EXCLUDED.actions))',
-          [grant.resource_id, to.id, grant.actions],
-        );
-      const principalGrants = await c.db.all<{ target_id: string; principal_id: string; actions: string[] }>(
-        'SELECT * FROM principal_grants WHERE target_id=$1 OR principal_id=$1',
-        [from.id],
-        connection,
-      );
-      await connection.query('DELETE FROM principal_grants WHERE target_id=$1 OR principal_id=$1', [from.id]);
-      for (const grant of principalGrants)
-        await connection.query(
-          'INSERT INTO principal_grants(target_id,principal_id,actions) VALUES($1,$2,$3) ON CONFLICT(target_id,principal_id) DO UPDATE SET actions=ARRAY(SELECT DISTINCT unnest(principal_grants.actions||EXCLUDED.actions))',
-          [
-            grant.target_id === from.id ? to.id : grant.target_id,
-            grant.principal_id === from.id ? to.id : grant.principal_id,
-            grant.actions,
-          ],
-        );
       await connection.query(
         "UPDATE approval_requests SET state=CASE WHEN state IN ('pending','running') THEN 'cancelled' ELSE state END,private_input=NULL,continue_url=NULL,from_id=CASE WHEN from_id=$1 THEN $2 ELSE from_id END,to_id=CASE WHEN to_id=$1 THEN $2 ELSE to_id END WHERE from_id=$1 OR to_id=$1",
         [from.id, to.id],

@@ -1,0 +1,207 @@
+// Who may do what, in the SpiceDB schema language. A relation is a recorded fact; a permission is computed from
+// relations and never recorded. Every decision asks one permission here.
+//
+// A relation reads "subject is the relation of object": an AI is the agent of its person, a friend a reader of a
+// variable. Relations name roles (nouns); permissions name actions (verbs). Whom a principal or a thing belongs to
+// is kept with it and read as its owner, and a principal is its own self; every other relation is a line someone
+// drew. On what a key protects (variables, connections, apps), the lines come from the signed policy kept with it.
+
+definition principal {
+  relation owner: principal
+  relation self: principal
+  // Stands as this principal, as a person does for a group.
+  relation member: principal
+  // Uses what this principal holds without deciding for it.
+  relation agent: principal
+  // Pays for what this principal uses. Drawn by the payer, who takes the cost on.
+  relation payer: principal
+  // One action each, given on its own.
+  relation reader: principal
+  relation creator: principal
+  relation editor: principal
+  relation sharer: principal
+  relation runner: principal
+  relation credential_manager: principal
+  relation billing_manager: principal
+  relation exporter: principal
+
+  // Acts as this principal: itself, whoever acts as its owner, and whoever acts as one of its members.
+  permission stands = self + owner->stands + member->stands
+  // Uses what it holds: whoever acts as it, and its agents.
+  permission use = stands + agent->stands
+
+  permission read = use + reader->stands
+  permission create = stands + creator->stands
+  permission update = stands + editor->stands
+  permission share = stands + sharer->stands
+  permission execute = use + runner->stands
+  permission manage_credentials = stands + credential_manager->stands
+  permission manage_billing = stands + billing_manager->stands
+  permission export = stands + exporter->stands
+  // A principal ends itself or is ended by its owner, and only its owner passes it on.
+  permission delete = self + owner->stands
+  permission transfer = owner->stands
+
+  // Making something it will hold. An agent makes what it may then change, and not what decides for its principal.
+  permission create_variable = create + use
+  permission create_connection = create
+  permission create_service = create + use
+  permission create_method = create + use
+  permission create_app = create
+  permission create_object = create + use
+  permission create_environment = create + use
+  permission create_function = create + use
+}
+
+// A value opened only where its policy says. An agent may use and change it; only those who act as the owner see it.
+definition variable {
+  relation owner: principal
+  relation reader: principal
+  relation editor: principal
+  relation sharer: principal
+  relation revealer: principal
+  relation user: principal
+
+  permission read = owner->use + reader->stands
+  permission update = owner->use + editor->stands
+  permission delete = owner->use
+  permission share = owner->stands + sharer->stands
+  permission transfer = owner->stands
+  permission reveal = owner->stands + revealer->stands
+  permission use = owner->use + user->stands
+  // A name is changed by one who may both change the thing and decide for it.
+  permission rename = update & share
+}
+
+// What a service lets the owner do. An agent uses it; changing, removing and seeing it are the owner's.
+definition connection {
+  relation owner: principal
+  relation reader: principal
+  relation editor: principal
+  relation sharer: principal
+  relation revealer: principal
+  relation user: principal
+
+  permission read = owner->use + reader->stands
+  permission update = owner->stands + editor->stands
+  permission delete = owner->stands
+  permission share = owner->stands + sharer->stands
+  permission transfer = owner->stands
+  permission reveal = owner->stands + revealer->stands
+  permission use = owner->use + user->stands
+  permission rename = update & share
+}
+
+// An OAuth application, used to connect. An agent sees it is there; the rest is the owner's.
+definition app {
+  relation owner: principal
+  relation reader: principal
+  relation editor: principal
+  relation sharer: principal
+  relation revealer: principal
+  relation user: principal
+
+  permission read = owner->use + reader->stands
+  permission update = owner->stands + editor->stands
+  permission delete = owner->stands
+  permission share = owner->stands + sharer->stands
+  permission transfer = owner->stands
+  permission reveal = owner->stands + revealer->stands
+  permission use = owner->stands + user->stands
+  permission rename = update & share
+}
+
+// A description of a service, holding nothing secret: an agent may change it. Connecting with it is the owner's.
+definition service {
+  relation owner: principal
+  relation reader: principal
+  relation editor: principal
+  relation deleter: principal
+  relation sharer: principal
+  relation transferrer: principal
+  relation user: principal
+
+  permission read = owner->use + reader->stands
+  permission update = owner->use + editor->stands
+  permission delete = owner->use + deleter->stands
+  permission share = owner->stands + sharer->stands
+  permission transfer = owner->stands + transferrer->stands
+  permission use = owner->stands + user->stands
+  permission rename = update & share
+}
+
+// A way to connect to a service, as a service holds it.
+definition method {
+  relation owner: principal
+  relation reader: principal
+  relation editor: principal
+  relation deleter: principal
+  relation sharer: principal
+  relation transferrer: principal
+  relation user: principal
+
+  permission read = owner->use + reader->stands
+  permission update = owner->use + editor->stands
+  permission delete = owner->use + deleter->stands
+  permission share = owner->stands + sharer->stands
+  permission transfer = owner->stands + transferrer->stands
+  permission use = owner->stands + user->stands
+  permission rename = update & share
+}
+
+// A file. An agent works with it as the owner does, short of deciding for it.
+definition object {
+  relation owner: principal
+  relation reader: principal
+  relation editor: principal
+  relation deleter: principal
+  relation sharer: principal
+  relation transferrer: principal
+  relation user: principal
+
+  permission read = owner->use + reader->stands
+  permission update = owner->use + editor->stands
+  permission delete = owner->use + deleter->stands
+  permission share = owner->stands + sharer->stands
+  permission transfer = owner->stands + transferrer->stands
+  permission use = owner->use + user->stands
+  permission rename = update & share
+}
+
+// Somewhere to run things. It stays with the principal it was made for, so it is not passed on.
+definition environment {
+  relation owner: principal
+  relation reader: principal
+  relation editor: principal
+  relation deleter: principal
+  relation sharer: principal
+  relation user: principal
+  relation runner: principal
+
+  permission read = owner->use + reader->stands
+  permission update = owner->stands + editor->stands
+  permission delete = owner->use + deleter->stands
+  permission share = owner->stands + sharer->stands
+  permission use = owner->use + user->stands
+  permission execute = owner->use + runner->stands
+  permission rename = update & share
+}
+
+// An operation the owner decided, run with what it uses.
+definition function {
+  relation owner: principal
+  relation reader: principal
+  relation editor: principal
+  relation deleter: principal
+  relation sharer: principal
+  relation transferrer: principal
+  relation runner: principal
+
+  permission read = owner->use + reader->stands
+  permission update = owner->use + editor->stands
+  permission delete = owner->use + deleter->stands
+  permission share = owner->stands + sharer->stands
+  permission transfer = owner->stands + transferrer->stands
+  permission execute = owner->use + runner->stands
+  permission rename = update & share
+}

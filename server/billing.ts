@@ -152,9 +152,10 @@ export class Billing {
     const chain = await this.db.all<{ id: string; depth: number }>(
       `WITH RECURSIVE family(id,depth,visited) AS (
       SELECT $1::uuid,0,ARRAY[$1::uuid] UNION ALL
-      SELECT r.subject_id,f.depth+1,f.visited||r.subject_id FROM family f CROSS JOIN LATERAL (
-        SELECT subject_id FROM relations WHERE principal_id=f.id AND relation IN ('payer','owner') ORDER BY CASE relation WHEN 'payer' THEN 0 ELSE 1 END,created_at,id LIMIT 1
-      ) r WHERE NOT r.subject_id=ANY(f.visited) AND f.depth<32
+      SELECT n.id,f.depth+1,f.visited||n.id FROM family f CROSS JOIN LATERAL (
+        SELECT coalesce((SELECT subject_id FROM relations WHERE principal_id=f.id AND relation='payer'),
+          (SELECT owner_id FROM principals WHERE id=f.id)) id
+      ) n WHERE n.id IS NOT NULL AND NOT n.id=ANY(f.visited) AND f.depth<32
     ) SELECT id,depth FROM family ORDER BY depth DESC`,
       [principalId],
       connection,
@@ -266,7 +267,7 @@ export class Billing {
     }
   }
   async limits(actor: Actor, id: string, storageBytes: number, computeSeconds: number) {
-    await this.authorization.requirePrincipal(actor, id, 'billing');
+    await this.authorization.requirePrincipal(actor, id, 'manage_billing');
     await this.db.pool.query(
       'INSERT INTO usage_limits(principal_id,storage_bytes,compute_seconds) VALUES($1,$2,$3) ON CONFLICT(principal_id) DO UPDATE SET storage_bytes=$2,compute_seconds=$3',
       [id, storageBytes, computeSeconds],
@@ -275,7 +276,7 @@ export class Billing {
   }
   async checkout(actor: Actor, id: string) {
     id = await this.payer(id);
-    await this.authorization.requirePrincipal(actor, id, 'billing');
+    await this.authorization.requirePrincipal(actor, id, 'manage_billing');
     return this.db.transaction(async (connection) => {
       const principal = required(
         await this.db.one<{ name: string }>(
@@ -306,7 +307,7 @@ export class Billing {
   }
   async portal(actor: Actor, id: string) {
     id = await this.payer(id);
-    await this.authorization.requirePrincipal(actor, id, 'billing');
+    await this.authorization.requirePrincipal(actor, id, 'manage_billing');
     const account = required(
       await this.db.one<{ customer_id: string }>(
         'SELECT customer_id FROM payment_accounts WHERE principal_id=$1',

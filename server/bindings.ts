@@ -32,7 +32,7 @@ export class Bindings {
   async publish(actor: Actor, input: z.infer<typeof SignedBinding>, previousSignature?: string) {
     const signed = SignedBinding.parse(input);
     const binding = await verifyBinding(signed);
-    await this.authorization.requirePrincipal(actor, binding.principalId, 'credentials');
+    await this.authorization.requirePrincipal(actor, binding.principalId, 'manage_credentials');
     return this.db.transaction(async connection => {
       const principal = required(await this.db.one<{ public_key: PublicEncryptionKey | null }>(
         'SELECT public_key FROM principals WHERE id=$1 FOR UPDATE', [binding.principalId], connection,

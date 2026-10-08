@@ -161,7 +161,7 @@ export class Catalog {
             method = await this.resources.insert(row.owner_id, 'method', name, definition, {}, connection);
           methods[kind] = method.id;
           await connection.query(
-            'INSERT INTO grants(resource_id,principal_id,actions) SELECT $1,principal_id,actions FROM grants WHERE resource_id=$2',
+            'INSERT INTO relations(subject_id,relation,resource_id) SELECT subject_id,relation,$1 FROM relations WHERE resource_id=$2',
             [method.id, row.id],
           );
           await connection.query(
@@ -264,9 +264,11 @@ export class Catalog {
     return ServiceDefinition.parse({ ...input, methods: references });
   }
   private async usable(actor: Actor, kind: 'service' | 'method') {
-    const rows = await this.resources.db.all<ResourceRow>('SELECT * FROM resources WHERE kind=$1', [kind]);
-    const permissions = await this.resources.authorization.actionsForResources(actor, rows);
-    return rows.filter((row) => permissions.get(row.id)?.includes('use'));
+    const { authorization } = this.resources;
+    await authorization.active(actor);
+    if (actor.requestId) return [];
+    return this.resources.db.all<ResourceRow>('SELECT * FROM resources WHERE id=ANY($1::uuid[]) ORDER BY created_at,id',
+      [await authorization.find(actor.id, kind, 'use')]);
   }
   methodView(id: string, value: MethodDescription): CatalogConnectionMethod {
     return CatalogMethod.parse({

@@ -38,6 +38,17 @@ declare module 'fastify' {
 // A route one principal may ask another to call for it, and what calling it does in the words the one asked reads:
 // Japanese and English, or worked out from the body when its meaning depends on it.
 type Title = readonly [string, string];
+// What drawing or erasing a line is called where it is asked for.
+const lineTitles: Record<string, readonly [Title, Title]> = {
+  agent: [['代理にする', 'Make an agent'], ['代理を外す', 'Remove an agent']],
+  member: [['メンバーに加える', 'Add a member'], ['メンバーから外す', 'Remove a member']],
+  payer: [['支払いを引き受ける', 'Pay for a principal'], ['支払いをやめる', 'Stop paying for a principal']],
+};
+function lineTitle(body: C.JsonValue | undefined, erase: boolean): Title {
+  const relation = String(atPointer(body, '/relation'));
+  if (!erase && relation === 'agent' && atPointer(body, '/objectId') === '$approver') return ['アクセスを許可する', 'Allow access'];
+  return lineTitles[relation]?.[erase ? 1 : 0] ?? (erase ? ['権限を外す', 'Take back a permission'] : ['権限を渡す', 'Give a permission']);
+}
 export interface Approval {
   title: Title | ((body: C.JsonValue | undefined) => Title);
 }
@@ -46,7 +57,7 @@ export function actor(request: FastifyRequest): Actor {
   return request.actor;
 }
 export async function buildApp(context: Context) {
-  const { config, authentication, principals, authorization } = context;
+  const { config, authentication, principals, authorization, relations } = context;
   const app = Fastify({
     logger: {
       level: config.FOUNDATION_LOG_LEVEL,
@@ -471,7 +482,7 @@ export async function buildApp(context: Context) {
     },
     async (request, reply) => {
       const who = actor(request);
-      await authorization.requirePrincipal(who, request.params.id, 'credentials');
+      await authorization.requirePrincipal(who, request.params.id, 'manage_credentials');
       if (request.body.expiresAt && new Date(request.body.expiresAt).getTime() <= Date.now())
         fail(400, 'invalid_expiry', 'Choose a future expiry.');
       return reply
@@ -507,103 +518,58 @@ export async function buildApp(context: Context) {
       return { ok: true as const };
     },
   );
+  // Lines read "subject is the relation of object": the lines drawn onto an object, or from a subject.
   app.get(
-    '/api/principals/:id/relations',
-    { schema: { params: C.IdParams, querystring: C.PageQuery, response: { 200: C.listOf(C.Relation) } } },
-    (request) =>
-      principals.relations(actor(request), request.params.id, request.query.limit, request.query.after),
+    '/api/relations',
+    { schema: { querystring: C.RelationQuery, response: { 200: C.listOf(C.Relation) } } },
+    (request) => relations.list(actor(request), request.query),
   );
   app.post(
     '/api/relations',
     {
       bodyLimit: 32 * 1024 * 1024,
-      config: { approval: { title: (body) => atPointer(body, '/relation') === 'agent' && atPointer(body, '/principalId') === '$approver' ? ['アクセスを許可する', 'Allow access'] : ['関係を結ぶ', 'Add a relation'] } },
+      config: { approval: { title: (body) => lineTitle(body, false) } },
       schema: { body: C.RelationInput.extend({ contents: P.KeyUpdates.optional() }), response: { 200: C.Ok } },
     },
     async (request) => {
-      await principals.relate(
-        actor(request),
-        request.body.subjectId,
-        request.body.relation,
-        request.body.principalId,
-        request.body.contents,
-      );
+      const { contents, ...line } = request.body;
+      await relations.draw(actor(request), line, contents);
       return { ok: true as const };
     },
   );
+  app.delete(
+    '/api/relations',
+    {
+      bodyLimit: 32 * 1024 * 1024,
+      config: { approval: { title: (body) => lineTitle(body, true) } },
+      schema: { body: C.RelationInput.extend({ contents: P.KeyUpdates.optional() }), response: { 200: C.Ok } },
+    },
+    async (request) => {
+      const { contents, ...line } = request.body;
+      await relations.erase(actor(request), line, contents);
+      return { ok: true as const };
+    },
+  );
+  // What making a principal a member, or no longer one, seals again for whoever then acts as the group.
   app.get(
     '/api/relations/recipients',
     {
       schema: {
-        querystring: z.object({ subjectId: C.Id, principalId: C.Id, remove: z.enum(['true', 'false']).default('false') }),
+        querystring: z.object({ subjectId: C.Id, objectId: C.Id, remove: z.enum(['true', 'false']).default('false') }),
         response: { 200: C.listOf(P.KeySharingItem) },
       },
     },
     async (request) => {
-      await authorization.requirePrincipal(actor(request), request.query.principalId, 'share');
+      await authorization.requirePrincipal(actor(request), request.query.objectId, 'share');
       await principals.get(request.query.subjectId);
       return principals.keySharing.plan(
         actor(request),
-        request.query.principalId,
+        request.query.objectId,
         request.query.subjectId,
         'member',
         undefined,
         request.query.remove === 'true',
       );
-    },
-  );
-  app.delete(
-    '/api/relations',
-    { bodyLimit: 32 * 1024 * 1024, config: { approval: { title: ['関係を外す', 'Remove a relation'] } }, schema: { body: C.RelationInput.extend({ contents: P.KeyUpdates.optional() }), response: { 200: C.Ok } } },
-    async (request) => {
-      await principals.unrelate(
-        actor(request),
-        request.body.subjectId,
-        request.body.relation,
-        request.body.principalId,
-        request.body.contents,
-      );
-      return { ok: true as const };
-    },
-  );
-  app.get(
-    '/api/principals/:id/grants',
-    { schema: { params: C.IdParams, response: { 200: C.listOf(C.Grant) } } },
-    async (request) => ({ items: await principals.grants(actor(request), request.params.id), next: null }),
-  );
-  app.put(
-    '/api/principals/:id/grants/:principalId',
-    {
-      config: { approval: { title: ['権限を渡す', 'Grant permissions'] } },
-      schema: {
-        params: z.object({ id: C.Id, principalId: C.Id }),
-        body: z.object({ actions: z.array(C.Action).min(1) }).strict(),
-        response: { 200: C.Ok },
-      },
-    },
-    async (request) => {
-      await principals.grant(
-        actor(request),
-        request.params.id,
-        request.params.principalId,
-        request.body.actions,
-      );
-      return { ok: true as const };
-    },
-  );
-  app.delete(
-    '/api/principals/:id/grants/:principalId',
-    {
-      config: { approval: { title: ['権限を外す', 'Remove permissions'] } },
-      schema: { params: z.object({ id: C.Id, principalId: C.Id }), response: { 200: C.Ok } },
-    },
-    async (request) => {
-      await authorization.requirePrincipal(actor(request), request.params.id, 'share');
-      await context.db.pool.query('DELETE FROM principal_grants WHERE target_id=$1 AND principal_id=$2', [
-        request.params.id,
-        request.params.principalId,
-      ]);
-      return { ok: true as const };
     },
   );
   app.post(
@@ -613,7 +579,7 @@ export async function buildApp(context: Context) {
       schema: { params: C.IdParams, body: z.object({ principalId: C.Id }).strict(), response: { 200: C.Ok } },
     },
     async (request) => {
-      await principals.revoke(actor(request), request.params.id, request.body.principalId);
+      await relations.revoke(actor(request), request.params.id, request.body.principalId);
       return { ok: true as const };
     },
   );
