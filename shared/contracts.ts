@@ -145,6 +145,7 @@ export const OAuthDefinition = z.object({
   issuer: z.url().optional(),
   authorizeUrl: UrlTemplate,
   tokenUrl: UrlTemplate,
+  grantType: z.enum(['authorization_code', 'client_credentials']).optional(),
   identity: z
     .object({
       url: UrlTemplate.optional(),
@@ -172,7 +173,7 @@ export const OAuthDefinition = z.object({
   scopes: Scopes.default({ default: [], separator: ' ' }),
   fields: z.array(Field).default([]),
   outputs: OutputMap.default({ ACCESS_TOKEN: '/accessToken' }),
-  adapter: z.enum(['google', 'github', 'ebay', 'openrouter', 'cloudflare', 'slack']).optional(),
+  adapter: z.enum(['google', 'github', 'ebay', 'openrouter', 'cloudflare', 'slack', 'shopify']).optional(),
   keep: z.array(z.string()).default([]),
   hint: z.string().optional(),
 });
@@ -314,6 +315,10 @@ const resourceBase = {
   permissions: z.array(Action),
 };
 export const EnvironmentState = z.enum(['starting', 'running', 'stopping', 'stopped', 'failed']);
+export const EnvironmentDeletion = z.object({
+  state: z.enum(['pending', 'failed', 'complete']),
+  error: z.string().nullable(),
+});
 export const Lifetime = z
   .object({
     idleSeconds: z.number().int().min(60).max(86400).default(3600),
@@ -389,6 +394,7 @@ export const EnvironmentResource = z.object({
     manifestDigest: z.string().optional(),
     awsPrincipal: z.string().optional(),
     state: EnvironmentState,
+    deletion: EnvironmentDeletion.optional(),
     startedAt: Time.nullable(),
     stoppedAt: Time.nullable(),
     lastActiveAt: Time,

@@ -21,6 +21,9 @@ const CREATED: Record<string, readonly [string, string]> = {
 const roleTemplate = () => readFileSync(new URL('./aws-connection.yaml', import.meta.url));
 export async function routesResources(app: ApiApp, context: Context) {
   const { resources, authorization, catalog, functions, objects, environments, billing } = context;
+  app.get('/api/principals/:id/environment-callers', {
+    schema: { params: C.IdParams, response: { 200: C.listOf(C.Recipient) } },
+  }, async request => ({ items: await environments.callers(actor(request), request.params.id), next: null }));
   app.get('/api/catalog', { schema: { response: { 200: C.listOf(C.CatalogEntry) } } }, async (request) => ({
     items: await catalog.list(actor(request)),
     next: null,
@@ -221,18 +224,21 @@ export async function routesResources(app: ApiApp, context: Context) {
       schema: {
         params: C.IdParams,
         querystring: z.object({}).strict(),
-        response: { 200: C.Ok },
+        response: { 200: C.Ok, 202: C.EnvironmentDeletion },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const who = actor(request),
         row = await resources.get(request.params.id);
-      if (row.kind === 'environment') await environments.remove(who, row);
+      if (row.kind === 'environment') return reply.code(202).send(await environments.remove(who, row));
       else if (row.kind === 'object') await objects.remove(who, row);
       else await resources.delete(who, row);
       return { ok: true as const };
     },
   );
+  app.get('/api/resources/:id/deletion', {
+    schema: { params: C.IdParams, response: { 200: C.EnvironmentDeletion } },
+  }, request => environments.deletion(actor(request), request.params.id));
   app.get(
     '/api/resources/:id/recipients',
     { schema: { params: C.IdParams, response: { 200: C.listOf(C.Recipient) } } },

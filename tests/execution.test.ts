@@ -71,6 +71,7 @@ test('運営環境が自分の鍵で登録し、停止時に実行権を失効�
   assert.equal(payments.events.length, 1);
   assert.equal(runner.volumes.size, 1);
   await c.environments.remove(owner.actor, await c.resources.get(row.id));
+  await c.environments.tick();
   assert.equal(runner.volumes.size, 0);
 });
 

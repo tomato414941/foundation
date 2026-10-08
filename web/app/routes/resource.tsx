@@ -5,9 +5,9 @@ import { useState } from 'react';
 import { Link, redirect, useActionData, useLoaderData } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/resource';
-import { Resource } from '../../../shared/contracts';
+import { Resource, EnvironmentDeletion } from '../../../shared/contracts';
 import { decode } from '../../../shared/encryption';
-import { api, actionResult, formText } from '../api';
+import { api, ApiFailure, actionResult, formText } from '../api';
 import { authenticate, decryptVariable } from '../keys';
 import {
   Bytes,
@@ -23,13 +23,21 @@ import {
   usePolling,
   useTask,
 } from '../components';
-import { resourceKind } from '../navigation';
+import { resourceKind, sectionFor } from '../navigation';
 import { useWorkspace } from './workspace';
 import { ConnectionFacts } from '../connection-facts';
 import { custodyClient } from '../custody';
 import { availableEnvironments, EnvironmentChoice } from '../environments';
+import { EnvironmentDelete } from '../environment-delete';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
-  const resource = await api('/resources/' + params.id, { signal: request.signal }, Resource);
+  const resource = await api('/resources/' + params.id, { signal: request.signal }, Resource).catch(async error => {
+    if (params.section === 'environments' && error instanceof ApiFailure && error.status === 404) {
+      const deletion = await api('/resources/' + params.id + '/deletion', { signal: request.signal }, EnvironmentDeletion)
+        .catch(() => null);
+      if (deletion?.state === 'complete') throw redirect(`/p/${params.owner}/environments?deleted=1`);
+    }
+    throw error;
+  });
   if (resource.ownerId !== params.owner || resource.kind !== resourceKind(params.section))
     throw new Response('Not found', { status: 404 });
   return { resource, environments: resource.kind === 'connection' ? await availableEnvironments(resource.ownerId) : [] };
@@ -74,7 +82,7 @@ export default function ResourceDetail() {
   const [revoke, setRevoke] = useState(true);
   const can = (action: (typeof item.permissions)[number]) => item.permissions.includes(action);
   usePolling(
-    item.kind === 'environment' && ['starting', 'running', 'stopping'].includes(item.data.state),
+    item.kind === 'environment' && !item.data.deletion && ['starting', 'running', 'stopping'].includes(item.data.state),
     item.kind === 'environment' && item.data.state === 'running' ? 15000 : 2500,
   );
   const secret = async () => {
@@ -89,6 +97,7 @@ export default function ResourceDetail() {
   return (
     <Page
       title={item.name}
+      back={{ to: `/p/${item.ownerId}/${sectionFor(item.kind)}`, label: t(item.kind === 'environment' ? 'backToEnvironments' : 'backToList') }}
       actions={
         <>
           {can('update') && !['environment', 'connection'].includes(item.kind) && (
@@ -210,26 +219,25 @@ export default function ResourceDetail() {
       )}
       {item.kind === 'environment' && (
         <Panel>
-          {item.data.executorId && <Detail label={t('executionDestination')}>
-            <span className="break-all font-mono text-sm">{item.data.executorId}</span><Copy value={item.data.executorId} />
-            <Link className="ml-3 underline" to={'/account/trust?principal=' + item.data.executorId}>{t('trustIdentity')}</Link>
-          </Detail>}
+          {item.data.executorId && <Button variant="ghost" asChild>
+            <Link to={'/account/trust?principal=' + item.data.executorId}>{t('verifyEnvironment')}</Link>
+          </Button>}
           {item.data.driver !== 'attached' && <><Detail label={t('image')}>{item.data.image ?? t('defaultImage')}</Detail>
           <Detail label={t('size')}>{t(item.data.size)}</Detail>
           <Detail label={t('maximum')}>{item.data.lifetime.maxSeconds / 60}</Detail>
           <Detail label={t('idle')}>{item.data.lifetime.idleSeconds / 60}</Detail></>}
           {item.data.error && <Notice tone={'error'}>{t('failure')}</Notice>}
-          {item.data.state === 'running' && can('execute') && (
+          {!item.data.deletion && item.data.state === 'running' && can('execute') && (
             <Button variant="default" asChild>
               <Link to="run">{t('execute')}</Link>
             </Button>
           )}
-          {['starting', 'running'].includes(item.data.state) && can('update') && (
+          {!item.data.deletion && ['starting', 'running'].includes(item.data.state) && can('delete') && (
             <Confirm label={t('stop')} name={item.name} body={t('stopBody')} danger={false}>
               <input type="hidden" name="intent" value="stop" />
             </Confirm>
           )}
-          {['stopped', 'failed'].includes(item.data.state) && (
+          {!item.data.deletion && ['stopped', 'failed'].includes(item.data.state) && (
             <p className="leading-relaxed text-muted-foreground">{t('stoppedHelp')}</p>
           )}
         </Panel>
@@ -255,7 +263,8 @@ export default function ResourceDetail() {
           )}
         </Panel>
       )}
-      {can('delete') && (
+      {item.kind === 'environment' && can('delete') && <EnvironmentDelete item={item} />}
+      {item.kind !== 'environment' && can('delete') && (
         <div className="flex min-w-0 flex-wrap items-center">
           <Confirm label={t(item.kind === 'connection' ? 'disconnect' : 'delete')} name={item.name}>
             {item.kind === 'connection' && item.data.methodKind === 'oauth' && (
@@ -287,7 +296,8 @@ function BoxDetails({ item }: { item: Awaited<ReturnType<typeof clientLoader>>['
       </Detail>
       {'state' in item.data && (
         <Detail label={t('status')}>
-          <State value={item.data.state} />
+          <State value={item.kind === 'environment' && item.data.deletion
+            ? item.data.deletion.state === 'failed' ? 'deleteFailed' : 'deleting' : item.data.state} />
         </Detail>
       )}
       {item.kind === 'connection' && (

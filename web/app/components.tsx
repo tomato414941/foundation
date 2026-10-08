@@ -36,14 +36,19 @@ export function Page({
   children,
   actions,
   narrow = false,
+  back,
 }: {
   title: string;
   children: ReactNode;
   actions?: ReactNode;
   narrow?: boolean;
+  back?: { to: string; label: string };
 }) {
   return (
     <section className={cn('mx-auto flex w-full flex-col gap-6', narrow ? 'max-w-2xl' : 'max-w-6xl')}>
+      {back && <Link to={back.to} className="flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+        <ChevronLeft className="size-4" aria-hidden="true" />{back.label}
+      </Link>}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <h1 className="min-w-0 text-2xl font-semibold tracking-tight wrap-anywhere">{title}</h1>
         {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
@@ -132,7 +137,7 @@ export function State({ value }: { value: string }) {
         'gap-1.5 font-normal',
         ['ready', 'succeeded', 'approved', 'running'].includes(value) &&
           'border-emerald-500/20 bg-emerald-500/5 text-emerald-300',
-        ['failed', 'reconnect', 'reconnect_required'].includes(value) &&
+        ['failed', 'deleteFailed', 'reconnect', 'reconnect_required'].includes(value) &&
           'border-amber-500/20 bg-amber-500/5 text-amber-300',
       )}
     >

@@ -33,6 +33,9 @@ export function ResourceTable({
         </TableHeader>
         <TableBody>
           {items.map((item) => {
+            const state = item.kind === 'environment' && item.data.deletion
+              ? item.data.deletion.state === 'failed' ? 'deleteFailed' : 'deleting'
+              : 'state' in item.data ? item.data.state : null;
             const Icon =
               item.kind === 'connection'
                 ? Link2
@@ -73,7 +76,7 @@ export function ResourceTable({
                         </>
                       )}
                       <div className="flex gap-2 text-xs text-muted-foreground sm:hidden">
-                        {'state' in item.data && <State value={item.data.state} />}
+                        {state && <State value={state} />}
                         {item.kind === 'object' && <Bytes value={item.data.size} />}
                         {item.kind === 'variable' && <Bytes value={item.data.bytes} />}
                       </div>
@@ -83,8 +86,8 @@ export function ResourceTable({
                 <TableCell className="hidden px-5 py-4 text-muted-foreground sm:table-cell">
                   {kinds ? (
                     t(sectionFor(item.kind))
-                  ) : 'state' in item.data ? (
-                    <State value={item.data.state} />
+                  ) : state ? (
+                    <State value={state} />
                   ) : item.kind === 'object' ? (
                     <Bytes value={item.data.size} />
                   ) : item.kind === 'variable' ? (

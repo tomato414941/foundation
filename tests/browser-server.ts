@@ -15,10 +15,19 @@ import { Connections } from '../runtime/connections.js';
 import { CommandProcess } from '../runtime/command.js';
 import { MemoryJournal } from './delegation-support.js';
 import type { EnvironmentOptions } from '../shared/contracts.js';
+import { DomainError } from '../server/errors.js';
 
 const agents = new Map<string, Executor>();
 const running = new Map<string, Promise<void>>();
+const deletions = new Map<string, { phase: 'stop' | 'volume'; gate?: Promise<void>; release?: () => void; fail?: boolean }>();
 class BrowserRunner extends MemoryRunner {
+  private async beforeDelete(id: string, phase: 'stop' | 'volume') {
+    const key = phase === 'stop' ? id : [...deletions.keys()].find(key => 'vol_' + key.replaceAll('-', '') === id);
+    const plan = key ? deletions.get(key) : null;
+    if (plan?.phase !== phase) return;
+    if (plan.fail) { plan.fail = false; throw new DomainError(502, 'runner_unavailable', 'Provider unavailable'); }
+    if (plan.gate) await plan.gate;
+  }
   override async start(id: string, options: EnvironmentOptions, environment: Record<string, string>,
     created: (id: string, volume: string) => Promise<void>) {
     const machine = await super.start(id, options, environment, created);
@@ -43,7 +52,8 @@ class BrowserRunner extends MemoryRunner {
       new CommandProcess({ isolation: 'process' }), new Connections(binding, keys, broker.connections(), journal, transport)));
     return machine;
   }
-  override async stop(id: string) { agents.delete(id); await super.stop(id); }
+  override async stop(id: string) { await this.beforeDelete(id, 'stop'); agents.delete(id); await super.stop(id); }
+  override async removeVolume(id: string) { await this.beforeDelete(id, 'volume'); await super.removeVolume(id); }
 }
 
 const fixtureData = await fixture();
@@ -78,6 +88,23 @@ const context = await createContext(
 );
 const app = await buildApp(context);
 app.get('/__test/ready', async () => ({ pid: process.pid }));
+app.post<{ Params: { id: string }; Body: { phase: 'stop' | 'volume'; mode: 'hold' | 'fail' | 'release' } }>(
+  '/__test/deletion/:id', async request => {
+    const { id } = request.params;
+    if (request.body.mode === 'release') { deletions.get(id)?.release?.(); deletions.delete(id); }
+    else {
+      const plan: { phase: 'stop' | 'volume'; gate?: Promise<void>; release?: () => void; fail?: boolean } = { phase: request.body.phase };
+      if (request.body.mode === 'hold') plan.gate = new Promise(resolve => { plan.release = resolve; });
+      else plan.fail = true;
+      deletions.set(id, plan);
+    }
+    return { ok: true };
+  });
+app.post<{ Params: { id: string }; Body: { name: string } }>('/__test/caller/:id', async request => {
+  const caller = await fixtureData.person(request.body.name);
+  await context.principals.relate({ id: request.params.id }, caller.actor.id, 'agent', request.params.id);
+  return { id: caller.actor.id, name: request.body.name };
+});
 app.get<{ Params: { id: string } }>('/__test/executor/:id/fingerprint', async request => {
   const agent = agents.get(request.params.id);
   return agent ? { id: agent.binding.principalId, fingerprint: await hash(agent.binding) } : null;

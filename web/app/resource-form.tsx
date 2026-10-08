@@ -1,13 +1,13 @@
 import { Button } from './components/ui/button';
 import { SelectItem } from './components/ui/select';
-import { InputField, TextareaField, SelectField } from './form-fields';
+import { InputField, TextareaField, SelectField, CheckboxField } from './form-fields';
 import { Notice } from './components';
 import { useEffect, useState } from 'react';
 import { z } from 'zod';
 import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
-import { CatalogEntry, CatalogMethod, Resource, Payment, Usage, listOf } from '../../shared/contracts';
+import { CatalogEntry, CatalogMethod, Resource, Payment, Usage, Recipient, listOf } from '../../shared/contracts';
 import type { CatalogConnectionMethod, ResourceView } from '../../shared/contracts';
 import { decode, encode } from '../../shared/encryption';
 import { canonical } from '../../shared/authority';
@@ -48,6 +48,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     connections,
     shared,
     environments,
+    callers,
   ] = await Promise.all([
     id ? api('/resources/' + id, { signal: request.signal }, Resource) : null,
     ['connection', 'app'].includes(kind)
@@ -69,6 +70,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       ? api('/resources/shared', { signal: request.signal }, listOf(Resource))
       : null,
     isProtected(kind) ? availableEnvironments(params.owner!) : [],
+    kind === 'environment' ? api(`/principals/${params.owner}/environment-callers`, { signal: request.signal }, listOf(Recipient)) : null,
   ]);
   if (resource && (resource.ownerId !== params.owner || resource.kind !== kind))
     throw new Response('Not found', { status: 404 });
@@ -126,6 +128,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     pinnedMethod,
     appMaterial,
     environments,
+    callers: callers?.items ?? [],
     selectedExecutors,
     content,
     binary,
@@ -206,6 +209,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       body.options = {
         image: formText(form, 'image') || undefined,
         size: formText(form, 'size'),
+        ...(form.getAll('callerIds').length ? { callerIds: form.getAll('callerIds').map(String) } : {}),
         lifetime: {
           idleSeconds: Number(formText(form, 'idle')) * 60,
           maxSeconds: Number(formText(form, 'maximum')) * 60,
@@ -304,8 +308,8 @@ export default function ResourceForm() {
   const service = data.catalog.find((item) => item.id === serviceId);
   const offered = (entry: typeof service) =>
     entry
-      ? eligibleMethods.filter((item) =>
-          Object.values(entry.methods).some((method) => method.id === item.id),
+      ? Object.values(entry.methods).flatMap((method) =>
+          eligibleMethods.filter((item) => item.id === method.id),
         )
       : eligibleMethods;
   const methods = offered(service);
@@ -540,7 +544,7 @@ export default function ResourceForm() {
                               </SelectItem>
                             ))}
                           </SelectField>}
-                          <InputField
+                          {method.config.grantType !== 'client_credentials' && <InputField
                             name="scopes"
                             label={t('scopes')}
                             defaultValue={
@@ -549,8 +553,8 @@ export default function ResourceForm() {
                                 : method.config.scopes.default.join(' ')
                             }
                             hint={t('scopesHelp')}
-                          />
-                          {method.config.scopes.docs && (
+                          />}
+                          {method.config.grantType !== 'client_credentials' && method.config.scopes.docs && (
                             <ExternalLink href={method.config.scopes.docs}>{t('docs')}</ExternalLink>
                           )}
                         </>
@@ -679,9 +683,16 @@ export default function ResourceForm() {
                       min={1}
                       max={1440}
                     />
-                    <Notice tone="info">{t('managedExecutorHelp')}</Notice>
+                    <Notice tone="info">{t('managedEnvironmentHelp')}</Notice>
                   </Panel>
                 )}
+                {data.kind === 'environment' && data.callers.length > 0 && <Panel title={t('environmentUsers')}>
+                  <p className="text-sm leading-relaxed text-muted-foreground">{t('environmentUsersHelp')}</p>
+                  {data.callers.map(caller => caller.id === sessionData.principal?.id
+                    ? <div key={caller.id}><input type="hidden" name="callerIds" value={caller.id} />
+                        <p className="text-sm">{t('environmentUserMe', { name: caller.name })}</p></div>
+                    : <CheckboxField key={caller.id} name="callerIds" value={caller.id} label={caller.name} />)}
+                </Panel>}
                 {data.kind === 'function' && (
                   <>
                     <TextareaField

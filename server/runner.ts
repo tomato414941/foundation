@@ -8,6 +8,7 @@ export interface Runner {
     created: (machineId: string, volumeId: string) => Promise<void>): Promise<string>;
   stop(machineId: string): Promise<void>;
   find(id: string): Promise<string | null>;
+  findVolume(id: string): Promise<string | null>;
   removeVolume(volumeId: string): Promise<void>;
 }
 const sizes = {
@@ -46,29 +47,31 @@ export class FlyRunner implements Runner {
     if (!Array.isArray(rows)) fail(502, 'runner_response', 'The environment provider returned an invalid response.');
     return (rows.find(row => row.name === 'foundation-' + id)?.id as string | undefined) ?? null;
   }
-  private async volume(id: string, options: EnvironmentOptions) {
+  async findVolume(id: string) {
     const name = 'f_' + id.replaceAll('-', '').slice(0, 28);
-    const list = async () => {
-      const rows = await this.call('GET', '/volumes');
-      if (!Array.isArray(rows)) fail(502, 'runner_response', 'The environment provider returned an invalid response.');
-      const matches = rows.filter(row => row.name === name && row.state !== 'destroyed');
-      if (matches.length > 1) fail(409, 'volume_ambiguous', 'Resolve duplicate executor volumes before continuing.');
-      return matches[0];
-    };
-    let volume = await list();
-    if (!volume) {
+    const rows = await this.call('GET', '/volumes');
+    if (!Array.isArray(rows)) fail(502, 'runner_response', 'The environment provider returned an invalid response.');
+    const matches = rows.filter(row => row.name === name && row.state !== 'destroyed');
+    if (matches.length > 1) fail(409, 'volume_ambiguous', 'Resolve duplicate executor volumes before continuing.');
+    if (!matches.length) return null;
+    if (typeof matches[0]!.id !== 'string') fail(502, 'runner_response', 'The executor volume could not be identified.');
+    return matches[0]!.id;
+  }
+  private async volume(id: string, options: EnvironmentOptions) {
+    let volumeId = await this.findVolume(id);
+    if (!volumeId) {
       try {
-        const created = await this.call('POST', '/volumes', { name, region: this.config.FLY_REGION,
+        const created = await this.call('POST', '/volumes', { name: 'f_' + id.replaceAll('-', '').slice(0, 28), region: this.config.FLY_REGION,
           size_gb: 3, encrypted: true, auto_backup_enabled: true, compute: sizes[options.size] });
-        if (Array.isArray(created)) fail(502, 'runner_response', 'The environment provider returned an invalid response.');
-        volume = created;
+        if (Array.isArray(created) || typeof created.id !== 'string')
+          fail(502, 'runner_response', 'The executor volume could not be identified.');
+        volumeId = created.id;
       } catch (error) {
-        volume = await list();
-        if (!volume) throw error;
+        volumeId = await this.findVolume(id);
+        if (!volumeId) throw error;
       }
     }
-    if (typeof volume.id !== 'string') fail(502, 'runner_response', 'The executor volume could not be identified.');
-    return volume.id;
+    return volumeId;
   }
   async start(id: string, options: EnvironmentOptions, environment: Record<string, string>,
     created: (machineId: string, volumeId: string) => Promise<void>) {

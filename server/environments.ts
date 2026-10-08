@@ -8,8 +8,8 @@ import { digest, token } from './vault.js';
 import type { Vault } from './vault.js';
 import type { Configuration } from './config.js';
 import type { Delegation } from './delegation.js';
-import { EnvironmentInput } from '../shared/contracts.js';
-import type { EnvironmentOptions } from '../shared/contracts.js';
+import { EnvironmentInput, EnvironmentDeletion } from '../shared/contracts.js';
+import type { EnvironmentOptions, PublicEncryptionKey } from '../shared/contracts.js';
 import { EnvironmentBootstrap, EnvironmentEnrollment } from '../shared/protocol.js';
 import { canonical, hash, verifyBinding } from '../shared/authority.js';
 import { fail, failure, required } from './errors.js';
@@ -19,9 +19,34 @@ interface Job {
   bootstrap_ciphertext: string | null; bootstrap_digest: string | null;
   bootstrap_expires_at: Date | null; enrollment_digest: string | null; attempts: number;
 }
+interface Deletion {
+  resource_id: string; owner_id: string; actor_id: string | null;
+  state: 'pending' | 'failed' | 'complete'; error: string | null;
+}
 export class Environments {
   constructor(readonly resources: Resources, readonly billing: Billing, readonly runner: Runner,
     readonly vault: Vault, readonly config: Configuration, readonly delegation: Delegation) {}
+
+  async callers(actor: Actor, ownerId: string) {
+    if (!(await this.resources.authorization.canCreate(actor, ownerId, 'environment')))
+      fail(403, 'forbidden', 'You cannot open environments for this principal.');
+    const candidates = await this.resources.db.all<{ id: string; name: string; public_key: PublicEncryptionKey }>(
+      `WITH RECURSIVE members(id) AS (
+        SELECT $1::uuid UNION SELECT r.subject_id FROM relations r JOIN members m ON r.principal_id=m.id
+        WHERE r.relation IN ('owner','member')
+      ) SELECT p.id,p.name,p.public_key FROM principals p WHERE p.public_key IS NOT NULL
+        AND EXISTS(SELECT 1 FROM principal_key_bindings b WHERE b.principal_id=p.id)
+        AND (p.id=$2 OR p.id IN (SELECT id FROM members)
+          OR EXISTS(SELECT 1 FROM relations r WHERE r.subject_id=p.id AND r.principal_id IN (SELECT id FROM members) AND r.relation='agent')
+          OR EXISTS(SELECT 1 FROM principal_grants g WHERE g.principal_id=p.id AND g.target_id=$1 AND 'execute'=ANY(g.actions)))
+      ORDER BY p.name,p.id`, [ownerId, actor.id]);
+    const allowed = [];
+    for (const candidate of candidates) {
+      if (await this.resources.authorization.principal({ id: candidate.id }, ownerId, 'execute'))
+        allowed.push({ id: candidate.id, name: candidate.name, publicKey: candidate.public_key });
+    }
+    return allowed;
+  }
 
   async create(actor: Actor, ownerId: string, options: EnvironmentOptions, name?: string) {
     if (!this.runner.enabled) fail(503, 'environments_unavailable', 'Environments are not configured.');
@@ -39,7 +64,7 @@ export class Environments {
     return this.resources.db.transaction(async connection => {
       await this.billing.reserve(ownerId, 'compute',
         options.lifetime.maxSeconds * { small: 1, medium: 2, large: 4 }[options.size], connection);
-      const id = randomUUID(), label = name ?? 'Foundation Agent ' + id.slice(0, 8);
+      const id = randomUUID(), label = name ?? '実行環境 ' + id.slice(0, 8);
       const executor = await this.resources.principals.create(label, null, undefined, connection);
       const bootstrap = EnvironmentBootstrap.parse({ id, executorId: executor.id, ownerId, name: label,
         origin: this.config.origin, bootstrap: token(), commandImage: image, callers });
@@ -118,10 +143,18 @@ export class Environments {
       `UPDATE environment_jobs j SET lease_until=now()+interval '2 minutes',lease_token=$1,attempts=attempts+1
        WHERE resource_id=(SELECT j.resource_id FROM environment_jobs j JOIN resources r ON r.id=j.resource_id
          WHERE (j.lease_until IS NULL OR j.lease_until<now()) AND j.retry_at<=now()
-           AND r.data->>'state' IN ('starting','stopping')
+           AND (r.data->>'state' IN ('starting','stopping') OR r.data->'deletion'->>'state'='pending')
+           AND coalesce(r.data->'deletion'->>'state','')<>'failed'
          ORDER BY r.created_at FOR UPDATE OF j SKIP LOCKED LIMIT 1) RETURNING j.*`, [lease]);
     if (!job) return false;
     let row = await this.resources.get(job.resource_id);
+    const renewal = setInterval(() => {
+      void this.resources.db.pool.query(
+        "UPDATE environment_jobs SET lease_until=now()+interval '2 minutes' WHERE resource_id=$1 AND lease_token=$2",
+        [row.id, lease]).catch(() => {});
+    }, 30_000);
+    renewal.unref();
+    let deletionStep: 'stop' | 'disk' | 'resource' = 'stop';
     try {
       if (row.data.state === 'starting') {
         await this.billing.requirePayment(row.owner_id);
@@ -139,41 +172,95 @@ export class Environments {
             [row.id, new Date().toISOString()]);
         });
       } else if (row.data.state === 'stopping') {
-        const machine = job.machine_id ?? await this.runner.find(row.id);
+        const machine = row.data.driver === 'attached' ? null : job.machine_id ?? await this.runner.find(row.id);
         if (machine) await this.runner.stop(machine);
         await this.resources.db.transaction(async connection => {
           row = required(await this.resources.db.one<ResourceRow>(
             'SELECT * FROM resources WHERE id=$1 FOR UPDATE', [row.id], connection));
           const seconds = row.data.startedAt
             ? Math.max(0, Math.ceil((Date.now() - Date.parse(String(row.data.startedAt))) / 1000)) : 0;
-          await this.billing.record(row.owner_id, 'compute',
+          if (row.data.driver !== 'attached') await this.billing.record(row.owner_id, 'compute',
             seconds * { small: 1, medium: 2, large: 4 }[String(row.data.size) as EnvironmentOptions['size']],
             'environment:' + row.id, connection);
-          await this.resources.update(row, { data: { ...row.data,
+          row = await this.resources.update(row, { data: { ...row.data,
             state: row.data.error ? 'failed' : 'stopped', stoppedAt: new Date().toISOString() } }, connection);
           await connection.query('DELETE FROM credentials WHERE environment_id=$1', [row.id]);
           await connection.query('UPDATE environment_jobs SET bootstrap_ciphertext=NULL,bootstrap_digest=NULL WHERE resource_id=$1', [row.id]);
           await this.resources.audit.record(row.owner_id, null, 'environment.stop', row.id, { seconds }, connection);
         });
       }
+      const deletion = await this.resources.db.one<Deletion>(
+        "SELECT * FROM environment_deletions WHERE resource_id=$1 AND state='pending'", [row.id]);
+      if (deletion && ['stopped', 'failed'].includes(String(row.data.state))) {
+        deletionStep = 'disk';
+        const volume = row.data.driver === 'attached' ? null : job.volume_id ?? await this.runner.findVolume(row.id);
+        if (volume) await this.runner.removeVolume(volume);
+        deletionStep = 'resource';
+        await this.resources.db.transaction(async connection => {
+          await this.resources.delete({ id: deletion.actor_id ?? row.owner_id }, row, connection);
+          await connection.query(
+            "UPDATE environment_deletions SET state='complete',error=NULL,completed_at=now() WHERE resource_id=$1", [row.id]);
+        });
+      }
       await this.resources.db.pool.query(
         "UPDATE environment_jobs SET lease_until=NULL,lease_token=NULL,retry_at=now()+interval '5 seconds' WHERE resource_id=$1 AND lease_token=$2",
         [row.id, lease]);
     } catch (error) {
-      if (row.data.state === 'starting') await this.requestStop(row.id, failure(error).message);
+      const deleting = await this.resources.db.one<Deletion>(
+        "SELECT * FROM environment_deletions WHERE resource_id=$1 AND state='pending'", [row.id]);
+      if (row.data.state === 'starting') await this.requestStop(row.id, deleting ? null : failure(error).message);
+      else if (deleting) await this.resources.db.transaction(async connection => {
+        const cause = failure(error).code;
+        const code = ['runner_unavailable', 'runner_response'].includes(cause)
+          ? deletionStep === 'disk' ? 'environment_disk_delete_failed' : 'environment_stop_failed' : cause;
+        await connection.query(
+          "UPDATE environment_deletions SET state='failed',error=$2 WHERE resource_id=$1", [row.id, code]);
+        await connection.query(
+          "UPDATE resources SET data=data||jsonb_build_object('deletion',jsonb_build_object('state','failed','error',$2::text)),version=version+1,updated_at=now() WHERE id=$1",
+          [row.id, code]);
+      });
       await this.resources.db.pool.query(
         "UPDATE environment_jobs SET lease_until=NULL,lease_token=NULL,retry_at=now()+$3::int*interval '1 second' WHERE resource_id=$1 AND lease_token=$2",
-        [row.id, lease, Math.min(300, 2 ** Math.min(job.attempts, 8))]);
-    }
+        [row.id, lease, deleting ? 0 : Math.min(300, 2 ** Math.min(job.attempts, 8))]);
+    } finally { clearInterval(renewal); }
     return true;
   }
   async remove(actor: Actor, row: ResourceRow) {
-    await this.resources.authorization.requireResource(actor, row, 'delete');
-    if (!['stopped', 'failed'].includes(String(row.data.state)))
-      fail(409, 'environment_active', 'Stop the environment before removing it.');
-    const job = await this.resources.db.one<Job>('SELECT * FROM environment_jobs WHERE resource_id=$1', [row.id]);
-    if (job?.volume_id) await this.runner.removeVolume(job.volume_id);
-    await this.resources.delete(actor, row);
+    if (row.kind !== 'environment') fail(400, 'wrong_kind', 'Choose an environment.');
+    await this.resources.db.transaction(async connection => {
+      await connection.query('SELECT id FROM principals WHERE id=$1 FOR UPDATE', [row.owner_id]);
+      await connection.query('SELECT resource_id FROM executor_environments WHERE resource_id=$1 FOR UPDATE', [row.id]);
+      row = required(await this.resources.db.one<ResourceRow>(
+        'SELECT * FROM resources WHERE id=$1 FOR UPDATE', [row.id], connection));
+      await this.resources.authorization.requireResource(actor, row, 'delete', connection);
+      const existing = await this.resources.db.one<Deletion>(
+        'SELECT * FROM environment_deletions WHERE resource_id=$1', [row.id], connection);
+      if (existing?.state === 'pending') return;
+      if (!['stopped', 'failed'].includes(String(row.data.state))) {
+        await this.delegation.stop({ id: row.owner_id }, row.id, connection);
+        row = await this.resources.get(row.id, connection);
+        if (row.data.driver !== 'attached') row.data.state = 'stopping';
+      }
+      await connection.query(
+        `INSERT INTO environment_deletions(resource_id,owner_id,actor_id,state) VALUES($1,$2,$3,'pending')
+         ON CONFLICT(resource_id) DO UPDATE SET state='pending',error=NULL,actor_id=EXCLUDED.actor_id`,
+        [row.id, row.owner_id, actor.id]);
+      await this.resources.update(row, { data: { ...row.data, deletion: { state: 'pending', error: null } } }, connection);
+      await connection.query(
+        `INSERT INTO environment_jobs(resource_id) VALUES($1)
+         ON CONFLICT(resource_id) DO UPDATE SET retry_at=now(),attempts=0`, [row.id]);
+      await this.resources.audit.record(row.owner_id, actor.id, 'environment.delete_requested', row.id, {}, connection);
+    });
+    return EnvironmentDeletion.parse({ state: 'pending', error: null });
+  }
+  async deletion(actor: Actor, id: string) {
+    const deletion = required(await this.resources.db.one<Deletion>(
+      'SELECT * FROM environment_deletions WHERE resource_id=$1', [id]));
+    const row = await this.resources.db.one<ResourceRow>('SELECT * FROM resources WHERE id=$1', [id]);
+    if (row) await this.resources.authorization.requireResource(actor, row, 'read');
+    else if (!actor.requestId && deletion.actor_id === actor.id) await this.resources.authorization.active(actor);
+    else await this.resources.authorization.requirePrincipal(actor, deletion.owner_id, 'read');
+    return EnvironmentDeletion.parse(deletion);
   }
   async enforcePayment() {
     const rows = await this.resources.db.all<{ id: string; owner_id: string }>(

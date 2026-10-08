@@ -100,6 +100,15 @@ ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS bootstrap_digest text;
 ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS bootstrap_ciphertext text;
 ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS bootstrap_expires_at timestamptz;
 ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS enrollment_digest text;
+CREATE TABLE IF NOT EXISTS environment_deletions (
+  resource_id uuid PRIMARY KEY,
+  owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  actor_id uuid REFERENCES principals(id) ON DELETE SET NULL,
+  state text NOT NULL CHECK (state IN ('pending','failed','complete')),
+  error text,
+  requested_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz
+);
 CREATE TABLE IF NOT EXISTS grants (
   resource_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
   principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,

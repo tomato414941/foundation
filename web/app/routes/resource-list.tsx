@@ -35,7 +35,8 @@ export default function ResourceList() {
         : true;
   usePolling(
     data.items.some(
-      (item) => item.kind === 'environment' && ['starting', 'stopping'].includes(item.data.state),
+      (item) => item.kind === 'environment' && (item.data.deletion
+        ? item.data.deletion.state === 'pending' : ['starting', 'stopping'].includes(item.data.state)),
     ),
   );
   return (
@@ -54,6 +55,7 @@ export default function ResourceList() {
       }
     >
       <ErrorNotice error={search.get('error')} />
+      {section === 'environments' && search.get('deleted') === '1' && <Notice tone="success">{t('environmentDeleted')}</Notice>}
       {!available && <Notice>{t('featureUnavailable')}</Notice>}
       <Form method="get" className="flex items-center gap-2">
         <div className="relative min-w-0 flex-1 sm:max-w-sm">

@@ -67,4 +67,8 @@ export class MemoryRunner implements Runner {
   async find(id: string) {
     return this.machines.has(id) ? id : null;
   }
+  async findVolume(id: string) {
+    const volume = 'vol_' + id.replaceAll('-', '');
+    return this.volumes.has(volume) ? volume : null;
+  }
 }

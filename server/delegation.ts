@@ -308,22 +308,22 @@ export class Delegation {
     return this.get(actor, id);
   }
 
-  async stop(actor: Actor, environmentId: string) {
-    const resource = await this.resources.get(environmentId);
-    await this.resources.authorization.requireResource(actor, resource, 'delete');
-    await this.resources.db.transaction(async connection => {
-      await connection.query('UPDATE executor_environments SET stopped_at=now() WHERE resource_id=$1', [environmentId]);
-      await connection.query(
-        `UPDATE resources SET data=data||jsonb_build_object('state','stopped','stoppedAt',$2::text),version=version+1 WHERE id=$1`,
-        [environmentId, new Date().toISOString()],
-      );
-      await connection.query(
-        `UPDATE execution_tasks SET cancel_requested=true,
+  async stop(actor: Actor, environmentId: string, connection: Queryable = this.resources.db.pool): Promise<void> {
+    if (connection === this.resources.db.pool)
+      return this.resources.db.transaction(transaction => this.stop(actor, environmentId, transaction));
+    const resource = await this.resources.get(environmentId, connection);
+    await this.resources.authorization.requireResource(actor, resource, 'delete', connection);
+    await connection.query('UPDATE executor_environments SET stopped_at=now() WHERE resource_id=$1', [environmentId]);
+    await connection.query(
+      `UPDATE resources SET data=data||jsonb_build_object('state','stopped','stoppedAt',$2::text),version=version+1 WHERE id=$1`,
+      [environmentId, new Date().toISOString()],
+    );
+    await connection.query(
+      `UPDATE execution_tasks SET cancel_requested=true,
          state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'cancelled' END,
          error=CASE WHEN phase='dispatched' THEN 'environment_stopped' ELSE NULL END,
          finished_at=now(),lease_until=NULL WHERE environment_id=$1 AND state IN ('queued','running')`, [environmentId],
-      );
-    });
+    );
   }
 
   async recover() {
