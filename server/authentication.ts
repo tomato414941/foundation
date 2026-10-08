@@ -197,6 +197,7 @@ export class Authentication {
       createdAt: iso(row.created_at),
       lastUsedAt: row.last_used_at ? iso(row.last_used_at) : null,
       expiresAt: row.expires_at ? iso(row.expires_at) : null,
+      canOpen: row.private_wrap !== null,
     });
   }
   async removeCredential(actor: Actor, principalId: string, id: string) {

@@ -198,6 +198,12 @@ export async function registerPasskey(name: string, principal?: Pick<PrincipalVi
   await migrateUnlockedSecrets(result.principalId);
   return { ...result, encrypted: !!(await getKey(result.principalId)) };
 }
+// Wrap this browser's unlocked keys for another of the principal's passkeys, by authenticating with it.
+export async function handKey(principalId: string, credentialId: string) {
+  const existing = unlocked.get(principalId);
+  if (!existing) throw new ApiFailure('key_unavailable');
+  return authenticate(principalId, credentialId, existing);
+}
 export async function issueKey(
   principal: Pick<PrincipalView, 'id' | 'publicKey'>,
   name: string,

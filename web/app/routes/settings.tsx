@@ -27,6 +27,7 @@ import { actionResult, api, formText } from '../api';
 import { Bytes, Confirm, Copy, DateText, Detail, ErrorNotice, Page, Paging, Panel } from '../components';
 import { useWorkspace } from './workspace';
 import { rekeySharing } from '../keys';
+import { CredentialsPanel } from '../credentials-panel';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   if (!['general', 'credentials', 'billing', 'integrations', 'audit'].includes(params.tab))
     throw new Response('Not found', { status: 404 });
@@ -191,47 +192,7 @@ export default function SettingsPage() {
             </>
           )}
           {data.credentials && (
-            <Panel title={t('credentials')}>
-              <Button variant="default" asChild>
-                <Link to="new">{t('add')}</Link>
-              </Button>
-              <ul className="divide-y divide-border">
-                {data.credentials.items.map((credential) => (
-                  <li
-                    key={credential.id}
-                    className="flex flex-wrap items-center gap-3 py-4 first:pt-0 last:pb-0"
-                  >
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <div className="font-medium wrap-anywhere">{credential.name}</div>
-                      <div className="text-xs leading-relaxed text-muted-foreground wrap-anywhere">
-                        {
-                          <>
-                            {t(
-                              credential.kind === 'key'
-                                ? 'apiKey'
-                                : credential.kind === 'email'
-                                  ? 'email'
-                                  : 'passkeySignin',
-                            )}{' '}
-                            · <DateText value={credential.lastUsedAt ?? credential.createdAt} />
-                            {credential.expiresAt && (
-                              <>
-                                {' '}
-                                · {t('expires')}: <DateText value={credential.expiresAt} />
-                              </>
-                            )}
-                          </>
-                        }
-                      </div>
-                    </div>
-                    <Confirm label={t('delete')} name={credential.name}>
-                      <input type="hidden" name="intent" value="credential" />
-                      <input type="hidden" name="credentialId" value={credential.id} />
-                    </Confirm>
-                  </li>
-                ))}
-              </ul>
-            </Panel>
+            <CredentialsPanel principal={data.principal} items={data.credentials.items} currentId={session.credentialId} />
           )}
           {data.payment && data.usage && (
             <>

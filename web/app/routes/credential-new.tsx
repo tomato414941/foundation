@@ -3,7 +3,7 @@ import { SelectItem } from '../components/ui/select';
 import { InputField, TextareaField, SelectField } from '../form-fields';
 import { Notice } from '../components';
 import { useState } from 'react';
-import { Form, Link, useActionData, useNavigate, useRevalidator } from 'react-router';
+import { Form, Link, useActionData, useNavigate, useRevalidator, useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/credential-new';
 import { actionResult, api, formText } from '../api';
@@ -39,14 +39,16 @@ export default function CredentialNew() {
   const { t } = useTranslation();
   const { principal, session } = useWorkspace();
   const result = useActionData<typeof clientAction>();
-  const [kind, setKind] = useState('passkey');
+  const [search] = useSearchParams();
+  const preset = ['passkey', 'email', 'key'].includes(search.get('kind') ?? '') ? search.get('kind')! : null;
+  const [kind, setKind] = useState(preset ?? 'passkey');
   const [name, setName] = useState('');
   const task = useTask();
   const navigate = useNavigate();
   const revalidator = useRevalidator();
   const back = `/p/${principal.id}/settings/credentials`;
   return (
-    <Page title={t('add')} narrow>
+    <Page title={t(preset === 'key' ? 'issueKey' : preset === 'email' ? 'addEmail' : preset === 'passkey' ? 'addPasskey' : 'add')} narrow>
       <ErrorNotice error={task.error ?? (result && 'error' in result ? result.error : null)} />
       {result && 'token' in result ? (
         <Panel title={t('apiKey')}>
@@ -72,16 +74,20 @@ export default function CredentialNew() {
           }}
         >
           <div className="flex min-w-0 flex-col gap-6">
-            <SelectField
-              name="kind"
-              label={t('kind')}
-              value={kind}
-              onValueChange={(value) => setKind(value)}
-            >
-              <SelectItem value={'passkey'}>{t('addPasskey')}</SelectItem>
-              {session.features.email && <SelectItem value={'email'}>{t('email')}</SelectItem>}
-              <SelectItem value={'key'}>{t('apiKey')}</SelectItem>
-            </SelectField>
+            {preset ? (
+              <input type="hidden" name="kind" value={kind} />
+            ) : (
+              <SelectField
+                name="kind"
+                label={t('kind')}
+                value={kind}
+                onValueChange={(value) => setKind(value)}
+              >
+                <SelectItem value={'passkey'}>{t('addPasskey')}</SelectItem>
+                {session.features.email && <SelectItem value={'email'}>{t('email')}</SelectItem>}
+                <SelectItem value={'key'}>{t('apiKey')}</SelectItem>
+              </SelectField>
+            )}
             {kind === 'email' ? (
               <InputField name="email" type="email" label={t('email')} required autoComplete="email" />
             ) : (

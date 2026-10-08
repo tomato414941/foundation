@@ -99,6 +99,8 @@ export const Credential = z.object({
   createdAt: Time,
   lastUsedAt: Time.nullable(),
   expiresAt: Time.nullable(),
+  // Whether this way in carries the principal's wrapped encryption key, so it can open secrets.
+  canOpen: z.boolean(),
 });
 export const RelationInput = z
   .object({ subjectId: Id, relation: z.enum(['agent', 'member', 'payer']), principalId: Id })

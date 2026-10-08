@@ -359,6 +359,28 @@ class BrowserTests(unittest.TestCase):
             self.assertEqual(read.returncode, 0, read.stderr)
             self.assertEqual(read.stdout, "Read after device sign-in")
 
+    def test_ログイン方法の一覧に鍵の状態と使用中の印を示し発行したキーが鍵を持つ(self):
+        page, principal = self.passkey_account("Credentials viewer")
+        page.goto(f"{ORIGIN}/p/{principal['id']}/settings/credentials")
+        page.wait_for_load_state("networkidle")
+        expect(page.get_by_text("この端末でシークレットを開けます。", exact=True)).to_be_visible()
+        row = page.get_by_role("listitem").filter(has_text="Credentials viewer")
+        expect(row.get_by_text("使用中", exact=True)).to_be_visible()
+        expect(row.get_by_text("シークレットを開ける", exact=False)).to_be_visible()
+        expect(row.get_by_role("button", name="削除", exact=True)).to_have_count(0)
+        page.get_by_role("link", name="キーを発行", exact=True).click()
+        expect(page.get_by_role("heading", name="キーを発行", exact=True)).to_be_visible()
+        expect(page.get_by_role("combobox", name="種類", exact=True)).to_have_count(0)
+        page.get_by_role("textbox", name="名前", exact=True).fill("Issued key")
+        page.get_by_role("button", name="追加", exact=True).click()
+        expect(page.get_by_role("textbox", name="APIキー", exact=True)).to_be_visible()
+        page.get_by_role("link", name="閉じる", exact=True).click()
+        page.wait_for_url("**/settings/credentials")
+        key_row = page.get_by_role("listitem").filter(has_text="Issued key")
+        expect(key_row.get_by_text("シークレットを開ける", exact=False)).to_be_visible()
+        expect(key_row.get_by_role("button", name="削除", exact=True)).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "credentials-desktop-ja.png"), full_page=True)
+
     def test_メンバー追加と所有者変更でシークレットを引き継ぐ(self):
         owner, principal = self.passkey_account("Project owner")
         member, recipient = self.passkey_account("Project member")
