@@ -14,6 +14,7 @@ import { Connections } from '../runtime/connections.js';
 import { CommandProcess } from '../runtime/command.js';
 import { MemoryJournal } from './delegation-support.js';
 import type { EnvironmentOptions } from '../shared/contracts.js';
+import { encode, seal } from '../shared/encryption.js';
 
 const agents = new Map<string, Executor>();
 const running = new Map<string, Promise<void>>();
@@ -75,6 +76,15 @@ const context = await createContext(
 );
 const app = await buildApp(context);
 app.get('/__test/ready', async () => ({ pid: process.pid }));
+app.post<{ Body: { principalId: string } }>('/__test/legacy-secret', async request => {
+  const owner = await context.principals.get(request.body.principalId), id = crypto.randomUUID();
+  if (!owner.public_key) throw new Error('Create the account keys first.');
+  const bytes = encode('legacy-browser-secret');
+  const sealed = await seal(bytes, [{ id: owner.id, publicKey: owner.public_key }], 'resource:' + id);
+  const row = await context.resources.insert(owner.id, 'secret', 'Legacy browser secret',
+    { bytes: bytes.length, recipients: [owner.id] }, { id, sealed });
+  return { id: row.id };
+});
 app.get<{ Params: { id: string } }>('/__test/executor/:id/fingerprint', async request => {
   const agent = agents.get(request.params.id);
   return agent ? { id: agent.binding.principalId, fingerprint: await hash(agent.binding) } : null;

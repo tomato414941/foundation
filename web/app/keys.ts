@@ -66,6 +66,16 @@ async function keep(id: string, keys: IdentityKeys) {
   held.set(id, identity);
   unlocked.set(id, keys);
 }
+const migrations = new Map<string, Promise<void>>();
+export async function migrateUnlockedSecrets(id: string) {
+  if (!await getIdentity(id)) return;
+  const existing = migrations.get(id);
+  if (existing) return existing;
+  const { custodyClient } = await import('./custody');
+  const migrating = (async () => { await (await custodyClient(id)).migrateSecrets(); })();
+  migrations.set(id, migrating);
+  try { await migrating; } finally { migrations.delete(id); }
+}
 export async function clearKeys() {
   unlocked.clear();
   held.clear();
@@ -145,6 +155,7 @@ export async function authenticate(principalId?: string, credentialId?: string, 
       await keep(result.principalId, keys);
     }
   }
+  await migrateUnlockedSecrets(result.principalId);
   return { ...result, encrypted: !!(await getKey(result.principalId)) };
 }
 export async function registerPasskey(name: string, principal?: Pick<PrincipalView, 'id' | 'publicKey'>) {
@@ -184,6 +195,7 @@ export async function registerPasskey(name: string, principal?: Pick<PrincipalVi
   if (keys) await keep(result.principalId, keys);
   else if ((credential.clientExtensionResults as { prf?: { enabled?: boolean } }).prf?.enabled)
     return authenticate(result.principalId, credential.id, existing);
+  await migrateUnlockedSecrets(result.principalId);
   return { ...result, encrypted: !!(await getKey(result.principalId)) };
 }
 export async function issueKey(

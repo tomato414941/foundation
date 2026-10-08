@@ -102,6 +102,39 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("option", name=option, exact=True).click()
         expect(page.get_by_role("listbox")).to_be_hidden()
 
+    def test_signin_migrates_existing_secret_and_reveals_the_same_value(self):
+        page, principal = self.passkey_account("Migration account")
+        response = page.request.post(ORIGIN + "/__test/legacy-secret", data={"principalId": principal["id"]})
+        self.assertTrue(response.ok, response.text())
+        secret_id = response.json()["id"]
+        page.get_by_role("button", name="ログアウト", exact=True).click()
+        page.wait_for_url("**/signin")
+        page.wait_for_load_state("networkidle")
+        page.get_by_role("button", name="パスキーでログイン", exact=True).click()
+        page.wait_for_url("**/p/**")
+        page.wait_for_load_state("networkidle")
+        migrated = page.request.get(f"{ORIGIN}/api/resources/{secret_id}/custody")
+        self.assertTrue(migrated.ok, migrated.text())
+        self.assertEqual(migrated.json()["content"]["policy"]["revision"], 1)
+        page.goto(f"{ORIGIN}/p/{principal['id']}/secrets/{secret_id}")
+        page.wait_for_load_state("networkidle")
+        page.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(page.get_by_role("textbox", name="値", exact=True)).to_have_value("legacy-browser-secret")
+        page.screenshot(path=str(ARTIFACTS / "migrated-secret-ja.png"), full_page=True)
+
+    def test_reload_migrates_existing_secret_with_unlocked_keys(self):
+        page, principal = self.passkey_account("Background migration account")
+        created = page.request.post(ORIGIN + "/__test/legacy-secret", data={"principalId": principal["id"]})
+        self.assertTrue(created.ok, created.text())
+        secret_id = created.json()["id"]
+        with page.expect_response(lambda response: response.url.endswith(f"/resources/{secret_id}/legacy-secret") and response.request.method == "POST") as saved:
+            page.reload()
+        self.assertTrue(saved.value.ok, saved.value.text())
+        page.wait_for_load_state("networkidle")
+        current = page.request.get(f"{ORIGIN}/api/resources/{secret_id}/custody")
+        self.assertTrue(current.ok, current.text())
+        self.assertEqual(current.json()["content"]["policy"]["ownerId"], principal["id"])
+
     def trust_fingerprint(self, page, principal_id, fingerprint):
         previous = page.url
         page.goto(ORIGIN + "/account/trust")

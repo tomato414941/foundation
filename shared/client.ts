@@ -7,7 +7,8 @@ import {
   AccessPolicy, approvePolicy, authorizeUse, continuesPolicy, policyAuthority, prepareRun, protect, reveal, verifyContent,
 } from './custody.js';
 import type { CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun } from './custody.js';
-import { BoundRecipient, ProtectedRead, Registration } from './protocol.js';
+import { BoundRecipient, LegacySecretPlan, ProtectedRead, Registration } from './protocol.js';
+import { open } from './encryption.js';
 import { RuntimeOperation, Task, authorizeEnvironment, readReceipt, verifyEnvironment } from './execution.js';
 import type { ExecutionOperation, RegisteredEnvironment, TaskView } from './execution.js';
 import { functionRequest } from './function-request.js';
@@ -67,9 +68,70 @@ export class CustodyClient {
     return items.map(item => item.binding);
   }
   async read(id: string) {
-    const item = await this.api.json('/api/resources/' + Id.parse(id) + '/custody', {}, ProtectedRead);
+    Id.parse(id);
+    let item;
+    try { item = await this.api.json('/api/resources/' + id + '/custody', {}, ProtectedRead); }
+    catch (error) {
+      if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'custody_required') throw error;
+      await this.migrateSecret(id);
+      item = await this.api.json('/api/resources/' + id + '/custody', {}, ProtectedRead);
+    }
     await this.observe(item.content, id);
     return item;
+  }
+  async migrateSecret(id: string) {
+    let plan;
+    try { plan = await this.api.json('/api/resources/' + Id.parse(id) + '/legacy-secret', {}, LegacySecretPlan); }
+    catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'already_migrated') return;
+      throw error;
+    }
+    if (plan.id !== id || plan.policy.id !== id || plan.policy.origin !== this.origin ||
+      !plan.policy.authorities.some(authority => canonical(authority) === canonical(this.binding)))
+      throw new Error('Migrate the secret as its existing owner.');
+    const current = await this.trust.checkpoint(id);
+    if (current) throw new Error('This device has already observed signed content for this secret.');
+    for (const signed of plan.bindings) {
+      await verifyBinding(signed);
+      const pinned = signed.binding.principalId === this.binding.principalId
+        ? this.binding : await this.trust.binding(signed.binding.principalId);
+      if (pinned && canonical(pinned) !== canonical(signed.binding))
+        throw new Error('A recipient changed keys. Verify its keys before migration.');
+    }
+    for (const binding of [...plan.policy.readers, ...plan.policy.authorities,
+      ...plan.policy.grants.flatMap(grant => [grant.actor, grant.executor])]) {
+      if (!plan.bindings.some(signed => canonical(signed.binding) === canonical(binding)))
+        throw new Error('Verify every recipient binding before migration.');
+    }
+    const bytes = await open(plan.sealed, this.keys.encryption, this.binding.principalId, 'resource:' + id);
+    try {
+      const content = await protect(bytes, plan.policy, 1, this.binding, this.keys);
+      const checked = await reveal(content, this.binding, this.keys.encryption);
+      try {
+        if (checked.length !== bytes.length || checked.some((value, index) => value !== bytes[index]))
+          throw new Error('The migrated secret could not be verified.');
+      } finally { checked.fill(0); }
+      try {
+        await this.api.json('/api/resources/' + id + '/legacy-secret', { method: 'POST',
+          body: { name: plan.name, version: plan.version, content } }, Resource);
+      } catch (error) {
+        if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'changed') throw error;
+        // A concurrent owner can complete migration first. Never overwrite it.
+        const migrated = await this.api.json('/api/resources/' + id + '/custody', {}, ProtectedRead);
+        if (canonical(migrated.content.policy) !== canonical(plan.policy)) throw error;
+        const value = await reveal(migrated.content, this.binding, this.keys.encryption);
+        try {
+          if (value.length !== bytes.length || value.some((byte, index) => byte !== bytes[index])) throw error;
+        } finally { value.fill(0); }
+      }
+      // The legacy store had no signatures to pin. Bootstrap its current
+      // recipients once, after owner-side decryption and a successful commit.
+      for (const signed of plan.bindings) await this.trust.rememberBinding(signed.binding);
+    } finally { bytes.fill(0); }
+  }
+  async migrateSecrets() {
+    const { items } = await this.api.json('/api/migrations/secrets', {}, listOf(Id));
+    for (const id of items) await this.read(id);
   }
   async observe(input: CustodyContent, id = input.policy.id) {
     const content = await verifyContent(input);
