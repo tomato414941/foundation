@@ -36,6 +36,7 @@
     "@modelcontextprotocol/sdk": "1.32.1",
     "@simplewebauthn/server": "14.0.3",
     "fastify": "5.12.5",
+    "ipaddr.js": "2.5.0",
     "jose": "6.2.12",
     "oauth4webapi": "3.8.8",
     "pg": "8.23.1",

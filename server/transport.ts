@@ -1,8 +1,9 @@
 import { lookup } from 'node:dns/promises';
-import { isIP, BlockList } from 'node:net';
+import { isIP } from 'node:net';
 import { request } from 'node:https';
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
 import { fail, DomainError } from './errors.js';
+import ipaddr from 'ipaddr.js';
 
 export interface OutboundRequest {
   url: string;
@@ -20,37 +21,15 @@ export interface OutboundResponse {
 export interface Transport {
   send(input: OutboundRequest): Promise<OutboundResponse>;
 }
-const blocked = new BlockList();
-for (const [address, prefix] of [
-  ['0.0.0.0', 8],
-  ['10.0.0.0', 8],
-  ['100.64.0.0', 10],
-  ['127.0.0.0', 8],
-  ['169.254.0.0', 16],
-  ['172.16.0.0', 12],
-  ['192.0.0.0', 24],
-  ['192.0.2.0', 24],
-  ['192.168.0.0', 16],
-  ['198.18.0.0', 15],
-  ['198.51.100.0', 24],
-  ['203.0.113.0', 24],
-  ['224.0.0.0', 4],
-  ['240.0.0.0', 4],
-] as const)
-  blocked.addSubnet(address, prefix, 'ipv4');
-const globalV6 = new BlockList();
-globalV6.addSubnet('2000::', 3, 'ipv6');
-for (const [address, prefix] of [
-  ['2001::', 32],
-  ['2001:db8::', 32],
-  ['2002::', 16],
-] as const)
-  blocked.addSubnet(address, prefix, 'ipv6');
+const globalV6 = ipaddr.IPv6.parseCIDR('2000::/3');
+const publicRanges = new Set([
+  'unicast', 'amt', 'as112', 'as112v6', 'orchid2', 'droneRemoteIdProtocolEntityTags',
+]);
 export function publicAddress(address: string): boolean {
-  const family = isIP(address);
-  return family === 4
-    ? !blocked.check(address, 'ipv4')
-    : family === 6 && globalV6.check(address, 'ipv6') && !blocked.check(address, 'ipv6');
+  if (!isIP(address) || address.includes('%')) return false;
+  const parsed = ipaddr.parse(address);
+  return publicRanges.has(parsed.range()) &&
+    (!(parsed instanceof ipaddr.IPv6) || parsed.match(globalV6));
 }
 export function publicUrl(value: string, ownOrigin?: string): URL {
   let url: URL;
