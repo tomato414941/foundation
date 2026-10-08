@@ -277,6 +277,7 @@ async function login(args: Arguments) {
     }).catch(() => null);
     if (!polled) continue;
     if (polled.status === 404) throw new Error('The sign-in was not approved in time. Run foundation login again.');
+    if (polled.status >= 500) continue;
     if (!polled.ok) throw new Error('Sign-in failed (HTTP ' + polled.status + ').');
     const result = z
       .object({ state: z.string(), sealed: Sealed.nullable() })
