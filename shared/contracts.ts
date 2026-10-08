@@ -145,7 +145,6 @@ export const OAuthDefinition = z.object({
   issuer: z.url().optional(),
   authorizeUrl: UrlTemplate,
   tokenUrl: UrlTemplate,
-  grantType: z.enum(['authorization_code', 'client_credentials']).optional(),
   identity: z
     .object({
       url: UrlTemplate.optional(),

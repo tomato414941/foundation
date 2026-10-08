@@ -47,40 +47,35 @@
     },
     "client_credentials": {
       "name": "Shopify · Client ID / Secret",
-      "kind": "oauth",
+      "kind": "token",
       "config": {
-        "grantType": "client_credentials",
-        "authorizeUrl": "https://{shop}.myshopify.com/admin/oauth/authorize",
-        "tokenUrl": "https://{shop}.myshopify.com/admin/oauth/access_token",
-        "clientAuth": "body",
-        "pkce": false,
         "fields": [
           {
             "name": "shop",
-            "label": "ストア名",
+            "label": "ストア",
             "required": true,
-            "placeholder": "example（example.myshopify.com の場合）",
-            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
-            "note": "このストアにインストール済みの、自分の組織のアプリを使用してください。"
+            "placeholder": "your-store",
+            "note": ".myshopify.com の前の部分",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]*$"
+          },
+          {
+            "name": "clientId",
+            "label": "Client ID",
+            "required": true
+          },
+          {
+            "name": "clientSecret",
+            "label": "Client secret",
+            "secret": true,
+            "required": true
           }
         ],
-        "identity": {
-          "url": "https://{shop}.myshopify.com/admin/api/2026-07/graphql.json",
-          "method": "POST",
-          "id": "/data/shop/id",
-          "name": "/data/shop/name"
-        },
-        "scopes": {
-          "default": [],
-          "separator": ",",
-          "docs": "https://shopify.dev/docs/api/usage/access-scopes"
-        },
         "outputs": {
-          "SHOPIFY_ACCESS_TOKEN": "/accessToken",
           "SHOPIFY_SHOP": "/shop",
-          "SHOPIFY_TOKEN_EXPIRES_AT": "/expiresAt"
+          "SHOPIFY_CLIENT_ID": "/clientId",
+          "SHOPIFY_CLIENT_SECRET": "/clientSecret"
         },
-        "hint": "自分のShopify組織のストア向けです。Dev DashboardのClient ID・Client secretを使い、アクセストークンを自動取得・更新します。アクセス権限はShopifyのアプリ設定で指定してください。"
+        "instructions": "Shopify Dev Dashboardで発行した、自分のストアにインストール済みのアプリの認証情報を入力してください。"
       },
       "docs": "https://shopify.dev/docs/apps/build/authentication-authorization/client-credentials-grant",
       "console": "https://dev.shopify.com/dashboard"

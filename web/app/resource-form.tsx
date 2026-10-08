@@ -508,9 +508,6 @@ export default function ResourceForm() {
                       ))}
                     </SelectField>
                     {existing && <input type="hidden" name="methodId" value={methodId} />}
-                    {method?.kind === 'oauth' && method.config.grantType === 'client_credentials' && method.config.hint && (
-                      <Notice tone="info">{method.config.hint}</Notice>
-                    )}
                     {!existing && !!existingConnections.length && (
                       <Notice tone={'info'}>
                         <p className="leading-relaxed text-sm">{t('existingConnections')}</p>
@@ -547,7 +544,7 @@ export default function ResourceForm() {
                               </SelectItem>
                             ))}
                           </SelectField>}
-                          {method.config.grantType !== 'client_credentials' && <InputField
+                          <InputField
                             name="scopes"
                             label={t('scopes')}
                             defaultValue={
@@ -556,8 +553,8 @@ export default function ResourceForm() {
                                 : method.config.scopes.default.join(' ')
                             }
                             hint={t('scopesHelp')}
-                          />}
-                          {method.config.grantType !== 'client_credentials' && method.config.scopes.docs && (
+                          />
+                          {method.config.scopes.docs && (
                             <ExternalLink href={method.config.scopes.docs}>{t('docs')}</ExternalLink>
                           )}
                         </>
@@ -572,13 +569,12 @@ export default function ResourceForm() {
                           />
                           <InputField
                             name="clientSecret"
-                            required={!existing && method?.kind === 'oauth' && method.config.grantType === 'client_credentials' && method.config.clientAuth !== 'none'}
                             type="password"
                             autoComplete="new-password"
                             label={t('clientSecret')}
                             hint={existing ? t('unchangedSecret') : undefined}
                           />
-                          {method?.kind === 'oauth' && method.config.grantType !== 'client_credentials' && <InputField
+                          <InputField
                             label={t('callbackUrl')}
                             value={
                               typeof window !== 'undefined'
@@ -586,7 +582,7 @@ export default function ResourceForm() {
                                 : ''
                             }
                             readOnly={true}
-                          />}
+                          />
                         </>
                       )}
                       {fields.map((field) => (

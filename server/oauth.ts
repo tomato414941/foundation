@@ -46,11 +46,6 @@ const lifetime = (value: unknown) => {
     fail(502, 'invalid_response', 'The service returned an invalid expiry.');
   return seconds;
 };
-const shopifyEndpoint = (url: string, pathname: string | RegExp) => {
-  const endpoint = new URL(url);
-  return endpoint.hostname.endsWith('.myshopify.com') &&
-    (typeof pathname === 'string' ? endpoint.pathname === pathname : pathname.test(endpoint.pathname));
-};
 const tokenTypes: oauth.RecognizedTokenTypes = Object.assign(Object.create(null), {
   dpop: () => fail(502, 'invalid_response', 'The service returned an unsupported token.'),
 });
@@ -67,8 +62,6 @@ export class OAuth {
     redirectUri: string,
     scopes: string[],
   ) {
-    if (spec.grantType === 'client_credentials')
-      fail(400, 'wrong_grant', 'This connection exchanges application credentials directly.');
     const url = new URL(expandUrl(spec.authorizeUrl, app.fields));
     const params: Record<string, string> = {
       ...spec.authorizeParams,
@@ -94,9 +87,7 @@ export class OAuth {
   }
   private configuration(spec: OAuthSpec, app: OAuthApp) {
     const server: oauth.AuthorizationServer = {
-      issuer: spec.issuer ?? new URL(expandUrl(
-        spec.grantType === 'client_credentials' ? spec.tokenUrl : spec.authorizeUrl, app.fields,
-      )).origin,
+      issuer: spec.issuer ?? new URL(expandUrl(spec.authorizeUrl, app.fields)).origin,
       token_endpoint: expandUrl(spec.tokenUrl, app.fields),
     };
     if (spec.issuer) publicUrl(spec.issuer);
@@ -172,9 +163,7 @@ export class OAuth {
     try {
       const processResponse = refresh
         ? oauth.processRefreshTokenResponse
-        : spec.grantType === 'client_credentials'
-          ? oauth.processClientCredentialsResponse
-          : oauth.processAuthorizationCodeResponse;
+        : oauth.processAuthorizationCodeResponse;
       const result = await processResponse(
         server,
         client,
@@ -312,31 +301,9 @@ export class OAuth {
       fail(409, 'account_changed', 'Reconnect using the same service account.');
     return result;
   }
-  async clientCredentials(
-    spec: OAuthSpec, app: OAuthApp, scopes: string[], previous?: OAuthToken, checkpoint?: TokenCheckpoint,
-  ): Promise<OAuthToken> {
-    if (spec.grantType !== 'client_credentials')
-      fail(400, 'wrong_grant', 'Choose a client credentials connection method.');
-    const { server, client } = this.configuration(spec, app);
-    const shopify = shopifyEndpoint(server.token_endpoint!, '/admin/oauth/access_token');
-    const response = await oauth.clientCredentialsGrantRequest(
-      server, client, this.authentication(app, spec.clientAuth),
-      { ...spec.tokenParams, ...(scopes.length && !shopify ? { scope: scopes.join(spec.scopes.separator) } : {}) },
-      this.options(spec.tokenFormat),
-    );
-    const data = await this.tokenResponse(spec, app, response);
-    const received = this.token(spec, data, scopes, previous, Boolean(previous));
-    await checkpoint?.(received, data);
-    const result = await this.inspect(spec, app, received, data);
-    if (previous && result.account !== previous.account)
-      fail(409, 'account_changed', 'Reconnect using the same service account.');
-    return result;
-  }
   async refresh(spec: OAuthSpec, app: OAuthApp, previous: OAuthToken, checkpoint?: TokenCheckpoint): Promise<OAuthToken> {
     let current = previous;
     if (previous.expiresAt !== null && previous.expiresAt < Date.now() + 60_000) {
-      if (spec.grantType === 'client_credentials')
-        return this.clientCredentials(spec, app, previous.scopes, previous, checkpoint);
       if (!previous.refreshToken || (previous.refreshExpiresAt && previous.refreshExpiresAt <= Date.now()))
         fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
       const { server, client } = this.configuration(spec, app);
@@ -418,27 +385,20 @@ export class OAuth {
       };
     }
     if (spec.identity?.url) {
-      const url = expandUrl(spec.identity.url, {
-        ...app.fields, ...current.extra, accessToken: current.accessToken, refreshToken: current.refreshToken ?? '',
-      });
-      // Shopify's Admin GraphQL API uses its own access-token header and a shop query.
-      const shopify = spec.grantType === 'client_credentials' &&
-        shopifyEndpoint(url, /^\/admin\/api\/[^/]+\/graphql\.json$/);
       const response = await this.transport.send({
-        url,
+        url: expandUrl(spec.identity.url, {
+          ...app.fields,
+          ...current.extra,
+          accessToken: current.accessToken,
+          refreshToken: current.refreshToken ?? '',
+        }),
         method: spec.identity.method,
-        headers: shopify
-          ? { ...spec.identity.headers, 'content-type': 'application/json', 'X-Shopify-Access-Token': current.accessToken }
-          : { ...spec.identity.headers, authorization: 'Bearer ' + current.accessToken },
-        ...(shopify ? { body: JSON.stringify({ query: '{ shop { id name myshopifyDomain } }' }) } : {}),
+        headers: { ...spec.identity.headers, authorization: 'Bearer ' + current.accessToken },
       });
       data = responseJson(response);
       if (response.status === 401 || response.status === 403)
         fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
       if (response.status >= 400) fail(502, 'invalid_response', 'The service account could not be verified.');
-      if (shopify && (data.errors ||
-        atPointer(data, '/data/shop/myshopifyDomain') !== app.fields.shop + '.myshopify.com'))
-        fail(502, 'invalid_response', 'The Shopify store could not be verified.');
       if (spec.adapter === 'github' && response.headers['x-oauth-scopes'] !== undefined) {
         current.scopes = strings(response.headers['x-oauth-scopes'].replaceAll(',', ' '));
         current.scopesStatus = 'reported';

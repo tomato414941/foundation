@@ -124,16 +124,13 @@ export class Connections implements ExecutionExtension {
     if (intent.operation !== expected) fail(400, 'wrong_operation', 'Use the approved connection operation.');
     if (action.action === 'start') {
       if (action.method.kind === 'oauth') {
-        if (requiresApp(action.method) && !action.appId)
-          fail(400, 'app_required', 'Choose an OAuth application.');
-        if (action.method.config.grantType !== 'client_credentials') {
-          if (!action.redirectUri) fail(400, 'invalid_redirect', 'Choose a callback URL.');
-          const redirect = new URL(action.redirectUri);
-          if (redirect.username || redirect.password || redirect.hash || redirect.search ||
-            !(action.redirectUri === intent.origin + '/oauth/callback' ||
-              (redirect.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(redirect.hostname))))
-            fail(400, 'invalid_redirect', 'Use the Foundation callback or a callback on this computer.');
-        }
+        if ((requiresApp(action.method) && !action.appId) || !action.redirectUri)
+          fail(400, 'app_required', 'Choose an OAuth application and callback URL.');
+        const redirect = new URL(action.redirectUri);
+        if (redirect.username || redirect.password || redirect.hash || redirect.search ||
+          !(action.redirectUri === intent.origin + '/oauth/callback' ||
+            (redirect.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(redirect.hostname))))
+          fail(400, 'invalid_redirect', 'Use the Foundation callback or a callback on this computer.');
         const app = action.appId ? await this.app(action.appId, action.methodId, intent, sources)
           : AppMaterial.parse({ format: 1, methodId: action.methodId, generation: action.flowId, clientId: '', fields: {} });
         fields(action.method, app.fields);
@@ -168,7 +165,7 @@ export class Connections implements ExecutionExtension {
     this.active.add(lock);
     try {
       signal.throwIfAborted();
-      if (action.action === 'start') return await this.start(action, intent, sources, signal);
+      if (action.action === 'start') return await this.start(action, intent, sources);
       if (action.action === 'exchange') return await this.exchange(action, intent, signal);
       if (action.action === 'commit') return await this.commit(action, intent);
       const content = this.source(action.id, ContentTypes.tokenSet, sources), state = await this.material(content, intent);
@@ -187,7 +184,7 @@ export class Connections implements ExecutionExtension {
     return { kind: 'review', flowId: id, name: flow.input.name,
       metadata: { ...await connectionMetadata(flow.material!), ...connectionLabels(flow.material!) } };
   }
-  private async start(input: Extract<ConnectionCommand, { action: 'start' }>, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal) {
+  private async start(input: Extract<ConnectionCommand, { action: 'start' }>, intent: ExecutionIntent, sources: CustodyContent[]) {
     const id = 'oauth_' + input.flowId;
     if (await this.journal.read(id)) fail(409, 'flow_exists', 'Use a new connection request.');
     const flow: Flow = { actor: intent.actor, ownerId: intent.ownerId, input,
@@ -204,23 +201,9 @@ export class Connections implements ExecutionExtension {
     }
     await this.journal.write(id, flow);
     if (input.method.kind !== 'oauth') return this.review(input.flowId, flow);
-    const scopes = [...new Set([...input.method.config.scopes.default, ...input.scopes])];
-    if (input.method.config.grantType === 'client_credentials') {
-      flow.phase = 'exchanging';
-      await this.journal.write(id, flow);
-      const token = await this.oauth(signal).clientCredentials(input.method.config, flow.app!, scopes, undefined,
-        async (token, response) => {
-          flow.checkpoint = { token, response }; flow.phase = 'received';
-          await this.journal.write(id, flow);
-        });
-      flow.material = ConnectionMaterial.parse({ format: 1, methodId: input.methodId, method: input.method,
-        generation: randomUUID(), appId: input.appId, appGeneration: flow.app!.generation, oauth: token });
-      flow.phase = 'review';
-      await this.journal.write(id, flow);
-      return this.review(input.flowId, flow);
-    }
     if (input.redirectUri === intent.origin + '/oauth/callback') await this.broker.relay?.({ id: input.flowId,
       runId: intent.id, stateDigest: await hash(flow.state), expiresAt: new Date(flow.expiresAt).toISOString() });
+    const scopes = [...new Set([...input.method.config.scopes.default, ...input.scopes])];
     return { kind: 'authorize', flowId: input.flowId,
       url: await this.oauth().authorize(input.method.config, flow.app!, flow.state, flow.verifier, input.redirectUri!, scopes) };
   }

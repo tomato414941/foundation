@@ -14,7 +14,7 @@ test('ShopifyのOAuth・Client credentials・APIキーの接続方法を共通�
   assert.deepEqual(Object.values(shopify.methods).map(method => method.id),
     ['shopify:oauth', 'shopify:client_credentials', 'shopify:token']);
   const method = shopify.methods.client_credentials!;
-  assert.equal(method.availability, 'app-required');
+  assert.equal(method.availability, 'ready');
 });
 
 test('一つのサービスから同方式の複数の接続方法を選び、それぞれの値を利用する', async t => {
