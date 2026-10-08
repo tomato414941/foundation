@@ -110,7 +110,7 @@ export default function SettingsPage() {
   return (
     <Page title={t('settings')}>
       <Tabs value={data.tab} onValueChange={(tab) => void navigate(prefix + tab)} className="gap-6">
-        <TabsList aria-label={t('settings')} className="max-w-full justify-start overflow-x-auto">
+        <TabsList aria-label={t('settings')} className="max-w-full justify-start overflow-x-auto overflow-y-hidden">
           {(['general', 'credentials', 'billing', 'integrations', 'audit'] as const)
             .filter((tab) =>
               tab === 'credentials'
