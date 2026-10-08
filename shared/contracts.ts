@@ -173,7 +173,7 @@ export const OAuthDefinition = z.object({
   scopes: Scopes.default({ default: [], separator: ' ' }),
   fields: z.array(Field).default([]),
   outputs: OutputMap.default({ ACCESS_TOKEN: '/accessToken' }),
-  adapter: z.enum(['google', 'github', 'ebay', 'openrouter', 'cloudflare', 'slack', 'shopify']).optional(),
+  adapter: z.enum(['google', 'github', 'ebay', 'openrouter', 'cloudflare', 'slack']).optional(),
   keep: z.array(z.string()).default([]),
   hint: z.string().optional(),
 });

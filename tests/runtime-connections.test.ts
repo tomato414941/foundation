@@ -18,12 +18,14 @@ import type { OutboundRequest, OutboundResponse, Transport } from '../server/tra
 
 const response = (body: unknown): OutboundResponse => ({ status: 200, headers: { 'content-type': 'application/json' },
   body: encode(JSON.stringify(body)) });
-async function setup(respond: (request: OutboundRequest) => Promise<OutboundResponse> | OutboundResponse) {
+async function setup(respond: (request: OutboundRequest) => Promise<OutboundResponse> | OutboundResponse,
+  config: Record<string, unknown> = {}) {
   const f = await delegatedFixture();
   const method = MethodDefinition.parse({ name: 'Provider', kind: 'oauth', config: {
     authorizeUrl: 'https://provider.example/authorize', tokenUrl: 'https://provider.example/token',
     identity: { url: 'https://provider.example/account', id: '/id', name: '/name' },
     scopes: { default: ['read'] },
+    ...config,
   } });
   const policy = (contentType: CustodyPolicy['contentType'], operations: CustodyPolicy['grants'][number]['operations']): CustodyPolicy => ({
     ...f.policy, id: crypto.randomUUID(), contentType, grants: [{ ...f.policy.grants[0]!, operations }],
@@ -83,6 +85,39 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
   return { ...f, method, policy, appMaterial, appContent, appPolicy, operations, journal, broker, connections,
     requests, transport, run, storedConnection, worker: executor };
 }
+
+test('Client credentialsから取得した接続先と権限を確認して保存し、更新したトークンを利用する', async () => {
+  let grants = 0;
+  const f = await setup(request => request.url.endsWith('/token')
+    ? response({ access_token: 'runtime-access-' + ++grants, token_type: 'bearer', expires_in: grants === 1 ? 10 : 3600, scope: 'read' })
+    : response({ id: 'account-1', name: 'Account' }), { grantType: 'client_credentials' });
+  try {
+    const flowId = crypto.randomUUID();
+    const reviewed = await f.run({ action: 'start', flowId, name: 'My client connection', methodId: 'provider:oauth',
+      method: f.method, appId: f.appPolicy.id });
+    assert.equal(reviewed.kind, 'review');
+    const metadata = reviewed.metadata as Record<string, JsonValue>;
+    assert.equal(metadata.accountVerified, true);
+    assert.deepEqual(metadata.scopes, ['read']);
+    const runId = crypto.randomUUID();
+    const policy = { ...f.policy(ContentTypes.tokenSet, [Operations.http, Operations.refresh]), producers: [{ executor: f.executor.binding,
+      runId, expiresAt: f.intent.expiresAt, materialRevision: 1 }] };
+    const saved = await f.run({ action: 'commit', flowId, authorizationDigest: metadata.authorizationDigest!,
+      approval: await approvePolicy(policy, f.owner.binding, f.owner.keys) }, [f.appContent], runId);
+    const content = (await f.custody.read(f.owner.actor, String(saved.id))).content;
+    const operation = { kind: 'http' };
+    const sources = [content, f.appContent];
+    const intent: ExecutionIntent = { ...f.intent, operation: Operations.http, operationDigest: await hash(operation),
+      sources: await Promise.all(sources.map(async content => ({ id: content.policy.id, materialRevision: content.materialRevision,
+        policyDigest: await hash(content.policy), ...(content.policy.contentType === ContentTypes.tokenSet
+          ? { authorizationDigest: String(content.metadata.authorizationDigest) } : {}) }))) };
+    const outputs = await f.connections.outputs(content, intent, sources, new AbortController().signal);
+    assert.equal(outputs.ACCESS_TOKEN, 'runtime-access-2');
+    assert.equal(grants, 2);
+    assert.equal(new URLSearchParams(String(f.requests[0]!.body)).get('grant_type'), 'client_credentials');
+    assert.equal((await f.custody.read(f.owner.actor, policy.id)).content.materialRevision, 2);
+  } finally { await f.close(); }
+});
 
 test('選んだ実行先でOAuthコードを交換し、接続先と権限を確認してから承認した宛先へ保存する', async () => {
   const f = await setup(request => request.url.endsWith('/token')

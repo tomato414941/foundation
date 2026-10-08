@@ -7,6 +7,16 @@ const keyMethod = (name: string, field = 'token', output = 'API_KEY') =>
   MethodDefinition.parse({ name, kind: 'token',
     config: { fields: [{ name: field, label: field, secret: true }], outputs: { [output]: '/' + field } } });
 
+test('ShopifyのOAuth・Client credentials・APIキーの接続方法を共通サービスから選択する', async t => {
+  const f = await flowFixture(); t.after(f.close);
+  const shopify = (await f.context.catalog.list(f.owner.actor)).find(item => item.id === 'shopify')!;
+  assert.equal(shopify.builtin, true);
+  assert.deepEqual(Object.values(shopify.methods).map(method => method.id),
+    ['shopify:oauth', 'shopify:client_credentials', 'shopify:token']);
+  const method = shopify.methods.client_credentials!;
+  assert.equal(method.availability, 'app-required');
+});
+
 test('一つのサービスから同方式の複数の接続方法を選び、それぞれの値を利用する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const service = await f.context.catalog.createService(f.owner.actor, f.owner.actor.id, 'Example',
