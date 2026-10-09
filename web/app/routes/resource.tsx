@@ -81,6 +81,10 @@ export default function ResourceDetail() {
   const [minutes, setMinutes] = useState(15);
   const [revoke, setRevoke] = useState(true);
   const can = (action: (typeof item.permissions)[number]) => item.permissions.includes(action);
+  const environment = item.kind === 'environment' ? item : null;
+  const environmentState = environment?.data.deletion
+    ? environment.data.deletion.state === 'failed' ? 'deleteFailed' : 'deleting'
+    : environment?.data.state;
   usePolling(
     item.kind === 'environment' && !item.data.deletion && ['starting', 'running', 'stopping'].includes(item.data.state),
     item.kind === 'environment' && item.data.state === 'running' ? 15000 : 2500,
@@ -100,6 +104,18 @@ export default function ResourceDetail() {
       back={{ to: `/p/${item.ownerId}/${sectionFor(item.kind)}`, label: t(item.kind === 'environment' ? 'backToEnvironments' : 'backToList') }}
       actions={
         <>
+          {environmentState && <State value={environmentState}
+            label={environmentState === 'running' ? t('state.environmentRunning') : undefined} />}
+          {environment && !environment.data.deletion && environment.data.state === 'running' && can('execute') && (
+            <Button asChild>
+              <Link to="run">{t('execute')}</Link>
+            </Button>
+          )}
+          {environment && !environment.data.deletion && ['starting', 'running'].includes(environment.data.state) && can('delete') && (
+            <Confirm label={t('stop')} name={item.name} body={t('stopBody')} danger={false}>
+              <input type="hidden" name="intent" value="stop" />
+            </Confirm>
+          )}
           {can('update') && !['environment', 'connection'].includes(item.kind) && (
             <Button variant="outline" asChild>
               <Link to="edit">{t('edit')}</Link>
@@ -119,9 +135,7 @@ export default function ResourceDetail() {
       }
     >
       <ErrorNotice error={task.error ?? (result && 'error' in result ? result.error : null)} />
-      <Panel>
-        <BoxDetails item={item} />
-      </Panel>
+      {!environment && <Panel><BoxDetails item={item} /></Panel>}
       {item.kind === 'variable' && can('reveal') && (
         <Panel>
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -218,29 +232,25 @@ export default function ResourceDetail() {
         </Panel>
       )}
       {item.kind === 'environment' && (
-        <Panel>
-          {item.data.executorId && <Button variant="ghost" asChild>
-            <Link to={'/account/trust?principal=' + item.data.executorId}>{t('verifyEnvironment')}</Link>
-          </Button>}
-          {item.data.driver !== 'attached' && <><Detail label={t('image')}>{item.data.image ?? t('defaultImage')}</Detail>
-          <Detail label={t('size')}>{t(item.data.size)}</Detail>
-          <Detail label={t('maximum')}>{item.data.lifetime.maxSeconds / 60}</Detail>
-          <Detail label={t('idle')}>{item.data.lifetime.idleSeconds / 60}</Detail></>}
+        <>
           {item.data.error && <Notice tone={'error'}>{t('failure')}</Notice>}
-          {!item.data.deletion && item.data.state === 'running' && can('execute') && (
-            <Button variant="default" asChild>
-              <Link to="run">{t('execute')}</Link>
-            </Button>
-          )}
-          {!item.data.deletion && ['starting', 'running'].includes(item.data.state) && can('delete') && (
-            <Confirm label={t('stop')} name={item.name} body={t('stopBody')} danger={false}>
-              <input type="hidden" name="intent" value="stop" />
-            </Confirm>
-          )}
           {!item.data.deletion && ['stopped', 'failed'].includes(item.data.state) && (
             <p className="leading-relaxed text-muted-foreground">{t('stoppedHelp')}</p>
           )}
-        </Panel>
+          {item.data.driver !== 'attached' && <Panel title={t('settings')}>
+            <Detail label={t('image')}>{item.data.image ?? t('defaultImage')}</Detail>
+            <Detail label={t('size')}>{t(item.data.size)}</Detail>
+            <Detail label={t('maximum')}>{item.data.lifetime.maxSeconds / 60}</Detail>
+            <Detail label={t('idle')}>{item.data.lifetime.idleSeconds / 60}</Detail>
+          </Panel>}
+          <Panel>
+            <BoxDetails item={item} />
+            {item.data.executorId && <Link to={'/account/trust?principal=' + item.data.executorId}
+              className="inline-flex min-h-11 w-fit items-center text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground">
+              {t('verifyEnvironment')}
+            </Link>}
+          </Panel>
+        </>
       )}
       {item.kind === 'function' && (
         <Panel>
@@ -294,10 +304,9 @@ function BoxDetails({ item }: { item: Awaited<ReturnType<typeof clientLoader>>['
       <Detail label={t('updated')}>
         <DateText value={item.updatedAt} />
       </Detail>
-      {'state' in item.data && (
+      {item.kind !== 'environment' && 'state' in item.data && (
         <Detail label={t('status')}>
-          <State value={item.kind === 'environment' && item.data.deletion
-            ? item.data.deletion.state === 'failed' ? 'deleteFailed' : 'deleting' : item.data.state} />
+          <State value={item.data.state} />
         </Detail>
       )}
       {item.kind === 'connection' && (
