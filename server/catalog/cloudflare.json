@@ -5,7 +5,7 @@
   "docs": "https://developers.cloudflare.com/api/",
   "methods": {
     "oauth": {
-      "name": "Cloudflare · OAuth",
+      "name": "Cloudflare · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://dash.cloudflare.com/oauth2/auth",
@@ -35,7 +35,7 @@
       "docs": "https://developers.cloudflare.com/api/"
     },
     "token": {
-      "name": "Cloudflare · API key",
+      "name": "Cloudflare · Enter API token",
       "kind": "token",
       "config": {
         "fields": [

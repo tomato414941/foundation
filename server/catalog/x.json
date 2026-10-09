@@ -6,7 +6,7 @@
   "console": "https://developer.x.com/en/portal/dashboard",
   "methods": {
     "oauth": {
-      "name": "X · OAuth",
+      "name": "X · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://x.com/i/oauth2/authorize",
@@ -45,7 +45,7 @@
       "console": "https://developer.x.com/en/portal/dashboard"
     },
     "token": {
-      "name": "X · API key",
+      "name": "X · Enter access token",
       "kind": "token",
       "config": {
         "fields": [

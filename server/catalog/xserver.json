@@ -6,7 +6,7 @@
   "console": "https://secure.xserver.ne.jp/xapanel/login/xvps/",
   "methods": {
     "token": {
-      "name": "XServer · API key",
+      "name": "XServer · Enter API key",
       "kind": "token",
       "config": {
         "fields": [

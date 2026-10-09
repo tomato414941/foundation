@@ -66,7 +66,8 @@ export class ConnectionClient {
       action: 'start', flowId: id, name: input.name, methodId: input.methodId, method: input.method, appId,
       fields: input.fields ?? {}, scopes: input.scopes ?? [],
       ...(input.role ? { role: input.role } : {}),
-      ...(input.method.kind === 'oauth' ? { redirectUri: input.redirectUri ?? this.custody.origin + '/oauth/callback' } : {}),
+      ...(input.method.kind === 'oauth' && input.method.config.grantType !== 'client_credentials'
+        ? { redirectUri: input.redirectUri ?? this.custody.origin + '/oauth/callback' } : {}),
     } }, { sourceIds: appId ? [appId] : [], approval });
     const flow: ConnectionFlow = { id, ownerId: input.ownerId, environmentId: input.environmentId, name: input.name,
       appId, policy, previousPolicyDigest: previous ? await hash(previous.content.policy) : null,

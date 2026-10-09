@@ -16,6 +16,7 @@ export function requiresApp(method: MethodDescription) {
 export const TokenMaterial = z.object({
   accessToken: z.string().min(1).max(16384), refreshToken: z.string().min(1).max(16384).optional(),
   expiresAt: z.number().nullable(), refreshExpiresAt: z.number().optional(), scopes: z.array(z.string()),
+  requestedScopes: z.array(z.string()).optional(),
   account: z.string(), accountName: z.string(), accountVerified: z.boolean().optional(),
   scopesStatus: z.enum(['unknown', 'requested', 'reported']).optional(), extra: Fields, facts: JsonObject,
 }).strict();

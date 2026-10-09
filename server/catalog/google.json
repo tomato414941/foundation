@@ -6,7 +6,7 @@
   "console": "https://console.cloud.google.com/apis/connections",
   "methods": {
     "oauth": {
-      "name": "Google · OAuth",
+      "name": "Google · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://accounts.google.com/o/oauth2/v2/auth",

@@ -6,7 +6,7 @@
   "console": "https://developer.atlassian.com/console/myapps/",
   "methods": {
     "oauth": {
-      "name": "Atlassian · OAuth",
+      "name": "Atlassian · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://auth.atlassian.com/authorize",
@@ -47,7 +47,7 @@
       "console": "https://developer.atlassian.com/console/myapps/"
     },
     "token": {
-      "name": "Atlassian · API key",
+      "name": "Atlassian · Enter API token",
       "kind": "token",
       "config": {
         "fields": [

@@ -6,7 +6,7 @@
   "console": "https://app.box.com/developers/console",
   "methods": {
     "oauth": {
-      "name": "Box · OAuth",
+      "name": "Box · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://account.box.com/api/oauth2/authorize",

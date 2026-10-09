@@ -6,7 +6,7 @@
   "console": "https://gitlab.com/-/user_settings/applications",
   "methods": {
     "oauth": {
-      "name": "GitLab · OAuth",
+      "name": "GitLab · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://gitlab.com/oauth/authorize",
@@ -46,7 +46,7 @@
       "console": "https://gitlab.com/-/user_settings/applications"
     },
     "token": {
-      "name": "GitLab · API key",
+      "name": "GitLab · Enter access token",
       "kind": "token",
       "config": {
         "fields": [

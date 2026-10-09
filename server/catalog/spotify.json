@@ -6,7 +6,7 @@
   "console": "https://developer.spotify.com/dashboard",
   "methods": {
     "oauth": {
-      "name": "Spotify · OAuth",
+      "name": "Spotify · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://accounts.spotify.com/authorize",

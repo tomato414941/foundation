@@ -7,7 +7,7 @@
   "console": "https://openrouter.ai/keys",
   "methods": {
     "oauth": {
-      "name": "OpenRouter · OAuth",
+      "name": "OpenRouter · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://openrouter.ai/auth",
@@ -24,7 +24,7 @@
       "console": "https://openrouter.ai/keys"
     },
     "token": {
-      "name": "OpenRouter · API key",
+      "name": "OpenRouter · Enter API key",
       "kind": "token",
       "config": {
         "fields": [

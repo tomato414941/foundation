@@ -156,8 +156,9 @@ const Scopes = z.object({
 const UrlTemplate = z.string().min(1).max(4096);
 const PointerList = z.union([z.string(), z.array(z.string()).min(1)]);
 export const OAuthDefinition = z.object({
+  grantType: z.enum(['authorization_code', 'client_credentials']).optional(),
   issuer: z.url().optional(),
-  authorizeUrl: UrlTemplate,
+  authorizeUrl: UrlTemplate.optional(),
   tokenUrl: UrlTemplate,
   identity: z
     .object({
@@ -189,6 +190,8 @@ export const OAuthDefinition = z.object({
   adapter: z.enum(['google', 'github', 'ebay', 'openrouter', 'cloudflare', 'slack']).optional(),
   keep: z.array(z.string()).default([]),
   hint: z.string().optional(),
+}).refine(value => value.grantType === 'client_credentials' || Boolean(value.authorizeUrl), {
+  path: ['authorizeUrl'], message: 'An authorization code flow requires an authorization URL.',
 });
 export const TokenDefinition = z.object({
   fields: z.array(Field).min(1),

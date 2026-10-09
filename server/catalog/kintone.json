@@ -4,7 +4,7 @@
   "docs": "https://cybozu.dev/ja/kintone/docs/rest-api/",
   "methods": {
     "oauth": {
-      "name": "kintone · OAuth",
+      "name": "kintone · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://{domain}/oauth2/authorization",
@@ -39,7 +39,7 @@
       "docs": "https://cybozu.dev/ja/kintone/docs/rest-api/"
     },
     "token": {
-      "name": "kintone · API key",
+      "name": "kintone · Enter API token",
       "kind": "token",
       "config": {
         "fields": [

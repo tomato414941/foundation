@@ -6,7 +6,7 @@
   "console": "https://dashboard.heroku.com/account/applications",
   "methods": {
     "oauth": {
-      "name": "Heroku · OAuth",
+      "name": "Heroku · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://id.heroku.com/oauth/authorize",
@@ -43,7 +43,7 @@
       "console": "https://dashboard.heroku.com/account/applications"
     },
     "token": {
-      "name": "Heroku · API key",
+      "name": "Heroku · Enter API key",
       "kind": "token",
       "config": {
         "fields": [

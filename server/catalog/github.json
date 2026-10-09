@@ -7,7 +7,7 @@
   "console": "https://github.com/settings/developers",
   "methods": {
     "oauth": {
-      "name": "GitHub · OAuth",
+      "name": "GitHub · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://github.com/login/oauth/authorize",
@@ -36,7 +36,7 @@
       "console": "https://github.com/settings/developers"
     },
     "token": {
-      "name": "GitHub · API key",
+      "name": "GitHub · Enter access token",
       "kind": "token",
       "config": {
         "fields": [

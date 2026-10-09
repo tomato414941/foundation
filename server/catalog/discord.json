@@ -6,7 +6,7 @@
   "console": "https://discord.com/developers/applications",
   "methods": {
     "oauth": {
-      "name": "Discord · OAuth",
+      "name": "Discord · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://discord.com/oauth2/authorize",
@@ -46,7 +46,7 @@
       "console": "https://discord.com/developers/applications"
     },
     "token": {
-      "name": "Discord · API key",
+      "name": "Discord · Enter bot token",
       "kind": "token",
       "config": {
         "fields": [

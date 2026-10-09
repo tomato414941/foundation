@@ -6,7 +6,7 @@
   "console": "https://cloud.digitalocean.com/account/api/applications",
   "methods": {
     "oauth": {
-      "name": "DigitalOcean · OAuth",
+      "name": "DigitalOcean · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://cloud.digitalocean.com/v1/oauth/authorize",
@@ -42,7 +42,7 @@
       "console": "https://cloud.digitalocean.com/account/api/applications"
     },
     "token": {
-      "name": "DigitalOcean · API key",
+      "name": "DigitalOcean · Enter access token",
       "kind": "token",
       "config": {
         "fields": [

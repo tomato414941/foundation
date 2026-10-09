@@ -6,7 +6,7 @@
   "console": "https://developer.ebay.com/my/keys",
   "methods": {
     "oauth": {
-      "name": "eBay · OAuth",
+      "name": "eBay · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://auth.ebay.com/oauth2/authorize",

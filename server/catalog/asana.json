@@ -6,7 +6,7 @@
   "console": "https://app.asana.com/0/my-apps",
   "methods": {
     "oauth": {
-      "name": "Asana · OAuth",
+      "name": "Asana · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://app.asana.com/-/oauth_authorize",
@@ -44,7 +44,7 @@
       "console": "https://app.asana.com/0/my-apps"
     },
     "token": {
-      "name": "Asana · API key",
+      "name": "Asana · Enter access token",
       "kind": "token",
       "config": {
         "fields": [

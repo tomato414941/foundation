@@ -6,7 +6,7 @@
   "console": "https://api.slack.com/apps",
   "methods": {
     "oauth": {
-      "name": "Slack · OAuth",
+      "name": "Slack · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://slack.com/oauth/v2/authorize",
@@ -45,7 +45,7 @@
       "console": "https://api.slack.com/apps"
     },
     "token": {
-      "name": "Slack · API key",
+      "name": "Slack · Enter access token",
       "kind": "token",
       "config": {
         "fields": [

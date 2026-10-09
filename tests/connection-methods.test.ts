@@ -1,20 +1,46 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { flowFixture } from './flow-support.js';
+import { flowFixture, jsonResponse } from './flow-support.js';
 import { MethodDefinition, Resource, ServiceInputDefinition } from '../shared/contracts.js';
 
 const keyMethod = (name: string, field = 'token', output = 'API_KEY') =>
   MethodDefinition.parse({ name, kind: 'token',
     config: { fields: [{ name: field, label: field, secret: true }], outputs: { [output]: '/' + field } } });
 
-test('ShopifyのOAuth・Client credentials・APIキーの接続方法を共通サービスから選択する', async t => {
-  const f = await flowFixture(); t.after(f.close);
+test('Shopifyのアプリ認証で接続先と権限を確認して保存し、利用時にトークンを更新する', async t => {
+  let grants = 0;
+  const f = await flowFixture(request => {
+    if (request.url.endsWith('/admin/oauth/access_token')) {
+      const form = new URLSearchParams(String(request.body));
+      assert.equal(form.get('grant_type'), 'client_credentials');
+      assert.equal(form.get('client_id'), 'application-id');
+      return jsonResponse({ access_token: 'shopify-access-' + ++grants, expires_in: 10, scope: 'read_products' });
+    }
+    if (request.url.endsWith('/graphql.json')) return jsonResponse({ data: { shop: {
+      id: 'gid://shopify/Shop/1', name: 'My shop', myshopifyDomain: 'example.myshopify.com',
+    } } });
+    return jsonResponse({ ok: true });
+  }); t.after(f.close);
   const shopify = (await f.context.catalog.list(f.owner.actor)).find(item => item.id === 'shopify')!;
   assert.equal(shopify.builtin, true);
   assert.deepEqual(Object.values(shopify.methods).map(method => method.id),
     ['shopify:oauth', 'shopify:client_credentials', 'shopify:token']);
   const method = shopify.methods.client_credentials!;
-  assert.equal(method.availability, 'ready');
+  assert.equal(method.availability, 'app-required');
+  const application = await f.saveApp(method.id, 'Shopify app', { shop: 'example' });
+  const started = await f.start({ methodId: method.id, appId: application.id });
+  const reviewed = await f.tick(started.flow.id);
+  assert.equal(reviewed.kind, 'review', JSON.stringify(reviewed));
+  if (reviewed.kind !== 'review') return;
+  assert.equal(reviewed.metadata.account, 'My shop');
+  assert.equal(reviewed.metadata.accountVerified, true);
+  assert.deepEqual(reviewed.metadata.scopes, ['read_products']);
+  const saved = await f.accept(started.flow.id);
+  assert.equal((await f.http(saved.id, 'SHOPIFY_ACCESS_TOKEN'))?.ok, true);
+  assert.equal(f.requests.at(-1)!.headers.authorization, 'Bearer shopify-access-2');
+  const renewed = await f.client.read(saved.id);
+  assert.equal(renewed.content.materialRevision, 2);
+  assert.equal(grants, 2);
 });
 
 test('一つのサービスから同方式の複数の接続方法を選び、それぞれの値を利用する', async t => {

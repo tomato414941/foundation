@@ -5,7 +5,7 @@
   "console": "https://secure.sakura.ad.jp/vps/",
   "methods": {
     "vps-api-key": {
-      "name": "さくらのVPS · API key",
+      "name": "さくらのVPS · Enter API key",
       "kind": "token",
       "config": {
         "fields": [

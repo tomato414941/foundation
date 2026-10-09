@@ -6,7 +6,7 @@
   "console": "https://dashboard.render.com/u/settings",
   "methods": {
     "oauth": {
-      "name": "Render MCP · OAuth",
+      "name": "Render MCP · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://api.render.com/v1/oauth/authorize",
@@ -38,7 +38,7 @@
       "docs": "https://render.com/docs/mcp-server"
     },
     "token": {
-      "name": "Render REST API · API key",
+      "name": "Render REST API · Enter API key",
       "kind": "token",
       "config": {
         "fields": [

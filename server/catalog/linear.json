@@ -6,7 +6,7 @@
   "console": "https://linear.app/settings/api",
   "methods": {
     "oauth": {
-      "name": "Linear · OAuth",
+      "name": "Linear · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://linear.app/oauth/authorize",
@@ -51,7 +51,7 @@
       "console": "https://linear.app/settings/api"
     },
     "token": {
-      "name": "Linear · API key",
+      "name": "Linear · Enter API key",
       "kind": "token",
       "config": {
         "fields": [

@@ -4,7 +4,7 @@
   "docs": "https://developer.salesforce.com/docs/apis",
   "methods": {
     "oauth": {
-      "name": "Salesforce · OAuth",
+      "name": "Salesforce · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://login.salesforce.com/services/oauth2/authorize",

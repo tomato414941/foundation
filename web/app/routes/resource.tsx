@@ -26,6 +26,7 @@ import {
 import { resourceKind, sectionFor } from '../navigation';
 import { useWorkspace } from './workspace';
 import { ConnectionFacts } from '../connection-facts';
+import { connectionMethodName } from '../connection-method-labels';
 import { custodyClient } from '../custody';
 import { availableEnvironments, EnvironmentChoice } from '../environments';
 import { EnvironmentDelete } from '../environment-delete';
@@ -309,7 +310,7 @@ function BoxDetails({ item }: { item: Awaited<ReturnType<typeof clientLoader>>['
           <Detail label={t('service')}>
             {item.data.services.map((service) => service.name).join(', ') || '—'}
           </Detail>
-          <Detail label={t('method')}>{item.data.methodName}</Detail>
+          <Detail label={t('method')}>{connectionMethodName(item.data.methodName, t)}</Detail>
           <ConnectionFacts value={item.data} />
         </>
       )}

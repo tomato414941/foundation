@@ -6,7 +6,7 @@
   "console": "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
   "methods": {
     "oauth": {
-      "name": "Microsoft 365 · OAuth",
+      "name": "Microsoft 365 · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize",

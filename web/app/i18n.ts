@@ -163,6 +163,22 @@ const words: Record<string, [string, string]> = {
   method: ['接続方法', 'Connection method'],
   methods: ['接続方法', 'Connection methods'],
   allMethods: ['すべての接続方法', 'All connection methods'],
+  connectInBrowser: ['ブラウザで接続', 'Connect in browser'],
+  connectWithApp: ['アプリ認証で接続', 'Connect with app credentials'],
+  enterApiKey: ['APIキーを入力', 'Enter API key'],
+  enterAccessToken: ['アクセストークンを入力', 'Enter access token'],
+  enterApiToken: ['APIトークンを入力', 'Enter API token'],
+  enterBotToken: ['Botトークンを入力', 'Enter bot token'],
+  enterIntegrationSecret: ['インテグレーションのシークレットを入力', 'Enter integration secret'],
+  enterCredentials: ['認証情報を入力', 'Enter credentials'],
+  clientCredentialsHelp: [
+    '登録したアプリのClient IDとClient secretでアクセストークンを取得します。有効期限が近づくと、利用時に自動で再取得します。',
+    'Get an access token using the registered app’s client ID and secret. Tokens are renewed automatically when used near expiry.',
+  ],
+  shopifyClientCredentialsHelp: [
+    '自分のShopify組織のストアにインストール済みのアプリを使用してください。権限はDev Dashboardのアプリ設定で指定します。',
+    'Use an app installed on a store in your own Shopify organization. Set its access scopes in the Dev Dashboard.',
+  ],
   existingConnections: [
     'この接続方法で登録済みの接続を利用できます。',
     'You can use an existing connection with this method.',

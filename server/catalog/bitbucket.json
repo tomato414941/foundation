@@ -5,7 +5,7 @@
   "docs": "https://developer.atlassian.com/cloud/bitbucket/rest/",
   "methods": {
     "oauth": {
-      "name": "Bitbucket · OAuth",
+      "name": "Bitbucket · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://bitbucket.org/site/oauth2/authorize",
@@ -37,7 +37,7 @@
       "docs": "https://developer.atlassian.com/cloud/bitbucket/rest/"
     },
     "token": {
-      "name": "Bitbucket · API key",
+      "name": "Bitbucket · Enter API token",
       "kind": "token",
       "config": {
         "fields": [

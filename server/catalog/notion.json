@@ -6,7 +6,7 @@
   "console": "https://www.notion.so/profile/integrations",
   "methods": {
     "oauth": {
-      "name": "Notion · OAuth",
+      "name": "Notion · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://api.notion.com/v1/oauth/authorize",
@@ -40,7 +40,7 @@
       "console": "https://www.notion.so/profile/integrations"
     },
     "token": {
-      "name": "Notion · API key",
+      "name": "Notion · Enter integration secret",
       "kind": "token",
       "config": {
         "fields": [

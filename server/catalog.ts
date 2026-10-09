@@ -33,7 +33,10 @@ export function legacyMethod(service: LegacyServiceDescription, kind: AuthKindNa
   const config = service.auth[kind];
   if (!config) fail(400, 'scheme_unavailable', 'Choose an available connection method.');
   return MethodDefinition.parse({
-    name: (service.name + ' · ' + { oauth: 'OAuth', token: 'API key', role: 'IAM role' }[kind]).slice(0, 200),
+    name: (service.name + ' · ' + {
+      oauth: service.auth.oauth?.grantType === 'client_credentials' ? 'Connect with app credentials' : 'Connect in browser',
+      token: 'Enter credentials', role: 'IAM role',
+    }[kind]).slice(0, 200),
     kind,
     config,
     ...(service.docs ? { docs: service.docs } : {}),

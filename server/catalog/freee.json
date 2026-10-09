@@ -6,7 +6,7 @@
   "console": "https://app.secure.freee.co.jp/developers/applications",
   "methods": {
     "oauth": {
-      "name": "freee · OAuth",
+      "name": "freee · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://accounts.secure.freee.co.jp/public_api/authorize",

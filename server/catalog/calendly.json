@@ -6,7 +6,7 @@
   "console": "https://developer.calendly.com/",
   "methods": {
     "oauth": {
-      "name": "Calendly · OAuth",
+      "name": "Calendly · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://auth.calendly.com/oauth/authorize",
@@ -43,7 +43,7 @@
       "console": "https://developer.calendly.com/"
     },
     "token": {
-      "name": "Calendly · API key",
+      "name": "Calendly · Enter access token",
       "kind": "token",
       "config": {
         "fields": [

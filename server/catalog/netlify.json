@@ -6,7 +6,7 @@
   "console": "https://app.netlify.com/user/applications",
   "methods": {
     "oauth": {
-      "name": "Netlify · OAuth",
+      "name": "Netlify · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://app.netlify.com/authorize",
@@ -39,7 +39,7 @@
       "console": "https://app.netlify.com/user/applications"
     },
     "token": {
-      "name": "Netlify · API key",
+      "name": "Netlify · Enter access token",
       "kind": "token",
       "config": {
         "fields": [

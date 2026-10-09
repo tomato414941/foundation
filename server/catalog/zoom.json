@@ -6,7 +6,7 @@
   "console": "https://marketplace.zoom.us/",
   "methods": {
     "oauth": {
-      "name": "Zoom · OAuth",
+      "name": "Zoom · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://zoom.us/oauth/authorize",

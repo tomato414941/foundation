@@ -37,11 +37,11 @@ class Provider implements Transport {
     return this.respond(request);
   }
 }
-async function builtin(name: string) {
+async function builtin(name: string, method = 'oauth') {
   const service = JSON.parse(
     await readFile(new URL('../server/catalog/' + name + '.json', import.meta.url), 'utf8'),
   );
-  return OAuthDefinition.parse(service.methods.oauth.config);
+  return OAuthDefinition.parse(service.methods[method].config);
 }
 function existing(overrides: Partial<OAuthToken> = {}): OAuthToken {
   return JSON.parse(
@@ -214,6 +214,91 @@ test('Shopifyの応答から接続し、更新用トークンで新しいアク�
   const refreshed = await oauth.refresh(spec, shopifyApp, token);
   assert.equal(refreshed.accessToken, 'shopify-access-2');
   assert.equal(refreshed.refreshToken, 'shopify-refresh-2');
+});
+
+test('アプリ認証で取得した権限と要求したスコープを区別し、同じスコープでトークンを再取得する', async () => {
+  for (const clientAuth of ['basic', 'body']) {
+    const spec = definition({ grantType: 'client_credentials', authorizeUrl: undefined, clientAuth });
+    const scopes = ['https://graph.example/.default'];
+    let grants = 0;
+    const provider = new Provider(request => {
+      const form = new URLSearchParams(String(request.body));
+      assert.equal(form.get('grant_type'), 'client_credentials');
+      assert.equal(form.get('scope'), scopes[0]);
+      if (clientAuth === 'basic') checkBasic(request);
+      else {
+        assert.equal(form.get('client_id'), app.clientId);
+        assert.equal(form.get('client_secret'), app.clientSecret);
+      }
+      return response({ access_token: 'app-access-' + ++grants, token_type: 'Bearer',
+        expires_in: 10, scope: 'read write', account_id: 'application-1', account_name: 'Application' });
+    });
+    const oauth = new OAuth(provider);
+    const token = await oauth.clientCredentials(spec, app, scopes);
+    assert.deepEqual(token.scopes, ['read', 'write']);
+    assert.equal(token.account, 'application-1');
+    assert.equal(token.accountVerified, true);
+    const refreshed = await oauth.refresh(spec, app, token);
+    assert.equal(refreshed.accessToken, 'app-access-2');
+    assert.deepEqual(refreshed.requestedScopes, scopes);
+    assert.equal(refreshed.account, token.account);
+  }
+});
+
+test('Shopifyのアプリ認証からストアと権限を確認し、有効期限が近づいたトークンを再取得する', async () => {
+  const spec = await builtin('shopify', 'client_credentials');
+  const shopifyApp = { ...app, fields: { shop: 'example' } };
+  let grants = 0, inspections = 0;
+  const provider = new Provider(request => {
+    if (request.url.endsWith('/admin/oauth/access_token')) {
+      assert.deepEqual(Object.fromEntries(new URLSearchParams(String(request.body))), {
+        grant_type: 'client_credentials', client_id: app.clientId, client_secret: app.clientSecret,
+      });
+      return response({ access_token: 'shopify-app-access-' + ++grants, expires_in: 86_400,
+        scope: 'read_products,write_orders' });
+    }
+    inspections++;
+    assert.equal(request.headers?.['X-Shopify-Access-Token'], 'shopify-app-access-' + grants);
+    assert.equal(request.method, 'POST');
+    assert.match(JSON.parse(String(request.body)).query, /myshopifyDomain/);
+    return response({ data: { shop: { id: 'gid://shopify/Shop/1', name: 'Example shop', myshopifyDomain: 'example.myshopify.com' } } });
+  });
+  const oauth = new OAuth(provider);
+  const token = await oauth.clientCredentials(spec, shopifyApp, []);
+  assert.equal(token.account, 'gid://shopify/Shop/1');
+  assert.equal(token.accountName, 'Example shop');
+  assert.equal(token.accountVerified, true);
+  assert.deepEqual(token.scopes, ['read_products', 'write_orders']);
+  assert.equal(token.scopesStatus, 'reported');
+  assert.ok(token.expiresAt! > Date.now() + 86_300_000);
+  const refreshed = await oauth.refresh(spec, shopifyApp, { ...token, expiresAt: 0 });
+  assert.equal(refreshed.accessToken, 'shopify-app-access-2');
+  assert.equal(refreshed.account, token.account);
+  assert.equal(inspections, 2);
+  assert.deepEqual(oauth.outputs(spec, shopifyApp, refreshed), {
+    SHOPIFY_SHOP: 'example', SHOPIFY_ACCESS_TOKEN: refreshed.accessToken,
+    SHOPIFY_TOKEN_EXPIRES_AT: String(refreshed.expiresAt),
+  });
+});
+
+test('アプリ認証で拒否された認証情報や不正な期限を接続エラーとして扱う', async () => {
+  const spec = definition({ grantType: 'client_credentials' });
+  for (const [body, status, code] of [
+    [{ error: 'invalid_client' }, 401, 'authorization_failed'],
+    [{ access_token: 'invalid-expiry', token_type: 'bearer', expires_in: 0 }, 200, 'invalid_response'],
+  ] as const) {
+    const oauth = new OAuth(new Provider(() => response(body, status)));
+    await assert.rejects(oauth.clientCredentials(spec, app, []), { code });
+  }
+});
+
+test('Shopifyのアプリ認証で取得した接続先が指定したストアと一致することを確認する', async () => {
+  const spec = await builtin('shopify', 'client_credentials');
+  const provider = new Provider(request => request.url.endsWith('/access_token')
+    ? response({ access_token: 'shopify-access', expires_in: 86_400 })
+    : response({ data: { shop: { id: 'gid://shopify/Shop/2', name: 'Other shop', myshopifyDomain: 'other.myshopify.com' } } }));
+  await assert.rejects(new OAuth(provider).clientCredentials(spec, { ...app, fields: { shop: 'example' } }, []),
+    { code: 'invalid_response' });
 });
 
 test('eBayのRuNameで認可し、独自のトークン種別と照会結果を使って更新と失効を実行する', async () => {

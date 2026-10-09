@@ -21,6 +21,7 @@ import { ErrorNotice, ExternalLink, JsonField, Page, Panel, SaveBar } from './co
 import { resourceKind, resourcePath } from './navigation';
 import { useWorkspace } from './routes/workspace';
 import { serviceLabels } from './service-labels';
+import { connectionMethodName } from './connection-method-labels';
 export async function formLoader({ params, request }: LoaderFunctionArgs) {
   const kind = resourceKind(params.section);
   const query = new URL(request.url).searchParams;
@@ -315,6 +316,8 @@ export default function ResourceForm() {
       : (data.methodId ?? preferred(methods)?.id ?? ''),
   );
   const method = data.pinnedMethod ?? eligibleMethods.find((item) => item.id === methodId);
+  const clientCredentials = method?.kind === 'oauth' && method.config.grantType === 'client_credentials';
+  const shopifyClientCredentials = clientCredentials && methodId === 'shopify:client_credentials';
   const [fileName, setFileName] = useState('');
   // An IAM role is made in the owner's own AWS console, trusting the identity the chosen executor runs as.
   const roleSetup = data.kind === 'connection' && method?.kind === 'role';
@@ -502,11 +505,22 @@ export default function ResourceForm() {
                     >
                       {(existing && method ? [method] : methods).map((item) => (
                         <SelectItem key={item.id} value={item.id}>
-                          {item.name}
+                          {connectionMethodName(item.name, t, service?.name)}
                         </SelectItem>
                       ))}
                     </SelectField>
                     {existing && <input type="hidden" name="methodId" value={methodId} />}
+                    {method?.kind === 'oauth' && (
+                      <p className="text-sm text-muted-foreground">
+                        OAuth 2.0 / {clientCredentials ? 'Client Credentials' : 'Authorization Code'}
+                      </p>
+                    )}
+                    {clientCredentials && (
+                      <Notice tone="info">
+                        <p>{t('clientCredentialsHelp')}</p>
+                        {shopifyClientCredentials && <p className="mt-2">{t('shopifyClientCredentialsHelp')}</p>}
+                      </Notice>
+                    )}
                     {!existing && !!existingConnections.length && (
                       <Notice tone={'info'}>
                         <p className="leading-relaxed text-sm">{t('existingConnections')}</p>
@@ -543,7 +557,7 @@ export default function ResourceForm() {
                               </SelectItem>
                             ))}
                           </SelectField>}
-                          <InputField
+                          {!shopifyClientCredentials && <InputField
                             name="scopes"
                             label={t('scopes')}
                             defaultValue={
@@ -552,7 +566,7 @@ export default function ResourceForm() {
                                 : method.config.scopes.default.join(' ')
                             }
                             hint={t('scopesHelp')}
-                          />
+                          />}
                           {method.config.scopes.docs && (
                             <ExternalLink href={method.config.scopes.docs}>{t('docs')}</ExternalLink>
                           )}
@@ -570,10 +584,11 @@ export default function ResourceForm() {
                             name="clientSecret"
                             type="password"
                             autoComplete="new-password"
+                            required={!existing && clientCredentials && method?.kind === 'oauth' && method.config.clientAuth !== 'none'}
                             label={t('clientSecret')}
                             hint={existing ? t('unchangedSecret') : undefined}
                           />
-                          <InputField
+                          {!clientCredentials && <InputField
                             label={t('callbackUrl')}
                             value={
                               typeof window !== 'undefined'
@@ -581,7 +596,7 @@ export default function ResourceForm() {
                                 : ''
                             }
                             readOnly={true}
-                          />
+                          />}
                         </>
                       )}
                       {fields.map((field) => (

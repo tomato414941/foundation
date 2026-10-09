@@ -5,6 +5,7 @@ import type { ResourceView } from '../../shared/contracts';
 import { Bytes, DateText, Empty, State } from './components';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table';
 import { resourcePath, sectionFor } from './navigation';
+import { connectionMethodName } from './connection-method-labels';
 
 export function ResourceTable({
   items,
@@ -67,7 +68,7 @@ export function ResourceTable({
                       {item.kind === 'connection' && (
                         <>
                           <p className="text-xs whitespace-normal text-muted-foreground wrap-anywhere">
-                            {item.data.methodName}
+                            {connectionMethodName(item.data.methodName, t)}
                           </p>
                           <p className="text-xs whitespace-normal text-muted-foreground wrap-anywhere">
                             {item.data.account || t('accountUnverified')}

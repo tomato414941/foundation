@@ -4,7 +4,7 @@
   "docs": "https://developer.zendesk.com/api-reference/",
   "methods": {
     "oauth": {
-      "name": "Zendesk · OAuth",
+      "name": "Zendesk · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://{subdomain}.zendesk.com/oauth/authorizations/new",
@@ -49,7 +49,7 @@
       "docs": "https://developer.zendesk.com/api-reference/"
     },
     "token": {
-      "name": "Zendesk · API key",
+      "name": "Zendesk · Enter API token",
       "kind": "token",
       "config": {
         "fields": [

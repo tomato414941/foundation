@@ -6,7 +6,7 @@
   "console": "https://airtable.com/create/oauth",
   "methods": {
     "oauth": {
-      "name": "Airtable · OAuth",
+      "name": "Airtable · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://airtable.com/oauth2/v1/authorize",
@@ -39,7 +39,7 @@
       "console": "https://airtable.com/create/oauth"
     },
     "token": {
-      "name": "Airtable · API key",
+      "name": "Airtable · Enter access token",
       "kind": "token",
       "config": {
         "fields": [

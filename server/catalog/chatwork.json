@@ -6,7 +6,7 @@
   "console": "https://www.chatwork.com/service/packages/chatwork/subpackages/oauth/client_list.php",
   "methods": {
     "oauth": {
-      "name": "Chatwork · OAuth",
+      "name": "Chatwork · Connect in browser",
       "kind": "oauth",
       "config": {
         "authorizeUrl": "https://www.chatwork.com/packages/oauth2/login.php",
@@ -43,7 +43,7 @@
       "console": "https://www.chatwork.com/service/packages/chatwork/subpackages/oauth/client_list.php"
     },
     "token": {
-      "name": "Chatwork · API key",
+      "name": "Chatwork · Enter API token",
       "kind": "token",
       "config": {
         "fields": [
