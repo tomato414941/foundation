@@ -36,8 +36,8 @@ export function registerMetadataTools(server: McpServer, gateway: {
     return { paths: Object.keys(spec.paths), components: Object.keys(spec.components?.schemas ?? {}) };
   }, input.response_format));
   server.registerTool('foundation_api', {
-    title: 'Call the Foundation control API',
-    description: 'Manage metadata and approval requests as this identity. Include limit/after on list paths. Protected values must be encrypted by a client; ask the person to enter secrets through a CONNECT approval request. This tool does not sign executions or decrypt values.',
+    title: 'Call the Foundation API',
+    description: 'Call Foundation resource, process, and approval APIs as this principal. Start a command with POST /api/environments/{id}/processes. Read state, exit status, and paginated stdout/stderr through GET /api/processes/{id}/output; use its next offset to read more. Inspect or cancel a process through /api/processes/{id}. Include limit/after on list paths. Protected variables and connections require client encryption; use CONNECT approval requests for service consent.',
     inputSchema: z.object({ method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
       path: z.string().startsWith('/api/').max(2048), body: Json.optional(), response_format: ResponseFormat }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },

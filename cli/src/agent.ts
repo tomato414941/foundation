@@ -14,6 +14,7 @@ import { CommandProcess } from '../../runtime/command.js';
 import { journalLock } from '../../runtime/lock.js';
 import { detectAwsPrincipal } from '../../runtime/roles.js';
 import { Operations } from '../../shared/custody.js';
+import { ProcessBroker, ProcessExecutor } from '../../runtime/process.js';
 
 export async function startAgent(client: Client, options: {
   id?: string; ownerId: string; name: string; isolation: 'process' | 'container';
@@ -57,11 +58,17 @@ export async function startAgent(client: Client, options: {
     const connections = new Connections(binding, keys, broker.connections(), journal, transport);
     const executor = new Executor(environment, keys, broker, journal, transport,
       new CommandProcess({ isolation: environment.manifest.isolation, image: environment.manifest.commandImage }), connections);
+    const workingDirectory = environment.manifest.isolation === 'container' ? '/workspace' : process.cwd();
+    await client.json('/api/environments/' + id + '/processes/registration', { method: 'PUT', body: { workingDirectory } });
+    const processes = new ProcessExecutor(id, new ProcessBroker(client), journal, new CommandProcess({
+      isolation: environment.manifest.isolation, image: environment.manifest.commandImage,
+      workspace: join(path, 'workspace'),
+    }));
     do {
-      const pending = [...await connections.reconcile(), ...await executor.reconcile()];
+      const pending = [...await connections.reconcile(), ...await executor.reconcile(), ...await processes.reconcile()];
       if (pending.length) process.stderr.write(JSON.stringify({ event: 'reconciliation_pending', ids: pending }) + '\n');
       let claimed = false;
-      try { claimed = await executor.tick(controller.signal); }
+      try { claimed = await executor.tick(controller.signal); claimed = await processes.tick(controller.signal) || claimed; }
       catch (error) { if (!(error instanceof DeliveryPending) || options.once) throw error; }
       if (options.once) break;
       if (!claimed) await delay(1000, undefined, { signal: controller.signal });

@@ -30,6 +30,7 @@ import { Delegation } from './delegation.js';
 import { ConnectionOperations } from './connection-operations.js';
 import { OAuthRelays } from './oauth-relays.js';
 import { Operations } from '../shared/custody.js';
+import { Processes } from './processes.js';
 
 export interface Dependencies {
   db?: Database;
@@ -59,6 +60,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     delegation = new Delegation(resources, bindings, custody, config.origin),
     connectionOperations = new ConnectionOperations(custody),
     oauthRelays = new OAuthRelays(delegation);
+  const processes = new Processes(resources, delegation);
   principals.keySharing = new KeySharing(custody);
   const objects = new Objects(resources, billing, deps.storage ?? new S3Objects(config)),
     environments = new Environments(
@@ -111,6 +113,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     delegation,
     connectionOperations,
     oauthRelays,
+    processes,
   };
 }
 export type Context = Awaited<ReturnType<typeof createContext>>;

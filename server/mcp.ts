@@ -25,7 +25,7 @@ export async function routesMcp(app: ApiApp) {
       { name: 'Foundation', version: '1.0.0' },
       {
         instructions:
-          'This endpoint manages Foundation metadata and approval requests. Protected values and executions require client encryption and signatures. Use foundation mcp on a device holding an explicitly authorized identity to sign runs and decrypt results. For service consent or secret entry, create a CONNECT approval request for the browser; never submit plaintext credentials to this API.',
+          'Use foundation_schema to discover the Foundation API and foundation_api to call it as the authenticated principal. Start commands with POST /api/environments/{id}/processes, then inspect or cancel the returned process ID. Protected variables and service connections use client encryption and signatures. For service consent or protected input, create a CONNECT approval request for the browser.',
       },
     );
     registerMetadataTools(server, {

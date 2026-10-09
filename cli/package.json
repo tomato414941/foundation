@@ -1,7 +1,7 @@
 {
   "name": "@tomato414941/foundation",
-  "version": "3.0.0",
-  "description": "Manage Foundation resources and deliver encrypted inputs to commands.",
+  "version": "3.1.0",
+  "description": "Manage Foundation resources and run commands in execution environments.",
   "type": "module",
   "engines": {
     "node": ">=24"

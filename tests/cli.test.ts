@@ -81,6 +81,28 @@ async function cliFixture() {
   return { f, context, app, origin, directory, run, start, close, person };
 }
 
+test('CLIの共通APIからコマンドを開始し、実行環境で処理して結果を読む', async t => {
+  const c = await cliFixture(); t.after(c.close);
+  const initialized = await c.run(['init', '--name', 'Process API principal', '--origin', c.origin]);
+  assert.equal(initialized.code, 0, initialized.stderr);
+  const environmentId = randomUUID();
+  const registered = await c.run(['agent', 'start', '--id', environmentId, '--once']);
+  assert.equal(registered.code, 0, registered.stderr);
+  const command = ['node', '-e', 'let text="";process.stdin.on("data",value=>text+=value);' +
+    'process.stdin.on("end",()=>process.stdout.write(JSON.stringify({text,value:process.env.VALUE,cwd:process.cwd()})))'];
+  const started = await c.run(['api', 'POST', '/api/environments/' + environmentId + '/processes', '--body', '@-'],
+    JSON.stringify({ command, workingDirectory: c.directory, environment: { VALUE: 'API value' }, stdin: 'API input' }));
+  assert.equal(started.code, 0, started.stderr);
+  const id = JSON.parse(started.stdout).id;
+  const executed = await c.run(['agent', 'start', '--id', environmentId, '--once']);
+  assert.equal(executed.code, 0, executed.stderr);
+  const inspected = await c.run(['api', 'GET', '/api/processes/' + id]);
+  assert.equal(inspected.code, 0, inspected.stderr);
+  const process = JSON.parse(inspected.stdout);
+  assert.equal(process.state, 'succeeded');
+  assert.deepEqual(JSON.parse(process.result.stdout), { text: 'API input', value: 'API value', cwd: c.directory });
+});
+
 test('変数を使用権限でローカルコマンドへ渡し、内容の読み出しを制限する', async t => {
   const c = await cliFixture(); t.after(c.close);
   const initialized = await c.run(['init', '--name', 'Variable executor', '--origin', c.origin]);

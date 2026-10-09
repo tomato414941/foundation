@@ -111,6 +111,7 @@ export class Environments {
          (r.data->>'startedAt')::timestamptz+(r.data->'lifetime'->>'maxSeconds')::int*interval '1 second'<=now()
          OR (r.data->>'lastActiveAt')::timestamptz+(r.data->'lifetime'->>'idleSeconds')::int*interval '1 second'<=now()
            AND NOT EXISTS(SELECT 1 FROM execution_tasks t WHERE t.environment_id=r.id AND t.state IN ('queued','running'))
+           AND NOT EXISTS(SELECT 1 FROM environment_processes p WHERE p.environment_id=r.id AND p.state IN ('queued','running'))
          OR r.data->>'state'='starting' AND j.bootstrap_expires_at<now())`);
     for (const row of expired) await this.requestStop(row.id, 'The environment reached its lifetime limit.');
     const lease = randomUUID();

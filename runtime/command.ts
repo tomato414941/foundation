@@ -9,9 +9,11 @@ export interface RunnerJob {
   timeoutSeconds: number;
   environment: Record<string, string>;
   files: Record<string, string>;
+  workingDirectory?: string;
 }
 export interface CommandResult {
   exitCode: number | null;
+  signal: string | null;
   stdout: string;
   stderr: string;
   timedOut: boolean;
@@ -28,7 +30,7 @@ export function childEnvironment(input: Record<string, string> = {}) {
 }
 
 export class CommandProcess implements CommandExecutor {
-  constructor(readonly options: { isolation: 'process' | 'container'; image?: string; cwd?: string }) {
+  constructor(readonly options: { isolation: 'process' | 'container'; image?: string; cwd?: string; workspace?: string }) {
     if (options.isolation === 'container' && !/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/.test(options.image ?? ''))
       throw new Error('Choose a container image pinned to its SHA-256 digest.');
   }
@@ -38,7 +40,7 @@ export class CommandProcess implements CommandExecutor {
     const files = join(directory, 'files');
     const name = 'foundation-' + crypto.randomUUID();
     const container = this.options.isolation === 'container';
-    const output: CommandResult = { exitCode: null, stdout: '', stderr: '', timedOut: false, truncated: false };
+    const output: CommandResult = { exitCode: null, signal: null, stdout: '', stderr: '', timedOut: false, truncated: false };
     let interrupted = false;
     try {
       await mkdir(files, { mode: 0o700 });
@@ -50,22 +52,29 @@ export class CommandProcess implements CommandExecutor {
       }
       let command = job.command;
       if (container) {
-        // Docker's env-file syntax is line-oriented; values containing newlines must be files.
-        if (Object.entries(values).some(([key, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || /[\r\n\0]/.test(value)))
-          throw new Error('Use file inputs for multiline container values.');
+        if (Object.entries(values).some(([key, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || value.includes('\0')))
+          throw new Error('Use valid environment variable names and values without null bytes.');
+        // Env files are line-oriented; Docker accepts multiline values as individual arguments.
+        const multiline = Object.entries(values).filter(([, value]) => /[\r\n]/.test(value));
         const envFile = join(directory, 'environment');
-        await writeFile(envFile, Object.entries(values).map(([key, value]) => key + '=' + value).join('\n'),
+        await writeFile(envFile, Object.entries(values).filter(([, value]) => !/[\r\n]/.test(value))
+          .map(([key, value]) => key + '=' + value).join('\n'),
           { mode: 0o600, flag: 'wx' });
+        if (this.options.workspace) await mkdir(this.options.workspace, { recursive: true, mode: 0o700 });
         command = ['docker', 'run', '--rm', '--name', name, '--init', '--read-only', '--cap-drop=ALL',
           '--security-opt=no-new-privileges', '--pids-limit=128', '--memory=512m', '--cpus=1',
           '--network=bridge', '--tmpfs=/tmp:rw,nosuid,nodev,size=64m',
           '--user=' + String(process.getuid?.() ?? 65534) + ':' + String(process.getgid?.() ?? 65534),
           '--mount=type=bind,source=' + files + ',target=/run/foundation,readonly',
-          '--env-file', envFile, '-i', this.options.image!, ...job.command];
+          '--env-file', envFile,
+          ...multiline.flatMap(([key, value]) => ['--env', key + '=' + value]),
+          ...(this.options.workspace ? ['--mount=type=bind,source=' + this.options.workspace + ',target=/workspace'] : []),
+          ...(job.workingDirectory ? ['--workdir', job.workingDirectory] : []),
+          '--entrypoint=' + job.command[0]!, '-i', this.options.image!, ...job.command.slice(1)];
       }
       await new Promise<void>(resolve => {
         const child = spawn(command[0]!, command.slice(1), {
-          env: childEnvironment(container ? {} : values), cwd: this.options.cwd,
+          env: childEnvironment(container ? {} : values), cwd: container ? this.options.cwd : job.workingDirectory ?? this.options.cwd,
           detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
         });
         const decoders = { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') };
@@ -102,7 +111,7 @@ export class CommandProcess implements CommandExecutor {
         signal.addEventListener('abort', kill, { once: true });
         if (signal.aborted) kill();
         child.once('error', () => { output.exitCode = 127; output.stderr = 'The command could not be started.'; finish(); });
-        child.once('close', code => { output.exitCode = code; finish(); });
+        child.once('close', (code, exitSignal) => { output.exitCode = code; output.signal = exitSignal; finish(); });
       });
       return output;
     } finally {

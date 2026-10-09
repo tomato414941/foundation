@@ -123,7 +123,7 @@ export class Delegation {
     return { registration: environment.registration };
   }
 
-  private async requireExecutor(actor: Actor, id: string) {
+  async requireExecutor(actor: Actor, id: string) {
     await this.resources.authorization.active(actor);
     const environment = await this.environment(id);
     if (environment.executor_id !== actor.id) fail(403, 'forbidden', 'Use the identity registered for this environment.');
@@ -311,6 +311,13 @@ export class Delegation {
     await connection.query(
       `UPDATE execution_tasks SET cancel_requested=true,
          state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'cancelled' END,
+         error=CASE WHEN phase='dispatched' THEN 'environment_stopped' ELSE NULL END,
+         finished_at=now(),lease_until=NULL WHERE environment_id=$1 AND state IN ('queued','running')`, [environmentId],
+    );
+    await connection.query(
+      `UPDATE environment_processes SET cancel_requested=true,
+         state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'cancelled' END,
+         phase=CASE WHEN phase='dispatched' THEN phase ELSE 'settled' END,
          error=CASE WHEN phase='dispatched' THEN 'environment_stopped' ELSE NULL END,
          finished_at=now(),lease_until=NULL WHERE environment_id=$1 AND state IN ('queued','running')`, [environmentId],
     );
