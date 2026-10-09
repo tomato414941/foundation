@@ -36,6 +36,8 @@ export function ResourceTable({
             const state = item.kind === 'environment' && item.data.deletion
               ? item.data.deletion.state === 'failed' ? 'deleteFailed' : 'deleting'
               : 'state' in item.data ? item.data.state : null;
+            const stateBadge = state && <State value={state}
+              label={item.kind === 'environment' && state === 'running' ? t('state.environmentRunning') : undefined} />;
             const Icon =
               item.kind === 'connection'
                 ? Link2
@@ -76,7 +78,7 @@ export function ResourceTable({
                         </>
                       )}
                       <div className="flex gap-2 text-xs text-muted-foreground sm:hidden">
-                        {state && <State value={state} />}
+                        {stateBadge}
                         {item.kind === 'object' && <Bytes value={item.data.size} />}
                         {item.kind === 'variable' && <Bytes value={item.data.bytes} />}
                       </div>
@@ -87,7 +89,7 @@ export function ResourceTable({
                   {kinds ? (
                     t(sectionFor(item.kind))
                   ) : state ? (
-                    <State value={state} />
+                    stateBadge
                   ) : item.kind === 'object' ? (
                     <Bytes value={item.data.size} />
                   ) : item.kind === 'variable' ? (

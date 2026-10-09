@@ -128,7 +128,7 @@ export function Empty({ search = false }: { search?: boolean }) {
   );
 }
 
-export function State({ value }: { value: string }) {
+export function State({ value, label }: { value: string; label?: string }) {
   const { t } = useTranslation();
   return (
     <Badge
@@ -142,7 +142,7 @@ export function State({ value }: { value: string }) {
       )}
     >
       <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
-      {t('state.' + value, { defaultValue: value })}
+      {label ?? t('state.' + value, { defaultValue: value })}
     </Badge>
   );
 }

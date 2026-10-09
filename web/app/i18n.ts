@@ -395,6 +395,7 @@ const words: Record<string, [string, string]> = {
   'state.disconnecting': ['解除中', 'Disconnecting'],
   'state.starting': ['起動中', 'Starting'],
   'state.running': ['実行中', 'Running'],
+  'state.environmentRunning': ['稼働中', 'Running'],
   'state.stopping': ['停止中', 'Stopping'],
   'state.stopped': ['停止済み', 'Stopped'],
   'state.failed': ['失敗', 'Failed'],
