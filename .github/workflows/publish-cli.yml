@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 25
     services:
       postgres:
-        image: postgres:18-alpine
+        image: public.ecr.aws/docker/library/postgres:18-alpine
         env:
           POSTGRES_USER: foundation
           POSTGRES_PASSWORD: foundation-ci-only
