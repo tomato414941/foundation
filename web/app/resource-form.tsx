@@ -367,6 +367,16 @@ export default function ResourceForm() {
       : data.kind === 'object'
         ? !sessionData.features.objects
         : false;
+  const nameField = (
+    <InputField
+      name="name"
+      label={t('name')}
+      defaultValue={existing?.name ?? ''}
+      required={!['environment', 'connection', 'object'].includes(data.kind)}
+      hint={data.kind === 'object' && fileName ? fileName : undefined}
+      maxLength={200}
+    />
+  );
   return (
     <Page
       title={
@@ -417,14 +427,7 @@ export default function ResourceForm() {
               <input type="hidden" name="connectionId" value={existing.id} />
             )}
               <>
-                <InputField
-                  name="name"
-                  label={t('name')}
-                  defaultValue={existing?.name ?? ''}
-                  required={!['environment', 'connection', 'object'].includes(data.kind)}
-                  hint={data.kind === 'object' && fileName ? fileName : undefined}
-                  maxLength={200}
-                />
+                {data.kind !== 'environment' && nameField}
                 {data.kind === 'variable' && (
                   <Panel>
                     {!sessionData.principal?.publicKey && (
@@ -641,46 +644,52 @@ export default function ResourceForm() {
                 </Panel>}
                 {!roleSetup && executorChoice}
                 {data.kind === 'environment' && (
-                  <Panel>
-                    {data.usage && (
-                      <p className="leading-relaxed text-sm">
-                        {t('computeUsage', {
-                          used: Math.ceil(data.usage.computeSeconds / 60),
-                          limit: Math.floor(data.usage.computeLimit / 60),
-                        })}
-                      </p>
-                    )}
-                    <Button variant="ghost" asChild>
-                      <Link to={'/p/' + principal.id + '/settings/billing'}>{t('billing')}</Link>
-                    </Button>
-                    <InputField name="image" label={t('image')} placeholder={t('defaultImage')} />
-                    <SelectField name="size" label={t('size')} defaultValue="small">
-                      {['small', 'medium', 'large'].map((value) => (
-                        <SelectItem key={value} value={value}>
-                          {t(value)}
-                        </SelectItem>
-                      ))}
-                    </SelectField>
-                    <InputField
-                      type="number"
-                      name="idle"
-                      label={t('idle')}
-                      defaultValue={60}
-                      required
-                      min={1}
-                      max={1440}
-                    />
-                    <InputField
-                      type="number"
-                      name="maximum"
-                      label={t('maximum')}
-                      defaultValue={60}
-                      required
-                      min={1}
-                      max={1440}
-                    />
-                    <Notice tone="info">{t('managedEnvironmentHelp')}</Notice>
-                  </Panel>
+                  <>
+                    <Panel>
+                      {nameField}
+                      <InputField name="image" label={t('image')} placeholder={t('defaultImage')} />
+                      <SelectField name="size" label={t('size')} defaultValue="small">
+                        {['small', 'medium', 'large'].map((value) => (
+                          <SelectItem key={value} value={value}>
+                            {t(value)}
+                          </SelectItem>
+                        ))}
+                      </SelectField>
+                      <InputField
+                        type="number"
+                        name="idle"
+                        label={t('idle')}
+                        defaultValue={60}
+                        required
+                        min={1}
+                        max={1440}
+                      />
+                      <InputField
+                        type="number"
+                        name="maximum"
+                        label={t('maximum')}
+                        defaultValue={60}
+                        required
+                        min={1}
+                        max={1440}
+                      />
+                      <Notice tone="info">{t('managedEnvironmentHelp')}</Notice>
+                    </Panel>
+                    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-1 text-xs text-muted-foreground">
+                      {data.usage && (
+                        <p className="leading-relaxed">
+                          {t('computeUsage', {
+                            used: Math.ceil(data.usage.computeSeconds / 60),
+                            limit: Math.floor(data.usage.computeLimit / 60),
+                          })}
+                        </p>
+                      )}
+                      <Link to={'/p/' + principal.id + '/settings/billing'}
+                        className="inline-flex min-h-11 items-center underline underline-offset-4 hover:text-foreground">
+                        {t('billing')}
+                      </Link>
+                    </div>
+                  </>
                 )}
                 {data.kind === 'function' && (
                   <>
