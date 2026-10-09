@@ -89,7 +89,7 @@ export default function ResourceDetail() {
     item.kind === 'environment' && !item.data.deletion && ['starting', 'running', 'stopping'].includes(item.data.state),
     item.kind === 'environment' && item.data.state === 'running' ? 15000 : 2500,
   );
-  const secret = async () => {
+  const reveal = async () => {
     try {
       return await decryptVariable(item.id, session.principal!.id);
     } catch {
@@ -141,14 +141,14 @@ export default function ResourceDetail() {
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Button
               loading={task.busy}
-              onClick={() => task.run(async () => setContent(content ? null : await secret()))}
+              onClick={() => task.run(async () => setContent(content ? null : await reveal()))}
               variant="default"
             >
               {t(content ? 'hide' : 'reveal')}
             </Button>
             <Button
               loading={task.busy}
-              onClick={() => task.run(async () => downloadBytes(await secret(), item.name))}
+              onClick={() => task.run(async () => downloadBytes(await reveal(), item.name))}
               variant="ghost"
             >
               {t('download')}

@@ -23,10 +23,10 @@ test('他方のメールアドレスを確認してアカウントを統合し�
   );
   let params = new URLSearchParams(new URL(f.mailer.sent.at(-1)!.link).hash.slice(1));
   await c.authentication.verifyEmail(params.get('challenge')!, params.get('token')!);
-  const initial = await protect(encode('merge-secret'), AccessPolicy.parse({ format: 2, id: crypto.randomUUID(),
+  const initial = await protect(encode('merge-value'), AccessPolicy.parse({ format: 2, id: crypto.randomUUID(),
     origin: f.config.origin, ownerId: source.actor.id, contentType: ContentTypes.value, revision: 1,
     authorities: [source.binding], readers: [source.binding], grants: [] }), 1, source.binding, source.keys);
-  const secret = await c.custody.put(source.actor, { name: 'Saved value', content: initial });
+  const variable = await c.custody.put(source.actor, { name: 'Saved value', content: initial });
   await c.authentication.beginEmail(
     'merge@example.com',
     'browser',
@@ -42,14 +42,14 @@ test('他方のメールアドレスを確認してアカウントを統合し�
   if (!('mergeProof' in verified)) return;
   const plan = await accounts.plan(target.actor, verified.mergeProof);
   assert.equal(plan.from.id, source.actor.id);
-  const moved = await protect(encode('merge-secret'), { ...initial.policy, revision: 2, ownerId: target.actor.id,
+  const moved = await protect(encode('merge-value'), { ...initial.policy, revision: 2, ownerId: target.actor.id,
     authorities: [target.binding], readers: [target.binding] }, 2, source.binding, source.keys, undefined, initial);
-  await accounts.merge(target.actor, verified.mergeProof, { [secret.id]: { version: secret.version, content: moved } });
-  const row = await c.resources.get(secret.id);
+  await accounts.merge(target.actor, verified.mergeProof, { [variable.id]: { version: variable.version, content: moved } });
+  const row = await c.resources.get(variable.id);
   assert.equal(row.owner_id, target.actor.id);
   assert.equal(
     decode(await reveal((await c.custody.read(target.actor, row.id)).content, target.binding, target.keys.encryption)),
-    'merge-secret',
+    'merge-value',
   );
   assert.equal((await c.authentication.authenticate(source.token))?.id, target.actor.id);
   await assert.rejects(() => accounts.merge(target.actor, verified.mergeProof, {}), {

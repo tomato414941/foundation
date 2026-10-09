@@ -7,16 +7,16 @@ import { AgreementNeeded } from '../server/relations.js';
 import { seal, open, encode, decode, wrap, unwrap } from '../shared/encryption.js';
 import { AccessPolicy, ContentTypes, continuesPolicy, protect, reveal } from '../shared/custody.js';
 
-test('メンバー追加と所有者変更で配下の秘密を再暗号化し、新しい相手が開けるようにする', async t => {
+test('メンバー追加と所有者変更で配下の変数を再暗号化し、新しい相手が開けるようにする', async t => {
   const f = await fixture(); t.after(f.close);
   const owner = await f.person('Owner'), member = await f.person('Member'), next = await f.person('New owner');
   const project = await f.principals.create('Project', null, owner.actor.id);
   const child = await f.principals.create('Nested project', null, project.id);
-  const bytes = encode('shared project secret'), id = randomUUID();
+  const bytes = encode('shared project value'), id = randomUUID();
   const initial = await protect(bytes, AccessPolicy.parse({ format: 2, id, origin: f.config.origin,
     ownerId: child.id, contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding], grants: [] }),
     1, owner.binding, owner.keys);
-  await f.custody.put(owner.actor, { name: 'Project secret', content: initial });
+  await f.custody.put(owner.actor, { name: 'Project variable', content: initial });
   const joining = { subjectId: member.actor.id, relation: 'member', objectId: project.id };
   await assert.rejects(f.relations.draw(owner.actor, joining), { code: 'rekey_required' });
   const updates = async (subject: string, relation: 'member' | 'owner') => {
@@ -30,7 +30,7 @@ test('メンバー追加と所有者変更で配下の秘密を再暗号化し�
   const shared = (await f.custody.read(member.actor, id)).content;
   assert.equal(decode(await reveal(shared, member.binding, member.keys.encryption)), decode(bytes));
   const transferred = await updates(next.actor.id, 'owner');
-  await f.resources.rename(owner.actor, await f.resources.get(id), 'Renamed secret');
+  await f.resources.rename(owner.actor, await f.resources.get(id), 'Renamed variable');
   const agreed = { ...owner.actor, agreedBy: next.actor.id };
   await assert.rejects(f.relations.transfer(agreed, project.id, next.actor.id, transferred), { code: 'changed' });
   transferred[id]!.version = (await f.resources.get(id)).version;
@@ -42,17 +42,17 @@ test('メンバー追加と所有者変更で配下の秘密を再暗号化し�
   await assert.rejects(f.custody.read(owner.actor, id), { code: 'forbidden' });
   const updated = await protect(encode('new value'), result.policy, result.materialRevision + 1,
     next.binding, next.keys, undefined, result);
-  await f.custody.put(next.actor, { name: 'Renamed secret', content: updated, version: (await f.resources.get(id)).version });
+  await f.custody.put(next.actor, { name: 'Renamed variable', content: updated, version: (await f.resources.get(id)).version });
   assert.equal(decode(await reveal((await f.custody.read(next.actor, id)).content, next.binding, next.keys.encryption)), 'new value');
 });
 
-test('シークレットは新しい所有者が受け取りに同意したときに移り、宛先の鍵と編集権限を引き継ぐ', async t => {
+test('変数は新しい所有者が受け取りに同意したときに移り、宛先の鍵と編集権限を引き継ぐ', async t => {
   const f = await fixture(); t.after(f.close);
   const owner = await f.person('Before'), next = await f.person('After'), id = randomUUID();
   const policy = AccessPolicy.parse({ format: 2, id, origin: f.config.origin, ownerId: owner.actor.id,
     contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding], grants: [] });
   const initial = await protect(encode('transfer-value'), policy, 1, owner.binding, owner.keys);
-  const row = await f.custody.put(owner.actor, { name: 'Transferred secret', content: initial });
+  const row = await f.custody.put(owner.actor, { name: 'Transferred variable', content: initial });
   const content = await protect(encode('transfer-value'), { ...policy, ownerId: next.actor.id,
     revision: 2, authorities: [next.binding], readers: [next.binding] }, 2, owner.binding, owner.keys, undefined, initial);
   await assert.rejects(f.custody.put(owner.actor, { name: row.name, version: row.version, content }),
@@ -77,7 +77,7 @@ test('機械が自分の鍵で登録し、自分のプリンシパルとして�
   assert.equal(await f.authentication.authenticate(session.token), null);
 });
 
-test('メンバーを外すと宛先と編集権限を更新し、残る所有者が秘密を使い続ける', async t => {
+test('メンバーを外すと宛先と編集権限を更新し、残る所有者が変数を使い続ける', async t => {
   const f = await fixture(); t.after(f.close);
   const owner = await f.person(), member = await f.person('Member');
   const project = await f.principals.create('Project', null, owner.actor.id);
@@ -96,17 +96,17 @@ test('メンバーを外すと宛先と編集権限を更新し、残る所有�
   await assert.rejects(f.custody.read(member.actor, row.id), { code: 'forbidden' });
 });
 
-test('公開鍵で暗号化したシークレットを宛先の秘密鍵で開く', async (t) => {
+test('公開鍵で暗号化した値を宛先の秘密鍵で開く', async (t) => {
   const f = await fixture();
   t.after(f.close);
   const owner = await f.person(),
     stranger = await f.person('Stranger');
   const value = await seal(
-    encode('correct secret'),
+    encode('correct value'),
     [{ id: owner.actor.id, publicKey: owner.keys.publicKey }],
     'item',
   );
-  assert.equal(decode(await open(value, owner.keys.privateKey, owner.actor.id, 'item')), 'correct secret');
+  assert.equal(decode(await open(value, owner.keys.privateKey, owner.actor.id, 'item')), 'correct value');
   await assert.rejects(open(value, stranger.keys.privateKey, owner.actor.id, 'item'));
   await assert.rejects(open(value, owner.keys.privateKey, owner.actor.id, 'different item'));
   const prf = crypto.getRandomValues(new Uint8Array(32));
