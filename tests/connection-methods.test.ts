@@ -7,6 +7,42 @@ const keyMethod = (name: string, field = 'token', output = 'API_KEY') =>
   MethodDefinition.parse({ name, kind: 'token',
     config: { fields: [{ name: field, label: field, secret: true }], outputs: { [output]: '/' + field } } });
 
+test('OVHcloudのアプリ認証を保存し選んだAPI接続先へのHTTP実行でトークンを再取得する', async t => {
+  for (const [methodId, tokenUrl, apiBaseUrl] of [
+    ['ovh:client_credentials', 'https://www.ovh.com/auth/oauth2/token', 'https://eu.api.ovh.com/1.0'],
+    ['ovh:client_credentials_ca', 'https://ca.ovh.com/auth/oauth2/token', 'https://ca.api.ovh.com/1.0'],
+    ['ovh:client_credentials_us', 'https://us.ovhcloud.com/auth/oauth2/token', 'https://api.us.ovhcloud.com/1.0'],
+  ] as const) await t.test(methodId, async t => {
+    let grants = 0;
+    const f = await flowFixture(request => {
+      if (request.url === tokenUrl) {
+        const form = new URLSearchParams(String(request.body));
+        assert.equal(form.get('grant_type'), 'client_credentials');
+        assert.equal(form.get('client_id'), 'application-id');
+        assert.equal(form.get('client_secret'), 'application-secret');
+        assert.equal(form.get('scope'), 'all');
+        return jsonResponse({ access_token: 'ovh-access-' + ++grants, token_type: 'Bearer', expires_in: 10, scope: 'all' });
+      }
+      assert.equal(request.url, apiBaseUrl + '/vps');
+      assert.equal(request.headers?.authorization, 'Bearer ovh-access-2');
+      return jsonResponse(['vps-test']);
+    }); t.after(f.close);
+    const application = await f.saveApp(methodId);
+    const started = await f.start({ methodId, appId: application.id });
+    const reviewed = await f.tick(started.flow.id);
+    assert.equal(reviewed.kind, 'review', JSON.stringify(reviewed));
+    if (reviewed.kind !== 'review') return;
+    assert.equal(reviewed.metadata.account, 'application-id');
+    assert.equal(reviewed.metadata.accountVerified, false);
+    assert.deepEqual(reviewed.metadata.scopes, ['all']);
+    const saved = await f.accept(started.flow.id);
+    assert.equal((await f.http(saved.id, 'OVH_ACCESS_TOKEN', apiBaseUrl + '/vps'))?.ok, true);
+    const renewed = await f.client.read(saved.id);
+    assert.equal(renewed.content.materialRevision, 2);
+    assert.equal(grants, 2);
+  });
+});
+
 test('Shopifyのアプリ認証で接続先と権限を確認して保存し、利用時にトークンを更新する', async t => {
   let grants = 0;
   const f = await flowFixture(request => {

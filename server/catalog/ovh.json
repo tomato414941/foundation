@@ -1,0 +1,107 @@
+{
+  "id": "ovh",
+  "name": "OVHcloud",
+  "docs": "https://docs.ovhcloud.com/en/guides/manage-and-operate/api/manage-service-account",
+  "console": "https://www.ovh.com/manager/",
+  "methods": {
+    "client_credentials": {
+      "name": "OVHcloud EU · Connect with app credentials",
+      "kind": "oauth",
+      "config": {
+        "grantType": "client_credentials",
+        "tokenUrl": "https://www.ovh.com/auth/oauth2/token",
+        "clientAuth": "body",
+        "pkce": false,
+        "identity": {
+          "from": "app",
+          "id": "/clientId",
+          "name": "/clientId"
+        },
+        "defaults": {
+          "apiBaseUrl": "https://eu.api.ovh.com/1.0",
+          "endpoint": "ovh-eu"
+        },
+        "scopes": {
+          "default": ["all"],
+          "docs": "https://docs.ovhcloud.com/en/guides/account-and-service-management/account-information/authenticate-api-with-service-account"
+        },
+        "outputs": {
+          "OVH_ACCESS_TOKEN": "/accessToken",
+          "OVH_CLIENT_ID": "/clientId",
+          "OVH_API_BASE_URL": "/apiBaseUrl",
+          "OVH_ENDPOINT": "/endpoint",
+          "OVH_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "hint": "Use a service account created for the EU API. Send OVH_ACCESS_TOKEN as an Authorization: Bearer token to OVH_API_BASE_URL. The OAuth scope all does not describe IAM permissions; allowed operations and resources are configured in OVHcloud IAM policies. The client ID identifies the configured service account; the account owner's identity and IAM permissions have not been verified. Revoke access by changing the service account's IAM policies or deleting it in OVHcloud."
+      },
+      "docs": "https://docs.ovhcloud.com/en/guides/manage-and-operate/api/manage-service-account",
+      "console": "https://www.ovh.com/manager/"
+    },
+    "client_credentials_ca": {
+      "name": "OVHcloud CA · Connect with app credentials",
+      "kind": "oauth",
+      "config": {
+        "grantType": "client_credentials",
+        "tokenUrl": "https://ca.ovh.com/auth/oauth2/token",
+        "clientAuth": "body",
+        "pkce": false,
+        "identity": {
+          "from": "app",
+          "id": "/clientId",
+          "name": "/clientId"
+        },
+        "defaults": {
+          "apiBaseUrl": "https://ca.api.ovh.com/1.0",
+          "endpoint": "ovh-ca"
+        },
+        "scopes": {
+          "default": ["all"],
+          "docs": "https://docs.ovhcloud.com/en/guides/account-and-service-management/account-information/authenticate-api-with-service-account"
+        },
+        "outputs": {
+          "OVH_ACCESS_TOKEN": "/accessToken",
+          "OVH_CLIENT_ID": "/clientId",
+          "OVH_API_BASE_URL": "/apiBaseUrl",
+          "OVH_ENDPOINT": "/endpoint",
+          "OVH_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "hint": "Use a service account created for the CA API. Send OVH_ACCESS_TOKEN as an Authorization: Bearer token to OVH_API_BASE_URL. The OAuth scope all does not describe IAM permissions; allowed operations and resources are configured in OVHcloud IAM policies. The client ID identifies the configured service account; the account owner's identity and IAM permissions have not been verified. Revoke access by changing the service account's IAM policies or deleting it in OVHcloud."
+      },
+      "docs": "https://docs.ovhcloud.com/en/guides/manage-and-operate/api/manage-service-account",
+      "console": "https://ca.ovh.com/manager/"
+    },
+    "client_credentials_us": {
+      "name": "OVHcloud US · Connect with app credentials",
+      "kind": "oauth",
+      "config": {
+        "grantType": "client_credentials",
+        "tokenUrl": "https://us.ovhcloud.com/auth/oauth2/token",
+        "clientAuth": "body",
+        "pkce": false,
+        "identity": {
+          "from": "app",
+          "id": "/clientId",
+          "name": "/clientId"
+        },
+        "defaults": {
+          "apiBaseUrl": "https://api.us.ovhcloud.com/1.0",
+          "endpoint": "ovh-us"
+        },
+        "scopes": {
+          "default": ["all"],
+          "docs": "https://docs.ovhcloud.com/en/guides/account-and-service-management/account-information/authenticate-api-with-service-account"
+        },
+        "outputs": {
+          "OVH_ACCESS_TOKEN": "/accessToken",
+          "OVH_CLIENT_ID": "/clientId",
+          "OVH_API_BASE_URL": "/apiBaseUrl",
+          "OVH_ENDPOINT": "/endpoint",
+          "OVH_TOKEN_EXPIRES_AT": "/expiresAt"
+        },
+        "hint": "Use a service account created for the US API. Send OVH_ACCESS_TOKEN as an Authorization: Bearer token to OVH_API_BASE_URL. The OAuth scope all does not describe IAM permissions; allowed operations and resources are configured in OVHcloud IAM policies. The client ID identifies the configured service account; the account owner's identity and IAM permissions have not been verified. Revoke access by changing the service account's IAM policies or deleting it in OVHcloud."
+      },
+      "docs": "https://docs.ovhcloud.com/en/guides/manage-and-operate/api/manage-service-account",
+      "console": "https://us.ovhcloud.com/manager/"
+    }
+  }
+}

@@ -318,6 +318,7 @@ export default function ResourceForm() {
   const method = data.pinnedMethod ?? eligibleMethods.find((item) => item.id === methodId);
   const clientCredentials = method?.kind === 'oauth' && method.config.grantType === 'client_credentials';
   const shopifyClientCredentials = clientCredentials && methodId === 'shopify:client_credentials';
+  const ovhClientCredentials = clientCredentials && methodId.startsWith('ovh:');
   const [fileName, setFileName] = useState('');
   // An IAM role is made in the owner's own AWS console, trusting the identity the chosen executor runs as.
   const roleSetup = data.kind === 'connection' && method?.kind === 'role';
@@ -519,6 +520,11 @@ export default function ResourceForm() {
                       <Notice tone="info">
                         <p>{t('clientCredentialsHelp')}</p>
                         {shopifyClientCredentials && <p className="mt-2">{t('shopifyClientCredentialsHelp')}</p>}
+                        {ovhClientCredentials && <>
+                          <p className="mt-2">{t('ovhApiRegionHelp')}</p>
+                          <p className="mt-2">{t('ovhClientCredentialsHelp')}</p>
+                          {method?.docs && <ExternalLink href={method.docs}>{t('docs')}</ExternalLink>}
+                        </>}
                       </Notice>
                     )}
                     {!existing && !!existingConnections.length && (

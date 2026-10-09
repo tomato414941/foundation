@@ -60,6 +60,9 @@ const ebayTokenTypes: oauth.RecognizedTokenTypes = Object.assign(Object.create(n
 });
 export class OAuth {
   constructor(readonly transport: Transport) {}
+  private appValues(spec: OAuthSpec, app: OAuthApp) {
+    return { ...spec.defaults, ...app.fields, clientId: app.clientId };
+  }
   async authorize(
     spec: OAuthSpec,
     app: OAuthApp,
@@ -70,7 +73,7 @@ export class OAuth {
   ) {
     if (spec.grantType === 'client_credentials' || !spec.authorizeUrl)
       fail(400, 'wrong_grant', 'This connection exchanges application credentials directly.');
-    const url = new URL(expandUrl(spec.authorizeUrl, app.fields));
+    const url = new URL(expandUrl(spec.authorizeUrl, this.appValues(spec, app)));
     const params: Record<string, string> = {
       ...spec.authorizeParams,
       response_type: 'code',
@@ -96,9 +99,9 @@ export class OAuth {
   private configuration(spec: OAuthSpec, app: OAuthApp) {
     const server: oauth.AuthorizationServer = {
       issuer: spec.issuer ?? new URL(expandUrl(
-        spec.grantType === 'client_credentials' ? spec.tokenUrl : spec.authorizeUrl!, app.fields,
+        spec.grantType === 'client_credentials' ? spec.tokenUrl : spec.authorizeUrl!, this.appValues(spec, app),
       )).origin,
-      token_endpoint: expandUrl(spec.tokenUrl, app.fields),
+      token_endpoint: expandUrl(spec.tokenUrl, this.appValues(spec, app)),
     };
     if (spec.issuer) publicUrl(spec.issuer);
     return { server, client: { client_id: app.clientId } };
@@ -268,7 +271,7 @@ export class OAuth {
       )
         fail(400, 'invalid_state', 'Start the connection again.');
       const response = await this.transport.send({
-        url: expandUrl(spec.tokenUrl, app.fields),
+        url: expandUrl(spec.tokenUrl, this.appValues(spec, app)),
         method: 'POST',
         headers: { accept: 'application/json', 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -422,7 +425,7 @@ export class OAuth {
     }
     if (spec.identity?.url) {
       const url = expandUrl(spec.identity.url, {
-        ...app.fields, ...current.extra, accessToken: current.accessToken, refreshToken: current.refreshToken ?? '',
+        ...this.appValues(spec, app), ...current.extra, accessToken: current.accessToken, refreshToken: current.refreshToken ?? '',
       });
       // Shopify's Admin GraphQL API uses its own access-token header and a shop query.
       const shopify = spec.grantType === 'client_credentials' &&
@@ -448,7 +451,7 @@ export class OAuth {
       }
       if (spec.adapter === 'google' && data.email_verified !== true)
         fail(502, 'invalid_response', 'The service account could not be verified.');
-    } else if (spec.identity?.from === 'app') data = app.fields;
+    } else if (spec.identity?.from === 'app') data = this.appValues(spec, app);
     const first = (pointers: string | string[]) => {
       for (const pointer of Array.isArray(pointers) ? pointers : [pointers]) {
         const value = atPointer(data, pointer);
@@ -478,8 +481,7 @@ export class OAuth {
     if (!spec.revoke)
       fail(409, 'manual_revoke', 'Remove access in the service settings, then remove this connection.');
     const url = expandUrl(spec.revoke.url, {
-      ...app.fields,
-      clientId: app.clientId,
+      ...this.appValues(spec, app),
       accessToken: current.accessToken,
       refreshToken: current.refreshToken ?? '',
     });
@@ -525,7 +527,7 @@ export class OAuth {
   }
   outputs(spec: OAuthSpec, app: OAuthApp, value: OAuthToken): Record<string, string> {
     const data = {
-      ...app.fields,
+      ...this.appValues(spec, app),
       ...value.extra,
       ...value,
       expiresAt: value.expiresAt === null ? '' : String(value.expiresAt),

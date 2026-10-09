@@ -179,6 +179,14 @@ const words: Record<string, [string, string]> = {
     '自分のShopify組織のストアにインストール済みのアプリを使用してください。権限はDev Dashboardのアプリ設定で指定します。',
     'Use an app installed on a store in your own Shopify organization. Set its access scopes in the Dev Dashboard.',
   ],
+  ovhApiRegionHelp: [
+    'アカウントを登録したAPI接続先（EU・CA・US）を選んでください。VPSの設置地域は注文時に指定します。',
+    'Choose the API region where your account was registered (EU, CA or US). Choose the VPS location when ordering.',
+  ],
+  ovhClientCredentialsHelp: [
+    'OVHcloudで作成したサービスアカウントを使用してください。操作範囲はOVHcloudのIAMポリシーで設定します。スコープ「all」は全操作の許可を意味しません。',
+    'Use a service account created in OVHcloud. Configure allowed operations in OVHcloud IAM policies. The all scope does not grant permission for every operation.',
+  ],
   existingConnections: [
     'この接続方法で登録済みの接続を利用できます。',
     'You can use an existing connection with this method.',
