@@ -106,7 +106,7 @@ class BrowserTests(unittest.TestCase):
         previous = page.url
         page.goto(ORIGIN + "/account/trust")
         page.get_by_role("textbox", name="共有相手のプリンシパルID", exact=True).fill(principal_id)
-        page.get_by_role("textbox", name="鍵の指紋", exact=True).fill(fingerprint)
+        page.get_by_role("textbox", name="公開鍵の指紋", exact=True).fill(fingerprint)
         page.get_by_role("button", name="相手の鍵を確認", exact=True).click()
         expect(page.get_by_text("保存しました。", exact=True)).to_be_visible()
         page.goto(previous)
