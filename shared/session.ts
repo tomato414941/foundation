@@ -12,7 +12,7 @@ export const Session = z.object({
   credentialId: Id.nullable(),
   wrappedKey: WrappedKey.nullable(),
   requestId: Id.nullable(),
-  server: z.object({ name: Name, commit: z.string().nullable() }),
+  server: z.object({ name: Name }),
   features: Features,
   principals: z.array(Principal),
 });

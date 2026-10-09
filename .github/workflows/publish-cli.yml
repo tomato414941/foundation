@@ -197,7 +197,7 @@ jobs:
         run: |
           docker buildx create --use --name foundation >/dev/null
           docker buildx build --platform linux/arm64 \
-            --build-arg "FOUNDATION_COMMIT=$GITHUB_SHA" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --build-arg "FLY_IMAGE=$EXECUTOR_IMAGE" \
             --tag "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA::7}" \
             --tag "ghcr.io/${GITHUB_REPOSITORY,,}:main" \
