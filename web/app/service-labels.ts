@@ -29,8 +29,8 @@ export const serviceLabels: Record<string, string> = {
   'netlify.token.token.label': 'Personal access token',
   'notion.token.token.label': '内部インテグレーションのシークレット',
   'openrouter.token.token.label': 'APIキー',
-  'sakura-vps.token.token.label': 'APIキー',
-  'sakura-vps.token.token.note':
+  'sakura.token.token.label': 'APIキー',
+  'sakura.token.token.note':
     'さくらのVPSのAPIキーを入力してください。さくらのクラウドのAPIキーとは異なります。',
   'shopify.oauth.shop.label': 'ストア名',
   'shopify.oauth.shop.placeholder': 'example（example.myshopify.com の場合）',

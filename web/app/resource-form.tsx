@@ -354,7 +354,7 @@ export default function ResourceForm() {
       (data.kind === 'connection' && method.kind === 'token'))
       ? method.config.fields
       : [];
-  const labelService = methodId.startsWith('sakura:') ? 'sakura-vps' : methodId.split(':')[0];
+  const labelService = methodId.split(':')[0];
   const matchingApps = data.apps.filter(
     (item) => item.kind === 'app' && item.data.methodId === methodId && item.permissions.includes('use'),
   );

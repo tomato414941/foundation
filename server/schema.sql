@@ -74,12 +74,7 @@ CREATE INDEX IF NOT EXISTS relations_subject ON relations(subject_id, relation);
 -- One payer at most for each principal.
 CREATE UNIQUE INDEX IF NOT EXISTS relations_payer ON relations(principal_id) WHERE relation = 'payer';
 CREATE UNIQUE INDEX IF NOT EXISTS resources_name ON resources(owner_id,kind,name) WHERE kind <> 'connection';
-CREATE TABLE IF NOT EXISTS connection_method_aliases (
-  service_id uuid NOT NULL,
-  scheme text NOT NULL CHECK (scheme IN ('oauth','token','role')),
-  method_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
-  PRIMARY KEY (service_id,scheme)
-);
+DROP TABLE IF EXISTS connection_method_aliases;
 CREATE TABLE IF NOT EXISTS object_blobs (
   id uuid PRIMARY KEY,
   resource_id uuid REFERENCES resources(id) ON DELETE SET NULL,

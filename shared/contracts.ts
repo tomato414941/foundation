@@ -242,23 +242,12 @@ export const ServiceMetadata = z
     console: z.url().optional(),
   })
   .strict();
-export const LegacyServiceDefinition = ServiceMetadata.extend({
-  auth: z
-    .object({
-      oauth: OAuthDefinition.optional(),
-      token: TokenDefinition.optional(),
-      role: RoleDefinition.optional(),
-    })
-    .strict(),
-}).strict();
-export type LegacyServiceDescription = z.infer<typeof LegacyServiceDefinition>;
 export const ServiceDefinition = ServiceMetadata.extend({
   methods: z.record(MethodKey, z.string().min(1)),
 }).strict();
-export const InlineServiceDefinition = ServiceMetadata.extend({
+export const ServiceInputDefinition = ServiceMetadata.extend({
   methods: z.record(MethodKey, z.union([z.string().min(1), MethodDefinition])),
 }).strict();
-export const ServiceInputDefinition = z.union([InlineServiceDefinition, LegacyServiceDefinition]);
 export type ServiceDefinitionInput = z.infer<typeof ServiceInputDefinition>;
 export type ServiceDescription = z.infer<typeof ServiceDefinition>;
 export const CatalogEntry = ServiceMetadata.extend({

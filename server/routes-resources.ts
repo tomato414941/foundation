@@ -169,7 +169,6 @@ export async function routesResources(app: ApiApp, context: Context) {
             const definition = await catalog.prepareDefinition(
               who,
               row.owner_id,
-              row.id,
               C.ServiceInputDefinition.parse(body.definition),
               connection,
             );

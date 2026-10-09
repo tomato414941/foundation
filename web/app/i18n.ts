@@ -624,14 +624,7 @@ const errors: Array<[string[], string, string]> = [
     'Register and select an OAuth app for this service.',
   ],
   [
-    [
-      'wrong_app',
-      'wrong_connection',
-      'scheme_required',
-      'scheme_unavailable',
-      'method_required',
-      'wrong_method',
-    ],
+    ['wrong_app', 'wrong_connection'],
     'サービス、接続方法、OAuthアプリの組み合わせを確認してください。',
     'Check the selected service, connection method, and OAuth app.',
   ],

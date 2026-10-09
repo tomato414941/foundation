@@ -1,21 +1,15 @@
-import { randomUUID } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import {
-  AuthKind,
   CatalogEntry,
   CatalogMethod,
   Id,
-  InlineServiceDefinition,
-  LegacyServiceDefinition,
   MethodDefinition,
   ServiceDefinition,
   ServiceInputDefinition,
 } from '../shared/contracts.js';
 import type {
-  AuthKindName,
   CatalogConnectionMethod,
   CatalogService,
-  LegacyServiceDescription,
   MethodDescription,
   ServiceDescription,
   ServiceDefinitionInput,
@@ -26,37 +20,9 @@ import type { Configuration } from './config.js';
 import type { Queryable } from './database.js';
 import { fail } from './errors.js';
 
-export const canonicalServiceId = (id: string) => (id === 'sakura-vps' ? 'sakura' : id);
-const legacyKey = (serviceId: string, kind: AuthKindName) => serviceId + ':' + kind;
 const uuid = (id: string) => Id.safeParse(id).success;
-export function legacyMethod(service: LegacyServiceDescription, kind: AuthKindName): MethodDescription {
-  const config = service.auth[kind];
-  if (!config) fail(400, 'scheme_unavailable', 'Choose an available connection method.');
-  return MethodDefinition.parse({
-    name: (service.name + ' · ' + {
-      oauth: service.auth.oauth?.grantType === 'client_credentials' ? 'Connect with app credentials' : 'Connect in browser',
-      token: 'Enter credentials', role: 'IAM role',
-    }[kind]).slice(0, 200),
-    kind,
-    config,
-    ...(service.docs ? { docs: service.docs } : {}),
-    ...(service.console ? { console: service.console } : {}),
-  });
-}
-export function inlineService(value: ServiceDefinitionInput) {
-  const input = ServiceInputDefinition.parse(value);
-  if (!('auth' in input)) return input;
-  const { auth, ...metadata } = input;
-  return InlineServiceDefinition.parse({
-    ...metadata,
-    methods: Object.fromEntries(
-      Object.keys(auth).map((kind) => [kind, legacyMethod(input, AuthKind.parse(kind))]),
-    ),
-  });
-}
 
 export class Catalog {
-  readonly aliases = new Map<string, string>();
   private constructor(
     readonly definitions: Map<string, ServiceDescription>,
     readonly methods: Map<string, MethodDescription>,
@@ -70,62 +36,22 @@ export class Catalog {
       catalog = new Catalog(definitions, methods, resources, config);
     for (const filename of (await readdir(directory)).filter((name) => name.endsWith('.json')).sort()) {
       const { id: rawId, ...data } = JSON.parse(await readFile(new URL(filename, directory), 'utf8'));
-      const id = canonicalServiceId(String(rawId)),
-        input = inlineService(ServiceInputDefinition.parse(data)),
+      const id = String(rawId),
+        input = ServiceInputDefinition.parse(data),
         references: Record<string, string> = {};
-      for (const [rawKey, value] of Object.entries(input.methods)) {
-        const key = id === 'sakura' && rawKey === 'token' ? 'vps-api-key' : rawKey;
+      for (const [key, value] of Object.entries(input.methods)) {
         const methodId = typeof value === 'string' ? value : id + ':' + key;
         if (typeof value !== 'string') methods.set(methodId, MethodDefinition.parse(value));
         references[key] = methodId;
-        if (AuthKind.safeParse(rawKey).success) {
-          catalog.registerAlias(String(rawId), rawKey as AuthKindName, methodId);
-          catalog.registerAlias(id, rawKey as AuthKindName, methodId);
-        }
-        if (id === 'sakura' && key === 'vps-api-key') {
-          catalog.registerAlias('sakura-vps', 'token', methodId);
-          catalog.registerAlias('sakura', 'token', methodId);
-        }
       }
-      definitions.set(
-        id,
-        ServiceDefinition.parse({
-          ...input,
-          ...(id === 'sakura' ? { name: 'さくら' } : {}),
-          methods: references,
-        }),
-      );
+      definitions.set(id, ServiceDefinition.parse({ ...input, methods: references }));
     }
     for (const service of definitions.values())
       for (const methodId of Object.values(service.methods))
         if (!methods.has(methodId))
           throw new Error('A catalog service references an unknown connection method.');
-    await catalog.migrateDefinitions();
     resources.connectionServices = (actor, methodId) => catalog.servicesForMethod(actor, methodId);
     return catalog;
-  }
-  private registerAlias(serviceId: string, kind: AuthKindName, methodId: string) {
-    this.aliases.set(legacyKey(serviceId, kind), methodId);
-  }
-  async legacyMethodId(
-    serviceId: string,
-    kind: AuthKindName,
-    connection: Queryable = this.resources.db.pool,
-  ) {
-    const known = this.aliases.get(legacyKey(serviceId, kind));
-    if (known) return known;
-    if (uuid(serviceId)) {
-      const row = await this.resources.db.one<{ method_id: string }>(
-        'SELECT method_id FROM connection_method_aliases WHERE service_id=$1 AND scheme=$2',
-        [serviceId, kind],
-        connection,
-      );
-      if (row) {
-        this.registerAlias(serviceId, kind, row.method_id);
-        return row.method_id;
-      }
-    }
-    fail(400, 'method_required', 'Choose a connection method.');
   }
   private async methodName(ownerId: string, name: string, connection: Queryable) {
     const prefix = name.slice(0, 180);
@@ -140,74 +66,6 @@ export class Catalog {
     }
     fail(409, 'name_taken', 'Choose another connection method name.');
   }
-  private async migrateDefinitions() {
-    await this.resources.db.transaction(async (connection) => {
-      await connection.query('SELECT pg_advisory_xact_lock(736023747)');
-      const existingAliases = await this.resources.db.all<{
-        service_id: string;
-        scheme: AuthKindName;
-        method_id: string;
-      }>('SELECT service_id,scheme,method_id FROM connection_method_aliases', [], connection);
-      for (const row of existingAliases) this.registerAlias(row.service_id, row.scheme, row.method_id);
-      const services = await this.resources.db.all<ResourceRow>(
-        "SELECT * FROM resources WHERE kind='service' AND data ? 'auth' FOR UPDATE",
-        [],
-        connection,
-      );
-      for (const row of services) {
-        const old = LegacyServiceDefinition.parse(row.data),
-          { auth, ...metadata } = old,
-          methods: Record<string, string> = {};
-        for (const kind of Object.keys(auth).map((value) => AuthKind.parse(value))) {
-          const definition = legacyMethod(old, kind),
-            name = await this.methodName(row.owner_id, definition.name, connection),
-            method = await this.resources.insert(row.owner_id, 'method', name, definition, {}, connection);
-          methods[kind] = method.id;
-          await connection.query(
-            'INSERT INTO relations(subject_id,relation,resource_id) SELECT subject_id,relation,$1 FROM relations WHERE resource_id=$2',
-            [method.id, row.id],
-          );
-          await connection.query(
-            'INSERT INTO connection_method_aliases(service_id,scheme,method_id) VALUES($1,$2,$3)',
-            [row.id, kind, method.id],
-          );
-          this.registerAlias(row.id, kind, method.id);
-        }
-        await connection.query('UPDATE resources SET data=$2 WHERE id=$1', [
-          row.id,
-          JSON.stringify({ ...metadata, methods }),
-        ]);
-        await this.resources.references(row.id, Object.values(methods), connection);
-      }
-      const apps = await this.resources.db.all<ResourceRow>(
-        "SELECT * FROM resources WHERE kind='app' AND NOT(data ? 'methodId') FOR UPDATE",
-        [],
-        connection,
-      );
-      for (const row of apps) {
-        const { serviceId, ...data } = row.data,
-          methodId = await this.legacyMethodId(String(serviceId), 'oauth', connection);
-        await connection.query('UPDATE resources SET data=$2 WHERE id=$1', [
-          row.id,
-          JSON.stringify({ ...data, methodId }),
-        ]);
-        await this.resources.references(row.id, this.methods.has(methodId) ? [] : [methodId], connection);
-      }
-    });
-  }
-  async get(
-    actor: Actor,
-    id: string,
-    connection: Queryable = this.resources.db.pool,
-  ): Promise<ServiceDescription> {
-    const builtin = this.definitions.get(canonicalServiceId(id));
-    if (builtin) return builtin;
-    if (!uuid(id)) fail(404, 'not_found', 'The service was not found.');
-    const row = await this.resources.get(id, connection);
-    if (row.kind !== 'service') fail(404, 'not_found', 'The service was not found.');
-    await this.resources.authorization.requireResource(actor, row, 'use', connection);
-    return ServiceDefinition.parse({ ...row.data, name: row.name });
-  }
   async method(
     actor: Actor,
     id: string,
@@ -221,29 +79,13 @@ export class Catalog {
     await this.resources.authorization.requireResource(actor, row, 'use', connection);
     return MethodDefinition.parse({ ...row.data, name: row.name });
   }
-  async select(actor: Actor, input: { methodId?: string; serviceId?: string; scheme?: AuthKindName }) {
-    const service = input.serviceId ? await this.get(actor, input.serviceId) : null;
-    const id =
-      input.methodId ??
-      (input.serviceId && input.scheme
-        ? await this.legacyMethodId(input.serviceId, input.scheme)
-        : fail(400, 'method_required', 'Choose a connection method.'));
-    if (service && !Object.values(service.methods).includes(id))
-      fail(400, 'wrong_method', 'Choose a connection method offered by this service.');
-    const definition = await this.method(actor, id);
-    if (input.scheme && definition.kind !== input.scheme)
-      fail(400, 'wrong_method', 'Choose a matching connection method.');
-    return { id, definition };
-  }
   async prepareDefinition(
     actor: Actor,
     ownerId: string,
-    serviceId: string,
-    value: ServiceDefinitionInput,
+    input: ServiceDefinitionInput,
     connection: Queryable,
   ): Promise<ServiceDescription> {
-    const input = inlineService(value),
-      references: Record<string, string> = {};
+    const references: Record<string, string> = {};
     for (const [key, value] of Object.entries(input.methods)) {
       if (typeof value === 'string') {
         await this.method(actor, value, connection);
@@ -254,14 +96,6 @@ export class Catalog {
         const name = await this.methodName(ownerId, value.name, connection),
           row = await this.resources.insert(ownerId, 'method', name, value, {}, connection);
         references[key] = row.id;
-      }
-    }
-    if ('auth' in value) {
-      for (const kind of Object.keys(value.auth).map((key) => AuthKind.parse(key))) {
-        await connection.query(
-          'INSERT INTO connection_method_aliases(service_id,scheme,method_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
-          [serviceId, kind, references[kind]],
-        );
       }
     }
     return ServiceDefinition.parse({ ...input, methods: references });
@@ -329,14 +163,13 @@ export class Catalog {
   async createService(actor: Actor, ownerId: string, name: string, value: ServiceDefinitionInput) {
     return this.resources.db.transaction(async (connection) => {
       await connection.query('SELECT pg_advisory_xact_lock(736023747)');
-      const id = randomUUID(),
-        data = await this.prepareDefinition(actor, ownerId, id, value, connection);
+      const data = await this.prepareDefinition(actor, ownerId, value, connection);
       return this.resources.insert(
         ownerId,
         'service',
         name,
         data,
-        { id, references: Object.values(data.methods).filter((methodId) => !this.methods.has(methodId)) },
+        { references: Object.values(data.methods).filter((methodId) => !this.methods.has(methodId)) },
         connection,
       );
     });
