@@ -74,11 +74,6 @@ CREATE INDEX IF NOT EXISTS relations_subject ON relations(subject_id, relation);
 -- One payer at most for each principal.
 CREATE UNIQUE INDEX IF NOT EXISTS relations_payer ON relations(principal_id) WHERE relation = 'payer';
 CREATE UNIQUE INDEX IF NOT EXISTS resources_name ON resources(owner_id,kind,name) WHERE kind <> 'connection';
-ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_owner_id_kind_name_key;
-CREATE TABLE IF NOT EXISTS schema_migrations (
-  name text PRIMARY KEY,
-  applied_at timestamptz NOT NULL DEFAULT now()
-);
 CREATE TABLE IF NOT EXISTS connection_method_aliases (
   service_id uuid NOT NULL,
   scheme text NOT NULL CHECK (scheme IN ('oauth','token','role')),
@@ -96,13 +91,13 @@ CREATE TABLE IF NOT EXISTS environment_jobs (
   lease_until timestamptz,
   lease_token uuid,
   attempts integer NOT NULL DEFAULT 0,
-  retry_at timestamptz NOT NULL DEFAULT now()
+  retry_at timestamptz NOT NULL DEFAULT now(),
+  volume_id text,
+  bootstrap_digest text,
+  bootstrap_ciphertext text,
+  bootstrap_expires_at timestamptz,
+  enrollment_digest text
 );
-ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS volume_id text;
-ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS bootstrap_digest text;
-ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS bootstrap_ciphertext text;
-ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS bootstrap_expires_at timestamptz;
-ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS enrollment_digest text;
 CREATE TABLE IF NOT EXISTS environment_deletions (
   resource_id uuid PRIMARY KEY,
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
@@ -242,9 +237,7 @@ CREATE TABLE IF NOT EXISTS execution_tasks (
   finished_at timestamptz
 );
 CREATE INDEX IF NOT EXISTS execution_queue ON execution_tasks(environment_id,state,created_at);
-ALTER TABLE execution_tasks DROP CONSTRAINT IF EXISTS execution_tasks_environment_id_fkey;
 CREATE INDEX IF NOT EXISTS execution_owner ON execution_tasks(owner_id,created_at DESC);
-ALTER TABLE execution_tasks ADD COLUMN IF NOT EXISTS cancel_requested boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS connection_operations (
   id uuid PRIMARY KEY,
   resource_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,

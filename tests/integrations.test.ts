@@ -37,24 +37,3 @@ test('外部連携のURLを保存し、承認依頼の状態を含めた完了UR
   expected.searchParams.set('state', 'cancelled');
   assert.equal(cancelled.json().returnUrl, expected.href);
 });
-
-test('既存データを更新しても完了URLとやり直し用URL、利用者の情報を保持する', async (t) => {
-  const f = await fixture();
-  t.after(f.close);
-  const owner = await f.person('Existing owner');
-  await f.db.pool.query('ALTER TABLE integration_settings ADD COLUMN webhook_secret text NOT NULL DEFAULT \'fixture\'');
-  await f.db.pool.query('INSERT INTO integration_settings(principal_id,settings) VALUES($1,$2)', [
-    owner.actor.id, JSON.stringify({ ...settings, webhookUrl: 'https://client.example/events' }),
-  ]);
-  await f.db.pool.query("DELETE FROM schema_migrations WHERE name='remove-outbound-webhooks'");
-  await f.db.initialize();
-  await f.db.initialize();
-  const context = await createContext(f.config, { db: f.db, mailer: f.mailer });
-  const current = await context.integrations.get(owner.actor, owner.actor.id);
-  assert.equal(current.returnUrl, settings.returnUrl);
-  assert.equal(current.refreshUrl, settings.refreshUrl);
-  assert.equal((await f.principals.get(owner.actor.id)).name, 'Existing owner');
-  const updated = { returnUrl: 'https://client.example/done', refreshUrl: settings.refreshUrl };
-  await context.integrations.set(owner.actor, owner.actor.id, updated);
-  assert.deepEqual(await context.integrations.get(owner.actor, owner.actor.id), updated);
-});
