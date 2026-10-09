@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fixture } from './support.js';
 import { principal } from '../server/authorization.js';
+import { AgreementNeeded } from '../server/relations.js';
 import { seal, open, encode, decode, wrap, unwrap } from '../shared/encryption.js';
 import { AccessPolicy, ContentTypes, continuesPolicy, protect, reveal } from '../shared/custody.js';
 
@@ -30,9 +31,10 @@ test('メンバー追加と所有者変更で配下の秘密を再暗号化し�
   assert.equal(decode(await reveal(shared, member.binding, member.keys.encryption)), decode(bytes));
   const transferred = await updates(next.actor.id, 'owner');
   await f.resources.rename(owner.actor, await f.resources.get(id), 'Renamed secret');
-  await assert.rejects(f.principals.transfer(owner.actor, project.id, next.actor.id, transferred), { code: 'changed' });
+  const agreed = { ...owner.actor, agreedBy: next.actor.id };
+  await assert.rejects(f.relations.transfer(agreed, project.id, next.actor.id, transferred), { code: 'changed' });
   transferred[id]!.version = (await f.resources.get(id)).version;
-  await f.principals.transfer(owner.actor, project.id, next.actor.id, transferred);
+  await f.relations.transfer(agreed, project.id, next.actor.id, transferred);
   const result = (await f.custody.read(next.actor, id)).content;
   assert.equal(continuesPolicy(shared.policy, result), true);
   assert.equal(decode(await reveal(result, next.binding, next.keys.encryption)), decode(bytes));
@@ -44,7 +46,7 @@ test('メンバー追加と所有者変更で配下の秘密を再暗号化し�
   assert.equal(decode(await reveal((await f.custody.read(next.actor, id)).content, next.binding, next.keys.encryption)), 'new value');
 });
 
-test('シークレットを新しい所有者へ移し、宛先の鍵と編集権限を引き継ぐ', async t => {
+test('シークレットは新しい所有者が受け取りに同意したときに移り、宛先の鍵と編集権限を引き継ぐ', async t => {
   const f = await fixture(); t.after(f.close);
   const owner = await f.person('Before'), next = await f.person('After'), id = randomUUID();
   const policy = AccessPolicy.parse({ format: 2, id, origin: f.config.origin, ownerId: owner.actor.id,
@@ -53,7 +55,10 @@ test('シークレットを新しい所有者へ移し、宛先の鍵と編集�
   const row = await f.custody.put(owner.actor, { name: 'Transferred secret', content: initial });
   const content = await protect(encode('transfer-value'), { ...policy, ownerId: next.actor.id,
     revision: 2, authorities: [next.binding], readers: [next.binding] }, 2, owner.binding, owner.keys, undefined, initial);
-  await f.custody.put(owner.actor, { name: row.name, version: row.version, content });
+  await assert.rejects(f.custody.put(owner.actor, { name: row.name, version: row.version, content }),
+    (error) => error instanceof AgreementNeeded && error.to === next.actor.id);
+  assert.equal((await f.resources.get(id)).owner_id, owner.actor.id);
+  await f.custody.put({ ...owner.actor, agreedBy: next.actor.id }, { name: row.name, version: row.version, content });
   assert.equal((await f.resources.get(id)).owner_id, next.actor.id);
   assert.equal(decode(await reveal((await f.custody.read(next.actor, id)).content, next.binding, next.keys.encryption)), 'transfer-value');
   await assert.rejects(f.custody.read(owner.actor, id), { code: 'forbidden' });
@@ -121,7 +126,7 @@ test('所有と所属の循環を拒否し、所有するプリンシパルの�
   await assert.rejects(f.relations.draw(owner.actor, { subjectId: child.id, relation: 'member', objectId: owner.actor.id }), {
     code: 'relation_cycle',
   });
-  await assert.rejects(f.principals.transfer(owner.actor, child.id, grandchild.id), {
+  await assert.rejects(f.relations.transfer(owner.actor, child.id, grandchild.id), {
     code: 'relation_cycle',
   });
 });

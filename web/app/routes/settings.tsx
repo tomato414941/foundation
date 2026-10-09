@@ -23,7 +23,7 @@ import {
   Usage,
   listOf,
 } from '../../../shared/contracts';
-import { actionResult, api, formText } from '../api';
+import { Changed, actionResult, api, formText } from '../api';
 import { Bytes, Confirm, Copy, DateText, Detail, ErrorNotice, Page, Paging, Panel } from '../components';
 import { useWorkspace } from './workspace';
 import { rekeySharing } from '../keys';
@@ -65,8 +65,8 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
     } else if (intent === 'transfer') {
       const to = formText(form, 'to');
       const contents = await rekeySharing(prefix + '/transfer-recipients?' + new URLSearchParams({ to }));
-      await api(prefix + '/transfer', { method: 'POST', body: { to, contents } });
-      return redirect('/');
+      const changed = await api(prefix + '/transfer', { method: 'POST', body: { to, contents } }, Changed);
+      return redirect('id' in changed ? '/requests/' + changed.id : '/');
     } else if (intent === 'credential')
       await api(prefix + '/credentials/' + formText(form, 'credentialId'), { method: 'DELETE' });
     else if (intent === 'limits')

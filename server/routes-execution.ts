@@ -40,7 +40,7 @@ export async function routesExecution(app: ApiApp, context: Context) {
     schema: { params: C.IdParams, response: { 200: P.ProtectedRead } },
   }, request => custody.read(actor(request), request.params.id));
   app.put('/api/resources/:id/custody', {
-    schema: { params: C.IdParams, body: P.ProtectedWrite, response: { 200: C.Resource } },
+    schema: { params: C.IdParams, body: P.ProtectedWrite, response: { 200: C.Resource, 202: C.ApprovalRequest } },
   }, async request => {
     if (request.params.id !== request.body.content.policy.id)
       fail(400, 'wrong_resource', 'Save the encrypted content at its approved destination.');

@@ -1,11 +1,11 @@
 import { Button } from '../components/ui/button';
 import { SelectItem } from '../components/ui/select';
 import { InputField, SelectField } from '../form-fields';
-import { Form, Link, useActionData, useLoaderData, useSearchParams } from 'react-router';
+import { Form, Link, redirect, useActionData, useLoaderData, useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/principals';
 import { Principal, Relation, listOf } from '../../../shared/contracts';
-import { actionResult, api, formText } from '../api';
+import { Changed, actionResult, api, formText } from '../api';
 import { Copy, ErrorNotice, Page, Paging, Panel } from '../components';
 import { useWorkspace } from './workspace';
 import { rekeySharing } from '../keys';
@@ -43,10 +43,12 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       relation === 'member'
         ? await rekeySharing('/relations/recipients?' + new URLSearchParams({ subjectId, objectId, remove: String(remove) }))
         : undefined;
-    await api('/relations', {
-      method: remove ? 'DELETE' : 'POST',
-      body: { subjectId, relation, objectId, ...(contents ? { contents } : {}) },
-    });
+    const changed = await api(
+      '/relations',
+      { method: remove ? 'DELETE' : 'POST', body: { subjectId, relation, objectId, ...(contents ? { contents } : {}) } },
+      Changed,
+    );
+    if ('id' in changed) return redirect('/requests/' + changed.id);
     return { ok: true };
   });
 }
@@ -67,7 +69,7 @@ export default function Principals() {
         <div className="text-xs leading-relaxed text-muted-foreground wrap-anywhere">{text}</div>
       </div>
       <Copy value={id} />
-      {remove && principal.permissions.includes('share') && (
+      {remove && principal.permissions.includes(remove.relation === 'payer' ? 'manage_billing' : 'share') && (
         <Form method="post">
           <input type="hidden" name="subjectId" value={remove.subjectId} />
           <input type="hidden" name="objectId" value={remove.objectId} />

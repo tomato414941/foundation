@@ -251,15 +251,12 @@ export async function routesResources(app: ApiApp, context: Context) {
       schema: {
         params: C.IdParams,
         body: z.object({ to: C.Id }).strict(),
-        response: { 200: C.Ok },
+        response: { 200: C.Ok, 202: C.ApprovalRequest },
       },
     },
     async (request) => {
-      await resources.transfer(
-        actor(request),
-        await resources.get(request.params.id),
-        request.body.to,
-      );
+      const row = await resources.get(request.params.id);
+      await context.relations.transfer(actor(request), row.id, request.body.to);
       return { ok: true as const };
     },
   );

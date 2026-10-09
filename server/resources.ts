@@ -16,7 +16,6 @@ import type {
   SealedContent,
 } from '../shared/contracts.js';
 import { fail, required } from './errors.js';
-import { isProtected } from '../shared/protected.js';
 
 export interface ResourceRow extends ResourceIdentity {
   name: string;
@@ -178,23 +177,6 @@ export class Resources {
     const updated = await this.update(row, { name: Name.parse(name) });
     await this.audit.record(row.owner_id, actor.id, 'resource.rename', row.id);
     return updated;
-  }
-  async transfer(actor: Actor, row: ResourceRow, to: string) {
-    await this.authorization.requireResource(actor, row, 'transfer');
-    await this.principals.get(to);
-    if (isProtected(row.kind))
-      fail(409, 'rekey_required', 'Encrypt this item for its new owner before transferring it.');
-    if (row.kind === 'environment')
-      fail(400, 'not_transferable', 'An environment stays with the principal that created it.');
-    await this.db.transaction(async connection => {
-      const changed = await connection.query(
-        'UPDATE resources SET owner_id=$3,version=version+1,updated_at=now() WHERE id=$1 AND version=$2',
-        [row.id, row.version, to]);
-      if (!changed.rowCount) fail(409, 'changed', 'Reload this item before transferring it.');
-      await connection.query('DELETE FROM relations WHERE resource_id=$1', [row.id]);
-      await this.audit.record(to, actor.id, 'resource.receive', row.id, { from: row.owner_id }, connection);
-      await this.audit.record(row.owner_id, actor.id, 'resource.transfer', row.id, { to }, connection);
-    });
   }
   async delete(actor: Actor, row: ResourceRow, connection: Queryable = this.db.pool): Promise<void> {
     if (connection === this.db.pool) return this.db.transaction(transaction => this.delete(actor, row, transaction));

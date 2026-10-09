@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Id, Resource, listOf } from './contracts.js';
+import { ApprovalRequest, Id, Resource, listOf } from './contracts.js';
 import type { JsonValue, ResourceView } from './contracts.js';
 import { SignedBinding, canonical, hash, signedValue, verifyBinding } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
@@ -125,6 +125,16 @@ export class CustodyClient {
       body: { name, content, ...(previous ? { version: previous.version } : {}) } }, Resource);
     await this.trust.rememberContent(content);
     return resource;
+  }
+  // Seals an item for the new owner its policy names. The item comes back once it is theirs; while the new owner has
+  // not agreed, the request that asks it comes back instead, and nothing here changes.
+  async pass(name: string, bytes: Uint8Array, policy: CustodyPolicy, previous: { content: CustodyContent; version: number }) {
+    const content = await protect(bytes, policy, previous.content.materialRevision + 1,
+      this.binding, this.keys, previous.content.metadata, previous.content);
+    const result = await this.api.json('/api/resources/' + policy.id + '/custody', { method: 'PUT',
+      body: { name, content, version: previous.version } }, z.union([Resource, ApprovalRequest]));
+    if ('kind' in result) await this.trust.rememberContent(content);
+    return result;
   }
   // Items the server cannot seal again itself, because only their readers can open them. The list
   // only says where to look: each item is checked here before anything changes.

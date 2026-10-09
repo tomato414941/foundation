@@ -17,6 +17,8 @@ import { bindKeys, newIdentityKeys, publicPart, signBinding } from '../shared/au
 import { Bindings } from '../server/bindings.js';
 import { Custody } from '../server/custody.js';
 import { KeySharing } from '../server/key-sharing.js';
+import { Billing, StripePayments } from '../server/billing.js';
+import type { PaymentProvider } from '../server/billing.js';
 
 export const databaseUrl =
   process.env.TEST_DATABASE_URL ??
@@ -28,7 +30,7 @@ export class TestMailer implements Mailer {
     this.sent.push({ address, link, locale });
   }
 }
-export async function fixture(overrides: Record<string, string> = {}) {
+export async function fixture(overrides: Record<string, string> = {}, payments?: PaymentProvider) {
   const schema = 'test_' + randomUUID().replaceAll('-', '');
   const admin = new pg.Pool({ connectionString: databaseUrl });
   await admin.query(`CREATE SCHEMA "${schema}"`);
@@ -48,11 +50,12 @@ export async function fixture(overrides: Record<string, string> = {}) {
   const authorization = new Authorization(db),
     audit = new Audit(db),
     principals = new Principals(db, authorization, audit),
-    relations = new Relations(db, authorization, audit, principals);
+    resources = new Resources(db, authorization, audit, principals),
+    billing = new Billing(db, authorization, audit, payments ?? new StripePayments(config), config),
+    relations = new Relations(db, authorization, audit, principals, resources, billing);
   const mailer = new TestMailer(),
     authentication = new Authentication(db, principals, authorization, audit, mailer, config);
-  const resources = new Resources(db, authorization, audit, principals);
-  const bindings = new Bindings(db, authorization, audit), custody = new Custody(resources, bindings, config.origin);
+  const bindings = new Bindings(db, authorization, audit), custody = new Custody(resources, bindings, relations, config.origin);
   principals.keySharing = new KeySharing(custody);
   async function person(name = 'Owner') {
     const identityKeys = await newIdentityKeys();
@@ -79,6 +82,7 @@ export async function fixture(overrides: Record<string, string> = {}) {
     audit,
     principals,
     relations,
+    billing,
     authentication,
     resources,
     mailer,

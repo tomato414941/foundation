@@ -1,5 +1,6 @@
 import { redirect } from 'react-router';
-import type { z } from 'zod';
+import { z } from 'zod';
+import { ApprovalRequest, Ok } from '../../shared/contracts';
 import { Session } from '../../shared/session';
 import type { SessionView } from '../../shared/session';
 import { ClientFailure, SubmissionPending } from '../../shared/client';
@@ -41,6 +42,8 @@ export async function api<T = unknown>(
     );
   return schema ? schema.parse(value) : (value as T);
 }
+// A change comes back done, or as the request that asks the other side to agree to it.
+export const Changed = z.union([Ok, ApprovalRequest]);
 export async function session(request?: Request): Promise<SessionView> {
   return api('/session', { signal: request?.signal }, Session);
 }

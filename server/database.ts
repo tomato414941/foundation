@@ -69,8 +69,9 @@ export const iso = (value: Date | string) =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 
 // Until the lines moved into one table, owners were relation rows and single actions were kept as lists in grants and
-// principal_grants. A database in that shape is carried over once, before the schema is applied: each owner onto the
-// principal it owns, and each action onto the role that gives it on its own.
+// principal_grants, and a request only ever asked its recipient to act. A database in that shape is carried over once,
+// before the schema is applied: each owner onto the principal it owns, each action onto the role that gives it on its
+// own, and requests given room for what they propose.
 async function carryOverLines(client: PoolClient) {
   const old = await client.query(
     "SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='relations' AND column_name='id'",
@@ -101,5 +102,7 @@ async function carryOverLines(client: PoolClient) {
       CROSS JOIN unnest(g.actions) a(action) JOIN carried_roles m ON m.type='principal' AND m.action=a.action
       WHERE g.principal_id<>g.target_id;
     DROP TABLE relations_carried, grants, principal_grants;
+    ALTER TABLE approval_requests ADD COLUMN proposal jsonb,
+      ADD COLUMN credential_id uuid REFERENCES credentials(id) ON DELETE CASCADE;
   `);
 }

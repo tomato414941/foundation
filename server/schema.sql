@@ -150,7 +150,9 @@ CREATE TABLE IF NOT EXISTS approval_requests (
   created_at timestamptz NOT NULL DEFAULT now(),
   finished_at timestamptz,
   private_input text,
-  continue_url text
+  continue_url text,
+  proposal jsonb,
+  credential_id uuid REFERENCES credentials(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS requests_recipient ON approval_requests(to_id,state,created_at);
 CREATE TABLE IF NOT EXISTS request_links (

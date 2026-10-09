@@ -489,11 +489,19 @@ export const RequestInput = z
     expiresInMinutes: z.number().int().min(1).max(1440).default(30),
   })
   .strict();
+const Named = z.object({ id: Id, name: Name });
+// A change its requester has made its own side of, waiting on the side the request is sent to: a line that needs both
+// its ends, or something passed to a new owner. The requester makes it once that side agrees.
+export const Proposal = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('line'), subject: Named, relation: RelationName, object: Named }),
+  z.object({ kind: z.literal('transfer'), item: Named, to: Named }),
+]);
 export const ApprovalRequest = z.object({
   id: Id,
   from: Principal.pick({ id: true, name: true }),
   to: Principal.pick({ id: true, name: true }).nullable(),
   message: z.string(),
+  proposal: Proposal.nullable(),
   operations: z.array(Operation.extend({ title: OperationTitle })),
   state: z.enum(['pending', 'running', 'approved', 'declined', 'cancelled', 'expired']),
   results: z.array(Json.nullable()),

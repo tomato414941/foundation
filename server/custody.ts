@@ -13,6 +13,7 @@ import { AppMetadata, ConnectionMetadata } from '../shared/connections.js';
 import type { ConnectionLabelValues } from '../shared/connections.js';
 import { kindOf } from '../shared/protected.js';
 import { project } from './relations.js';
+import type { Relations } from './relations.js';
 import { fail } from './errors.js';
 
 export interface ProtectedWrite {
@@ -27,7 +28,12 @@ const keptLabels = (data: Record<string, JsonValue> | undefined) =>
   Object.fromEntries(['methodName', 'account'].filter(key => typeof data?.[key] === 'string').map(key => [key, data![key]!]));
 
 export class Custody {
-  constructor(readonly resources: Resources, readonly bindings: Bindings, readonly origin: string) {}
+  constructor(
+    readonly resources: Resources,
+    readonly bindings: Bindings,
+    readonly relations: Relations,
+    readonly origin: string,
+  ) {}
 
   metadata(content: CustodyContent) {
     const schema = content.policy.contentType === ContentTypes.tokenSet ? ConnectionMetadata
@@ -127,7 +133,11 @@ export class Custody {
       if (current) {
         if (current.kind !== kindOf(policy.contentType))
           fail(400, 'wrong_resource', 'Keep the same resource kind when updating an item.');
-        await this.resources.authorization.requireResource(actor, current, current.owner_id === policy.ownerId ? 'update' : 'transfer', connection);
+        if (current.owner_id === policy.ownerId) await this.resources.authorization.requireResource(actor, current, 'update', connection);
+        else {
+          await this.resources.authorization.requireResource(actor, current, 'transfer', connection);
+          await this.resources.principals.get(policy.ownerId, connection);
+        }
         if (current.version !== input.version) fail(409, 'changed', 'This item changed. Reload it before saving.');
         const previous = await this.resources.db.one<{ content: CustodyContent }>(
           'SELECT content FROM resource_custody WHERE resource_id=$1', [policy.id], connection,
@@ -157,6 +167,10 @@ export class Custody {
         if (!policy.readers.some(reader => canonical(reader) === canonical(recipient)))
           fail(400, 'missing_recipient', 'Include every owner and member as an encrypted recipient.');
       }
+      // Sealing it for another owner passes it on, which the new owner agrees to as to anything passed to it.
+      if (current && current.owner_id !== policy.ownerId)
+        await this.relations.agree(actor, { kind: 'transfer', itemId: current.id, to: policy.ownerId },
+          this.relations.handing(current, policy.ownerId), connection);
       const data = { ...keptLabels(current?.data), ...content.metadata, ...(input.labels ?? {}),
         recipients: policy.readers.map(reader => reader.principalId),
         executors: [...new Set(policy.grants.map(grant => grant.executor.principalId))],

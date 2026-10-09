@@ -190,7 +190,9 @@ export class Accounts {
         )
           name = name.slice(0, 150) + ' · ' + row.id;
         if (isProtected(row.kind)) {
-          await c.custody.put({ id: from.id, credentialId: proof.credentialId }, { ...contents[row.id]!, name }, connection);
+          // Both accounts are this person's: the one merged into agrees to receive what the other passes on.
+          await c.custody.put({ id: from.id, credentialId: proof.credentialId, agreedBy: to.id },
+            { ...contents[row.id]!, name }, connection);
         } else {
           const changed = await connection.query(
             'UPDATE resources SET owner_id=$3,name=$4,version=version+1,updated_at=now() WHERE id=$1 AND version=$2',

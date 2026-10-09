@@ -18,6 +18,7 @@ import type {
   Settings,
 } from '../shared/contracts.js';
 import { setPointer, atPointer } from '../shared/values.js';
+import type { Proposed } from './relations.js';
 import { fail, failure, required } from './errors.js';
 
 interface RequestRow {
@@ -34,6 +35,8 @@ interface RequestRow {
   created_at: Date;
   private_input: string | null;
   continue_url: string | null;
+  proposal: Proposed | null;
+  credential_id: string | null;
 }
 interface ResponseContext {
   actor: Actor;
@@ -88,6 +91,7 @@ export class Requests {
       from: { id: from.id, name: from.name },
       to: to ? { id: to.id, name: to.name } : null,
       message: row.message,
+      proposal: row.proposal && (await this.proposal(row.proposal)),
       // Each operation with what it does in words, from the route it calls: the one asked reads that, not the call.
       operations: (await this.vault.decrypt<RequestedOperation[]>(row.operations, 'request-operations:' + row.id)).map(
         (operation) => ({ ...operation, title: required(this.dispatcher).describe(operation) }),
@@ -103,6 +107,19 @@ export class Requests {
       refreshUrl: settings?.settings.refreshUrl ?? null,
       canRespond: await this.canRespond(actor, row),
     });
+  }
+  // A proposed change as the one asked reads it: who and what, by name.
+  private async proposal(proposed: Proposed) {
+    const named = async (id: string) => {
+      const found = await this.db.one<{ name: string }>(
+        'SELECT name FROM principals WHERE id=$1 UNION ALL SELECT name FROM resources WHERE id=$1',
+        [id],
+      );
+      return { id, name: found?.name ?? id };
+    };
+    return proposed.kind === 'line'
+      ? { kind: proposed.kind, subject: await named(proposed.subjectId), relation: proposed.relation, object: await named(proposed.objectId) }
+      : { kind: proposed.kind, item: await named(proposed.itemId), to: await named(proposed.to) };
   }
   async get(actor: Actor | null, id: string) {
     const row = await this.row(id);
@@ -164,11 +181,7 @@ export class Requests {
     if (to) await this.principals.get(to);
     if (!to && !this.bootstrap(actor.id, input.operations))
       fail(400, 'recipient_required', 'Choose who should answer this request.');
-    const pending = await this.db.one<{ count: string }>(
-      "SELECT count(*) FROM approval_requests WHERE from_id=$1 AND state IN ('pending','running') AND expires_at>now()",
-      [actor.id],
-    );
-    if (Number(pending?.count) >= 20) fail(429, 'request_limit', 'Wait for an existing request to finish.');
+    await this.limit(actor.id);
     const alphabet = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
     const code = to
       ? undefined
@@ -190,6 +203,35 @@ export class Requests {
         ),
       );
     return this.view(actor, row, code);
+  }
+  private async limit(actorId: string) {
+    const pending = await this.db.one<{ count: string }>(
+      "SELECT count(*) FROM approval_requests WHERE from_id=$1 AND state IN ('pending','running') AND expires_at>now()",
+      [actorId],
+    );
+    if (Number(pending?.count) >= 20) fail(429, 'request_limit', 'Wait for an existing request to finish.');
+  }
+  // A change its requester has made its own side of, sent to the side it waits on for a day. Once that side agrees, the
+  // requester makes it as it asked, with the key it asked with: the one who agrees gives only its own side.
+  async propose(actor: Actor, to: string, proposed: Proposed, operation: RequestedOperation) {
+    if (actor.requestId || actor.approvalId) fail(403, 'forbidden', 'You do not have permission to perform this action.');
+    await this.limit(actor.id);
+    const id = randomUUID(),
+      row = required(
+        await this.db.one<RequestRow>(
+          `INSERT INTO approval_requests(id,from_id,to_id,message,operations,results,state,expires_at,proposal,credential_id)
+          VALUES($1,$2,$3,'',$4,'[null]','pending',now()+interval '1 day',$5,$6) RETURNING *`,
+          [
+            id,
+            actor.id,
+            to,
+            await this.vault.encrypt([operation], 'request-operations:' + id),
+            JSON.stringify(proposed),
+            actor.credentialId ?? null,
+          ],
+        ),
+      );
+    return this.view(actor, row);
   }
   private substitute(value: JsonValue, actorId: string, fromId: string): JsonValue {
     if (value === '$approver') return actorId;
@@ -250,18 +292,27 @@ export class Requests {
           fail(400, 'invalid_pointer', 'The requested input target was not found.');
         }
       }
+      // A proposed change is made exactly as it was proposed.
+      if (row.proposal) return current;
       current.path = current.path
         .replaceAll('{approver}', effectiveId)
         .replaceAll('{requester}', row.from_id);
       if (current.body !== undefined) current.body = this.substitute(current.body, effectiveId, row.from_id);
       return current;
     });
-    const effectiveActor: Actor = {
-      id: effectiveId,
-      ...(actor.sessionId ? { sessionId: actor.sessionId } : {}),
-      ...(actor.credentialId ? { credentialId: actor.credentialId } : {}),
-      approvalId: id,
-    };
+    const effectiveActor: Actor = row.proposal
+      ? {
+          id: row.from_id,
+          ...(row.credential_id ? { credentialId: row.credential_id } : {}),
+          agreedBy: effectiveId,
+          approvalId: id,
+        }
+      : {
+          id: effectiveId,
+          ...(actor.sessionId ? { sessionId: actor.sessionId } : {}),
+          ...(actor.credentialId ? { credentialId: actor.credentialId } : {}),
+          approvalId: id,
+        };
     const responseContext: ResponseContext = { actor: effectiveActor, operations: filled, browser, index: 0 };
     await this.db.transaction(async (connection) => {
       const claimed = await connection.query(
@@ -338,7 +389,7 @@ export class Requests {
       "UPDATE approval_requests SET state='approved',finished_at=now(),private_input=NULL,continue_url=NULL WHERE id=$1 AND state='running'",
       [id],
     );
-    await this.audit.record(row.from_id, context.actor.id, 'request.approve', id);
+    await this.audit.record(row.from_id, context.actor.agreedBy ?? context.actor.id, 'request.approve', id);
   }
   async completed(actor: Actor, result: JsonValue) {
     if (!actor.approvalId || actor.approvalIndex === undefined) return;

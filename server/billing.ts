@@ -192,6 +192,18 @@ export class Billing {
       fail(402, 'payment_required', 'Add a payment method to use storage and environments.');
     return id;
   }
+  // Whether a principal can take on another's costs: they reach whoever its own costs reach, who needs a payment
+  // method wherever payments are taken.
+  async requireChargeable(principalId: string, connection: Queryable = this.db.pool) {
+    if (this.config.FOUNDATION_BILLING_MODE === 'included' || !this.provider.enabled) return;
+    const account = await this.db.one<{ status: string }>(
+      'SELECT status FROM payment_accounts WHERE principal_id=$1',
+      [await this.payer(principalId, connection)],
+      connection,
+    );
+    if (!account || !['active', 'trialing'].includes(account.status))
+      fail(402, 'payment_required', 'Add a payment method before paying for another principal.');
+  }
   async usage(principalId: string, connection: Queryable = this.db.pool) {
     const limits = await this.db.one<{ compute_seconds: string; storage_bytes: string }>(
       'SELECT compute_seconds,storage_bytes FROM usage_limits WHERE principal_id=$1',

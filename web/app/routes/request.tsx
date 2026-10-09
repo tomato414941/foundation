@@ -23,6 +23,7 @@ import {
   JsonView,
   Page,
   Panel,
+  ProposalText,
   State,
   usePolling,
 } from '../components';
@@ -93,7 +94,13 @@ export default function RequestPage() {
         <Detail label={t('expires')}>
           <DateText value={item.expiresAt} />
         </Detail>
-        <p className="leading-relaxed whitespace-pre-wrap">{item.message || t('noMessage')}</p>
+        {item.proposal ? (
+          <p className="font-medium leading-relaxed wrap-anywhere">
+            <ProposalText proposal={item.proposal} />
+          </p>
+        ) : (
+          <p className="leading-relaxed whitespace-pre-wrap">{item.message || t('noMessage')}</p>
+        )}
         {item.code && (
           <Detail label={t('code')}>
             {item.code}
@@ -109,7 +116,7 @@ export default function RequestPage() {
       </Panel>
       <Form method="post">
         <div className="flex min-w-0 flex-col gap-6">
-          {item.operations.map((operation, index) => (
+          {!item.proposal && item.operations.map((operation, index) => (
             <Panel key={index} title={`${index + 1}. ${i18n.language === 'ja' ? operation.title.ja : operation.title.en}`}>
               <JsonView value={operation.body ?? {}} />
               {operation.inputs.map((input, inputIndex) => (
@@ -178,7 +185,7 @@ export default function RequestPage() {
           </Link>
         </Button>
       )}
-      {item.results.some((value) => value !== null) && (
+      {!item.proposal && item.results.some((value) => value !== null) && (
         <Panel title={t('result')}>
           <JsonView value={item.results} />
         </Panel>

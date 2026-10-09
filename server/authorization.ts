@@ -19,6 +19,8 @@ export interface Actor {
   requestId?: string;
   approvalId?: string;
   approvalIndex?: number;
+  // Who agreed, for the other side of a change the actor makes, to the request it is made under.
+  agreedBy?: string;
 }
 export interface ResourceIdentity {
   id: string;

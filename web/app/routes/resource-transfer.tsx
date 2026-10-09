@@ -7,7 +7,7 @@ import { Resource, listOf } from '../../../shared/contracts';
 import { BoundRecipient } from '../../../shared/protocol';
 import { verifyBinding } from '../../../shared/authority';
 import { isProtected } from '../../../shared/protected';
-import { actionResult, api, formText } from '../api';
+import { Changed, actionResult, api, formText } from '../api';
 import { custodyClient } from '../custody';
 import { ErrorNotice, Page, SaveBar } from '../components';
 import { resourcePath } from '../navigation';
@@ -30,11 +30,12 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
       const readers = recipients.items.map(item => item.binding);
       const policy = { ...previous.content.policy, ownerId: to, revision: previous.content.policy.revision + 1,
         readers, authorities: readers, grants: [], observers: [], producers: [] };
-      await client.save(resource.name, await client.reveal(resource.id), policy, { previous, metadata: previous.content.metadata });
-    } else await api('/resources/' + resource.id + '/transfer', {
-      method: 'POST',
-      body: { to },
-    });
+      const passed = await client.pass(resource.name, await client.reveal(resource.id), policy, previous);
+      if (!('kind' in passed)) return redirect('/requests/' + passed.id);
+    } else {
+      const changed = await api('/resources/' + resource.id + '/transfer', { method: 'POST', body: { to } }, Changed);
+      if ('id' in changed) return redirect('/requests/' + changed.id);
+    }
     return redirect(`/p/${params.owner}/${params.section}`);
   });
 }

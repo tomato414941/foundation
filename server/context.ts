@@ -46,21 +46,21 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     authorization = new Authorization(db),
     audit = new Audit(db),
     principals = new Principals(db, authorization, audit),
-    relations = new Relations(db, authorization, audit, principals);
+    resources = new Resources(db, authorization, audit, principals),
+    billing = new Billing(db, authorization, audit, deps.payments ?? new StripePayments(config), config),
+    relations = new Relations(db, authorization, audit, principals, resources, billing);
   const mailer = deps.mailer ?? new ResendMailer(config.RESEND_API_KEY, config.FOUNDATION_MAIL_FROM),
     authentication = new Authentication(db, principals, authorization, audit, mailer, config);
-  const resources = new Resources(db, authorization, audit, principals),
-    catalog = await Catalog.load(resources, config),
+  const catalog = await Catalog.load(resources, config),
     transport = deps.transport ?? new PublicTransport(config.origin),
     functions = new Functions(resources, config.origin);
   const bindings = new Bindings(db, authorization, audit),
-    custody = new Custody(resources, bindings, config.origin),
+    custody = new Custody(resources, bindings, relations, config.origin),
     delegation = new Delegation(resources, bindings, custody, config.origin),
     connectionOperations = new ConnectionOperations(custody),
     oauthRelays = new OAuthRelays(delegation);
   principals.keySharing = new KeySharing(custody);
-  const billing = new Billing(db, authorization, audit, deps.payments ?? new StripePayments(config), config),
-    objects = new Objects(resources, billing, deps.storage ?? new S3Objects(config)),
+  const objects = new Objects(resources, billing, deps.storage ?? new S3Objects(config)),
     environments = new Environments(
       resources,
       billing,

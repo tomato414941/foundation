@@ -7,7 +7,7 @@ import type { Audit } from './audit.js';
 import { Name, Principal, PublicKey, WrappedKey } from '../shared/contracts.js';
 import type { PublicEncryptionKey, WrappedEncryptionKey } from '../shared/contracts.js';
 import { fail, required } from './errors.js';
-import type { KeySharing, KeyUpdates } from './key-sharing.js';
+import type { KeySharing } from './key-sharing.js';
 import { ResourceKind } from '../shared/contracts.js';
 
 export interface PrincipalRow {
@@ -100,19 +100,6 @@ export class Principals {
           [credentialId, id, WrappedKey.parse(wrap)],
         );
       await this.audit.record(id, actor.id, 'principal.publishKey', id, {}, connection);
-    });
-  }
-  // Passes a principal to another owner, sealing what it holds again for whoever then acts as it.
-  async transfer(actor: Actor, id: string, to: string, contents: KeyUpdates = {}) {
-    await this.authorization.requirePrincipal(actor, id, 'transfer');
-    await this.get(to);
-    await this.db.transaction(async (connection) => {
-      await connection.query('SELECT pg_advisory_xact_lock(736023743)');
-      if (await this.authorization.holds(id, principal(to), 'stands', connection))
-        fail(409, 'relation_cycle', 'This transfer would create an ownership cycle.');
-      await this.keySharing.apply(actor, id, to, 'owner', contents, connection);
-      await connection.query('UPDATE principals SET owner_id=$2 WHERE id=$1', [id, to]);
-      await this.audit.record(id, actor.id, 'principal.transfer', to, {}, connection);
     });
   }
 }

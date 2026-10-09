@@ -15,6 +15,7 @@ import {
 import { cn } from 'cn';
 import { useTranslation } from 'react-i18next';
 import { errorCode } from './api';
+import type { ApprovalView } from '../../shared/contracts';
 import { Button } from './components/ui/button';
 import { Badge } from './components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from './components/ui/card';
@@ -128,6 +129,13 @@ export function Empty({ search = false }: { search?: boolean }) {
   );
 }
 
+// What a proposed change does, in one sentence: the line it draws, or who becomes the owner.
+export function ProposalText({ proposal }: { proposal: NonNullable<ApprovalView['proposal']> }) {
+  const { t } = useTranslation();
+  return proposal.kind === 'line'
+    ? t('line', { subject: proposal.subject.name, relation: t(proposal.relation), object: proposal.object.name })
+    : t('transferLine', { item: proposal.item.name, to: proposal.to.name });
+}
 export function State({ value, label }: { value: string; label?: string }) {
   const { t } = useTranslation();
   return (

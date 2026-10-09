@@ -148,8 +148,8 @@ const words: Record<string, [string, string]> = {
   removeAccess: ['権限を解除', 'Remove access'],
   transferTo: ['新しい所有者のプリンシパルID', 'New owner principal ID'],
   transferHelp: [
-    '移管後は、新しい所有者がアクセス権を管理します。',
-    'The new owner will manage access after the transfer.',
+    '移管後は、新しい所有者がアクセス権を管理します。新しい所有者の承認が必要なときは、承認の依頼を送ります。',
+    'The new owner will manage access after the transfer. When the new owner needs to agree, a request is sent to them.',
   ],
   expires: ['有効期限', 'Expires'],
   minutes: ['分', 'minutes'],
@@ -294,11 +294,12 @@ const words: Record<string, [string, string]> = {
     'Agents use connections and variables. Members participate in management.',
   ],
   paymentHelp: [
-    '支払元のプリンシパルが、このプリンシパルの利用料金を支払います。',
-    'The payer principal pays for this principal’s usage.',
+    '支払元のプリンシパルが、このプリンシパルの利用料金を支払います。支払元の承認が必要なときは、承認の依頼を送ります。',
+    'The payer principal pays for this principal’s usage. When the payer needs to agree, a request is sent to them.',
   ],
   connectedPrincipals: ['関連するプリンシパル', 'Related principals'],
   line: ['{{subject}} は {{object}} の{{relation}}', '{{subject}}: {{relation}} of {{object}}'],
+  transferLine: ['{{item}} の所有者を {{to}} に変更', 'Make {{to}} the owner of {{item}}'],
   createPrincipal: ['プリンシパルを作成', 'Create principal'],
   principalHelp: [
     'エージェントやチームの接続・変数をまとめて管理します。',
