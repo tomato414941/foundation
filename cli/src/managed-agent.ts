@@ -37,7 +37,7 @@ export async function managedAgent() {
   catch { await docker('docker', ['pull', input.commandImage], { env: environment, timeout: 300_000, maxBuffer: 2_000_000 }); }
   return startAgent(client, { id: input.id, ownerId: input.ownerId, name: input.name,
     isolation: 'container',
-    image: input.commandImage, managed: true });
+    image: input.commandImage, managed: true, ssh: input.ssh });
 }
 
 export async function enrollManaged(input: ReturnType<typeof EnvironmentBootstrap.parse>, client: Client) {

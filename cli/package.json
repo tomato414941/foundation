@@ -1,6 +1,6 @@
 {
   "name": "@tomato414941/foundation",
-  "version": "3.2.1",
+  "version": "3.3.0",
   "description": "Manage Foundation resources and run commands in execution environments.",
   "type": "module",
   "engines": {

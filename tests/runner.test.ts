@@ -45,3 +45,27 @@ test('Flyの命名制約に従って実行環境を起動し、再試行時に�
   assert.equal(machines.length, 1);
   assert.deepEqual(created, [['machine-test', 'vol_test'], ['machine-test', 'vol_test']]);
 });
+
+test('環境ごとの公開TCPポートを対応するSSHリスナーへ接続する', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'foundation-ssh-runner-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const config = await configuration({ DATABASE_URL: 'postgres://localhost/foundation',
+    FOUNDATION_DATA: directory, FOUNDATION_KEY: Buffer.alloc(32).toString('base64url'),
+    FLY_API_TOKEN: 'test-token', FLY_APP: 'test-app', FLY_IMAGE: 'ghcr.io/example/agent@sha256:' + '1'.repeat(64) });
+  const endpoints = new Map<number, number>();
+  t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {
+    if (init.method === 'GET') return Response.json([]);
+    const body = JSON.parse(String(init.body));
+    if (new URL(url).pathname.endsWith('/volumes')) return Response.json({ id: 'vol_' + body.name });
+    for (const service of body.config.services) for (const external of service.ports) {
+      assert.equal(service.protocol, 'tcp');
+      assert.equal(service.autostop, false);
+      endpoints.set(external.port, service.internal_port);
+    }
+    return Response.json({ id: body.name });
+  });
+  const runner = new FlyRunner(config);
+  for (const port of [24000, 24001]) await runner.start(crypto.randomUUID(), EnvironmentInput.parse({}),
+    { FOUNDATION_SSH_PORT: String(port) }, async () => {});
+  assert.deepEqual([...endpoints], [[24000, 24000], [24001, 24001]]);
+});

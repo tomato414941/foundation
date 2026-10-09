@@ -2,7 +2,7 @@ import { Button } from '../components/ui/button';
 import { InputField, TextareaField, CheckboxField } from '../form-fields';
 import { Notice } from '../components';
 import { useState } from 'react';
-import { Link, redirect, useActionData, useLoaderData } from 'react-router';
+import { Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/resource';
 import { Resource, EnvironmentDeletion } from '../../../shared/contracts';
@@ -30,6 +30,8 @@ import { connectionMethodName } from '../connection-method-labels';
 import { custodyClient } from '../custody';
 import { availableEnvironments, EnvironmentChoice } from '../environments';
 import { EnvironmentDelete } from '../environment-delete';
+import { EnvironmentSSH } from '../environment-ssh';
+import { sshSettings } from '../ssh';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   const resource = await api('/resources/' + params.id, { signal: request.signal }, Resource).catch(async error => {
     if (params.section === 'environments' && error instanceof ApiFailure && error.status === 404) {
@@ -46,6 +48,12 @@ export async function clientLoader({ params, request }: Route.ClientLoaderArgs) 
 export async function clientAction({ params, request }: Route.ClientActionArgs) {
   return actionResult(async () => {
     const form = await request.formData();
+    if (formText(form, 'intent') === 'ssh') {
+      const settings = sshSettings(form);
+      await api(`/environments/${params.id}/ssh`, { method: 'PUT',
+        body: { ...settings, revision: Number(formText(form, 'sshRevision')) } });
+      return { sshSaved: true };
+    }
     if (formText(form, 'intent') === 'stop') {
       await api(`/resources/${params.id}/stop`, { method: 'POST', body: {} });
       return { ok: true };
@@ -74,6 +82,7 @@ export default function ResourceDetail() {
   const { session } = useWorkspace();
   const { t } = useTranslation();
   const task = useTask();
+  const navigation = useNavigation();
   const [content, setContent] = useState<Uint8Array | null>(null);
   const [link, setLink] = useState<{
     url: string;
@@ -239,6 +248,8 @@ export default function ResourceDetail() {
             <Detail label={t('maximum')}>{item.data.lifetime.maxSeconds / 60}</Detail>
             <Detail label={t('idle')}>{item.data.lifetime.idleSeconds / 60}</Detail>
           </Panel>}
+          <EnvironmentSSH item={item} canUpdate={can('update')} busy={navigation.state !== 'idle'}
+            saved={Boolean(result && 'sshSaved' in result && result.sshSaved)} />
           <Panel>
             <BoxDetails item={item} />
             {item.data.executorId && <Link to={'/account/trust?principal=' + item.data.executorId}

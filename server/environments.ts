@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { z } from 'zod';
 import type { Actor } from './authorization.js';
 import type { Resources, ResourceRow } from './resources.js';
@@ -11,6 +11,8 @@ import type { Delegation } from './delegation.js';
 import { EnvironmentInput, EnvironmentDeletion } from '../shared/contracts.js';
 import type { EnvironmentOptions } from '../shared/contracts.js';
 import { EnvironmentBootstrap, EnvironmentEnrollment } from '../shared/protocol.js';
+import { SSHConnection, SSHView, sshKeyBytes } from '../shared/ssh.js';
+import type { SSHHeartbeat, SSHUpdate } from '../shared/ssh.js';
 import { canonical, fingerprint, hash, verifyBinding } from '../shared/authority.js';
 import { fail, failure, required } from './errors.js';
 
@@ -27,6 +29,8 @@ export class Environments {
   constructor(readonly resources: Resources, readonly billing: Billing, readonly runner: Runner,
     readonly vault: Vault, readonly config: Configuration, readonly delegation: Delegation) {}
 
+  get sshEnabled() { return this.runner.enabled && Boolean(this.config.FLY_SSH_HOST); }
+
   async create(actor: Actor, ownerId: string, options: EnvironmentOptions, name?: string) {
     if (!this.runner.enabled) fail(503, 'environments_unavailable', 'Environments are not configured.');
     if (!(await this.resources.authorization.canCreate(actor, ownerId, 'environment')))
@@ -36,24 +40,94 @@ export class Environments {
     const image = options.image ?? this.config.FLY_COMMAND_IMAGE;
     if (!/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/.test(image))
       fail(400, 'image_required', 'Choose a command image pinned to its SHA-256 digest.');
+    if (options.ssh?.authorizedKeys.length && !this.sshEnabled)
+      fail(503, 'ssh_unavailable', 'SSH is not configured for managed environments.');
     return this.resources.db.transaction(async connection => {
       await this.billing.reserve(ownerId, 'compute',
         options.lifetime.maxSeconds * { small: 1, medium: 2, large: 4 }[options.size], connection);
       const id = randomUUID(), label = name ?? '実行環境 ' + id.slice(0, 8);
+      const { ssh: requestedSSH, ...settings } = options;
+      let ssh: z.infer<typeof SSHConnection> | undefined;
+      if (this.sshEnabled) {
+        await connection.query("SELECT pg_advisory_xact_lock(hashtext(current_schema() || ':ssh_ports'))");
+        const available = await this.resources.db.one<{ port: number }>(
+          `SELECT port FROM generate_series($1::int,$2::int) AS port
+           WHERE NOT EXISTS(SELECT 1 FROM environment_jobs WHERE ssh_port=port) ORDER BY port LIMIT 1`,
+          [this.config.FLY_SSH_PORT_MIN, this.config.FLY_SSH_PORT_MAX], connection);
+        if (!available) fail(503, 'ssh_capacity', 'All SSH connection ports are in use. Try again later.');
+        ssh = SSHConnection.parse({ authorizedKeys: requestedSSH?.authorizedKeys ?? [],
+          host: this.config.FLY_SSH_HOST, port: available.port, username: 'root', workingDirectory: '/workspace',
+          hostKey: null, fingerprint: null, revision: 1, appliedRevision: 0, activeSessions: 0 });
+      }
       const executor = await this.resources.principals.create(label, null, undefined, connection);
       const bootstrap = EnvironmentBootstrap.parse({ id, executorId: executor.id, ownerId, name: label,
-        origin: this.config.origin, bootstrap: token(), commandImage: image });
+        origin: this.config.origin, bootstrap: token(), commandImage: image, ...(ssh ? { ssh: { port: ssh.port } } : {}) });
       const row = await this.resources.insert(ownerId, 'environment', label, {
-        ...options, image, driver: 'managed', executorId: executor.id, operatorId: executor.id,
+        ...settings, ...(ssh ? { ssh } : {}), image, driver: 'managed', executorId: executor.id, operatorId: executor.id,
         capabilities: ['http', 'command', 'function', 'connect', 'refresh', 'revoke'], isolation: 'container',
         state: 'starting', startedAt: null, stoppedAt: null, lastActiveAt: new Date().toISOString(), error: null,
       }, { id }, connection);
       await connection.query(
-        `INSERT INTO environment_jobs(resource_id,bootstrap_digest,bootstrap_ciphertext,bootstrap_expires_at)
-         VALUES($1,$2,$3,now()+interval '15 minutes')`,
-        [id, digest(bootstrap.bootstrap), await this.vault.encrypt(bootstrap, 'executor-bootstrap:' + id)]);
+        `INSERT INTO environment_jobs(resource_id,bootstrap_digest,bootstrap_ciphertext,bootstrap_expires_at,ssh_port)
+         VALUES($1,$2,$3,now()+interval '15 minutes',$4)`,
+        [id, digest(bootstrap.bootstrap), await this.vault.encrypt(bootstrap, 'executor-bootstrap:' + id), ssh?.port ?? null]);
       await this.resources.audit.record(ownerId, actor.id, 'environment.create', id, { executorId: executor.id }, connection);
       return row;
+    });
+  }
+
+  private sshView(row: ResourceRow) {
+    if (row.kind !== 'environment') fail(400, 'wrong_kind', 'Choose an environment.');
+    if (!row.data.ssh) return null;
+    const ssh = SSHConnection.parse(row.data.ssh);
+    const state = !['starting', 'running'].includes(String(row.data.state)) || row.data.deletion ? 'stopped'
+      : row.data.state === 'starting' ? 'starting'
+      : ssh.appliedRevision !== ssh.revision || !ssh.hostKey ? 'configuring'
+      : ssh.authorizedKeys.length ? 'ready' : 'disabled';
+    return SSHView.parse({ ...ssh, state });
+  }
+  async ssh(actor: Actor, id: string) {
+    const row = await this.resources.get(id);
+    await this.resources.authorization.requireResource(actor, row, 'read');
+    return this.sshView(row);
+  }
+  async updateSSH(actor: Actor, id: string, input: z.infer<typeof SSHUpdate>) {
+    return this.resources.db.transaction(async connection => {
+      const row = required(await this.resources.db.one<ResourceRow>('SELECT * FROM resources WHERE id=$1 FOR UPDATE', [id], connection));
+      await this.resources.authorization.requireResource(actor, row, 'update', connection);
+      const ssh = this.sshView(row);
+      if (!ssh) fail(409, 'ssh_unavailable', 'SSH is not available in this environment.');
+      if (ssh.state === 'stopped') fail(409, 'environment_stopped', 'Create a new environment after this one has stopped.');
+      if (input.revision !== undefined && input.revision !== ssh.revision)
+        fail(409, 'changed', 'The SSH keys have changed. Read them again before saving.');
+      const previous = SSHConnection.parse(row.data.ssh);
+      const updated = await this.resources.update(row, { data: { ...row.data,
+        ssh: { ...previous, authorizedKeys: [...new Set(input.authorizedKeys)], revision: previous.revision + 1 } } }, connection);
+      await this.resources.audit.record(row.owner_id, actor.id, 'environment.ssh_keys_updated', id,
+        { keys: input.authorizedKeys.length }, connection);
+      return this.sshView(updated)!;
+    });
+  }
+  async sshHeartbeat(actor: Actor, id: string, input: z.infer<typeof SSHHeartbeat>) {
+    return this.resources.db.transaction(async connection => {
+      await this.delegation.requireExecutor(actor, id);
+      const row = required(await this.resources.db.one<ResourceRow>('SELECT * FROM resources WHERE id=$1 FOR UPDATE', [id], connection));
+      const ssh = this.sshView(row);
+      if (!ssh || ssh.state === 'stopped') fail(409, 'ssh_unavailable', 'SSH is not available in this environment.');
+      if (input.appliedRevision > ssh.revision) fail(409, 'changed', 'Use the current SSH settings.');
+      const fingerprint = 'SHA256:' + createHash('sha256').update(required(sshKeyBytes(input.hostKey))).digest('base64').replace(/=+$/, '');
+      if (ssh.fingerprint && ssh.fingerprint !== fingerprint)
+        fail(409, 'ssh_host_key_changed', 'Restore this environment’s saved SSH host key.');
+      if (!ssh.hostKey || ssh.appliedRevision !== input.appliedRevision || ssh.activeSessions !== input.activeSessions) {
+        const settings = SSHConnection.parse(row.data.ssh);
+        await this.resources.update(row, { data: { ...row.data,
+          ssh: { ...settings, hostKey: input.hostKey, fingerprint, appliedRevision: input.appliedRevision,
+            activeSessions: input.activeSessions } } }, connection);
+      }
+      if (input.activeSessions > 0) await connection.query(
+        "UPDATE resources SET data=jsonb_set(data,'{lastActiveAt}',to_jsonb($2::text)) WHERE id=$1",
+        [id, new Date().toISOString()]);
+      return { configuration: { authorizedKeys: ssh.authorizedKeys, port: ssh.port, revision: ssh.revision } };
     });
   }
 
@@ -110,6 +184,7 @@ export class Environments {
        WHERE r.data->>'state' IN ('starting','running') AND (
          (r.data->>'startedAt')::timestamptz+(r.data->'lifetime'->>'maxSeconds')::int*interval '1 second'<=now()
          OR (r.data->>'lastActiveAt')::timestamptz+(r.data->'lifetime'->>'idleSeconds')::int*interval '1 second'<=now()
+           AND coalesce((r.data->'ssh'->>'activeSessions')::int,0)=0
            AND NOT EXISTS(SELECT 1 FROM execution_tasks t WHERE t.environment_id=r.id AND t.state IN ('queued','running'))
            AND NOT EXISTS(SELECT 1 FROM environment_processes p WHERE p.environment_id=r.id AND p.state IN ('queued','running'))
          OR r.data->>'state'='starting' AND j.bootstrap_expires_at<now())`);
@@ -138,7 +213,8 @@ export class Environments {
           required(job.bootstrap_ciphertext), 'executor-bootstrap:' + row.id));
         await this.runner.start(row.id, EnvironmentInput.parse({
           image: row.data.image, size: row.data.size, lifetime: row.data.lifetime,
-        }), { FOUNDATION_EXECUTOR_BOOTSTRAP: Buffer.from(canonical(bootstrap)).toString('base64url') },
+        }), { FOUNDATION_EXECUTOR_BOOTSTRAP: Buffer.from(canonical(bootstrap)).toString('base64url'),
+          ...(bootstrap.ssh ? { FOUNDATION_SSH_PORT: String(bootstrap.ssh.port) } : {}) },
         async (machineId, volumeId) => {
           await this.resources.db.pool.query(
             'UPDATE environment_jobs SET machine_id=$3,volume_id=$4 WHERE resource_id=$1 AND lease_token=$2',
@@ -162,6 +238,7 @@ export class Environments {
             state: row.data.error ? 'failed' : 'stopped', stoppedAt: new Date().toISOString() } }, connection);
           await connection.query('DELETE FROM credentials WHERE environment_id=$1', [row.id]);
           await connection.query('UPDATE environment_jobs SET bootstrap_ciphertext=NULL,bootstrap_digest=NULL WHERE resource_id=$1', [row.id]);
+          await connection.query('UPDATE environment_jobs SET ssh_port=NULL WHERE resource_id=$1', [row.id]);
           await this.resources.audit.record(row.owner_id, null, 'environment.stop', row.id, { seconds }, connection);
         });
       }

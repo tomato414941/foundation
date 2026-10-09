@@ -12,9 +12,12 @@ RUN node scripts/build-cli.mjs
 
 FROM node:24-bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates docker.io util-linux \
+ && apt-get install -y --no-install-recommends ca-certificates docker.io util-linux openssh-server \
+ && passwd -d root \
+ && rm -f /etc/ssh/ssh_host_* \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build --chmod=755 /app/cli/dist/cli.mjs /usr/local/bin/foundation
 COPY --chmod=755 deploy/environment/entrypoint.sh /usr/local/bin/foundation-agent
+COPY --chmod=755 deploy/environment/ssh-session.sh /usr/local/bin/foundation-ssh-session
 WORKDIR /root
 CMD ["foundation-agent"]

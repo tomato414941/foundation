@@ -16,9 +16,11 @@ import { CommandProcess } from '../runtime/command.js';
 import { MemoryJournal } from './delegation-support.js';
 import type { EnvironmentOptions } from '../shared/contracts.js';
 import { DomainError } from '../server/errors.js';
+import { SSHWorkerState } from '../shared/ssh.js';
 
 const agents = new Map<string, Executor>();
 const running = new Map<string, Promise<void>>();
+const sshAgents = new Map<string, { client: Client; hostKey: string; revision: number }>();
 const deletions = new Map<string, { phase: 'stop' | 'volume'; gate?: Promise<void>; release?: () => void; fail?: boolean }>();
 class BrowserRunner extends MemoryRunner {
   private async beforeDelete(id: string, phase: 'stop' | 'volume') {
@@ -45,6 +47,8 @@ class BrowserRunner extends MemoryRunner {
       isolation: 'container', commandImage: bootstrap.commandImage,
       awsPrincipal: 'arn:aws:iam::123456789012:role/foundation-test-executor', revision: 1 }, keys);
     await client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: registration });
+    if (bootstrap.ssh) sshAgents.set(id, { client, revision: 0,
+      hostKey: 'ssh-ed25519 ' + Buffer.concat([Buffer.from('0000000b7373682d6564323535313900000020', 'hex'), randomBytes(32)]).toString('base64') });
     const broker = new HttpBroker(client), journal = new MemoryJournal();
     const transport = { async send() { return { status: 200, headers: {}, body: new TextEncoder().encode('{}') }; } };
     // This UI fixture simulates provisioning; container isolation has its own integration test.
@@ -52,11 +56,11 @@ class BrowserRunner extends MemoryRunner {
       new CommandProcess({ isolation: 'process' }), new Connections(binding, keys, broker.connections(), journal, transport)));
     return machine;
   }
-  override async stop(id: string) { await this.beforeDelete(id, 'stop'); agents.delete(id); await super.stop(id); }
+  override async stop(id: string) { await this.beforeDelete(id, 'stop'); agents.delete(id); sshAgents.delete(id); await super.stop(id); }
   override async removeVolume(id: string) { await this.beforeDelete(id, 'volume'); await super.removeVolume(id); }
 }
 
-const fixtureData = await fixture();
+const fixtureData = await fixture({ FLY_SSH_HOST: 'ssh.foundation.test' });
 const port = Number(process.env.FOUNDATION_TEST_PORT ?? 3458);
 const origin = 'http://localhost:' + port;
 const context = await createContext(
@@ -125,7 +129,14 @@ try {
 worker.start();
 const executorTimer = setInterval(() => {
   for (const [id, agent] of agents) if (!running.has(id)) {
-    const task = agent.tick().then(() => {}).catch(error => app.log.error(error)).finally(() => running.delete(id));
+    const task = agent.tick().then(async () => {
+      const ssh = sshAgents.get(id);
+      if (ssh) {
+        const state = await ssh.client.json('/api/environments/' + id + '/ssh/heartbeat', { method: 'POST',
+          body: { hostKey: ssh.hostKey, appliedRevision: ssh.revision, activeSessions: 0 } }, SSHWorkerState);
+        if (state.configuration) ssh.revision = state.configuration.revision;
+      }
+    }).catch(error => app.log.error(error)).finally(() => running.delete(id));
     running.set(id, task);
   }
 }, 1000);

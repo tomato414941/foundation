@@ -40,7 +40,11 @@ jobs:
           node-version: '24'
           package-manager-cache: false
       - name: Install test dependencies
-        run: npm ci --include=dev --no-audit --no-fund
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends openssh-server
+          sudo mkdir -p /run/sshd
+          npm ci --include=dev --no-audit --no-fund
       - name: Check and test
         run: |
           npm run check

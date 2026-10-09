@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SSHConnection, SSHSettings } from './ssh.js';
 import { decodeProtectedHeader } from 'jose';
 
 if (typeof window !== 'undefined') z.config({ jitless: true });
@@ -346,6 +347,7 @@ export const EnvironmentInput = z
     image: z.string().min(1).max(300).optional(),
     size: z.enum(['small', 'medium', 'large']).default('small'),
     lifetime: Lifetime.default({ idleSeconds: 3600, maxSeconds: 3600 }),
+    ssh: SSHSettings.optional(),
   })
   .strict();
 export type EnvironmentOptions = z.infer<typeof EnvironmentInput>;
@@ -408,6 +410,7 @@ export const EnvironmentResource = z.object({
     capabilities: z.array(z.string()).optional(), isolation: z.enum(['process', 'container']).optional(),
     manifestDigest: z.string().optional(),
     processes: z.object({ workingDirectory: z.string() }).optional(),
+    ssh: SSHConnection.optional(),
     awsPrincipal: z.string().optional(),
     state: EnvironmentState,
     deletion: EnvironmentDeletion.optional(),

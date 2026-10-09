@@ -75,6 +75,9 @@ export class FlyRunner implements Runner {
   }
   async start(id: string, options: EnvironmentOptions, environment: Record<string, string>,
     created: (machineId: string, volumeId: string) => Promise<void>) {
+    const sshPort = environment.FOUNDATION_SSH_PORT ? Number(environment.FOUNDATION_SSH_PORT) : null;
+    if (sshPort !== null && (!Number.isInteger(sshPort) || sshPort < 1024 || sshPort > 65535))
+      throw new Error('Use an allocated SSH port.');
     const volumeId = await this.volume(id, options);
     let machineId = await this.find(id);
     if (!machineId) {
@@ -85,6 +88,9 @@ export class FlyRunner implements Runner {
             guest: sizes[options.size], mounts: [{ volume: volumeId, path: '/data' }],
             auto_destroy: false, restart: { policy: 'on-failure', max_retries: 3 },
             metadata: { foundation_environment: id },
+            ...(sshPort === null ? {} : { services: [{ protocol: 'tcp', internal_port: sshPort,
+              ports: [{ port: sshPort }], autostart: false, autostop: false,
+              concurrency: { type: 'connections', soft_limit: 100, hard_limit: 200 } }] }),
           } });
         if (Array.isArray(machine) || typeof machine.id !== 'string')
           fail(502, 'runner_response', 'The environment provider returned an invalid response.');

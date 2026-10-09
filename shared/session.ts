@@ -4,6 +4,7 @@ import { Principal, Id, Name, Locale, PublicKey, WrappedKey } from './contracts.
 export const Features = z.object({
   email: z.boolean(),
   environments: z.boolean(),
+  ssh: z.boolean(),
   objects: z.boolean(),
   payments: z.boolean(),
 });

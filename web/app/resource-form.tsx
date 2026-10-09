@@ -17,6 +17,7 @@ import { actionResult, api, ApiFailure, formText, jsonField, session, upload } f
 import { decryptVariable } from './keys';
 import { connectionClient, custodyClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
+import { sshSettings } from './ssh';
 import { ErrorNotice, ExternalLink, JsonField, Page, Panel, SaveBar } from './components';
 import { resourceKind, resourcePath } from './navigation';
 import { useWorkspace } from './routes/workspace';
@@ -211,6 +212,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
           idleSeconds: Number(formText(form, 'idle')) * 60,
           maxSeconds: Number(formText(form, 'maximum')) * 60,
         },
+        ...(form.has('sshKeys') ? { ssh: sshSettings(form) } : {}),
       };
     } else if (kind === 'function')
       body.definition = {
@@ -696,6 +698,11 @@ export default function ResourceForm() {
                       />
                       <Notice tone="info">{t('managedEnvironmentHelp')}</Notice>
                     </Panel>
+                    {sessionData.features.ssh && <Panel title="SSH">
+                      <TextareaField name="sshKeys" label={t('sshAuthorizedKeysOptional')} rows={3}
+                        hint={t('sshCreateHelp')} spellCheck={false} autoCapitalize="off" autoCorrect="off"
+                        className="font-mono text-xs" />
+                    </Panel>}
                     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-1 text-xs text-muted-foreground">
                       {data.usage && (
                         <p className="leading-relaxed">

@@ -98,6 +98,8 @@ CREATE TABLE IF NOT EXISTS environment_jobs (
   bootstrap_expires_at timestamptz,
   enrollment_digest text
 );
+ALTER TABLE environment_jobs ADD COLUMN IF NOT EXISTS ssh_port integer CHECK (ssh_port BETWEEN 1024 AND 65535);
+CREATE UNIQUE INDEX IF NOT EXISTS environment_ssh_port ON environment_jobs(ssh_port) WHERE ssh_port IS NOT NULL;
 CREATE TABLE IF NOT EXISTS environment_deletions (
   resource_id uuid PRIMARY KEY,
   owner_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,

@@ -22,6 +22,7 @@ import * as P from '../shared/protocol.js';
 import { routesResources } from './routes-resources.js';
 import { routesExecution } from './routes-execution.js';
 import { routesProcesses } from './routes-processes.js';
+import { routesSSH } from './routes-ssh.js';
 import { routesRequests } from './routes-requests.js';
 import { routesDevices } from './routes-devices.js';
 import { routesAccounts } from './routes-accounts.js';
@@ -276,6 +277,7 @@ export async function buildApp(context: Context) {
     features: {
       email: context.mailer.enabled,
       environments: context.environments.runner.enabled,
+      ssh: context.environments.sshEnabled,
       objects: context.objects.store.enabled,
       payments: context.billing.provider.enabled,
     },
@@ -643,6 +645,7 @@ export async function buildApp(context: Context) {
   await routesResources(app, context);
   await routesExecution(app, context);
   await routesProcesses(app, context);
+  await routesSSH(app, context);
   await routesRequests(app, context, cookieOptions);
   await routesDevices(app, context);
   await routesAccounts(app, context);

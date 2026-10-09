@@ -15,10 +15,13 @@ import { journalLock } from '../../runtime/lock.js';
 import { detectAwsPrincipal } from '../../runtime/roles.js';
 import { Operations } from '../../shared/custody.js';
 import { ProcessBroker, ProcessExecutor } from '../../runtime/process.js';
+import { SSHServer } from '../../runtime/ssh.js';
+import { SSHWorkerState } from '../../shared/ssh.js';
 
 export async function startAgent(client: Client, options: {
   id?: string; ownerId: string; name: string; isolation: 'process' | 'container';
   image?: string; managed?: boolean; once?: boolean;
+  ssh?: { port: number };
 }) {
   const { directory, keys, binding, broker, transport } = privateClient(client);
   const id = Id.parse(options.id ?? crypto.randomUUID()), path = join(directory, 'executors', id);
@@ -27,6 +30,7 @@ export async function startAgent(client: Client, options: {
   const controller = new AbortController();
   const stop = () => controller.abort();
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
+  let ssh: SSHServer | undefined;
   try {
     const journal = new FileJournal(path, client.identity.origin, binding, keys);
     let environment = await journal.read<RegisteredEnvironment>('environment_' + id);
@@ -60,11 +64,18 @@ export async function startAgent(client: Client, options: {
       new CommandProcess({ isolation: environment.manifest.isolation, image: environment.manifest.commandImage }), connections);
     const workingDirectory = environment.manifest.isolation === 'container' ? '/workspace' : process.cwd();
     await client.json('/api/environments/' + id + '/processes/registration', { method: 'PUT', body: { workingDirectory } });
+    if (options.managed && options.ssh) {
+      ssh = new SSHServer({ directory: join(path, 'ssh'), workspace: join(path, 'workspace'),
+        workspaceLink: '/workspace', port: options.ssh.port },
+      input => client.json('/api/environments/' + id + '/ssh/heartbeat', { method: 'POST', body: input }, SSHWorkerState));
+      await ssh.start();
+    }
     const processes = new ProcessExecutor(id, new ProcessBroker(client), journal, new CommandProcess({
       isolation: environment.manifest.isolation, image: environment.manifest.commandImage,
       workspace: join(path, 'workspace'),
     }));
     do {
+      ssh?.ensureRunning();
       const pending = [...await connections.reconcile(), ...await executor.reconcile(), ...await processes.reconcile()];
       if (pending.length) process.stderr.write(JSON.stringify({ event: 'reconciliation_pending', ids: pending }) + '\n');
       let claimed = false;
@@ -76,8 +87,11 @@ export async function startAgent(client: Client, options: {
   } catch (error) {
     if (!controller.signal.aborted) throw error;
   } finally {
-    process.off('SIGINT', stop); process.off('SIGTERM', stop);
-    await release();
+    try { await ssh?.stop(); }
+    finally {
+      process.off('SIGINT', stop); process.off('SIGTERM', stop);
+      await release();
+    }
   }
   return 0;
 }

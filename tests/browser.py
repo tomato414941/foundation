@@ -654,6 +654,49 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("dialog").get_by_role("button", name="停止", exact=True).click()
         expect(page.get_by_text("停止済み", exact=True)).to_be_visible(timeout=15000)
 
+    def test_スマホでSSH公開鍵を指定して接続情報を確認し公開鍵を変更する(self):
+        import tempfile
+        owner, principal = self.passkey_account("SSH environment owner")
+        paid = owner.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
+        self.assertTrue(paid.ok, paid.text())
+        page = self.page(webkit=True, mobile=True)
+        page.context.add_cookies(owner.context.cookies())
+        page.goto(f"{ORIGIN}/p/{principal['id']}/environments/new")
+        keys = page.get_by_role("textbox", name="SSH公開鍵（任意）", exact=True)
+        expect(keys).to_be_visible()
+        keys.fill("invalid key")
+        page.get_by_role("button", name="起動", exact=True).click()
+        expect(page.get_by_role("alert").filter(has_text="SSH公開鍵を確認してください")).to_be_visible()
+        with tempfile.TemporaryDirectory() as directory:
+            public_keys = []
+            for name in ["first", "second"]:
+                path = Path(directory) / name
+                subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(path)], check=True)
+                public_keys.append(path.with_suffix(".pub").read_text().strip())
+            keys.fill(public_keys[0])
+            page.get_by_role("button", name="起動", exact=True).click()
+            page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
+            environment_id = page.url.rsplit("/", 1)[1]
+            self.environments.append((page, environment_id))
+            expect(page.get_by_text("稼働中", exact=True)).to_be_visible(timeout=15000)
+            expect(page.locator("code").filter(has_text="root@ssh.foundation.test")).to_be_visible()
+            expect(page.get_by_text("SSHホスト鍵の指紋", exact=True)).to_be_visible(timeout=20000)
+            editor = page.get_by_role("textbox", name="SSH公開鍵", exact=True)
+            expect(editor).to_have_value(public_keys[0])
+            editor.fill(public_keys[1])
+            editor.locator("xpath=ancestor::form").get_by_role("button", name="保存", exact=True).click()
+            expect(page.get_by_text("SSH公開鍵を保存しました。", exact=True)).to_be_visible()
+            response = page.request.get(ORIGIN + "/api/environments/" + environment_id + "/ssh")
+            self.assertTrue(response.ok, response.text())
+            self.assertEqual(response.json()["authorizedKeys"], [public_keys[1]])
+            self.assertEqual(response.json()["workingDirectory"], "/workspace")
+            page.reload()
+            expect(editor).to_have_value(public_keys[1])
+            self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
+            print("Rendered SSH: " + editor.locator("xpath=ancestor::*[@data-slot='card']").inner_text(), flush=True)
+            self.select(page, "言語", "English")
+            expect(page.get_by_text("SSH host key fingerprint", exact=True)).to_be_visible()
+
     def test_ファイルを保存して実行環境を起動して停止する(self):
         page, principal = self.passkey_account()
         response = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})

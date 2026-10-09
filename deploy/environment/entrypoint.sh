@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 umask 077
+mkdir -p /run/sshd
+chmod 755 /run/sshd
 dockerd --host=unix:///var/run/docker.sock --storage-driver=vfs >/var/log/foundation-docker.log 2>&1 &
 daemon_pid=$!
 count=0
