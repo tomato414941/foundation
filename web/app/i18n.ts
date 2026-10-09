@@ -265,13 +265,6 @@ const words: Record<string, [string, string]> = {
   paymentIncluded: ['利用枠の範囲内で利用できます。', 'You can use the service within the available limits.'],
   featureUnavailable: ['この機能は現在利用できません。', 'This feature is currently unavailable.'],
   command: ['コマンド', 'Command'],
-  commandHelp: [
-    'プログラムと引数をJSON配列で入力します。例: ["node", "--version"]',
-    'Enter the program and arguments as a JSON array, e.g. ["node", "--version"].',
-  ],
-  stdin: ['標準入力', 'Standard input'],
-  timeout: ['実行時間の上限（秒）', 'Timeout (seconds)'],
-  inputs: ['入力（JSON）', 'Inputs (JSON)'],
   execute: ['実行', 'Run'],
   result: ['実行結果', 'Result'],
   http: ['HTTPリクエスト', 'HTTP request'],

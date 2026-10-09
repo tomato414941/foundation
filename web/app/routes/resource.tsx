@@ -106,11 +106,6 @@ export default function ResourceDetail() {
         <>
           {environmentState && <State value={environmentState}
             label={environmentState === 'running' ? t('state.environmentRunning') : undefined} />}
-          {environment && !environment.data.deletion && environment.data.state === 'running' && can('execute') && (
-            <Button asChild>
-              <Link to="run">{t('execute')}</Link>
-            </Button>
-          )}
           {environment && !environment.data.deletion && ['starting', 'running'].includes(environment.data.state) && can('delete') && (
             <Confirm label={t('stop')} name={item.name} body={t('stopBody')} danger={false}>
               <input type="hidden" name="intent" value="stop" />

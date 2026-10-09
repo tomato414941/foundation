@@ -30,7 +30,7 @@ export default [
     route(':section/:id/edit', 'routes/resource-edit.tsx'),
     route(':section/:id/share', 'routes/resource-share.tsx'),
     route(':section/:id/transfer', 'routes/resource-transfer.tsx'),
-    route(':section/:id/run', 'routes/resource-run.tsx'),
+    route('functions/:id/run', 'routes/resource-run.tsx'),
   ]),
   route('*', 'routes/not-found.tsx'),
 ] satisfies RouteConfig;

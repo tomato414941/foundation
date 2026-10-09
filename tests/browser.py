@@ -125,7 +125,7 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("textbox", name="名前", exact=True).fill(name)
         page.get_by_role("button", name="起動", exact=True).click()
         expect(page.get_by_role("heading", name=name, exact=True)).to_be_visible()
-        expect(page.get_by_role("link", name="実行", exact=True)).to_be_visible(timeout=15000)
+        expect(page.get_by_text("稼働中", exact=True)).to_be_visible(timeout=15000)
         path = page.url
         self.environments.append((page, path.rsplit('/', 1)[1]))
         fingerprint = page.request.get(ORIGIN + "/__test/executor/" + path.rsplit("/", 1)[1] + "/fingerprint").json()
@@ -605,7 +605,7 @@ class BrowserTests(unittest.TestCase):
         page.wait_for_url(re.compile(r"/environments/[a-f0-9-]{36}$"))
         environment_id = page.url.rsplit("/", 1)[1]
         self.environments.append((page, environment_id))
-        expect(page.get_by_role("link", name="実行", exact=True)).to_be_visible(timeout=15000)
+        expect(page.get_by_text("稼働中", exact=True)).to_be_visible(timeout=15000)
         response = page.request.get(ORIGIN + "/api/resources/" + environment_id)
         self.assertTrue(response.ok, response.text())
         environment = response.json()
@@ -616,7 +616,7 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("dialog").get_by_role("button", name="停止", exact=True).click()
         expect(page.get_by_text("停止済み", exact=True)).to_be_visible(timeout=15000)
 
-    def test_ファイルを保存して実行環境を起動しコマンドを実行して停止する(self):
+    def test_ファイルを保存して実行環境を起動して停止する(self):
         page, principal = self.passkey_account()
         response = page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
         self.assertTrue(response.ok, response.text())
@@ -632,12 +632,7 @@ class BrowserTests(unittest.TestCase):
         with page.expect_download() as download:
             page.get_by_role("link", name="ダウンロード", exact=True).click()
         self.assertEqual(Path(download.value.path()).read_text(), "browser file")
-        environment_path = self.executor(page, principal, "Worker")
-        page.get_by_role("link", name="実行", exact=True).click()
-        page.get_by_role("textbox", name="コマンド", exact=True).fill(json.dumps(["node", "-e", "process.stdout.write('ok')"]))
-        page.get_by_role("button", name="実行", exact=True).click()
-        expect(page.get_by_text('"stdout": "ok"', exact=False)).to_be_visible(timeout=15000)
-        page.goto(environment_path)
+        self.executor(page, principal, "Worker")
         page.get_by_role("button", name="停止", exact=True).click()
         page.get_by_role("dialog").get_by_role("button", name="停止", exact=True).click()
         expect(page.get_by_text("停止済み", exact=True)).to_be_visible(timeout=15000)
@@ -702,7 +697,7 @@ class BrowserTests(unittest.TestCase):
         page.wait_for_url(f"**/p/{principal['id']}/environments?deleted=1", timeout=15000)
         expect(page.get_by_role("alert")).to_contain_text("実行環境を削除しました")
 
-    def test_利用者を指定せずに環境を作成してプリンシパルへ共有し実行して権限を解除する(self):
+    def test_実行環境を作成してプリンシパルへ共有し権限を解除する(self):
         page, principal = self.passkey_account("Environment owner")
         recipient, other = self.passkey_account("Shared principal")
         page.request.post(ORIGIN + "/__test/payment", data={"principalId": principal["id"]})
@@ -716,10 +711,8 @@ class BrowserTests(unittest.TestCase):
         environment_id = path.rsplit("/", 1)[1]
         self.environments.append((page, environment_id))
         expect(page.get_by_role("heading", name=re.compile(r"^実行環境 [a-f0-9]{8}$"))).to_be_visible()
-        expect(page.get_by_role("link", name="実行", exact=True)).to_be_visible(timeout=15000)
+        expect(page.get_by_text("稼働中", exact=True)).to_be_visible(timeout=15000)
         name = page.get_by_role("heading", level=1).inner_text()
-        fingerprint = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/fingerprint").json()
-        self.trust_fingerprint(recipient, fingerprint["id"], fingerprint["fingerprint"])
         page.get_by_role("link", name="共有", exact=True).click()
         page.get_by_role("textbox", name="共有相手のプリンシパルID", exact=True).fill(other["id"])
         page.get_by_role("checkbox", name="実行する", exact=True).check()
@@ -728,10 +721,10 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_role("heading", name="権限を付与したプリンシパル", exact=True)).to_be_visible()
         page.screenshot(path=str(ARTIFACTS / "environment-sharing-ja.png"), full_page=True)
         recipient.goto(path)
-        recipient.get_by_role("link", name="実行", exact=True).click()
-        recipient.get_by_role("textbox", name="コマンド", exact=True).fill(json.dumps(["node", "-e", "process.stdout.write('shared-principal-ok')"]))
-        recipient.get_by_role("button", name="実行", exact=True).click()
-        expect(recipient.get_by_text('"stdout": "shared-principal-ok"', exact=False)).to_be_visible(timeout=15000)
+        expect(recipient.get_by_role("heading", name=name, exact=True)).to_be_visible()
+        shared = recipient.request.get(ORIGIN + "/api/resources/" + environment_id)
+        self.assertTrue(shared.ok, shared.text())
+        self.assertIn("execute", shared.json()["permissions"])
         page.get_by_role("button", name="権限を解除", exact=True).click()
         expect(page.get_by_text("項目がありません。", exact=True)).to_be_visible()
         self.assertEqual(recipient.request.get(ORIGIN + "/api/resources/" + environment_id).status, 403)

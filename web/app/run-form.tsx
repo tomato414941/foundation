@@ -1,4 +1,4 @@
-import { InputField, TextareaField } from './form-fields';
+import { InputField } from './form-fields';
 import { Form, redirect, useActionData, useLoaderData } from 'react-router';
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 import { useTranslation } from 'react-i18next';
@@ -10,9 +10,16 @@ import { RequestFields } from './resource-form';
 import { resourcePath } from './navigation';
 import { custodyClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
+async function runResource(params: LoaderFunctionArgs['params']) {
+  if (!params.id) return null;
+  const resource = await api('/resources/' + params.id, {}, Resource);
+  if (resource.kind !== 'function' || resource.ownerId !== params.owner)
+    throw new Response('Not found', { status: 404 });
+  return resource;
+}
 export async function runLoader({ params }: LoaderFunctionArgs) {
   const [resource, environments] = await Promise.all([
-    params.id ? api('/resources/' + params.id, {}, Resource) : null,
+    runResource(params),
     availableEnvironments(params.owner!),
   ]);
   return { resource, environments };
@@ -20,7 +27,7 @@ export async function runLoader({ params }: LoaderFunctionArgs) {
 export async function runAction({ params, request }: ActionFunctionArgs) {
   return actionResult(async () => {
     const form = await request.formData();
-    const resource = params.id ? await api('/resources/' + params.id, {}, Resource) : null;
+    const resource = await runResource(params);
     let input: ExecutionOperation;
     if (resource?.kind === 'function')
       input = {
@@ -32,14 +39,6 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
             .filter(([key]) => key.startsWith('argument.'))
             .map(([key, value]) => [key.slice(9), String(value)]),
         ),
-      };
-    else if (resource?.kind === 'environment')
-      input = {
-        kind: 'command',
-        command: jsonField(form, 'command', []),
-        stdin: String(form.get('stdin') ?? ''),
-        timeoutSeconds: Number(formText(form, 'timeout')),
-        inputs: jsonField(form, 'inputs', []),
       };
     else
       input = {
@@ -62,8 +61,7 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
       if (!(error instanceof ApiFailure) || error.status !== 403) throw error;
       ownerId = client.binding.principalId;
     }
-    const result = await client.submit(ownerId,
-      resource?.kind === 'environment' ? resource.id : formText(form, 'environmentId'), input,
+    const result = await client.submit(ownerId, formText(form, 'environmentId'), input,
       { save: jsonField(form, 'save', {}) });
     return redirect('/runs/' + result.id);
   });
@@ -77,7 +75,7 @@ export default function RunForm() {
       <ErrorNotice error={result && 'error' in result ? result.error : null} />
       <Form method="post">
         <div className="flex min-w-0 flex-col gap-6">
-          {resource?.kind !== 'environment' && <EnvironmentChoice items={environments} />}
+          <EnvironmentChoice items={environments} />
           {resource?.kind === 'function' ? (
             resource.data.parameters.map((parameter) => (
               <InputField
@@ -88,27 +86,6 @@ export default function RunForm() {
                 defaultValue={parameter.default ?? ''}
               />
             ))
-          ) : resource?.kind === 'environment' ? (
-            <>
-              <JsonField
-                name="command"
-                label={t('command')}
-                value={['node', '--version']}
-                rows={3}
-                helperText={t('commandHelp')}
-              />
-              <TextareaField name="stdin" label={t('stdin')} rows={3} />
-              <InputField
-                type="number"
-                name="timeout"
-                label={t('timeout')}
-                defaultValue={60}
-                required
-                min={1}
-                max={3600}
-              />
-              <JsonField name="inputs" label={t('inputs')} value={[]} />
-            </>
           ) : (
             <>
               <Panel>
