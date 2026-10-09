@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS build
+FROM public.ecr.aws/docker/library/node:24-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY vendor ./vendor
@@ -10,7 +10,7 @@ COPY server ./server
 COPY scripts/build-cli.mjs ./scripts/build-cli.mjs
 RUN node scripts/build-cli.mjs
 
-FROM node:24-bookworm-slim
+FROM public.ecr.aws/docker/library/node:24-bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates docker.io util-linux openssh-server \
  && passwd -d root \

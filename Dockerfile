@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS build
+FROM public.ecr.aws/docker/library/node:24-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY vendor ./vendor
@@ -7,7 +7,7 @@ COPY . .
 RUN npm run build
 RUN npm prune --omit=dev --offline --ignore-scripts --no-audit --no-fund
 
-FROM node:24-bookworm-slim AS runtime
+FROM public.ecr.aws/docker/library/node:24-bookworm-slim AS runtime
 ARG FLY_IMAGE=
 ENV NODE_ENV=production FOUNDATION_HOST=0.0.0.0 FOUNDATION_PORT=3417 FOUNDATION_DATA=/var/lib/foundation FLY_IMAGE=$FLY_IMAGE
 WORKDIR /app
