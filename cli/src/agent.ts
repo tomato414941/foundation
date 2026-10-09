@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { privateClient } from './custody.js';
 import type { Client } from './client.js';
-import { canonical, hash } from '../../shared/authority.js';
+import { canonical, fingerprint } from '../../shared/authority.js';
 import { Id } from '../../shared/contracts.js';
 import { signEnvironment, verifyEnvironment } from '../../shared/execution.js';
 import type { RegisteredEnvironment } from '../../shared/execution.js';
@@ -51,7 +51,7 @@ export async function startAgent(client: Client, options: {
     }
     await client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: environment });
     process.stdout.write(JSON.stringify({ environmentId: id, identityId: binding.principalId,
-      fingerprint: await hash(binding), isolation: environment.manifest.isolation,
+      fingerprint: await fingerprint(binding), isolation: environment.manifest.isolation,
       ...(environment.manifest.awsPrincipal ? { awsPrincipal: environment.manifest.awsPrincipal } : {}),
       ...(environment.manifest.isolation === 'process' ? { notice: 'Only allow trusted code on this host.' } : {}) }) + '\n');
     const connections = new Connections(binding, keys, broker.connections(), journal, transport);

@@ -114,7 +114,7 @@ class BrowserTests(unittest.TestCase):
     def trust(self, page, other, principal):
         previous = other.url
         other.goto(ORIGIN + "/account/trust")
-        fingerprint = other.get_by_text(re.compile(r"^[A-Za-z0-9_-]{43}$")).inner_text()
+        fingerprint = other.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).inner_text()
         other.goto(previous)
         self.trust_fingerprint(page, principal["id"], fingerprint)
 
@@ -260,7 +260,7 @@ class BrowserTests(unittest.TestCase):
         child = created.json()
         self.assertIsNone(child["publicKey"])
         page.goto(ORIGIN + "/account/trust")
-        owner_fingerprint = page.get_by_text(re.compile(r"^[A-Za-z0-9_-]{43}$")).inner_text()
+        owner_fingerprint = page.get_by_text(re.compile(r"^sha256:[0-9a-f]{64}$")).inner_text()
         page.goto(f"{ORIGIN}/p/{child['id']}/settings/credentials/new")
         page.wait_for_load_state("networkidle")
         self.select(page, "種類", "APIキー")

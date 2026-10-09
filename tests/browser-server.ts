@@ -5,7 +5,7 @@ import { createContext } from '../server/context.js';
 import { buildApp } from '../server/app.js';
 import { Worker } from '../server/worker.js';
 import { randomBytes } from 'node:crypto';
-import { bindKeys, hash, newIdentityKeys, signBinding } from '../shared/authority.js';
+import { bindKeys, fingerprint, newIdentityKeys, signBinding } from '../shared/authority.js';
 import { EnvironmentBootstrap } from '../shared/protocol.js';
 import { signEnvironment } from '../shared/execution.js';
 import { Client } from '../cli/src/client.js';
@@ -102,7 +102,7 @@ app.post<{ Params: { id: string }; Body: { phase: 'stop' | 'volume'; mode: 'hold
   });
 app.get<{ Params: { id: string } }>('/__test/executor/:id/fingerprint', async request => {
   const agent = agents.get(request.params.id);
-  return agent ? { id: agent.binding.principalId, fingerprint: await hash(agent.binding) } : null;
+  return agent ? { id: agent.binding.principalId, fingerprint: await fingerprint(agent.binding) } : null;
 });
 app.get<{ Params: { address: string } }>('/__test/mail/:address', async (request) => ({
   link: fixtureData.mailer.sent.findLast((item) => item.address === request.params.address)?.link ?? null,

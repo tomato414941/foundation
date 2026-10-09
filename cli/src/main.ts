@@ -24,7 +24,7 @@ import type { ResourceView } from '../../shared/contracts.js';
 import { ContentTypes } from '../../shared/custody.js';
 import { Session } from '../../shared/session.js';
 import { newEncryptionKey, open as openSealed, unbase64url, unwrap } from '../../shared/encryption.js';
-import { bindKeys, hash, newIdentityKeys, PrivateKeys, publicPart, signBinding, SignedBinding } from '../../shared/authority.js';
+import { bindKeys, fingerprint, newIdentityKeys, PrivateKeys, publicPart, signBinding, SignedBinding } from '../../shared/authority.js';
 import { RuntimeOperation, Task } from '../../shared/execution.js';
 import type { TaskView } from '../../shared/execution.js';
 import { Client, ApiError } from './client.js';
@@ -251,7 +251,7 @@ async function signInWithKey(base: string, imported: string) {
   if (done.length) process.stderr.write('Sealed ' + done.length + ' item(s) again without their expired grants.\n');
   if (failed.length) process.stderr.write(failed.length + ' item(s) could not be sealed again yet; signing in again retries them.\n');
   print({ principal: { id: current.principal.id, name: current.principal.name }, origin: base, identity: configPath(),
-    fingerprint: await hash(binding) });
+    fingerprint: await fingerprint(binding) });
 }
 async function login(args: Arguments) {
   const base = origin(args.values.origin);
@@ -329,7 +329,7 @@ async function initialize(args: Arguments) {
   await new Client(identity).json('/api/principals/' + registered.principal.id + '/binding', {
     method: 'PUT', body: await signBinding(binding, keys),
   }, SignedBinding);
-  print({ principal: registered.principal, origin: base, identity: path, fingerprint: await hash(binding) });
+  print({ principal: registered.principal, origin: base, identity: path, fingerprint: await fingerprint(binding) });
 }
 async function waitFor<T>(fetcher: () => Promise<T>, state: (value: T) => string, timeout: number) {
   const deadline = Date.now() + timeout * 1000;

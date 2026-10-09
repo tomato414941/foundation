@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ApprovalRequest, Id, Resource, listOf } from './contracts.js';
 import type { JsonValue, ResourceView } from './contracts.js';
-import { SignedBinding, canonical, hash, signedValue, verifyBinding } from './authority.js';
+import { SignedBinding, canonical, fingerprint, hash, signedValue, verifyBinding } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
 import {
   AccessPolicy, ContentTypes, Operations, approvePolicy, authorizeUse, continuesPolicy, permittedOperations, policyAuthority,
@@ -45,7 +45,7 @@ export class CustodyClient {
   async inspectIdentity(id: string) {
     const signed = await this.api.json('/api/identities/' + Id.parse(id) + '/binding', {}, SignedBinding);
     await verifyBinding(signed);
-    return { ...signed, fingerprint: await hash(signed.binding) };
+    return { ...signed, fingerprint: await fingerprint(signed.binding) };
   }
   async trustIdentity(id: string, expectedFingerprint: string) {
     const identity = await this.inspectIdentity(id);

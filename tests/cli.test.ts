@@ -12,7 +12,7 @@ import { buildApp } from '../server/app.js';
 import { Redactor, secretVariants } from '../cli/src/execute.js';
 import { encode, seal, wrap } from '../shared/encryption.js';
 import { AccessPolicy, ContentTypes, Operations, protect } from '../shared/custody.js';
-import { bindKeys, hash, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
+import { bindKeys, fingerprint, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 
 async function cliFixture() {
   const reserved = createServer();
@@ -94,7 +94,7 @@ test('変数を使用権限でローカルコマンドへ渡し、内容の読�
       expiresAt: new Date(Date.now() + 7_200_000).toISOString() }] });
   await c.context.custody.put(owner.actor, { name: 'Command variable',
     content: await protect(encode('command-variable-value'), policy, 1, owner.binding, owner.keys) });
-  const trusted = await c.run(['trust', owner.actor.id, '--fingerprint', await hash(owner.binding)]);
+  const trusted = await c.run(['trust', owner.actor.id, '--fingerprint', await fingerprint(owner.binding)]);
   assert.equal(trusted.code, 0, trusted.stderr);
   const executed = await c.run(['exec', '--inputs', JSON.stringify([
     { name: 'VARIABLE_VALUE', source: { id } },
@@ -180,7 +180,7 @@ test('CLIの確認コードを承認し、同じAPIから所有者のリソー�
   const status = await c.run(['status']);
   assert.equal(status.code, 0, status.stderr);
   assert.ok(JSON.parse(status.stdout).principals.some((item: { id: string }) => item.id === owner.actor.id));
-  const trusted = await c.run(['trust', owner.actor.id, '--fingerprint', await hash(owner.binding)]);
+  const trusted = await c.run(['trust', owner.actor.id, '--fingerprint', await fingerprint(owner.binding)]);
   assert.equal(trusted.code, 0, trusted.stderr);
   const kept = await c.run(
     ['keep', 'Owner variable', '--owner', owner.actor.id, '--stdin'],

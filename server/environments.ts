@@ -11,7 +11,7 @@ import type { Delegation } from './delegation.js';
 import { EnvironmentInput, EnvironmentDeletion } from '../shared/contracts.js';
 import type { EnvironmentOptions } from '../shared/contracts.js';
 import { EnvironmentBootstrap, EnvironmentEnrollment } from '../shared/protocol.js';
-import { canonical, hash, verifyBinding } from '../shared/authority.js';
+import { canonical, fingerprint, hash, verifyBinding } from '../shared/authority.js';
 import { fail, failure, required } from './errors.js';
 
 interface Job {
@@ -85,7 +85,7 @@ export class Environments {
         [randomUUID(), binding.principalId, row.name, digest(value.token), id]);
       await connection.query('UPDATE environment_jobs SET enrollment_digest=$2 WHERE resource_id=$1', [id, enrollmentDigest]);
       await this.resources.audit.record(row.owner_id, binding.principalId, 'environment.enroll', id,
-        { fingerprint: await hash(binding) }, connection);
+        { fingerprint: await fingerprint(binding) }, connection);
     });
   }
 

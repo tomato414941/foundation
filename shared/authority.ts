@@ -37,12 +37,18 @@ export function canonical(value: unknown): string {
   throw new Error('Use finite numbers, Unicode strings, arrays, and plain JSON objects.');
 }
 
-export async function fingerprint(key: PublicEncryptionKey | JWK): Promise<string> {
+export async function thumbprint(key: PublicEncryptionKey | JWK): Promise<string> {
   return calculateJwkThumbprint(PublicKey.parse({ kty: key.kty, crv: key.crv, x: key.x, y: key.y }), 'sha256');
 }
 
 export async function hash(value: unknown): Promise<string> {
   return base64url(new Uint8Array(await crypto.subtle.digest('SHA-256', encode(canonical(value)))));
+}
+
+// What people compare to verify an identity's keys, written like other digests: sha256:<lowercase hex>.
+export async function fingerprint(binding: BoundKeys): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', encode(canonical(binding))));
+  return 'sha256:' + Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 export async function newIdentityKeys(): Promise<IdentityKeys> {
@@ -108,8 +114,8 @@ export const SignedBinding = z.object({ binding: KeyBinding, signature: Signatur
 
 export async function signBinding(binding: BoundKeys, keys: IdentityKeys) {
   await validateBinding(binding);
-  if (await fingerprint(keys.encryption) !== await fingerprint(binding.encryption) ||
-    await fingerprint(keys.signing) !== await fingerprint(binding.signing))
+  if (await thumbprint(keys.encryption) !== await thumbprint(binding.encryption) ||
+    await thumbprint(keys.signing) !== await thumbprint(binding.signing))
     throw new Error('The private keys do not match this identity.');
   return { binding, signature: await sign(binding, keys.signing, 'key-binding') };
 }
@@ -118,7 +124,7 @@ export async function validateBinding(input: BoundKeys): Promise<void> {
   const binding = KeyBinding.parse(input);
   if ((binding.generation === 1) !== (binding.previous === null))
     throw new Error('Link each replacement key to its preceding binding.');
-  if (await fingerprint(binding.encryption) === await fingerprint(binding.signing))
+  if (await thumbprint(binding.encryption) === await thumbprint(binding.signing))
     throw new Error('Use separate encryption and signing keys.');
   await importJWK(binding.encryption, 'ECDH-ES+A256KW');
   await importJWK(binding.signing, 'ES256');

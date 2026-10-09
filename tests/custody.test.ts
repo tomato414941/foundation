@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  bindKeys, canonical, fingerprint, hash, newIdentityKeys, sign, signBinding, verify, verifyBinding,
+  bindKeys, canonical, hash, newIdentityKeys, sign, signBinding, thumbprint, verify, verifyBinding,
 } from '../shared/authority.js';
 import { AccessPolicy, ContentTypes, Operations, permittedOperations, authorizeUse, openRun, prepareRun, protect, renewContent, reveal, useContent, verifyContent, verifyRun } from '../shared/custody.js';
 import type { CustodyPolicy, ExecutionIntent } from '../shared/custody.js';
@@ -52,7 +52,7 @@ test('JSONの順序によらず同じ内容に署名し、用途と署名者を�
 
 test('暗号化鍵と署名鍵を個別に生成し、公開する鍵の組を署名で確認する', async () => {
   const { keys, binding } = await identity();
-  assert.notEqual(await fingerprint(keys.encryption), await fingerprint(keys.signing));
+  assert.notEqual(await thumbprint(keys.encryption), await thumbprint(keys.signing));
   const signed = await signBinding(binding, keys);
   assert.deepEqual(await verifyBinding(signed), binding);
   await assert.rejects(verifyBinding({ ...signed, binding: { ...binding, principalId: crypto.randomUUID() } }));
