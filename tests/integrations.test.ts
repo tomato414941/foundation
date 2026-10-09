@@ -22,7 +22,7 @@ test('外部連携のURLを保存し、承認依頼の状態を含めた完了UR
   const created = await app.inject({ method: 'POST', url: '/api/requests', headers, payload: {
     to: recipient.actor.id,
     operations: [{ method: 'POST', path: '/api/relations', body: {
-      relation: 'agent', principalId: '$approver', subjectId: sender.actor.id,
+      relation: 'agent', objectId: '$approver', subjectId: sender.actor.id,
     } }],
   } });
   assert.equal(created.statusCode, 201, created.body);

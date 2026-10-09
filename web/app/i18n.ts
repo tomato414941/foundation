@@ -298,6 +298,7 @@ const words: Record<string, [string, string]> = {
     'The payer principal pays for this principal’s usage.',
   ],
   connectedPrincipals: ['関連するプリンシパル', 'Related principals'],
+  line: ['{{subject}} は {{object}} の{{relation}}', '{{subject}}: {{relation}} of {{object}}'],
   createPrincipal: ['プリンシパルを作成', 'Create principal'],
   principalHelp: [
     'エージェントやチームの接続・変数をまとめて管理します。',
@@ -414,8 +415,8 @@ const words: Record<string, [string, string]> = {
   'permission.reveal': ['内容を開く', 'Reveal contents'],
   'permission.use': ['実行に使用する', 'Use in runs'],
   'permission.execute': ['実行する', 'Run'],
-  'permission.credentials': ['ログイン方法を管理する', 'Manage credentials'],
-  'permission.billing': ['支払いを管理する', 'Manage billing'],
+  'permission.manage_credentials': ['ログイン方法を管理する', 'Manage credentials'],
+  'permission.manage_billing': ['支払いを管理する', 'Manage billing'],
   'permission.export': ['エクスポートする', 'Export'],
   'errors.forbidden': ['この操作を行う権限がありません。', 'You do not have permission to do this.'],
   'errors.unauthenticated': ['ログインして続けてください。', 'Sign in to continue.'],

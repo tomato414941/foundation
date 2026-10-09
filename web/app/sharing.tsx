@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Form, useActionData, useLoaderData } from 'react-router';
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 import { useTranslation } from 'react-i18next';
-import { Action, Grant, Principal, Resource, listOf } from '../../shared/contracts';
+import { Action, Principal, Relation, Resource, RoleOf, listOf } from '../../shared/contracts';
 import type { ActionName } from '../../shared/contracts';
 import { actionResult, api, ApiFailure, formText } from './api';
 import { custodyClient } from './custody';
@@ -14,22 +14,37 @@ import { isProtected } from '../../shared/protected';
 import { availableEnvironments, EnvironmentChoice } from './environments';
 import { ErrorNotice, Page, Panel, SaveBar } from './components';
 import { resourcePath } from './navigation';
+// The actions a role gives, read back from its name: a reader may read, a user may use.
+const actionOf = new Map<string, ActionName>(Object.entries(RoleOf).map(([action, role]) => [role, action as ActionName]));
+// Who was given which actions here, one entry for each subject, from the lines drawn onto the target.
+async function given(id: string, signal?: AbortSignal) {
+  const lines = await api('/relations?' + new URLSearchParams({ object: id, limit: '200' }), { signal }, listOf(Relation));
+  const bySubject = new Map<string, { principalId: string; principalName: string; actions: ActionName[] }>();
+  for (const line of lines.items) {
+    const action = actionOf.get(line.relation);
+    if (!action) continue;
+    const entry = bySubject.get(line.subjectId) ?? { principalId: line.subjectId, principalName: line.subjectName, actions: [] };
+    entry.actions.push(action);
+    bySubject.set(line.subjectId, entry);
+  }
+  return [...bySubject.values()];
+}
 export async function shareLoader({ params, request }: LoaderFunctionArgs) {
-  const prefix = params.id ? '/resources/' + params.id : '/principals/' + params.owner;
+  const id = params.id ?? params.owner!;
   const [target, grants] = await Promise.all([
     params.id
-      ? api(prefix, { signal: request.signal }, Resource)
-      : api(prefix, { signal: request.signal }, Principal),
-    api(prefix + '/grants', { signal: request.signal }, listOf(Grant)),
+      ? api('/resources/' + id, { signal: request.signal }, Resource)
+      : api('/principals/' + id, { signal: request.signal }, Principal),
+    given(id, request.signal),
   ]);
   const protectedItem = 'kind' in target && isProtected(target.kind);
-  return { target, grants: grants.items, prefix, protectedItem,
+  return { target, grants, protectedItem,
     environments: protectedItem ? await availableEnvironments(target.ownerId) : [] };
 }
 export async function shareAction({ params, request }: ActionFunctionArgs) {
   return actionResult(async () => {
     const form = await request.formData();
-    const prefix = params.id ? '/resources/' + params.id : '/principals/' + params.owner;
+    const objectId = params.id ?? params.owner!;
     const id = formText(form, 'principalId');
     const remove = formText(form, 'intent') === 'remove';
     const actions = form.getAll('actions').map((value) => Action.parse(value));
@@ -68,10 +83,13 @@ export async function shareAction({ params, request }: ActionFunctionArgs) {
         return { ok: true };
       }
     }
-    await api(prefix + '/grants/' + id, {
-      method: remove ? 'DELETE' : 'PUT',
-      ...(remove ? {} : { body: { actions } }),
-    });
+    // Each action is its own line: draw the ones now chosen, erase the ones no longer.
+    const before = (await given(objectId)).find((entry) => entry.principalId === id)?.actions ?? [];
+    const line = (action: ActionName) => ({ subjectId: id, relation: RoleOf[action], objectId });
+    for (const action of actions.filter((action) => !before.includes(action)))
+      await api('/relations', { method: 'POST', body: line(action) });
+    for (const action of before.filter((action) => remove || !actions.includes(action)))
+      await api('/relations', { method: 'DELETE', body: line(action) });
     return { ok: true };
   });
 }
@@ -133,7 +151,7 @@ export default function Sharing() {
           <Panel title={t('permissions')}>
             <div className="grid gap-3">
               {data.target.permissions
-                .filter((action) => data.protectedItem ? ['read', 'reveal', 'update', 'use'].includes(action) : 'kind' in data.target || !['delete', 'transfer'].includes(action))
+                .filter((action) => data.protectedItem ? ['read', 'reveal', 'update', 'use'].includes(action) : 'kind' in data.target || !['delete', 'transfer', 'use'].includes(action))
                 .map((action) => (
                   <CheckboxField
                     name="actions"

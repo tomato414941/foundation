@@ -3,6 +3,7 @@ import type { z } from 'zod';
 import type { Database } from './database.js';
 import { iso } from './database.js';
 import type { Authorization, Actor } from './authorization.js';
+import { principal } from './authorization.js';
 import type { Principals } from './principals.js';
 import type { Authentication } from './authentication.js';
 import type { Audit } from './audit.js';
@@ -67,7 +68,7 @@ export class Requests {
     if (!actor) return false;
     await this.authorization.active(actor);
     if (actor.requestId) return actor.requestId === row.id && actor.id === row.to_id;
-    if (row.to_id) return this.authorization.stands(actor.id, row.to_id);
+    if (row.to_id) return this.authorization.holds(actor.id, principal(row.to_id), 'stands');
     return Boolean(row.code_hash) && actor.id !== row.from_id;
   }
   private async view(actor: Actor | null, row: RequestRow, code?: string): Promise<ApprovalView> {
@@ -112,7 +113,7 @@ export class Requests {
   }
   async list(actor: Actor, limit = 100, after?: string) {
     if (actor.requestId) fail(403, 'forbidden', 'This link can open only its own request.');
-    const ids = await this.authorization.standsAs(actor.id);
+    const ids = await this.authorization.find(actor.id, 'principal', 'stands');
     const rows = await this.db.all<RequestRow>(
       'SELECT * FROM approval_requests WHERE (from_id=$1 OR to_id=ANY($2::uuid[])) AND ($3::uuid IS NULL OR id>$3) ORDER BY id LIMIT $4',
       [actor.id, ids, after ?? null, limit + 1],
@@ -134,7 +135,7 @@ export class Requests {
           !Array.isArray(body) &&
           (body.subjectId === actorId || body.subjectId === '$requester') &&
           body.relation === 'agent' &&
-          body.principalId === '$approver' &&
+          body.objectId === '$approver' &&
           Object.keys(body).length === 3,
       ) &&
       operations[0].inputs.length === 0
@@ -159,11 +160,7 @@ export class Requests {
           fail(400, 'invalid_pointer', 'Place each requested field in the operation body.');
         }
     }
-    const owner = await this.db.one<{ subject_id: string }>(
-      "SELECT subject_id FROM relations WHERE principal_id=$1 AND relation='owner' ORDER BY created_at,id LIMIT 1",
-      [actor.id],
-    );
-    const to = input.to ?? owner?.subject_id ?? null;
+    const to = input.to ?? (await this.principals.get(actor.id)).owner_id;
     if (to) await this.principals.get(to);
     if (!to && !this.bootstrap(actor.id, input.operations))
       fail(400, 'recipient_required', 'Choose who should answer this request.');
@@ -274,17 +271,10 @@ export class Requests {
       if (!claimed.rowCount) fail(409, 'request_answered', 'This request is already being handled.');
       if (row.code_hash) {
         await connection.query('SELECT pg_advisory_xact_lock(736023743)');
-        const owner = await this.db.one(
-          "SELECT 1 FROM relations WHERE principal_id=$1 AND relation='owner'",
-          [row.from_id],
-          connection,
-        );
-        if (owner || (await this.authorization.stands(row.from_id, effectiveId, connection)))
+        const device = await this.principals.get(row.from_id, connection);
+        if (device.owner_id || (await this.authorization.holds(row.from_id, principal(effectiveId), 'stands', connection)))
           fail(409, 'already_owned', 'This device has already been taken on.');
-        await connection.query(
-          "INSERT INTO relations(id,subject_id,principal_id,relation) VALUES($1,$2,$3,'owner')",
-          [randomUUID(), effectiveId, row.from_id],
-        );
+        await connection.query('UPDATE principals SET owner_id=$2 WHERE id=$1', [row.from_id, effectiveId]);
         await connection.query('UPDATE approval_requests SET to_id=$2,code_hash=NULL WHERE id=$1', [
           id,
           effectiveId,

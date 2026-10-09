@@ -31,7 +31,7 @@ export async function delegatedFixture() {
     return { keys, binding, actor, token: enrolled.token };
   }
   const owner = await person('Owner'), executor = await person('Executor'), stranger = await person('Other');
-  await f.principals.relate(owner.actor, executor.actor.id, 'agent', owner.actor.id);
+  await f.relations.draw(owner.actor, { subjectId: executor.actor.id, relation: 'agent', objectId: owner.actor.id });
   const environment = await signEnvironment({
     format: 3, id: crypto.randomUUID(), origin: f.config.origin, ownerId: owner.actor.id,
     name: 'Own server', executor: executor.binding, operatorId: executor.actor.id,

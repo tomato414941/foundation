@@ -25,11 +25,27 @@ export const Action = z.enum([
   'reveal',
   'use',
   'execute',
-  'credentials',
-  'billing',
+  'manage_credentials',
+  'manage_billing',
   'export',
 ]);
 export type ActionName = z.infer<typeof Action>;
+// The role that gives an action on its own, read "subject is the role of object". Which roles a type has is the
+// authorization schema's.
+export const RoleOf = {
+  read: 'reader',
+  create: 'creator',
+  update: 'editor',
+  delete: 'deleter',
+  share: 'sharer',
+  transfer: 'transferrer',
+  reveal: 'revealer',
+  use: 'user',
+  execute: 'runner',
+  manage_credentials: 'credential_manager',
+  manage_billing: 'billing_manager',
+  export: 'exporter',
+} as const satisfies Record<ActionName, string>;
 export const ResourceKind = z.enum([
   'variable',
   'connection',
@@ -86,6 +102,8 @@ export const Recipient = z.object({ id: Id, name: Name, publicKey: PublicKey });
 export const Principal = z.object({
   id: Id,
   name: Name,
+  // Whom this principal belongs to, if anyone: its owner acts as it.
+  owner: z.object({ id: Id, name: Name }).nullable(),
   createdAt: Time,
   permissions: z.array(Action),
   createKinds: z.array(ResourceKind),
@@ -102,19 +120,15 @@ export const Credential = z.object({
   // Whether this way in carries the principal's wrapped encryption key, so it can open encrypted values.
   canOpen: z.boolean(),
 });
-export const RelationInput = z
-  .object({ subjectId: Id, relation: z.enum(['agent', 'member', 'payer']), principalId: Id })
-  .strict();
+// A line: the subject is the relation of the object ("the AI is the agent of its person"). The object is a principal
+// or a thing; the relation is a role its type declares in the authorization schema.
+export const RelationName = z.string().regex(/^[a-z][a-z_]*[a-z]$/).max(64);
+export const RelationInput = z.object({ subjectId: Id, relation: RelationName, objectId: Id }).strict();
 export const Relation = RelationInput.extend({
-  id: Id,
-  createdAt: Time,
+  objectType: z.enum(['principal', ...ResourceKind.options]),
   subjectName: Name,
-  principalName: Name,
-}).extend({ relation: z.enum(['owner', 'agent', 'member', 'payer']) });
-export const Grant = z.object({
-  principalId: Id,
-  actions: z.array(Action).min(1),
-  principalName: Name.optional(),
+  objectName: Name,
+  createdAt: Time,
 });
 export const ApiError = z.object({
   error: z.object({ code: z.string(), message: z.string(), details: Json.optional() }),
@@ -535,3 +549,5 @@ export const PageQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(100),
   after: z.string().optional(),
 });
+export const RelationQuery = PageQuery.extend({ object: Id.optional(), subject: Id.optional() })
+  .refine((query) => Boolean(query.object) !== Boolean(query.subject), 'Choose the object or the subject of the lines.');

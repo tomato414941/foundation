@@ -6,24 +6,11 @@ CREATE TABLE IF NOT EXISTS principals (
   id uuid PRIMARY KEY,
   name text NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
   public_key jsonb,
+  -- Whom this principal belongs to, if anyone. Its owner acts as it; one who owns principals is not removed.
+  owner_id uuid REFERENCES principals(id) ON DELETE RESTRICT CHECK (owner_id <> id),
   created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE TABLE IF NOT EXISTS relations (
-  id uuid PRIMARY KEY,
-  subject_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  relation text NOT NULL CHECK (relation IN ('owner','agent','member','payer')),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (subject_id, principal_id, relation),
-  CHECK (subject_id <> principal_id)
-);
-CREATE INDEX IF NOT EXISTS relations_target ON relations(principal_id, relation);
-CREATE TABLE IF NOT EXISTS principal_grants (
-  target_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  actions text[] NOT NULL,
-  PRIMARY KEY(target_id,principal_id)
-);
+CREATE INDEX IF NOT EXISTS principals_owner ON principals(owner_id) WHERE owner_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS credentials (
   id uuid PRIMARY KEY,
   principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
@@ -70,6 +57,22 @@ CREATE TABLE IF NOT EXISTS resources (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS resources_owner ON resources(owner_id,kind,created_at,id);
+-- The lines drawn between principals and onto what they hold: the subject is the relation of the object, a principal
+-- or a resource. What each relation may be is the authorization schema's; whom a thing belongs to is kept with it.
+CREATE TABLE IF NOT EXISTS relations (
+  subject_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  relation text NOT NULL CHECK (relation ~ '^[a-z][a-z_]*[a-z]$'),
+  principal_id uuid REFERENCES principals(id) ON DELETE CASCADE,
+  resource_id uuid REFERENCES resources(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK ((principal_id IS NULL) <> (resource_id IS NULL)),
+  CHECK (subject_id <> principal_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS relations_on_principal ON relations(principal_id, relation, subject_id) WHERE principal_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS relations_on_resource ON relations(resource_id, relation, subject_id) WHERE resource_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS relations_subject ON relations(subject_id, relation);
+-- One payer at most for each principal.
+CREATE UNIQUE INDEX IF NOT EXISTS relations_payer ON relations(principal_id) WHERE relation = 'payer';
 CREATE UNIQUE INDEX IF NOT EXISTS resources_name ON resources(owner_id,kind,name) WHERE kind <> 'connection';
 ALTER TABLE resources DROP CONSTRAINT IF EXISTS resources_owner_id_kind_name_key;
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -108,13 +111,6 @@ CREATE TABLE IF NOT EXISTS environment_deletions (
   error text,
   requested_at timestamptz NOT NULL DEFAULT now(),
   completed_at timestamptz
-);
-CREATE TABLE IF NOT EXISTS grants (
-  resource_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
-  principal_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-  actions text[] NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY(resource_id,principal_id)
 );
 CREATE TABLE IF NOT EXISTS resource_references (
   resource_id uuid NOT NULL REFERENCES resources(id) ON DELETE CASCADE,

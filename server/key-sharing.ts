@@ -1,5 +1,6 @@
 import type { Queryable } from './database.js';
-import type { Actor } from './authorization.js';
+import type { Actor, Change } from './authorization.js';
+import { principal } from './authorization.js';
 import type { ResourceRow } from './resources.js';
 import type { Custody } from './custody.js';
 import type { BoundKeys } from '../shared/authority.js';
@@ -14,7 +15,10 @@ export class KeySharing {
   async plan(actor: Actor, target: string, subject: string, relation: 'owner' | 'member',
     connection: Queryable = this.custody.resources.db.pool, remove = false) {
     const { resources, bindings } = this.custody;
-    const descendants = await resources.authorization.standsAs(target, connection);
+    const descendants = await resources.authorization.find(target, 'principal', 'stands', connection);
+    // Whoever would act as an owner once the line is drawn or erased: the readers its items are sealed for.
+    const change: Change = relation === 'owner' ? { owners: { [target]: subject } }
+      : { [remove ? 'remove' : 'add']: [{ subjectId: subject, relation: 'member', objectId: target }] };
     const rows = await resources.db.all<ResourceRow>(
       "SELECT * FROM resources WHERE kind IN ('variable','connection','app') AND owner_id=ANY($1::uuid[]) ORDER BY id",
       [descendants], connection);
@@ -23,13 +27,8 @@ export class KeySharing {
       const content = await this.custody.get(row.id, connection);
       const oldReaders = new Set((await resources.recipients(row.owner_id, connection)).map(item => item.id));
       const next = await resources.db.all<{ id: string }>(
-        `WITH RECURSIVE edges(subject_id,principal_id) AS (
-          SELECT subject_id,principal_id FROM relations WHERE relation IN ('owner','member')
-            AND NOT(principal_id=$1 AND relation=$3 AND ($3='owner' OR subject_id=$2))
-          UNION SELECT $2::uuid,$1::uuid WHERE NOT $5::boolean
-        ), readers(id) AS (SELECT $4::uuid UNION SELECT e.subject_id FROM edges e JOIN readers r ON e.principal_id=r.id)
-        SELECT p.id FROM principals p JOIN readers r ON r.id=p.id WHERE p.public_key IS NOT NULL ORDER BY p.id`,
-        [target, subject, relation, row.owner_id, remove], connection);
+        'SELECT id FROM principals WHERE id=ANY($1::uuid[]) AND public_key IS NOT NULL ORDER BY id',
+        [await resources.authorization.holders(principal(row.owner_id), 'stands', connection, change)], connection);
       const readers: BoundKeys[] = await Promise.all(next.map(async item => (await bindings.current(item.id, connection)).binding));
       if (!readers.length) fail(409, 'encryption_key_required', 'The owner or remaining members need encryption keys.');
       const removed = (binding: BoundKeys) => oldReaders.has(binding.principalId) && !readers.some(next => next.id === binding.id);

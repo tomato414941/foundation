@@ -46,7 +46,7 @@ export default function RequestNew() {
               {
                 method: 'POST',
                 path: '/api/relations',
-                body: { subjectId: '$requester', relation: 'agent', principalId: '$approver' },
+                body: { subjectId: '$requester', relation: 'agent', objectId: '$approver' },
               },
             ]}
             rows={10}

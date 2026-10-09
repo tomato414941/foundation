@@ -3,9 +3,10 @@ import { randomUUID } from 'node:crypto';
 import type { Database, Queryable } from './database.js';
 import { iso } from './database.js';
 import type { Authorization, Actor, ResourceIdentity } from './authorization.js';
+import { principal } from './authorization.js';
 import type { Audit } from './audit.js';
 import type { Principals } from './principals.js';
-import { Resource, Name, Action } from '../shared/contracts.js';
+import { Resource, Name, ResourceKind } from '../shared/contracts.js';
 import type {
   ResourceKindName,
   ResourceView,
@@ -124,7 +125,7 @@ export class Resources {
       version: row.version,
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
-      permissions: permissions ?? (await this.authorization.resourceActions(actor, row)),
+      permissions: permissions ?? (await this.authorization.actions(actor, row)),
     });
   }
   async list(
@@ -141,79 +142,42 @@ export class Resources {
       [ownerId, input.kind ?? null, input.query || null, input.after ?? null, limit + 1],
     );
     const selected = rows.slice(0, limit),
-      permissions = await this.authorization.actionsForResources(actor, selected);
+      permissions = await this.authorization.permissions(actor, selected);
     const readable = selected.filter((row) => permissions.get(row.id)?.includes('read'));
     return {
-      items: await Promise.all(readable.map((row) => this.view(actor, row, permissions.get(row.id)))),
+      items: await Promise.all(readable.map((row) => this.view(actor, row, permissions.get(row.id) as ActionName[]))),
       next: rows.length > limit ? selected.at(-1)!.id : null,
     };
   }
+  // What others hold that the actor was let read: not what belongs to a principal it acts as or for.
   async shared(actor: Actor) {
-    const standing = await this.authorization.standsAs(actor.id);
+    const readable = (
+      await Promise.all(ResourceKind.options.map((kind) => this.authorization.find(actor.id, kind, 'read')))
+    ).flat();
     const rows = await this.db.all<ResourceRow>(
-      "SELECT DISTINCT r.* FROM resources r JOIN grants g ON g.resource_id=r.id WHERE g.principal_id=ANY($1::uuid[]) AND 'read'=ANY(g.actions) AND NOT(r.owner_id=ANY($1::uuid[])) ORDER BY r.name,r.id",
-      [standing],
+      'SELECT * FROM resources WHERE id=ANY($1::uuid[]) AND NOT owner_id=ANY($2::uuid[]) ORDER BY name,id',
+      [readable, await this.authorization.find(actor.id, 'principal', 'use')],
     );
-    const permissions = await this.authorization.actionsForResources(actor, rows);
+    const permissions = await this.authorization.permissions(actor, rows);
     return {
-      items: await Promise.all(rows.map((row) => this.view(actor, row, permissions.get(row.id)))),
+      items: await Promise.all(rows.map((row) => this.view(actor, row, permissions.get(row.id) as ActionName[]))),
       next: null,
     };
   }
+  // Whoever acts as the owner, with a key to seal for: those who open what it holds.
   async recipients(ownerId: string, connection: Queryable = this.db.pool) {
     const rows = await this.db.all<{ id: string; name: string; public_key: PublicEncryptionKey }>(
-      `WITH RECURSIVE recipients(id) AS (
-      SELECT $1::uuid UNION SELECT r.subject_id FROM relations r JOIN recipients p ON r.principal_id=p.id WHERE r.relation IN ('owner','member')
-    ) SELECT p.id,p.name,p.public_key FROM principals p JOIN recipients r ON p.id=r.id WHERE p.public_key IS NOT NULL`,
-      [ownerId],
+      'SELECT id,name,public_key FROM principals WHERE id=ANY($1::uuid[]) AND public_key IS NOT NULL',
+      [await this.authorization.holders(principal(ownerId), 'stands', connection)],
       connection,
     );
     return rows.map((row) => ({ id: row.id, name: row.name, publicKey: row.public_key }));
   }
   async rename(actor: Actor, row: ResourceRow, name: string) {
-    await this.authorization.requireResource(actor, row, 'update');
-    if (!(await this.authorization.stands(actor.id, row.owner_id)))
-      await this.authorization.requireResource(actor, row, 'share');
+    await this.authorization.requireResource(actor, row, 'rename');
     const updated = await this.update(row, { name: Name.parse(name) });
     await this.audit.record(row.owner_id, actor.id, 'resource.rename', row.id);
     return updated;
-  }
-  async grants(actor: Actor, row: ResourceRow) {
-    await this.authorization.requireResource(actor, row, 'share');
-    const rows = await this.db.all<{ principal_id: string; actions: ActionName[]; name: string }>(
-      'SELECT g.*,p.name FROM grants g JOIN principals p ON p.id=g.principal_id WHERE resource_id=$1 ORDER BY p.name',
-      [row.id],
-    );
-    return rows.map((grant) => ({
-      principalId: grant.principal_id,
-      principalName: grant.name,
-      actions: grant.actions,
-    }));
-  }
-  async grant(actor: Actor, row: ResourceRow, principalId: string, actions: ActionName[]) {
-    await this.authorization.requireResource(actor, row, 'share');
-    await this.principals.get(principalId);
-    if (isProtected(row.kind))
-      fail(409, 'rekey_required', 'Sign and encrypt the new access policy to share this item.');
-    for (const action of actions) {
-      Action.parse(action);
-      await this.authorization.requireResource(actor, row, action);
-    }
-    await this.db.pool.query(
-      'INSERT INTO grants(resource_id,principal_id,actions) VALUES($1,$2,$3) ON CONFLICT(resource_id,principal_id) DO UPDATE SET actions=EXCLUDED.actions',
-      [row.id, principalId, [...new Set(actions)]],
-    );
-    await this.audit.record(row.owner_id, actor.id, 'resource.share', row.id, { principalId, actions });
-  }
-  async revoke(actor: Actor, row: ResourceRow, principalId: string) {
-    if (isProtected(row.kind))
-      fail(409, 'rekey_required', 'Sign and encrypt the new access policy to remove access.');
-    await this.authorization.requireResource(actor, row, 'share');
-    await this.db.pool.query('DELETE FROM grants WHERE resource_id=$1 AND principal_id=$2', [
-      row.id,
-      principalId,
-    ]);
-    await this.audit.record(row.owner_id, actor.id, 'resource.revoke', row.id, { principalId });
   }
   async transfer(actor: Actor, row: ResourceRow, to: string) {
     await this.authorization.requireResource(actor, row, 'transfer');
@@ -227,7 +191,7 @@ export class Resources {
         'UPDATE resources SET owner_id=$3,version=version+1,updated_at=now() WHERE id=$1 AND version=$2',
         [row.id, row.version, to]);
       if (!changed.rowCount) fail(409, 'changed', 'Reload this item before transferring it.');
-      await connection.query('DELETE FROM grants WHERE resource_id=$1', [row.id]);
+      await connection.query('DELETE FROM relations WHERE resource_id=$1', [row.id]);
       await this.audit.record(to, actor.id, 'resource.receive', row.id, { from: row.owner_id }, connection);
       await this.audit.record(row.owner_id, actor.id, 'resource.transfer', row.id, { to }, connection);
     });

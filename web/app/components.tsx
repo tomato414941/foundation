@@ -372,15 +372,16 @@ export function usePolling(active: boolean, milliseconds = 2500) {
   }, [active, milliseconds, revalidator]);
 }
 
-export function Paging({ next, search }: { next: string | null; search: URLSearchParams }) {
+// Moves through one list of a page: param names where the list's position is kept, for a page with more than one.
+export function Paging({ next, search, param = 'after' }: { next: string | null; search: URLSearchParams; param?: string }) {
   const { t } = useTranslation();
   const more = new URLSearchParams(search);
-  if (next) more.set('after', next);
+  if (next) more.set(param, next);
   const first = new URLSearchParams(search);
-  first.delete('after');
-  return next || search.has('after') ? (
+  first.delete(param);
+  return next || search.has(param) ? (
     <nav aria-label={t('pagination')} className="flex items-center justify-end gap-2">
-      {search.has('after') && (
+      {search.has(param) && (
         <Button asChild variant="outline">
           <Link to={'?' + first}>
             <ChevronLeft className="size-4" />

@@ -87,7 +87,7 @@ test('秘密を使用権限でローカルコマンドへ渡し、内容の読�
   assert.equal(initialized.code, 0, initialized.stderr);
   const identity = JSON.parse(await readFile(join(c.directory, 'foundation', 'identity.json'), 'utf8')).identities[0];
   const owner = await c.person('Secret owner'), id = crypto.randomUUID();
-  await c.context.principals.relate(owner.actor, identity.principalId, 'agent', owner.actor.id);
+  await c.context.relations.draw(owner.actor, { subjectId: identity.principalId, relation: 'agent', objectId: owner.actor.id });
   const policy = AccessPolicy.parse({ format: 2, id, origin: c.origin, ownerId: owner.actor.id, contentType: ContentTypes.value,
     revision: 1, readers: [owner.binding], authorities: [owner.binding], producers: [],
     grants: [{ actor: identity.binding, executor: identity.binding, operations: [Operations.command], callerProgram: true,

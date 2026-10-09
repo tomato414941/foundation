@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fixture } from './support.js';
+import { principal } from '../server/authorization.js';
 import { seal, open, encode, decode, wrap, unwrap } from '../shared/encryption.js';
 import { AccessPolicy, ContentTypes, continuesPolicy, protect, reveal } from '../shared/custody.js';
 
@@ -15,7 +16,8 @@ test('メンバー追加と所有者変更で配下の秘密を再暗号化し�
     ownerId: child.id, contentType: ContentTypes.value, revision: 1, authorities: [owner.binding], readers: [owner.binding], grants: [] }),
     1, owner.binding, owner.keys);
   await f.custody.put(owner.actor, { name: 'Project secret', content: initial });
-  await assert.rejects(f.principals.relate(owner.actor, member.actor.id, 'member', project.id), { code: 'rekey_required' });
+  const joining = { subjectId: member.actor.id, relation: 'member', objectId: project.id };
+  await assert.rejects(f.relations.draw(owner.actor, joining), { code: 'rekey_required' });
   const updates = async (subject: string, relation: 'member' | 'owner') => {
     const plan = await f.principals.keySharing.plan(owner.actor, project.id, subject, relation);
     return Object.fromEntries(await Promise.all(plan.items.map(async item => [item.id, {
@@ -23,7 +25,7 @@ test('メンバー追加と所有者変更で配下の秘密を再暗号化し�
         owner.binding, owner.keys, item.content.metadata, item.content),
     }])));
   };
-  await f.principals.relate(owner.actor, member.actor.id, 'member', project.id, await updates(member.actor.id, 'member'));
+  await f.relations.draw(owner.actor, joining, await updates(member.actor.id, 'member'));
   const shared = (await f.custody.read(member.actor, id)).content;
   assert.equal(decode(await reveal(shared, member.binding, member.keys.encryption)), decode(bytes));
   const transferred = await updates(next.actor.id, 'owner');
@@ -74,14 +76,15 @@ test('メンバーを外すと宛先と編集権限を更新し、残る所有�
   const f = await fixture(); t.after(f.close);
   const owner = await f.person(), member = await f.person('Member');
   const project = await f.principals.create('Project', null, owner.actor.id);
-  await f.principals.relate(owner.actor, member.actor.id, 'member', project.id);
+  const membership = { subjectId: member.actor.id, relation: 'member', objectId: project.id };
+  await f.relations.draw(owner.actor, membership);
   const policy = AccessPolicy.parse({ format: 2, id: randomUUID(), origin: f.config.origin,
     ownerId: project.id, contentType: ContentTypes.value, revision: 1, authorities: [owner.binding, member.binding], readers: [owner.binding, member.binding], grants: [] });
   const bytes = encode('private value'), content = await protect(bytes, policy, 1, owner.binding, owner.keys);
   const row = await f.custody.put(owner.actor, { name: 'Credential', content });
   const plan = await f.principals.keySharing.plan(owner.actor, project.id, member.actor.id, 'member', f.db.pool, true);
   const update = plan.items[0]!;
-  await f.principals.unrelate(owner.actor, member.actor.id, 'member', project.id, { [row.id]: { version: row.version,
+  await f.relations.erase(owner.actor, membership, { [row.id]: { version: row.version,
     content: await protect(bytes, update.policy, 2, owner.binding, owner.keys, content.metadata, content) } });
   const current = (await f.custody.read(owner.actor, row.id)).content;
   assert.equal(decode(await reveal(current, owner.binding, owner.keys.encryption)), 'private value');
@@ -114,8 +117,8 @@ test('所有と所属の循環を拒否し、所有するプリンシパルの�
   const owner = await f.person();
   const child = await f.principals.create('Child', null, owner.actor.id);
   const grandchild = await f.principals.create('Grandchild', null, child.id);
-  assert.equal(await f.authorization.principal(owner.actor, grandchild.id, 'credentials'), true);
-  await assert.rejects(f.principals.relate(owner.actor, child.id, 'member', owner.actor.id), {
+  assert.equal(await f.authorization.can(owner.actor, principal(grandchild.id), 'manage_credentials'), true);
+  await assert.rejects(f.relations.draw(owner.actor, { subjectId: child.id, relation: 'member', objectId: owner.actor.id }), {
     code: 'relation_cycle',
   });
   await assert.rejects(f.principals.transfer(owner.actor, child.id, grandchild.id), {

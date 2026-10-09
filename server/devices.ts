@@ -72,7 +72,7 @@ export class Devices {
   }
   async approve(actor: Actor, id: string, code: string, principalId: string) {
     if (actor.requestId) fail(403, 'forbidden', 'Sign in to let a device in.');
-    await this.authorization.requirePrincipal(actor, principalId, 'credentials');
+    await this.authorization.requirePrincipal(actor, principalId, 'manage_credentials');
     const row = await this.row(id);
     if (row.data.state !== 'pending') fail(409, 'device_answered', 'This device request is already being handled.');
     const attempted = await this.db.one<{ attempts: number }>(
@@ -92,7 +92,7 @@ export class Devices {
     const row = await this.row(id);
     if (row.data.state !== 'approving' || !row.principal_id)
       fail(409, 'device_not_approved', 'Approve the device before completing it.');
-    await this.authorization.requirePrincipal(actor, row.principal_id, 'credentials');
+    await this.authorization.requirePrincipal(actor, row.principal_id, 'manage_credentials');
     const envelope = Sealed.parse(sealed);
     if (envelope.recipients.length !== 1 || envelope.recipients[0]!.header.kid !== id)
       fail(400, 'invalid_envelope', 'Seal the token for this device only.');

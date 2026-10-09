@@ -4,6 +4,7 @@ import { Vault } from './vault.js';
 import { Authorization } from './authorization.js';
 import { Audit } from './audit.js';
 import { Principals } from './principals.js';
+import { Relations } from './relations.js';
 import { Authentication } from './authentication.js';
 import { ResendMailer } from './mail.js';
 import type { Mailer } from './mail.js';
@@ -44,7 +45,8 @@ export async function createContext(config: Configuration, deps: Dependencies = 
   const vault = await Vault.initialize(db, config),
     authorization = new Authorization(db),
     audit = new Audit(db),
-    principals = new Principals(db, authorization, audit);
+    principals = new Principals(db, authorization, audit),
+    relations = new Relations(db, authorization, audit, principals);
   const mailer = deps.mailer ?? new ResendMailer(config.RESEND_API_KEY, config.FOUNDATION_MAIL_FROM),
     authentication = new Authentication(db, principals, authorization, audit, mailer, config);
   const resources = new Resources(db, authorization, audit, principals),
@@ -91,6 +93,7 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     authorization,
     audit,
     principals,
+    relations,
     mailer,
     authentication,
     resources,

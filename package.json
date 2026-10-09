@@ -40,6 +40,7 @@
     "jose": "6.2.12",
     "oauth4webapi": "3.8.8",
     "pg": "8.23.1",
+    "rebac": "file:vendor/rebac-0.0.0.tgz",
     "safe-regex2": "5.1.1",
     "stripe": "23.0.0",
     "zod": "4.6.5"

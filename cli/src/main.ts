@@ -582,7 +582,7 @@ async function main(argv: string[]) {
               {
                 method: 'POST',
                 path: '/api/relations',
-                body: { subjectId: current.principal.id, relation: 'agent', principalId: '$approver' },
+                body: { subjectId: current.principal.id, relation: 'agent', objectId: '$approver' },
               },
             ],
           }
