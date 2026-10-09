@@ -14,6 +14,7 @@ import { useWorkspace } from './workspace';
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   const search = new URL(request.url).searchParams;
   const query = new URLSearchParams({ kind: resourceKind(params.section), limit: '50' });
+  if (params.section === 'services') query.set('includeOwned', 'true');
   for (const key of ['query', 'after']) if (search.has(key)) query.set(key, search.get(key)!);
   return api(
     `/principals/${params.owner}/resources?${query}`,
@@ -76,7 +77,8 @@ export default function ResourceList() {
           {t('search')}
         </Button>
       </Form>
-      <ResourceTable items={data.items} search={!!search.get('query')} />
+      <ResourceTable items={data.items} search={!!search.get('query')} ownerId={principal.id}
+        ownerNames={Object.fromEntries(session.principals.map(item => [item.id, item.name]))} />
       <Paging next={data.next} search={search} />
       {section === 'services' && (
         <div className="flex flex-wrap gap-2">

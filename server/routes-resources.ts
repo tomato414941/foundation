@@ -71,11 +71,15 @@ export async function routesResources(app: ApiApp, context: Context) {
         querystring: C.PageQuery.extend({
           kind: C.ResourceKind.optional(),
           query: z.string().max(200).optional(),
+          includeOwned: z.enum(['true', 'false']).optional(),
         }),
         response: { 200: C.listOf(C.Resource) },
       },
     },
-    (request) => resources.list(actor(request), request.params.id, request.query),
+    (request) => resources.list(actor(request), request.params.id, {
+      ...request.query,
+      includeOwned: request.query.includeOwned === 'true',
+    }),
   );
   app.get('/api/resources/shared', { schema: { response: { 200: C.listOf(C.Resource) } } }, (request) =>
     resources.shared(actor(request)),

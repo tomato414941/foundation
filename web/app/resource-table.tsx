@@ -11,10 +11,14 @@ export function ResourceTable({
   items,
   kinds = false,
   search = false,
+  ownerId,
+  ownerNames,
 }: {
   items: ResourceView[];
   kinds?: boolean;
   search?: boolean;
+  ownerId?: string;
+  ownerNames?: Record<string, string>;
 }) {
   const { t } = useTranslation();
   if (!items.length) return <Empty search={search} />;
@@ -77,6 +81,14 @@ export function ResourceTable({
                               ' · ' + t('accountUnverified')}
                           </p>
                         </>
+                      )}
+                      {ownerNames && item.ownerId !== ownerId && (
+                        <p className="text-xs whitespace-normal text-muted-foreground wrap-anywhere">
+                          {t('owner')}: {' '}
+                          <Link to={`/p/${item.ownerId}/${sectionFor(item.kind)}`} className="underline-offset-4 hover:underline">
+                            {ownerNames[item.ownerId] ?? item.ownerId}
+                          </Link>
+                        </p>
                       )}
                       <div className="flex gap-2 text-xs text-muted-foreground sm:hidden">
                         {stateBadge}

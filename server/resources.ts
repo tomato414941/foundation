@@ -130,15 +130,20 @@ export class Resources {
   async list(
     actor: Actor,
     ownerId: string,
-    input: { kind?: ResourceKindName; query?: string; limit?: number; after?: string } = {},
+    input: { kind?: ResourceKindName; query?: string; limit?: number; after?: string; includeOwned?: boolean } = {},
   ) {
     await this.authorization.requirePrincipal(actor, ownerId, 'read');
     const limit = input.limit ?? 100;
     const rows = await this.db.all<ResourceRow>(
-      `SELECT * FROM resources WHERE owner_id=$1 AND ($2::text IS NULL OR kind=$2)
+      `WITH RECURSIVE owners(id) AS (
+        SELECT $1::uuid
+        UNION
+        SELECT p.id FROM principals p JOIN owners o ON p.owner_id=o.id WHERE $6::boolean
+      )
+      SELECT * FROM resources WHERE owner_id IN (SELECT id FROM owners) AND ($2::text IS NULL OR kind=$2)
       AND ($3::text IS NULL OR name ILIKE '%' || replace(replace(replace($3,'\\','\\\\'),'%','\\%'),'_','\\_') || '%')
       AND ($4::uuid IS NULL OR id>$4) ORDER BY id LIMIT $5`,
-      [ownerId, input.kind ?? null, input.query || null, input.after ?? null, limit + 1],
+      [ownerId, input.kind ?? null, input.query || null, input.after ?? null, limit + 1, input.includeOwned ?? false],
     );
     const selected = rows.slice(0, limit),
       permissions = await this.authorization.permissions(actor, selected);
