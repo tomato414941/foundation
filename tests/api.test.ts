@@ -45,7 +45,7 @@ test('OAuthの認可応答を開始した依頼者と実行先へ暗号化して
     headers: { authorization: 'Bearer ' + f.stranger.token } })).statusCode, 403);
 });
 
-test('HTTP APIで登録し、シークレットを保存して同じ権限で一覧を取得する', async (t) => {
+test('HTTP APIで登録し、変数を保存して同じ権限で一覧を取得する', async (t) => {
   const f = await fixture(),
     context = await createContext(f.config, { db: f.db, mailer: f.mailer }),
     app = await buildApp(context);
@@ -62,11 +62,11 @@ test('HTTP APIで登録し、シークレットを保存して同じ権限で一
   const bound = await app.inject({ method: 'PUT', url: '/api/principals/' + identity.principal.id + '/binding',
     headers, payload: await signBinding(binding, keys) });
   assert.equal(bound.statusCode, 200, bound.body);
-  const content = await protect(encode('api-secret'), AccessPolicy.parse({ format: 2, id, origin: f.config.origin,
+  const content = await protect(encode('api-value'), AccessPolicy.parse({ format: 2, id, origin: f.config.origin,
     ownerId: identity.principal.id, contentType: ContentTypes.value, revision: 1, authorities: [binding], readers: [binding], grants: [] }),
     1, binding, keys);
   const created = await app.inject({ method: 'PUT', url: '/api/resources/' + id + '/custody',
-    headers, payload: { name: 'API secret', content } });
+    headers, payload: { name: 'API variable', content } });
   assert.equal(created.statusCode, 200, created.body);
   assert.equal(created.json().kind, 'variable');
   const list = await app.inject({ url: '/api/principals/' + identity.principal.id + '/resources?kind=variable', headers });

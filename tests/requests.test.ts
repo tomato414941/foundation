@@ -118,7 +118,7 @@ test('依頼専用リンクでその依頼を承認し、通常のAPI操作を�
   assert.equal(repeated.statusCode, 400, repeated.body);
 });
 
-test('接続の承認後に実行先で秘密を受け取り、暗号化した接続の作成結果を依頼元へ返す', async t => {
+test('接続の承認後に実行先で認証情報を受け取り、暗号化した接続の作成結果を依頼元へ返す', async t => {
   const f = await flowFixture(); t.after(f.close);
   const sender = f.api(f.stranger.token);
   const asked = await sender.json('/api/requests', { method: 'POST', body: { to: f.owner.actor.id,

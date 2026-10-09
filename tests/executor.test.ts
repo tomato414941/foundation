@@ -13,7 +13,7 @@ import { decode, encode } from '../shared/encryption.js';
 import type { OutboundRequest, Transport } from '../server/transport.js';
 import type { JsonValue } from '../shared/contracts.js';
 
-test('実行先で秘密を復号してHTTP要求へ渡し、依頼者が暗号化された結果を復号する', async () => {
+test('実行先で変数を復号してHTTP要求へ渡し、依頼者が暗号化された結果を復号する', async () => {
   const f = await delegatedFixture();
   try {
     const requests: OutboundRequest[] = [];

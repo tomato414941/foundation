@@ -61,7 +61,7 @@ test('暗号化鍵と署名鍵を個別に生成し、公開する鍵の組を�
   await assert.rejects(signBinding(binding, other.keys));
 });
 
-test('所有者は内容を読み、許可された実行先は指定した依頼者の処理に秘密を使う', async () => {
+test('所有者は内容を読み、許可された実行先は指定した依頼者の処理にその内容を使う', async () => {
   const { owner, executor, caller, stranger, policy, intent, operation } = await setup();
   const content = await protect(encode('sensitive-value'), policy, 1, owner.binding, owner.keys);
   assert.equal(decode(await reveal(content, owner.binding, owner.keys.encryption)), 'sensitive-value');
@@ -78,7 +78,7 @@ test('所有者は内容を読み、許可された実行先は指定した依�
 
 test('権限、内容、宛先、版を検証してから暗号化データを開く', async () => {
   const { owner, policy, stranger } = await setup();
-  const content = await protect(encode('secret'), policy, 1, owner.binding, owner.keys);
+  const content = await protect(encode('value'), policy, 1, owner.binding, owner.keys);
   await assert.rejects(verifyContent({ ...content, materialRevision: 2 }));
   await assert.rejects(verifyContent({ ...content, policy: { ...policy, readers: [stranger.binding] } }));
   await assert.rejects(verifyContent({ ...content, sealed: { ...content.sealed,

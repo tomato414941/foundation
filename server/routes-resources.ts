@@ -10,13 +10,11 @@ import { atPointer } from '../shared/values.js';
 
 // What creating each kind of item is called, for the one asked to approve it.
 const CREATED: Record<string, readonly [string, string]> = {
-  secret: ['シークレットを保存する', 'Save a secret'],
   service: ['サービス定義を作る', 'Create a service definition'],
   method: ['接続方法を作る', 'Create a connection method'],
-  app: ['OAuthアプリを登録する', 'Register an OAuth app'],
   environment: ['実行環境を作る', 'Create an environment'],
   function: ['関数を作る', 'Create a function'],
-};
+} satisfies Record<z.infer<typeof C.NewResource>['kind'], readonly [string, string]>;
 
 const roleTemplate = () => readFileSync(new URL('./aws-connection.yaml', import.meta.url));
 export async function routesResources(app: ApiApp, context: Context) {

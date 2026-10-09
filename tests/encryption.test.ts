@@ -9,7 +9,7 @@ const sample = JSON.parse(await readFile(new URL('./fixtures/encryption.json', i
 const publicKey = PublicKey.parse(sample.publicKey);
 const context = 'resource:' + sample.resourceId;
 
-test('保存済みの暗号鍵とシークレットを復号し、共有相手の鍵で開けるように暗号化する', async () => {
+test('保存済みの暗号鍵と内容を復号し、共有相手の鍵で開けるように暗号化する', async () => {
   const privateKey = await unwrap(sample.wrappedKey, unbase64url(sample.prf), sample.principalId);
   assert.deepEqual(privateKey, sample.privateKey);
   const content = await open(Sealed.parse(sample.sealed), await hold(privateKey), sample.principalId, context);
