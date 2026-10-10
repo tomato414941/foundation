@@ -36,7 +36,7 @@ const words: Record<string, [string, string]> = {
   createRoleHelp: ['開いたAWSの画面でスタックを作成し、出力のRoleArnを下に貼り付けてください。ロールに付ける権限はその画面で選べます。', 'Create the stack in the AWS console that opens, then paste its RoleArn output below. Choose the permissions to attach there.'],
   executorWithoutAws: ['選んだ実行環境はAWSの身元を持っていないため、IAMロールを引き受けられません。AWSの認証情報がある端末で実行環境を登録してください。', 'The chosen environment has no AWS identity, so it cannot assume a role. Register an environment on a machine with AWS credentials.'],
   roleArnHelp: ['スタックの出力 RoleArn の値です。', 'The RoleArn output of the stack.'],
-  externalIdHelp: ['ロールを作るときに自動で設定されます。', 'Set automatically when the role is created.'],
+  externalIdHelp: ['ロールの信頼ポリシーに設定したExternal IDと同じ値を使ってください。', "Use the same External ID as the role's trust policy."],
   approvedExecutors: ['使用を許可する実行環境', 'Approved environments'],
   executorChoiceHelp: ['この処理を行う実行環境を選んでください。', 'Choose the environment for this operation.'],
   executorDisclosure: ['選んだ実行環境へ値を渡し、あなたが依頼する処理での使用を30日間許可します。その環境の運営者は内容を読めます。未選択なら、内容を読める端末だけで使用します。', 'Share the value with selected environments for operations you request for 30 days. Their operators can read it. With none selected, use is limited to devices that can read the content.'],

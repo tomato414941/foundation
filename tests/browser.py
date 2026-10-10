@@ -622,7 +622,57 @@ class BrowserTests(unittest.TestCase):
         self.assertIn("param_PrincipalArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Ffoundation-test-executor", href)
         external_id = re.search(r"param_ExternalId=([0-9a-f]{32})", href).group(1)
         self.assertEqual(page.get_by_label("External ID", exact=True).input_value(), external_id)
+        page.get_by_label("External ID", exact=True).fill("edited-external-id")
+        page.get_by_label("リージョン", exact=True).fill("us-west-2")
+        expect(link).to_have_attribute("href", re.compile(r"home\?region=us-west-2#.*param_ExternalId=edited-external-id"))
         page.screenshot(path=str(ARTIFACTS / "connection-aws-role-ja.png"), full_page=True, animations="disabled")
+
+    def test_AWS接続を保存し再接続でロール設定と共有先を引き継ぐ(self):
+        page, principal = self.passkey_account("AWS owner")
+        reader, recipient = self.passkey_account("AWS reader")
+        self.trust(page, reader, recipient)
+        self.trust(reader, page, principal)
+        environment_path = self.executor(page, principal)
+        environment_id = environment_path.rsplit("/", 1)[1]
+        role = {"arn": "arn:aws:iam::123456789012:role/team/Example", "region": "us-west-2",
+                "externalId": "saved-external-id"}
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        self.select(page, "実行環境", "Browser executor")
+        page.get_by_role("textbox", name="名前", exact=True).fill("AWS account")
+        page.get_by_label("IAMロールのARN", exact=True).fill(role["arn"])
+        page.get_by_label("リージョン", exact=True).fill(role["region"])
+        page.get_by_label("External ID", exact=True).fill(role["externalId"])
+        page.get_by_role("button", name="接続する", exact=True).click()
+        self.accept_connection(page, "AWS account")
+        connection_path = page.url
+        connection_id = connection_path.rsplit("/", 1)[1]
+        page.get_by_role("link", name="共有", exact=True).click()
+        page.get_by_role("textbox", name="共有相手のプリンシパルID").fill(recipient["id"])
+        page.get_by_role("checkbox", name="内容を開く", exact=True).check()
+        page.get_by_role("button", name="権限を保存", exact=True).click()
+        expect(page.get_by_text("AWS reader", exact=True)).to_be_visible()
+        before = page.request.get(ORIGIN + "/api/resources/" + connection_id + "/custody").json()["content"]["policy"]
+        page.goto(connection_path)
+        page.get_by_role("link", name="再接続", exact=True).click()
+        expect(page.get_by_label("IAMロールのARN", exact=True)).to_have_value(role["arn"])
+        expect(page.get_by_label("リージョン", exact=True)).to_have_value(role["region"])
+        expect(page.get_by_label("External ID", exact=True)).to_have_value(role["externalId"])
+        expect(page.get_by_role("combobox", name="実行環境", exact=True)).to_have_text("Browser executor")
+        link = page.get_by_role("link", name="AWSでIAMロールを作る", exact=True)
+        expect(link).to_have_attribute("href", re.compile(r"home\?region=us-west-2#.*param_ExternalId=saved-external-id"))
+        page.screenshot(path=str(ARTIFACTS / "connection-aws-reconnect-ja.png"), full_page=True, animations="disabled")
+        print("Rendered AWS reconnect: " + page.locator("main").inner_text(), flush=True)
+        page.get_by_role("button", name="接続する", exact=True).click()
+        self.accept_connection(page, "AWS account")
+        self.assertEqual(page.url, connection_path)
+        requests = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/roles").json()
+        self.assertGreaterEqual(len(requests), 2)
+        self.assertTrue(all(request == role for request in requests), requests)
+        after = page.request.get(ORIGIN + "/api/resources/" + connection_id + "/custody").json()["content"]["policy"]
+        self.assertEqual(after["readers"], before["readers"])
+        self.assertEqual(after["authorities"], before["authorities"])
+        self.assertEqual([grant["executor"] for grant in after["grants"]], [grant["executor"] for grant in before["grants"]])
+        self.assertTrue(reader.request.get(ORIGIN + "/api/resources/" + connection_id + "/custody").ok)
 
     def test_スマホで初期値のまま実行環境を起動して停止する(self):
         owner, principal = self.passkey_account("Mobile environment owner")

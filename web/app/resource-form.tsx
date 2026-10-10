@@ -79,6 +79,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     locked = false;
   let appMaterial: ReturnType<typeof AppMaterial.parse> | null = null;
   let pinnedMethod: CatalogConnectionMethod | null = null;
+  let role: z.infer<typeof ConnectionMaterial.shape.role>;
   let selectedExecutors: string[] = [];
   if (resource && isProtected(resource.kind)) {
     try {
@@ -89,6 +90,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       if (resource.kind === 'connection') {
         const state = ConnectionMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
         pinnedMethod = { ...state.method, id: state.methodId, builtin: false, availability: 'ready' };
+        role = state.role;
       }
     } catch { locked = true; }
   }
@@ -126,6 +128,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       ).values(),
     ],
     pinnedMethod,
+    role,
     appMaterial,
     environments,
     selectedExecutors,
@@ -327,8 +330,9 @@ export default function ResourceForm() {
   const [environmentId, setEnvironmentId] = useState(data.environmentId ?? data.selectedExecutors[0] ?? '');
   const executor = data.environments.find((item) => item.id === environmentId);
   const awsPrincipal = executor?.kind === 'environment' ? executor.data.awsPrincipal : undefined;
-  const [externalId] = useState(() => crypto.randomUUID().replaceAll('-', ''));
-  const [region, setRegion] = useState('ap-northeast-1');
+  const [externalId, setExternalId] = useState(() => data.role?.externalId ??
+    (data.kind === 'connection' && !existing ? crypto.randomUUID().replaceAll('-', '') : ''));
+  const [region, setRegion] = useState(data.role?.region ?? 'ap-northeast-1');
   const [templateUrl, setTemplateUrl] = useState('');
   useEffect(() => {
     if (!roleSetup || !awsPrincipal || templateUrl) return;
@@ -661,9 +665,10 @@ export default function ResourceForm() {
                       </>
                     : <Notice tone="warning">{t('executorWithoutAws')}</Notice>)}
                   <InputField name="arn" label={t('roleArn')} required hint={t('roleArnHelp')}
-                    defaultValue={existing?.kind === 'connection' ? existing.data.accountId ?? '' : ''} />
+                    defaultValue={data.role?.arn ?? ''} />
                   <InputField name="region" label={t('region')} value={region} onChange={event => setRegion(event.target.value)} required />
-                  <InputField name="externalId" label="External ID" required minLength={16} defaultValue={externalId} hint={t('externalIdHelp')} />
+                  <InputField name="externalId" label="External ID" required minLength={16} value={externalId}
+                    onChange={event => setExternalId(event.target.value)} hint={t('externalIdHelp')} />
                 </Panel>}
                 {!roleSetup && executorChoice}
                 {data.kind === 'environment' && (

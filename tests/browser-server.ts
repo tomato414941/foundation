@@ -20,6 +20,7 @@ import { SSHWorkerState } from '../shared/ssh.js';
 
 const agents = new Map<string, Executor>();
 const running = new Map<string, Promise<void>>();
+const roleRequests = new Map<string, Array<{ arn: string; externalId: string; region: string }>>();
 const sshAgents = new Map<string, { client: Client; hostKey: string; revision: number }>();
 const deletions = new Map<string, { phase: 'stop' | 'volume'; gate?: Promise<void>; release?: () => void; fail?: boolean }>();
 class BrowserRunner extends MemoryRunner {
@@ -53,7 +54,15 @@ class BrowserRunner extends MemoryRunner {
     const transport = { async send() { return { status: 200, headers: {}, body: new TextEncoder().encode('{}') }; } };
     // This UI fixture simulates provisioning; container isolation has its own integration test.
     agents.set(id, new Executor(registration, keys, broker, journal, transport,
-      new CommandProcess({ isolation: 'process' }), new Connections(binding, keys, broker.connections(), journal, transport)));
+      new CommandProcess({ isolation: 'process' }), new Connections(binding, keys, broker.connections(), journal, transport, {
+        async obtain(arn, externalId, region) {
+          const requests = roleRequests.get(id) ?? [];
+          requests.push({ arn, externalId, region });
+          roleRequests.set(id, requests);
+          return { AWS_ACCESS_KEY_ID: 'browser-role-key', AWS_SECRET_ACCESS_KEY: 'browser-role-secret',
+            AWS_SESSION_TOKEN: 'browser-role-session', AWS_DEFAULT_REGION: region };
+        },
+      })));
     return machine;
   }
   override async stop(id: string) { await this.beforeDelete(id, 'stop'); agents.delete(id); sshAgents.delete(id); await super.stop(id); }
@@ -92,6 +101,7 @@ const context = await createContext(
 );
 const app = await buildApp(context);
 app.get('/__test/ready', async () => ({ pid: process.pid }));
+app.get<{ Params: { id: string } }>('/__test/executor/:id/roles', async request => roleRequests.get(request.params.id) ?? []);
 app.post<{ Params: { id: string }; Body: { phase: 'stop' | 'volume'; mode: 'hold' | 'fail' | 'release' } }>(
   '/__test/deletion/:id', async request => {
     const { id } = request.params;
