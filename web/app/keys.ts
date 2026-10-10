@@ -8,7 +8,7 @@ import type {
 import { importJWK } from 'jose';
 import type { PrincipalView, PublicEncryptionKey } from '../../shared/contracts';
 import { base64url, encode, hold, unwrap, wrap } from '../../shared/encryption';
-import { PrivateKeys, SignedBinding, bindKeys, canonical, completeKeys, newIdentityKeys, publicPart, signBinding } from '../../shared/authority';
+import { PrivateKeys, SignedBinding, bindKeys, canonical, newIdentityKeys, publicPart, signBinding } from '../../shared/authority';
 import type { BoundKeys, IdentityKeys } from '../../shared/authority';
 import { api, ApiFailure } from './api';
 import { listOf } from '../../shared/contracts';
@@ -21,9 +21,6 @@ const unlocked = new Map<string, IdentityKeys>();
 type HeldIdentity = { binding: BoundKeys; keys: { encryption: CryptoKey; signing: CryptoKey } };
 const held = new Map<string, HeldIdentity>();
 const seed = encode('Foundation passkey identity keys v2');
-// Keys wrapped before signing keys existed were derived from this seed; sign-in still asks for it
-// so such a wrap can be opened once and replaced.
-const formerSeed = encode('Foundation passkey encryption v1');
 type Verified = {
   principalId: string;
   credentialId: string;
@@ -93,11 +90,6 @@ function prf(credential: AuthenticationResponseJSON | RegistrationResponseJSON):
   const value = output.prf?.results?.first;
   return value ? new Uint8Array(value) : null;
 }
-function formerPrf(credential: AuthenticationResponseJSON): Uint8Array | null {
-  const output = credential.clientExtensionResults as { prf?: { results?: { second?: ArrayBuffer } } };
-  const value = output.prf?.results?.second;
-  return value ? new Uint8Array(value) : null;
-}
 function verificationCredential(credential: AuthenticationResponseJSON | RegistrationResponseJSON) {
   const { prf: _prf, ...extensions } = credential.clientExtensionResults as Record<string, unknown>;
   return { ...credential, clientExtensionResults: extensions };
@@ -109,11 +101,11 @@ async function assertion(principalId?: string, credentialId?: string) {
   );
   const options = {
     ...data.options,
-    extensions: { ...data.options.extensions, prf: { eval: { first: seed, second: formerSeed } } },
+    extensions: { ...data.options.extensions, prf: { eval: { first: seed } } },
     ...(credentialId ? { allowCredentials: [{ id: credentialId, type: 'public-key' as const }] } : {}),
   };
   const credential = await startAuthentication({ optionsJSON: options });
-  return { challengeId: data.challengeId, credential, secret: prf(credential), formerSecret: formerPrf(credential) };
+  return { challengeId: data.challengeId, credential, secret: prf(credential) };
 }
 export async function authenticate(principalId?: string, credentialId?: string, wrapping?: IdentityKeys) {
   const proof = await assertion(principalId, credentialId);
@@ -123,26 +115,13 @@ export async function authenticate(principalId?: string, credentialId?: string, 
   });
   if (proof.secret) {
     if (result.wrappedKey) {
-      let unwrapped: unknown, former = false;
-      try {
-        unwrapped = await unwrap(result.wrappedKey, proof.secret, result.principalId);
-      } catch {
-        if (!proof.formerSecret) throw new ApiFailure('key_unavailable');
-        unwrapped = await unwrap(result.wrappedKey, proof.formerSecret, result.principalId).catch(() => {
-          throw new ApiFailure('key_unavailable');
-        });
-        former = true;
-      }
-      const { keys: key, completed } = await completeKeys(unwrapped).catch(() => {
-        throw new ApiFailure('key_unreadable');
+      const unwrapped = await unwrap(result.wrappedKey, proof.secret, result.principalId).catch(() => {
+        throw new ApiFailure('key_unavailable');
       });
-      if (!matchesPublicKey(key, result.publicKey)) throw new ApiFailure('encryption_key_changed');
-      if (completed || former)
-        await api(`/principals/${result.principalId}/credentials/${result.credentialId}/wrap`, {
-          method: 'PUT',
-          body: { wrappedKey: await wrap(key, proof.secret, result.principalId), publicKey: result.publicKey },
-        });
-      await keep(result.principalId, key);
+      const keys = PrivateKeys.safeParse(unwrapped);
+      if (!keys.success) throw new ApiFailure('key_unreadable');
+      if (!matchesPublicKey(keys.data, result.publicKey)) throw new ApiFailure('encryption_key_changed');
+      await keep(result.principalId, keys.data);
     } else if (!result.publicKey || wrapping) {
       if (wrapping && result.publicKey && !matchesPublicKey(wrapping, result.publicKey))
         throw new ApiFailure('encryption_key_changed');

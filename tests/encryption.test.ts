@@ -40,23 +40,3 @@ test('改変された暗号文と異なる鍵による復号を拒否する', as
   const stranger = await newEncryptionKey();
   await assert.rejects(open(sealed, stranger.privateKey, sample.principalId, context));
 });
-
-test('署名鍵ができる前に包んだ暗号鍵を、同じ暗号鍵のまま署名鍵つきに揃える', async () => {
-  const { completeKeys, newIdentityKeys } = await import('../shared/authority.js');
-  const { newEncryptionKey, wrap, unwrap } = await import('../shared/encryption.js');
-  const prf = crypto.getRandomValues(new Uint8Array(32));
-  const old = await newEncryptionKey();
-  const legacy = await wrap(old.privateKey as never, prf, '11111111-1111-4111-8111-111111111111');
-  const unwrapped = await unwrap(legacy, prf, '11111111-1111-4111-8111-111111111111');
-  const completed = await completeKeys(unwrapped);
-  assert.equal(completed.completed, true);
-  assert.deepEqual(completed.keys.encryption, old.privateKey);
-  assert.equal(completed.keys.signing.crv, 'P-256');
-  const current = await newIdentityKeys();
-  const kept = await completeKeys(current);
-  assert.equal(kept.completed, false);
-  assert.deepEqual(kept.keys, current);
-  const exported = { ...old.privateKey, ext: true, key_ops: ['deriveBits'], alg: 'ECDH-ES' };
-  assert.deepEqual((await completeKeys(exported)).keys.encryption, old.privateKey);
-  await assert.rejects(completeKeys({ kty: 'oct' }), /not an identity key/);
-});
