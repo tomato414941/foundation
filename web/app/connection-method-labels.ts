@@ -9,6 +9,7 @@ const labels: Record<string, string> = {
   'Enter bot token': 'enterBotToken',
   'Enter integration secret': 'enterIntegrationSecret',
   'Enter credentials': 'enterCredentials',
+  'AWS authentication': 'awsAuthentication',
 };
 
 export function connectionMethodName(name: string, t: TFunction, serviceName?: string): string {

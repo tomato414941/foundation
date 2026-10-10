@@ -404,3 +404,70 @@ test('CLIで接続を実行先へ依頼し、確認した接続を暗号化し�
   assert.equal(used.code, 0, used.stderr);
   assert.equal(used.stdout, '[redacted]');
 });
+
+test('CLIでAWS一時認証情報と追加ロールを保存し、SDKへ渡してAWS APIを呼び出す', async t => {
+  const requests: Array<{ action: string; authorization: string; session?: string }> = [];
+  const aws = createHttpServer((request, response) => {
+    let body = '';
+    request.on('data', chunk => { body += chunk; });
+    request.on('end', () => {
+      const form = new URLSearchParams(body), action = form.get('Action') ?? '', authorization = String(request.headers.authorization);
+      requests.push({ action, authorization, session: request.headers['x-amz-security-token'] as string | undefined });
+      response.setHeader('content-type', 'text/xml');
+      if (action === 'AssumeRole') response.end('<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">' +
+        '<AssumeRoleResult><Credentials><AccessKeyId>assumed-cli-key</AccessKeyId><SecretAccessKey>assumed-cli-secret</SecretAccessKey>' +
+        '<SessionToken>assumed-cli-session</SessionToken><Expiration>' + new Date(Date.now() + 3_600_000).toISOString() +
+        '</Expiration></Credentials></AssumeRoleResult></AssumeRoleResponse>');
+      else {
+        const assumed = authorization.includes('Credential=assumed-cli-key/');
+        response.end('<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><GetCallerIdentityResult>' +
+          (assumed ? '<Arn>arn:aws:sts::999999999999:assumed-role/Example/cli</Arn><UserId>AROCLI:cli</UserId><Account>999999999999</Account>'
+            : '<Arn>arn:aws:iam::123456789012:user/operator</Arn><UserId>AIDOPERATOR</UserId><Account>123456789012</Account>') +
+          '</GetCallerIdentityResult></GetCallerIdentityResponse>');
+      }
+    });
+  });
+  await new Promise<void>(resolve => aws.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>((resolve, reject) => aws.close(error => error ? reject(error) : resolve())));
+  const c = await cliFixture({ AWS_REGION: 'us-west-2', AWS_PROFILE: '', AWS_EC2_METADATA_DISABLED: 'true',
+    AWS_ACCESS_KEY_ID: 'ambient-cli-key', AWS_SECRET_ACCESS_KEY: 'ambient-cli-secret', AWS_SESSION_TOKEN: 'ambient-cli-session',
+    AWS_ENDPOINT_URL_STS: 'http://127.0.0.1:' + (aws.address() as { port: number }).port });
+  t.after(c.close);
+  assert.equal((await c.run(['init', '--name', 'AWS owner', '--origin', c.origin])).code, 0);
+  const environment = randomUUID();
+  const registered = await c.run(['agent', 'start', '--id', environment, '--once']);
+  assert.equal(registered.code, 0, registered.stderr);
+  const start = await c.run(['connect', '--method', 'aws:role', '--environment', environment, '--name', 'AWS session role', '--aws', '@-'],
+    JSON.stringify({ authentication: { kind: 'session', accessKeyId: 'explicit-cli-key', secretAccessKey: 'explicit-cli-secret',
+      sessionToken: 'explicit-cli-session', expiresAt: Date.now() + 3_600_000 }, region: 'us-west-2',
+      role: { arn: 'arn:aws:iam::999999999999:role/team/Example' } }));
+  assert.equal(start.code, 0, start.stderr);
+  const flow = JSON.parse(start.stdout).flowId;
+  const executed = await c.run(['agent', 'start', '--id', environment, '--once']);
+  assert.equal(executed.code, 0, executed.stderr);
+  const reviewed = await c.run(['connect', 'status', flow]);
+  assert.equal(reviewed.code, 0, reviewed.stderr);
+  assert.equal(JSON.parse(reviewed.stdout).metadata.aws.authentication, 'session');
+  assert.equal(JSON.parse(reviewed.stdout).metadata.aws.roleArn, 'arn:aws:iam::999999999999:role/team/Example');
+  const accept = await c.run(['connect', 'accept', flow]);
+  assert.equal(accept.code, 0, accept.stderr);
+  const saved = await c.run(['agent', 'start', '--id', environment, '--once']);
+  assert.equal(saved.code, 0, saved.stderr);
+  const connected = await c.run(['connect', 'status', flow]);
+  const id = JSON.parse(connected.stdout).id;
+  const inputs = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION', 'AWS_REGION']
+    .map(name => ({ name, source: { id, output: name } }));
+  const used = await c.run(['exec', '--inputs', JSON.stringify(inputs), '--', process.execPath, '--input-type=module', '-e',
+    'import { STSClient, GetCallerIdentityCommand } from "@aws-sdk/client-sts";' +
+    'const client = new STSClient({endpoint:' +
+      JSON.stringify('http://127.0.0.1:' + (aws.address() as { port: number }).port) + '});' +
+    'const result = await client.send(new GetCallerIdentityCommand({}));process.stdout.write(result.Account);client.destroy();']);
+  assert.equal(used.code, 0, used.stderr);
+  assert.equal(used.stdout, '999999999999');
+  const assumes = requests.filter(request => request.action === 'AssumeRole');
+  assert.ok(assumes.length >= 2);
+  assert.ok(assumes.every(request => request.authorization.includes('Credential=explicit-cli-key/')));
+  assert.ok(assumes.every(request => request.session === 'explicit-cli-session'));
+  assert.equal(requests.at(-1)!.session, 'assumed-cli-session');
+  assert.match(requests.at(-1)!.authorization, /Credential=assumed-cli-key\//);
+});

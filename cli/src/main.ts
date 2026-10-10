@@ -75,6 +75,7 @@ Options:
   --for ID               Allow this executor to use the content (repeatable)
   --app ID               OAuth application to use for a connection
   --fields JSON          Connection or application fields (@FILE or @- accepted)
+  --aws JSON             AWS authentication, region, and optional role (@FILE or @- recommended)
   --client-secret VALUE  OAuth application secret (@FILE or @- recommended)
   --isolation MODE       process for trusted local code, or container
   --image IMAGE          Command container image pinned with @sha256:DIGEST
@@ -130,6 +131,7 @@ const options = {
   fields: textOption,
   scopes: textOption,
   role: textOption,
+  aws: textOption,
   parameters: textOption,
   'redirect-uri': textOption,
   inputs: textOption,
@@ -446,6 +448,7 @@ async function main(argv: string[]) {
       appId: args.values.app, connectionId: args.values.connection,
       fields: await json(args.values.fields, {}), scopes: await json(args.values.scopes, []),
       role: args.values.role ? await json(args.values.role) : undefined,
+      aws: args.values.aws ? await json(args.values.aws) : undefined,
       environments: args.values.for, redirectUri: args.values['redirect-uri'] });
     else {
       const id = Id.parse(requireArgument(args.positionals[1], 'Supply a connection request ID.'));

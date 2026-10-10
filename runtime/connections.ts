@@ -20,6 +20,8 @@ import { DeliveryPending } from './executor.js';
 import type { Journal } from './journal.js';
 import type { RoleProvider } from './roles.js';
 import { AwsRoles } from './roles.js';
+import { AwsConnections } from './aws.js';
+import type { AwsConnectionProvider } from './aws.js';
 import { utf8 } from './inputs.js';
 
 export interface ConnectionBroker {
@@ -77,6 +79,7 @@ export class Connections implements ExecutionExtension {
   constructor(
     readonly binding: BoundKeys, readonly keys: IdentityKeys, readonly broker: ConnectionBroker,
     readonly journal: Journal, readonly transport: Transport, readonly roles: RoleProvider = new AwsRoles(),
+    readonly aws: AwsConnectionProvider = new AwsConnections(),
   ) {}
 
   private oauth(signal?: AbortSignal) {
@@ -141,7 +144,9 @@ export class Connections implements ExecutionExtension {
         if (requiresApp(action.method) && action.method.config.clientAuth !== 'none' && !app.clientSecret)
           fail(409, 'app_required', 'Add a client secret to this OAuth application.');
       } else if (action.method.kind === 'token') fields(action.method, action.fields);
-      else if (!action.role) fail(400, 'role_required', 'Choose a role trusted for this executor.');
+      else if (!action.role && !action.aws) fail(400, 'role_required', 'Choose AWS authentication or a role trusted for this executor.');
+      if (action.aws && (action.method.kind !== 'role' || action.role))
+        fail(400, 'invalid_input', 'Choose one AWS authentication configuration.');
     } else if (action.action === 'commit') {
       const flow = await this.flow(action.flowId, intent), approval = await verifyPolicyApproval(action.approval);
       if (!flow.material || action.authorizationDigest !== (await connectionMetadata(flow.material)).authorizationDigest ||
@@ -174,6 +179,7 @@ export class Connections implements ExecutionExtension {
       if (action.action === 'commit') return await this.commit(action, intent);
       const content = this.source(action.id, ContentTypes.tokenSet, sources), state = await this.material(content, intent);
       if (action.action === 'refresh') {
+        if (state.aws) await this.aws.obtain(state.aws, state.aws, signal);
         const refreshed = state.method.kind === 'oauth' ? await this.refresh(content, state, intent, sources, signal) : state;
         return { kind: 'refreshed', id: content.policy.id, ...(await connectionMetadata(refreshed)) };
       }
@@ -198,10 +204,11 @@ export class Connections implements ExecutionExtension {
       state: randomBytes(32).toString('base64url'), verifier: randomBytes(32).toString('base64url'),
       expiresAt: Math.min(Date.now() + 600_000, Date.parse(intent.expiresAt)), phase: input.method.kind === 'oauth' ? 'authorize' : 'review' };
     if (input.method.kind !== 'oauth') {
-      if (input.method.kind === 'role') await this.roles.obtain(input.role!.arn, input.role!.externalId, input.role!.region);
+      const aws = input.method.kind === 'role' && input.aws ? (await this.aws.obtain(input.aws, undefined, signal)).state : undefined;
+      if (input.method.kind === 'role' && !aws) await this.roles.obtain(input.role!.arn, input.role!.externalId, input.role!.region);
       flow.material = ConnectionMaterial.parse({ format: 1, methodId: input.methodId, method: input.method,
         generation: randomUUID(), appId: null, appGeneration: null,
-        ...(input.method.kind === 'role' ? { role: input.role } : { fields: fields(input.method, input.fields) }) });
+        ...(aws ? { aws } : input.method.kind === 'role' ? { role: input.role } : { fields: fields(input.method, input.fields) }) });
     }
     await this.journal.write(id, flow);
     if (input.method.kind !== 'oauth') return this.review(input.flowId, flow);
@@ -296,7 +303,9 @@ export class Connections implements ExecutionExtension {
     let state = await this.material(content, intent, destination);
     if (state.method.kind === 'token') return Object.fromEntries(Object.entries(state.method.config.outputs)
       .map(([key, pointer]) => [key, textValue(atPointer(state.fields!, pointer))]));
-    if (state.method.kind === 'role') return this.roles.obtain(state.role!.arn, state.role!.externalId, state.role!.region);
+    if (state.method.kind === 'role') return state.aws
+      ? (await this.aws.obtain(state.aws, state.aws, signal)).credentials
+      : this.roles.obtain(state.role!.arn, state.role!.externalId, state.role!.region);
     if (await this.broker.state(content.policy.id))
       fail(409, 'connection_busy', 'Resolve the current token update before using this connection.');
     state = await this.refresh(content, state, intent, sources, signal, destination);

@@ -8,6 +8,7 @@ import type { ConnectionFlow, FlowProgress } from '../../shared/connection-clien
 import { canonical } from '../../shared/authority.js';
 import { decode, encode } from '../../shared/encryption.js';
 import { ContentTypes } from '../../shared/custody.js';
+import { AwsConnectionInput } from '../../shared/aws.js';
 
 export async function method(client: Client, id: string) {
   const catalog = await client.json('/api/connection-methods', {}, listOf(CatalogMethod));
@@ -46,7 +47,7 @@ export async function saveApp(client: Client, input: {
 }
 export async function startConnection(client: Client, input: {
   ownerId: string; environmentId: string; methodId: string; name?: string; appId?: string;
-  connectionId?: string; fields: unknown; scopes: unknown; role?: unknown; environments?: string[]; redirectUri?: string;
+  connectionId?: string; fields: unknown; scopes: unknown; role?: unknown; aws?: unknown; environments?: string[]; redirectUri?: string;
 }) {
   const definition = await method(client, input.methodId);
   const existing = input.connectionId ? await client.json('/api/resources/' + Id.parse(input.connectionId), {}, Resource) : null;
@@ -54,6 +55,7 @@ export async function startConnection(client: Client, input: {
     name: Name.parse(input.name ?? existing?.name ?? definition.name), methodId: input.methodId, method: definition,
     appId: input.appId, connectionId: input.connectionId, fields: z.record(z.string(), z.string()).parse(input.fields),
     scopes: z.array(z.string()).parse(input.scopes), role: ConnectionMaterial.shape.role.parse(input.role),
+    ...(input.aws !== undefined ? { aws: AwsConnectionInput.parse(input.aws) } : {}),
     environments: input.environments, redirectUri: input.redirectUri });
 }
 export function flowOutput(progress: FlowProgress) {

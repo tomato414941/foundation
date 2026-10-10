@@ -6,11 +6,11 @@
   "console": "https://console.aws.amazon.com/",
   "methods": {
     "role": {
-      "name": "AWS · IAM role",
+      "name": "AWS · AWS authentication",
       "kind": "role",
       "config": {
         "kind": "aws",
-        "hint": "Delivered as AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN (valid for an hour) plus AWS_DEFAULT_REGION; the AWS CLI and SDKs read them directly. Inject again for fresh ones. What the role may do is the IAM policies the owner chose when creating it (ReadOnlyAccess unless changed)."
+        "hint": "Choose access keys, temporary credentials, or the selected executor's AWS authentication. Optionally assume an IAM role using that source. Delivers AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_REGION and AWS_DEFAULT_REGION to commands and SDKs. Temporary credentials must be replaced after expiry; executor authentication can renew through its AWS credential provider."
       },
       "docs": "https://docs.aws.amazon.com/",
       "console": "https://console.aws.amazon.com/"

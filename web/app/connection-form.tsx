@@ -1,9 +1,10 @@
 import { useTranslation } from 'react-i18next';
 import type { CatalogConnectionMethod, ResourceView } from '../../shared/contracts';
 import type { AppState, ConnectionState } from '../../shared/connections';
+import type { AwsConnectionRequest } from '../../shared/aws';
 import { connectionMethod } from '../../shared/connection-methods';
 import { formText } from './api';
-import { AwsRoleForm, awsRoleSettings } from './aws-role-form';
+import { AwsConnectionForm, awsConnectionSettings, awsFormValues } from './aws-connection-form';
 import { ExternalLink, Notice } from './components';
 import { SelectItem } from './components/ui/select';
 import { InputField, SelectField } from './form-fields';
@@ -32,12 +33,12 @@ export function connectionFields(form: FormData): Record<string, string> {
   return Object.fromEntries([...form.entries()].filter(([key]) => key.startsWith('field.'))
     .map(([key, value]) => [key.slice(6), String(value)]));
 }
-export function connectionSettings(method: CatalogConnectionMethod, form: FormData): {
-  fields: Record<string, string>; scopes?: string[]; role?: ConnectionState['role'];
+export function connectionSettings(method: CatalogConnectionMethod, form: FormData, previous?: ConnectionState): {
+  fields: Record<string, string>; scopes?: string[]; aws?: AwsConnectionRequest;
 } {
   return {
     fields: connectionFields(form),
-    ...(method.kind === 'role' ? { role: awsRoleSettings(form) } : {}),
+    ...(method.kind === 'role' ? { aws: awsConnectionSettings(form, previous?.aws) } : {}),
     ...(form.has('scopes') ? { scopes: formText(form, 'scopes').split(/\s+/).filter(Boolean) } : {}),
   };
 }
@@ -103,12 +104,15 @@ export function ConnectionFields({ purpose, method, existing, appMaterial, apps 
   </div>;
 }
 
-export function ConnectionPreparation({ method, initialRole, newConnection, executor }: {
+export function connectionInitialValues(state: ConnectionState) {
+  return { aws: awsFormValues(state) };
+}
+export function ConnectionPreparation({ method, initial, newConnection, executor }: {
   method?: CatalogConnectionMethod;
-  initialRole?: ConnectionState['role'];
+  initial?: ReturnType<typeof connectionInitialValues>;
   newConnection: boolean;
   executor?: ResourceView;
 }) {
-  return <AwsRoleForm active={method?.kind === 'role'} initialRole={initialRole}
+  return <AwsConnectionForm active={method?.kind === 'role'} initial={initial?.aws}
     newConnection={newConnection} executor={executor} />;
 }

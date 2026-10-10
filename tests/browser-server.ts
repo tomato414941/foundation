@@ -18,10 +18,12 @@ import type { EnvironmentOptions } from '../shared/contracts.js';
 import { DomainError } from '../server/errors.js';
 import { SSHWorkerState } from '../shared/ssh.js';
 import type { Transport } from '../server/transport.js';
+import type { AwsConnectionRequest } from '../shared/aws.js';
 
 const agents = new Map<string, Executor>();
 const running = new Map<string, Promise<void>>();
 const roleRequests = new Map<string, Array<{ arn: string; externalId: string; region: string }>>();
+const awsRequests = new Map<string, AwsConnectionRequest[]>();
 const oauthRequests = new Map<string, Array<{ clientId: string | null; clientSecret: string | null; scope: string | null }>>();
 const sshAgents = new Map<string, { client: Client; hostKey: string; revision: number }>();
 const deletions = new Map<string, { phase: 'stop' | 'volume'; gate?: Promise<void>; release?: () => void; fail?: boolean }>();
@@ -75,6 +77,33 @@ class BrowserRunner extends MemoryRunner {
           return { AWS_ACCESS_KEY_ID: 'browser-role-key', AWS_SECRET_ACCESS_KEY: 'browser-role-secret',
             AWS_SESSION_TOKEN: 'browser-role-session', AWS_DEFAULT_REGION: region };
         },
+      }, {
+        async obtain(input) {
+          const requests = awsRequests.get(id) ?? [];
+          requests.push(input); awsRequests.set(id, requests);
+          if (input.authentication.kind === 'session' && input.authentication.expiresAt <= Date.now())
+            throw new DomainError(409, 'reconnect_required', 'Reconnect with current AWS credentials.');
+          if (input.role) {
+            const requests = roleRequests.get(id) ?? [];
+            requests.push({ arn: input.role.arn, externalId: input.role.externalId ?? '', region: input.region });
+            roleRequests.set(id, requests);
+          }
+          const authentication = input.authentication;
+          const sourceIdentity = { accountId: '123456789012', principalId: 'BROWSERSOURCE',
+            arn: authentication.kind === 'environment'
+              ? 'arn:aws:sts::123456789012:assumed-role/foundation-test-executor/browser'
+              : 'arn:aws:iam::123456789012:user/browser-operator' };
+          const identity = input.role ? { accountId: input.role.arn.split(':')[4]!, principalId: 'BROWSERROLE',
+            arn: 'arn:aws:sts::' + input.role.arn.split(':')[4] + ':assumed-role/' + input.role.arn.split('/').at(-1) + '/browser' }
+            : sourceIdentity;
+          return { state: { authentication, region: input.region, ...(input.role ? { role: input.role } : {}), sourceIdentity, identity },
+            credentials: input.role || authentication.kind === 'environment'
+              ? { AWS_ACCESS_KEY_ID: 'browser-role-key', AWS_SECRET_ACCESS_KEY: 'browser-role-secret',
+                AWS_SESSION_TOKEN: 'browser-role-session', AWS_DEFAULT_REGION: input.region, AWS_REGION: input.region }
+              : { AWS_ACCESS_KEY_ID: authentication.accessKeyId, AWS_SECRET_ACCESS_KEY: authentication.secretAccessKey,
+                AWS_SESSION_TOKEN: authentication.kind === 'session' ? authentication.sessionToken : '',
+                AWS_DEFAULT_REGION: input.region, AWS_REGION: input.region } };
+        },
       })));
     return machine;
   }
@@ -115,6 +144,7 @@ const context = await createContext(
 const app = await buildApp(context);
 app.get('/__test/ready', async () => ({ pid: process.pid }));
 app.get<{ Params: { id: string } }>('/__test/executor/:id/roles', async request => roleRequests.get(request.params.id) ?? []);
+app.get<{ Params: { id: string } }>('/__test/executor/:id/aws', async request => awsRequests.get(request.params.id) ?? []);
 app.get<{ Params: { id: string } }>('/__test/executor/:id/oauth', async request => oauthRequests.get(request.params.id) ?? []);
 app.post<{ Params: { id: string }; Body: { phase: 'stop' | 'volume'; mode: 'hold' | 'fail' | 'release' } }>(
   '/__test/deletion/:id', async request => {

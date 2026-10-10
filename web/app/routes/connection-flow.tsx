@@ -7,6 +7,8 @@ import { connectionClient } from '../custody';
 import { Button } from '../components/ui/button';
 import { Detail, ErrorNotice, ExternalLink, Notice, Page, Panel, State, usePolling } from '../components';
 import { resourcePath } from '../navigation';
+import { AwsConnectionInfo } from '../../../shared/aws';
+import { AwsConnectionFacts } from '../aws-connection-facts';
 
 export async function clientLoader({ params, request }: Route.ClientLoaderArgs) {
   await signedIn(request);
@@ -28,6 +30,7 @@ export async function clientAction({ params, request }: Route.ClientActionArgs) 
 export default function ConnectionFlow() {
   const { t } = useTranslation(), data = useLoaderData<typeof clientLoader>(), result = useActionData<typeof clientAction>();
   const progress = 'kind' in data ? data : null;
+  const aws = AwsConnectionInfo.safeParse(progress?.kind === 'review' ? progress.metadata.aws : undefined);
   usePolling(progress?.kind === 'pending' || progress?.kind === 'authorize');
   return <Page title={progress?.flow.name ?? t('connect')} narrow>
     <ErrorNotice error={'error' in data && typeof data.error === 'string' ? data.error : result && 'error' in result ? result.error : null} />
@@ -39,8 +42,9 @@ export default function ConnectionFlow() {
     {progress?.kind === 'review' && <Panel title={t('connectionApprove')}>
       <Detail label={t('accountName')}>{String(progress.metadata.account ?? t('accountUnverified'))}</Detail>
       {!progress.metadata.accountVerified && <Notice tone="warning">{t('accountUnverified')}</Notice>}
-      <Detail label={t('scopes')}>{Array.isArray(progress.metadata.scopes) && progress.metadata.scopes.length
-        ? progress.metadata.scopes.join(', ') : t('scopesUnknown')}</Detail>
+      {aws.success ? <AwsConnectionFacts value={aws.data} /> :
+        <Detail label={t('scopes')}>{Array.isArray(progress.metadata.scopes) && progress.metadata.scopes.length
+          ? progress.metadata.scopes.join(', ') : t('scopesUnknown')}</Detail>}
       <Form method="post"><Button type="submit">{t('save')}</Button></Form>
     </Panel>}
     {progress?.kind === 'failed' && <Panel><State value={progress.task.state} />

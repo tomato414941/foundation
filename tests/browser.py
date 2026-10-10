@@ -674,6 +674,8 @@ class BrowserTests(unittest.TestCase):
         page, principal = self.passkey_account()
         self.executor(page, principal)
         page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        self.select(page, "認証方法", "実行環境のAWS認証")
+        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
         self.select(page, "実行環境", "Browser executor")
         link = page.get_by_role("link", name="AWSでIAMロールを作る", exact=True)
         expect(link).to_be_visible()
@@ -706,6 +708,8 @@ class BrowserTests(unittest.TestCase):
         role = {"arn": "arn:aws:iam::123456789012:role/team/Example", "region": "us-west-2",
                 "externalId": "saved-external-id"}
         page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        self.select(page, "認証方法", "実行環境のAWS認証")
+        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
         self.select(page, "実行環境", "Browser executor")
         page.get_by_role("textbox", name="名前", exact=True).fill("AWS account")
         page.get_by_label("IAMロールのARN", exact=True).fill(role["arn"])
@@ -756,6 +760,8 @@ class BrowserTests(unittest.TestCase):
 
         page.route(re.compile(r"/api/principals/[^/]+/resources\?kind=environment"), unconfirmed_identity)
         page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        self.select(page, "認証方法", "実行環境のAWS認証")
+        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
         self.select(page, "実行環境", "Browser executor")
         expect(page.get_by_text("選んだ実行環境のAWSの身元を確認できません。", exact=False)).to_be_visible()
         page.get_by_role("textbox", name="名前", exact=True).fill("Existing AWS role")
@@ -769,6 +775,98 @@ class BrowserTests(unittest.TestCase):
         self.select(page, "Language", "日本語")
         page.get_by_role("button", name="接続する", exact=True).click()
         self.accept_connection(page, "Existing AWS role")
+
+    def test_AWSアクセスキーを保存し再接続で認証情報を引き継いで更新する(self):
+        page, principal = self.passkey_account("AWS access key owner")
+        environment_id = self.executor(page, principal).rsplit("/", 1)[1]
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        expect(page.get_by_role("combobox", name="認証方法", exact=True)).to_have_text("アクセスキー")
+        page.get_by_role("textbox", name="名前", exact=True).fill("AWS keys")
+        page.get_by_label("アクセスキーID", exact=True).fill("browser-access-key")
+        page.get_by_label("シークレットアクセスキー", exact=True).fill("browser-access-secret")
+        page.get_by_label("リージョン", exact=True).fill("us-west-2")
+        self.select(page, "実行環境", "Browser executor")
+        page.wait_for_load_state("networkidle")
+        page.screenshot(path=str(ARTIFACTS / "connection-aws-access-key-ja.png"), full_page=True, animations="disabled")
+        print("Rendered AWS keys: " + page.locator("main").inner_text(), flush=True)
+        self.select(page, "言語", "English")
+        expect(page.get_by_role("combobox", name="Authentication method", exact=True)).to_have_text("Access keys")
+        page.set_viewport_size({"width": 390, "height": 844})
+        self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
+        page.screenshot(path=str(ARTIFACTS / "connection-aws-access-key-en.png"), full_page=True, animations="disabled")
+        self.select(page, "Language", "日本語")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        expect(page.get_by_text("AWSの認証元", exact=True)).to_be_visible()
+        expect(page.get_by_text("arn:aws:iam::123456789012:user/browser-operator", exact=True)).to_be_visible()
+        self.accept_connection(page, "AWS keys")
+        connection_path = page.url
+        connection_id = connection_path.rsplit("/", 1)[1]
+        resource = page.request.get(ORIGIN + "/api/resources/" + connection_id).json()
+        self.assertEqual(resource["data"]["aws"], {"authentication": "access_key", "region": "us-west-2",
+                         "sourceAccountId": "123456789012", "sourceArn": "arn:aws:iam::123456789012:user/browser-operator"})
+        page.get_by_role("link", name="再接続", exact=True).click()
+        expect(page.get_by_label("アクセスキーID", exact=True)).to_have_value("browser-access-key")
+        expect(page.get_by_label("シークレットアクセスキー", exact=True)).to_have_value("")
+        expect(page.get_by_label("リージョン", exact=True)).to_have_value("us-west-2")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        self.accept_connection(page, "AWS keys")
+        self.assertEqual(page.url, connection_path)
+        page.get_by_role("link", name="再接続", exact=True).click()
+        page.get_by_label("アクセスキーID", exact=True).fill("updated-access-key")
+        page.get_by_label("シークレットアクセスキー", exact=True).fill("updated-access-secret")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        self.accept_connection(page, "AWS keys")
+        requests = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/aws").json()
+        self.assertEqual([item["authentication"] for item in requests], [
+            {"kind": "access_key", "accessKeyId": "browser-access-key", "secretAccessKey": "browser-access-secret"},
+            {"kind": "access_key", "accessKeyId": "browser-access-key", "secretAccessKey": "browser-access-secret"},
+            {"kind": "access_key", "accessKeyId": "updated-access-key", "secretAccessKey": "updated-access-secret"}])
+
+    def test_AWS一時認証情報で追加ロールを保存し期限切れ時に再接続を案内する(self):
+        from datetime import datetime, timezone
+        page, principal = self.passkey_account("AWS temporary credentials owner")
+        environment_id = self.executor(page, principal).rsplit("/", 1)[1]
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        self.select(page, "認証方法", "一時認証情報")
+        page.get_by_role("textbox", name="名前", exact=True).fill("AWS temporary role")
+        page.get_by_label("アクセスキーID", exact=True).fill("temporary-key")
+        page.get_by_label("シークレットアクセスキー", exact=True).fill("temporary-secret")
+        page.get_by_label("セッショントークン", exact=True).fill("temporary-session")
+        expiration = datetime.fromtimestamp(time.time() + 3600, timezone.utc).strftime("%Y-%m-%dT%H:%M")
+        page.get_by_label("有効期限", exact=True).fill(expiration)
+        page.get_by_role("checkbox", name="別のIAMロールを使う", exact=True).check()
+        page.get_by_label("IAMロールのARN", exact=True).fill("arn:aws:iam::999999999999:role/team/Example")
+        self.select(page, "実行環境", "Browser executor")
+        page.wait_for_load_state("networkidle")
+        page.screenshot(path=str(ARTIFACTS / "connection-aws-session-role-ja.png"), full_page=True, animations="disabled")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        expect(page.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
+        expect(page.get_by_text("一時認証情報", exact=True)).to_be_visible()
+        self.accept_connection(page, "AWS temporary role")
+        page.get_by_role("link", name="再接続", exact=True).click()
+        expect(page.get_by_label("有効期限", exact=True)).to_have_value(expiration)
+        expect(page.get_by_label("IAMロールのARN", exact=True)).to_have_value("arn:aws:iam::999999999999:role/team/Example")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        self.accept_connection(page, "AWS temporary role")
+        requests = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/aws").json()
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[0], requests[1])
+        page.get_by_role("link", name="再接続", exact=True).click()
+        page.get_by_label("有効期限", exact=True).fill("2020-01-01T00:00")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        expect(page.get_by_role("alert").filter(has_text="サービスに再接続してください。")).to_be_visible(timeout=15000)
+
+    def test_実行環境のAWS認証で追加ロールを指定せず接続を保存する(self):
+        page, principal = self.passkey_account("AWS environment credentials owner")
+        environment_id = self.executor(page, principal).rsplit("/", 1)[1]
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        self.select(page, "認証方法", "実行環境のAWS認証")
+        page.get_by_role("textbox", name="名前", exact=True).fill("AWS environment")
+        self.select(page, "実行環境", "Browser executor")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        self.accept_connection(page, "AWS environment")
+        requests = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/aws").json()
+        self.assertEqual(requests, [{"authentication": {"kind": "environment"}, "region": "ap-northeast-1"}])
 
     def test_スマホで初期値のまま実行環境を起動して停止する(self):
         owner, principal = self.passkey_account("Mobile environment owner")

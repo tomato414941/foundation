@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { SSHConnection, SSHSettings } from './ssh.js';
 import { decodeProtectedHeader } from 'jose';
+import { AwsConnectionInfo } from './aws.js';
 
 if (typeof window !== 'undefined') z.config({ jitless: true });
 
@@ -368,6 +369,7 @@ export const ConnectionResource = z.object({
     appId: Id.nullable(),
     generation: Id.optional(),
     authorizationDigest: z.string().optional(),
+    aws: AwsConnectionInfo.optional(),
   }),
 });
 export const ServiceResource = z.object({

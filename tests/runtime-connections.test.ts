@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { STSClient } from '@aws-sdk/client-sts';
 import { delegatedFixture, MemoryJournal } from './delegation-support.js';
 import { ConnectionOperations } from '../server/connection-operations.js';
 import { Connections } from '../runtime/connections.js';
 import type { ConnectionBroker } from '../runtime/connections.js';
+import type { RoleProvider } from '../runtime/roles.js';
 import { DeliveryPending, Executor } from '../runtime/executor.js';
 import { CommandProcess } from '../runtime/command.js';
 import { MethodDefinition } from '../shared/contracts.js';
@@ -18,7 +20,7 @@ import type { OutboundRequest, OutboundResponse, Transport } from '../server/tra
 
 const response = (body: unknown): OutboundResponse => ({ status: 200, headers: { 'content-type': 'application/json' },
   body: encode(JSON.stringify(body)) });
-async function setup(respond: (request: OutboundRequest) => Promise<OutboundResponse> | OutboundResponse) {
+async function setup(respond: (request: OutboundRequest) => Promise<OutboundResponse> | OutboundResponse, roles?: RoleProvider) {
   const f = await delegatedFixture();
   const method = MethodDefinition.parse({ name: 'Provider', kind: 'oauth', config: {
     authorizeUrl: 'https://provider.example/authorize', tokenUrl: 'https://provider.example/token',
@@ -46,7 +48,7 @@ async function setup(respond: (request: OutboundRequest) => Promise<OutboundResp
   };
   const requests: OutboundRequest[] = [];
   const transport: Transport = { async send(request) { requests.push(request); return respond(request); } };
-  const connections = new Connections(f.executor.binding, f.executor.keys, broker, journal, transport);
+  const connections = new Connections(f.executor.binding, f.executor.keys, broker, journal, transport, roles);
   const executor = new Executor(f.environment, f.executor.keys, f.broker, journal, transport,
     new CommandProcess({ isolation: 'process' }), connections);
   async function intent(operation: JsonValue, sources: CustodyContent[], kind: ExecutionIntent['operation'], id = crypto.randomUUID()) {
@@ -112,6 +114,64 @@ test('選んだ実行先でOAuthコードを交換し、接続先と権限を確
     assert.equal(material.oauth!.refreshToken, 'runtime-refresh');
     assert.equal(new URLSearchParams(String(f.requests[0]!.body)).get('client_secret'), 'runtime-client-secret');
     assert.equal(f.requests.length, 2);
+  } finally { await f.close(); }
+});
+
+test('AWSキーを選んだ実行先へ送り、確認した身元と認証情報を暗号化して保存して使用する', async t => {
+  t.mock.method(STSClient.prototype, 'send', async () => ({ Account: '123456789012',
+    Arn: 'arn:aws:iam::123456789012:user/operator', UserId: 'AIDOPERATOR' }));
+  const f = await setup(() => response({}));
+  try {
+    const method = MethodDefinition.parse({ name: 'AWS', kind: 'role', config: { kind: 'aws' } });
+    const flowId = crypto.randomUUID();
+    const reviewed = await f.run({ action: 'start', flowId, name: 'AWS keys', methodId: 'aws:role', method, appId: null,
+      aws: { authentication: { kind: 'access_key', accessKeyId: 'encrypted-aws-key', secretAccessKey: 'encrypted-aws-secret' },
+        region: 'us-west-2' } }, []);
+    const metadata = reviewed.metadata as Record<string, JsonValue>;
+    assert.equal(metadata.accountVerified, true);
+    assert.deepEqual(metadata.aws, { authentication: 'access_key', region: 'us-west-2', sourceAccountId: '123456789012',
+      sourceArn: 'arn:aws:iam::123456789012:user/operator' });
+    const runId = crypto.randomUUID();
+    const policy = { ...f.policy(ContentTypes.tokenSet, [Operations.command, Operations.refresh]),
+      producers: [{ executor: f.executor.binding, runId, expiresAt: f.intent.expiresAt, materialRevision: 1 }] };
+    await f.run({ action: 'commit', flowId, authorizationDigest: metadata.authorizationDigest!,
+      approval: await approvePolicy(policy, f.owner.binding, f.owner.keys) }, [], runId);
+    const saved = await f.custody.read(f.owner.actor, policy.id);
+    const material = ConnectionMaterial.parse(JSON.parse(decode(await reveal(saved.content, f.owner.binding, f.owner.keys.encryption))));
+    assert.deepEqual(material.aws!.authentication, { kind: 'access_key', accessKeyId: 'encrypted-aws-key', secretAccessKey: 'encrypted-aws-secret' });
+    const authorization = { ...f.intent, operation: Operations.command, sources: [{ id: policy.id, materialRevision: 1,
+      policyDigest: await hash(policy), authorizationDigest: String(saved.content.metadata.authorizationDigest) }] };
+    assert.deepEqual(await f.connections.outputs(saved.content, authorization, [saved.content], new AbortController().signal), {
+      AWS_ACCESS_KEY_ID: 'encrypted-aws-key', AWS_SECRET_ACCESS_KEY: 'encrypted-aws-secret', AWS_SESSION_TOKEN: '',
+      AWS_DEFAULT_REGION: 'us-west-2', AWS_REGION: 'us-west-2',
+    });
+    const refreshed = await f.connections.execute({ action: 'refresh', id: policy.id },
+      { ...authorization, operation: Operations.refresh }, [saved.content], new AbortController().signal);
+    assert.equal((refreshed as Record<string, JsonValue>).kind, 'refreshed');
+  } finally { await f.close(); }
+});
+
+test('保存済みのAWSロール接続を従来の署名と設定で利用する', async () => {
+  const requests: Array<{ arn: string; externalId: string; region: string }> = [];
+  const credentials = { AWS_ACCESS_KEY_ID: 'legacy-key', AWS_SECRET_ACCESS_KEY: 'legacy-secret',
+    AWS_SESSION_TOKEN: 'legacy-session', AWS_DEFAULT_REGION: 'us-west-2' };
+  const f = await setup(() => response({}), { async obtain(arn, externalId, region) {
+    requests.push({ arn, externalId, region }); return credentials;
+  } });
+  try {
+    const material = ConnectionMaterial.parse({ format: 1, methodId: 'aws:role',
+      method: { name: 'AWS · IAM role', kind: 'role', config: { kind: 'aws' } },
+      generation: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', appId: null, appGeneration: null,
+      role: { arn: 'arn:aws:iam::123456789012:role/team/Legacy', externalId: 'legacy-external-id', region: 'us-west-2' } });
+    const metadata = await connectionMetadata(material);
+    // This digest was produced by the previous release for the saved connection above.
+    assert.equal(metadata.authorizationDigest, 'lTRDDspzDV1t6toqgtfm3euU0zoWs5qW0lTRO5PRRaM');
+    const policy = f.policy(ContentTypes.tokenSet, [Operations.command]);
+    const content = await protect(encode(canonical(material)), policy, 1, f.owner.binding, f.owner.keys, metadata);
+    const authorization = { ...f.intent, operation: Operations.command, sources: [{ id: policy.id, materialRevision: 1,
+      policyDigest: await hash(policy), authorizationDigest: metadata.authorizationDigest }] };
+    assert.deepEqual(await f.connections.outputs(content, authorization, [content], new AbortController().signal), credentials);
+    assert.deepEqual(requests, [material.role]);
   } finally { await f.close(); }
 });
 

@@ -17,7 +17,7 @@ import { actionResult, api, ApiFailure, formText, jsonField, session, upload } f
 import { decryptVariable } from './keys';
 import { connectionClient, custodyClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
-import { ConnectionFields, ConnectionMethodHelp, ConnectionPreparation, connectionFields, connectionSettings } from './connection-form';
+import { ConnectionFields, ConnectionMethodHelp, ConnectionPreparation, connectionFields, connectionSettings, connectionInitialValues } from './connection-form';
 import { sshSettings } from './ssh';
 import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { resourceKind, resourcePath } from './navigation';
@@ -79,7 +79,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     locked = false;
   let appMaterial: ReturnType<typeof AppMaterial.parse> | null = null;
   let pinnedMethod: CatalogConnectionMethod | null = null;
-  let role: ConnectionState['role'];
+  let connection: ReturnType<typeof connectionInitialValues> | undefined;
   let selectedExecutors: string[] = [];
   if (resource && isProtected(resource.kind)) {
     try {
@@ -90,7 +90,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       if (resource.kind === 'connection') {
         const state = ConnectionMaterial.parse(JSON.parse(decode(await client.reveal(resource.id))));
         pinnedMethod = { ...state.method, id: state.methodId, builtin: false, availability: 'ready' };
-        role = state.role;
+        connection = connectionInitialValues(state);
       }
     } catch { locked = true; }
   }
@@ -128,7 +128,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
       ).values(),
     ],
     pinnedMethod,
-    role,
+    connection,
     appMaterial,
     environments,
     selectedExecutors,
@@ -155,12 +155,17 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       const selected = (await api('/connection-methods', {}, listOf(CatalogMethod))).items.find(method => method.id === formText(form, 'methodId'));
       if (!selected) throw new ApiFailure('invalid_input');
       const { id: methodId, builtin: _builtin, availability: _availability, ...method } = selected;
+      const connectionId = formText(form, 'connectionId');
+      let previous: ConnectionState | undefined;
+      if (selected.kind === 'role' && connectionId && formText(form, 'awsAuthentication') !== 'environment' &&
+        (!formText(form, 'awsSecretAccessKey') || (formText(form, 'awsAuthentication') === 'session' && !formText(form, 'awsSessionToken'))))
+        previous = ConnectionMaterial.parse(JSON.parse(decode(await client.custody.reveal(connectionId))));
       const progress = await client.start({
         ownerId: owner, environmentId: formText(form, 'environmentId'), methodId, method,
         name: name || existing?.name || method.name,
         ...(formText(form, 'approvalId') ? { approvalId: formText(form, 'approvalId') } : {}),
         appId: formText(form, 'appId') || undefined,
-        ...connectionSettings(selected, form),
+        ...connectionSettings(selected, form, previous),
         ...(formText(form, 'connectionId') ? { connectionId: formText(form, 'connectionId') } : {}),
       });
       return redirect('/connections/' + progress.flow.id);
@@ -503,7 +508,7 @@ export default function ResourceForm() {
                 )}
                 {executorChoice}
                 <ConnectionPreparation method={data.kind === 'connection' ? method : undefined}
-                  initialRole={data.role} newConnection={data.kind === 'connection' && !existing}
+                  initial={data.connection} newConnection={data.kind === 'connection' && !existing}
                   executor={executor} />
                 {data.kind === 'environment' && (
                   <>

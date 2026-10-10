@@ -11,6 +11,7 @@ import type { TaskView } from './execution.js';
 import { decode, open } from './encryption.js';
 import { ConnectionMaterial, requiresApp } from './connections.js';
 import { connectionMethod } from './connection-methods.js';
+import type { AwsConnectionRequest } from './aws.js';
 
 const Review = z.object({ kind: z.literal('review'), flowId: Id, name: Name, metadata: JsonObject }).strict();
 export const FlowRecord = z.object({
@@ -47,6 +48,7 @@ export class ConnectionClient {
   }
   async start(input: { ownerId: string; environmentId: string; name: string; methodId: string; method: MethodDescription;
     appId?: string; fields?: Record<string, string>; scopes?: string[]; role?: z.infer<typeof ConnectionMaterial.shape.role>;
+    aws?: AwsConnectionRequest;
     connectionId?: string; environments?: string[]; redirectUri?: string; approvalId?: string }) {
     const id = crypto.randomUUID();
     const plan = input.approvalId ? await this.custody.api.json('/api/requests/' + input.approvalId + '/connection', {}, ConnectionPlan) : null;
@@ -67,6 +69,7 @@ export class ConnectionClient {
       action: 'start', flowId: id, name: input.name, methodId: input.methodId, method: input.method, appId,
       fields: input.fields ?? {}, scopes: input.scopes ?? [],
       ...(input.role ? { role: input.role } : {}),
+      ...(input.aws ? { aws: input.aws } : {}),
       ...(connectionMethod(input.method).browserAuthorization
         ? { redirectUri: input.redirectUri ?? this.custody.origin + '/oauth/callback' } : {}),
     } }, { sourceIds: appId ? [appId] : [], approval });

@@ -1,9 +1,10 @@
 import { useTranslation } from 'react-i18next';
 import type { ConnectionView } from '../../shared/contracts';
 import { Detail } from './components';
+import { AwsConnectionFacts } from './aws-connection-facts';
 export type ConnectionFactsValue = Pick<
   ConnectionView['data'],
-  'account' | 'accountId' | 'accountVerified' | 'scopes' | 'scopesStatus'
+  'account' | 'accountId' | 'accountVerified' | 'scopes' | 'scopesStatus' | 'aws'
 >;
 export function ConnectionFacts({ value }: { value: ConnectionFactsValue }) {
   const { t } = useTranslation();
@@ -18,7 +19,7 @@ export function ConnectionFacts({ value }: { value: ConnectionFactsValue }) {
       {value.accountId && value.accountId !== value.account && (
         <Detail label={t('externalAccountId')}>{value.accountId}</Detail>
       )}
-      <Detail label={t('scopes')}>
+      {value.aws ? <AwsConnectionFacts value={value.aws} /> : <Detail label={t('scopes')}>
         {value.scopesStatus === 'unknown' ? (
           t('scopesUnknown')
         ) : (
@@ -29,7 +30,7 @@ export function ConnectionFacts({ value }: { value: ConnectionFactsValue }) {
             </p>
           </>
         )}
-      </Detail>
+      </Detail>}
     </>
   );
 }
