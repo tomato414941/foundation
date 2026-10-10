@@ -2,8 +2,7 @@ import { Button } from './components/ui/button';
 import { SelectItem } from './components/ui/select';
 import { InputField, TextareaField, SelectField } from './form-fields';
 import { Notice } from './components';
-import { useEffect, useState } from 'react';
-import { z } from 'zod';
+import { useState } from 'react';
 import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
@@ -12,11 +11,13 @@ import type { CatalogConnectionMethod, ResourceView } from '../../shared/contrac
 import { decode, encode } from '../../shared/encryption';
 import { canonical } from '../../shared/authority';
 import { AppMaterial, ConnectionMaterial, requiresApp } from '../../shared/connections';
+import type { ConnectionState } from '../../shared/connections';
 import { contentTypeOf, isProtected } from '../../shared/protected';
 import { actionResult, api, ApiFailure, formText, jsonField, session, upload } from './api';
 import { decryptVariable } from './keys';
 import { connectionClient, custodyClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
+import { AwsRoleForm, awsRoleSettings } from './aws-role-form';
 import { sshSettings } from './ssh';
 import { ErrorNotice, ExternalLink, JsonField, Page, Panel, SaveBar } from './components';
 import { resourceKind, resourcePath } from './navigation';
@@ -79,7 +80,7 @@ export async function formLoader({ params, request }: LoaderFunctionArgs) {
     locked = false;
   let appMaterial: ReturnType<typeof AppMaterial.parse> | null = null;
   let pinnedMethod: CatalogConnectionMethod | null = null;
-  let role: z.infer<typeof ConnectionMaterial.shape.role>;
+  let role: ConnectionState['role'];
   let selectedExecutors: string[] = [];
   if (resource && isProtected(resource.kind)) {
     try {
@@ -166,7 +167,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
         ...(formText(form, 'approvalId') ? { approvalId: formText(form, 'approvalId') } : {}),
         appId: formText(form, 'appId') || undefined,
         fields,
-        ...(method.kind === 'role' ? { role: { arn: formText(form, 'arn'), region: formText(form, 'region'), externalId: formText(form, 'externalId') } } : {}),
+        ...(method.kind === 'role' ? { role: awsRoleSettings(form) } : {}),
         ...(form.has('scopes') ? { scopes: formText(form, 'scopes').split(/\s+/).filter(Boolean) } : {}),
         ...(formText(form, 'connectionId') ? { connectionId: formText(form, 'connectionId') } : {}),
       });
@@ -325,29 +326,8 @@ export default function ResourceForm() {
   const shopifyClientCredentials = clientCredentials && methodId === 'shopify:client_credentials';
   const ovhClientCredentials = clientCredentials && methodId.startsWith('ovh:');
   const [fileName, setFileName] = useState('');
-  // An IAM role is made in the owner's own AWS console, trusting the identity the chosen executor runs as.
-  const roleSetup = data.kind === 'connection' && method?.kind === 'role';
   const [environmentId, setEnvironmentId] = useState(data.environmentId ?? data.selectedExecutors[0] ?? '');
   const executor = data.environments.find((item) => item.id === environmentId);
-  const awsPrincipal = executor?.kind === 'environment' ? executor.data.awsPrincipal : undefined;
-  const [externalId, setExternalId] = useState(() => data.role?.externalId ??
-    (data.kind === 'connection' && !existing ? crypto.randomUUID().replaceAll('-', '') : ''));
-  const [region, setRegion] = useState(data.role?.region ?? 'ap-northeast-1');
-  const [templateUrl, setTemplateUrl] = useState('');
-  useEffect(() => {
-    if (!roleSetup || !awsPrincipal || templateUrl) return;
-    const controller = new AbortController();
-    api('/aws/role-template', { signal: controller.signal }, z.object({ url: z.string() }))
-      .then((result) => setTemplateUrl(result.url))
-      .catch(() => {});
-    return () => controller.abort();
-  }, [roleSetup, awsPrincipal, templateUrl]);
-  const consoleUrl =
-    roleSetup && awsPrincipal && templateUrl
-      ? 'https://console.aws.amazon.com/cloudformation/home?' + new URLSearchParams({ region }) +
-        '#/stacks/create/review?' + new URLSearchParams({ templateURL: templateUrl,
-          stackName: 'foundation-' + externalId.slice(0, 12), param_PrincipalArn: awsPrincipal, param_ExternalId: externalId })
-      : '';
   const executorChoice = isProtected(data.kind) && (
     <EnvironmentChoice items={data.environments} multiple={data.kind !== 'connection'} onChange={setEnvironmentId}
       selected={data.environmentId ? [data.environmentId] : data.selectedExecutors} />
@@ -656,21 +636,10 @@ export default function ResourceForm() {
                     </div>
                   </Panel>
                 )}
-                {roleSetup && executorChoice}
-                {roleSetup && <Panel title={t('role')}>
-                  {executor && (awsPrincipal
-                    ? <>
-                        <p className="text-sm leading-relaxed text-muted-foreground">{t('createRoleHelp')}</p>
-                        {consoleUrl && <ExternalLink href={consoleUrl}>{t('createRole')}</ExternalLink>}
-                      </>
-                    : <Notice tone="warning">{t('executorAwsUnconfirmed')}</Notice>)}
-                  <InputField name="arn" label={t('roleArn')} required hint={t('roleArnHelp')}
-                    defaultValue={data.role?.arn ?? ''} />
-                  <InputField name="region" label={t('region')} value={region} onChange={event => setRegion(event.target.value)} required />
-                  <InputField name="externalId" label="External ID" required minLength={16} value={externalId}
-                    onChange={event => setExternalId(event.target.value)} hint={t('externalIdHelp')} />
-                </Panel>}
-                {!roleSetup && executorChoice}
+                {executorChoice}
+                <AwsRoleForm active={data.kind === 'connection' && method?.kind === 'role'}
+                  initialRole={data.role} newConnection={data.kind === 'connection' && !existing}
+                  executor={executor} />
                 {data.kind === 'environment' && (
                   <>
                     <Panel>

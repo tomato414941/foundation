@@ -625,6 +625,14 @@ class BrowserTests(unittest.TestCase):
         page.get_by_label("External ID", exact=True).fill("edited-external-id")
         page.get_by_label("リージョン", exact=True).fill("us-west-2")
         expect(link).to_have_attribute("href", re.compile(r"home\?region=us-west-2#.*param_ExternalId=edited-external-id"))
+        self.select(page, "サービス", "Render")
+        expect(page.get_by_label("API key", exact=True)).to_be_visible()
+        self.select(page, "サービス", "AWS")
+        expect(page.get_by_label("External ID", exact=True)).to_have_value("edited-external-id")
+        expect(page.get_by_label("リージョン", exact=True)).to_have_value("us-west-2")
+        expect(page.get_by_role("combobox", name="実行環境", exact=True)).to_have_text("Browser executor")
+        expect(link).to_have_attribute("href", re.compile(r"home\?region=us-west-2#.*param_ExternalId=edited-external-id"))
+        page.wait_for_load_state("networkidle")
         page.screenshot(path=str(ARTIFACTS / "connection-aws-role-ja.png"), full_page=True, animations="disabled")
 
     def test_AWS接続を保存し再接続でロール設定と共有先を引き継ぐ(self):
