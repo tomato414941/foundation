@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -14,7 +15,7 @@ import { encode, seal, wrap } from '../shared/encryption.js';
 import { AccessPolicy, ContentTypes, Operations, protect } from '../shared/custody.js';
 import { bindKeys, fingerprint, newIdentityKeys, publicPart, signBinding } from '../shared/authority.js';
 
-async function cliFixture() {
+async function cliFixture(environmentOverrides: Record<string, string> = {}) {
   const reserved = createServer();
   await new Promise<void>(resolve => reserved.listen(0, '127.0.0.1', resolve));
   const port = (reserved.address() as { port: number }).port;
@@ -24,7 +25,7 @@ async function cliFixture() {
     app = await buildApp(context);
   const origin = await app.listen({ host: '127.0.0.1', port }),
     directory = await mkdtemp(join(tmpdir(), 'foundation-cli-test-'));
-  const environment = { ...process.env, XDG_CONFIG_HOME: directory };
+  const environment = { ...process.env, XDG_CONFIG_HOME: directory, ...environmentOverrides };
   for (const key of [
     'FOUNDATION_ORIGIN',
     'FOUNDATION_TOKEN',
@@ -81,13 +82,42 @@ async function cliFixture() {
   return { f, context, app, origin, directory, run, start, close, person };
 }
 
-test('CLIの共通APIからコマンドを開始し、実行環境で処理して結果を読む', async t => {
-  const c = await cliFixture(); t.after(c.close);
+test('CLIはIAM情報の取得が拒否されても実行先を登録しコマンドを処理する', async t => {
+  const actions: string[] = [];
+  const aws = createHttpServer((request, response) => {
+    let body = '';
+    request.on('data', chunk => { body += chunk; });
+    request.on('end', () => {
+      const action = new URLSearchParams(body).get('Action') ?? '';
+      actions.push(action);
+      response.setHeader('content-type', 'text/xml');
+      if (action === 'GetCallerIdentity') response.end(
+        '<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">' +
+        '<GetCallerIdentityResult><Arn>arn:aws:sts::123456789012:assumed-role/cli-test/session</Arn>' +
+        '<UserId>AROCLITESTEXAMPLE:session</UserId><Account>123456789012</Account></GetCallerIdentityResult>' +
+        '</GetCallerIdentityResponse>');
+      else {
+        response.statusCode = 403;
+        response.end('<ErrorResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">' +
+          '<Error><Type>Sender</Type><Code>AccessDenied</Code><Message>IAM lookup is denied.</Message></Error></ErrorResponse>');
+      }
+    });
+  });
+  await new Promise<void>(resolve => aws.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>((resolve, reject) => aws.close(error => error ? reject(error) : resolve())));
+  const awsOrigin = 'http://127.0.0.1:' + (aws.address() as { port: number }).port;
+  const c = await cliFixture({ AWS_REGION: 'us-east-1', AWS_PROFILE: '',
+    AWS_ACCESS_KEY_ID: 'cli-test-access-key', AWS_SECRET_ACCESS_KEY: 'cli-test-secret-key', AWS_SESSION_TOKEN: '',
+    AWS_ENDPOINT_URL_STS: awsOrigin, AWS_ENDPOINT_URL_IAM: awsOrigin, AWS_EC2_METADATA_DISABLED: 'true' });
+  t.after(c.close);
   const initialized = await c.run(['init', '--name', 'Process API principal', '--origin', c.origin]);
   assert.equal(initialized.code, 0, initialized.stderr);
   const environmentId = randomUUID();
   const registered = await c.run(['agent', 'start', '--id', environmentId, '--once']);
   assert.equal(registered.code, 0, registered.stderr);
+  assert.equal(JSON.parse(registered.stdout).awsPrincipal ?? null, null);
+  assert.ok(actions.includes('GetCallerIdentity'));
+  assert.ok(actions.includes('GetRole'));
   const command = ['node', '-e', 'let text="";process.stdin.on("data",value=>text+=value);' +
     'process.stdin.on("end",()=>process.stdout.write(JSON.stringify({text,value:process.env.VALUE,cwd:process.cwd()})))'];
   const started = await c.run(['api', 'POST', '/api/environments/' + environmentId + '/processes', '--body', '@-'],

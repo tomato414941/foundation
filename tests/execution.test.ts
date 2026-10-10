@@ -220,7 +220,7 @@ test('実行用プログラムが環境変数とファイルと標準入力を�
 test('実行先が名乗るAWSの身元を実行環境に載せ、名乗らなくなれば外す', async t => {
   const f = await delegatedFixture();
   t.after(f.close);
-  const awsPrincipal = 'arn:aws:iam::123456789012:role/own-server';
+  const awsPrincipal = 'arn:aws:iam::123456789012:role/' + 'project/'.repeat(35) + 'own-server';
   const manifest = { format: 3 as const, id: crypto.randomUUID(), origin: f.config.origin, ownerId: f.executor.actor.id,
     name: 'Own server', executor: f.executor.binding, operatorId: f.executor.actor.id, driver: 'attached' as const,
     capabilities: [Operations.http, Operations.connect], isolation: 'process' as const };

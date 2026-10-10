@@ -46,7 +46,7 @@ class BrowserRunner extends MemoryRunner {
       name: bootstrap.name, executor: binding, operatorId: binding.principalId, driver: 'managed',
       capabilities: Object.values(Operations),
       isolation: 'container', commandImage: bootstrap.commandImage,
-      awsPrincipal: 'arn:aws:iam::123456789012:role/foundation-test-executor', revision: 1 }, keys);
+      awsPrincipal: 'arn:aws:iam::123456789012:role/service/foundation-test-executor', revision: 1 }, keys);
     await client.json('/api/environments/' + id + '/registration', { method: 'PUT', body: registration });
     if (bootstrap.ssh) sshAgents.set(id, { client, revision: 0,
       hostKey: 'ssh-ed25519 ' + Buffer.concat([Buffer.from('0000000b7373682d6564323535313900000020', 'hex'), randomBytes(32)]).toString('base64') });

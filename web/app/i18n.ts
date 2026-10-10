@@ -34,7 +34,7 @@ const words: Record<string, [string, string]> = {
   'errors.function_required': ['関数を指定するか、任意の処理への使用を明示して許可してください。', 'Choose a function or explicitly allow caller-supplied programs.'],
   createRole: ['AWSでIAMロールを作る', 'Create the IAM role in AWS'],
   createRoleHelp: ['開いたAWSの画面でスタックを作成し、出力のRoleArnを下に貼り付けてください。ロールに付ける権限はその画面で選べます。', 'Create the stack in the AWS console that opens, then paste its RoleArn output below. Choose the permissions to attach there.'],
-  executorWithoutAws: ['選んだ実行環境はAWSの身元を持っていないため、IAMロールを引き受けられません。AWSの認証情報がある端末で実行環境を登録してください。', 'The chosen environment has no AWS identity, so it cannot assume a role. Register an environment on a machine with AWS credentials.'],
+  executorAwsUnconfirmed: ['選んだ実行環境のAWSの身元を確認できません。実行環境のAWS認証と、IAMロール情報を読み取る権限を確認してください。', "Could not verify the chosen environment's AWS identity. Check its AWS credentials and permission to read IAM role information."],
   roleArnHelp: ['スタックの出力 RoleArn の値です。', 'The RoleArn output of the stack.'],
   externalIdHelp: ['ロールの信頼ポリシーに設定したExternal IDと同じ値を使ってください。', "Use the same External ID as the role's trust policy."],
   approvedExecutors: ['使用を許可する実行環境', 'Approved environments'],

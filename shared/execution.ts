@@ -6,7 +6,7 @@ import { Operation, Operations, Origin, PolicyApproval, RunIntent, runContext } 
 import type { ExecutionIntent } from './custody.js';
 import { base64url, encode, open, seal } from './encryption.js';
 
-export const AwsPrincipal = z.string().regex(/^arn:aws[a-z-]*:iam::\d{12}:(?:role|user)\/[\w+=,.@/-]{1,200}$/);
+export const AwsPrincipal = z.string().regex(/^arn:aws[a-z-]*:iam::\d{12}:(?:role|user)\/(?:[\x21-\x7e]{1,510}\/)?[\w+=,.@-]{1,64}$/);
 export const EnvironmentManifest = z.object({
   format: z.literal(3), id: Id, origin: Origin, ownerId: Id,
   name: Name, executor: KeyBinding, operatorId: Id,

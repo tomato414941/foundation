@@ -619,7 +619,7 @@ class BrowserTests(unittest.TestCase):
         href = link.get_attribute("href")
         self.assertIn("console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/create/review?", href)
         self.assertIn("templateURL=https%3A%2F%2Fobjects.example%2Fpublished%2Faws-connection.yaml", href)
-        self.assertIn("param_PrincipalArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Ffoundation-test-executor", href)
+        self.assertIn("param_PrincipalArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Fservice%2Ffoundation-test-executor", href)
         external_id = re.search(r"param_ExternalId=([0-9a-f]{32})", href).group(1)
         self.assertEqual(page.get_by_label("External ID", exact=True).input_value(), external_id)
         page.get_by_label("External ID", exact=True).fill("edited-external-id")
@@ -673,6 +673,33 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(after["authorities"], before["authorities"])
         self.assertEqual([grant["executor"] for grant in after["grants"]], [grant["executor"] for grant in before["grants"]])
         self.assertTrue(reader.request.get(ORIGIN + "/api/resources/" + connection_id + "/custody").ok)
+
+    def test_AWSの身元が未確認の実行先を案内し既存ロールの接続を確認する(self):
+        page, principal = self.passkey_account("AWS identity owner")
+        self.executor(page, principal)
+
+        def unconfirmed_identity(route):
+            response = route.fetch()
+            data = response.json()
+            for item in data["items"]:
+                item["data"].pop("awsPrincipal", None)
+            route.fulfill(response=response, json=data)
+
+        page.route(re.compile(r"/api/principals/[^/]+/resources\?kind=environment"), unconfirmed_identity)
+        page.goto(f"{ORIGIN}/p/{principal['id']}/services/new?method=aws:role")
+        self.select(page, "実行環境", "Browser executor")
+        expect(page.get_by_text("選んだ実行環境のAWSの身元を確認できません。", exact=False)).to_be_visible()
+        page.get_by_role("textbox", name="名前", exact=True).fill("Existing AWS role")
+        page.get_by_label("IAMロールのARN", exact=True).fill("arn:aws:iam::123456789012:role/team/Existing")
+        page.get_by_label("External ID", exact=True).fill("existing-external-id")
+        page.screenshot(path=str(ARTIFACTS / "connection-aws-unconfirmed-ja.png"), full_page=True, animations="disabled")
+        print("Rendered AWS identity notice: " + page.get_by_role("alert").inner_text(), flush=True)
+        self.select(page, "言語", "English")
+        expect(page.get_by_text("Could not verify the chosen environment's AWS identity.", exact=False)).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "connection-aws-unconfirmed-en.png"), full_page=True, animations="disabled")
+        self.select(page, "Language", "日本語")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        self.accept_connection(page, "Existing AWS role")
 
     def test_スマホで初期値のまま実行環境を起動して停止する(self):
         owner, principal = self.passkey_account("Mobile environment owner")

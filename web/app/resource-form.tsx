@@ -663,7 +663,7 @@ export default function ResourceForm() {
                         <p className="text-sm leading-relaxed text-muted-foreground">{t('createRoleHelp')}</p>
                         {consoleUrl && <ExternalLink href={consoleUrl}>{t('createRole')}</ExternalLink>}
                       </>
-                    : <Notice tone="warning">{t('executorWithoutAws')}</Notice>)}
+                    : <Notice tone="warning">{t('executorAwsUnconfirmed')}</Notice>)}
                   <InputField name="arn" label={t('roleArn')} required hint={t('roleArnHelp')}
                     defaultValue={data.role?.arn ?? ''} />
                   <InputField name="region" label={t('region')} value={region} onChange={event => setRegion(event.target.value)} required />

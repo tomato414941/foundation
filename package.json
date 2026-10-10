@@ -21,6 +21,7 @@
     "dev:server": "tsx watch --env-file-if-exists=.env server/main.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-iam": "3.1146.0",
     "@aws-sdk/client-kms": "3.1146.0",
     "@aws-sdk/client-s3": "3.1146.0",
     "@aws-sdk/client-sts": "3.1146.0",
