@@ -1,0 +1,30 @@
+{
+  "id": "huggingface",
+  "name": "Hugging Face",
+  "api": "https://huggingface.co/api",
+  "docs": "https://huggingface.co/docs/hub/en/api",
+  "console": "https://huggingface.co/settings/tokens",
+  "methods": {
+    "token": {
+      "name": "Hugging Face · Enter access token",
+      "kind": "token",
+      "config": {
+        "fields": [
+          {
+            "name": "token",
+            "label": "User access token",
+            "secret": true,
+            "note": "Use a fine-grained token with the repository and bucket permissions you need. Grant write access to upload or update files."
+          }
+        ],
+        "console": "https://huggingface.co/settings/tokens",
+        "outputs": {
+          "HF_TOKEN": "/token"
+        },
+        "hint": "Use HF_TOKEN with the Hugging Face Hub libraries or as a Bearer token with the Hub API."
+      },
+      "docs": "https://huggingface.co/docs/hub/en/security-tokens",
+      "console": "https://huggingface.co/settings/tokens"
+    }
+  }
+}

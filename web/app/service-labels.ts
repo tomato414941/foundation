@@ -16,6 +16,9 @@ export const serviceLabels: Record<string, string> = {
   'github.token.token.label': 'Personal access token',
   'gitlab.token.token.label': 'Personal access token',
   'heroku.token.token.label': 'API key',
+  'huggingface.token.token.label': 'ユーザーアクセストークン',
+  'huggingface.token.token.note':
+    '必要なリポジトリとバケットへのアクセス権を持つFine-grainedトークンを入力してください。アップロードや更新には書き込み権限が必要です。',
   'hubspot.token.token.label': 'Private app access token',
   'kintone.oauth.domain.label': 'kintoneのドメイン',
   'kintone.oauth.domain.placeholder': 'example.cybozu.com',
