@@ -17,12 +17,11 @@ import { actionResult, api, ApiFailure, formText, jsonField, session, upload } f
 import { decryptVariable } from './keys';
 import { connectionClient, custodyClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
-import { AwsRoleForm, awsRoleSettings } from './aws-role-form';
+import { ConnectionFields, ConnectionMethodHelp, ConnectionPreparation, connectionFields, connectionSettings } from './connection-form';
 import { sshSettings } from './ssh';
-import { ErrorNotice, ExternalLink, JsonField, Page, Panel, SaveBar } from './components';
+import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { resourceKind, resourcePath } from './navigation';
 import { useWorkspace } from './routes/workspace';
-import { serviceLabels } from './service-labels';
 import { connectionMethodName } from './connection-method-labels';
 export async function formLoader({ params, request }: LoaderFunctionArgs) {
   const kind = resourceKind(params.section);
@@ -156,19 +155,12 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       const selected = (await api('/connection-methods', {}, listOf(CatalogMethod))).items.find(method => method.id === formText(form, 'methodId'));
       if (!selected) throw new ApiFailure('invalid_input');
       const { id: methodId, builtin: _builtin, availability: _availability, ...method } = selected;
-      const fields = Object.fromEntries(
-        [...form.entries()]
-          .filter(([key]) => key.startsWith('field.'))
-          .map(([key, value]) => [key.slice(6), String(value)]),
-      );
       const progress = await client.start({
         ownerId: owner, environmentId: formText(form, 'environmentId'), methodId, method,
         name: name || existing?.name || method.name,
         ...(formText(form, 'approvalId') ? { approvalId: formText(form, 'approvalId') } : {}),
         appId: formText(form, 'appId') || undefined,
-        fields,
-        ...(method.kind === 'role' ? { role: awsRoleSettings(form) } : {}),
-        ...(form.has('scopes') ? { scopes: formText(form, 'scopes').split(/\s+/).filter(Boolean) } : {}),
+        ...connectionSettings(selected, form),
         ...(formText(form, 'connectionId') ? { connectionId: formText(form, 'connectionId') } : {}),
       });
       return redirect('/connections/' + progress.flow.id);
@@ -199,7 +191,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       let metadata;
       if (kind === 'app') {
         const old = previous ? AppMaterial.parse(JSON.parse(decode(await client.reveal(previous.content.policy.id)))) : null;
-        const fields = Object.fromEntries([...form.entries()].filter(([key]) => key.startsWith('field.')).map(([key, value]) => [key.slice(6), String(value)]));
+        const fields = connectionFields(form);
         const app = AppMaterial.parse({ format: 1, methodId: formText(form, 'methodId'), clientId: formText(form, 'clientId'), fields,
           generation: old && old.methodId === formText(form, 'methodId') && old.clientId === formText(form, 'clientId') && canonical(old.fields) === canonical(fields) ? old.generation : crypto.randomUUID(),
           ...(formText(form, 'clientSecret') || old?.clientSecret ? { clientSecret: formText(form, 'clientSecret') || old?.clientSecret } : {}) });
@@ -288,7 +280,7 @@ export default function ResourceForm() {
   const data = useLoaderData<typeof formLoader>();
   const result = useActionData<typeof formAction>();
   const { principal, session: sessionData } = useWorkspace();
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const navigation = useNavigation();
   const existing = data.resource;
   const back = existing
@@ -322,9 +314,6 @@ export default function ResourceForm() {
       : (data.methodId ?? preferred(methods)?.id ?? ''),
   );
   const method = data.pinnedMethod ?? eligibleMethods.find((item) => item.id === methodId);
-  const clientCredentials = method?.kind === 'oauth' && method.config.grantType === 'client_credentials';
-  const shopifyClientCredentials = clientCredentials && methodId === 'shopify:client_credentials';
-  const ovhClientCredentials = clientCredentials && methodId.startsWith('ovh:');
   const [fileName, setFileName] = useState('');
   const [environmentId, setEnvironmentId] = useState(data.environmentId ?? data.selectedExecutors[0] ?? '');
   const executor = data.environments.find((item) => item.id === environmentId);
@@ -332,13 +321,6 @@ export default function ResourceForm() {
     <EnvironmentChoice items={data.environments} multiple={data.kind !== 'connection'} onChange={setEnvironmentId}
       selected={data.environmentId ? [data.environmentId] : data.selectedExecutors} />
   );
-  const fields =
-    method &&
-    ((data.kind === 'app' && method.kind === 'oauth') ||
-      (data.kind === 'connection' && method.kind === 'token'))
-      ? method.config.fields
-      : [];
-  const labelService = methodId.split(':')[0];
   const matchingApps = data.apps.filter(
     (item) => item.kind === 'app' && item.data.methodId === methodId && item.permissions.includes('use'),
   );
@@ -497,22 +479,7 @@ export default function ResourceForm() {
                       ))}
                     </SelectField>
                     {existing && <input type="hidden" name="methodId" value={methodId} />}
-                    {method?.kind === 'oauth' && (
-                      <p className="text-sm text-muted-foreground">
-                        OAuth 2.0 / {clientCredentials ? 'Client Credentials' : 'Authorization Code'}
-                      </p>
-                    )}
-                    {clientCredentials && (
-                      <Notice tone="info">
-                        <p>{t('clientCredentialsHelp')}</p>
-                        {shopifyClientCredentials && <p className="mt-2">{t('shopifyClientCredentialsHelp')}</p>}
-                        {ovhClientCredentials && <>
-                          <p className="mt-2">{t('ovhApiRegionHelp')}</p>
-                          <p className="mt-2">{t('ovhClientCredentialsHelp')}</p>
-                          {method?.docs && <ExternalLink href={method.docs}>{t('docs')}</ExternalLink>}
-                        </>}
-                      </Notice>
-                    )}
+                    <ConnectionMethodHelp method={method} />
                     {!existing && !!existingConnections.length && (
                       <Notice tone={'info'}>
                         <p className="leading-relaxed text-sm">{t('existingConnections')}</p>
@@ -530,114 +497,12 @@ export default function ResourceForm() {
                         )}
                       </Notice>
                     )}
-                    <div key={methodId} className="flex min-w-0 flex-col gap-6">
-                      {data.kind === 'connection' && method?.kind === 'oauth' && (
-                        <>
-                          {requiresApp(method) && <SelectField
-                            key={methodId}
-                            name="appId"
-                            label={t('app')}
-                            defaultValue={
-                              existing?.kind === 'connection'
-                                ? (existing.data.appId ?? '')
-                                : (matchingApps[0]?.id ?? '')
-                            }
-                          >
-                            {matchingApps.map((item) => (
-                              <SelectItem key={item.id} value={item.id}>
-                                {item.name}
-                              </SelectItem>
-                            ))}
-                          </SelectField>}
-                          {!shopifyClientCredentials && <InputField
-                            name="scopes"
-                            label={t('scopes')}
-                            defaultValue={
-                              existing?.kind === 'connection'
-                                ? existing.data.scopes.join(' ')
-                                : method.config.scopes.default.join(' ')
-                            }
-                            hint={t('scopesHelp')}
-                          />}
-                          {method.config.scopes.docs && (
-                            <ExternalLink href={method.config.scopes.docs}>{t('docs')}</ExternalLink>
-                          )}
-                        </>
-                      )}
-                      {data.kind === 'app' && (
-                        <>
-                          <InputField
-                            name="clientId"
-                            required
-                            label={t('clientId')}
-                            defaultValue={existing?.kind === 'app' ? existing.data.clientId : ''}
-                          />
-                          <InputField
-                            name="clientSecret"
-                            type="password"
-                            autoComplete="new-password"
-                            required={!existing && clientCredentials && method?.kind === 'oauth' && method.config.clientAuth !== 'none'}
-                            label={t('clientSecret')}
-                            hint={existing ? t('unchangedSecret') : undefined}
-                          />
-                          {!clientCredentials && <InputField
-                            label={t('callbackUrl')}
-                            value={
-                              typeof window !== 'undefined'
-                                ? window.location.origin + '/oauth/callback'
-                                : ''
-                            }
-                            readOnly={true}
-                          />}
-                        </>
-                      )}
-                      {fields.map((field) => (
-                        <InputField
-                          key={field.name}
-                          name={'field.' + field.name}
-                          label={
-                            i18n.language === 'ja'
-                              ? (serviceLabels[`${labelService}.${method?.kind}.${field.name}.label`] ??
-                                field.label)
-                              : field.label
-                          }
-                          type={field.secret ? 'password' : 'text'}
-                          required={field.required ?? true}
-                          defaultValue={
-                            existing?.kind === 'app'
-                              ? (data.appMaterial?.fields[field.name] ?? '')
-                              : data.kind === 'app' && method?.kind === 'oauth'
-                                ? (method.config.defaults[field.name] ?? '')
-                                : ''
-                          }
-                          placeholder={field.placeholder}
-                          autoComplete="off"
-                          hint={
-                            i18n.language === 'ja'
-                              ? (serviceLabels[`${labelService}.${method?.kind}.${field.name}.note`] ??
-                                field.note)
-                              : field.note
-                          }
-                        />
-                      ))}
-                      {(method?.kind === 'token'
-                        ? (method.config.console ?? method.console)
-                        : method?.console) && (
-                        <ExternalLink
-                          href={
-                            (method?.kind === 'token'
-                              ? (method.config.console ?? method.console)
-                              : method?.console)!
-                          }
-                        >
-                          {t('serviceConsole')}
-                        </ExternalLink>
-                      )}
-                    </div>
+                    <ConnectionFields key={methodId} purpose={data.kind === 'app' ? 'app' : 'connection'}
+                      method={method} existing={existing} appMaterial={data.appMaterial} apps={matchingApps} />
                   </Panel>
                 )}
                 {executorChoice}
-                <AwsRoleForm active={data.kind === 'connection' && method?.kind === 'role'}
+                <ConnectionPreparation method={data.kind === 'connection' ? method : undefined}
                   initialRole={data.role} newConnection={data.kind === 'connection' && !existing}
                   executor={executor} />
                 {data.kind === 'environment' && (

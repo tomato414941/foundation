@@ -17,10 +17,12 @@ import { MemoryJournal } from './delegation-support.js';
 import type { EnvironmentOptions } from '../shared/contracts.js';
 import { DomainError } from '../server/errors.js';
 import { SSHWorkerState } from '../shared/ssh.js';
+import type { Transport } from '../server/transport.js';
 
 const agents = new Map<string, Executor>();
 const running = new Map<string, Promise<void>>();
 const roleRequests = new Map<string, Array<{ arn: string; externalId: string; region: string }>>();
+const oauthRequests = new Map<string, Array<{ clientId: string | null; clientSecret: string | null; scope: string | null }>>();
 const sshAgents = new Map<string, { client: Client; hostKey: string; revision: number }>();
 const deletions = new Map<string, { phase: 'stop' | 'volume'; gate?: Promise<void>; release?: () => void; fail?: boolean }>();
 class BrowserRunner extends MemoryRunner {
@@ -51,7 +53,18 @@ class BrowserRunner extends MemoryRunner {
     if (bootstrap.ssh) sshAgents.set(id, { client, revision: 0,
       hostKey: 'ssh-ed25519 ' + Buffer.concat([Buffer.from('0000000b7373682d6564323535313900000020', 'hex'), randomBytes(32)]).toString('base64') });
     const broker = new HttpBroker(client), journal = new MemoryJournal();
-    const transport = { async send() { return { status: 200, headers: {}, body: new TextEncoder().encode('{}') }; } };
+    const transport: Transport = { async send(request) {
+      if (request.url === 'https://ca.ovh.com/auth/oauth2/token') {
+        const form = new URLSearchParams(String(request.body ?? ''));
+        const requests = oauthRequests.get(id) ?? [];
+        requests.push({ clientId: form.get('client_id'), clientSecret: form.get('client_secret'), scope: form.get('scope') });
+        oauthRequests.set(id, requests);
+        return { status: 200, headers: { 'content-type': 'application/json' }, body: new TextEncoder().encode(JSON.stringify({
+          access_token: 'browser-ovh-token-' + requests.length, token_type: 'Bearer', expires_in: 3600, scope: 'all',
+        })) };
+      }
+      return { status: 200, headers: {}, body: new TextEncoder().encode('{}') };
+    } };
     // This UI fixture simulates provisioning; container isolation has its own integration test.
     agents.set(id, new Executor(registration, keys, broker, journal, transport,
       new CommandProcess({ isolation: 'process' }), new Connections(binding, keys, broker.connections(), journal, transport, {
@@ -102,6 +115,7 @@ const context = await createContext(
 const app = await buildApp(context);
 app.get('/__test/ready', async () => ({ pid: process.pid }));
 app.get<{ Params: { id: string } }>('/__test/executor/:id/roles', async request => roleRequests.get(request.params.id) ?? []);
+app.get<{ Params: { id: string } }>('/__test/executor/:id/oauth', async request => oauthRequests.get(request.params.id) ?? []);
 app.post<{ Params: { id: string }; Body: { phase: 'stop' | 'volume'; mode: 'hold' | 'fail' | 'release' } }>(
   '/__test/deletion/:id', async request => {
     const { id } = request.params;
