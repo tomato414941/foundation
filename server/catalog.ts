@@ -19,6 +19,7 @@ import type { Actor } from './authorization.js';
 import type { Configuration } from './config.js';
 import type { Queryable } from './database.js';
 import { fail } from './errors.js';
+import { requiresApp } from '../shared/connection-methods.js';
 
 const uuid = (id: string) => Id.safeParse(id).success;
 
@@ -112,12 +113,7 @@ export class Catalog {
       id,
       ...value,
       builtin: this.methods.has(id),
-      availability:
-        value.kind === 'oauth'
-          ? value.config.adapter === 'openrouter'
-            ? 'ready'
-            : 'app-required'
-          : 'ready',
+      availability: requiresApp(value) ? 'app-required' : 'ready',
     });
   }
   async listMethods(actor: Actor): Promise<CatalogConnectionMethod[]> {

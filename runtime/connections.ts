@@ -5,6 +5,7 @@ import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
 import type { JsonValue, MethodDescription } from '../shared/contracts.js';
 import { AppMaterial, ConnectionAction, ConnectionMaterial, connectionLabels, connectionMetadata, requiresApp } from '../shared/connections.js';
 import type { AppState, ConnectionCommand, ConnectionLabelValues, ConnectionState } from '../shared/connections.js';
+import { connectionMethod } from '../shared/connection-methods.js';
 import { ContentTypes, Operations, authorizeUse, produceContent, renewContent, useContent, verifyPolicyApproval } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent } from '../shared/custody.js';
 import { encode } from '../shared/encryption.js';
@@ -126,7 +127,7 @@ export class Connections implements ExecutionExtension {
       if (action.method.kind === 'oauth') {
         if (requiresApp(action.method) && !action.appId)
           fail(400, 'app_required', 'Choose an OAuth application.');
-        if (action.method.config.grantType !== 'client_credentials') {
+        if (connectionMethod(action.method).browserAuthorization) {
           if (!action.redirectUri) fail(400, 'invalid_redirect', 'Choose a callback URL.');
           const redirect = new URL(action.redirectUri);
           if (redirect.username || redirect.password || redirect.hash || redirect.search ||

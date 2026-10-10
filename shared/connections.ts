@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { AuthKind, Id, JsonObject, MethodDefinition, Name } from './contracts.js';
-import type { MethodDescription } from './contracts.js';
 import { Fingerprint, hash } from './authority.js';
 import { PolicyApproval } from './custody.js';
+import { connectionMethod, requiresApp } from './connection-methods.js';
+export { requiresApp } from './connection-methods.js';
 
 const Fields = z.record(z.string().max(100), z.string().max(16384));
 export const AppMaterial = z.object({
@@ -10,9 +11,6 @@ export const AppMaterial = z.object({
   clientId: z.string().max(1000), clientSecret: z.string().max(16384).optional(), fields: Fields,
 }).strict();
 export type AppState = z.infer<typeof AppMaterial>;
-export function requiresApp(method: MethodDescription) {
-  return method.kind === 'oauth' && method.config.adapter !== 'openrouter';
-}
 export const TokenMaterial = z.object({
   accessToken: z.string().min(1).max(16384), refreshToken: z.string().min(1).max(16384).optional(),
   expiresAt: z.number().nullable(), refreshExpiresAt: z.number().optional(), scopes: z.array(z.string()),
@@ -48,9 +46,7 @@ export const ConnectionMetadata = z.object({
 }).strict();
 
 export async function connectionMetadata(state: ConnectionState) {
-  const outputs = state.method.kind === 'role'
-    ? ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION']
-    : Object.keys(state.method.config.outputs);
+  const outputs = connectionMethod(state.method).outputs;
   const authorizationDigest = await hash({
     generation: state.generation, methodId: state.methodId, method: state.method,
     appId: state.appId, appGeneration: state.appGeneration,

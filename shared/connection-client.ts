@@ -10,6 +10,7 @@ import { Task } from './execution.js';
 import type { TaskView } from './execution.js';
 import { decode, open } from './encryption.js';
 import { ConnectionMaterial, requiresApp } from './connections.js';
+import { connectionMethod } from './connection-methods.js';
 
 const Review = z.object({ kind: z.literal('review'), flowId: Id, name: Name, metadata: JsonObject }).strict();
 export const FlowRecord = z.object({
@@ -66,7 +67,7 @@ export class ConnectionClient {
       action: 'start', flowId: id, name: input.name, methodId: input.methodId, method: input.method, appId,
       fields: input.fields ?? {}, scopes: input.scopes ?? [],
       ...(input.role ? { role: input.role } : {}),
-      ...(input.method.kind === 'oauth' && input.method.config.grantType !== 'client_credentials'
+      ...(connectionMethod(input.method).browserAuthorization
         ? { redirectUri: input.redirectUri ?? this.custody.origin + '/oauth/callback' } : {}),
     } }, { sourceIds: appId ? [appId] : [], approval });
     const flow: ConnectionFlow = { id, ownerId: input.ownerId, environmentId: input.environmentId, name: input.name,

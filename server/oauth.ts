@@ -1,63 +1,14 @@
-import { Template } from '@fedify/uri-template';
-import { createHash } from 'node:crypto';
 import * as oauth from 'oauth4webapi';
-import type { z } from 'zod';
-import type { OAuthDefinition } from '../shared/contracts.js';
 import { atPointer, textValue } from '../shared/values.js';
 import { publicUrl, responseJson } from './transport.js';
 import type { Transport } from './transport.js';
 import { DomainError, fail } from './errors.js';
+import { oauthService } from './oauth-service.js';
+import { digest, expandUrl, lifetime, strings } from './oauth-values.js';
+import type { OAuthApp, OAuthSpec, OAuthToken, TokenCheckpoint } from './oauth-values.js';
+export { expandUrl } from './oauth-values.js';
+export type { OAuthApp, OAuthSpec, OAuthToken, TokenCheckpoint } from './oauth-values.js';
 
-const digest = (value: string) => createHash('sha256').update(value).digest('hex');
-
-export type OAuthSpec = z.infer<typeof OAuthDefinition>;
-export interface OAuthApp {
-  clientId: string;
-  clientSecret?: string;
-  fields: Record<string, string>;
-  version?: number;
-}
-export interface OAuthToken {
-  accessToken: string;
-  refreshToken?: string;
-  expiresAt: number | null;
-  refreshExpiresAt?: number;
-  scopes: string[];
-  requestedScopes?: string[];
-  account: string;
-  accountName: string;
-  accountVerified?: boolean;
-  scopesStatus?: 'unknown' | 'requested' | 'reported';
-  extra: Record<string, string>;
-  facts: Record<string, unknown>;
-}
-export type TokenCheckpoint = (token: OAuthToken, response: Record<string, unknown>) => Promise<void>;
-export function expandUrl(template: string, values: Record<string, string>): string {
-  try {
-    return publicUrl(new Template(template).expand(values)).href;
-  } catch {
-    fail(400, 'invalid_service_url', 'Check the service URL and its required fields.');
-  }
-}
-const strings = (value: unknown, separator = ' ') =>
-  typeof value === 'string' ? [...new Set(value.split(separator).filter(Boolean))].sort() : [];
-const lifetime = (value: unknown) => {
-  const seconds = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
-  if (!Number.isSafeInteger(seconds) || seconds <= 0 || seconds > 315_576_000)
-    fail(502, 'invalid_response', 'The service returned an invalid expiry.');
-  return seconds;
-};
-const shopifyEndpoint = (url: string, pathname: string | RegExp) => {
-  const endpoint = new URL(url);
-  return endpoint.hostname.endsWith('.myshopify.com') &&
-    (typeof pathname === 'string' ? endpoint.pathname === pathname : pathname.test(endpoint.pathname));
-};
-const tokenTypes: oauth.RecognizedTokenTypes = Object.assign(Object.create(null), {
-  dpop: () => fail(502, 'invalid_response', 'The service returned an unsupported token.'),
-});
-const ebayTokenTypes: oauth.RecognizedTokenTypes = Object.assign(Object.create(null), tokenTypes, {
-  'user access token': () => {},
-});
 export class OAuth {
   constructor(readonly transport: Transport) {}
   private appValues(spec: OAuthSpec, app: OAuthApp) {
@@ -78,7 +29,7 @@ export class OAuth {
       ...spec.authorizeParams,
       response_type: 'code',
       client_id: app.clientId,
-      redirect_uri: spec.adapter === 'ebay' ? app.fields.ruName! : redirectUri,
+      redirect_uri: oauthService(spec).redirectUri?.(app, redirectUri) ?? redirectUri,
       state,
     };
     if (scopes.length) params.scope = scopes.join(spec.scopes.separator);
@@ -86,13 +37,7 @@ export class OAuth {
       params.code_challenge = await oauth.calculatePKCECodeChallenge(verifier);
       params.code_challenge_method = 'S256';
     }
-    if (spec.adapter === 'openrouter') {
-      delete params.response_type;
-      delete params.client_id;
-      delete params.redirect_uri;
-      params.callback_url = redirectUri;
-      params.key_label = 'Foundation';
-    }
+    oauthService(spec).authorize?.(params, redirectUri);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
     return url.href;
   }
@@ -159,19 +104,7 @@ export class OAuth {
     const normalized = { ...data };
     // inspect() resolves the service account; OIDC ID tokens are not used to authenticate sessions.
     delete normalized.id_token;
-    // Shopify omits token_type; Notion defines refresh_token as string | null.
-    if (
-      endpoint.hostname.endsWith('.myshopify.com') &&
-      endpoint.pathname === '/admin/oauth/access_token' &&
-      normalized.token_type === undefined
-    )
-      normalized.token_type = 'bearer';
-    if (
-      endpoint.hostname === 'api.notion.com' &&
-      endpoint.pathname === '/v1/oauth/token' &&
-      normalized.refresh_token === null
-    )
-      delete normalized.refresh_token;
+    oauthService(spec, endpoint.href).normalizeToken?.(normalized);
     if (normalized.expires_in !== undefined) normalized.expires_in = lifetime(normalized.expires_in);
     try {
       const processResponse = refresh
@@ -184,7 +117,7 @@ export class OAuth {
         client,
         Response.json(normalized, { status: response.status }),
         {
-          recognizedTokenTypes: spec.adapter === 'ebay' ? ebayTokenTypes : tokenTypes,
+          recognizedTokenTypes: oauthService(spec, endpoint.href).recognizedTokenTypes,
         },
       );
       return { ...data, ...result };
@@ -200,7 +133,7 @@ export class OAuth {
     previous?: OAuthToken,
     refreshing = false,
   ): OAuthToken {
-    const accessToken = spec.adapter === 'openrouter' ? data.key : data.access_token;
+    const accessToken = data[oauthService(spec).accessTokenField ?? 'access_token'];
     if (
       typeof accessToken !== 'string' ||
       !accessToken ||
@@ -261,26 +194,10 @@ export class OAuth {
     if (spec.grantType === 'client_credentials')
       fail(400, 'wrong_grant', 'This connection exchanges application credentials directly.');
     let data: Record<string, unknown>;
-    if (spec.adapter === 'openrouter') {
-      const parameters = authorization.parameters;
-      if (
-        parameters.getAll('state').length !== 1 ||
-        parameters.get('state') !== authorization.state ||
-        parameters.getAll('code').length !== 1 ||
-        !parameters.get('code')
-      )
-        fail(400, 'invalid_state', 'Start the connection again.');
-      const response = await this.transport.send({
-        url: expandUrl(spec.tokenUrl, this.appValues(spec, app)),
-        method: 'POST',
-        headers: { accept: 'application/json', 'content-type': 'application/json' },
-        body: JSON.stringify({
-          ...spec.tokenParams,
-          code: parameters.get('code'),
-          code_verifier: verifier,
-          code_challenge_method: 'S256',
-        }),
-      });
+    const service = oauthService(spec);
+    if (service.exchange) {
+      const response = await service.exchange({ spec, app, transport: this.transport,
+        url: () => expandUrl(spec.tokenUrl, this.appValues(spec, app)), authorization, verifier });
       data = this.checkResponse(spec, response.status, responseJson(response));
     } else {
       const { server, client } = this.configuration(spec, app);
@@ -297,7 +214,7 @@ export class OAuth {
           client,
           this.authentication(app, spec.clientAuth),
           parameters,
-          spec.adapter === 'ebay' ? app.fields.ruName! : redirectUri,
+          service.redirectUri?.(app, redirectUri) ?? redirectUri,
           spec.pkce ? verifier : oauth.nopkce,
           { ...this.options(spec.tokenFormat), additionalParameters: spec.tokenParams },
         );
@@ -314,7 +231,7 @@ export class OAuth {
     const received = this.token(spec, data, scopes, previous);
     await checkpoint?.(received, data);
     const result = await this.inspect(spec, app, received, data);
-    if (previous && result.account !== previous.account && spec.adapter !== 'openrouter')
+    if (previous && result.account !== previous.account && !service.allowAccountChange)
       fail(409, 'account_changed', 'Reconnect using the same service account.');
     return result;
   }
@@ -324,10 +241,11 @@ export class OAuth {
     if (spec.grantType !== 'client_credentials')
       fail(400, 'wrong_grant', 'Choose a client credentials connection method.');
     const { server, client } = this.configuration(spec, app);
-    const shopify = shopifyEndpoint(server.token_endpoint!, '/admin/oauth/access_token');
+    const service = oauthService(spec, server.token_endpoint!);
+    const parameters = { ...spec.tokenParams, ...(scopes.length ? { scope: scopes.join(spec.scopes.separator) } : {}) };
     const response = await oauth.clientCredentialsGrantRequest(
       server, client, this.authentication(app, spec.clientAuth),
-      { ...spec.tokenParams, ...(scopes.length && !shopify ? { scope: scopes.join(spec.scopes.separator) } : {}) },
+      service.clientCredentialsParameters?.(parameters) ?? parameters,
       this.options(spec.tokenFormat),
     );
     const data = await this.tokenResponse(spec, app, response);
@@ -357,7 +275,7 @@ export class OAuth {
       current = this.token(spec, data, previous.scopes, previous, true);
       await checkpoint?.(current, data);
     }
-    if (spec.identity?.url || spec.adapter === 'ebay' || spec.adapter === 'openrouter')
+    if (spec.identity?.url || oauthService(spec).refreshInspection)
       current = await this.inspect(spec, app, current);
     if (current.account !== previous.account)
       fail(409, 'account_changed', 'Reconnect using the same service account.');
@@ -370,87 +288,25 @@ export class OAuth {
     tokenResponse?: Record<string, unknown>,
   ): Promise<OAuthToken> {
     let data: Record<string, unknown> = tokenResponse ?? {};
-    if (spec.adapter === 'ebay') {
-      const { server, client } = this.configuration(spec, app);
-      const response = await oauth.introspectionRequest(
-        { ...server, introspection_endpoint: server.token_endpoint + '/introspect' },
-        client,
-        this.authentication(app, 'basic'),
-        current.accessToken,
-        { ...this.options(), additionalParameters: { token_type_hint: 'access_token' } },
-      );
-      try {
-        data = await oauth.processIntrospectionResponse(
-          server,
-          client,
-          Response.json(await this.json(response), { status: response.status }),
-        );
-      } catch {
-        fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
-      }
-      if (
-        data.active !== true ||
-        data.client_id !== app.clientId ||
-        typeof data.sub !== 'string' ||
-        !data.sub ||
-        typeof data.exp !== 'number' ||
-        data.exp * 1000 <= Date.now()
-      )
-        fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
-      return {
-        ...current,
-        account: data.sub,
-        accountName: typeof data.username === 'string' ? data.username : data.sub,
-        scopes: strings(data.scope),
-        scopesStatus: 'reported',
-        accountVerified: true,
-        expiresAt: Math.min(current.expiresAt ?? Infinity, data.exp * 1000),
-      };
-    }
-    if (spec.adapter === 'openrouter') {
-      const response = await this.transport.send({
-        url: 'https://openrouter.ai/api/v1/key',
-        headers: { authorization: 'Bearer ' + current.accessToken },
-      });
-      data = responseJson(response);
-      if (response.status !== 200 || !data.data || typeof data.data !== 'object')
-        fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
-      const info = data.data as Record<string, unknown>;
-      return {
-        ...current,
-        account: digest(current.accessToken),
-        accountName: typeof info.label === 'string' ? info.label : 'OpenRouter',
-        facts: info,
-      };
-    }
+    const service = oauthService(spec);
+    if (service.inspect) return service.inspect({ spec, app, transport: this.transport, current,
+      configuration: () => this.configuration(spec, app),
+      authentication: method => this.authentication(app, method),
+      options: () => this.options(), json: response => this.json(response) });
     if (spec.identity?.url) {
       const url = expandUrl(spec.identity.url, {
         ...this.appValues(spec, app), ...current.extra, accessToken: current.accessToken, refreshToken: current.refreshToken ?? '',
       });
-      // Shopify's Admin GraphQL API uses its own access-token header and a shop query.
-      const shopify = spec.grantType === 'client_credentials' &&
-        shopifyEndpoint(url, /^\/admin\/api\/[^/]+\/graphql\.json$/);
-      const response = await this.transport.send({
-        url,
-        method: spec.identity.method,
-        headers: shopify
-          ? { ...spec.identity.headers, 'content-type': 'application/json', 'X-Shopify-Access-Token': current.accessToken }
-          : { ...spec.identity.headers, authorization: 'Bearer ' + current.accessToken },
-        ...(shopify ? { body: JSON.stringify({ query: '{ shop { id name myshopifyDomain } }' }) } : {}),
+      const identityService = oauthService(spec, url);
+      const response = await this.transport.send(identityService.identityRequest?.({ spec, app, transport: this.transport, url, current }) ?? {
+        url, method: spec.identity.method,
+        headers: { ...spec.identity.headers, authorization: 'Bearer ' + current.accessToken },
       });
       data = responseJson(response);
       if (response.status === 401 || response.status === 403)
         fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
       if (response.status >= 400) fail(502, 'invalid_response', 'The service account could not be verified.');
-      if (shopify && ((Array.isArray(data.errors) ? data.errors.length : Boolean(data.errors)) ||
-        atPointer(data, '/data/shop/myshopifyDomain') !== app.fields.shop + '.myshopify.com'))
-        fail(502, 'invalid_response', 'The Shopify store could not be verified.');
-      if (spec.adapter === 'github' && response.headers['x-oauth-scopes'] !== undefined) {
-        current.scopes = strings(response.headers['x-oauth-scopes'].replaceAll(',', ' '));
-        current.scopesStatus = 'reported';
-      }
-      if (spec.adapter === 'google' && data.email_verified !== true)
-        fail(502, 'invalid_response', 'The service account could not be verified.');
+      identityService.verifyIdentity?.({ spec, app, transport: this.transport, current, response, data });
     } else if (spec.identity?.from === 'app') data = this.appValues(spec, app);
     const first = (pointers: string | string[]) => {
       for (const pointer of Array.isArray(pointers) ? pointers : [pointers]) {
@@ -508,19 +364,15 @@ export class OAuth {
     const headers: Record<string, string> = {};
     const auth = spec.revoke.auth ?? spec.clientAuth;
     if (spec.revoke.style === 'bearer') headers.authorization = 'Bearer ' + current.accessToken;
-    else if (auth === 'basic' || spec.revoke.style === 'github')
+    else if (auth === 'basic')
       headers.authorization =
         'Basic ' + Buffer.from(app.clientId + ':' + (app.clientSecret ?? '')).toString('base64');
-    let body: string | undefined;
-    if (spec.revoke.style === 'github') {
-      headers['content-type'] = 'application/json';
-      body = JSON.stringify({ access_token: current.accessToken });
-    }
-    const response = await this.transport.send({
+    const response = await this.transport.send(oauthService(spec).revokeRequest?.({
+      spec, app, transport: this.transport, url, current,
+    }) ?? {
       url,
       method: spec.revoke.style === 'bearer' ? 'POST' : 'DELETE',
       headers,
-      ...(body ? { body } : {}),
     });
     if (response.status >= 300)
       fail(502, 'revoke_failed', 'Access could not be removed at the service. Try again.');
