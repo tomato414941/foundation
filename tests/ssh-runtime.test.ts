@@ -72,13 +72,16 @@ test('通常のSSHとSFTPで作業ファイルを扱い、鍵の変更と再起�
   await execute('sftp', [...authentication(first), '-P', String(port), '-b', batch, target], { timeout: 10_000 });
   assert.equal(await readFile(join(workspace, 'uploaded.txt'), 'utf8'), 'SFTP round trip');
   assert.equal(await readFile(downloaded, 'utf8'), 'shared workspace');
-  const session = spawn('ssh', [...authentication(first), '-p', String(port), target, 'cat > /dev/null'], { stdio: ['pipe', 'ignore', 'ignore'] });
-  t.after(() => { session.kill(); });
-  for (let attempt = 0; attempt < 100 && await server.activeSessions() === 0; attempt++) await delay(20);
+  const sessions = Array.from({ length: 4 }, () => spawn('ssh',
+    [...authentication(first), '-p', String(port), target, 'cat > /dev/null'], { stdio: ['pipe', 'ignore', 'ignore'] }));
+  t.after(() => { for (const session of sessions) session.kill(); });
+  const connectedDeadline = Date.now() + 5_000;
+  while (await server.activeSessions() !== sessions.length && Date.now() < connectedDeadline) await delay(1);
   await server.sync();
-  assert.equal(reported.activeSessions, 1);
-  session.stdin!.end();
-  for (let attempt = 0; attempt < 100 && await server.activeSessions() !== 0; attempt++) await delay(20);
+  assert.equal(reported.activeSessions, sessions.length);
+  for (const session of sessions) session.stdin!.end();
+  const disconnectedDeadline = Date.now() + 5_000;
+  while (await server.activeSessions() !== 0 && Date.now() < disconnectedDeadline) await delay(1);
   assert.equal(await server.activeSessions(), 0);
   configuration = { ...configuration, authorizedKeys: [secondPublic], revision: 2 };
   await server.sync();
