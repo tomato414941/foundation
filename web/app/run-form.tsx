@@ -3,12 +3,12 @@ import { Form, redirect, useActionData, useLoaderData } from 'react-router';
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { Principal, Resource } from '../../shared/contracts';
-import type { ExecutionOperation } from '../../shared/execution';
+import type { JsonValue } from '../../shared/contracts';
 import { actionResult, api, ApiFailure, formText, jsonField } from './api';
 import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { RequestFields } from './resource-form';
 import { resourcePath } from './navigation';
-import { custodyClient } from './custody';
+import { operationClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
 async function runResource(params: LoaderFunctionArgs['params']) {
   if (!params.id) return null;
@@ -28,12 +28,11 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
   return actionResult(async () => {
     const form = await request.formData();
     const resource = await runResource(params);
-    let input: ExecutionOperation;
+    let input: Record<string, JsonValue>;
     if (resource?.kind === 'function')
       input = {
         kind: 'function',
-        definition: resource.data,
-        outputs: {},
+        functionId: resource.id,
         arguments: Object.fromEntries(
           [...form.entries()]
             .filter(([key]) => key.startsWith('argument.'))
@@ -50,20 +49,20 @@ export async function runAction({ params, request }: ActionFunctionArgs) {
           ...(formText(form, 'body') ? { body: String(form.get('body')) } : {}),
           bindings: jsonField(form, 'bindings', []),
         },
-        save: {},
       };
-    const client = await custodyClient();
+    const client = await operationClient();
     let ownerId = params.owner!;
     try {
       const owner = await api('/principals/' + ownerId, {}, Principal);
-      if (!owner.permissions.includes('execute')) ownerId = client.binding.principalId;
+      if (!owner.permissions.includes('execute')) ownerId = client.custody.binding.principalId;
     } catch (error) {
       if (!(error instanceof ApiFailure) || error.status !== 403) throw error;
-      ownerId = client.binding.principalId;
+      ownerId = client.custody.binding.principalId;
     }
-    const result = await client.submit(ownerId, formText(form, 'environmentId'), input,
-      { save: jsonField(form, 'save', {}) });
-    return redirect('/runs/' + result.id);
+    const result = await client.execute({ name: 'run.execute', input: { ownerId, environmentId: formText(form, 'environmentId'),
+      operation: input, save: jsonField(form, 'save', {}) } });
+    if (!('kind' in result) || result.kind !== 'run') throw new ApiFailure('invalid_input');
+    return redirect('/runs/' + result.task.id);
   });
 }
 export default function RunForm() {

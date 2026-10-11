@@ -12,6 +12,8 @@ import { decode, open } from './encryption.js';
 import { requiresApp } from './connections.js';
 import { connectionMethod, selectScopes } from './connection-methods.js';
 import type { AwsConnectionRequest } from './aws.js';
+import { OperationExecution, WaitingOperation } from './operations.js';
+import { DelegatedRun } from './custody.js';
 
 const Review = z.object({ kind: z.literal('review'), flowId: Id, name: Name, metadata: JsonObject }).strict();
 export const FlowRecord = z.object({
@@ -21,6 +23,8 @@ export const FlowRecord = z.object({
   taskId: Id, createdAt: z.iso.datetime(),
   approval: z.object({ id: Id, index: z.number().int().min(0).max(7) }).strict().optional(),
   approvalCompleted: z.boolean().optional(),
+  execution: z.object({ id: Id, index: z.number().int().nonnegative() }).strict().optional(),
+  pendingRun: DelegatedRun.optional(),
   url: z.url().nullable(), review: Review.nullable(), connectionId: Id.nullable(),
 }).strict();
 export type ConnectionFlow = z.infer<typeof FlowRecord>;
@@ -49,7 +53,8 @@ export class ConnectionClient {
   async start(input: { ownerId: string; environmentId: string; name: string; methodId: string; method: MethodDescription;
     appId?: string; fields?: Record<string, string>; scopes?: string[];
     aws?: AwsConnectionRequest;
-    connectionId?: string; environments?: string[]; redirectUri?: string; approvalId?: string }) {
+    connectionId?: string; environments?: string[]; redirectUri?: string; approvalId?: string;
+    execution?: { id: string; index: number } }) {
     const id = crypto.randomUUID();
     const plan = input.approvalId ? await this.custody.api.json('/api/requests/' + input.approvalId + '/connection', {}, ConnectionPlan) : null;
     if (plan && (plan.input.ownerId !== input.ownerId || plan.input.methodId !== input.methodId ||
@@ -57,6 +62,22 @@ export class ConnectionClient {
       (plan.input.environmentId && plan.input.environmentId !== input.environmentId)))
       throw new Error('Use the connection method and executor approved by this request.');
     const approval = plan ? { id: plan.id, index: plan.index } : undefined;
+    const execution = input.execution ?? (plan ? { id: plan.id, index: plan.index } : undefined);
+    if (execution) {
+      const active = await this.custody.api.json('/api/operation-executions/' + execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
+      if (active.index !== execution.index || active.invocation.name !== 'connection.connect' ||
+        active.invocation.input.ownerId !== input.ownerId || active.invocation.input.methodId !== input.methodId ||
+        (active.invocation.input.appId && active.invocation.input.appId !== input.appId) ||
+        (active.invocation.input.methodDigest && active.invocation.input.methodDigest !== await hash(input.method)) ||
+        (active.invocation.input.name && active.invocation.input.name !== input.name) ||
+        (active.invocation.input.environmentId && active.invocation.input.environmentId !== input.environmentId))
+        throw new Error('Use the connection and execution environment prepared by this operation.');
+      const values = { ...(!active.invocation.input.environmentId ? { environmentId: input.environmentId } : {}),
+        ...(!active.invocation.input.appId && input.appId ? { appId: input.appId } : {}),
+        ...(!active.invocation.input.name ? { name: input.name } : {}) };
+      if (Object.keys(values).length) await this.custody.api.json('/api/operation-executions/' + execution.id + '/input', { method: 'PATCH',
+        body: { index: execution.index, values } }, OperationExecution);
+    }
     const previous = input.connectionId ? await this.custody.read(input.connectionId) : null;
     if (previous && (previous.content.policy.contentType !== ContentTypes.tokenSet || previous.content.policy.ownerId !== input.ownerId ||
       previous.content.metadata.methodId !== input.methodId)) throw new Error('Choose the existing connection and its method.');
@@ -71,27 +92,45 @@ export class ConnectionClient {
       ...(input.aws ? { aws: input.aws } : {}),
       ...(connectionMethod(input.method).browserAuthorization
         ? { redirectUri: input.redirectUri ?? this.custody.origin + '/oauth/callback' } : {}),
-    } }, { sourceIds: appId ? [appId] : [], approval });
+    } }, { sourceIds: appId ? [appId] : [], approval, operationContext: await this.operationContext(execution, id) });
     const flow: ConnectionFlow = { id, ownerId: input.ownerId, environmentId: input.environmentId, name: input.name,
       appId, policy, previousPolicyDigest: previous ? await hash(previous.content.policy) : null,
       step: 'start', taskId: request.intent.id, createdAt: new Date().toISOString(), url: null, review: null, connectionId: null,
       ...(approval ? { approval, approvalCompleted: false } : {}) };
+    if (execution) flow.execution = execution;
+    flow.pendingRun = request;
+    await this.custody.trust.rememberRun(request);
     await this.store.put(flow);
+    if (execution) await this.custody.api.json('/api/operation-executions/' + execution.id + '/continuation', { method: 'PUT',
+      body: { index: execution.index, continuation: { kind: 'connection', id } } }, OperationExecution);
     const task = await this.custody.submitPrepared(request);
     return { kind: 'pending' as const, flow, task };
+  }
+  private async operationContext(execution: ConnectionFlow['execution'], flowId: string) {
+    if (!execution) return undefined;
+    const plan = await this.custody.api.json('/api/operation-executions/' + execution.id + '/input', {}, WaitingOperation.extend({ id: Id }));
+    if (plan.index !== execution.index) throw new Error('Continue the connection that is awaiting input.');
+    return { ...execution, invocation: plan.invocation, continuationId: flowId };
   }
   async progress(id: string, relay = true): Promise<FlowProgress> {
     const flow = await this.flow(id);
     if (flow.step === 'connected') {
-      if (flow.approval && !flow.approvalCompleted) {
-        await this.custody.api.json('/api/requests/' + flow.approval.id + '/connection', {
+      if ((flow.execution || flow.approval) && !flow.approvalCompleted) {
+        if (flow.execution) await this.custody.api.json('/api/operation-executions/' + flow.execution.id + '/complete', {
+          method: 'POST', body: { index: flow.execution.index, proof: { runId: flow.taskId, resourceId: flow.connectionId } },
+        }, OperationExecution);
+        else await this.custody.api.json('/api/requests/' + flow.approval!.id + '/connection', {
           method: 'POST', body: { runId: flow.taskId, resourceId: flow.connectionId },
         }, ApprovalRequest);
         flow.approvalCompleted = true; await this.store.put(flow);
       }
       return { kind: 'connected', flow, id: flow.connectionId! };
     }
-    if (flow.step === 'cancelled') return { kind: 'cancelled', flow };
+    if (flow.step === 'cancelled') {
+      if (flow.execution) await this.custody.api.json('/api/operation-executions/' + flow.execution.id + '/cancel',
+        { method: 'POST', body: {} }, OperationExecution);
+      return { kind: 'cancelled', flow };
+    }
     if (flow.step === 'review') return { kind: 'review', flow, metadata: flow.review!.metadata };
     if (flow.step === 'authorize') {
       if (relay) {
@@ -106,7 +145,12 @@ export class ConnectionClient {
       }
       return { kind: 'authorize', flow, url: flow.url! };
     }
-    const task = await this.custody.api.json('/api/executions/' + flow.taskId, {}, Task);
+    let task: TaskView;
+    try { task = await this.custody.api.json('/api/executions/' + flow.taskId, {}, Task); }
+    catch (error) {
+      if (!flow.pendingRun || !error || typeof error !== 'object' || !('code' in error) || error.code !== 'not_found') throw error;
+      task = await this.custody.submitPrepared(flow.pendingRun);
+    }
     if (['queued', 'running'].includes(task.state)) return { kind: 'pending', flow, task };
     const result = await this.custody.result(task);
     if (!result?.ok) return { kind: 'failed', flow, task, error: result?.error ?? task.error };
@@ -144,8 +188,10 @@ export class ConnectionClient {
     }
     const request = await this.custody.prepare(flow.ownerId, flow.environmentId, { kind: 'connect', input: {
       action: 'exchange', flowId: id, parameters,
-    } }, { sourceIds: flow.appId ? [flow.appId] : [], approval: flow.approval });
+    } }, { sourceIds: flow.appId ? [flow.appId] : [], approval: flow.approval,
+      operationContext: await this.operationContext(flow.execution ?? flow.approval, id) });
     flow.step = 'exchange'; flow.taskId = request.intent.id;
+    flow.pendingRun = request;
     await this.store.put(flow);
     const task = await this.custody.submitPrepared(request);
     return { kind: 'pending', flow, task };
@@ -163,8 +209,10 @@ export class ConnectionClient {
     const request = await this.custody.prepare(flow.ownerId, flow.environmentId, { kind: 'connect', input: {
       action: 'commit', flowId: id, authorizationDigest: flow.review!.metadata.authorizationDigest!,
       approval: await approvePolicy(policy, this.custody.binding, this.custody.keys, previous?.content),
-    } }, { id: runId, expiresAt, approval: flow.approval });
+    } }, { id: runId, expiresAt, approval: flow.approval,
+      operationContext: await this.operationContext(flow.execution ?? flow.approval, id) });
     flow.step = 'commit'; flow.taskId = request.intent.id;
+    flow.pendingRun = request;
     await this.store.put(flow);
     const task = await this.custody.submitPrepared(request);
     return { kind: 'pending', flow, task };
@@ -175,6 +223,6 @@ export class ConnectionClient {
       await this.custody.api.json('/api/executions/' + flow.taskId + '/cancel', { method: 'POST', body: {} }, Task);
     flow.step = 'cancelled';
     await this.store.put(flow);
-    return { kind: 'cancelled' as const, flow };
+    return this.progress(id);
   }
 }

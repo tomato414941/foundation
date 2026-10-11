@@ -4,7 +4,8 @@ import { canonical, hash, sign, validateBinding, verify } from '../../shared/aut
 import type { BoundKeys, KeyMaterial } from '../../shared/authority';
 import type { CustodyContent, CustodyPolicy, SealedRun } from '../../shared/custody';
 import { ConnectionClient } from '../../shared/connection-client';
-import type { ConnectionFlow } from '../../shared/connection-client';
+import { RemoteFlowStore } from '../../shared/operation-continuations';
+import { OperationClient } from '../../shared/operation-client';
 import { api, ApiFailure, session } from './api';
 import { getIdentity } from './keys';
 import { stored } from './storage';
@@ -49,9 +50,19 @@ export async function custodyClient(principalId?: string) {
     location.origin, identity.binding, identity.keys, trust);
 }
 export async function connectionClient() {
-  const custody = await custodyClient(), trust = custody.trust as BrowserTrust;
+  const custody = await custodyClient(), trust = custody.trust as BrowserTrust, remote = new RemoteFlowStore(custody);
   return new ConnectionClient(custody, {
-    get: id => trust.get<ConnectionFlow>('flow:' + id),
-    put: flow => trust.put('flow:' + flow.id, flow),
+    async get(id) {
+      const saved = await remote.get(id);
+      if (saved) return saved;
+      const previous = await trust.get<import('../../shared/connection-client').ConnectionFlow>('flow:' + id);
+      if (previous) await remote.put(previous);
+      return previous;
+    },
+    put: flow => remote.put(flow),
   });
+}
+export async function operationClient() {
+  const connections = await connectionClient();
+  return new OperationClient(connections.custody, connections);
 }

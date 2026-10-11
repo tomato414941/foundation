@@ -46,6 +46,8 @@ export interface ClaimedTask {
 
 export class Delegation {
   checkApproval?: (actor: Actor, intent: ExecutionIntent) => Promise<void>;
+  checkOperationContext?: (actor: Actor, intent: ExecutionIntent) => Promise<void>;
+  completed?: (task: TaskView) => Promise<void>;
   constructor(
     readonly resources: Resources, readonly bindings: Bindings,
     readonly custody: Custody, readonly origin: string,
@@ -147,6 +149,10 @@ export class Delegation {
     if (intent.origin !== this.origin || intent.actor.principalId !== actor.id)
       fail(403, 'forbidden', 'Sign execution requests with your own identity.');
     await this.bindings.requireCurrent(intent.actor);
+    if (intent.operationContext) {
+      if (!this.checkOperationContext) fail(503, 'operation_unavailable', 'The prepared operation cannot be checked.');
+      await this.checkOperationContext(actor, intent);
+    }
     if (intent.approval) {
       if (!this.checkApproval) fail(503, 'approval_unavailable', 'The approval request cannot be checked.');
       await this.checkApproval(actor, intent);
@@ -273,6 +279,7 @@ export class Delegation {
     await verifyReceipt(receipt, row.request.intent);
     if (row.receipt) {
       if (canonical(row.receipt) !== canonical(receipt)) fail(409, 'run_settled', 'This run already has a final result.');
+      await this.completed?.(this.view(row));
       return this.view(row);
     }
     if (receipt.state === 'succeeded' && row.phase !== 'dispatched')
@@ -283,6 +290,7 @@ export class Delegation {
       [row.id, lease, receipt.state, JSON.stringify(receipt)],
     );
     if (!updated) fail(409, 'lease_lost', 'This run can no longer accept a result from that execution lease.');
+    await this.completed?.(this.view(updated));
     return this.view(updated);
   }
 

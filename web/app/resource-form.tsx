@@ -8,14 +8,13 @@ import { useTranslation } from 'react-i18next';
 import type { LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
 import { CatalogEntry, CatalogMethod, Resource, Payment, Usage, listOf } from '../../shared/contracts';
 import type { CatalogConnectionMethod, ResourceView } from '../../shared/contracts';
-import { decode, encode } from '../../shared/encryption';
-import { canonical } from '../../shared/authority';
-import { AppMaterial, ConnectionMaterial, requiresApp } from '../../shared/connections';
+import { decode } from '../../shared/encryption';
+import { AppMaterial, ConnectionMaterial } from '../../shared/connections';
 import type { ConnectionState } from '../../shared/connections';
-import { contentTypeOf, isProtected } from '../../shared/protected';
+import { isProtected } from '../../shared/protected';
 import { actionResult, api, ApiFailure, formText, jsonField, session, upload } from './api';
 import { decryptVariable } from './keys';
-import { connectionClient, custodyClient } from './custody';
+import { operationClient, custodyClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
 import { ConnectionFields, connectionNeedsMaterial, ConnectionMethodHelp, ConnectionPreparation, connectionFields, connectionSettings, connectionInitialValues } from './connection-form';
 import { sshSettings } from './ssh';
@@ -23,6 +22,7 @@ import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { resourceKind, resourcePath } from './navigation';
 import { useWorkspace } from './routes/workspace';
 import { connectionMethodName } from './connection-method-labels';
+import { connectionSubmission } from './operation-form';
 export async function formLoader({ params, request }: LoaderFunctionArgs) {
   const kind = resourceKind(params.section);
   const query = new URL(request.url).searchParams;
@@ -151,22 +151,22 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
     const existing = params.id ? await api('/resources/' + params.id, {}, Resource) : null;
     const version = Number(formText(form, 'version'));
     if (kind === 'connection') {
-      const client = await connectionClient();
+      const client = await operationClient();
       const selected = (await api('/connection-methods', {}, listOf(CatalogMethod))).items.find(method => method.id === formText(form, 'methodId'));
       if (!selected) throw new ApiFailure('invalid_input');
-      const { id: methodId, builtin: _builtin, availability: _availability, ...method } = selected;
+      const methodId = selected.id;
       const connectionId = formText(form, 'connectionId');
       let previous: ConnectionState | undefined;
       if (connectionId && connectionNeedsMaterial(selected, form))
         previous = ConnectionMaterial.parse(JSON.parse(decode(await client.custody.reveal(connectionId))));
-      const progress = await client.start({
-        ownerId: owner, environmentId: formText(form, 'environmentId'), methodId, method,
-        name: name || existing?.name || method.name,
-        ...(formText(form, 'approvalId') ? { approvalId: formText(form, 'approvalId') } : {}),
-        appId: formText(form, 'appId') || undefined,
-        ...connectionSettings(selected, form, previous),
-        ...(formText(form, 'connectionId') ? { connectionId: formText(form, 'connectionId') } : {}),
-      });
+      const prepared = connectionSubmission({ ownerId: owner, methodId,
+        name: name || existing?.name || selected.name,
+        ...(connectionId ? { connectionId } : {}) }, form, selected);
+      if (previous) prepared.material = { ...prepared.material, ...connectionSettings(selected, form, previous) };
+      const progress = formText(form, 'approvalId')
+        ? await client.continue(formText(form, 'approvalId'), prepared.material)
+        : await client.execute({ name: 'connection.connect', input: prepared.input }, prepared.material);
+      if (!('flow' in progress)) throw new ApiFailure('invalid_input');
       return redirect('/connections/' + progress.flow.id);
     }
     if (kind === 'object') {
@@ -182,27 +182,16 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
     }
     let body: Record<string, unknown> = { kind, name };
     if (kind === 'variable' || kind === 'app') {
-      const client = await custodyClient();
-      const previous = existing ? await client.read(existing.id) : undefined;
-      if (previous && previous.version !== version) throw new ApiFailure('changed');
-      const environments = await Promise.all(form.getAll('environments').map(id => client.environment(String(id))));
-      const policy = await client.policy(owner, contentTypeOf(kind), environments, { previous: previous?.content.policy });
+      const client = await operationClient();
       const file = form.get('file');
-      let content =
-        file instanceof File && file.name
-          ? new Uint8Array(await file.arrayBuffer())
-          : encode(String(form.get('value') ?? ''));
-      let metadata;
-      if (kind === 'app') {
-        const old = previous ? AppMaterial.parse(JSON.parse(decode(await client.reveal(previous.content.policy.id)))) : null;
-        const fields = connectionFields(form);
-        const app = AppMaterial.parse({ format: 1, methodId: formText(form, 'methodId'), clientId: formText(form, 'clientId'), fields,
-          generation: old && old.methodId === formText(form, 'methodId') && old.clientId === formText(form, 'clientId') && canonical(old.fields) === canonical(fields) ? old.generation : crypto.randomUUID(),
-          ...(formText(form, 'clientSecret') || old?.clientSecret ? { clientSecret: formText(form, 'clientSecret') || old?.clientSecret } : {}) });
-        content = encode(canonical(app));
-        metadata = { methodId: app.methodId, clientId: app.clientId, generation: app.generation };
-      }
-      return redirect(resourcePath(await client.save(name, content, policy, { previous, metadata })));
+      const value = file instanceof File && file.name ? new Uint8Array(await file.arrayBuffer()) : String(form.get('value') ?? '');
+      const result = await client.execute({ name: kind === 'app' ? 'app.save' : 'variable.save', input: {
+        ownerId: owner, name, environmentIds: form.getAll('environments').map(String),
+        ...(existing ? { resourceId: existing.id, version } : {}),
+        ...(kind === 'app' ? { methodId: formText(form, 'methodId'), clientId: formText(form, 'clientId') } : {}),
+      } }, { value, clientSecret: formText(form, 'clientSecret') || undefined, fields: connectionFields(form) });
+      if (!('kind' in result) || result.kind !== 'saved') throw new ApiFailure('invalid_input');
+      return redirect(resourcePath(result.resource));
     } else if (kind === 'environment') {
       if (!name) delete body.name;
       body.options = {
@@ -334,8 +323,7 @@ export default function ResourceForm() {
   const methodUnavailable =
     data.kind === 'connection' &&
     (!method ||
-      method.availability === 'unavailable' ||
-      (requiresApp(method) && !matchingApps.length));
+      method.availability === 'unavailable');
   const spec = existing?.kind === 'function' ? existing.data : undefined;
   const unavailable =
     data.kind === 'environment'

@@ -1104,6 +1104,89 @@ class BrowserTests(unittest.TestCase):
         page.get_by_role("navigation", name="現在の位置", exact=True).get_by_role("link", name="実行環境", exact=True).click()
         page.wait_for_url(f"**/p/{principal['id']}/environments")
 
+    def test_依頼画面でOVHの認証情報を入力し再読込後に接続を確認して保存する(self):
+        sender, _ = self.passkey_account("OVH requester")
+        receiver, principal = self.passkey_account("OVH approver")
+        environment = self.executor(receiver, principal).rsplit("/", 1)[1]
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "message": "OVHcloudへ接続してください。", "operations": [{
+            "method": "POST", "path": "/api/operations/connection.connect", "body": {
+                "ownerId": "$approver", "methodId": "ovh:client_credentials_ca", "name": "Requested OVH account"
+            }
+        }]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        asked = response.json()
+        receiver.goto(asked["url"])
+        receiver.wait_for_load_state("networkidle")
+        expect(receiver.get_by_text("1. サービスに接続する", exact=True)).to_be_visible()
+        expect(receiver.get_by_role("link", name="サービスの管理画面を開く", exact=True)).to_be_visible()
+        receiver.get_by_label("クライアントID", exact=True).fill("requested-ovh-client")
+        receiver.get_by_label("クライアントシークレット", exact=True).fill("requested-ovh-secret")
+        self.select(receiver, "実行環境", "Browser executor")
+        receiver.screenshot(path=str(ARTIFACTS / "request-ovh-input-ja.png"), full_page=True, animations="disabled")
+        approval_bodies = []
+        receiver.on("request", lambda request: approval_bodies.append(request.post_data) if request.url.endswith("/approve") else None)
+        receiver.get_by_role("button", name="承認", exact=True).click()
+        expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
+        self.assertEqual(receiver.url, asked["url"])
+        self.assertEqual(len(approval_bodies), 1)
+        self.assertNotIn("requested-ovh-secret", approval_bodies[0])
+        receiver.reload()
+        receiver.wait_for_load_state("networkidle")
+        expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
+        receiver.screenshot(path=str(ARTIFACTS / "request-ovh-review-ja.png"), full_page=True, animations="disabled")
+        receiver.get_by_role("button", name="保存", exact=True).click()
+        expect(receiver.get_by_text("承認済み", exact=True)).to_be_visible(timeout=15000)
+        self.assertEqual(receiver.url, asked["url"])
+        completed = sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()
+        self.assertEqual(completed["state"], "approved")
+        connection = receiver.request.get(ORIGIN + "/api/resources/" + completed["results"][0]["id"]).json()
+        self.assertEqual(connection["name"], "Requested OVH account")
+        self.assertEqual(connection["data"]["methodId"], "ovh:client_credentials_ca")
+        token_calls = receiver.request.get(ORIGIN + "/__test/executor/" + environment + "/oauth").json()
+        self.assertEqual(token_calls, [{"clientId": "requested-ovh-client", "clientSecret": "requested-ovh-secret", "scope": "all"}])
+
+    def test_依頼画面で接続の確認中に取り消すと依頼と実行を終了する(self):
+        sender, _ = self.passkey_account("Connection requester")
+        receiver, principal = self.passkey_account("Connection approver")
+        environment = self.executor(receiver, principal).rsplit("/", 1)[1]
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{
+            "method": "POST", "path": "/api/operations/connection.connect", "body": {
+                "ownerId": "$approver", "methodId": "ovh:client_credentials_ca", "name": "Cancelled OVH account", "environmentId": environment
+            }
+        }]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        asked = response.json()
+        receiver.goto(asked["url"])
+        receiver.wait_for_load_state("networkidle")
+        receiver.get_by_label("クライアントID", exact=True).fill("cancelled-ovh-client")
+        receiver.get_by_label("クライアントシークレット", exact=True).fill("cancelled-ovh-secret")
+        receiver.get_by_role("button", name="承認", exact=True).click()
+        expect(receiver.get_by_role("heading", name="接続先と権限を確認して保存", exact=True)).to_be_visible(timeout=15000)
+        receiver.get_by_role("button", name="キャンセル", exact=True).click()
+        expect(receiver.get_by_text("辞退済み", exact=True)).to_be_visible(timeout=15000)
+        self.assertEqual(sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["state"], "declined")
+        self.assertEqual(receiver.request.get(ORIGIN + "/api/operation-executions/" + asked["id"]).json()["state"], "cancelled")
+
+    def test_依頼画面で機密の変数を入力して承認すると暗号化して保存する(self):
+        sender, _ = self.passkey_account("Value requester")
+        receiver, principal = self.passkey_account("Value approver")
+        response = sender.request.post(ORIGIN + "/api/requests", data={"to": principal["id"], "operations": [{
+            "method": "POST", "path": "/api/operations/variable.save", "body": {
+                "ownerId": "$approver", "name": "Requested variable", "value": "", "environmentIds": []
+            }, "inputs": [{"pointer": "/value", "label": "Private value", "secret": True}]
+        }]}, headers={"origin": ORIGIN})
+        self.assertTrue(response.ok, response.text())
+        asked = response.json()
+        receiver.goto(asked["url"])
+        receiver.wait_for_load_state("networkidle")
+        receiver.get_by_role("textbox", name="値", exact=True).fill("requested-private-value")
+        receiver.get_by_role("button", name="承認", exact=True).click()
+        expect(receiver.get_by_text("承認済み", exact=True)).to_be_visible(timeout=15000)
+        result = sender.request.get(ORIGIN + "/api/requests/" + asked["id"]).json()["results"][0]
+        receiver.goto(f"{ORIGIN}/p/{principal['id']}/variables/{result['id']}")
+        receiver.get_by_role("button", name="内容を表示", exact=True).click()
+        expect(receiver.get_by_role("textbox", name="値", exact=True)).to_have_value("requested-private-value")
+
     def test_依頼内容を確認して承認し新しいプリンシパルを作成する(self):
         sender, _ = self.passkey_account("Requester")
         receiver, principal = self.passkey_account("Approver")

@@ -3,16 +3,10 @@ import type { ApiApp } from './app.js';
 import { actor } from './app.js';
 import type { Context } from './context.js';
 import { IdParams, Ok, PageQuery, listOf } from '../shared/contracts.js';
-import { ClaimedProcess, CreatedProcess, CreateProcess, ProcessCompletion, ProcessRegistration, ProcessView } from '../shared/process.js';
+import { ClaimedProcess, ProcessCompletion, ProcessRegistration, ProcessView } from '../shared/process.js';
 import { Lease } from '../shared/protocol.js';
 
 export async function routesProcesses(app: ApiApp, { processes }: Context) {
-  app.post('/api/environments/:id/processes', {
-    schema: { summary: 'Start a command in an environment', params: IdParams, body: CreateProcess, response: { 202: CreatedProcess } },
-  }, async (request, reply) => {
-    const { id, environmentId, ownerId, actorId, state, createdAt } = await processes.create(actor(request), request.params.id, request.body);
-    return reply.code(202).send({ id, environmentId, ownerId, actorId, state, createdAt });
-  });
   app.get('/api/environments/:id/processes', {
     schema: { params: IdParams, querystring: PageQuery, response: { 200: listOf(ProcessView) } },
   }, request => processes.list(actor(request), request.params.id, request.query.limit, request.query.after));
@@ -34,9 +28,6 @@ export async function routesProcesses(app: ApiApp, { processes }: Context) {
       truncated: process.result?.truncated ?? false, exitCode: process.result?.exitCode ?? null,
       signal: process.result?.signal ?? null, timedOut: process.result?.timedOut ?? false, error: process.error };
   });
-  app.post('/api/processes/:id/cancel', {
-    schema: { params: IdParams, body: z.object({}).strict(), response: { 200: ProcessView } },
-  }, request => processes.cancel(actor(request), request.params.id));
   app.put('/api/environments/:id/processes/registration', {
     schema: { params: IdParams, body: ProcessRegistration, response: { 200: ProcessRegistration } },
   }, request => processes.register(actor(request), request.params.id, request.body));

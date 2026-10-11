@@ -30,6 +30,11 @@ import { Delegation } from './delegation.js';
 import { ConnectionOperations } from './connection-operations.js';
 import { OAuthRelays } from './oauth-relays.js';
 import { Operations } from '../shared/custody.js';
+import { userOperations } from './user-operations.js';
+import { OperationExecutions } from './operation-executions.js';
+import { requestedOperation } from '../shared/operations.js';
+import { canonical } from '../shared/authority.js';
+import { fail, DomainError } from './errors.js';
 import { Processes } from './processes.js';
 
 export interface Dependencies {
@@ -72,8 +77,11 @@ export async function createContext(config: Configuration, deps: Dependencies = 
       delegation,
     );
   const devices = new Devices(db, authorization, audit, config.origin);
-  const integrations = new Integrations(db, authorization, config.origin),
-    requests = new Requests(
+  const integrations = new Integrations(db, authorization, config.origin);
+  const operations = userOperations({ authorization, principals, relations, resources, catalog, environments,
+    functions, objects, billing, processes, integrations, custody, delegation });
+  const operationExecutions = new OperationExecutions(db, vault, authorization, operations, audit);
+  const requests = new Requests(
       db,
       authorization,
       principals,
@@ -81,12 +89,42 @@ export async function createContext(config: Configuration, deps: Dependencies = 
       audit,
       vault,
       config.origin,
+      operations,
+      operationExecutions,
     );
+  operationExecutions.consent = async (actor, id, operation, error) => {
+    await requests.propose(actor, error.to, error.proposed, requestedOperation(operation.name, operation.input), id);
+  };
+  delegation.checkOperationContext = async (actor, intent) => {
+    const context = intent.operationContext!, { plan } = await operationExecutions.input(actor, context.id);
+    if (context.index !== plan.index || canonical(context.invocation) !== canonical(plan.invocation) ||
+      canonical(intent.approval ?? null) !== canonical(plan.approval ?? null) ||
+      (plan.invocation.name === 'connection.connect' && (plan.continuation?.kind !== 'connection' || plan.continuation.id !== context.continuationId)) ||
+      (plan.invocation.name === 'run.execute' && (plan.continuation?.kind !== 'run' || plan.continuation.id !== intent.id)))
+      fail(409, 'operation_changed', 'Use the prepared operation and its current continuation.');
+  };
+  delegation.completed = async task => {
+    const execution = task.intent.operationContext;
+    if (!execution) return;
+    const proof = task.kind === 'connect'
+      ? await db.one<{ id: string }>("SELECT resource_id AS id FROM resource_custody WHERE content->>'creationRunId'=$1", [task.id])
+      : null;
+    if (task.kind === 'connect' && !proof) return;
+    try {
+      await operationExecutions.complete({ id: task.actorId }, execution.id, execution.index,
+        proof ? { runId: task.id, resourceId: proof.id } : { runId: task.id });
+    } catch (error) {
+      if (!(error instanceof DomainError) || error.status >= 500) throw error;
+    }
+  };
   delegation.checkApproval = async (actor, intent) => {
-    const plan = await requests.connectionPlan(actor, intent.approval!.id);
-    if (plan.index !== intent.approval!.index || plan.input.ownerId !== intent.ownerId || intent.operation !== Operations.connect ||
-      (plan.input.environmentId && plan.input.environmentId !== intent.environmentId))
-      throw new Error('Use the connection and execution environment approved by this request.');
+    const plan = await requests.operationPlan(actor, intent.approval!.id), input = plan.invocation.input;
+    const kind = plan.invocation.name === 'connection.connect' ? 'connect' : plan.invocation.name === 'run.execute'
+      ? (input.operation as { kind: keyof typeof Operations }).kind : null;
+    if (!intent.operationContext || intent.operationContext.id !== plan.id || plan.index !== intent.approval!.index ||
+      input.ownerId !== intent.ownerId || !kind || intent.operation !== Operations[kind] ||
+      (input.environmentId && input.environmentId !== intent.environmentId))
+      throw new Error('Use the operation and execution environment approved by this request.');
   };
   return {
     config,
@@ -107,6 +145,8 @@ export async function createContext(config: Configuration, deps: Dependencies = 
     environments,
     integrations,
     requests,
+    operations,
+    operationExecutions,
     devices,
     bindings,
     custody,

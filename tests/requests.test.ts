@@ -6,6 +6,7 @@ import { buildApp } from '../server/app.js';
 import { principal } from '../server/authorization.js';
 import { ApprovalRequest } from '../shared/contracts.js';
 import { flowFixture } from './flow-support.js';
+import { OperationExecution } from '../shared/operations.js';
 
 test('確認コードで端末を引き受け、承認者の権限で利用を委任する', async (t) => {
   const f = await fixture(),
@@ -127,7 +128,8 @@ test('接続の承認後に実行先で認証情報を受け取り、暗号化�
     } }] } }, ApprovalRequest);
   const answer = await f.client.api.json('/api/requests/' + asked.id + '/approve', { method: 'POST', body: {} }, ApprovalRequest);
   assert.equal(answer.state, 'running');
-  assert.equal(new URL(answer.continueUrl!).searchParams.get('approval'), asked.id);
+  assert.equal(answer.waiting?.invocation.name, 'connection.connect');
+  assert.equal(answer.waiting?.invocation.input.environmentId, f.environment.manifest.id);
   const started = await f.connections.start({ ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id,
     methodId: 'github:token', method: await f.method('github:token'), name: 'Requested connection',
     fields: { token: 'owner-provided-key' }, approvalId: asked.id });
@@ -154,6 +156,7 @@ test('承認依頼の取り消しで待機中の接続を止め、その依頼�
     fields: { token: 'provided-key' }, approvalId: asked.id };
   const started = await f.connections.start(input);
   assert.equal((await sender.json('/api/requests/' + asked.id + '/cancel', { method: 'POST', body: {} }, ApprovalRequest)).state, 'cancelled');
+  assert.equal((await f.client.api.json('/api/operation-executions/' + asked.id, {}, OperationExecution)).state, 'cancelled');
   const progress = await f.tick(started.flow.id);
   assert.equal(progress.kind, 'failed');
   if (progress.kind === 'failed') assert.equal(progress.task.state, 'cancelled');

@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { fixture } from './support.js';
 import { createContext } from '../server/context.js';
 import { MemoryPayments, MemoryObjects, MemoryRunner } from './fakes.js';
-import { EnvironmentInput } from '../shared/contracts.js';
+import { ApprovalRequest, EnvironmentInput } from '../shared/contracts.js';
+import { requestedOperation } from '../shared/operations.js';
+import { buildApp } from '../server/app.js';
 import { EnvironmentBootstrap } from '../shared/protocol.js';
 import { bindKeys, newIdentityKeys, signBinding } from '../shared/authority.js';
 import { signEnvironment } from '../shared/execution.js';
@@ -124,6 +126,30 @@ test('ファイルを更新し、同時編集と保存容量の超過を拒否�
   );
   await c.objects.remove(owner.actor, updated);
   assert.equal(storage.files.size, 0);
+});
+
+test('通常のファイルアップロードと依頼からの更新を同じ利用者の権限と保存処理で行う', async t => {
+  const f = await fixture(), c = await createContext(f.config, { db: f.db, mailer: f.mailer,
+    payments: new MemoryPayments(), storage: new MemoryObjects() });
+  const app = await buildApp(c); t.after(async () => { await app.close(); await f.close(); });
+  const owner = await f.person('File owner'), sender = await f.person('Sender');
+  await f.db.pool.query("INSERT INTO payment_accounts(principal_id,customer_id,status) VALUES($1,$2,'active')", [owner.actor.id, 'file-customer']);
+  const headers = { authorization: 'Bearer ' + owner.token };
+  const created = await app.inject({ method: 'POST', url: '/api/principals/' + owner.actor.id + '/objects?name=note.txt&contentType=text/plain',
+    headers: { ...headers, 'content-type': 'application/octet-stream' }, payload: Buffer.from('one') });
+  assert.equal(created.statusCode, 201, created.body);
+  const file = created.json();
+  const asked = await app.inject({ method: 'POST', url: '/api/requests', headers: { authorization: 'Bearer ' + sender.token },
+    payload: { to: owner.actor.id, operations: [requestedOperation('object.update', { id: file.id, version: file.version,
+      contentType: 'text/plain', bytes: Buffer.from('two').toString('base64url') })] } });
+  assert.equal(asked.statusCode, 201, asked.body);
+  const answered = await app.inject({ method: 'POST', url: '/api/requests/' + asked.json().id + '/approve', headers, payload: {} });
+  assert.equal(answered.statusCode, 200, answered.body); assert.equal(ApprovalRequest.parse(answered.json()).state, 'approved');
+  const content = await app.inject({ url: '/api/resources/' + file.id + '/content', headers });
+  assert.equal(content.body, 'two');
+  const stale = await app.inject({ method: 'PUT', url: '/api/resources/' + file.id + '/content?version=' + file.version,
+    headers: { ...headers, 'content-type': 'application/octet-stream' }, payload: Buffer.from('old') });
+  assert.equal(stale.statusCode, 409, stale.body);
 });
 
 test('支払い登録不要の利用枠を複数プリンシパルで共有し、保存容量と計算時間と同時起動数を制限する', async (t) => {

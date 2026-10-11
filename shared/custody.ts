@@ -7,6 +7,7 @@ import {
   Fingerprint, KeyBinding, Signature, canonical, hash, sign, validateBinding, verify,
 } from './authority.js';
 import type { BoundKeys, KeyMaterial } from './authority.js';
+import { OperationContext } from './operations.js';
 
 export const Origin = z.url().refine(value => {
   const url = new URL(value);
@@ -337,6 +338,7 @@ export async function matchesPin(content: CustodyContent, pin: z.infer<typeof So
 export const RunIntent = z.object({
   format: z.literal(2), id: Id, origin: Origin, ownerId: Id,
   approval: z.object({ id: Id, index: z.number().int().min(0).max(7) }).strict().optional(),
+  operationContext: OperationContext.optional(),
   actor: KeyBinding, environmentId: Id, executor: KeyBinding,
   environmentDigest: Fingerprint,
   operation: Operation, functionDigest: Fingerprint.nullable(),

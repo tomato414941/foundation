@@ -9,6 +9,7 @@ import {
 } from './custody.js';
 import type { ContentTypeId, CustodyContent, CustodyPolicy, ExecutionIntent, SealedRun } from './custody.js';
 import { BoundRecipient, ProtectedRead, Registration, Reprotection } from './protocol.js';
+import type { ProtectedWrite } from './protocol.js';
 import { RuntimeOperation, Task, authorizeEnvironment, readReceipt, verifyEnvironment } from './execution.js';
 import type { ExecutionOperation, RegisteredEnvironment, TaskView } from './execution.js';
 import { functionRequest } from './function-request.js';
@@ -29,7 +30,7 @@ export class ClientFailure extends Error {
 }
 export class SubmissionPending extends Error {
   constructor(readonly id: string) {
-    super('The execution request is saved locally. Check execution ' + id + ' before starting another operation.');
+    super('The execution request has been saved. Check execution ' + id + ' before starting another operation.');
   }
 }
 export class CustodyClient {
@@ -114,14 +115,16 @@ export class CustodyClient {
       authorities: options.previous?.authorities ?? readers, readers, grants, producers: [] });
   }
   async save(name: string, bytes: Uint8Array, policy: CustodyPolicy,
-    options: { metadata?: Record<string, JsonValue>; previous?: { content: CustodyContent; version: number } } = {}) {
+    options: { metadata?: Record<string, JsonValue>; previous?: { content: CustodyContent; version: number };
+      commit?: (write: z.infer<typeof ProtectedWrite>) => Promise<ResourceView> } = {}) {
     const previous = options.previous;
     if (previous && canonical(policy) === canonical({ ...previous.content.policy, revision: policy.revision }))
       policy = { ...policy, revision: previous.content.policy.revision };
     const content = await protect(bytes, policy, (previous?.content.materialRevision ?? 0) + 1,
       this.binding, this.keys, options.metadata, previous?.content);
-    const resource = await this.api.json('/api/resources/' + policy.id + '/custody', { method: 'PUT',
-      body: { name, content, ...(previous ? { version: previous.version } : {}) } }, Resource);
+    const write = { name, content, ...(previous ? { version: previous.version } : {}) };
+    const resource = options.commit ? await options.commit(write) : await this.api.json('/api/resources/' + policy.id + '/custody',
+      { method: 'PUT', body: write }, Resource);
     await this.trust.rememberContent(content);
     return resource;
   }
@@ -188,7 +191,7 @@ export class CustodyClient {
   }
   async prepare(ownerId: string, environmentId: string, input: ExecutionOperation,
     options: { id?: string; sourceIds?: string[]; save?: Record<string, string>; expiresAt?: string;
-      approval?: ExecutionIntent['approval'] } = {}) {
+      approval?: ExecutionIntent['approval']; operationContext?: ExecutionIntent['operationContext'] } = {}) {
     const environment = await this.environment(environmentId), operation = RuntimeOperation.parse(input);
     const id = options.id ?? crypto.randomUUID(), expiresAt = options.expiresAt ?? new Date(Date.now() + 3_600_000).toISOString();
     const request = operation.kind === 'http' ? operation.request : operation.kind === 'function'
@@ -209,6 +212,7 @@ export class CustodyClient {
       environmentId, executor: environment.manifest.executor, environmentDigest: await hash(environment.manifest),
       operation: Operations[operation.kind], operationDigest: await hash(operation),
       ...(options.approval ? { approval: options.approval } : {}),
+      ...(options.operationContext ? { operationContext: options.operationContext } : {}),
       functionDigest: operation.kind === 'function' ? await hash(operation.definition) : null,
       sources: await Promise.all(sources.map(async content => ({ id: content.policy.id,
         materialRevision: content.materialRevision, policyDigest: await hash(content.policy),

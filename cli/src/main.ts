@@ -13,6 +13,7 @@ import {
   ApprovalRequest,
   Credential,
   Id,
+  JsonObject,
   Input,
   Name,
   RequestInput,
@@ -21,17 +22,19 @@ import {
   listOf,
 } from '../../shared/contracts.js';
 import type { ResourceView } from '../../shared/contracts.js';
-import { ContentTypes } from '../../shared/custody.js';
 import { Session } from '../../shared/session.js';
 import { newEncryptionKey, open as openSealed, unbase64url, unwrap } from '../../shared/encryption.js';
 import { bindKeys, fingerprint, newIdentityKeys, PrivateKeys, publicPart, signBinding, SignedBinding } from '../../shared/authority.js';
-import { RuntimeOperation, Task } from '../../shared/execution.js';
+import { Task } from '../../shared/execution.js';
 import type { TaskView } from '../../shared/execution.js';
 import { Client, ApiError } from './client.js';
 import { configPath, origin, readIdentity, saveIdentity, secureWrite } from './config.js';
 import { execute } from './execute.js';
 import { localInputs, privateClient } from './custody.js';
 import { startAgent } from './agent.js';
+import { operationClient } from './operations.js';
+import { Invocation, OperationDescription, OperationExecution } from '../../shared/operations.js';
+import { OperationMaterial } from '../../shared/operation-client.js';
 import { managedAgent } from './managed-agent.js';
 import { startMcp } from './mcp.js';
 import { connectionClient, flowOutput, saveApp, startConnection } from './connections.js';
@@ -47,6 +50,9 @@ Usage: foundation <command> [options]
   status                               Show this machine and its accessible principals
   join [--to ID] [--wait]               Ask a person to take on this machine
   api METHOD /api/PATH [--body JSON]    Call the common Foundation API
+  operation list                       List user operations and their inputs
+  operation run NAME --body JSON       Execute an operation (private material via --fields)
+  operation continue ID [--fields JSON] Resume an operation awaiting private input
   schema [--output FILE]                Read the OpenAPI specification
   mcp                                  Serve local MCP using this identity's signing keys
   trust ID --fingerprint VALUE         Trust identity keys verified with their holder
@@ -364,12 +370,12 @@ async function keep(client: Client, args: Arguments, owner: string) {
     );
     after = page.next;
   } while (after && !existing);
-  const { custody } = privateClient(client);
-  const previous = existing ? await custody.read(existing.id) : undefined;
-  const environments = await Promise.all((args.values.for ?? []).map(id => custody.environment(Id.parse(id))));
-  const policy = previous && !args.values.for ? previous.content.policy
-    : await custody.policy(owner, ContentTypes.value, environments, { previous: previous?.content.policy });
-  const result = await custody.save(name, content, policy, { previous });
+  const operations = operationClient(client), previous = existing ? await operations.custody.read(existing.id) : undefined;
+  const completed = await operations.execute({ name: 'variable.save', input: { ownerId: owner, name,
+    ...(existing ? { resourceId: existing.id, version: previous!.version } : {}),
+    ...(args.values.for ? { environmentIds: args.values.for.map(id => Id.parse(id)) } : {}) } }, { value: content });
+  if (!('kind' in completed) || completed.kind !== 'saved') throw new Error('Finish saving the variable.');
+  const result = completed.resource;
   await output(result, args);
 }
 
@@ -437,6 +443,29 @@ async function main(argv: string[]) {
       clientSecret: args.values['client-secret'] === undefined ? undefined : await text(args.values['client-secret']),
       fields: await json(args.values.fields, {}), environments: args.values.for });
     await output(resource, args); return 0;
+  }
+  if (command === 'operation') {
+    const action = args.positionals[0] ?? 'list';
+    if (action === 'list') await output(await client.json('/api/operations', {}, listOf(OperationDescription)), args);
+    else if (action === 'get') await output(await client.json('/api/operation-executions/' + Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), {}, OperationExecution), args);
+    else if (action === 'run' || action === 'continue') {
+      const material = OperationMaterial.parse(await json(args.values.fields, {}));
+      if (action === 'run') {
+        const invocation = Invocation.parse({ name: requireArgument(args.positionals[1], 'Supply an operation name.'), input: await json(args.values.body, {}) });
+        const catalog = await client.json('/api/operations', {}, listOf(OperationDescription));
+        const definition = catalog.items.find(item => item.name === invocation.name);
+        if (!definition) throw new Error('Choose an available operation.');
+        if (definition.execution === 'server') {
+          await output(await client.json('/api/operations/' + invocation.name, { method: 'POST', body: invocation.input }), args);
+          return 0;
+        }
+      }
+      const operations = operationClient(client);
+      const result = action === 'continue' ? await operations.continue(Id.parse(requireArgument(args.positionals[1], 'Supply an execution ID.')), material)
+        : await operations.execute(Invocation.parse({ name: args.positionals[1], input: await json(args.values.body, {}) }), material);
+      await output('flow' in result ? flowOutput(result) : result, args);
+    } else throw new Error('Choose operation list, run, get, or continue.');
+    return 0;
   }
   if (command === 'connect') {
     const flowClient = connectionClient(client), action = args.positionals[0] ?? 'start';
@@ -531,7 +560,7 @@ async function main(argv: string[]) {
       : fn?.kind === 'function'
         ? {
             kind: 'function',
-            definition: fn.data,
+            functionId: fn.id,
             arguments: await json(args.values.arguments, {}),
           }
         : {
@@ -540,9 +569,11 @@ async function main(argv: string[]) {
             timeoutSeconds: seconds(args.values.timeout, 60, 3600),
             inputs: await json(args.values.inputs, []),
           };
-    const run = await privateClient(client).custody.submit(owner, environmentId, RuntimeOperation.parse(input), {
-      save: z.record(z.string(), Name).parse(await json(args.values.save, {})),
-    });
+    const started = await operationClient(client).execute({ name: 'run.execute', input: { ownerId: owner, environmentId,
+      operation: JsonObject.parse(input),
+      save: z.record(z.string(), Name).parse(await json(args.values.save, {})) } });
+    if (!('kind' in started) || started.kind !== 'run') throw new Error('Continue the pending run.');
+    const run = started.task;
     const result = args.values.wait
       ? await waitFor(
           () => client.json('/api/executions/' + run.id, {}, Task),

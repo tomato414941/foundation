@@ -70,7 +70,7 @@ const words: Record<string, [string, string]> = {
   'state.uncertain': ['結果の確認が必要', 'Outcome needs review'],
   'errors.identity_untrusted': ['相手の鍵が未確認です。「相手の鍵を確認」で照合してから続けてください。', 'Verify the identity keys before continuing.'],
   'errors.fingerprint_mismatch': ['公開鍵の指紋が一致しません。相手に現在の指紋を確認してください。', 'The public key fingerprint does not match. Check the current fingerprint with the other party.'],
-  'errors.submission_pending': ['実行依頼をこの端末に保存しました。重複して依頼する前に実行履歴を確認してください。', 'The signed request is saved on this device. Check execution history before starting another operation.'],
+  'errors.submission_pending': ['実行依頼を保存しました。再実行する前に実行履歴を確認してください。', 'The execution request has been saved. Check execution history before trying again.'],
   returnToService: ['{{name}}に戻る', 'Return to {{name}}'],
   retry: ['やり直す', 'Try again'],
   home: ['ホーム', 'Home'],
@@ -275,6 +275,7 @@ const words: Record<string, [string, string]> = {
   ],
   clientId: ['クライアントID', 'Client ID'],
   clientSecret: ['クライアントシークレット', 'Client secret'],
+  newApplication: ['新しいアプリの認証情報を入力', 'Enter credentials for a new application'],
   unchangedSecret: ['変更する場合のみ入力', 'Enter only to replace'],
   callbackUrl: ['コールバックURL', 'Callback URL'],
   definition: ['定義（JSON）', 'Definition (JSON)'],
@@ -386,6 +387,7 @@ const words: Record<string, [string, string]> = {
   requestTo: ['依頼先のプリンシパルID', 'Recipient principal ID'],
   requestOperations: ['操作（JSON）', 'Operations (JSON)'],
   finishConnection: ['サービスの接続を続ける', 'Continue connecting the service'],
+  signinForPrivateInput: ['認証情報を入力するには、パスキーでログインしてください。', 'Sign in with your passkey to enter private information.'],
   requestComplete: ['依頼への対応が完了しました。', 'This request is complete.'],
   noMessage: ['メッセージはありません。', 'No message provided.'],
   addEmail: ['メールアドレスを追加', 'Add email address'],
@@ -766,8 +768,33 @@ const errors: Array<[string[], string, string]> = [
   ],
   [
     ['operation_unavailable'],
-    'この操作は依頼から実行できません。',
-    'This operation cannot be performed through an approval request.',
+    'この操作は利用できません。',
+    'This operation is unavailable.',
+  ],
+  [
+    ['execution_failed'],
+    '実行を完了できませんでした。実行履歴で結果を確認してください。',
+    'The execution did not complete successfully. Check its result in execution history.',
+  ],
+  [
+    ['execution_busy'],
+    '処理中です。しばらくお待ちください。',
+    'This operation is in progress. Please wait.',
+  ],
+  [
+    ['execution_uncertain'],
+    '処理結果を確認できませんでした。再実行する前に実行履歴とサービス側の状態を確認してください。',
+    'The result could not be confirmed. Check execution history and the service before trying again.',
+  ],
+  [
+    ['execution_changed', 'operation_changed'],
+    '内容が変わりました。再読み込みして確認してください。',
+    'This operation changed. Reload it and review the details.',
+  ],
+  [
+    ['execution_expired'],
+    'この操作の有効期限が切れました。',
+    'This operation has expired.',
   ],
 ];
 errors.push([

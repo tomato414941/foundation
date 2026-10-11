@@ -39,13 +39,6 @@ export async function routesExecution(app: ApiApp, context: Context) {
   app.get('/api/resources/:id/custody', {
     schema: { params: C.IdParams, response: { 200: P.ProtectedRead } },
   }, request => custody.read(actor(request), request.params.id));
-  app.put('/api/resources/:id/custody', {
-    schema: { params: C.IdParams, body: P.ProtectedWrite, response: { 200: C.Resource, 202: C.ApprovalRequest } },
-  }, async request => {
-    if (request.params.id !== request.body.content.policy.id)
-      fail(400, 'wrong_resource', 'Save the encrypted content at its approved destination.');
-    return resources.view(actor(request), await custody.put(actor(request), request.body));
-  });
   app.post('/api/executor/outputs', {
     schema: { body: P.ProtectedWrite.omit({ version: true }), response: { 201: z.object({ id: C.Id }) } },
   }, async (request, reply) => {
@@ -83,9 +76,6 @@ export async function routesExecution(app: ApiApp, context: Context) {
   app.get('/api/executions/:id', {
     schema: { params: C.IdParams, response: { 200: P.Task } },
   }, request => delegation.get(actor(request), request.params.id));
-  app.post('/api/executions/:id/cancel', {
-    schema: { params: C.IdParams, body: z.object({}).strict(), response: { 200: P.Task } },
-  }, request => delegation.cancel(actor(request), request.params.id));
   app.post('/api/executions/:id/renew', {
     schema: { params: C.IdParams, body: P.Lease, response: { 200: z.object({ active: z.boolean() }) } },
   }, request => delegation.renew(actor(request), request.params.id, request.body.lease));

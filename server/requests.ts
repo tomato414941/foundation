@@ -10,7 +10,6 @@ import type { Audit } from './audit.js';
 import { Vault, digest, token } from './vault.js';
 import { ApprovalRequest, ConnectionRequest } from '../shared/contracts.js';
 import type {
-  OperationTitle,
   RequestedOperation,
   RequestInput,
   ApprovalView,
@@ -19,7 +18,9 @@ import type {
 } from '../shared/contracts.js';
 import { setPointer, atPointer } from '../shared/values.js';
 import type { Proposed } from './relations.js';
-import { fail, failure, required } from './errors.js';
+import { fail, required } from './errors.js';
+import type { OperationRegistry } from './operations.js';
+import type { OperationExecutions } from './operation-executions.js';
 
 interface RequestRow {
   id: string;
@@ -41,16 +42,8 @@ interface RequestRow {
 interface ResponseContext {
   actor: Actor;
   operations: RequestedOperation[];
-  browser: string;
-  index: number;
-}
-export interface OperationDispatcher {
-  allows(operation: RequestedOperation): boolean;
-  describe(operation: RequestedOperation): OperationTitle;
-  execute(actor: Actor, operation: RequestedOperation, browser: string): Promise<JsonValue>;
 }
 export class Requests {
-  dispatcher: OperationDispatcher | null = null;
   constructor(
     readonly db: Database,
     readonly authorization: Authorization,
@@ -59,6 +52,8 @@ export class Requests {
     readonly audit: Audit,
     readonly vault: Vault,
     readonly origin: string,
+    readonly operations: OperationRegistry,
+    readonly executions: OperationExecutions,
   ) {}
   private async row(id: string): Promise<RequestRow> {
     await this.db.pool.query(
@@ -92,9 +87,13 @@ export class Requests {
       to: to ? { id: to.id, name: to.name } : null,
       message: row.message,
       proposal: row.proposal && (await this.proposal(row.proposal)),
-      // Each operation with what it does in words, from the route it calls: the one asked reads that, not the call.
+      // The operation definition supplies the same description to every entry point.
       operations: (await this.vault.decrypt<RequestedOperation[]>(row.operations, 'request-operations:' + row.id)).map(
-        (operation) => ({ ...operation, title: required(this.dispatcher).describe(operation) }),
+        (operation) => {
+          const invocation = this.operations.resolve(operation);
+          return { ...operation, title: this.operations.describe(operation), invocation,
+            execution: this.operations.get(invocation.name).execution };
+        },
       ),
       results: row.results,
       state: row.state,
@@ -106,6 +105,7 @@ export class Requests {
       returnUrl: returnUrl?.href ?? null,
       refreshUrl: settings?.settings.refreshUrl ?? null,
       canRespond: await this.canRespond(actor, row),
+      waiting: row.state === 'running' && await this.canRespond(actor, row) ? (await this.executions.peek(row.id))?.waiting ?? null : null,
     });
   }
   // A proposed change as the one asked reads it: who and what, by name.
@@ -122,10 +122,15 @@ export class Requests {
       : { kind: proposed.kind, item: await named(proposed.itemId), to: await named(proposed.to) };
   }
   async get(actor: Actor | null, id: string) {
-    const row = await this.row(id);
+    let row = await this.row(id);
     const publicJoin = row.code_hash && row.to_id === null;
     if (!publicJoin && (!actor || (actor.id !== row.from_id && !(await this.canRespond(actor, row)))))
       fail(403, 'forbidden', 'This request is addressed to another principal.');
+    if (row.state === 'running') {
+      if (!await this.executions.peek(id) && row.private_input && actor && !actor.requestId && await this.canRespond(actor, row))
+        await this.operationPlan(actor, id);
+      row = await this.row(id);
+    }
     return this.view(actor, row);
   }
   async list(actor: Actor, limit = 100, after?: string) {
@@ -141,11 +146,11 @@ export class Requests {
     };
   }
   private bootstrap(actorId: string, operations: RequestedOperation[]) {
-    const body = operations[0]?.body;
+    const operation = operations[0] ? this.operations.resolve(operations[0]) : null;
+    const body = operation?.input;
     return (
       operations.length === 1 &&
-      operations[0]?.method === 'POST' &&
-      operations[0].path === '/api/relations' &&
+      operation?.name === 'relation.draw' &&
       Boolean(
         body &&
           typeof body === 'object' &&
@@ -155,20 +160,24 @@ export class Requests {
           body.objectId === '$approver' &&
           Object.keys(body).length === 3,
       ) &&
-      operations[0].inputs.length === 0
+      operations[0]!.inputs.length === 0
     );
   }
   async create(actor: Actor, input: z.infer<typeof RequestInput>) {
     if (actor.requestId) fail(403, 'forbidden', 'Sign in to create a new request.');
     for (const operation of input.operations) {
-      if (operation.method === 'CONNECT') {
-        ConnectionRequest.parse(operation.body);
-        if (operation.path !== '/api/connections' || operation.inputs.length)
-          fail(400, 'invalid_operation', 'Request a connection method, then enter its credentials in the encrypted connection form.');
-      } else if (operation.inputs.some(field => field.secret))
-        fail(400, 'encrypted_input_required', 'Use a CONNECT request to enter service credentials on a selected executor.');
-      else if (!this.dispatcher?.allows(operation))
-        fail(400, 'operation_unavailable', 'This operation cannot be requested for approval.');
+      const invocation = this.operations.resolve(operation), definition = this.operations.get(invocation.name);
+      for (const field of operation.inputs)
+        if (field.secret && !definition.secret(field.pointer))
+          fail(400, 'encrypted_input_required', 'Choose an operation that handles this input with your encryption keys.');
+      if (definition.execution === 'keyholder') {
+        for (const key of ['value', 'clientSecret'])
+          if (invocation.input[key] !== undefined && invocation.input[key] !== '')
+            fail(400, 'encrypted_input_required', 'Enter private material when responding to the request.');
+        if (invocation.input.fields &&
+          Object.values(invocation.input.fields as Record<string, JsonValue>).some(value => value !== ''))
+          fail(400, 'encrypted_input_required', 'Enter service credentials when responding to the request.');
+      }
       for (const field of operation.inputs)
         try {
           if (atPointer(operation.body, field.pointer) === undefined)
@@ -202,6 +211,7 @@ export class Requests {
           ],
         ),
       );
+    await this.executions.plan(id, actor, input.operations.map(operation => this.operations.resolve(operation)), row.expires_at);
     return this.view(actor, row, code);
   }
   private async limit(actorId: string) {
@@ -213,10 +223,10 @@ export class Requests {
   }
   // A change its requester has made its own side of, sent to the side it waits on for a day. Once that side agrees, the
   // requester makes it as it asked, with the key it asked with: the one who agrees gives only its own side.
-  async propose(actor: Actor, to: string, proposed: Proposed, operation: RequestedOperation) {
+  async propose(actor: Actor, to: string, proposed: Proposed, operation: RequestedOperation, executionId?: string) {
     if (actor.requestId || actor.approvalId) fail(403, 'forbidden', 'You do not have permission to perform this action.');
     await this.limit(actor.id);
-    const id = randomUUID(),
+    const id = executionId ?? randomUUID(),
       row = required(
         await this.db.one<RequestRow>(
           `INSERT INTO approval_requests(id,from_id,to_id,message,operations,results,state,expires_at,proposal,credential_id)
@@ -246,9 +256,9 @@ export class Requests {
   async approve(
     actor: Actor,
     id: string,
-    browser: string,
     values: Array<Record<string, JsonValue>>,
     code?: string,
+    configuration: Array<Record<string, JsonValue>> = [],
   ) {
     let row = await this.row(id);
     if (!(await this.canRespond(actor, row)))
@@ -267,23 +277,16 @@ export class Requests {
       'request-operations:' + id,
     );
     const effectiveId = actor.requestId ? required(row.to_id) : actor.id;
+    const completed = (await this.executions.peek(id))?.index ?? 0;
     const filled = operations.map((operation, index) => {
       const current = structuredClone(operation),
         supplied = values[index] ?? {};
-      const previous = row.results[index];
+      if (index < completed) return current;
       if (
-        previous &&
-        typeof previous === 'object' &&
-        !Array.isArray(previous) &&
-        !Object.hasOwn(previous, 'error') &&
-        !Object.hasOwn(previous, 'pending')
-      )
-        return current;
-      if (
-        Object.keys(supplied).some((pointer) => !operation.inputs.some((input) => input.pointer === pointer))
+        Object.keys(supplied).some((pointer) => !operation.inputs.some((input) => input.pointer === pointer && !input.secret))
       )
         fail(400, 'unexpected_input', 'Only provide the fields this request asks for.');
-      for (const field of operation.inputs) {
+      for (const field of operation.inputs.filter(input => !input.secret)) {
         const value = supplied[field.pointer];
         if (value === undefined) fail(400, 'missing_input', 'Complete the requested fields.');
         try {
@@ -298,8 +301,10 @@ export class Requests {
         .replaceAll('{approver}', effectiveId)
         .replaceAll('{requester}', row.from_id);
       if (current.body !== undefined) current.body = this.substitute(current.body, effectiveId, row.from_id);
-      return current;
+      return Object.keys(configuration[index] ?? {}).length ? this.operations.configure(current, configuration[index]!) : current;
     });
+    const prepared = await Promise.all(filled.map(async (operation, index) => index < completed
+      ? { invocation: this.operations.resolve(operation) } : this.operations.prepareFor(actor, this.operations.resolve(operation, true))));
     const effectiveActor: Actor = row.proposal
       ? {
           id: row.from_id,
@@ -313,11 +318,13 @@ export class Requests {
           ...(actor.credentialId ? { credentialId: actor.credentialId } : {}),
           approvalId: id,
         };
-    const responseContext: ResponseContext = { actor: effectiveActor, operations: filled, browser, index: 0 };
+    const invocations = prepared.map(value => value.invocation);
+    await this.executions.plan(id, effectiveActor, invocations, row.expires_at, row.results);
     await this.db.transaction(async (connection) => {
+      await this.executions.authorize(effectiveActor, id, invocations, connection);
       const claimed = await connection.query(
-        "UPDATE approval_requests SET state='running',private_input=$2,continue_url=NULL WHERE id=$1 AND state='pending' AND expires_at>now()",
-        [id, await this.vault.encrypt(responseContext, 'request-input:' + id)],
+        "UPDATE approval_requests SET state='running',private_input=NULL,continue_url=NULL WHERE id=$1 AND state='pending' AND expires_at>now()",
+        [id],
       );
       if (!claimed.rowCount) fail(409, 'request_answered', 'This request is already being handled.');
       if (row.code_hash) {
@@ -332,122 +339,53 @@ export class Requests {
         ]);
       }
     });
-    await this.resume(id);
+    try { await this.executions.start(effectiveActor, invocations, { id, expiresAt: row.expires_at }); }
+    catch (error) {
+      if (!(error && typeof error === 'object' && 'code' in error && error.code === 'execution_busy')) throw error;
+    }
     return this.get(actor, id);
   }
-  private async resume(id: string) {
-    let row = await this.row(id);
-    if (row.state !== 'running' || !row.private_input) return;
-    const context = await this.vault.decrypt<ResponseContext>(row.private_input, 'request-input:' + id);
-    for (let index = context.index; index < context.operations.length; index++) {
-      const previous = row.results[index];
-      if (
-        previous &&
-        typeof previous === 'object' &&
-        !Array.isArray(previous) &&
-        !Object.hasOwn(previous, 'error') &&
-        !Object.hasOwn(previous, 'pending')
-      )
-        continue;
-      try {
-        await this.authorization.active(context.actor);
-        const operation = context.operations[index]!;
-        if (operation.method === 'CONNECT') {
-          const input = ConnectionRequest.parse(operation.body);
-          const query = new URLSearchParams({ method: input.methodId, approval: id,
-            ...(input.connectionId ? { connection: input.connectionId } : {}),
-            ...(input.environmentId ? { environment: input.environmentId } : {}) });
-          const results = [...row.results]; results[index] = { pending: true };
-          await this.db.pool.query(
-            "UPDATE approval_requests SET results=$2,continue_url=$3,private_input=$4 WHERE id=$1 AND state='running'",
-            [id, JSON.stringify(results), this.origin + '/p/' + input.ownerId + '/services/new?' + query,
-              await this.vault.encrypt({ ...context, index }, 'request-input:' + id)]);
-          return;
-        }
-        const result = await required(this.dispatcher).execute(
-          { ...context.actor, approvalIndex: index }, operation, context.browser);
-        row.results[index] = result;
-        await this.db.pool.query(
-          "UPDATE approval_requests SET results=$2,private_input=$3 WHERE id=$1 AND state='running'",
-          [
-            id,
-            JSON.stringify(row.results),
-            await this.vault.encrypt({ ...context, index: index + 1 }, 'request-input:' + id),
-          ],
-        );
-      } catch (error) {
-        const fault = failure(error);
-        row.results[index] = { error: { code: fault.code, message: fault.message } };
-        await this.db.pool.query(
-          "UPDATE approval_requests SET state='pending',results=$2,private_input=NULL,continue_url=NULL WHERE id=$1 AND state='running'",
-          [id, JSON.stringify(row.results)],
-        );
-        throw fault;
-      }
+  async operationPlan(actor: Actor, id: string) {
+    const row = await this.row(id);
+    if (actor.requestId || !await this.canRespond(actor, row) || row.state !== 'running')
+      fail(409, 'request_answered', 'Sign in with your keys to continue this request.');
+    // Existing running requests are adopted by the common execution engine when first resumed.
+    if (!await this.executions.peek(id) && row.private_input) {
+      const context = await this.vault.decrypt<ResponseContext>(row.private_input, 'request-input:' + id);
+      await this.executions.start(context.actor, context.operations.map(operation => this.operations.resolve(operation)),
+        { id, expiresAt: row.expires_at, results: row.results });
     }
-    await this.db.pool.query(
-      "UPDATE approval_requests SET state='approved',finished_at=now(),private_input=NULL,continue_url=NULL WHERE id=$1 AND state='running'",
-      [id],
-    );
-    await this.audit.record(row.from_id, context.actor.agreedBy ?? context.actor.id, 'request.approve', id);
-  }
-  async completed(actor: Actor, result: JsonValue) {
-    if (!actor.approvalId || actor.approvalIndex === undefined) return;
-    const row = await this.row(actor.approvalId);
-    if (row.state !== 'running' || !row.private_input)
-      fail(409, 'request_answered', 'This request is no longer awaiting a connection.');
-    const context = await this.vault.decrypt<ResponseContext>(row.private_input, 'request-input:' + row.id);
-    if (context.actor.id !== actor.id || context.index !== actor.approvalIndex)
-      fail(403, 'forbidden', 'This connection belongs to a different request.');
-    row.results[actor.approvalIndex] = result;
-    const updated = await this.db.pool.query(
-      "UPDATE approval_requests SET results=$2,continue_url=NULL,private_input=$3 WHERE id=$1 AND state='running' AND expires_at>now()",
-      [
-        row.id,
-        JSON.stringify(row.results),
-        await this.vault.encrypt({ ...context, index: context.index + 1 }, 'request-input:' + row.id),
-      ],
-    );
-    if (!updated.rowCount) fail(409, 'request_answered', 'This request is no longer active.');
-    await this.resume(row.id);
+    const { plan } = await this.executions.input(actor, id);
+    return { id, ...plan };
   }
   async connectionPlan(actor: Actor, id: string) {
-    const row = await this.row(id);
-    if (actor.requestId || !await this.canRespond(actor, row) || row.state !== 'running' || !row.private_input)
-      fail(409, 'request_answered', 'Sign in with your keys to continue this pending connection request.');
-    const context = await this.vault.decrypt<ResponseContext>(row.private_input, 'request-input:' + id);
-    if (context.actor.id !== actor.id || context.operations[context.index]?.method !== 'CONNECT')
-      fail(403, 'forbidden', 'Continue the connection approved by this identity.');
-    return { id, index: context.index, input: ConnectionRequest.parse(context.operations[context.index]!.body) };
-  }
-  private async stopExecutions(id: string) {
-    await this.db.pool.query(
-      `UPDATE execution_tasks SET cancel_requested=true,
-       state=CASE WHEN phase='dispatched' THEN 'uncertain' ELSE 'cancelled' END,
-       error=CASE WHEN phase='dispatched' THEN 'approval_cancelled' ELSE NULL END,
-       finished_at=now(),lease_until=NULL
-       WHERE request->'intent'->'approval'->>'id'=$1 AND state IN ('queued','running')`, [id]);
+    const plan = await this.operationPlan(actor, id);
+    if (plan.invocation.name !== 'connection.connect') fail(403, 'forbidden', 'Continue the connection approved by this identity.');
+    const { ownerId, methodId, connectionId, environmentId, name } = plan.invocation.input;
+    return { id, index: plan.index, input: ConnectionRequest.parse({ ownerId, methodId, connectionId, environmentId, name }) };
   }
   async decline(actor: Actor, id: string) {
     const row = await this.row(id);
     if (!(await this.canRespond(actor, row)))
       fail(403, 'forbidden', 'This request is addressed to another principal.');
-    await this.db.pool.query(
-      "UPDATE approval_requests SET state='declined',finished_at=now(),private_input=NULL,continue_url=NULL WHERE id=$1 AND state IN ('pending','running')",
-      [id],
-    );
-    await this.stopExecutions(id);
+    await this.db.transaction(async connection => {
+      await connection.query('SELECT id FROM operation_executions WHERE id=$1 FOR UPDATE', [id]);
+      const changed = await connection.query(
+        "UPDATE approval_requests SET state='declined',finished_at=now(),private_input=NULL,continue_url=NULL WHERE id=$1 AND state IN ('pending','running')", [id]);
+      if (changed.rowCount) await this.executions.revoke(id, connection);
+    });
     return this.get(actor, id);
   }
   async cancel(actor: Actor, id: string) {
     const row = await this.row(id);
     if (actor.requestId || actor.id !== row.from_id)
       fail(403, 'forbidden', 'Only the requester can cancel this request.');
-    await this.db.pool.query(
-      "UPDATE approval_requests SET state='cancelled',finished_at=now(),private_input=NULL,continue_url=NULL WHERE id=$1 AND state IN ('pending','running')",
-      [id],
-    );
-    await this.stopExecutions(id);
+    await this.db.transaction(async connection => {
+      await connection.query('SELECT id FROM operation_executions WHERE id=$1 FOR UPDATE', [id]);
+      const changed = await connection.query(
+        "UPDATE approval_requests SET state='cancelled',finished_at=now(),private_input=NULL,continue_url=NULL WHERE id=$1 AND state IN ('pending','running')", [id]);
+      if (changed.rowCount) await this.executions.revoke(id, connection);
+    });
     return this.get(actor, id);
   }
   async link(actor: Actor, id: string) {

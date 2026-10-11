@@ -11,6 +11,8 @@ export interface ConnectionFieldsProps {
   existing: ResourceView | null;
   appMaterial: AppState | null;
   apps: ResourceView[];
+  selectedAppId?: string;
+  clientId?: string;
 }
 export function ServiceFields({ method, fields, defaults = {}, existing, appMaterial }: {
   method: CatalogConnectionMethod; fields: ConnectionField[]; defaults?: Record<string, string>;

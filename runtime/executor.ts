@@ -10,6 +10,7 @@ import {
 } from '../shared/execution.js';
 import type { ExecutionOperation as Operation, RegisteredEnvironment, SignedReceipt, TaskView } from '../shared/execution.js';
 import { functionRequest } from '../shared/function-request.js';
+import { authorizeOperationContext } from '../shared/operation-authorization.js';
 import { atPointer, pointerParts, redact, setPointer } from '../shared/values.js';
 import { encode } from '../shared/encryption.js';
 import type { Transport } from '../server/transport.js';
@@ -127,6 +128,7 @@ export class Executor {
       await authorizeEnvironment(this.environment, opened.intent);
       const operation = RuntimeOperation.parse(opened.operation);
       if (Operations[operation.kind] !== intent.operation) throw new Error('Use the operation authorized by this intent.');
+      await authorizeOperationContext(intent, operation);
       await this.preflight(operation, intent, claim.sources);
       runningSignal.throwIfAborted();
       record.operation = operation;

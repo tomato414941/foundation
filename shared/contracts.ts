@@ -502,7 +502,10 @@ export const ApprovalRequest = z.object({
   to: Principal.pick({ id: true, name: true }).nullable(),
   message: z.string(),
   proposal: Proposal.nullable(),
-  operations: z.array(Operation.extend({ title: OperationTitle })),
+  operations: z.array(Operation.extend({ title: OperationTitle,
+    execution: z.enum(['server', 'keyholder']).default('server'),
+    invocation: z.object({ name: z.string(), input: JsonObject }).strict().optional(),
+  })),
   state: z.enum(['pending', 'running', 'approved', 'declined', 'cancelled', 'expired']),
   results: z.array(Json.nullable()),
   createdAt: Time,
@@ -513,6 +516,11 @@ export const ApprovalRequest = z.object({
   returnUrl: z.url().nullable(),
   refreshUrl: z.url().nullable(),
   canRespond: z.boolean(),
+  waiting: z.object({ index: z.number().int().nonnegative(),
+    invocation: z.object({ name: z.string(), input: JsonObject }).strict(),
+    approval: z.object({ id: Id, index: z.number().int().nonnegative() }).strict().optional(),
+    continuation: z.object({ kind: z.enum(['connection', 'run']), id: Id }).strict().nullable(),
+  }).strict().nullable().default(null),
 });
 export type ApprovalView = z.infer<typeof ApprovalRequest>;
 export const DeviceRequest = z.object({

@@ -147,6 +147,27 @@ CREATE TABLE IF NOT EXISTS approval_requests (
   credential_id uuid REFERENCES credentials(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS requests_recipient ON approval_requests(to_id,state,created_at);
+CREATE TABLE IF NOT EXISTS operation_executions (
+  id uuid PRIMARY KEY,
+  actor_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  state text NOT NULL CHECK(state IN ('waiting','running','succeeded','failed','uncertain','cancelled')),
+  wait text CHECK(wait IN ('approval','input')),
+  snapshot text NOT NULL,
+  revision integer NOT NULL DEFAULT 1,
+  lease_token uuid,
+  lease_until timestamptz,
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS operation_executions_actor ON operation_executions(actor_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS operation_continuations (
+  id uuid PRIMARY KEY,
+  actor_id uuid NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+  binding_id uuid NOT NULL,
+  revision integer NOT NULL,
+  envelope jsonb NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS request_links (
   token_hash text PRIMARY KEY,
   request_id uuid NOT NULL REFERENCES approval_requests(id) ON DELETE CASCADE,

@@ -3,9 +3,13 @@ import { useTranslation } from 'react-i18next';
 import type { Route } from './+types/connection-complete';
 import { Id } from '../../../shared/contracts';
 import { Notice, Page } from '../components';
+import { connectionClient } from '../custody';
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   const id = Id.safeParse(new URL(request.url).searchParams.get('flow'));
-  if (id.success) return redirect('/connections/' + id.data);
+  if (id.success) {
+    const progress = await (await connectionClient()).progress(id.data);
+    return redirect(progress.flow.approval ? '/requests/' + progress.flow.approval.id : '/connections/' + id.data);
+  }
   return null;
 }
 export default function ConnectionComplete() {
