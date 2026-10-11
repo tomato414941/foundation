@@ -152,12 +152,14 @@ const Scopes = z.object({
     .array(z.object({ id: z.string(), name: z.string(), description: z.string().optional() }))
     .optional(),
   default: z.array(z.string()).default([]),
+  required: z.array(z.string()).optional(),
   separator: z.string().default(' '),
   docs: z.url().optional(),
 });
 const UrlTemplate = z.string().min(1).max(4096);
 const PointerList = z.union([z.string(), z.array(z.string()).min(1)]);
 export const OAuthDefinition = z.object({
+  application: z.enum(['required', 'implicit']).optional(),
   grantType: z.enum(['authorization_code', 'client_credentials']).optional(),
   issuer: z.url().optional(),
   authorizeUrl: UrlTemplate.optional(),
@@ -189,7 +191,7 @@ export const OAuthDefinition = z.object({
   scopes: Scopes.default({ default: [], separator: ' ' }),
   fields: z.array(Field).default([]),
   outputs: OutputMap.default({ ACCESS_TOKEN: '/accessToken' }),
-  adapter: z.enum(['google', 'github', 'ebay', 'openrouter', 'cloudflare', 'slack']).optional(),
+  adapter: z.string().regex(/^[a-z][a-z0-9_-]{0,99}$/).optional(),
   keep: z.array(z.string()).default([]),
   hint: z.string().optional(),
 }).refine(value => value.grantType === 'client_credentials' || Boolean(value.authorizeUrl), {

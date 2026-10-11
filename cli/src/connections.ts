@@ -54,7 +54,7 @@ export async function startConnection(client: Client, input: {
   return connectionClient(client).start({ ownerId: input.ownerId, environmentId: Id.parse(input.environmentId),
     name: Name.parse(input.name ?? existing?.name ?? definition.name), methodId: input.methodId, method: definition,
     appId: input.appId, connectionId: input.connectionId, fields: z.record(z.string(), z.string()).parse(input.fields),
-    scopes: z.array(z.string()).parse(input.scopes), role: ConnectionMaterial.shape.role.parse(input.role),
+    scopes: z.array(z.string()).optional().parse(input.scopes), role: ConnectionMaterial.shape.role.parse(input.role),
     ...(input.aws !== undefined ? { aws: AwsConnectionInput.parse(input.aws) } : {}),
     environments: input.environments, redirectUri: input.redirectUri });
 }

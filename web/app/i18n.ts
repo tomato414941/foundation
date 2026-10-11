@@ -260,6 +260,7 @@ const words: Record<string, [string, string]> = {
     'Enter the scopes you need, separated by spaces.',
   ],
   serviceConsole: ['サービスの管理画面を開く', 'Open service console'],
+  requiredScopesHelp: ['この接続に必須のスコープ: {{scopes}}。', 'Required scopes for this connection: {{scopes}}.'],
   docs: ['ドキュメント', 'Documentation'],
   accountName: ['接続先', 'Connected account'],
   externalAccountId: ['外部のアカウント・ロールID', 'External account or role ID'],

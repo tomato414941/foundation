@@ -66,6 +66,7 @@ export async function flowFixture(respond: (request: OutboundRequest) => Outboun
     } });
   };
   async function start(input: { methodId: string; fields?: Record<string, string>; name?: string;
+    scopes?: string[];
     connectionId?: string; appId?: string; role?: { arn: string; externalId: string; region: string } }) {
     return connections.start({ ...input, method: await method(input.methodId), name: input.name ?? 'Account',
       ownerId: f.owner.actor.id, environmentId: f.environment.manifest.id });

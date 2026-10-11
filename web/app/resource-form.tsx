@@ -17,7 +17,7 @@ import { actionResult, api, ApiFailure, formText, jsonField, session, upload } f
 import { decryptVariable } from './keys';
 import { connectionClient, custodyClient } from './custody';
 import { availableEnvironments, EnvironmentChoice } from './environments';
-import { ConnectionFields, ConnectionMethodHelp, ConnectionPreparation, connectionFields, connectionSettings, connectionInitialValues } from './connection-form';
+import { ConnectionFields, connectionNeedsMaterial, ConnectionMethodHelp, ConnectionPreparation, connectionFields, connectionSettings, connectionInitialValues } from './connection-form';
 import { sshSettings } from './ssh';
 import { ErrorNotice, JsonField, Page, Panel, SaveBar } from './components';
 import { resourceKind, resourcePath } from './navigation';
@@ -157,8 +157,7 @@ export async function formAction({ params, request }: ActionFunctionArgs) {
       const { id: methodId, builtin: _builtin, availability: _availability, ...method } = selected;
       const connectionId = formText(form, 'connectionId');
       let previous: ConnectionState | undefined;
-      if (selected.kind === 'role' && connectionId && formText(form, 'awsAuthentication') !== 'environment' &&
-        (!formText(form, 'awsSecretAccessKey') || (formText(form, 'awsAuthentication') === 'session' && !formText(form, 'awsSessionToken'))))
+      if (connectionId && connectionNeedsMaterial(selected, form))
         previous = ConnectionMaterial.parse(JSON.parse(decode(await client.custody.reveal(connectionId))));
       const progress = await client.start({
         ownerId: owner, environmentId: formText(form, 'environmentId'), methodId, method,

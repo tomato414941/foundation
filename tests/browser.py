@@ -617,6 +617,52 @@ class BrowserTests(unittest.TestCase):
         expect(page.get_by_label("クライアントシークレット", exact=True)).to_be_visible()
         expect(page.get_by_label("コールバックURL", exact=True)).to_have_value(ORIGIN + "/oauth/callback")
 
+    def test_必須スコープの案内を表示し初期選択を外して接続を保存する(self):
+        page, principal = self.passkey_account("Scoped service owner")
+        environment_path = self.executor(page, principal)
+        root = f"{ORIGIN}/p/{principal['id']}"
+        page.goto(root + "/methods/new")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Scoped service")
+        page.get_by_role("textbox", name="定義（JSON）", exact=True).fill(json.dumps({"kind": "oauth", "config": {
+            "grantType": "client_credentials", "tokenUrl": "https://ca.ovh.com/auth/oauth2/token", "pkce": False,
+            "identity": {"from": "app", "id": "/clientId", "name": "/clientId"},
+            "scopes": {"default": ["optional"], "required": ["all"]},
+        }}))
+        page.get_by_role("button", name="作成", exact=True).click()
+        expect(page.get_by_role("heading", name="Scoped service", exact=True)).to_be_visible()
+        method_id = page.url.rsplit("/", 1)[1]
+        page.goto(root + "/apps/new")
+        self.select(page, "サービス", "すべての接続方法")
+        self.select(page, "接続方法", "Scoped service")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Scoped application")
+        page.get_by_label("クライアントID", exact=True).fill("browser-client")
+        page.get_by_label("クライアントシークレット", exact=True).fill("browser-client-secret")
+        page.get_by_role("checkbox", name="Browser executor", exact=True).check()
+        page.get_by_role("button", name="作成", exact=True).click()
+        expect(page.get_by_role("heading", name="Scoped application", exact=True)).to_be_visible()
+        page.goto(root + "/services/new?method=" + method_id)
+        page.wait_for_load_state("networkidle")
+        self.select(page, "実行環境", "Browser executor")
+        expect(page.get_by_role("textbox", name="スコープ", exact=True)).to_have_value("all optional")
+        expect(page.get_by_text("この接続に必須のスコープ: all。", exact=False)).to_be_visible()
+        page.screenshot(path=str(ARTIFACTS / "connection-required-scopes-ja.png"), full_page=True, animations="disabled")
+        self.select(page, "言語", "English")
+        page.set_viewport_size({"width": 390, "height": 844})
+        page.wait_for_load_state("networkidle")
+        expect(page.get_by_text("Required scopes for this connection: all.", exact=False)).to_be_visible()
+        self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 391)
+        page.screenshot(path=str(ARTIFACTS / "connection-required-scopes-en.png"), full_page=True, animations="disabled")
+        self.select(page, "Language", "日本語")
+        page.get_by_role("textbox", name="スコープ", exact=True).fill("")
+        page.get_by_role("textbox", name="名前", exact=True).fill("Selected scopes")
+        page.get_by_role("button", name="接続する", exact=True).click()
+        self.accept_connection(page, "Selected scopes")
+        connection = page.request.get(ORIGIN + "/api/resources/" + page.url.rsplit("/", 1)[1]).json()
+        self.assertEqual(connection["data"]["scopes"], ["all"])
+        environment_id = environment_path.rsplit("/", 1)[1]
+        requests = page.request.get(ORIGIN + "/__test/executor/" + environment_id + "/oauth").json()
+        self.assertEqual(requests, [{"clientId": "browser-client", "clientSecret": "browser-client-secret", "scope": "all"}])
+
     def test_アプリ認証の案内を示し保存済みのアプリでOVHへ接続し再接続する(self):
         page, principal = self.passkey_account("Application owner")
         environment_path = self.executor(page, principal)

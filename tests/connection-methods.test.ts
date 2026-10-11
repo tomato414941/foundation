@@ -122,6 +122,38 @@ test('複数のサービスに同じ接続を分類し、分類変更後も接�
   await assert.rejects(f.context.resources.delete(f.owner.actor, await f.context.resources.get(method.id)));
 });
 
+test('初期スコープを選び直し、必須スコープと選択内容を保存と自動更新で維持する', async t => {
+  for (const [selection, expected] of [
+    [undefined, ['identity', 'read']], [[], ['identity']], [['write', 'identity'], ['identity', 'write']],
+  ] as const) await t.test(selection?.join(',') ?? 'default selection', async t => {
+    const f = await flowFixture(request => request.url.endsWith('/token')
+      ? jsonResponse({ access_token: 'selected-scopes-token', token_type: 'Bearer', expires_in: 10,
+        scope: new URLSearchParams(String(request.body)).get('scope') }) : jsonResponse({ ok: true }));
+    t.after(f.close);
+    const method = await f.client.api.json('/api/principals/' + f.owner.actor.id + '/resources',
+      { method: 'POST', body: { kind: 'method', name: 'Scoped application', definition: {
+        name: 'Scoped application', kind: 'oauth', config: { grantType: 'client_credentials',
+          tokenUrl: 'https://provider.example/token', scopes: { default: ['read'], required: ['identity'] },
+          identity: { from: 'app', id: '/clientId', name: '/clientId' } },
+      } } }, Resource);
+    const app = await f.saveApp(method.id);
+    const started = await f.start({ methodId: method.id, appId: app.id,
+      ...(selection === undefined ? {} : { scopes: [...selection] }) });
+    const reviewed = await f.tick(started.flow.id);
+    assert.equal(reviewed.kind, 'review', JSON.stringify(reviewed));
+    if (reviewed.kind !== 'review') return;
+    assert.deepEqual(reviewed.metadata.scopes, expected);
+    const saved = await f.accept(started.flow.id);
+    assert.equal((await f.http(saved.id, 'ACCESS_TOKEN'))?.ok, true);
+    const tokenRequests = f.requests.filter(request => request.url.endsWith('/token'));
+    assert.equal(tokenRequests.length, 2);
+    assert.deepEqual(tokenRequests.map(request => new URLSearchParams(String(request.body)).get('scope')), [expected.join(' '), expected.join(' ')]);
+    const renewed = await f.client.read(saved.id);
+    assert.equal(renewed.content.materialRevision, 2);
+    assert.equal(renewed.content.metadata.authorizationDigest, reviewed.metadata.authorizationDigest);
+  });
+});
+
 test('接続先で使うOAuthアプリを接続方法に結び付けて確認する', async t => {
   const f = await flowFixture(); t.after(f.close);
   const application = await f.saveApp('google:oauth');

@@ -12,7 +12,7 @@ import { MethodDefinition } from '../shared/contracts.js';
 import type { JsonValue } from '../shared/contracts.js';
 import { AppMaterial, ConnectionMaterial, connectionMetadata } from '../shared/connections.js';
 import { hash, canonical } from '../shared/authority.js';
-import { ContentTypes, Operations, approvePolicy, prepareRun, protect, reveal } from '../shared/custody.js';
+import { ContentTypes, Operations, approvePolicy, prepareRun, protect, renewContent, reveal } from '../shared/custody.js';
 import type { CustodyContent, CustodyPolicy, ExecutionIntent } from '../shared/custody.js';
 import { readReceipt } from '../shared/execution.js';
 import { decode, encode } from '../shared/encryption.js';
@@ -117,6 +117,44 @@ test('選んだ実行先でOAuthコードを交換し、接続先と権限を確
   } finally { await f.close(); }
 });
 
+test('保存済みの認証待ち記録を読み取り、接続先を確認して承認した宛先へ保存する', async () => {
+  const f = await setup(request => request.url.endsWith('/token')
+    ? response({ access_token: 'continued-access', token_type: 'bearer', expires_in: 3600, scope: 'read' })
+    : response({ id: 'account-1', name: 'Account' }));
+  try {
+    const flowId = crypto.randomUUID();
+    await f.journal.write('oauth_' + flowId, { actor: f.owner.binding, ownerId: f.owner.actor.id,
+      input: { action: 'start', flowId, name: 'Continued connection', methodId: 'provider:oauth',
+        method: f.method, appId: f.appPolicy.id, fields: {}, scopes: [], redirectUri: f.config.origin + '/oauth/callback' },
+      app: f.appMaterial, state: 'previous-authorization-state', verifier: 'previous-proof-key-verifier',
+      expiresAt: Date.now() + 600_000, phase: 'authorize' });
+    const reviewed = await f.run({ action: 'exchange', flowId, parameters: new URLSearchParams({
+      state: 'previous-authorization-state', code: 'continued-code',
+    }).toString() });
+    assert.equal(reviewed.kind, 'review');
+    assert.deepEqual((reviewed.metadata as Record<string, JsonValue>).scopes, ['read']);
+    const runId = crypto.randomUUID(), policy = { ...f.policy(ContentTypes.tokenSet, [Operations.http, Operations.refresh]),
+      producers: [{ executor: f.executor.binding, runId, expiresAt: f.intent.expiresAt, materialRevision: 1 }] };
+    const saved = await f.run({ action: 'commit', flowId,
+      authorizationDigest: (reviewed.metadata as Record<string, JsonValue>).authorizationDigest!,
+      approval: await approvePolicy(policy, f.owner.binding, f.owner.keys) }, [f.appContent], runId);
+    assert.equal(saved.id, policy.id);
+    assert.equal(new URLSearchParams(String(f.requests[0]!.body)).get('code'), 'continued-code');
+  } finally { await f.close(); }
+});
+
+test('選び直したスコープと必須スコープでブラウザ認証を行う', async () => {
+  const f = await setup(() => response({}));
+  try {
+    const method = MethodDefinition.parse({ ...f.method, config: { ...f.method.config,
+      scopes: { default: ['read'], required: ['identity'] } } });
+    const started = await f.run({ action: 'start', flowId: crypto.randomUUID(), name: 'Selected scopes',
+      methodId: 'provider:oauth', method, appId: f.appPolicy.id, requestedScopes: [],
+      redirectUri: f.config.origin + '/oauth/callback' });
+    assert.equal(new URL(String(started.url)).searchParams.get('scope'), 'identity');
+  } finally { await f.close(); }
+});
+
 test('AWSキーを選んだ実行先へ送り、確認した身元と認証情報を暗号化して保存して使用する', async t => {
   t.mock.method(STSClient.prototype, 'send', async () => ({ Account: '123456789012',
     Arn: 'arn:aws:iam::123456789012:user/operator', UserId: 'AIDOPERATOR' }));
@@ -148,6 +186,41 @@ test('AWSキーを選んだ実行先へ送り、確認した身元と認証情�
     const refreshed = await f.connections.execute({ action: 'refresh', id: policy.id },
       { ...authorization, operation: Operations.refresh }, [saved.content], new AbortController().signal);
     assert.equal((refreshed as Record<string, JsonValue>).kind, 'refreshed');
+  } finally { await f.close(); }
+});
+
+test('AWSの認証情報を同じ承認と共有許可のまま暗号化して更新し利用する', async t => {
+  t.mock.method(STSClient.prototype, 'send', async () => ({ Account: '123456789012',
+    Arn: 'arn:aws:iam::123456789012:user/operator', UserId: 'AIDOPERATOR' }));
+  const f = await setup(() => response({}));
+  try {
+    const method = MethodDefinition.parse({ name: 'AWS', kind: 'role', config: { kind: 'aws' } });
+    const flowId = crypto.randomUUID();
+    const reviewed = await f.run({ action: 'start', flowId, name: 'Renewable AWS credentials', methodId: 'aws:role',
+      method, appId: null, authorizationVersion: 2,
+      aws: { authentication: { kind: 'access_key', accessKeyId: 'first-key', secretAccessKey: 'first-secret' }, region: 'us-west-2' } }, []);
+    const metadata = reviewed.metadata as Record<string, JsonValue>, runId = crypto.randomUUID();
+    const policy = { ...f.policy(ContentTypes.tokenSet, [Operations.command, Operations.refresh]),
+      producers: [{ executor: f.executor.binding, runId, expiresAt: f.intent.expiresAt, materialRevision: 1 }] };
+    await f.run({ action: 'commit', flowId, authorizationDigest: metadata.authorizationDigest!,
+      approval: await approvePolicy(policy, f.owner.binding, f.owner.keys) }, [], runId);
+    const previous = (await f.custody.read(f.owner.actor, policy.id)).content;
+    const material = ConnectionMaterial.parse(JSON.parse(decode(await reveal(previous, f.owner.binding, f.owner.keys.encryption))));
+    material.aws!.authentication = { kind: 'access_key', accessKeyId: 'rotated-key', secretAccessKey: 'rotated-secret' };
+    const operation = await f.operations.prepare(f.executor.actor, crypto.randomUUID(), policy.id, previous.materialRevision);
+    await f.operations.dispatch(f.executor.actor, operation.id, operation.fence);
+    const updated = await renewContent(previous, encode(canonical(material)), f.executor.binding, f.executor.keys,
+      await connectionMetadata(material));
+    await f.operations.commit(f.executor.actor, operation.id, operation.fence, updated);
+    const saved = (await f.custody.read(f.owner.actor, policy.id)).content;
+    assert.equal(saved.materialRevision, 2);
+    assert.deepEqual(saved.policy, previous.policy);
+    assert.equal(saved.metadata.authorizationDigest, previous.metadata.authorizationDigest);
+    const authorization = { ...f.intent, operation: Operations.command, sources: [{ id: policy.id, materialRevision: 2,
+      policyDigest: await hash(policy), authorizationDigest: String(saved.metadata.authorizationDigest) }] };
+    const outputs = await f.connections.outputs(saved, authorization, [saved], new AbortController().signal);
+    assert.equal(outputs.AWS_ACCESS_KEY_ID, 'rotated-key');
+    assert.equal(outputs.AWS_SECRET_ACCESS_KEY, 'rotated-secret');
   } finally { await f.close(); }
 });
 

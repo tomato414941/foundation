@@ -10,7 +10,7 @@ import { Task } from './execution.js';
 import type { TaskView } from './execution.js';
 import { decode, open } from './encryption.js';
 import { ConnectionMaterial, requiresApp } from './connections.js';
-import { connectionMethod } from './connection-methods.js';
+import { connectionMethod, selectScopes } from './connection-methods.js';
 import type { AwsConnectionRequest } from './aws.js';
 
 const Review = z.object({ kind: z.literal('review'), flowId: Id, name: Name, metadata: JsonObject }).strict();
@@ -68,8 +68,9 @@ export class ConnectionClient {
     const request = await this.custody.prepare(input.ownerId, input.environmentId, { kind: 'connect', input: {
       action: 'start', flowId: id, name: input.name, methodId: input.methodId, method: input.method, appId,
       fields: input.fields ?? {}, scopes: input.scopes ?? [],
+      ...(input.method.kind === 'oauth' ? { requestedScopes: selectScopes(input.method.config.scopes, input.scopes) } : {}),
       ...(input.role ? { role: input.role } : {}),
-      ...(input.aws ? { aws: input.aws } : {}),
+      ...(input.aws ? { aws: input.aws, authorizationVersion: 2 } : {}),
       ...(connectionMethod(input.method).browserAuthorization
         ? { redirectUri: input.redirectUri ?? this.custody.origin + '/oauth/callback' } : {}),
     } }, { sourceIds: appId ? [appId] : [], approval });

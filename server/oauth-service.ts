@@ -122,9 +122,9 @@ const google: OAuthService = {
       fail(502, 'invalid_response', 'The service account could not be verified.');
   },
 };
-const namedServices: Partial<Record<NonNullable<OAuthSpec['adapter']>, OAuthService>> = {
-  ebay, openrouter, github, google,
-};
+const namedServices: Readonly<Record<string, OAuthService>> = Object.assign(Object.create(null), {
+  ebay, openrouter, github, google, cloudflare: {}, slack: {},
+});
 const endpointServices: Array<{ matches(url: URL): boolean; service(spec: OAuthSpec, url: URL): OAuthService }> = [
   {
     matches: url => url.hostname.endsWith('.myshopify.com'),
@@ -166,6 +166,7 @@ export function oauthService(spec: OAuthSpec, endpoint?: string): OAuthService {
   const url = endpoint ? new URL(endpoint) : undefined;
   const endpointService = url ? endpointServices.find(service => service.matches(url))?.service(spec, url) : undefined;
   const named = spec.adapter ? namedServices[spec.adapter] : undefined;
+  if (spec.adapter && !named) fail(400, 'invalid_input', 'Choose a supported service authentication adapter.');
   return { recognizedTokenTypes: tokenTypes, ...endpointService, ...named,
     ...(spec.revoke?.style === 'github' ? githubRevocation : {}),
     ...(endpointService?.verifyIdentity || named?.verifyIdentity ? {

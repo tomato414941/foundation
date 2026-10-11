@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { STSClient, AssumeRoleCommand, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import type { GetCallerIdentityCommandOutput } from '@aws-sdk/client-sts';
-import { AwsConnectionInput, AwsConnectionMaterial, AwsIdentity } from '../shared/aws.js';
+import { AwsConnectionInput, AwsConnectionMaterial, AwsIdentity, stableAwsArn } from '../shared/aws.js';
 import type { AwsConnectionRequest, AwsConnectionState, VerifiedAwsIdentity } from '../shared/aws.js';
 import { DomainError, fail } from '../server/errors.js';
 import type { RoleCredentials } from './roles.js';
@@ -18,9 +18,8 @@ function identity(value: GetCallerIdentityCommandOutput): VerifiedAwsIdentity {
   return parsed.data;
 }
 function sameIdentity(actual: VerifiedAwsIdentity, expected: VerifiedAwsIdentity) {
-  const stableArn = (arn: string) => arn.includes(':assumed-role/') ? arn.slice(0, arn.lastIndexOf('/')) : arn;
   return actual.accountId === expected.accountId && actual.principalId === expected.principalId &&
-    stableArn(actual.arn) === stableArn(expected.arn);
+    stableAwsArn(actual.arn) === stableAwsArn(expected.arn);
 }
 function checkExpiry(expiration?: Date) {
   if (expiration && (!Number.isFinite(expiration.getTime()) || expiration.getTime() <= Date.now()))

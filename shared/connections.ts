@@ -4,6 +4,7 @@ import { Fingerprint, hash } from './authority.js';
 import { PolicyApproval } from './custody.js';
 import { connectionMethod, requiresApp } from './connection-methods.js';
 import { AwsConnectionInput, AwsConnectionMaterial, AwsConnectionInfo, awsConnectionInfo } from './aws.js';
+import { connectionAuthorization, connectionAccount } from './connection-authorization.js';
 export { requiresApp } from './connection-methods.js';
 
 const Fields = z.record(z.string().max(100), z.string().max(16384));
@@ -21,6 +22,7 @@ export const TokenMaterial = z.object({
 }).strict();
 export const ConnectionMaterial = z.object({
   format: z.literal(1), methodId: z.string().min(1), method: MethodDefinition, generation: Id,
+  authorizationVersion: z.literal(2).optional(),
   appId: Id.nullable(), appGeneration: Id.nullable(),
   state: z.literal('reconnect').optional(),
   oauth: TokenMaterial.optional(), fields: Fields.optional(),
@@ -35,6 +37,8 @@ export const ConnectionMaterial = z.object({
     ctx.addIssue({ code: 'custom', message: 'Use one AWS authentication configuration for this connection.' });
   if (Boolean(value.appId) !== Boolean(value.appGeneration))
     ctx.addIssue({ code: 'custom', message: 'Bind the application and its generation together.' });
+  if (value.authorizationVersion && !value.aws)
+    ctx.addIssue({ code: 'custom', message: 'Use the AWS identity authorization with AWS connection material.' });
 });
 export type ConnectionState = z.infer<typeof ConnectionMaterial>;
 
@@ -52,19 +56,11 @@ export const ConnectionMetadata = z.object({
 
 export async function connectionMetadata(state: ConnectionState) {
   const outputs = [...connectionMethod(state.method).outputs, ...(state.aws ? ['AWS_REGION'] : [])];
-  const authorizationDigest = await hash({
-    generation: state.generation, methodId: state.methodId, method: state.method,
-    appId: state.appId, appGeneration: state.appGeneration,
-    account: state.oauth?.account ?? state.role?.arn ?? state.aws?.identity.arn ?? null,
-    accountVerified: state.aws ? true : state.oauth?.accountVerified ?? false,
-    scopes: [...(state.oauth?.scopes ?? [])].sort(), role: state.role ?? null,
-    ...(state.aws ? { aws: state.aws } : {}),
-    ...(state.state ? { state: state.state } : {}),
-  });
+  const authorizationDigest = await hash(connectionAuthorization(state));
   return ConnectionMetadata.parse({
     methodId: state.methodId, methodKind: state.method.kind,
     generation: state.generation, authorizationDigest, appId: state.appId,
-    accountId: state.role?.arn ?? state.aws?.identity.arn ?? (state.oauth?.accountVerified ? state.oauth.account : null),
+    accountId: connectionAccount(state),
     accountVerified: Boolean(state.role || state.aws || state.oauth?.accountVerified),
     scopes: state.oauth?.scopes ?? [], scopesStatus: state.oauth?.scopesStatus ?? 'unknown',
     outputs, state: state.state ?? 'ready',
@@ -84,9 +80,16 @@ const FlowStart = z.object({
   action: z.literal('start'), flowId: Id, name: Name,
   methodId: z.string().min(1), method: MethodDefinition, appId: Id.nullable(),
   fields: Fields.default({}), scopes: z.array(z.string().max(1000)).max(200).default([]),
+  requestedScopes: z.array(z.string().max(1000)).max(200).optional(),
+  authorizationVersion: z.literal(2).optional(),
   redirectUri: z.url().optional(), role: ConnectionMaterial.shape.role,
   aws: AwsConnectionInput.optional(),
-}).strict();
+}).strict().superRefine((value, ctx) => {
+  if (((value.aws || value.role) && connectionMethod(value.method).family !== 'aws') || (value.aws && value.role))
+    ctx.addIssue({ code: 'custom', message: 'Choose one authentication configuration for this connection method.' });
+  if (value.authorizationVersion && !value.aws)
+    ctx.addIssue({ code: 'custom', message: 'Use the AWS identity authorization with AWS authentication.' });
+});
 export const ConnectionAction = z.discriminatedUnion('action', [
   FlowStart,
   z.object({ action: z.literal('exchange'), flowId: Id, parameters: z.string().max(16384) }).strict(),

@@ -23,6 +23,18 @@ export const AwsConnectionMaterial = AwsConnectionInput.extend({
   sourceIdentity: AwsIdentity, identity: AwsIdentity,
 }).strict();
 export type AwsConnectionState = z.infer<typeof AwsConnectionMaterial>;
+
+export function stableAwsArn(arn: string) {
+  return arn.includes(':assumed-role/') ? arn.slice(0, arn.lastIndexOf('/')) : arn;
+}
+function identityAuthorization(identity: VerifiedAwsIdentity) {
+  return { ...identity, arn: stableAwsArn(identity.arn) };
+}
+export function awsAuthorization(state: AwsConnectionState) {
+  return { authentication: state.authentication.kind, region: state.region, role: state.role ?? null,
+    sourceIdentity: identityAuthorization(state.sourceIdentity), identity: identityAuthorization(state.identity) };
+}
+
 export const AwsConnectionInfo = z.object({ authentication: z.enum(['access_key', 'session', 'environment']),
   region: AwsRegion, sourceAccountId: z.string().regex(/^\d{12}$/), sourceArn: z.string().max(2000),
   roleArn: AwsRoleArn.optional(), expiresAt: z.number().int().positive().optional() }).strict();

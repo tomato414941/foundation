@@ -446,7 +446,7 @@ async function main(argv: string[]) {
       environmentId: requireArgument(args.values.environment, 'Choose --environment ID.'),
       methodId: requireArgument(args.values.method, 'Choose --method ID.'), name: args.values.name,
       appId: args.values.app, connectionId: args.values.connection,
-      fields: await json(args.values.fields, {}), scopes: await json(args.values.scopes, []),
+      fields: await json(args.values.fields, {}), scopes: args.values.scopes === undefined ? undefined : await json(args.values.scopes, []),
       role: args.values.role ? await json(args.values.role) : undefined,
       aws: args.values.aws ? await json(args.values.aws) : undefined,
       environments: args.values.for, redirectUri: args.values['redirect-uri'] });

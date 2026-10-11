@@ -18,6 +18,7 @@
           "OPENROUTER_API_KEY": "/accessToken"
         },
         "adapter": "openrouter",
+        "application": "implicit",
         "hint": "OpenRouter makes an API key for Foundation. Inspect facts.key_info, including is_management_key and is_provisioning_key (null means unknown), before use. Model calls can incur charges."
       },
       "docs": "https://openrouter.ai/docs",

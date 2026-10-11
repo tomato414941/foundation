@@ -1,5 +1,4 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import safeRegex from 'safe-regex2';
 import { canonical, hash } from '../shared/authority.js';
 import type { BoundKeys, IdentityKeys } from '../shared/authority.js';
 import type { JsonValue, MethodDescription } from '../shared/contracts.js';
@@ -9,9 +8,6 @@ import { connectionMethod } from '../shared/connection-methods.js';
 import { ContentTypes, Operations, authorizeUse, produceContent, renewContent, useContent, verifyPolicyApproval } from '../shared/custody.js';
 import type { CustodyContent, ExecutionIntent } from '../shared/custody.js';
 import { encode } from '../shared/encryption.js';
-import { atPointer, textValue } from '../shared/values.js';
-import { OAuth } from '../server/oauth.js';
-import type { OAuthToken } from '../server/oauth.js';
 import type { ConnectionOperation } from '../server/connection-operations.js';
 import type { Transport } from '../server/transport.js';
 import { DomainError, fail } from '../server/errors.js';
@@ -22,6 +18,8 @@ import type { RoleProvider } from './roles.js';
 import { AwsRoles } from './roles.js';
 import { AwsConnections } from './aws.js';
 import type { AwsConnectionProvider } from './aws.js';
+import { connectionProviders } from './connection-providers.js';
+import type { AuthorizationContext, ConnectionCheckpoint, ConnectionProvider, ConnectionStart } from './connection-provider.js';
 import { utf8 } from './inputs.js';
 
 export interface ConnectionBroker {
@@ -43,7 +41,7 @@ interface Flow {
   verifier: string;
   expiresAt: number;
   phase: 'authorize' | 'exchanging' | 'received' | 'review' | 'committing' | 'committed';
-  checkpoint?: { token: OAuthToken; response: Record<string, unknown> };
+  checkpoint?: ConnectionCheckpoint;
   material?: ConnectionState;
   content?: CustodyContent;
 }
@@ -51,41 +49,23 @@ interface Renewal {
   operation: ConnectionOperation;
   previous: CustodyContent;
   material: ConnectionState;
-  app: AppState;
+  app: AppState | null;
   phase: 'prepared' | 'dispatched' | 'received' | 'settled';
-  checkpoint?: { token: OAuthToken; response: Record<string, unknown> };
+  checkpoint?: ConnectionCheckpoint;
   content?: CustodyContent;
   delivered: boolean;
 }
-function fields(method: MethodDescription, input: Record<string, string>) {
-  if (method.kind === 'role') return {};
-  const definitions = method.config.fields;
-  const values = { ...(method.kind === 'oauth' ? method.config.defaults : {}), ...input };
-  for (const field of definitions) {
-    if (field.required !== false && !values[field.name]) fail(400, 'missing_field', 'Complete the required service fields.');
-    if (values[field.name]?.includes('\0')) fail(400, 'invalid_field', 'Check the service fields.');
-    if (field.pattern && (field.pattern.length > 200 || !safeRegex(field.pattern)))
-      fail(400, 'invalid_pattern', 'Use a simple field validation pattern.');
-    if (field.pattern && values[field.name] && !new RegExp(field.pattern, 'u').test(values[field.name]!.slice(0, 1000)))
-      fail(400, 'invalid_field', 'Check the service fields.');
-  }
-  if (Object.keys(input).some(key => !definitions.some(field => field.name === key)))
-    fail(400, 'invalid_field', 'Remove unrecognized service fields.');
-  return values;
-}
-
 export class Connections implements ExecutionExtension {
   private active = new Set<string>();
+  private readonly providers: ReturnType<typeof connectionProviders>;
   constructor(
     readonly binding: BoundKeys, readonly keys: IdentityKeys, readonly broker: ConnectionBroker,
-    readonly journal: Journal, readonly transport: Transport, readonly roles: RoleProvider = new AwsRoles(),
-    readonly aws: AwsConnectionProvider = new AwsConnections(),
-  ) {}
+    readonly journal: Journal, transport: Transport, roles: RoleProvider = new AwsRoles(),
+    aws: AwsConnectionProvider = new AwsConnections(),
+  ) { this.providers = connectionProviders(transport, roles, aws); }
 
-  private oauth(signal?: AbortSignal) {
-    return new OAuth({ send: request => this.transport.send({ ...request,
-      ...(signal ? { signal: AbortSignal.any([signal, ...(request.signal ? [request.signal] : [])]) } : {}),
-    }) });
+  private provider(method: MethodDescription): ConnectionProvider {
+    return this.providers[connectionMethod(method).family];
   }
   private source(id: string, type: typeof ContentTypes.clientCredential | typeof ContentTypes.tokenSet, sources: CustodyContent[]) {
     const content = sources.find(source => source.policy.id === id && source.policy.contentType === type);
@@ -107,6 +87,7 @@ export class Connections implements ExecutionExtension {
     return value;
   }
   private async connectionApp(state: ConnectionState, intent: ExecutionIntent, sources: CustodyContent[]) {
+    if (connectionMethod(state.method).application === 'none') return null;
     if (!requiresApp(state.method)) return AppMaterial.parse({ format: 1, methodId: state.methodId,
       generation: state.generation, clientId: '', fields: {} });
     const operation = intent.operation === Operations.revoke ? Operations.revoke : Operations.refresh;
@@ -116,10 +97,25 @@ export class Connections implements ExecutionExtension {
     return app;
   }
   private async flow(id: string, intent: ExecutionIntent) {
-    const flow = await this.journal.read<Flow>('oauth_' + id);
+    const flow = await this.readFlow(id);
     if (!flow || flow.expiresAt <= Date.now() || canonical(flow.actor) !== canonical(intent.actor) || flow.ownerId !== intent.ownerId)
       fail(409, 'connection_expired', 'Start the connection again.');
     return flow;
+  }
+  private async readFlow(id: string) {
+    return await this.journal.read<Flow>('connect_' + id) ?? await this.journal.read<Flow>('oauth_' + id);
+  }
+  private writeFlow(id: string, flow: Flow) { return this.journal.write('connect_' + id, flow); }
+  private async startApp(input: ConnectionStart, intent: ExecutionIntent, sources: CustodyContent[]) {
+    if (connectionMethod(input.method).application === 'none') return null;
+    return input.appId ? this.app(input.appId, input.methodId, intent, sources)
+      : AppMaterial.parse({ format: 1, methodId: input.methodId, generation: input.flowId, clientId: '', fields: {} });
+  }
+  private authorization(id: string, flow: Flow, signal: AbortSignal): AuthorizationContext {
+    return { input: flow.input, app: flow.app, state: flow.state, verifier: flow.verifier, signal,
+      dispatch: async () => { flow.phase = 'exchanging'; await this.writeFlow(id, flow); },
+      receive: async checkpoint => { flow.checkpoint = checkpoint; flow.phase = 'received'; await this.writeFlow(id, flow); },
+    };
   }
 
   async validate(input: JsonValue, intent: ExecutionIntent, sources: CustodyContent[]) {
@@ -127,26 +123,17 @@ export class Connections implements ExecutionExtension {
     const expected = Operations[action.action === 'refresh' || action.action === 'revoke' ? action.action : 'connect'];
     if (intent.operation !== expected) fail(400, 'wrong_operation', 'Use the approved connection operation.');
     if (action.action === 'start') {
-      if (action.method.kind === 'oauth') {
-        if (requiresApp(action.method) && !action.appId)
-          fail(400, 'app_required', 'Choose an OAuth application.');
-        if (connectionMethod(action.method).browserAuthorization) {
-          if (!action.redirectUri) fail(400, 'invalid_redirect', 'Choose a callback URL.');
-          const redirect = new URL(action.redirectUri);
-          if (redirect.username || redirect.password || redirect.hash || redirect.search ||
-            !(action.redirectUri === intent.origin + '/oauth/callback' ||
-              (redirect.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(redirect.hostname))))
-            fail(400, 'invalid_redirect', 'Use the Foundation callback or a callback on this computer.');
-        }
-        const app = action.appId ? await this.app(action.appId, action.methodId, intent, sources)
-          : AppMaterial.parse({ format: 1, methodId: action.methodId, generation: action.flowId, clientId: '', fields: {} });
-        fields(action.method, app.fields);
-        if (requiresApp(action.method) && action.method.config.clientAuth !== 'none' && !app.clientSecret)
-          fail(409, 'app_required', 'Add a client secret to this OAuth application.');
-      } else if (action.method.kind === 'token') fields(action.method, action.fields);
-      else if (!action.role && !action.aws) fail(400, 'role_required', 'Choose AWS authentication or a role trusted for this executor.');
-      if (action.aws && (action.method.kind !== 'role' || action.role))
-        fail(400, 'invalid_input', 'Choose one AWS authentication configuration.');
+      if (requiresApp(action.method) && !action.appId)
+        fail(400, 'app_required', 'Choose an OAuth application.');
+      if (connectionMethod(action.method).browserAuthorization) {
+        if (!action.redirectUri) fail(400, 'invalid_redirect', 'Choose a callback URL.');
+        const redirect = new URL(action.redirectUri);
+        if (redirect.username || redirect.password || redirect.hash || redirect.search ||
+          !(action.redirectUri === intent.origin + '/oauth/callback' ||
+            (redirect.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(redirect.hostname))))
+          fail(400, 'invalid_redirect', 'Use the Foundation callback or a callback on this computer.');
+      }
+      this.provider(action.method).validate(action, await this.startApp(action, intent, sources));
     } else if (action.action === 'commit') {
       const flow = await this.flow(action.flowId, intent), approval = await verifyPolicyApproval(action.approval);
       if (!flow.material || action.authorizationDigest !== (await connectionMetadata(flow.material)).authorizationDigest ||
@@ -164,7 +151,7 @@ export class Connections implements ExecutionExtension {
     } else {
       const content = this.source(action.id, ContentTypes.tokenSet, sources);
       const state = await this.material(content, intent);
-      if (state.method.kind === 'oauth') await this.connectionApp(state, intent, sources);
+      await this.connectionApp(state, intent, sources);
     }
   }
 
@@ -179,12 +166,13 @@ export class Connections implements ExecutionExtension {
       if (action.action === 'commit') return await this.commit(action, intent);
       const content = this.source(action.id, ContentTypes.tokenSet, sources), state = await this.material(content, intent);
       if (action.action === 'refresh') {
-        if (state.aws) await this.aws.obtain(state.aws, state.aws, signal);
-        const refreshed = state.method.kind === 'oauth' ? await this.refresh(content, state, intent, sources, signal) : state;
+        await this.provider(state.method).check?.(state, signal);
+        const refreshed = await this.refresh(content, state, intent, sources, signal);
         return { kind: 'refreshed', id: content.policy.id, ...(await connectionMetadata(refreshed)) };
       }
-      if (state.method.kind !== 'oauth') fail(409, 'manual_revoke', 'Remove access in the service settings, then remove this connection.');
-      await this.oauth(signal).revoke(state.method.config, await this.connectionApp(state, intent, sources), state.oauth!);
+      const provider = this.provider(state.method);
+      if (!provider.revoke) fail(409, 'manual_revoke', 'Remove access in the service settings, then remove this connection.');
+      await provider.revoke(state, await this.connectionApp(state, intent, sources), signal);
       return { kind: 'revoked', id: content.policy.id };
     } finally { this.active.delete(lock); }
   }
@@ -195,80 +183,44 @@ export class Connections implements ExecutionExtension {
       metadata: { ...await connectionMetadata(flow.material!), ...connectionLabels(flow.material!) } };
   }
   private async start(input: Extract<ConnectionCommand, { action: 'start' }>, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal) {
-    const id = 'oauth_' + input.flowId;
-    if (await this.journal.read(id)) fail(409, 'flow_exists', 'Use a new connection request.');
+    if (await this.readFlow(input.flowId)) fail(409, 'flow_exists', 'Use a new connection request.');
     const flow: Flow = { actor: intent.actor, ownerId: intent.ownerId, input,
-      app: input.method.kind !== 'oauth' ? null : input.appId
-        ? await this.app(input.appId, input.methodId, intent, sources)
-        : AppMaterial.parse({ format: 1, methodId: input.methodId, generation: input.flowId, clientId: '', fields: {} }),
+      app: await this.startApp(input, intent, sources),
       state: randomBytes(32).toString('base64url'), verifier: randomBytes(32).toString('base64url'),
-      expiresAt: Math.min(Date.now() + 600_000, Date.parse(intent.expiresAt)), phase: input.method.kind === 'oauth' ? 'authorize' : 'review' };
-    if (input.method.kind !== 'oauth') {
-      const aws = input.method.kind === 'role' && input.aws ? (await this.aws.obtain(input.aws, undefined, signal)).state : undefined;
-      if (input.method.kind === 'role' && !aws) await this.roles.obtain(input.role!.arn, input.role!.externalId, input.role!.region);
-      flow.material = ConnectionMaterial.parse({ format: 1, methodId: input.methodId, method: input.method,
-        generation: randomUUID(), appId: null, appGeneration: null,
-        ...(aws ? { aws } : input.method.kind === 'role' ? { role: input.role } : { fields: fields(input.method, input.fields) }) });
-    }
-    await this.journal.write(id, flow);
-    if (input.method.kind !== 'oauth') return this.review(input.flowId, flow);
-    const scopes = [...new Set([...input.method.config.scopes.default, ...input.scopes])];
-    if (input.method.config.grantType === 'client_credentials') {
-      flow.phase = 'exchanging';
-      await this.journal.write(id, flow);
-      const token = await this.oauth(signal).clientCredentials(input.method.config, flow.app!, scopes, undefined,
-        async (token, response) => {
-          flow.checkpoint = { token, response }; flow.phase = 'received';
-          await this.journal.write(id, flow);
-        });
-      flow.material = ConnectionMaterial.parse({ format: 1, methodId: input.methodId, method: input.method,
-        generation: randomUUID(), appId: input.appId, appGeneration: flow.app!.generation, oauth: token });
-      flow.phase = 'review';
-      await this.journal.write(id, flow);
+      expiresAt: Math.min(Date.now() + 600_000, Date.parse(intent.expiresAt)), phase: 'authorize' };
+    await this.writeFlow(input.flowId, flow);
+    const result = await this.provider(input.method).start(this.authorization(input.flowId, flow, signal));
+    if (result.kind === 'ready') {
+      flow.material = result.material; flow.phase = 'review';
+      await this.writeFlow(input.flowId, flow);
       return this.review(input.flowId, flow);
     }
     if (input.redirectUri === intent.origin + '/oauth/callback') await this.broker.relay?.({ id: input.flowId,
       runId: intent.id, stateDigest: await hash(flow.state), expiresAt: new Date(flow.expiresAt).toISOString() });
     return { kind: 'authorize', flowId: input.flowId,
-      url: await this.oauth().authorize(input.method.config, flow.app!, flow.state, flow.verifier, input.redirectUri!, scopes) };
+      url: result.url };
   }
   private async exchange(action: Extract<ConnectionCommand, { action: 'exchange' }>, intent: ExecutionIntent, signal: AbortSignal) {
-    const flow = await this.flow(action.flowId, intent), id = 'oauth_' + action.flowId;
+    const flow = await this.flow(action.flowId, intent);
     if (flow.phase === 'review') return this.review(action.flowId, flow);
-    if (flow.input.method.kind !== 'oauth' || !flow.app || !['authorize', 'received'].includes(flow.phase))
+    const provider = this.provider(flow.input.method);
+    if (!provider.exchange || !['authorize', 'received'].includes(flow.phase))
       fail(409, 'connection_uncertain', 'Check the connection before authorizing it again.');
-    const oauth = this.oauth(signal), spec = flow.input.method.config;
-    const parameters = new URLSearchParams(action.parameters);
-    if (parameters.getAll('state').length !== 1 || parameters.get('state') !== flow.state)
-      fail(400, 'invalid_state', 'Start the connection again.');
-    let token: OAuthToken;
-    if (flow.phase === 'received') {
-      token = await oauth.inspect(spec, flow.app, flow.checkpoint!.token, flow.checkpoint!.response);
-    } else {
-      flow.phase = 'exchanging';
-      await this.journal.write(id, flow);
-      token = await oauth.exchange(spec, flow.app, { parameters, state: flow.state }, flow.verifier,
-        flow.input.redirectUri!, [...new Set([...spec.scopes.default, ...flow.input.scopes])], undefined,
-        async (token, response) => {
-          flow.checkpoint = { token, response }; flow.phase = 'received';
-          await this.journal.write(id, flow);
-        });
-    }
-    flow.material = ConnectionMaterial.parse({ format: 1, methodId: flow.input.methodId, method: flow.input.method,
-      generation: randomUUID(), appId: flow.input.appId, appGeneration: flow.input.appId ? flow.app.generation : null, oauth: token });
+    flow.material = await provider.exchange(this.authorization(action.flowId, flow, signal), action.parameters,
+      flow.phase === 'received' ? flow.checkpoint : undefined);
     flow.phase = 'review';
-    await this.journal.write(id, flow);
+    await this.writeFlow(action.flowId, flow);
     return this.review(action.flowId, flow);
   }
   private async commit(action: Extract<ConnectionCommand, { action: 'commit' }>, intent: ExecutionIntent) {
-    const flow = await this.flow(action.flowId, intent), id = 'oauth_' + action.flowId;
+    const flow = await this.flow(action.flowId, intent);
     if (flow.phase === 'committed') return { kind: 'connected', id: flow.content!.policy.id };
     if (!['review', 'committing'].includes(flow.phase)) fail(409, 'approval_required', 'Review this connection before saving.');
     if (!flow.content) {
       flow.content = await produceContent(encode(canonical(flow.material)), action.approval, intent.id,
         this.binding, this.keys, await connectionMetadata(flow.material!));
       flow.phase = 'committing';
-      await this.journal.write(id, flow);
+      await this.writeFlow(action.flowId, flow);
     } else if (canonical(flow.content.policy) !== canonical(action.approval.policy) || flow.content.creationRunId !== intent.id) {
       fail(409, 'connection_uncertain', 'Finish saving the previously approved connection before starting another save.');
     }
@@ -279,13 +231,13 @@ export class Connections implements ExecutionExtension {
       throw new DeliveryPending();
     }
     flow.phase = 'committed';
-    await this.journal.write(id, flow);
+    await this.writeFlow(action.flowId, flow);
     return { kind: 'connected', id: resource.id };
   }
   async recover(input: JsonValue, intent: ExecutionIntent): Promise<JsonValue | null> {
     const action = ConnectionAction.parse(input);
     if (action.action !== 'commit') return null;
-    const id = 'oauth_' + action.flowId, flow = await this.journal.read<Flow>(id);
+    const flow = await this.readFlow(action.flowId);
     if (!flow?.content || flow.ownerId !== intent.ownerId || canonical(flow.actor) !== canonical(intent.actor) ||
       flow.content.creationRunId !== intent.id || canonical(flow.content.policy) !== canonical(action.approval.policy) ||
       !['committing', 'committed'].includes(flow.phase)) return null;
@@ -294,27 +246,20 @@ export class Connections implements ExecutionExtension {
       if (error instanceof DomainError && error.status < 500) return null;
       throw new DeliveryPending();
     }
-    flow.phase = 'committed'; await this.journal.write(id, flow);
+    flow.phase = 'committed'; await this.writeFlow(action.flowId, flow);
     return { kind: 'connected', id: flow.content.policy.id };
   }
 
   async outputs(content: CustodyContent, intent: ExecutionIntent, sources: CustodyContent[], signal: AbortSignal,
     destination?: string): Promise<Record<string, string>> {
     let state = await this.material(content, intent, destination);
-    if (state.method.kind === 'token') return Object.fromEntries(Object.entries(state.method.config.outputs)
-      .map(([key, pointer]) => [key, textValue(atPointer(state.fields!, pointer))]));
-    if (state.method.kind === 'role') return state.aws
-      ? (await this.aws.obtain(state.aws, state.aws, signal)).credentials
-      : this.roles.obtain(state.role!.arn, state.role!.externalId, state.role!.region);
-    if (await this.broker.state(content.policy.id))
+    if (this.provider(state.method).renew && await this.broker.state(content.policy.id))
       fail(409, 'connection_busy', 'Resolve the current token update before using this connection.');
     state = await this.refresh(content, state, intent, sources, signal, destination);
-    if (state.method.kind !== 'oauth') throw new Error('Use an OAuth connection.');
-    return this.oauth(signal).outputs(state.method.config, await this.connectionApp(state, intent, sources), state.oauth!);
+    return this.provider(state.method).outputs(state, await this.connectionApp(state, intent, sources), signal);
   }
 
-  private async refreshed(record: Renewal, token: OAuthToken) {
-    const material = ConnectionMaterial.parse({ ...record.material, oauth: token });
+  private async refreshed(record: Renewal, material: ConnectionState) {
     const metadata = await connectionMetadata(material);
     if (metadata.authorizationDigest !== record.previous.metadata.authorizationDigest)
       fail(409, 'connection_review', 'Review the changed service account or permissions before sharing the updated connection.');
@@ -329,8 +274,9 @@ export class Connections implements ExecutionExtension {
   }
   private async refresh(content: CustodyContent, material: ConnectionState, intent: ExecutionIntent,
     sources: CustodyContent[], signal: AbortSignal, destination?: string) {
-    if (material.method.kind !== 'oauth') return material;
-    if (material.oauth!.expiresAt === null || material.oauth!.expiresAt! >= Date.now() + 60_000) return material;
+    const provider = this.provider(material.method);
+    if (!provider.needsRenewal(material)) return material;
+    if (!provider.renew) fail(409, 'reconnect_required', 'Reconnect this service to renew access.');
     try { await authorizeUse(content, { ...intent, operation: Operations.refresh }, { destination }); }
     catch { fail(403, 'refresh_required', 'Authorize this requester and executor to renew the connection for this destination.'); }
     const app = await this.connectionApp(material, intent, sources), id = randomUUID();
@@ -343,11 +289,11 @@ export class Connections implements ExecutionExtension {
       await this.journal.write('refresh_' + id, record);
       await this.broker.dispatch(id, operation.fence);
       signal.throwIfAborted();
-      const token = await this.oauth(signal).refresh(material.method.config, app, material.oauth!, async (token, response) => {
-        record.checkpoint = { token, response }; record.phase = 'received';
+      const updated = await provider.renew({ material, app, signal, receive: async checkpoint => {
+        record.checkpoint = checkpoint; record.phase = 'received';
         await this.journal.write('refresh_' + id, record);
-      });
-      return await this.refreshed(record, token);
+      } });
+      return await this.refreshed(record, updated);
     } catch (error) {
       if (record.phase === 'prepared') await this.broker.abort(id, operation.fence);
       else await this.broker.uncertain(id, operation.fence).catch(() => {});
@@ -374,10 +320,9 @@ export class Connections implements ExecutionExtension {
           await this.broker.abort(record.operation.id, record.operation.fence);
         record.delivered = true;
         await this.journal.write(id, record);
-      } else if (record.checkpoint && record.material.method.kind === 'oauth') {
-        const token = await this.oauth().inspect(record.material.method.config, record.app,
-          record.checkpoint.token, record.checkpoint.response);
-        await this.refreshed(record, token);
+      } else if (record.checkpoint && this.provider(record.material.method).recover) {
+        const updated = await this.provider(record.material.method).recover!(record.material, record.app, record.checkpoint);
+        await this.refreshed(record, updated);
       } else {
         await this.broker.uncertain(record.operation.id, record.operation.fence);
         record.delivered = true; await this.journal.write(id, record);
